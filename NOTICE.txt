@@ -1,0 +1,2 @@
+NeuralAmpModeler-rs https://github.com/fabiohl/NeuralAmpModeler-rs
+Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.

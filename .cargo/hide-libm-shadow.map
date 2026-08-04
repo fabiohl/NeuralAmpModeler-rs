@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+#
+# Linker version script — permanent fix + regression guard for an ELF
+# symbol-interposition hang. Full writeup, root-cause mechanism, and the
+# lessons learned from diagnosing it:
+# docs/postmortem-libm-symbol-interposition.md
+#
+# Root cause (summary): some part of the crate's dependency graph can pull
+# in libm-shaped fallback symbols (`log10f`, `atan2f`, `acosf`, ...) that
+# get compiled into the final binary as GLOBAL (exported, non-hidden)
+# symbols with the *same C name* as the real functions in the system's
+# `libm.so.6`. Under the standard ELF/`ld.so` rule that a main executable's
+# own global symbols take priority over same-named symbols in its dynamic
+# dependencies ("symbol interposition"), `ld.so` resolves the `JUMP_SLOT`
+# relocation for e.g. `log10f@GLIBC_2.2.5` back to the binary's OWN local
+# (trampoline) definition instead of the real glibc implementation —
+# creating a self-referential `trampoline -> PLT -> GOT -> trampoline`
+# loop: two `jmp` instructions, zero computation, zero syscalls, spinning
+# forever. Confirmed (via a live GDB attach reading the actual runtime GOT
+# contents — a static `nm`/`readelf` inspection is NOT sufficient to catch
+# this class of bug, see the postmortem doc) to affect the test binary, the
+# standalone binary, and the CLAP plugin `cdylib`.
+#
+# Fix: explicitly force every standard libm C symbol name to `local` binding
+# in our own binary's dynamic symbol table. A `local` symbol is never a
+# candidate for `ld.so`'s global symbol interposition, so calls to these
+# function names always fall through to the real dynamic `libm.so.6`
+# implementation, regardless of whether some dependency happens to also
+# define a same-named fallback in the future. This list intentionally
+# covers the *entire* standard C89/C99 libm surface (not just the three
+# symbols empirically observed to be affected: `log10f`, `atan2f`,
+# `acosf`), since the underlying mechanism is generic and could affect any
+# of them if a dependency's feature set changes.
+#
+# For regression checks, see the activation test and ELF verification
+# checklist in docs/postmortem-libm-symbol-interposition.md §3–4.
+{
+  local:
+    /* f64 */
+    acos; acosh; asin; asinh; atan; atan2; atanh; cbrt; ceil; copysign;
+    cos; cosh; erf; erfc; exp; exp2; expm1; fabs; fdim; floor; fma; fmax;
+    fmaximum; fmaximum_num; fmin; fminimum; fminimum_num; fmod; hypot;
+    ldexp; lgamma; lgamma_r; log; log10; log1p; log2; nextafter; pow;
+    remainder; remquo; rint; round; roundeven; scalbn; sin; sinh; sqrt;
+    tan; tanh; tgamma; trunc;
+    /* f32 */
+    acosf; acoshf; asinf; asinhf; atanf; atan2f; atanhf; cbrtf; ceilf;
+    copysignf; cosf; coshf; erfcf; erff; exp2f; expf; expm1f; fabsf;
+    fdimf; floorf; fmaf; fmaxf; fmaximumf; fmaximum_numf; fminf;
+    fminimumf; fminimum_numf; fmodf; hypotf; ldexpf; lgammaf; lgammaf_r;
+    log10f; log1pf; log2f; logf; nextafterf; powf; remainderf; remquof;
+    rintf; roundf; roundevenf; scalbnf; sinf; sinhf; sqrtf; tanf; tanhf;
+    tgammaf; truncf;
+};

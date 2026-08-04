@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+# Ignorar arquivos temporários
+*.tmp*
+.DS_Store
+Thumbs.db
+repomix-*.xml
+*.bak
+*.swp
+*.log
+
+# Defesa em profundidade: impede commit de metadados .git/ aninhados em qualquer subdiretório
+# (ex.: se /github.com/ for futuramente unignorado por engano, .git/ aninhados não serão stagedos).
+**/.git/
+
+# Ignorar artefatos do Rust
+#Cargo.lock
+/target
+
+# Ignorar diretório de scratch (artefatos de debug/protótipos temporários)
+scratch/
+scratch
+scratch.rs
+
+# Binários e scripts de debug compilados ad-hoc na raiz
+/test_*
+!/tests/
+
+# Golden vectors de validação numérica (não ignorar)
+!tests/fixtures/*.bin
+
+# Ignorar arquivos json desnecessários mas liberar os de testes
+*.json
+!tests/fixtures/**/*.json
+
+# Proptest regression files (gerados automaticamente)
+*.proptest-regressions
+
+# Fuzzing (cargo-fuzz)
+# Mantemos apenas os targets e a configuração. Ignoramos o corpus evoluído e artefatos de crash.
+fuzz/target/
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/Cargo.lock
+
+# Artefatos do cargo-mutants
+.mutants/
+.out/
+mutants.out.old/
+
+# C++ upstream vendor mirrors NÃO vivem mais neste repositório:
+# ficam concentrados na área third-party do workspace (../third-party/),
+# sincronizados por utils/mod-update.sh com pins de ../third-party/variables.env.
+
+# Build artifacts do render tool C++
+/tests/fixtures/render_ir
+/build/
+
+# Arquivos temporários dos scripts de geração de golden vectors
+/tests/fixtures/.temp_golden/
+/tests/fixtures/.temp_live/
+/tests/fixtures/stress_signal.wav
+/tests/fixtures/stress_signal_v2_*.wav
+
+# Artefatos de bytecode Python (scripts de fixtures/utilitários)
+__pycache__/
+*.pyc
+
+# Artefatos de ferramentas locais de IDE:
+/.kilo/

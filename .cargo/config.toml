@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+[build]
+warnings = "deny"
+rustflags = [
+  # --- Architecture and Optimization Configuration (march / mtune) ---
+
+  # OPTION 1 (Distributable Default):
+  # Minimum hard requirement: CPUs with AVX2, FMA, and BMI2 (2013+).
+  # Note: On Rust Stable (e.g. 1.95), '-Ctarget-cpu' sets BOTH the ISA (march) and generic tuning (mtune).
+  "-Ctarget-cpu=x86-64-v3",
+
+  # OPTION 2 (Maximum Local Optimization - "Native"):
+  # Sets both march and mtune for your own current CPU.
+  # WARNING: The resulting binary will be incompatible with older or different-family processors.
+  # "-Ctarget-cpu=native",
+
+  # --- Linker Optimizations ---
+  # Remove dead code to reduce final binary size.
+  "-Clink-arg=-Wl,--gc-sections",
+
+  # CRITICAL FOR REAL-TIME (DSP): Forces dynamic symbol resolution at startup (Bind Now).
+  # Prevents OS lazy-binding (e.g. calls to libm or libc) from occurring unexpectedly
+  # during the audio DSP thread, which would cause lockups and XRuns (execution page-faults).
+  "-Clink-arg=-Wl,-z,now",
+
+  # Improves load speed by discarding listed libraries that are not actually used.
+  "-Clink-arg=-Wl,--as-needed",
+]

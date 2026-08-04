@@ -1,0 +1,1 @@
+{"version": "0.5.4", "architecture": "Linear", "config": {"receptive_field": 4, "bias": false}, "weights": [-0.28941273269402096, 0.07962766854305478, -0.09877673902492994, 0.14897901952289913], "metadata": {"name": "Linear Fixture (bias=false)", "modeled_by": "tests/fixtures/generate_fixtures.py"}, "sample_rate": 48000}

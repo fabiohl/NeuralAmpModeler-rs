@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+[package]
+name = "NeuralAmpModeler-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+license = "Apache-2.0"
+repository = "https://github.com/fabiohl/NeuralAmpModeler-rs"
+description = "High-performance Neural Amp Modeler DSP core: WaveNet/LSTM/ConvNet inference, SIMD math (x86-64-v3), .nam/.namb loader, cabinet IR, resampling and noise gate."
+readme = "README.md"
+authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
+keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
+categories = ["multimedia::audio", "multimedia"]
+include = [
+    "src/bin/",
+    "src/common/",
+    "src/dsp/",
+    "src/loader/",
+    "src/math/",
+    "src/models/",
+    "src/testing/",
+    "src/lib.rs",
+    "Cargo.toml",
+    "/README.md",
+    "/LICENSE.txt",
+    "/NOTICE.txt",
+    "/docs/",
+    "build.rs",
+    ".cargo/hide-libm-shadow.map",
+]
+
+[lib]
+name = "neural_amp_modeler_rs"
+crate-type = ["rlib"]
+
+[dependencies]
+# Typed errors for the NAMB/loader surface.
+thiserror = "2.0"
+# POSIX calls (mlockall, prctl THP) for system utilities.
+libc = "0.2.189"
+# Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
+rtrb = "0.3.4"
+# .nam (JSON) model deserialization.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# SHA-256 for portable asset identity.
+sha2 = "0.10"
+# Logging facade (zero overhead when disabled).
+log = "0.4.33"
+# Lean error signaling for off-RT threads.
+anyhow = "1.0.104"
+
+
+[dev-dependencies]
+NeuralAmpModeler-rs = { path = ".", features = ["testing"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# Statistical benchmarking.
+criterion = { version = "0.8.2", default-features = false }
+# Property-based testing for FastMath kernels and parser fuzzing.
+proptest = "1.11.0"
+# Model-checking for concurrency protocols.
+loom = "0.7"
+# Serialize test execution for global-state side effects.
+serial_test = { version = "3", features = ["async"] }
+
+[[bench]]
+name = "inference_bench"
+harness = false
+
+[[bench]]
+name = "long_inference_bench"
+harness = false
+
+[[bench]]
+name = "dsp_bench"
+harness = false
+
+[[bench]]
+name = "dot_4x_bench"
+harness = false
+
+[[bench]]
+name = "kahan_conv1d_bench"
+harness = false
+
+[[bench]]
+name = "fft_radix4_bench"
+harness = false
+
+[[bench]]
+name = "math_bench"
+harness = false
+
+[[bench]]
+name = "gemv_bench"
+harness = false
+
+[[bench]]
+name = "linear"
+harness = false
+
+[[bench]]
+name = "regression_gate"
+harness = false
+
+[[bench]]
+name = "cabsim_bench"
+harness = false
+
+[[bench]]
+name = "head_gemv_bench"
+harness = false
+
+[features]
+default = []
+stereo = []
+testing = []
+heap-audit = []
+long_bench = []
+pgo = []
+dynamic-engine = []
+
+[[bin]]
+name = "gen_stress"
+path = "src/bin/gen_stress.rs"
+required-features = ["testing"]
+
+[[bin]]
+name = "wav_to_golden"
+path = "src/bin/wav_to_golden.rs"
+required-features = ["testing"]
+
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(loom)',
+] }
+
+[lints.clippy]
+allow_attributes = "warn"
+
+[profile.release]
+strip = true
+lto = "fat"
+opt-level = 3
+codegen-units = 1
+panic = "unwind"
+
+[profile.dist]
+inherits = "release"
+panic = "abort"
+
+[profile.dev]
+debug = 1
+opt-level = 0
+incremental = true
+split-debuginfo = "unpacked"
+
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["stereo", "testing"]
+rustdoc-args = ["--cfg", "docsrs"]

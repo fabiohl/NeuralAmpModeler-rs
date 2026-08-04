@@ -1,0 +1,22 @@
+{
+    "version": "0.6.0",
+    "architecture": "WaveNet",
+    "config": {
+        "layers": [
+            {
+                "channels": 16,
+                "dilations": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+                "activation": "ReLU"
+            },
+            {
+                "channels": 16,
+                "dilations": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+                "activation": "ReLU"
+            }
+        ]
+    },
+    "weights": [0.0],
+    "metadata": {
+        "name": "Mock A2 Model"
+    }
+}
