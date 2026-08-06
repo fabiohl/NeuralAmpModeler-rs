@@ -7,8 +7,7 @@
 # and `utils/tests-quick.sh` (agile first line) deliberately leave out:
 # numerical soak/endurance, full proptest/fuzz case counts, full C++
 # NeuralAmpModelerCore parity matrix (multi-SR), cross-ISA determinism,
-# RT-safety heap-audits, Criterion benchmarks for the record, and the
-# RT deadline/jitter gate.
+# RT-safety heap-audits, and the RT deadline/jitter gate.
 # Everything measuring floats runs `--release` — the codegen path that
 # ships to the end user (see docs/testing.md §2, Axis B).
 #
@@ -19,8 +18,7 @@
 #     or out of scope. Every phase below cross-references its quick-suite
 #     counterpart so scope drift is visible at a glance.
 #   - Does NOT repeat `utils/tests-performance-regression.sh` (per-push baseline
-#     gate) — Phase 6 records the full Criterion suite for the nightly
-#     archive, with no baseline gating of its own.
+#     gate). Benchmarks are executed separately via `cargo bench`.
 #
 # Failure isolation: each phase runs to completion independently (§6.2) so
 # one bad phase never hides the rest — a nightly run that dies on a shell
@@ -101,7 +99,7 @@ source "$(dirname "$0")/_lib.sh"
 trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" failed at line $LINENO with status $?. Aborting audit suite.${NC}"; exit 1' ERR
 
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
-echo -e "${BLUE}${BOLD}    NeuralAmpModeler-rs Long-Duration Stress & Audit Suite (± 45 minutes)   ${NC}"
+echo -e "${BLUE}${BOLD}    NeuralAmpModeler-rs Long-Duration Stress & Audit Suite (± 30 minutes)   ${NC}"
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
 
 # Setup target logs and timing tracker
@@ -328,7 +326,7 @@ if ! cargo test --features testing --release $(_test_flag catalog_preflight) -- 
     echo -e "${YELLOW}⚠ catalog_preflight exited non-zero (test may have reported missing required fixtures).${NC}"
 fi
 # Extract MISSING-REQUIRED count for the summary
-MISSING_REQUIRED_COUNT=$(grep -c 'MISSING-REQUIRED:' target/logs/catalog_preflight.log 2>/dev/null || echo 0)
+MISSING_REQUIRED_COUNT=$(grep -c 'MISSING-REQUIRED:' target/logs/catalog_preflight.log 2>/dev/null || true)
 if [ "$MISSING_REQUIRED_COUNT" -gt 0 ]; then
     echo -e "${RED}${BOLD}❌ Catalog preflight: ${MISSING_REQUIRED_COUNT} RequiredLocal fixture(s) absent.${NC}"
     echo -e "  Check target/logs/catalog_preflight.log for the full capability receipt."
@@ -409,40 +407,7 @@ extract_sub_timings() {
         head -n "$N_TOP_SLOWEST"
 }
 
-# extract_top_benches: parse criterion bench output for top-N slowest by median time.
-# Usage: extract_top_benches <log_file> <n>
-extract_top_benches() {
-    local log="$1"
-    local n="${2:-$N_TOP_SLOWEST}"
-    if [ ! -f "$log" ]; then
-        return
-    fi
-    # Criterion output: bench name on a line, then "time: [1.2345 ms 1.2500 ms 1.2750 ms]" on the next.
-    awk '
-    BEGIN { bench = "" }
-    /^Benchmarking/  { bench = "" }                          # new benchmark start — discard
-    /^[A-Za-z]/ && !/:/ && !/^Found/ && !/^change:/ { bench = $1 }  # capture bench result name
-    /time:.*\[/ && bench != "" {
-        split($0, a, /[\[\]]/)
-        if (length(a) >= 2) {
-            split(a[2], b, /[[:space:]]+/)
-            # b: [val1, unit, val2, unit, val3, unit]  — median is b[3] with unit b[4]
-            median_val  = b[3]
-            median_unit = b[4]
-            # Convert to nanoseconds for sorting
-            if (median_unit == "ns")        ns = median_val
-            else if (median_unit == "µs")   ns = median_val * 1000
-            else if (median_unit == "ms")   ns = median_val * 1000000
-            else if (median_unit == "s")    ns = median_val * 1000000000
-            else                            ns = median_val
-            printf "%.0f %s %s %s\n", ns, median_val, median_unit, bench
-        }
-        bench = ""
-    }
-    ' "$log" | sort -rn | head -n "$n" | while read -r ns val unit bench; do
-        printf "  %s %s  %s\n" "$val" "$unit" "$bench"
-    done
-}
+
 
 assert_ran_tests() {
     local log_file="$1"
@@ -599,7 +564,7 @@ run_proptests_parity_phase() {
     timed_cargo_test "gate_envelope_continuity_proptest" --release --no-fail-fast --lib -- "dsp::gate::gate_test::tests::gate_envelope_continuity_on_reversal" --ignored --nocapture || status=1
     return $status
 }
-run_phase "Property-Based, Parity & Golden Vectors in Release" "run_proptests_parity_phase" "phase3-proptests-parity.log" || true
+run_phase "Property-Based, Parity & Golden Vectors in Release" "run_proptests_parity_phase" "phase2-proptests-parity.log" || true
 
 # --- Phase 3: RT-Safety Heap-Audit (release, heap-audit) ---
 # Zero-alloc verification under the global counting allocator. No quick-suite
@@ -612,34 +577,9 @@ run_heap_audit_phase() {
     timed_cargo_test "diagnostic_bundle_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag diagnostic_bundle) -- heap_audit || status=1
     return $status
 }
-run_phase "Resampler, Cabsim & A2 Heap-Audit" "run_heap_audit_phase" "phase4-heap-audit.log" || true
+run_phase "Resampler, Cabsim & A2 Heap-Audit" "run_heap_audit_phase" "phase3-heap-audit.log" || true
 
-# --- Phase 4: Long Performance Benchmarks (Criterion, for the record) ---
-# Records the full bench suite nightly. No baseline gating here — that is
-# the exclusive job of `utils/tests-performance-regression.sh` (run per-push,
-# not duplicated). `fft_radix4_bench`, `gemv_bench`, and `linear` (bench) are
-# one-off research artifacts documenting past engineering decisions, not
-# regression gates — intentionally excluded from every automated suite.
-#
-# Each bench target is its OWN `cargo bench` invocation (never combined via
-# multiple `--bench` flags in one command). `cargo bench` aborts the entire
-# invocation on the first panicking bench binary and does not proceed to the
-# next `--bench` target. Isolating each benchmark binary ensures maximum resilience.
-run_benchmarks_phase() {
-    local status=0
-    cargo bench --features "long_bench,testing" --bench dot_4x_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench kahan_conv1d_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench inference_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench regression_gate -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench long_inference_bench || status=1
-    cargo bench --features "long_bench,testing" --bench math_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench dsp_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    cargo bench --features "long_bench,testing" --bench cabsim_bench -- --sample-size 100 --measurement-time 5 --warm-up-time 1 || status=1
-    return $status
-}
-run_phase "Long Performance Benchmarks" "run_benchmarks_phase" "phase5-benchmarks.log" || true
-
-# --- Phase 6: RT Deadline Gate (deterministic, hard assertion) ---
+# --- Phase 4: RT Deadline Gate (deterministic, hard assertion) ---
 # Absolute latency ceiling: assert!(p99 < 1.33 ms) for every model SKU.
 # This is the definitive gate — a regression that pushes p99 past the
 # audio buffer deadline fails the build deterministically.
@@ -648,9 +588,9 @@ run_rt_deadline_gate_phase() {
     timed_cargo_test "rt_deadline" --release --no-fail-fast $(_test_flag rt_deadline) -- --nocapture || status=1
     return $status
 }
-run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase6-rt-deadline.log" || true
+run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase4-rt-deadline.log" || true
 
-# --- Phase 7: RT Jitter Characterization (environmental telemetry) ---
+# --- Phase 5: RT Jitter Characterization (environmental telemetry) ---
 # Characterizes tail latency under CPU contention. This is diagnostic
 # telemetry — it does NOT assert deadlines under stress. An INCONCLUSIVE
 # result is expected when environment preconditions (CPU pinning,
@@ -660,9 +600,9 @@ run_rt_jitter_characterization_phase() {
     timed_cargo_test "rt_jitter" --release --no-fail-fast $(_test_flag rt_jitter) -- --ignored --nocapture || status=1
     return $status
 }
-run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase7-rt-jitter.log" || true
+run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase5-rt-jitter.log" || true
 
-# --- Phase 8: Loom Concurrency Model Checking (release) ---
+# --- Phase 6: Loom Concurrency Model Checking (release) ---
 # Model-checks the SPSC/GC/DspBridge lock-free primitives under loom's
 # exhaustive permutation engine. Runs with --cfg loom so the production
 # atomic paths are replaced by loom's instrumented wrappers. No quick-suite
@@ -675,7 +615,7 @@ run_loom_phase() {
     RUSTFLAGS="$loom_flags --cfg loom" timed_cargo_test "loom_tests" --release --no-fail-fast --test loom_tests -- --nocapture || status=1
     return $status
 }
-run_phase "Loom Concurrency Model Checking" "run_loom_phase" "phase8-loom.log" || true
+run_phase "Loom Concurrency Model Checking" "run_loom_phase" "phase6-loom.log" || true
 
 # --- Print beautifully structured summary ---
 echo -e "\n${BLUE}${BOLD}================================================================${NC}"
@@ -708,17 +648,6 @@ echo -e "${BLUE}${BOLD}  $(printf '━%.0s' {1..60})${NC}"
 for ((i=0; i<PHASE_COUNT; i++)); do
     name="${PHASE_NAMES[$i]}"
     sub_timings="${PHASE_SUB_TIMINGS[$i]}"
-
-    # Benchmarks phase uses criterion — parse bench log separately
-    if [[ "$name" == *"Benchmark"* ]]; then
-        bench_log="phase5-benchmarks.log"
-        top_benches=$(extract_top_benches "target/logs/$bench_log" "$N_TOP_SLOWEST" 2>/dev/null)
-        if [ -n "$top_benches" ]; then
-            echo -e "\n  ${YELLOW}${BOLD}[$name]${NC}"
-            echo "$top_benches"
-        fi
-        continue
-    fi
 
     if [ -n "$sub_timings" ]; then
         echo -e "\n  ${YELLOW}${BOLD}[$name]${NC}"

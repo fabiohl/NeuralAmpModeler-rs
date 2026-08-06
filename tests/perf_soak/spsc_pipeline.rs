@@ -81,7 +81,7 @@ fn test_end_to_end_spsc_pipeline() {
         .expect("Failed to receive model via SPSC in E2E");
 
     let mut active_model = match received {
-        neural_amp_modeler_rs::spsc::ParamPayload::LoadModel { model_l, .. } => model_l,
+        neural_amp_modeler_rs::common::spsc::ParamPayload::LoadModel { model_l, .. } => model_l,
         _ => panic!("Received payload is not LoadModel in E2E"),
     };
 

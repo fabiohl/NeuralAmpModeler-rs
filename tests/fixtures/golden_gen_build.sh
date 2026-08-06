@@ -239,6 +239,12 @@ else
         done
     fi
 
+    if grep -q '\-Werror\b' "$RENDER_CMAKE"; then
+        echo "  Patching: disabling -Werror and -Weffc++ for GCC 15 compatibility..."
+        sed -i 's/\-Werror\b/-Wno-error/g' "$RENDER_CMAKE"
+        sed -i 's/\-Weffc++\b/-Wno-effc++/g' "$RENDER_CMAKE"
+    fi
+
     CMAKE_LOG="$LOGS_DIR/render_cmake.log"
     cmake -S "$NAM_CORE_DIR" -B "$BUILD_DIR" \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \

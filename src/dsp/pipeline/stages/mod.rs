@@ -8,10 +8,12 @@
 //! - Zero I/O
 //! - Zero mutexes
 
+mod adaptive_ctrl;
 mod bridge;
 mod inference;
 mod input;
 mod output;
+mod routing;
 
 pub use bridge::write_bridge;
 pub use inference::run_inference;

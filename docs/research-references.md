@@ -22,8 +22,7 @@ DAFx 2025. arXiv:2505.04082.
 aliasing from nonlinear activation functions, especially on high fundamentals and high gain. Introduces
 the **ASR (Aliasing-to-Signal Ratio)** metric — the key missing measurement in nam-rs's QA arsenal.
 Shows that smoother activations (tanh, Snake) reduce ASR without significantly increasing ESR, directly
-informing the activation precision analysis (P-5) and the trade-off between Padé tanh (fast, clamped)
-and high-fidelity tanh (exact, smoother).
+informing the activation precision analysis (P-5) and the trade-off between Padé tanh (Fast mode approximation) and exact-grade tanh (Standard mode default).
 
 | Traceability | Reference                                                                                |
 |:------------ |:---------------------------------------------------------------------------------------- |
@@ -188,12 +187,12 @@ A-weighting curve) in the loss function used to train NAM models. This directly 
 perceptual dimension of the activation precision analysis (P-5): the frequency-dependent
 relevance of approximation error — errors in the presence region (~2–5 kHz) are audibly more
 significant than low-frequency errors. The paper also justifies A-weighted ESR as a perceptual
-complement to the standard (flat) ESR metric already implemented in `src/testing/perceptual.rs`.
+complement to the standard (flat) ESR metric already implemented in `src/testing/perceptual/mod.rs`.
 
-| Traceability | Reference                                                                                       |
-|:------------ |:----------------------------------------------------------------------------------------------- |
-| Finding      | P-5 (pré-ênfase A-weighting; ESR perceptual)                                                    |
-| Files        | `src/testing/perceptual.rs`, `docs/perceptual_validation.md`, `docs/fastmath-approximations.md` |
+| Traceability | Reference                                                                                           |
+|:------------ |:--------------------------------------------------------------------------------------------------- |
+| Finding      | P-5 (pré-ênfase A-weighting; ESR perceptual)                                                        |
+| Files        | `src/testing/perceptual/mod.rs`, `docs/perceptual_validation.md`, `docs/fastmath-approximations.md` |
 
 ---
 
@@ -229,15 +228,15 @@ arXiv:1910.11480.
 **Why relevant to nam-rs.** Introduces the **Multi-Resolution STFT (MR-STFT) loss** — the composite
 spectral metric combining spectral convergence (L1 of log-magnitude difference) and log-magnitude
 loss (L2) across multiple STFT resolutions. This is the exact technique adopted as the spectral
-regression-detection gate in `src/testing/perceptual.rs`, with per-model calibrated thresholds
+regression-detection gate in `src/testing/perceptual/mod.rs`, with per-model calibrated thresholds
 (Tier 1) and a dual hard/soft enforcement strategy. The multi-resolution approach (window sizes
 [256, 1024, 4096] in nam-rs) captures both narrow-band spectral artifacts and broadband transient
 errors that single-window ESR cannot detect.
 
-| Traceability | Reference                                                                                  |
-|:------------ |:------------------------------------------------------------------------------------------ |
-| Finding      | F-2 (MR-STFT como gate espectral); P-5 (complemento a ESR)                                 |
-| Files        | `src/testing/perceptual.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
+| Traceability | Reference                                                                                      |
+|:------------ |:---------------------------------------------------------------------------------------------- |
+| Finding      | F-2 (MR-STFT como gate espectral); P-5 (complemento a ESR)                                     |
+| Files        | `src/testing/perceptual/mod.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
 
 ---
 
@@ -303,14 +302,14 @@ European Broadcasting Union, 2016.
   sample-peak-only flag (`RT_STATUS_HAS_CLIPPED` in `output.rs`).
 - **BS.1770-4 main body + EBU R128** define the two-pass LUFS algorithm (absolute gate −70 LUFS
   → relative gate −10 LU) — the target upgrade from nam-rs's current single-pass simplified LUFS
-  (`src/testing/perceptual.rs`).
+  (`src/testing/perceptual/mod.rs`).
 - **EBU Tech 3342** defines **LRA (Loudness Range)** — a supplemental diagnostic that completes
   the loudness measurement framework (P-6).
 
-| Traceability | Reference                                                                                         |
-|:------------ |:------------------------------------------------------------------------------------------------- |
-| Finding      | P-6 (LUFS BS.1770-4 pleno, LRA); P-3 (true-peak dBTP)                                             |
-| Files        | `src/testing/perceptual.rs`, `src/dsp/pipeline/stages/output.rs`, `docs/perceptual_validation.md` |
+| Traceability | Reference                                                                                             |
+|:------------ |:----------------------------------------------------------------------------------------------------- |
+| Finding      | P-6 (LUFS BS.1770-4 pleno, LRA); P-3 (true-peak dBTP)                                                 |
+| Files        | `src/testing/perceptual/mod.rs`, `src/dsp/pipeline/stages/output.rs`, `docs/perceptual_validation.md` |
 
 ---
 

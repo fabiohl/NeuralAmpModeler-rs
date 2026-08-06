@@ -78,9 +78,9 @@ pub trait SlimmableModel {
     /// model switches to a different submodel or internal quality tier. Hosts
     /// and plugins can use these to map and snap discrete quality parameters.
     ///
-    /// Defaults to an empty vector for models without discrete breakpoints.
-    fn slimmable_breakpoints(&self) -> Vec<f64> {
-        vec![]
+    /// Defaults to an empty slice for models without discrete breakpoints.
+    fn slimmable_breakpoints(&self) -> Box<[f64]> {
+        Box::new([])
     }
 }
 

@@ -23,7 +23,7 @@
 //  cargo test --release --test rt_jitter -- --ignored --nocapture
 //  ```
 //
-//  Marked `#[ignore]` — runs during `tests-long.sh` Phase 6.
+//  Marked `#[ignore]` — runs during `tests-long.sh` Phase 5.
 
 use super::common;
 use common::rt_helpers::{self, RtPreflightStatus};

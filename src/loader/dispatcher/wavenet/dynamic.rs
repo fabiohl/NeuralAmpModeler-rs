@@ -3,7 +3,7 @@
 
 use super::super::WeightCursor;
 use super::layout;
-use super::reject_condition_dsp_lstm;
+use super::static_factory::reject_condition_dsp_lstm;
 use crate::loader::dispatcher::checked_arith;
 use crate::loader::nam_json::{
     FreeWavenetGeometry, NamModelData, WavenetTopologyResult, get_wavenet_topology,
@@ -164,7 +164,7 @@ fn build_wavenet_dynamic_inner(
     depth: usize,
     container_depth: usize,
 ) -> anyhow::Result<WaveNetModelDyn> {
-    super::validate_layer_activations(data)?;
+    super::static_factory::validate_layer_activations(data)?;
 
     if geom.num_arrays == 0 {
         anyhow::bail!("WaveNet dynamic engine requires at least 1 layer array");

@@ -26,11 +26,16 @@ cargo bench --bench inference_bench
 # Performance regression gate suite
 cargo bench --bench regression_gate
 
-# Specialized DSP module benchmark suites
+# Specialized DSP, Math & Kernel benchmark suites
 cargo bench --bench cabsim_bench
 cargo bench --bench dsp_bench
 cargo bench --bench math_bench
 cargo bench --bench gemv_bench
+cargo bench --bench head_gemv_bench
+cargo bench --bench linear
+cargo bench --bench dot_4x_bench
+cargo bench --bench fft_radix4_bench
+cargo bench --bench kahan_conv1d_bench
 ```
 
 ### Long-Duration Benchmarks (Soak Bench)
@@ -180,7 +185,7 @@ the new baseline after `cargo clean` or a fresh clone.
 | `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                                                                                         |
 | [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse).                                                                      |
 | [`utils/pgo-engine.sh`](../utils/pgo-engine.sh)                                     | **Engine PGO Workflow** — Profile-Guided Optimization pipeline automating instrumented profiling (`gen_stress`, `wav_to_golden`) and crate compilation. Saves the merged profile data artifact to **`/tmp/nam_pgo/merged.profdata`** (configurable via `NAM_PGO_DIR`). |
-| [`utils/tests-long.sh`](../utils/tests-long.sh) Phase 6                             | Runs the full bench suite (including `regression_gate`) as part of the nightly audit, purely **for the record** — no baseline comparison, no pass/fail on slowdown.                                                                                                    |
+| [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                                                                                                   |
 | [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (~3 min) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks.                                                                                                             |
 
 > [!IMPORTANT]

@@ -56,14 +56,12 @@ fn signal_energy(signal: &[f32], start: usize, len: usize) -> f32 {
 
 // =============================================================================
 // Slimmable Breakpoints Coverage
-// =============================================================================
-
-/// Test 4.1: Single submodel — breakpoints must be empty.
+// ============================================================================/// Test 4.1: Single submodel — breakpoints must be empty.
 #[test]
 fn test_breakpoints_single_submodel() {
     let submodels = vec![(1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
     assert!(
         bps.is_empty(),
         "Single submodel must have empty breakpoints"
@@ -75,7 +73,7 @@ fn test_breakpoints_single_submodel() {
 fn test_breakpoints_two_submodels() {
     let submodels = vec![(0.4, make_lstm()), (1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
     assert_eq!(bps.len(), 1, "Two submodels must have 1 breakpoint");
     assert!(
         (bps[0] - 0.4f32 as f64).abs() < 1e-9,
@@ -88,7 +86,7 @@ fn test_breakpoints_two_submodels() {
 fn test_breakpoints_three_submodels() {
     let submodels = vec![(0.25, make_lstm()), (0.55, make_lstm()), (1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
     assert_eq!(bps.len(), 2, "Three submodels must have 2 breakpoints");
     assert!((bps[0] - 0.25f32 as f64).abs() < 1e-9);
     assert!((bps[1] - 0.55f32 as f64).abs() < 1e-9);
@@ -128,7 +126,7 @@ fn test_breakpoints_via_nam_model_trait() {
     let submodels = vec![(0.3, make_lstm()), (0.7, make_lstm()), (1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
     let model = StaticModel::Container(Box::new(container));
-    let bps: Vec<f64> = NamModel::slimmable_breakpoints(&model); // trait method
+    let bps: Box<[f64]> = NamModel::slimmable_breakpoints(&model); // trait method
     assert_eq!(bps.len(), 2);
 }
 
@@ -137,7 +135,7 @@ fn test_breakpoints_via_nam_model_trait() {
 fn test_breakpoints_via_slimmable_trait() {
     let submodels = vec![(0.3, make_lstm()), (0.7, make_lstm()), (1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
     assert_eq!(bps.len(), 2);
 }
 
@@ -150,7 +148,7 @@ fn test_breakpoints_roundtrip_consistency() {
         48000,
     )
     .unwrap();
-    let bps_direct: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps_direct: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
 
     let model = StaticModel::Container(Box::new(container));
     let bps_inherent = model.slimmable_breakpoints();
@@ -165,7 +163,7 @@ fn test_breakpoints_roundtrip_consistency() {
     )
     .unwrap();
     let model2 = StaticModel::Container(Box::new(container2));
-    let bps_trait: Vec<f64> = NamModel::slimmable_breakpoints(&model2);
+    let bps_trait: Box<[f64]> = NamModel::slimmable_breakpoints(&model2);
     assert_eq!(
         bps_direct, bps_trait,
         "Direct (SlimmableModel) must match NamModel trait"
@@ -177,7 +175,7 @@ fn test_breakpoints_roundtrip_consistency() {
 fn test_breakpoints_edge_cases() {
     let submodels = vec![(f32::MIN_POSITIVE, make_lstm()), (1.0, make_lstm())];
     let container = ContainerModel::new(submodels, 48000).unwrap();
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
     assert_eq!(bps.len(), 1, "MIN_POSITIVE / 1.0 must have 1 breakpoint");
 }
 
@@ -204,9 +202,9 @@ fn test_breakpoints_a2_fixture() {
     let container =
         ContainerModel::new(vec![(0.5, lite_model), (1.0, full_model)], sample_rate).unwrap();
 
-    let bps: Vec<f64> = SlimmableModel::slimmable_breakpoints(&container);
+    let bps: Box<[f64]> = SlimmableModel::slimmable_breakpoints(&container);
 
-    let expected: Vec<f64> = vec![0.5];
+    let expected: Box<[f64]> = vec![0.5].into_boxed_slice();
     assert_eq!(bps, expected, "A2 breakpoints must be [0.5]");
 }
 

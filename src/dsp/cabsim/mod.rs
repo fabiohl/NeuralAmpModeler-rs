@@ -9,4 +9,6 @@
 
 pub mod adapter;
 pub mod conv;
+pub(crate) mod ir_parse;
+pub(crate) mod ir_resample;
 pub mod loader;

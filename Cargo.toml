@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.94.0"
 license = "Apache-2.0"
@@ -13,6 +13,7 @@ authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
 keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
 categories = ["multimedia::audio", "multimedia"]
 include = [
+    "examples/",
     "src/bin/",
     "src/common/",
     "src/dsp/",
@@ -115,11 +116,17 @@ harness = false
 
 [features]
 default = []
+# Enables multi-channel / stereo dual-model loader support.
 stereo = []
+# Exposes off-RT test utilities, audio signal generators, and perceptual metrics.
 testing = []
+# Enables heap-allocation auditing infrastructure.
 heap-audit = []
+# Enables long-form inference benchmarks.
 long_bench = []
+# Build with PGO (Profile-Guided Optimization) support.
 pgo = []
+# Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies.
 dynamic-engine = []
 
 [[bin]]
@@ -132,11 +139,38 @@ name = "wav_to_golden"
 path = "src/bin/wav_to_golden.rs"
 required-features = ["testing"]
 
+[[example]]
+name = "load_model"
+path = "examples/load_model.rs"
+required-features = []
+
+[[example]]
+name = "offline_render"
+path = "examples/offline_render.rs"
+required-features = []
+
+[[example]]
+name = "cabsim"
+path = "examples/cabsim.rs"
+required-features = []
+
+[[example]]
+name = "diagnostics"
+path = "examples/diagnostics.rs"
+required-features = []
+
+[[example]]
+name = "math_activations"
+path = "examples/math_activations.rs"
+required-features = []
+
+[[example]]
+name = "inspect_model"
+path = "examples/inspect_model.rs"
+required-features = []
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(loom)',
-] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [lints.clippy]
 allow_attributes = "warn"

@@ -11,7 +11,6 @@ pub mod spsc;
 #[cfg(target_arch = "x86_64")]
 pub mod tsc;
 
-pub use diagnostics::*;
-pub use panic_hook::*;
-pub use params::*;
-pub use spsc::*;
+// These submodules are exposed via their qualified module paths (common::diagnostics, common::spsc, etc.).
+// The crate root (lib.rs) selectively re-exports curated items from here — see
+// the "API Surface Policy" comment in lib.rs.

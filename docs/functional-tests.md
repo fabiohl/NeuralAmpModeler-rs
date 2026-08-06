@@ -82,12 +82,14 @@ This document defines manual functional verification procedures for the DSP engi
 
 ```rust
 use neural_amp_modeler_rs::common::diagnostics::SystemSnapshot;
-use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
+use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+use neural_amp_modeler_rs::models::NamModel;
 use std::path::Path;
 
 // Smoke test: load + process
+
 let sys = SystemSnapshot::capture();
-let mp = load_and_build_model(Path::new("model.nam"), &sys, false, LoadOptions::default())?;
+let mut mp = load_and_build_model(Path::new("model.nam"), &sys, false, LoadOptions::default())?;
 let model = mp.model_l.as_mut().unwrap();
 
 let input = vec![0.0f32; 128];

@@ -32,33 +32,70 @@ mod sealed {
 // Trait NamModel — Public Contract
 // =============================================================================
 
-/// The interface (standard connector) for any neural model (amplifiers, pedals, etc.).
+/// Interface for all neural network model architectures in `NeuralAmpModeler-rs`.
 ///
-/// Sealed via private supertrait — only types within this crate can implement `NamModel`.
+/// `NamModel` defines the operational contract for acoustic neural inference
+/// engines (WaveNet A1/A2, LSTM, ConvNet, Linear FIR/FFT, and Slimmable containers).
+///
+/// # Lifecycle & Execution Flow
+///
+/// 1. **Off-RT Instantiation & Prewarming:**
+///    Models are constructed outside the real-time audio thread via [`loader::load_and_build_model`](crate::loader::load_and_build_model)
+///    or concrete architecture constructors. During instantiation, weights are packed into
+///    64-byte aligned SIMD structures (`AlignedVec<f32>`), internal history state buffers are
+///    allocated, and [`prewarm`](NamModel::prewarm) is executed to prime dilated convolution
+///    buffers or recurrent states.
+///
+/// 2. **Real-Time Audio Hot-Path Processing:**
+///    The DAW audio callback or standalone audio loop invokes [`process`](NamModel::process) on
+///    each audio quantum (block of `f32` samples). Execution strictly guarantees:
+///    - **Zero Heap Allocations:** No `Box`, `Vec`, `String`, or dynamic allocation occurs during `process`.
+///    - **Zero Mutex Locks / Blocking I/O:** No locks, condition variables, file I/O, or logging.
+///    - **Deterministic Real-Time Bounds:** SIMD inner loops (AVX2 / AVX-512) execute within
+///      sub-millisecond deadlines.
+///
+/// 3. **State Resets & Buffer Reallocations:**
+///    When sample rates or maximum buffer sizes change, the control thread invokes [`reset`](NamModel::reset)
+///    or [`set_max_buffer_size`](NamModel::set_max_buffer_size). Re-allocations happen off-RT,
+///    preserving zero-allocation guarantees during subsequent audio callbacks.
+///
+/// 4. **Swapping & GC Deallocation Cascade:**
+///    When models or quality tiers are swapped dynamically, old model instances are transferred via an
+///    SPSC channel to an off-RT Garbage Collector (`GcProducer`), ensuring deallocation drops
+///    happen off the audio thread.
+///
+/// # Thread Safety & Trait Sealing
+///
+/// `NamModel` requires `Send + Sync`, enabling safe cross-thread transfer and multi-threaded host dispatch.
+/// The trait is sealed via `sealed::Sealed` to restrict public implementations to this crate, enabling
+/// static dispatch via [`StaticModel`].
 pub trait NamModel: Send + Sync + sealed::Sealed {
-    /// Invoked by the DSP RT-Thread to process acoustic sample blocks (Float32).
+    /// Invoked by the DSP audio thread to process an acoustic sample block.
+    ///
+    /// # Real-Time Safety
+    /// This method MUST NOT allocate on the heap, acquire locks, or perform blocking I/O.
     fn process(&mut self, input: &[f32], output: &mut [f32]);
 
-    /// "Heats up" the virtual tubes of the neural engine (`prewarm`).
+    /// Primes internal state buffers by processing `num_samples` of zeroed input off-RT.
+    ///
+    /// Stabilizes receptive fields in WaveNet or recurrent states in LSTM before live audio processing.
     fn prewarm(&mut self, num_samples: usize);
 
-    /// Returns whether prewarm should be executed on `reset()`.
+    /// Returns whether prewarm should be executed on [`reset`](NamModel::reset).
     ///
     /// Default: `true` (prewarm on every reset).
     fn prewarm_on_reset(&self) -> bool {
         true
     }
 
-    /// Sets whether prewarm should be executed on `reset()`.
+    /// Sets whether prewarm should be executed on [`reset`](NamModel::reset).
     ///
     /// Default: no-op (fixed-size models ignore this flag).
     fn set_prewarm_on_reset(&mut self, _val: bool) {}
 
-    /// Resets the model's internal state with a new sample rate and max buffer size.
+    /// Resets internal model states with a new sample rate and maximum block size.
     ///
-    /// The default implementation calls `prewarm(max_buffer_size)` if `prewarm_on_reset()`
-    /// returns `true`. Architectures with recurrent state (LSTM) may override this
-    /// for a lighter reset (only zero the internal states without reprocessing a full prewarm).
+    /// Default implementation calls `prewarm(max_buffer_size)` if `prewarm_on_reset()` is `true`.
     fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         if self.prewarm_on_reset() {
             self.prewarm(max_buffer_size);
@@ -66,37 +103,35 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
         Ok(())
     }
 
-    /// Reallocates internal buffers to support the given maximum block size.
-    ///
-    /// Models with fixed (const-generic) buffer sizes can use the default no-op.
+    /// Reallocates internal scratch buffers to support up to `max_buf` samples.
     ///
     /// Default: no-op (suitable for static models and LSTM).
     fn set_max_buffer_size(&mut self, _max_buf: usize) -> anyhow::Result<()> {
         Ok(())
     }
 
-    /// Returns the number of samples needed to fully stabilize the model's internal
-    /// state (receptive field / recurrent memory depth).
+    /// Returns the number of samples needed to fully stabilize internal states.
     ///
-    /// Default: `0` (suitable for LSTM, which stabilizes via recurrence).
-    /// WaveNet variants override this to return the sum of all array receptive
-    /// fields plus any condition_dsp prewarm samples.
+    /// Default: `0` (suitable for LSTM). WaveNet models return their total receptive field depth.
     fn prewarm_samples(&self) -> usize {
         0
     }
 
-    /// Returns the breakpoints at which slimmable quality transitions occur.
+    /// Returns quality-tier breakpoints `[0.0, 1.0]` for slimmable model bundles.
     ///
-    /// Each breakpoint represents a normalized value in `[0.0, 1.0]` where the
-    /// model switches to a different submodel or internal quality tier. Hosts
-    /// and plugins can use these to map and snap discrete quality parameters.
-    ///
-    /// Delegates to the inner model when applicable (e.g., `ContainerModel`).
-    /// Defaults to an empty vector for models without discrete breakpoints.
-    fn slimmable_breakpoints(&self) -> Vec<f64> {
-        vec![]
+    /// # Allocation note
+    /// The returned `Box<[f64]>` is allocated off-RT during configuration. MUST NOT be called on hot-path.
+    fn slimmable_breakpoints(&self) -> Box<[f64]> {
+        Box::new([])
     }
 }
+
+// ── API Return Type Policy ────────────────────────────────────────────────────
+// Methods returning collections of model configuration (not audio samples) use:
+//   • Box<[T]>  when the set is fixed-size and immutable after model load.
+//   • Vec<T>    only when the set is dynamic and caller-growable (justify inline).
+// All collection-returning methods are off-RT only; document this in their
+// doc-comments with the "# Allocation note" section.
 
 /// Wrapper enum for trained model variants.
 /// Enables static dispatch of DSP calls to the concrete variant, avoiding vtable overhead.

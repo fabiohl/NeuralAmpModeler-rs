@@ -21,6 +21,10 @@
 // `[build] rustflags` entry in `.cargo/config.toml` — see the comment
 // there for why that approach failed).
 fn main() {
+    if std::env::var("DOCS_RS").is_ok() {
+        return;
+    }
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 

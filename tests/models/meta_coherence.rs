@@ -428,6 +428,8 @@ fn test_rt_logging_safety() {
 
     let cold_path_files: &[&str] = &[
         "src/dsp/cabsim/loader.rs",
+        "src/dsp/cabsim/ir_parse.rs",
+        "src/dsp/cabsim/ir_resample.rs",
         "src/models/slicing.rs",
         "src/models/a2/model/set_weights.rs",
         "src/models/a2/model/dynamic/build.rs",

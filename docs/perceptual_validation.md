@@ -32,7 +32,7 @@ with zero heap allocation in hot loops (aside from FFT planner construction).
 
 ## ESR — Error-to-Signal Ratio (Primary Scale-Robust Metric)
 
-**Files:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs) | [`tests/common/metrics.rs`](../tests/common/metrics.rs) | **f64 variant:** [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)
+**Files:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs) | [`tests/common/metrics.rs`](../tests/common/metrics.rs) | **f64 variant:** [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)
 
 ```text
 ESR = Σ(rᵢ − tᵢ)² / Σ rᵢ²
@@ -104,7 +104,7 @@ stress signal. Source measurements are documented in code comments.
 | LSTM 2×8                             | 93     | 1.7e-9  | 0.12        | Standard precision default                                  |
 | LSTM Official (H=3)                  | 105    | 9.0e-11 | 0.22        | Standard precision default                                  |
 | LSTM-Dyn 1×7                         | 80     | 3.5e-9  | 0.10        | Non-catalog geometry, 48 kHz only                           |
-| Linear                               | 125    | 1.0e-10 | 0.12        | Partitioned FFT FIR convolution                             |
+| Linear (RF=320..8192)                | 125    | 1.0e-10 | 0.12        | Partitioned FFT FIR convolution (RF-independent precision)  |
 
 Fallback formulas (when a model has no calibrated entry):
 
@@ -147,7 +147,7 @@ is proportionally tightened. `min_snr_db` is clamped to at least 5.0 dB.
 
 ## MR-STFT — Multi-Resolution STFT Loss (Hard + Soft Spectral Gate)
 
-**File:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)
+**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)
 
 ```text
 MR-STFT = Σ_w weight[w] · mean_frame( L1_sc + L2_sc )
@@ -340,7 +340,7 @@ Tests: [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs) (unit),
 
 ## LUFS — ITU-R BS.1770-4 Integrated Loudness (Full 2-Pass Gating)
 
-**File:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs) (`compute_integrated_lufs`)
+**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs) (`compute_integrated_lufs`)
 
 Full implementation of ITU-R BS.1770-4 integrated loudness with absolute and
 relative gating. Single-channel mono computation.
@@ -365,7 +365,7 @@ legitimate.
 
 ## LRA — EBU Tech 3342 Loudness Range
 
-**File:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs) (`compute_lra`)
+**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs) (`compute_lra`)
 
 Quantifies the macro-dynamic range of a program — the statistical distribution
 of loudness over time, not peak-to-average ratio.
@@ -376,7 +376,7 @@ Tests: [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs).
 
 ## True-Peak — ITU-R BS.1770-4 Annex 2 (dBTP)
 
-**File:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs) (`compute_true_peak_db`)
+**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs) (`compute_true_peak_db`)
 
 Measures the inter-sample peak — the true analog peak after D/A reconstruction —
 which can exceed 0 dBFS even when all digital samples are ≤ 0 dBFS (Gibbs phenomenon).
@@ -393,7 +393,7 @@ Tests: [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs).
 
 ## Combined Loudness Measurement
 
-**File:** [`src/testing/perceptual.rs`](../src/testing/perceptual.rs) (`measure_loudness`)
+**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs) (`measure_loudness`)
 
 Computes LUFS + LRA + dBTP in a single pass, sharing the K-weighting filter
 between LUFS and LRA.
@@ -642,17 +642,17 @@ When a tightened gate fails, fix the underlying cause or record a documented lim
 
 | Metric            | Implementation                                                                  | Tests                                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ESR (f32)         | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`tests/common/metrics.rs`](../tests/common/metrics.rs)                                                                                                |
+| ESR (f32)         | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`tests/common/metrics.rs`](../tests/common/metrics.rs)                                                                                                |
 | ESR (f64)         | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs) | [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs)                                                                      |
-| MR-STFT           | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`tests/common/validation.rs`](../tests/common/validation.rs)                                                                                          |
+| MR-STFT           | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`tests/common/validation.rs`](../tests/common/validation.rs)                                                                                          |
 | ASR               | [`src/testing/aliasing.rs`](../src/testing/aliasing.rs)                         | [`src/testing/aliasing_test.rs`](../src/testing/aliasing_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)         |
 | Farina FR+THD     | [`src/testing/spectral/farina.rs`](../src/testing/spectral/farina.rs)           | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)         |
 | THD+N AES17       | [`src/testing/spectral/thd.rs`](../src/testing/spectral/thd.rs)                 | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)         |
 | IMD SMPTE         | [`src/testing/spectral/thd.rs`](../src/testing/spectral/thd.rs)                 | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)         |
-| LUFS              | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs), [`tests/models/ebu_lufs_compliance.rs`](../tests/models/ebu_lufs_compliance.rs) |
-| LRA               | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
-| True-Peak dBTP    | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
-| Combined Loudness | [`src/testing/perceptual.rs`](../src/testing/perceptual.rs)                     | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
+| LUFS              | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs), [`tests/models/ebu_lufs_compliance.rs`](../tests/models/ebu_lufs_compliance.rs) |
+| LRA               | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
+| True-Peak dBTP    | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
+| Combined Loudness | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)             | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs)                                                                                  |
 | f64 Oracle        | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs) | [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs)                                                                      |
 | Fidelity Report   | [`tests/common/validation.rs`](../tests/common/validation.rs)                   | [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs), [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)                   |
 | ISA Parity        | [`tests/parity/isa_parity.rs`](../tests/parity/isa_parity.rs)                   | [`tests/parity/isa_parity.rs`](../tests/parity/isa_parity.rs)                                                                                          |

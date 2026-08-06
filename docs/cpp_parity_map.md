@@ -724,7 +724,7 @@ All dynamic path variants achieve near-bit-exact parity or expected approximatio
 
 ### 4.4 🔴 Status: wavenet_a2_max.nam (Official Flagship) — Disabled Fail-Closed
 
-This model is the sole item in the A2 topology currently disabled fail-closed at dispatch (`is_disabled_broken_a2_flagship` in `src/loader/dispatcher/wavenet/mod.rs`).
+This model is the sole item in the A2 topology currently disabled fail-closed at dispatch (`is_disabled_broken_a2_flagship` in `src/loader/dispatcher/wavenet/static_factory.rs`).
 
 **Root Cause Summary:**
 Three structural bugs in the dynamic engine contribute to the divergence against the C++ golden vector (`golden_wavenet_a2_max.bin`):
@@ -860,7 +860,7 @@ has no practical benefit for any real-world use case.
 
 **Verification:** this policy is enforced at two levels:
 
-1. **JSON parse:** `validate_sample_rate` (`src/loader/nam_json/validation.rs`) rejects
+1. **JSON parse:** `deserialize_sample_rate` (`src/loader/nam_json/validation/schema.rs`) rejects
    non-finite or ≤0 sample rates via `JsonError::InvalidSampleRate`, but `None` (absent
    field) passes through silently — it is handled downstream.
 2. **Model build:** `build.rs:161` applies `unwrap_or(DEFAULT_SAMPLE_RATE)` to the parsed
@@ -946,7 +946,7 @@ failure. This is the only item that should block a release if `wavenet_a2_max.na
 is a requirement.
 
 > **Mitigado/contido (2026-07-02):** desativado fail-closed na camada de dispatch
-> (`is_disabled_broken_a2_flagship` em `src/loader/dispatcher/wavenet/mod.rs`,
+> (`is_disabled_broken_a2_flagship` em `src/loader/dispatcher/wavenet/static_factory.rs`,
 > ver §4.4). `build_model` rejeita o modelo com `Err` antes de
 > tocar pesos ou construir o motor. O modelo `.nam` e o golden `.bin` permanecem
 > no repositório (disabled, not removed). Reativação depende de fechar a

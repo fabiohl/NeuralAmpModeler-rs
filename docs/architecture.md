@@ -17,7 +17,7 @@ The engine is an independent public library. Downstream applications may exercis
 
 ### 1.1 Structural Dispatch: `StaticModel` Enum (Zero Vtable Routing)
 
-NeuralAmpModeler-rs uses a **static enum dispatch** pattern to route inference calls to the correct model architecture without virtual table (vtable) overhead. The `StaticModel` enum (`src/models/mod.rs:106`) has 23 variants covering all supported architectures:
+NeuralAmpModeler-rs uses a **static enum dispatch** pattern to route inference calls to the correct model architecture without virtual table (vtable) overhead. The `StaticModel` enum (`src/models/mod.rs:141`) has 23 variants covering all supported architectures:
 
 | Family                 | Variants                                                                                                            | Dispatch Strategy                  |
 |:---------------------- |:------------------------------------------------------------------------------------------------------------------- |:---------------------------------- |

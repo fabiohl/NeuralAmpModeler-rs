@@ -26,7 +26,7 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
     data: &NamModelData,
     topo: NamWavenetTopology,
 ) -> anyhow::Result<WaveNetModel<CH, K, HEAD>> {
-    super::validate_layer_activations(data)?;
+    super::static_factory::validate_layer_activations(data)?;
 
     let mut cursor = WeightCursor::new(&data.weights, data.weights_layout);
 

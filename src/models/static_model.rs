@@ -123,11 +123,11 @@ impl StaticModel {
     ///
     /// Delegates to `ContainerModel::slimmable_breakpoints()` when this is a
     /// `Container` variant. Returns an empty vector for all other variants.
-    pub fn slimmable_breakpoints(&self) -> Vec<f64> {
+    pub fn slimmable_breakpoints(&self) -> Box<[f64]> {
         if let Self::Container(c) = self {
             SlimmableModel::slimmable_breakpoints(c.as_ref())
         } else {
-            vec![]
+            Box::new([])
         }
     }
 

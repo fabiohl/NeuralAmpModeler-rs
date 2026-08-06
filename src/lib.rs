@@ -46,14 +46,16 @@
 //!
 //! ### Feature Flags Summary Table
 //!
-//! | Feature Flag | Default | Description                                                        |
-//! |:------------ |:-------:|:------------------------------------------------------------------ |
-//! | `stereo`     | No      | Enables multi-channel / stereo dual-model loader support.          |
-//! | `testing`    | No      | Exposes off-RT test utilities, audio signal generators, and        |
-//! |              |         | perceptual metrics (`testing` module).                             |
-//! | `heap-audit` | No      | Enables heap-allocation auditing infrastructure.                   |
-//! | `long_bench` | No      | Enables long-form inference benchmarks.                            |
-//! | `pgo`        | No      | Build with PGO (Profile-Guided Optimization) support.              |
+//! | Feature Flag     | Default | Description                                                        |
+//! |:---------------- |:-------:|:------------------------------------------------------------------ |
+//! | `stereo`         | No      | Enables multi-channel / stereo dual-model loader support.          |
+//! | `testing`        | No      | Exposes off-RT test utilities, audio signal generators, and        |
+//! |                  |         | perceptual metrics (`testing` module).                             |
+//! | `heap-audit`     | No      | Enables heap-allocation auditing infrastructure.                   |
+//! | `long_bench`     | No      | Enables long-form inference benchmarks.                            |
+//! | `pgo`            | No      | Build with PGO (Profile-Guided Optimization) support.              |
+//! | `dynamic-engine` | No      | Enables generic dynamic-dimension fallback execution paths for     |
+//! |                  |         | arbitrary non-standard model topologies.                           |
 //!
 //! ---
 //!
@@ -126,8 +128,8 @@
 //! | [`models`] | Neural network architectures & static topologies   | [`models::StaticModel`], WaveNet, LSTM, ConvNet        |
 //! | [`dsp`]    | Digital signal processing engine & oversampling    | [`dsp::gate::GateParams`],                             |
 //! |            |                                                    | [`dsp::oversample::OversampleEngine`]                  |
-//! | [`common`] | Diagnostics, atomic bitmasks, & SPSC queues        | [`common::RtStatusFlags`],                             |
-//! |            |                                                    | [`common::alloc_audit`]                                |
+//! | [`common`] | Host-agnostic infrastructure & SPSC protocol     | [`common::spsc::RtStatusFlags`],                   |
+//! |            | *(Advanced API — qualified paths)*                 | [`common::alloc_audit`]                                |
 //! | `testing`  | Off-RT test utilities & perceptual metrics         | Audio validation and f64 Oracles                       |
 //! |            | (requires `testing`)                               |                                                        |
 //!
@@ -149,7 +151,7 @@
 //! ### 2. Zero Blocking I/O
 //! No `println!`, `eprintln!`, `format!`, file I/O, or blocking
 //! synchronization primitives are permitted on the RT thread. State
-//! transitions are signaled atomically via [`common::RtStatusFlags`].
+//! transitions are signaled atomically via [`common::spsc::RtStatusFlags`].
 //!
 //! ### 3. Denormal Protection (FTZ + DAZ)
 //! Subnormal (denormal) floating-point numbers cause severe performance
@@ -185,7 +187,22 @@ compile_error!(
 );
 
 pub mod common;
-pub use common::*;
+
+// API Surface Policy:
+// Only deliberately chosen types are re-exported at the crate root. Internal
+// infrastructure (SPSC protocol, RT status flags, alloc-audit) is
+// accessible via its qualified path (neural_amp_modeler_rs::common::spsc::*).
+// Do NOT add glob re-exports (pub use common::*) to this file.
+
+// Curated public re-exports for audio host integration and engine configuration.
+// Diagnostics and system support reporting for host applications:
+pub use common::diagnostics::{DiagnosticBundle, SystemSnapshot};
+// Global processing parameters and configuration mode enums:
+pub use common::params::{
+    ActivationPrecision, AdaptiveComputeMode, ProcessingParams, RtProcessingParams, SlimOverride,
+};
+// Zero-allocation panic dump hook facility for crash reporting:
+pub use common::panic_hook::install_panic_hook;
 
 pub mod dsp;
 pub mod loader;

@@ -235,9 +235,9 @@ impl NamModel for ContainerModel {
 }
 
 impl SlimmableModel for ContainerModel {
-    fn slimmable_breakpoints(&self) -> Vec<f64> {
+    fn slimmable_breakpoints(&self) -> Box<[f64]> {
         if self.submodels.len() <= 1 {
-            return vec![];
+            return Box::new([]);
         }
         self.submodels[..self.submodels.len() - 1]
             .iter()

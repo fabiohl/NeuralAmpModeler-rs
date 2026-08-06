@@ -228,11 +228,11 @@ impl NamModel for StaticModel {
         }
     }
 
-    fn slimmable_breakpoints(&self) -> Vec<f64> {
+    fn slimmable_breakpoints(&self) -> Box<[f64]> {
         if let Self::Container(c) = self {
             SlimmableModel::slimmable_breakpoints(c.as_ref())
         } else {
-            vec![]
+            Box::new([])
         }
     }
 }

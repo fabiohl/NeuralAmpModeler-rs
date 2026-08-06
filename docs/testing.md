@@ -11,7 +11,7 @@ This document tracks and categorizes the test suite of `NeuralAmpModeler-rs` acc
 > **Document scope.** This document covers the *functional/correctness* `cargo test` architecture: [utils/tests-quick.sh](../utils/tests-quick.sh) (agile first line) and [utils/tests-long.sh](../utils/tests-long.sh) (nightly/pre-release audit). Static analysis ([utils/lints.sh](../utils/lints.sh)) and performance benchmarking are out of scope here:
 >
 > - [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) is the canonical, baseline-gated performance-regression wall. Its full rationale, workflow, and troubleshooting live in [benchmarks.md](benchmarks.md) ("Regression Gate" section).
-> - [utils/tests-long.sh](../utils/tests-long.sh) Phase 6 (§4 below) additionally runs the full Criterion bench suite for the record, with no baseline gating of its own.
+> - Benchmarks are executed via `cargo bench` or `utils/tests-performance-regression.sh` and are excluded from the nightly test runner ([utils/tests-long.sh](../utils/tests-long.sh)).
 
 ---
 
@@ -71,7 +71,7 @@ graph TD
 
 ### Heap Audits — delegated to the long suite
 
-- Heap-audit integration tests run in [utils/tests-long.sh](../utils/tests-long.sh) Phase 4 in **release**. They are out of the quick loop.
+- Heap-audit integration tests run in [utils/tests-long.sh](../utils/tests-long.sh) Phase 3 in **release**. They are out of the quick loop.
 
 ### Golden Vector Supply Chain
 
@@ -79,7 +79,7 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector.
 
-- **Libm Export Guard:** [utils/debug/verify_no_libm_exports.sh](../utils/debug/verify_no_libm_exports.sh) verifies that compiled artifacts do not export libm symbols with global/weak linkage, preventing runtime symbol interposition bugs. Invoked by [utils/lints.sh](../utils/lints.sh).
+- **Libm Export Guard:** [utils/debug/verify_no_libm_exports.sh](../utils/debug/verify_no_libm_exports.sh) is a diagnostic ELF surface verification script that inspects compiled artifacts to confirm they do not export libm symbols with global/weak linkage, preventing runtime symbol interposition bugs (documented in [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)).
 
 ---
 

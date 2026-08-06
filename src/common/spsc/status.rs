@@ -71,6 +71,9 @@ pub const RT_STATUS_NEEDS_QUANTUM_LOG: u64 = 1 << 23;
 /// Set whenever an item is parked in the overflow buffer, regardless of overwrite.
 pub const RT_STATUS_GC_TIER3: u64 = 1 << 22;
 
+/// Flag indicating that the SPSC command queue drain limit was reached (64 events) on the RT thread.
+pub const RT_STATUS_SPSC_DRAIN_TRUNCATED: u64 = 1 << 24;
+
 /// Atomic status flags for silent RT→Main communication.
 ///
 /// The DSP thread sets atomic flags instead of calling `println!`/`eprintln!`.
@@ -105,6 +108,7 @@ pub const RT_STATUS_GC_TIER3: u64 = 1 << 22;
 /// | 21 | `SLIMMABLE_RESET_FAILED` | ContainerModel submodel reset failed on RT thread |
 /// | 22 | `GC_TIER3` | GC cascade reached Tier 3 (overflow buffer) — item parked |
 /// | 23 | `NEEDS_QUANTUM_LOG` | Host quantum (buffer size in frames) changed |
+/// | 24 | `SPSC_DRAIN_TRUNCATED` | SPSC command queue drain limit reached (64 events) |
 #[repr(align(128))]
 pub struct RtStatusFlags {
     /// Effective sample rate active on the DSP thread after resampler rebuild.

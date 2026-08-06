@@ -60,8 +60,6 @@ mutants.out.old/
 # Arquivos temporários dos scripts de geração de golden vectors
 /tests/fixtures/.temp_golden/
 /tests/fixtures/.temp_live/
-/tests/fixtures/stress_signal.wav
-/tests/fixtures/stress_signal_v2_*.wav
 
 # Artefatos de bytecode Python (scripts de fixtures/utilitários)
 __pycache__/
