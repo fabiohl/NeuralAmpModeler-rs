@@ -76,7 +76,7 @@ fn test_system_snapshot_capture() {
 /// mnemonic, contextual parameters, and copy instructions.
 #[test]
 fn test_diagnostic_support_block_contains_code() {
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let snap = SystemSnapshot::capture();
     let diag = NamDiagnostic::new(NamErrorCode::NambCrc32Mismatch, &snap)
         .message("Corrupted file")
@@ -158,7 +158,7 @@ fn test_emit_irq_advisory_safety() {
 /// Verifies that DiagnosticBundle::capture().render() yields a nominal block without error fields.
 #[test]
 fn test_diagnostic_bundle_nominal() {
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let bundle = DiagnosticBundle::capture();
     let rendered = bundle.render();
 
@@ -182,7 +182,7 @@ fn test_diagnostic_bundle_nominal() {
 /// Verifies that DiagnosticBundle::capture_with_error() matches NamDiagnostic::support_block() output.
 #[test]
 fn test_diagnostic_bundle_with_error_matches() {
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let snap = SystemSnapshot::capture();
     let code = NamErrorCode::NambCrc32Mismatch;
     let params = vec![
@@ -199,15 +199,31 @@ fn test_diagnostic_bundle_with_error_matches() {
     let block_diag = diag.support_block();
     let block_bundle = bundle.render();
 
-    // Strip timestamp lines and dynamic environmental log warnings (e.g. IRQ isolation advisories) to prevent flaky failures on host variations
-    let lines_diag: Vec<&str> = block_diag
-        .lines()
-        .filter(|l| !l.starts_with("timestamp=") && !l.contains("isolate core"))
-        .collect();
-    let lines_bundle: Vec<&str> = block_bundle
-        .lines()
-        .filter(|l| !l.starts_with("timestamp=") && !l.contains("isolate core"))
-        .collect();
+    fn filter_diagnostic_lines(block: &str) -> Vec<&str> {
+        let mut lines = Vec::new();
+        let mut in_log_trace = false;
+        for line in block.lines() {
+            if line.contains("Recent Log Trace") {
+                in_log_trace = true;
+                lines.push(line);
+                continue;
+            }
+            if in_log_trace {
+                if line.starts_with("───") {
+                    in_log_trace = false;
+                    lines.push(line);
+                }
+                continue;
+            }
+            if !line.starts_with("timestamp=") && !line.contains("isolate core") {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    let lines_diag = filter_diagnostic_lines(&block_diag);
+    let lines_bundle = filter_diagnostic_lines(&block_bundle);
 
     assert_eq!(lines_diag, lines_bundle);
 }

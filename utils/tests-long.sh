@@ -98,9 +98,9 @@ source "$(dirname "$0")/_lib.sh"
 # `run_phase ... || true` below and never reach this trap — see §6.2).
 trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" failed at line $LINENO with status $?. Aborting audit suite.${NC}"; exit 1' ERR
 
-echo -e "${BLUE}${BOLD}===============================================================${NC}"
-echo -e "${BLUE}${BOLD}    NeuralAmpModeler-rs Long-Duration Stress & Audit Suite (± 30 minutes)   ${NC}"
-echo -e "${BLUE}${BOLD}===============================================================${NC}"
+echo -e "${BLUE}${BOLD}=============================================================${NC}"
+echo -e "${BLUE}${BOLD}    NeuralAmpModeler-rs Long-Duration Stress & Audit Suite   ${NC}"
+echo -e "${BLUE}${BOLD}=============================================================${NC}"
 
 # Setup target logs and timing tracker
 rm -rf target/logs/

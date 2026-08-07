@@ -35,7 +35,7 @@
 //! **Pure Core DSP & Model Inference:**
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "0.1.0"
+//! NeuralAmpModeler-rs = "0.3.0"
 //! ```
 //!
 //! **Adding Off-RT Testing & Audio Signal Generators:**

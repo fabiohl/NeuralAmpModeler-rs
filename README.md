@@ -3,7 +3,7 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# NeuralAmpModeler-rs 0.1.0
+# NeuralAmpModeler-rs
 
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20%7C%20AVX--512-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg)
 
@@ -80,14 +80,14 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "0.1.0"
+NeuralAmpModeler-rs = "0.3.0"
 ```
 
 For off-RT testing utilities and audio signal generators:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "0.1.0", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "0.3.0", features = ["testing"] }
 ```
 
 ### Feature Flags

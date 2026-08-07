@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.94.0"
 license = "Apache-2.0"
@@ -46,7 +46,7 @@ rtrb = "0.3.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # SHA-256 for portable asset identity.
-sha2 = "0.10"
+sha2 = "0.11"
 # Logging facade (zero overhead when disabled).
 log = "0.4.33"
 # Lean error signaling for off-RT threads.
@@ -64,7 +64,7 @@ proptest = "1.11.0"
 # Model-checking for concurrency protocols.
 loom = "0.7"
 # Serialize test execution for global-state side effects.
-serial_test = { version = "3", features = ["async"] }
+serial_test = { version = "4", features = ["async"] }
 
 [[bench]]
 name = "inference_bench"

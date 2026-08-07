@@ -61,7 +61,17 @@ fn resolve_model_path(model_filename: &str) -> PathBuf {
     if path.exists() {
         return path;
     }
-    models_dir_nondist().join(model_filename)
+    let nondist = models_dir_nondist().join(model_filename);
+    if nondist.exists() {
+        return nondist;
+    }
+    let t3k = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../third-party/nam_t3k")
+        .join(model_filename);
+    if t3k.exists() {
+        return t3k;
+    }
+    path
 }
 
 fn anchors_dir() -> PathBuf {

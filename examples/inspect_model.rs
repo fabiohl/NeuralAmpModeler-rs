@@ -48,7 +48,13 @@ use neural_amp_modeler_rs::loader::{LoadOptions, LoadedModelPair, load_and_build
 fn sha256_hex(path: &Path) -> String {
     use sha2::{Digest, Sha256};
     match std::fs::read(path) {
-        Ok(bytes) => format!("{:x}", Sha256::digest(&bytes)),
+        Ok(bytes) => Sha256::digest(&bytes)
+            .iter()
+            .fold(String::with_capacity(64), |mut acc, b| {
+                use std::fmt::Write;
+                let _ = write!(acc, "{:02x}", b);
+                acc
+            }),
         Err(_) => "(unreadable)".to_string(),
     }
 }
