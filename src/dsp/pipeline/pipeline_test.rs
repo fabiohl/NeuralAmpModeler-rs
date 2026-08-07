@@ -109,7 +109,7 @@ mod tests {
         };
 
         let _guard = TrackingGuard::new();
-        capture_dsp_pipeline(&mut samples_l, &mut samples_r, n, ctx, bufs, 48000);
+        let n_processed = capture_dsp_pipeline(&mut samples_l, &mut samples_r, n, ctx, bufs, 48000);
         let allocs = get_alloc_count();
         drop(_guard);
 
@@ -121,6 +121,11 @@ mod tests {
         let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
         let out_buf = &bridge.buffers[read_idx];
         let n_out = out_buf.n_samples as usize;
+
+        assert_eq!(
+            n_processed, n_out,
+            "capture_dsp_pipeline return value n_processed must equal bridge n_out"
+        );
 
         (
             out_buf.buf_l[..n_out].to_vec(),

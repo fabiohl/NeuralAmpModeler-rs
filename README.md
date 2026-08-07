@@ -80,14 +80,14 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "0.3.0"
+NeuralAmpModeler-rs = "x.y.z"
 ```
 
 For off-RT testing utilities and audio signal generators:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "0.3.0", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 ```
 
 ### Feature Flags

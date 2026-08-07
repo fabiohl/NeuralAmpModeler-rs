@@ -15,6 +15,8 @@ use super::stages::{
 ///
 /// Statically dispatches to a monomorphized inner implementation, eliminating
 /// v-table overhead from all inner SIMD operations.
+///
+/// Returns the number of output samples processed (`n_pw`). Returns 0 if `bridge_writer` is None or gate is closed.
 #[inline(always)]
 pub fn capture_dsp_pipeline(
     samples_l: &mut [f32],
@@ -23,7 +25,7 @@ pub fn capture_dsp_pipeline(
     ctx: DspPipelineContext<'_>,
     bufs: DspBuffers<'_>,
     sample_rate: u32,
-) {
+) -> usize {
     use crate::math::common::{
         Avx2Math, Avx512Math, Avx512VnniBf16Math, InstructionSet, effective_instruction_set,
     };
@@ -87,9 +89,9 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
     mut ctx: DspPipelineContext<'_>,
     bufs: DspBuffers<'_>,
     sample_rate: u32,
-) {
+) -> usize {
     if ctx.bridge_writer.is_none() {
-        return;
+        return 0;
     }
     // STAGE 1: INPUT AND CLEANUP
     let gate_state =
@@ -103,7 +105,7 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
         if let Some(writer) = ctx.bridge_writer {
             writer.write_silence();
         }
-        return;
+        return 0;
     }
 
     // STAGE 2: THE "BRAIN" (AMP/PEDAL SIMULATION)
@@ -178,4 +180,6 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
         ctx.bridge_writer,
         *ctx.process_mono,
     );
+
+    n_pw
 }
