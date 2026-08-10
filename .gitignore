@@ -49,6 +49,9 @@ fuzz/Cargo.lock
 .out/
 mutants.out.old/
 
+# Artefatos de terceiros
+/third-party
+
 # C++ upstream vendor mirrors NÃO vivem mais neste repositório:
 # ficam concentrados na área third-party do workspace (../third-party/),
 # sincronizados por utils/mod-update.sh com pins de ../third-party/variables.env.
