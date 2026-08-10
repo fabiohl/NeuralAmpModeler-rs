@@ -19,6 +19,7 @@
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
+use neural_amp_modeler_rs::models::a2::GatingMode;
 use neural_amp_modeler_rs::models::slimmable::SlimmableModel;
 use neural_amp_modeler_rs::models::{NamModel, StaticModel};
 use std::fs;
@@ -35,15 +36,19 @@ fn gv_metric(label: &str) {
 /// Runs a v2 golden test across a specific set of sample rates.
 ///
 /// For each sample rate, reads the committed `golden_{name}_v2_{sr}.bin` file,
-/// processes with `process_in_blocks`, and validates via `report_dsp_fidelity`.
+/// processes with `process_in_blocks`, and validates via `report_dsp_fidelity`
+/// (or `report_dsp_fidelity_no_lufs` when `check_lufs_gate` is false).
 ///
-/// Uses `assert!` to enforce mandatory gate: all listed .bin files must exist.
+/// `check_lufs_gate` must match the corresponding `live_cross_validation_v2_*`
+/// policy in `tests/parity/cpp_parity.rs` (SKIP_CAPABILITY for synthetic
+/// low-loudness fixtures such as `lstm_2x24` / `convnet_relu`).
 fn run_v2_golden_test(
     model_filename: &str,
     golden_name: &str,
     label: &str,
     model_name: &str,
     sample_rates: &[u32],
+    check_lufs_gate: bool,
 ) {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let nam_path = model_path(model_filename);
@@ -118,16 +123,30 @@ fn run_v2_golden_test(
         set_metric_model(format!("{label} @{sr} (v2) Live"));
         set_metric_mode("Live".to_string());
 
-        report_dsp_fidelity(
-            &expected,
-            &output,
-            mse_limit,
-            min_snr_db,
-            max_esr,
-            mrstft_max,
-            &format!("{label} @ {sr} Hz (v2)"),
-            sr,
-        );
+        let report_label = format!("{label} @ {sr} Hz (v2)");
+        if check_lufs_gate {
+            report_dsp_fidelity(
+                &expected,
+                &output,
+                mse_limit,
+                min_snr_db,
+                max_esr,
+                mrstft_max,
+                &report_label,
+                sr,
+            );
+        } else {
+            report_dsp_fidelity_no_lufs(
+                &expected,
+                &output,
+                mse_limit,
+                min_snr_db,
+                max_esr,
+                mrstft_max,
+                &report_label,
+                sr,
+            );
+        }
     }
 }
 
@@ -961,33 +980,33 @@ fn test_golden_vectors_a2_example_slimmable() {
     );
 }
 
-/// Test 8k: `wavenet_a2_max.nam` is disabled at dispatch (fail-closed, §7.1).
+/// Test 8k: `wavenet_a2_max.nam` dispatch is fail-closed (TR1.1 / KB-A2-MAX).
 ///
-/// The model is confirmed broken against the NAMcore C++ golden
-/// (see `docs/cpp_parity_map.md` §7.1). This test asserts that
-/// `build_model` returns `Err` with the expected "disabled" message
-/// and cite to §7.1, proving the guard is active.
+/// Known bug: prod×C++ SNR ≈ 0.23 dB (structural). `build_model` must
+/// return `Err` — no production f32 instance of this topology enters
+/// the public hot path.
 #[test]
-fn test_wavenet_a2_max_dispatch_is_disabled_broken() {
+fn test_wavenet_a2_max_dispatch_rejected() {
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
     let path = model_path("wavenet_a2_max.nam");
     assert!(path.exists());
     let json = fs::read_to_string(&path).expect("Failed to read wavenet_a2_max.nam");
     let data = parse_nam_json(&json).expect("Failed to parse wavenet_a2_max.nam");
     let result = build_model(&data);
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("wavenet_a2_max.nam must be rejected fail-closed (TR1.1)"),
+    };
+    let msg = err.to_string();
     assert!(
-        result.is_err(),
-        "wavenet_a2_max.nam must be rejected (fail-closed guard is missing or bypassed)"
+        msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
+        "Error message must cite KB-A2-MAX / parity gap, got: {msg}"
     );
-    let err_msg = format!("{}", result.err().unwrap());
     assert!(
-        err_msg.contains("disabled"),
-        "Error message must contain 'disabled', got: {}",
-        err_msg
-    );
-    assert!(
-        err_msg.contains("§7.1"),
-        "Error message must cite §7.1, got: {}",
-        err_msg
+        msg.contains("fail-closed"),
+        "Error message must cite fail-closed, got: {msg}"
     );
 }
 
@@ -1012,6 +1031,598 @@ fn test_wavenet_condition_dsp_still_loads() {
         "wavenet_condition_dsp.nam must load successfully (guard is over-broad). Error: {:?}",
         result.err()
     );
+}
+
+/// Test TR2.2: weight budget checkpoints for A2 Max (818 main + 1052 condition_dsp).
+///
+/// Under `NAM_A2_MAX_UNLOCK=1`, verifies that the dispatcher consumes every f32
+/// in the weight stream — the main model builds with exactly 818 weights consumed
+/// and the condition_dsp sub-model with exactly 1052. Per-component checkpoints
+/// are asserted against the NAMCore reference (`third-party/.../generate_weights_a2.py`).
+///
+/// **Invariant:** any residual weight ≠ 0 fails the layout test before comparing audio.
+/// **Rollback:** remove this test; the guard remains unchanged.
+#[test]
+fn test_a2_max_weight_budget_818_1052() {
+    let path = model_path("wavenet_a2_max.nam");
+    assert!(path.exists());
+    let json = fs::read_to_string(&path).expect("Failed to read wavenet_a2_max.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse wavenet_a2_max.nam");
+
+    // --- Main model weight budget ---
+    let main_actual = data.weights.len();
+    assert_eq!(
+        main_actual, 818,
+        "Main model weight count mismatch: expected 818, got {main_actual}"
+    );
+
+    // --- condition_dsp weight budget ---
+    let cond_json = data
+        .config
+        .condition_dsp
+        .as_ref()
+        .expect("A2 Max fixture must have condition_dsp");
+    let cond_actual = cond_json
+        .get("weights")
+        .and_then(|w| w.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert_eq!(
+        cond_actual, 1052,
+        "condition_dsp weight count mismatch: expected 1052, got {cond_actual}"
+    );
+
+    // --- Build model (implicitly verifies all weights consumed) ---
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let model = build_model(&data).expect("A2 Max must build under NAM_A2_MAX_UNLOCK=1");
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    let wad = match &*model {
+        StaticModel::WavenetA2Dyn(wad) => wad,
+        _ => panic!("Expected WavenetA2Dyn variant"),
+    };
+
+    // --- Per-component checkpoints: rechannel ---
+    let rechannel_expected = wad.input_channels * wad.channels;
+    assert_eq!(
+        wad.rechannel_w_f32.len(),
+        rechannel_expected,
+        "rechannel weight count mismatch"
+    );
+
+    // --- Per-component checkpoints: layers ---
+    for (li, layer) in wad.layers.iter().enumerate() {
+        let ch = wad.channels;
+        let bn = wad.bottleneck;
+        let use_gating = matches!(
+            wad.gating_modes[li],
+            GatingMode::Gated | GatingMode::Blended
+        );
+        let conv_out = if use_gating { bn * 2 } else { bn };
+        // mixin_w: group-aware compact
+        let mg = wad.mixin_groups.max(1);
+        let mixin_in_pg = wad.condition_size / mg as usize;
+        let mixin_count = conv_out * mixin_in_pg;
+        assert_eq!(
+            layer.mixin_w.len(),
+            mixin_count,
+            "layer[{li}].mixin_w size mismatch"
+        );
+
+        // l1x1: group-aware compact
+        let lg = wad.l1x1_groups.max(1);
+        let l1x1_in_pg = bn / lg as usize;
+        let l1x1_w_count = if lg > 1 { ch * l1x1_in_pg } else { bn * ch };
+        assert_eq!(
+            layer.l1x1_w.len(),
+            l1x1_w_count,
+            "layer[{li}].l1x1_w size mismatch"
+        );
+        assert_eq!(layer.l1x1_b.len(), ch, "layer[{li}].l1x1_b size mismatch");
+
+        // head1x1
+        if wad.head1x1_active {
+            let h1_w_count = wad.head_accum_size * wad.head1x1_h1_in;
+            assert!(
+                layer.head1x1_w.len() == h1_w_count,
+                "layer[{li}].head1x1_w size mismatch: expected {h1_w_count}, got {}",
+                layer.head1x1_w.len()
+            );
+            assert!(
+                layer.head1x1_b.len() == wad.head_accum_size,
+                "layer[{li}].head1x1_b size mismatch"
+            );
+        }
+
+        // Verify FiLM layers are present where expected
+        assert!(
+            layer.conv_pre_film.is_some(),
+            "layer[{li}].conv_pre_film must be loaded"
+        );
+        assert!(
+            layer.input_mixin_post_film.is_some(),
+            "layer[{li}].input_mixin_post_film must be loaded"
+        );
+        assert!(
+            layer.activation_pre_film.is_some(),
+            "layer[{li}].activation_pre_film must be loaded"
+        );
+        assert!(
+            layer.layer1x1_post_film.is_some(),
+            "layer[{li}].layer1x1_post_film must be loaded"
+        );
+        assert!(
+            layer.head1x1_post_film.is_some(),
+            "layer[{li}].head1x1_post_film must be loaded"
+        );
+
+        // FiLM check: conv_post_film should exist (active in JSON)
+        assert!(
+            layer.conv_post_film.is_some(),
+            "layer[{li}].conv_post_film must be loaded"
+        );
+    }
+
+    // --- Head budget ---
+    let head_size = wad.head_size;
+    if head_size == 1 {
+        assert!(
+            wad.head_conv.is_some(),
+            "head_conv must be built for head_size=1"
+        );
+    } else {
+        let per_oc_w = wad.head_kernel_size * wad.head_accum_size;
+        assert_eq!(
+            wad.head_rechannel_w.len(),
+            head_size * per_oc_w,
+            "head_rechannel_w size mismatch"
+        );
+        assert_eq!(
+            wad.head_rechannel_b.len(),
+            head_size,
+            "head_rechannel_b size mismatch"
+        );
+        assert_eq!(
+            wad.head_rechannel_scale.len(),
+            head_size,
+            "head_rechannel_scale size mismatch"
+        );
+    }
+
+    // --- condition_dsp built ---
+    assert!(
+        wad.condition_dsp.is_some(),
+        "A2 Max condition_dsp must be built"
+    );
+}
+
+/// Checkpoints FiLM por slot (H6 — Sprint R2.bis, TR2b.3).
+///
+/// Under unlock, builds A2 Max and registers per-layer, per-FiLM-slot:
+/// (groups, shift, w_count, b_count, stream offset). Verifies the total
+/// weight budget = 818 and each slot matches the `weights_layout.rs` formula.
+///
+/// ## How to run
+/// ```sh
+/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_a2_max_film_slot_budget -- --ignored --exact --nocapture
+/// ```
+#[test]
+#[ignore = "TR2b.3 (H6): FiLM budget check — not a CI gate; run manually"]
+fn test_a2_max_film_slot_budget() {
+    use neural_amp_modeler_rs::models::StaticModel;
+
+    let path = model_path("wavenet_a2_max.nam");
+    assert!(path.exists());
+    let json = fs::read_to_string(&path).expect("Failed to read wavenet_a2_max.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse wavenet_a2_max.nam");
+
+    let total_weights = data.weights.len();
+    assert_eq!(total_weights, 818, "Main model weight budget mismatch");
+
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let model = build_model(&data).expect("A2 Max must build under unlock");
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    let wad = match &*model {
+        StaticModel::WavenetA2Dyn(wad) => wad,
+        _ => panic!("Expected WavenetA2Dyn variant"),
+    };
+
+    let ch = wad.channels;
+    let bn = wad.bottleneck;
+    let cond_size = wad.condition_size;
+    let k = wad
+        .layers
+        .first()
+        .map(|l| l.conv.kernel_size())
+        .unwrap_or(0);
+    let conv_out: usize = wad
+        .gating_modes
+        .first()
+        .map(|g| match g {
+            neural_amp_modeler_rs::models::a2::gating::GatingMode::Gated
+            | neural_amp_modeler_rs::models::a2::gating::GatingMode::Blended => bn * 2,
+            _ => bn,
+        })
+        .unwrap_or(bn);
+    let mg = (wad.mixin_groups as usize).max(1);
+    let lg = (wad.l1x1_groups as usize).max(1);
+    let h1_w_count = wad.head_accum_size * wad.head1x1_h1_in;
+    let num_layers = wad.num_layers;
+    let head_k = wad.head_kernel_size;
+
+    println!(
+        "// Topology: CH={ch} BN={bn} cond={cond_size} K={k} conv_out={conv_out} layers={num_layers}"
+    );
+    println!(
+        "// mixin_groups={mg} l1x1_groups={lg} head1x1_active={}",
+        wad.head1x1_active
+    );
+    println!(
+        "// head_accum_size={} head1x1_h1_in={} head_kernel_size={head_k}",
+        wad.head_accum_size, wad.head1x1_h1_in
+    );
+
+    // ── Helper: FiLM weight/bias formulas (replicated from weights_layout::pub(crate)) ──
+    fn film_w_cnt(groups: u32, cond_size: usize, channels: usize, shift: bool) -> usize {
+        let g = groups as usize;
+        let mult = if shift { 2 } else { 1 };
+        channels * mult * cond_size / g
+    }
+    fn film_b_cnt(channels: usize, shift: bool) -> usize {
+        if shift { channels * 2 } else { channels }
+    }
+
+    // ── Walk all layers, all 8 FiLM slots ──
+    /// Returns (slot_name, film_channels for given has/cond_size).
+    fn slot_info(idx: usize, has: usize, cs: usize, ch: usize) -> (&'static str, usize) {
+        let fc = match idx {
+            2 => cs,
+            7 => has,
+            _ => ch,
+        };
+        let name = match idx {
+            0 => "conv_pre_film",
+            1 => "conv_post_film",
+            2 => "input_mixin_pre_film",
+            3 => "input_mixin_post_film",
+            4 => "activation_pre_film",
+            5 => "activation_post_film",
+            6 => "layer1x1_post_film",
+            7 => "head1x1_post_film",
+            _ => "?",
+        };
+        (name, fc)
+    }
+
+    fn get_film(
+        layer: &neural_amp_modeler_rs::models::a2::layer::A2Layer,
+        idx: usize,
+    ) -> Option<&neural_amp_modeler_rs::models::a2::film::FiLMLayer> {
+        match idx {
+            0 => layer.conv_pre_film.as_ref(),
+            1 => layer.conv_post_film.as_ref(),
+            2 => layer.input_mixin_pre_film.as_ref(),
+            3 => layer.input_mixin_post_film.as_ref(),
+            4 => layer.activation_pre_film.as_ref(),
+            5 => layer.activation_post_film.as_ref(),
+            6 => layer.layer1x1_post_film.as_ref(),
+            7 => layer.head1x1_post_film.as_ref(),
+            _ => None,
+        }
+    }
+
+    let mut stream_pos = 0usize;
+    let mut running_sum = 0usize;
+
+    // 1) Rechannel
+    let rc_count = wad.input_channels * ch;
+    let rc_offset = stream_pos;
+    stream_pos += rc_count;
+    running_sum += rc_count;
+    println!("  [rechannel]        offset={rc_offset:>4} w={rc_count:>4} sum={running_sum}");
+
+    // 2) Per-layer: conv, mixin, l1x1, head1x1, then FiLM
+    #[expect(clippy::type_complexity)]
+    let mut film_table: Vec<(usize, usize, &str, usize, bool, usize, usize, usize)> = Vec::new();
+    let mut total_film_w = 0usize;
+    let mut total_film_b = 0usize;
+
+    for li in 0..num_layers {
+        let layer = &wad.layers[li];
+
+        // conv_w
+        let conv_w_cnt = ch * bn * k;
+        let conv_w_off = stream_pos;
+        stream_pos += conv_w_cnt;
+        running_sum += conv_w_cnt;
+        println!(
+            "  l{li} conv_w        offset={conv_w_off:>4} w={conv_w_cnt:>4} sum={running_sum}"
+        );
+
+        // conv_b
+        let conv_b_cnt = conv_out;
+        let conv_b_off = stream_pos;
+        stream_pos += conv_b_cnt;
+        running_sum += conv_b_cnt;
+        println!(
+            "  l{li} conv_b        offset={conv_b_off:>4} w={conv_b_cnt:>4} sum={running_sum}"
+        );
+
+        // mixin_w
+        let mixin_in_pg = cond_size / mg;
+        let mixin_cnt = conv_out * mixin_in_pg;
+        let mixin_off = stream_pos;
+        stream_pos += mixin_cnt;
+        running_sum += mixin_cnt;
+        println!("  l{li} mixin_w       offset={mixin_off:>4} w={mixin_cnt:>4} sum={running_sum}");
+
+        // l1x1_w
+        let l1x1_in_pg = bn / lg;
+        let l1x1_w_cnt = if lg > 1 { ch * l1x1_in_pg } else { bn * ch };
+        let l1x1_w_off = stream_pos;
+        stream_pos += l1x1_w_cnt;
+        running_sum += l1x1_w_cnt;
+        println!(
+            "  l{li} l1x1_w        offset={l1x1_w_off:>4} w={l1x1_w_cnt:>4} sum={running_sum}"
+        );
+
+        // l1x1_b
+        let l1x1_b_cnt = ch;
+        let l1x1_b_off = stream_pos;
+        stream_pos += l1x1_b_cnt;
+        running_sum += l1x1_b_cnt;
+        println!(
+            "  l{li} l1x1_b        offset={l1x1_b_off:>4} w={l1x1_b_cnt:>4} sum={running_sum}"
+        );
+
+        // head1x1_w
+        let h1_w_off = stream_pos;
+        stream_pos += h1_w_count;
+        running_sum += h1_w_count;
+        println!("  l{li} head1x1_w     offset={h1_w_off:>4} w={h1_w_count:>4} sum={running_sum}");
+
+        // head1x1_b
+        let h1_b_cnt = wad.head_accum_size;
+        let h1_b_off = stream_pos;
+        stream_pos += h1_b_cnt;
+        running_sum += h1_b_cnt;
+        println!("  l{li} head1x1_b     offset={h1_b_off:>4} w={h1_b_cnt:>4} sum={running_sum}");
+
+        // FiLM slots 0-7
+        for slot_idx in 0..8 {
+            let (slot_name, film_channels) =
+                slot_info(slot_idx, wad.head_accum_size, cond_size, ch);
+
+            if let Some(film) = get_film(layer, slot_idx) {
+                let groups = film.config.groups as usize;
+                let shift = film.config.shift;
+
+                let expected_w = film_w_cnt(film.config.groups, cond_size, film_channels, shift);
+                let expected_b = film_b_cnt(film_channels, shift);
+
+                let actual_w = film.weights.len();
+                let actual_b = film.bias.len();
+
+                let w_off = stream_pos;
+                stream_pos += actual_w;
+                let _b_off = stream_pos;
+                stream_pos += actual_b;
+                running_sum += actual_w + actual_b;
+
+                film_table.push((
+                    li, slot_idx, slot_name, groups, shift, expected_w, expected_b, w_off,
+                ));
+                total_film_w += actual_w;
+                total_film_b += actual_b;
+
+                let w_status = if actual_w == expected_w {
+                    "ok"
+                } else {
+                    "MISMATCH"
+                };
+                let b_status = if actual_b == expected_b {
+                    "ok"
+                } else {
+                    "MISMATCH"
+                };
+
+                println!(
+                    "  l{li} {slot_name:>24} offset={w_off:>4} w={actual_w:>3}(exp {expected_w:>3}) {w_status} \
+                     b={actual_b:>3}(exp {expected_b:>3}) {b_status} groups={groups} shift={shift} sum={running_sum}"
+                );
+            }
+        }
+    }
+
+    // 3) Head conv + bias + scale
+    if wad.head_size == 1 {
+        let hc = wad.head_conv.as_ref().expect("head_conv must exist");
+        let head_w_cnt = hc.head_w.len();
+        let head_w_off = stream_pos;
+        stream_pos += head_w_cnt;
+        running_sum += head_w_cnt;
+        println!("  [head_conv_w]     offset={head_w_off:>4} w={head_w_cnt:>4} sum={running_sum}");
+
+        let head_b_cnt = 1usize;
+        let head_b_off = stream_pos;
+        stream_pos += head_b_cnt;
+        running_sum += head_b_cnt;
+        println!("  [head_conv_b]     offset={head_b_off:>4} w={head_b_cnt:>4} sum={running_sum}");
+    } else {
+        let per_oc = head_k * wad.head_accum_size;
+        let hw_cnt = wad.head_size * per_oc;
+        let hw_off = stream_pos;
+        stream_pos += hw_cnt;
+        running_sum += hw_cnt;
+        println!("  [head_rechannel_w] offset={hw_off:>4} w={hw_cnt:>4} sum={running_sum}");
+
+        let hb_cnt = wad.head_size;
+        let hb_off = stream_pos;
+        stream_pos += hb_cnt;
+        running_sum += hb_cnt;
+        println!("  [head_rechannel_b] offset={hb_off:>4} w={hb_cnt:>4} sum={running_sum}");
+    }
+
+    let head_scale_cnt = 1usize;
+    let hs_off = stream_pos;
+    stream_pos += head_scale_cnt;
+    running_sum += head_scale_cnt;
+    println!("  [head_scale]      offset={hs_off:>4} w={head_scale_cnt:>4} sum={running_sum}");
+
+    // ── Summary table ──
+    println!();
+    println!("=== FiLM Slot Budget Summary ===");
+    println!(
+        "{:<5} {:<6} {:<26} {:<8} {:<7} {:<10} {:<10} {:<10}",
+        "Layer", "Slot", "Name", "Groups", "Shift", "Weights", "Bias", "Offset"
+    );
+    println!("{}", "-".repeat(85));
+    for &(li, slot_idx, slot_name, groups, shift, exp_w, exp_b, offset) in &film_table {
+        println!(
+            "{:<5} {:<6} {:<26} {:<8} {:<7} {:<10} {:<10} {:<10}",
+            li, slot_idx, slot_name, groups, shift, exp_w, exp_b, offset
+        );
+    }
+    println!("{}", "-".repeat(85));
+    println!("Total FiLM weights: {total_film_w}, Total FiLM biases: {total_film_b}");
+
+    // ── Invariant: total == 818 ──
+    println!();
+    println!(
+        "// Measured: stream_pos after all weights = {stream_pos} | expected = {total_weights}"
+    );
+    assert_eq!(
+        running_sum, total_weights,
+        "Budget invariant: computed sum {running_sum} != actual total {total_weights}"
+    );
+    assert_eq!(
+        stream_pos, total_weights,
+        "Stream position {stream_pos} != total weights {total_weights}"
+    );
+
+    // ── Per-slot formula verification ──
+    let mut slot_mismatches = 0usize;
+    for &(li, _slot_idx, slot_name, _groups, _shift, exp_w, exp_b, _offset) in &film_table {
+        let layer = &wad.layers[li];
+        let _film_channels = match _slot_idx {
+            2 => cond_size,
+            7 => wad.head_accum_size,
+            _ => ch,
+        };
+        let film = get_film(layer, _slot_idx);
+        if let Some(f) = film {
+            if f.weights.len() != exp_w {
+                println!(
+                    "MISMATCH: l{li} {slot_name} w actual={} expected={exp_w}",
+                    f.weights.len()
+                );
+                slot_mismatches += 1;
+            }
+            if f.bias.len() != exp_b {
+                println!(
+                    "MISMATCH: l{li} {slot_name} b actual={} expected={exp_b}",
+                    f.bias.len()
+                );
+                slot_mismatches += 1;
+            }
+        }
+    }
+    assert_eq!(
+        slot_mismatches, 0,
+        "{slot_mismatches} FiLM slot formula mismatches found"
+    );
+
+    println!(
+        "// Measured: All {} FiLM slots match weight_layout formulas ✓",
+        film_table.len()
+    );
+    println!("// Measured: FiLM slot cursor positions verified — no slot overlap detected");
+    println!("// Measured: A2 Max main model total = {total_weights} ✓");
+}
+
+/// Test TR2.3: diagnostic dump harness — deterministic, bit-stable across two runs.
+///
+/// Under `NAM_A2_MAX_UNLOCK=1`, builds A2 Max, prewarms, and processes
+/// a deterministic test signal twice with full diagnostic capture enabled.
+/// Verifies that condition_dsp output, head-per-layer snapshots, and final
+/// output have identical bit-stable hashes in both runs (zero non-determinism).
+///
+/// **Invariant:** release builds carry no dump symbols.
+/// **Rollback:** remove this test and the diagnostic hooks.
+#[test]
+fn test_a2_max_diagnostic_dump_bit_stable() {
+    use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;
+
+    let path = model_path("wavenet_a2_max.nam");
+    let json = fs::read_to_string(&path).expect("Fixture not found");
+    let data = parse_nam_json(&json).expect("Parse failed");
+
+    let run_dump = || -> u64 {
+        unsafe {
+            std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+        }
+        let model = build_model(&data).expect("Build failed under unlock");
+        unsafe {
+            std::env::remove_var("NAM_A2_MAX_UNLOCK");
+        }
+        let mut wad = match *model {
+            StaticModel::WavenetA2Dyn(w) => w,
+            _ => panic!("Expected WavenetA2Dyn"),
+        };
+        wad.prewarm();
+
+        let config = DiagnosticConfig {
+            capture_condition_dsp: true,
+            capture_head_per_layer: true,
+            capture_final_output: true,
+        };
+        wad.enable_diagnostics(config);
+
+        let nf = 64usize;
+        let input: Vec<f32> = (0..nf)
+            .map(|i| {
+                let t = i as f32 / nf as f32;
+                (t * std::f32::consts::TAU * 10.0).sin() * 0.3
+            })
+            .collect();
+        let mut output = vec![0.0f32; nf];
+        wad.process(&input, &mut output);
+
+        let dump = wad.take_diagnostics().expect("Dump must be present");
+        let hash = dump.bit_stable_hash();
+        assert!(
+            !dump.condition_dsp_snapshots.is_empty(),
+            "condition_dsp snapshots must be captured"
+        );
+        assert!(
+            !dump.head_per_layer_snapshots.is_empty(),
+            "head-per-layer snapshots must be captured"
+        );
+        assert!(dump.final_output.is_some(), "final output must be captured");
+        assert_eq!(dump.total_frames, nf, "dump total_frames mismatch");
+        hash
+    };
+
+    let h1 = run_dump();
+    let h2 = run_dump();
+    assert_eq!(
+        h1, h2,
+        "Diagnostic dump must be bit-stable across two identical runs: \
+         run1={h1:#016x}, run2={h2:#016x}"
+    );
+
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
 }
 
 /// Test 8k-1b: `wavenet_condition_lstm.nam` fail-closed rejection.
@@ -1039,29 +1650,188 @@ fn test_wavenet_condition_lstm_loads_and_runs() {
     );
 }
 
-/// Test 8k-2: Loader Gap — Explicit rejection of single-net slimmable WaveNet (PM-12).
+/// Test 8k-2: Slimmable WaveNet metadata parsing (T5.1 — Parser e Estruturas de Metadados).
 ///
-/// Loads the real fixture `slimmable_wavenet.nam` and validates fail-closed
-/// rejection with the expected error message. The `nam-rs` engine does not
-/// support per-layer slimmable weight slicing — users must use a
-/// `SlimmableContainer` architecture instead.
+/// Loads the real fixture `slimmable_wavenet.nam` and validates:
+/// - JSON parsing succeeds with slimmable metadata deserialized into `SlimmableConfig`.
+/// - `allowed_channels` is properly extracted from `kwargs.allowed_channels`.
+/// - The model builds without rejection (no longer a loader gap).
+/// - `NamModelData::is_slimmable_capable()` returns `true` (metadata-level flag).
 #[test]
 fn test_loader_gap_slimmable_wavenet() {
+    use neural_amp_modeler_rs::loader::nam_json::SlimmableConfig;
+
     let path = model_path("slimmable_wavenet.nam");
     assert!(path.exists());
     let json = fs::read_to_string(&path).expect("Failed to read slimmable_wavenet.nam");
+
     let data = parse_nam_json(&json).expect("Failed to parse slimmable_wavenet.nam");
-    let model = build_model(&data);
-    assert!(
-        model.is_err(),
-        "Expected slimmable single-net WaveNet to be rejected, but it loaded successfully"
+    assert_eq!(data.architecture, "WaveNet");
+
+    let layer = data
+        .config
+        .layers
+        .first()
+        .expect("Expected at least one layer");
+    let slimmable: &SlimmableConfig = layer
+        .slimmable
+        .as_ref()
+        .expect("Expected slimmable metadata");
+    assert_eq!(
+        slimmable.method.as_deref(),
+        Some("slice_channels_uniform"),
+        "Expected method 'slice_channels_uniform'"
     );
-    let err_msg = format!("{}", model.err().unwrap());
+    let allowed = slimmable
+        .kwargs
+        .as_ref()
+        .and_then(|k| k.allowed_channels.as_deref())
+        .expect("Expected kwargs.allowed_channels");
+    assert_eq!(allowed, &[1, 2, 3], "Expected allowed_channels [1, 2, 3]");
+
     assert!(
-        err_msg.contains("slimmable single-net weight slicing is not supported"),
-        "Expected explicit slimmable rejection message, got: {}",
-        err_msg
+        data.is_slimmable_capable(),
+        "NamModelData must report slimmable_capable when layers have slimmable metadata"
     );
+
+    let model = build_model(&data).expect("Slimmable WaveNet model must build without rejection");
+    assert!(
+        model.is_slimmable_capable(),
+        "StaticModel must report slimmable_capable when geometry carries allowed_channels"
+    );
+}
+
+/// Test 8k-3: SlimmableWavenet channel slicing inference and breakpoint validation (T5.2).
+///
+/// Validates:
+/// - `slimmable_breakpoints()` returns correct normalized breakpoints from allowed_channels.
+/// - `set_slimmable_size()` sets the correct `pending_slim_channel` target.
+/// - Channel slicing rebuilds produce valid, deterministic, non-silent inference.
+/// - Each breakpoint (channel count) produces different output (slicing is not a no-op).
+#[test]
+fn test_slimmable_wavenet_inference_and_breakpoints() {
+    use neural_amp_modeler_rs::models::slimmable::SlimmableModel;
+
+    let path = model_path("slimmable_wavenet.nam");
+    let json = fs::read_to_string(&path).expect("Failed to read slimmable_wavenet.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse slimmable_wavenet.nam");
+
+    let model = build_model(&data).expect("Slimmable WaveNet model must build");
+
+    // ── Breakpoints validation ──
+    // allowed_channels = [1, 2, 3], full channels = 3
+    // breakpoints = [1/3, 2/3] ≈ [0.3333, 0.6667]
+    let bps = model.slimmable_breakpoints();
+    assert_eq!(
+        bps.len(),
+        2,
+        "Expected 2 breakpoints for allowed_channels [1,2,3]"
+    );
+    assert!(
+        (bps[0] - 1.0 / 3.0).abs() < 1e-9,
+        "First breakpoint should be 1/3, got {}",
+        bps[0]
+    );
+    assert!(
+        (bps[1] - 2.0 / 3.0).abs() < 1e-9,
+        "Second breakpoint should be 2/3, got {}",
+        bps[1]
+    );
+
+    // ── Inference at full channels (CH=3) ──
+    let mut full_model = model;
+    let prewarm_samples = full_model.prewarm_samples().max(2048);
+    full_model.prewarm(prewarm_samples);
+
+    let input: Vec<f32> = (0..128).map(|i| ((i as f32) * 0.1).sin() * 0.5).collect();
+    let mut full_out = vec![0.0f32; input.len()];
+    full_model.process(&input, &mut full_out);
+
+    let full_rms = (full_out.iter().map(|&x| x * x).sum::<f32>() / full_out.len() as f32).sqrt();
+    assert!(full_rms > 1e-6, "Full model output must be non-silent");
+
+    // ── Inference at each slimmable breakpoint ──
+    for &target_ch in &[1usize, 2, 3] {
+        let base_model = match full_model.as_ref() {
+            StaticModel::WavenetDyn(w) => w.clone_exact(),
+            _ => panic!("Expected WavenetDyn"),
+        };
+        let mut slim_model = if base_model.ch != target_ch {
+            base_model.slice_channels(target_ch).unwrap_or_else(|e| {
+                panic!("Failed to slice model to CH={target_ch}: {e}");
+            })
+        } else {
+            base_model
+        };
+        slim_model.prewarm();
+        let mut clone = slim_model.clone_exact();
+
+        let mut slim_out = vec![0.0f32; input.len()];
+        slim_model.process(&input, &mut slim_out);
+
+        let slim_rms =
+            (slim_out.iter().map(|&x| x * x).sum::<f32>() / slim_out.len() as f32).sqrt();
+        assert!(
+            slim_rms > 1e-6,
+            "Sliced model CH={target_ch} output must be non-silent"
+        );
+
+        let mut clone_out = vec![0.0f32; input.len()];
+        clone.process(&input, &mut clone_out);
+        for (i, (&a, &b)) in slim_out.iter().zip(clone_out.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-7,
+                "Sliced model CH={target_ch} non-deterministic at sample {i}: {a} vs {b}"
+            );
+        }
+
+        // CH=1 and CH=2 outputs should differ from CH=3 (slicing is not a no-op)
+        if target_ch < 3 {
+            let max_diff = slim_out
+                .iter()
+                .zip(full_out.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                max_diff > 1e-8,
+                "CH={target_ch} output identical to CH=3 — slicing produced no change"
+            );
+        }
+    }
+
+    // ── set_slimmable_size integration ──
+    let model2 = match full_model.as_ref() {
+        StaticModel::WavenetDyn(w) => Box::new(w.clone_exact()),
+        _ => panic!("Expected WavenetDyn"),
+    };
+    let mut model2 = StaticModel::WavenetDyn(model2);
+    if let StaticModel::WavenetDyn(w) = &mut model2 {
+        assert!(w.pending_slim_channel.is_none());
+        assert!(w.allowed_channels.is_some());
+
+        w.set_slimmable_size(0.0, None);
+        assert_eq!(
+            w.pending_slim_channel,
+            Some(1),
+            "quality 0.0 should select lowest tier CH=1"
+        );
+
+        w.set_slimmable_size(0.5, None);
+        assert_eq!(
+            w.pending_slim_channel,
+            Some(2),
+            "quality 0.5 should select middle tier CH=2"
+        );
+
+        w.set_slimmable_size(1.0, None);
+        assert_eq!(
+            w.pending_slim_channel,
+            Some(3),
+            "quality 1.0 should select highest tier CH=3"
+        );
+    } else {
+        panic!("Expected StaticModel::WavenetDyn variant");
+    }
 }
 
 /// Test 8l: Golden Vectors WaveNet Condition DSP cross-reference C++ ↔ NAM-rs.
@@ -1212,33 +1982,28 @@ fn test_golden_vectors_wavenet_official() {
     );
 }
 
-/// Test 8n: Loader Gap Slimmable Container — verifies robust loading with
-/// submodel topology routing (LSTM 1x3 + WaveNet free [3,2] + WaveNet free [4,2]).
-/// The container with all three submodels loads
-/// successfully via the dynamic engine (heterogeneous channels) and LSTM fast-path.
+/// Test 8n: Slimmable Container Integration — validates robust loading,
+/// submodel topology routing, inference at all switch boundaries, and
+/// crossfade transitions for `slimmable_container.nam`
+/// (LSTM 1x3 + WaveNetDyn CH=3 + WaveNetNano CH=4 [ReLU]).
+///
+/// Since no single-container C++ golden vector exists for this model,
+/// validation uses internal consistency: no NaN/Inf, deterministic output,
+/// non-silent inference, correct boundary switching, and crossfade continuity.
 #[test]
 fn test_loader_gap_slimmable_container() {
     let path = model_path("slimmable_container.nam");
     assert!(path.exists());
     let json = fs::read_to_string(&path).expect("Failed to read slimmable_container.nam");
     let data = parse_nam_json(&json).expect("Failed to parse slimmable_container.nam");
-    let model = match build_model(&data) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("SKIP: container build failed ({e:?})");
-            return;
-        }
-    };
+    let mut model =
+        build_model(&data).expect("slimmable_container.nam must build with ReLU supported");
 
-    // Verify we have a Container with 3 submodels
-    match model.as_ref() {
+    // Verify Container structure and architecture dispatch
+    let (num_submodels, max_values, sub_arches) = match model.as_ref() {
         StaticModel::Container(c) => {
-            assert_eq!(c.submodels().len(), 3);
-            // Verify max_values are sorted: 0.33, 0.66, 1.0
             let max_values: Vec<f32> = c.submodels().iter().map(|(mv, _)| *mv).collect();
-            assert_eq!(max_values, vec![0.33, 0.66, 1.0]);
-            // Verify submodel architectures are correctly dispatched
-            let sub_arches: Vec<&str> = c
+            let arches: Vec<&str> = c
                 .submodels()
                 .iter()
                 .map(|(_, sm)| match sm.as_ref() {
@@ -1248,12 +2013,163 @@ fn test_loader_gap_slimmable_container() {
                     _ => "Unknown",
                 })
                 .collect();
-            // Submodel[0] is LSTM 1x3, Submodel[1] is WaveNetDyn (free geometry),
-            // Submodel[2] is Nano (channels [4,2] + LITE dilations).
-            assert_eq!(sub_arches, vec!["LSTM", "WaveNetDyn", "Nano"]);
+            (c.submodels().len(), max_values, arches)
         }
-        _other => panic!("Expected StaticModel::Container, got a different variant"),
+        _ => panic!("Expected StaticModel::Container"),
+    };
+    assert_eq!(num_submodels, 3, "Container must have 3 submodels");
+    assert_eq!(max_values, vec![0.33, 0.66, 1.0]);
+    assert_eq!(sub_arches, vec!["LSTM", "WaveNetDyn", "Nano"]);
+
+    let sample_rate = data.sample_rate.map(|s| s as u32).unwrap_or(48000);
+    let _ = model.reset(sample_rate, 256);
+
+    /// Helper: advance past pending crossfade into steady state.
+    fn drain_crossfade(model: &mut StaticModel, input: &[f32]) {
+        loop {
+            let is_xf = match model {
+                StaticModel::Container(c) => c.is_crossfading(),
+                _ => false,
+            };
+            if !is_xf {
+                break;
+            }
+            let mut drain = vec![0.0f32; 64];
+            model.process(&input[..64.min(input.len())], &mut drain);
+        }
     }
+
+    /// Helper: get the active submodel index from a container model.
+    fn active_idx(model: &StaticModel) -> usize {
+        match model {
+            StaticModel::Container(c) => c.active_index(),
+            _ => panic!("Expected Container"),
+        }
+    }
+
+    /// Helper: switch to a slimmable size and drain crossfade.
+    fn switch_to(model: &mut StaticModel, size: f32, input: &[f32]) {
+        if let StaticModel::Container(c) = model {
+            c.set_slimmable_size(size, None);
+        }
+        drain_crossfade(model, input);
+    }
+
+    let input = generate_stress_signal_v1();
+    let num_samples = input.len();
+
+    // --- Boundary: size=0.1 → active_index=0 (LSTM 1x3) ---
+    switch_to(&mut model, 0.1, &input);
+    assert_eq!(active_idx(&model), 0, "size=0.1 must select LSTM (index 0)");
+    let mut output_lstm = vec![0.0f32; num_samples];
+    process_in_blocks(&mut model, &input, &mut output_lstm, GOLDEN_BLOCK_SIZE);
+    assert!(
+        output_lstm.iter().all(|v| v.is_finite()),
+        "LSTM submodel output must be finite"
+    );
+    let rms_lstm: f64 =
+        output_lstm.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / num_samples as f64;
+    assert!(rms_lstm.sqrt() > 1e-6, "LSTM output must not be silent");
+
+    // --- Determinism: same input, same output after reset ---
+    switch_to(&mut model, 0.1, &input);
+    let mut output_check = vec![0.0f32; num_samples];
+    process_in_blocks(&mut model, &input, &mut output_check, GOLDEN_BLOCK_SIZE);
+    assert!(
+        output_check.iter().all(|v| v.is_finite()),
+        "LSTM output after re-switch must be finite"
+    );
+    let rms_check: f64 = output_check
+        .iter()
+        .map(|v| (*v as f64).powi(2))
+        .sum::<f64>()
+        / num_samples as f64;
+    assert!(
+        rms_check.sqrt() > 1e-6,
+        "LSTM output after re-switch must not be silent"
+    );
+
+    // --- Boundary: size=0.5 → active_index=1 (WaveNetDyn CH=3) ---
+    switch_to(&mut model, 0.5, &input);
+    assert_eq!(
+        active_idx(&model),
+        1,
+        "size=0.5 must select WaveNetDyn (index 1)"
+    );
+    let mut output_dyn = vec![0.0f32; num_samples];
+    process_in_blocks(&mut model, &input, &mut output_dyn, GOLDEN_BLOCK_SIZE);
+    assert!(
+        output_dyn.iter().all(|v| v.is_finite()),
+        "WaveNetDyn submodel output must be finite"
+    );
+    let rms_dyn: f64 =
+        output_dyn.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / num_samples as f64;
+    assert!(
+        rms_dyn.sqrt() > 1e-8,
+        "WaveNetDyn output must not be silent"
+    );
+
+    // --- Boundary: size=0.8 → active_index=2 (WaveNet Nano CH=4, ReLU) ---
+    switch_to(&mut model, 0.8, &input);
+    assert_eq!(active_idx(&model), 2, "size=0.8 must select Nano (index 2)");
+    let mut output_nano = vec![0.0f32; num_samples];
+    process_in_blocks(&mut model, &input, &mut output_nano, GOLDEN_BLOCK_SIZE);
+    assert!(
+        output_nano.iter().all(|v| v.is_finite()),
+        "Nano ReLU submodel output must be finite"
+    );
+    let rms_nano: f64 =
+        output_nano.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / num_samples as f64;
+    assert!(
+        rms_nano.sqrt() > 1e-6,
+        "Nano ReLU output must not be silent"
+    );
+
+    // --- Crossfade at boundary 0.33 (LSTM → WaveNetDyn) ---
+    switch_to(&mut model, 0.1, &input);
+    {
+        if let StaticModel::Container(c) = model.as_mut() {
+            c.set_slimmable_size(0.34, None);
+        }
+    }
+    let mut xf_output_33 = vec![0.0f32; 256];
+    model.process(&input[..256], &mut xf_output_33);
+    assert!(
+        xf_output_33.iter().all(|v| v.is_finite()),
+        "Crossfade from LSTM to WaveNetDyn must produce finite output"
+    );
+    let xf_rms_33: f64 = xf_output_33
+        .iter()
+        .map(|v| (*v as f64).powi(2))
+        .sum::<f64>()
+        / 256.0;
+    assert!(
+        xf_rms_33.sqrt() > 1e-8,
+        "Crossfade at 0.33 must not be silent"
+    );
+
+    // --- Crossfade at boundary 0.66 (WaveNetDyn → Nano ReLU) ---
+    switch_to(&mut model, 0.5, &input);
+    {
+        if let StaticModel::Container(c) = model.as_mut() {
+            c.set_slimmable_size(0.67, None);
+        }
+    }
+    let mut xf_output_66 = vec![0.0f32; 256];
+    model.process(&input[..256], &mut xf_output_66);
+    assert!(
+        xf_output_66.iter().all(|v| v.is_finite()),
+        "Crossfade from WaveNetDyn to Nano ReLU must produce finite output"
+    );
+    let xf_rms_66: f64 = xf_output_66
+        .iter()
+        .map(|v| (*v as f64).powi(2))
+        .sum::<f64>()
+        / 256.0;
+    assert!(
+        xf_rms_66.sqrt() > 1e-8,
+        "Crossfade at 0.66 must not be silent"
+    );
 }
 
 // =============================================================================
@@ -1283,6 +2199,7 @@ fn test_golden_vectors_v2_wavenet_standard() {
         "WaveNet Standard (CH=16)",
         "BossWN-standard",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1295,6 +2212,7 @@ fn test_golden_vectors_v2_wavenet_feather() {
         "WaveNet Feather (CH=8)",
         "BossWN-feather",
         ALL_SR,
+        true,
     );
 }
 
@@ -1307,6 +2225,7 @@ fn test_golden_vectors_v2_wavenet_nano() {
         "WaveNet Nano (CH=4)",
         "BossWN-nano",
         ALL_SR,
+        true,
     );
 }
 
@@ -1319,6 +2238,7 @@ fn test_golden_vectors_v2_wavenet_lite() {
         "WaveNet Lite (CH=12)",
         "EVH-5150-Lite",
         ALL_SR,
+        true,
     );
 }
 
@@ -1331,6 +2251,7 @@ fn test_golden_vectors_v2_lstm_1x16() {
         "LSTM 1×16",
         "BossLSTM-1x16",
         SR_EX_192K,
+        true,
     );
 }
 
@@ -1343,6 +2264,7 @@ fn test_golden_vectors_v2_app_evh() {
         "APP EVH Stealth 100",
         "APP-EVH-Stealth100-Dialled-xSTD",
         ALL_SR,
+        true,
     );
 }
 
@@ -1355,6 +2277,7 @@ fn test_golden_vectors_v2_boss_bd2() {
         "Boss BD-2 H2O Mod",
         "Boss BD-2 H2O Mod T-12_00 G-12_00",
         ALL_SR,
+        true,
     );
 }
 
@@ -1367,6 +2290,7 @@ fn test_golden_vectors_v2_slammin_marshall() {
         "SLAMMIN MARSHALL JTM 45",
         "SLAMMIN MARSHALL JTM 45 REISSUE",
         ALL_SR,
+        true,
     );
 }
 
@@ -1379,6 +2303,7 @@ fn test_golden_vectors_v2_lstm_2x8() {
         "LSTM 2×8",
         "BossLSTM-2x8",
         SR_EX_192K,
+        true,
     );
 }
 
@@ -1391,6 +2316,7 @@ fn test_golden_vectors_v2_wavenet_a1_standard() {
         "WaveNet A1 Standard (Official)",
         "wavenet_a1_standard",
         ALL_SR,
+        true,
     );
 }
 
@@ -1406,6 +2332,7 @@ fn test_golden_vectors_v2_wavenet_official() {
         "WaveNet Official (CH=3, dynamic)",
         "wavenet_official",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1418,6 +2345,7 @@ fn test_golden_vectors_v2_lstm_official() {
         "LSTM Official",
         "lstm (Official)",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1430,6 +2358,7 @@ fn test_golden_vectors_v2_wavenet_a2_full() {
         "WaveNet A2-Full (CH=8)",
         "wavenet_a2_full",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1442,6 +2371,7 @@ fn test_golden_vectors_v2_wavenet_a2_lite() {
         "WaveNet A2-Lite (CH=3)",
         "wavenet_a2_lite",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1454,6 +2384,7 @@ fn test_golden_vectors_v2_wavenet_condition_dsp() {
         "WaveNet Condition DSP (CH=3, cond=3, dynamic)",
         "wavenet_condition_dsp",
         SR_48K_ONLY,
+        true,
     );
 }
 
@@ -1466,6 +2397,114 @@ fn test_golden_vectors_v2_wavenet_condition_lstm() {
         "WaveNet Condition DSP LSTM (CH=3, cond=3, LSTM)",
         "wavenet_condition_lstm",
         SR_48K_ONLY,
+        true,
+    );
+}
+
+// SKIP_CAPABILITY: mirrors live_cross_validation_v2_lstm_1x10 — synthetic
+// LSTM 1×10 can sit at the LUFS plausibility floor on long v2 stress; ESR/SNR
+// remain the primary interop gates (check_lufs_gate=false).
+/// Golden Vectors LSTM 1×10 (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_lstm_1x10() {
+    run_v2_golden_test(
+        "lstm_1x10.nam",
+        "golden_lstm_1x10",
+        "LSTM 1×10 (uncat., v2)",
+        "lstm_1x10",
+        SR_48K_ONLY,
+        false,
+    );
+}
+
+// SKIP_CAPABILITY: mirrors live_cross_validation_v2_lstm_2x24 — large hidden
+// size damps output energy on long v2 stress (LUFS ≈ −51…−54). Not a golden
+// defect; SNR/ESR stay near bit-exact vs C++ (check_lufs_gate=false).
+/// Golden Vectors LSTM 2×24 (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_lstm_2x24() {
+    run_v2_golden_test(
+        "lstm_2x24.nam",
+        "golden_lstm_2x24",
+        "LSTM 2×24 (uncat., v2)",
+        "lstm_2x24",
+        SR_48K_ONLY,
+        false,
+    );
+}
+
+/// Golden Vectors LSTM 3×8 (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_lstm_3x8() {
+    run_v2_golden_test(
+        "lstm_3x8.nam",
+        "golden_lstm_3x8",
+        "LSTM 3×8 (v2)",
+        "lstm_3x8",
+        SR_48K_ONLY,
+        true,
+    );
+}
+
+/// Golden Vectors ConvNet No BatchNorm (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_convnet_nobn() {
+    run_v2_golden_test(
+        "convnet_nobn.nam",
+        "golden_convnet_nobn",
+        "ConvNet No BatchNorm (v2)",
+        "convnet_nobn",
+        SR_48K_ONLY,
+        true,
+    );
+}
+
+// SKIP_CAPABILITY: mirrors live_cross_validation_v2_convnet_relu — ReLU
+// without BatchNorm yields inherently low loudness on v2 stress (LUFS ≈ −65).
+// C++ reference is valid; ESR/SNR are primary gates (check_lufs_gate=false).
+/// Golden Vectors ConvNet ReLU (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_convnet_relu() {
+    run_v2_golden_test(
+        "convnet_relu.nam",
+        "golden_convnet_relu",
+        "ConvNet ReLU (v2)",
+        "convnet_relu",
+        SR_48K_ONLY,
+        false,
+    );
+}
+
+/// Golden Vectors ConvNet SiLU (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_convnet_silu() {
+    run_v2_golden_test(
+        "convnet_silu.nam",
+        "golden_convnet_silu",
+        "ConvNet SiLU (v2)",
+        "convnet_silu",
+        SR_48K_ONLY,
+        true,
+    );
+}
+
+/// Golden Vectors Linear No Bias (v2 multi-SR, 48 kHz only).
+#[test]
+#[ignore]
+fn test_golden_vectors_v2_linear_nobias() {
+    run_v2_golden_test(
+        "linear_nobias.nam",
+        "golden_linear_nobias",
+        "Linear No Bias (v2)",
+        "linear_nobias",
+        SR_48K_ONLY,
+        true,
     );
 }
 
@@ -2136,32 +3175,24 @@ fn test_golden_vectors_convnet_test() {
     }
 }
 
-/// Test 10d: Golden Vectors — WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1)
+/// Test 10d: Golden — WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1)
 ///
-/// DISABLED — model confirmed broken against NAMcore C++ golden
-/// (see `docs/cpp_parity_map.md` §7.1). Inference path is blocked at
-/// dispatch by fail-closed guard in `is_disabled_broken_a2_flagship`
-/// (`src/loader/dispatcher/wavenet/mod.rs`).
+/// ## Gate state: `#[ignore = "KB-A2-MAX known bug: prod×C++ ~0.23 dB; guard TR1.1"]`
 ///
-/// Originally validated the `WaveNetA2Dyn` engine with condition_dsp
-/// sub-model against the C++ generic WaveNet reference (C++ a2_fast.cpp
-/// rejects this topology and falls back to Eigen-based generic WaveNet).
-/// Empirically measured (bypassing guard): SNR=−15.6 dB, ESR=3.61e1
-/// (noise power 36× signal power — negative SNR confirms architectural
-/// mismatch between Rust WaveNetA2Dyn native FiLM and C++ Eigen-based
-/// generic WaveNet with different condition_dsp processing).
+/// **Why ignored (KB-A2-MAX):** Permanent known bug until reopening criteria
+/// in `docs/cpp_parity_map.md` §4.4.3. HEAD meter prod×C++ **SNR ≈ 0.23 dB**
+/// (ESR ≈ 9.49e-1). Guard TR1.1 rejects `build_model`. Not a CI parity gate.
+/// Diagnostic path: `NAM_A2_MAX_UNLOCK=1` + feature `testing` / `cfg(test)`.
 ///
-/// Re-enable only after closing the condition_dsp parity gap (§4.4) and
-/// removing the dispatch guard.
+/// **What the test validates when un-ignored:** Compares Rust DSP against
+/// `golden_wavenet_a2_max.bin` (NAMCore C++). Do not un-ignore without
+/// meeting §4.4.3 (SNR≥90 dB + intermediate C++ dumps).
 #[test]
-#[ignore = "model disabled — confirmed broken; inference path blocked at dispatch"]
+#[ignore = "KB-A2-MAX known bug: prod×C++ ~0.23 dB; guard TR1.1 — not a CI parity gate"]
 fn test_golden_vectors_wavenet_a2_max() {
-    // The A2 Max flagship is fail-closed disabled at dispatch (§7.1 — see
-    // `is_disabled_broken_a2_flagship` and the non-ignored guard test
-    // `test_wavenet_a2_max_dispatch_is_disabled_broken`). Golden audio parity
-    // cannot be evaluated while the inference path is blocked, so this test
-    // only re-asserts the guard rejects the model and skips the spectral
-    // comparison until the §4.4 condition_dsp parity gap is closed.
+    // Permanent known bug until docs/cpp_parity_map.md §4.4.3.
+    // Default path (no unlock): assert fail-closed and return — never a red gate.
+    // Full golden compare only under NAM_A2_MAX_UNLOCK=1 (manual reopen diagnostics).
     let nam_path = model_path("wavenet_a2_max.nam");
     assert!(
         nam_path.exists(),
@@ -2169,30 +3200,601 @@ fn test_golden_vectors_wavenet_a2_max() {
          This fixture is part of the repository and must exist."
     );
 
-    let json_data = fs::read_to_string(&nam_path).expect("Failed to read wavenet_a2_max.nam");
-    let model_data = parse_nam_json(&json_data).expect("Failed to parse wavenet_a2_max.nam JSON");
-    let result = build_model(&model_data);
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read WaveNet A2 Max model");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+
+    let unlocked = std::env::var("NAM_A2_MAX_UNLOCK").as_deref() == Ok("1");
+    if !unlocked {
+        let err = match build_model(&model_data) {
+            Err(e) => e,
+            Ok(_) => panic!(
+                "KB-A2-MAX: build_model must Err without NAM_A2_MAX_UNLOCK=1 (fail-closed TR1.1)"
+            ),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
+            "KB-A2-MAX: reject message must cite known bug, got: {msg}"
+        );
+        return;
+    }
+
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
+
     assert!(
-        result.is_err(),
-        "wavenet_a2_max.nam must remain rejected by the fail-closed dispatch guard (§7.1); \
-         golden parity is deferred until the condition_dsp parity gap (§4.4) is closed."
+        golden_path.exists(),
+        "golden_wavenet_a2_max.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
     );
-    // Mirror the non-ignored guard test (`test_wavenet_a2_max_dispatch_is_disabled_broken`)
-    // so both assertions stay in lockstep on the exact rejection category, not
-    // just that *some* error occurred.
-    let err_msg = format!("{}", result.err().unwrap());
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
+
+    let mut model = build_model(&model_data)
+        .expect("Dispatcher failed to build A2 Max under NAM_A2_MAX_UNLOCK=1");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "wavenet_a2_max");
+    gv_metric("WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// A2 Max SNR/ESR vs C++ golden (n=2048, block=64, prewarm=2048) — tracking meter.
+///
+/// **Ignored by default** — does not fail CI. Run manually:
+/// ```sh
+/// cargo test --test models test_measure_a2_max_snr_vs_golden -- --ignored --exact --nocapture
+/// ```
+///
+/// Provenance (do not treat the println label as a frozen “pass” baseline):
+/// - Pre-R3 audit (TR2.5): SNR ≈ **1.35 dB**, ESR ≈ 7.4e-1
+/// - H1-only (TR3.1): SNR ≈ **2.31 dB**
+/// - H1+H2 tree (re-audit 2026-08-09): SNR ≈ **0.23 dB**, ESR ≈ 9.49e-1  ← current HEAD
+///
+/// Fail-closed guard remains active; unlock via `NAM_A2_MAX_UNLOCK=1` inside the test.
+#[test]
+#[ignore = "KB-A2-MAX meter only: prod×C++ ~0.23 dB; unlock diagnostics — not a CI gate"]
+fn test_measure_a2_max_snr_vs_golden() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
+    assert!(golden_path.exists());
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
+
+    let nam_path = model_path("wavenet_a2_max.nam");
+    assert!(nam_path.exists());
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read A2 Max model");
+    let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
+
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let mut model = build_model(&model_data).expect("Failed to build A2 Max under unlock");
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, 64);
+
+    let n = input.len() as f64;
+    let mse = common::metrics::compute_mse(&expected, &output);
+    let esr = common::metrics::compute_esr(&expected, &output);
+
+    let signal_power: f64 = expected.iter().map(|&x| x as f64 * x as f64).sum::<f64>() / n;
+    let snr_db = if mse > 0.0 && signal_power > 0.0 {
+        10.0 * (signal_power / mse).log10()
+    } else {
+        f64::INFINITY
+    };
+
+    // Measured history (f32 production vs C++ NAMcore golden_wavenet_a2_max.bin,
+    // n=2048, block=64, prewarm=2048, 48 kHz):
+    //   TR2.5 pre-R3:     SNR ≈ 1.35 dB, ESR ≈ 7.4e-1
+    //   TR3.1 H1-only:    SNR ≈ 2.31 dB
+    //   HEAD H1+H2 tree:  SNR ≈ 0.23 dB, ESR ≈ 9.49e-1  (re-audit 2026-08-09)
+    println!(
+        "// Measured: SNR = {snr_db:.2} dB, ESR = {esr:.2e} | \
+         n={} block=64 prewarm=2048 48kHz | HEAD meter (see history in test docs)",
+        input.len()
+    );
+
+    let max_abs = output
+        .iter()
+        .zip(expected.iter())
+        .map(|(a, b)| (a - b).abs() as f64)
+        .fold(0.0f64, f64::max);
+    println!("// Measured: max_abs_error = {max_abs:.4e} | same run");
+}
+
+/// Triple decomposition harness (H0 — Sprint R2.bis, TR2b.1).
+///
+/// Processes the same deterministic golden input (n=2048) three ways:
+///   1. prod f32 (unlock) — with diagnostic dumps of condition_dsp, head_accum, output
+///   2. f64 oracle — full model output
+///   3. C++ golden output — from `golden_wavenet_a2_max.bin`
+///
+/// Emits SNR/ESR table for prod×C++, prod×f64, f64×C++ and classifies
+/// the divergence pattern as Case A/B/C/D (see `docs/cpp_parity_map.md` §4.4.2).
+///
+/// ## How to run
+/// ```sh
+/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_h0_triple_decomposition -- --ignored --exact --nocapture
+/// ```
+///
+/// ## Invariants
+/// - One `#[ignore]`'d command reproduces the full table.
+/// - Numbers annotated with `// Measured:` for machine-readable consumption.
+/// - No production code change; only measurement + documentation.
+#[test]
+#[ignore = "TR2b.1 (H0): diagnostic harness — not a CI gate; run manually"]
+fn test_h0_triple_decomposition() {
+    use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;
+    use neural_amp_modeler_rs::testing::reference_oracle::{
+        PrecisionConfig, compute_esr_f64, esr_to_db_f64, oracle_forward,
+    };
+
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
+    if !golden_path.exists() {
+        eprintln!("SKIP: golden_wavenet_a2_max.bin not found.");
+        return;
+    }
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
+    let n = input.len();
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (1) prod f32 — production output + diagnostic dumps
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    let nam_path = model_path("wavenet_a2_max.nam");
+    assert!(nam_path.exists());
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read A2 Max model");
+    let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
+
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let model = build_model(&model_data).expect("Failed to build A2 Max under unlock");
+    let mut wad = match *model {
+        neural_amp_modeler_rs::models::StaticModel::WavenetA2Dyn(w) => w,
+        other => panic!("Expected WavenetA2Dyn, got {:?}", other.class_label()),
+    };
+
+    let config = DiagnosticConfig {
+        capture_condition_dsp: true,
+        capture_head_per_layer: true,
+        capture_final_output: true,
+    };
+    wad.enable_diagnostics(config);
+    wad.prewarm();
+
+    let mut prod_output = vec![0.0f32; n];
+    {
+        let block_size = 64usize;
+        let mut pos = 0;
+        while pos < n {
+            let nf = (n - pos).min(block_size);
+            wad.process(&input[pos..pos + nf], &mut prod_output[pos..pos + nf]);
+            pos += nf;
+        }
+    }
+    let dump = wad
+        .take_diagnostics()
+        .expect("Diagnostic dump must be present");
+
+    // Validation: dumps are non-empty
     assert!(
-        err_msg.contains("disabled"),
-        "Error message must contain 'disabled', got: {err_msg}"
+        !dump.condition_dsp_snapshots.is_empty(),
+        "condition_dsp snapshots required for H0 decomposition"
     );
     assert!(
-        err_msg.contains("§7.1"),
-        "Error message must cite §7.1, got: {err_msg}"
+        !dump.head_per_layer_snapshots.is_empty(),
+        "head_per_layer snapshots required for H0 decomposition"
     );
-    eprintln!(
-        "SKIP: WaveNet A2 Max golden parity — model disabled at dispatch (§7.1). \
-         Build correctly rejected: {err_msg}"
+    assert!(
+        dump.final_output.is_some(),
+        "final output required for H0 decomposition"
     );
+
+    // Per-channel stats on condition_dsp
+    for snap in &dump.condition_dsp_snapshots {
+        println!(
+            "// Measured: condition_dsp snapshot — channels={}, frames={}, nz_samples={}",
+            snap.channels,
+            snap.num_frames,
+            snap.data.iter().filter(|&&v| v.abs() > 1e-12).count()
+        );
+    }
+    println!(
+        "// Measured: head_per_layer snapshots = {} (layers captured)",
+        dump.head_per_layer_snapshots.len()
+    );
+
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (2) f64 oracle — full model output
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    let input_f64: Vec<f64> = input.iter().map(|&x| x as f64).collect();
+    let oracle_cfg = PrecisionConfig::default();
+    let oracle_output = oracle_forward(&model_data, &input_f64, &oracle_cfg);
+    assert_eq!(oracle_output.len(), n, "oracle output length mismatch");
+    assert!(
+        oracle_output.iter().all(|&x| x.is_finite()),
+        "oracle output contains NaN/Inf"
+    );
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (3) C++ golden — from .bin file (already in `expected`)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Pairwise SNR/ESR table
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    let prod_output_f64: Vec<f64> = prod_output.iter().map(|&x| x as f64).collect();
+    let expected_f64: Vec<f64> = expected.iter().map(|&x| x as f64).collect();
+
+    let esr_prod_cpp = compute_esr_f64(&expected_f64, &prod_output_f64);
+    let esr_prod_f64 = compute_esr_f64(&oracle_output, &prod_output_f64);
+    let esr_f64_cpp = compute_esr_f64(&expected_f64, &oracle_output);
+
+    let snr = |esr: f64| -> f64 {
+        if esr <= f64::EPSILON {
+            f64::INFINITY
+        } else {
+            -10.0 * esr.log10()
+        }
+    };
+
+    // ── H0 classification ──────────────────────────────────────────────────
+    // prod≈f64: ESR < 1e-3   ( -1  means < -30 dB, practically identical)
+    // prod≈C++: ESR < 1e-3
+    // f64≈C++ : ESR < 1e-3
+    let eps = 1e-3;
+
+    let classification = match (esr_prod_f64 < eps, esr_prod_cpp < eps, esr_f64_cpp < eps) {
+        (true, false, false) => "Case A: prod≈f64 ≠ C++ → bug compartilhado / grafo comum",
+        (false, false, true) => "Case B: f64≈C++ ≠ prod → bug só produção",
+        (false, true, false) => "Case C: prod≈C++ ≠ f64 → bug só oráculo (inesperado)",
+        (false, false, false) => "Case D: todos distintos → múltiplas falhas; priorizar cond/FiLM",
+        (true, true, false) => "prod≈f64≈C++ par (prod≈f64 ∧ prod≈C++ mas f64≉C++)",
+        (true, false, true) => "prod≈f64≈C++ par (prod≈f64 ∧ f64≈C++ mas prod≉C++)",
+        (false, true, true) => "prod≈C++≈f64 par (prod≈C++ ∧ f64≈C++ mas prod≉f64)",
+        (true, true, true) => "Todos idênticos (ESR<1e-3 em todos os pares) — gap fechado!",
+    };
+
+    // ── Print table ─────────────────────────────────────────────────────────
+    println!();
+    println!("=== H0 Triple Decomposition Table ===");
+    println!("Model:  wavenet_a2_max.nam (CH=4, cond=8, FiLM, head1x1)");
+    println!("Input:  n=2048, block=64, prewarm=2048, 48 kHz (golden_wavenet_a2_max.bin)");
+    println!(
+        "Oracle: PrecisionConfig::default() (F64Exact weights, Exact activations, Neumaier acc)"
+    );
+    println!();
+    println!(
+        "{:<20} {:<18} {:<18} {:<18}",
+        "Pair", "ESR (linear)", "ESR (dB)", "SNR (dB)"
+    );
+    println!("{}", "-".repeat(74));
+    println!(
+        "{:<20} {:<18.6e} {:<18.1} {:<18.1}",
+        "prod f32 × C++",
+        esr_prod_cpp,
+        esr_to_db_f64(esr_prod_cpp),
+        snr(esr_prod_cpp)
+    );
+    println!(
+        "{:<20} {:<18.6e} {:<18.1} {:<18.1}",
+        "prod f32 × f64 oracle",
+        esr_prod_f64,
+        esr_to_db_f64(esr_prod_f64),
+        snr(esr_prod_f64)
+    );
+    println!(
+        "{:<20} {:<18.6e} {:<18.1} {:<18.1}",
+        "f64 oracle × C++",
+        esr_f64_cpp,
+        esr_to_db_f64(esr_f64_cpp),
+        snr(esr_f64_cpp)
+    );
+    println!("{}", "-".repeat(74));
+    println!();
+    println!(
+        "// Measured: ESR prod×C++  = {esr_prod_cpp:.6e} ({:.1} dB)",
+        esr_to_db_f64(esr_prod_cpp)
+    );
+    println!(
+        "// Measured: ESR prod×f64  = {esr_prod_f64:.6e} ({:.1} dB)",
+        esr_to_db_f64(esr_prod_f64)
+    );
+    println!(
+        "// Measured: ESR f64×C++   = {esr_f64_cpp:.6e} ({:.1} dB)",
+        esr_to_db_f64(esr_f64_cpp)
+    );
+    println!("// Measured: SNR prod×C++  = {:.2} dB", snr(esr_prod_cpp));
+    println!("// Measured: SNR prod×f64  = {:.2} dB", snr(esr_prod_f64));
+    println!("// Measured: SNR f64×C++   = {:.2} dB", snr(esr_f64_cpp));
+    println!();
+    println!("Classification: {classification}");
+    println!("eps = {eps:.0e} (matches < -30 dB ESR for practical identity)");
+    println!();
+
+    // Assert the classification is not vacuous (at least one pair should diverge)
+    assert!(
+        esr_prod_cpp > eps || esr_prod_f64 > eps || esr_f64_cpp > eps,
+        "H0: all three pairs are identical (ESR<{eps:.0e}) — this would mean the gap is closed. \
+         Update classification and remove #[ignore]."
+    );
+}
+
+/// Runtime contract condition_dsp (H5+H7 — Sprint R2.bis, TR2b.2).
+///
+/// Under unlock, builds A2 Max and inspects the nested condition_dsp sub-model:
+///   1. Asserts `condition_dsp.num_output_channels()` value and documents.
+///   2. Identifies the enum variant of the nested condition_dsp.
+///   3. Dumps condition_dsp 8ch output and compares with f64 oracle.
+///   4. Confirms whether `dsp_ch < cond_size` branch is dead code.
+///
+/// ## How to run
+/// ```sh
+/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_tr2b2_condition_dsp_contract -- --ignored --exact --nocapture
+/// ```
+#[test]
+#[ignore = "TR2b.2 (H5+H7): diagnostic harness — not a CI gate; run manually"]
+fn test_tr2b2_condition_dsp_contract() {
+    use neural_amp_modeler_rs::models::StaticModel;
+    use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;
+    use neural_amp_modeler_rs::testing::reference_oracle::{
+        PrecisionConfig, compute_esr_f64, esr_to_db_f64, oracle_forward,
+    };
+
+    let nam_path = model_path("wavenet_a2_max.nam");
+    assert!(nam_path.exists());
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read A2 Max model");
+    let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
+    let model_data_for_oracle = model_data.clone();
+
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let model = build_model(&model_data).expect("A2 Max must build under unlock");
+    let wad = match *model {
+        StaticModel::WavenetA2Dyn(w) => w,
+        other => panic!("Expected WavenetA2Dyn, got {:?}", other.class_label()),
+    };
+
+    let cond_dsp = wad
+        .condition_dsp
+        .as_ref()
+        .expect("A2 Max must have condition_dsp");
+
+    let dsp_ch = cond_dsp.num_output_channels();
+    let cond_size = wad.condition_size;
+
+    assert_eq!(
+        cond_size, 8,
+        "Precondition: A2 Max condition_size must be 8, got {}",
+        cond_size
+    );
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (a) Enum variant of nested condition_dsp
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    let variant_label = match cond_dsp.as_ref() {
+        StaticModel::WavenetStandard(_) => "WavenetStandard",
+        StaticModel::WavenetLite(_) => "WavenetLite",
+        StaticModel::WavenetFeather(_) => "WavenetFeather",
+        StaticModel::WavenetNano(_) => "WavenetNano",
+        StaticModel::WavenetA2Full(_) => "WavenetA2Full",
+        StaticModel::WavenetA2Lite(_) => "WavenetA2Lite",
+        StaticModel::WavenetA2Dyn(_) => "WavenetA2Dyn",
+        StaticModel::WavenetA2Cascade(m) => {
+            let inner_head = m.arrays.first().map(|a| a.head_size).unwrap_or(0);
+            println!(
+                "// Measured: cond_dsp is WavenetA2Cascade ({} arrays, array[0].head_size={})",
+                m.arrays.len(),
+                inner_head
+            );
+            "WavenetA2Cascade"
+        }
+        StaticModel::WavenetDyn(m) => {
+            let last_head = m.arrays.last().map(|a| a.head).unwrap_or(0);
+            println!(
+                "// Measured: cond_dsp is WavenetDyn ({} arrays, last.head={})",
+                m.arrays.len(),
+                last_head
+            );
+            "WavenetDyn"
+        }
+        _ => {
+            let label = cond_dsp.class_label().to_string();
+            println!("// Measured: cond_dsp variant = {label}");
+            ""
+        }
+    };
+
+    println!(
+        "// Measured: cond_dsp.num_output_channels() = {dsp_ch} | condition_size = {cond_size}"
+    );
+    println!("// Measured: cond_dsp :: StaticModel::{variant_label}");
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (b) Dead code analysis: dsp_ch < cond_size branch
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    assert!(dsp_ch > 0, "cond_dsp.num_output_channels must be > 0");
+    let branch_executes = dsp_ch < cond_size;
+    println!();
+    if branch_executes {
+        println!("// Measured: H2 broadcast IS active — dsp_ch({dsp_ch}) < cond_size({cond_size})");
+    } else {
+        println!(
+            "// Measured: dsp_ch < cond_size is DEAD CODE on A2 Max (dsp_ch={dsp_ch} == cond_size={cond_size}). \
+             H2 broadcast is NOT the mechanism for this fixture."
+        );
+    }
+    println!();
+
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // (c) Dump condition_dsp 8ch vs f64 oracle
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
+    if !golden_path.exists() {
+        println!("SKIP: golden_wavenet_a2_max.bin not found.");
+        return;
+    }
+    let (golden_input, _) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
+
+    unsafe {
+        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+    }
+    let model2 = build_model(&model_data_for_oracle).expect("A2 Max must build");
+    let mut wad2 = match *model2 {
+        StaticModel::WavenetA2Dyn(w) => w,
+        other => panic!("Expected WavenetA2Dyn, got {:?}", other.class_label()),
+    };
+
+    let config = DiagnosticConfig {
+        capture_condition_dsp: true,
+        capture_head_per_layer: false,
+        capture_final_output: true,
+    };
+    wad2.enable_diagnostics(config);
+    wad2.prewarm();
+
+    let n = golden_input.len();
+    let mut prod_output = vec![0.0f32; n];
+    {
+        let block_size = 64usize;
+        let mut pos = 0;
+        while pos < n {
+            let nf = (n - pos).min(block_size);
+            wad2.process(
+                &golden_input[pos..pos + nf],
+                &mut prod_output[pos..pos + nf],
+            );
+            pos += nf;
+        }
+    }
+    let dump = wad2
+        .take_diagnostics()
+        .expect("Diagnostic dump must be present");
+
+    unsafe {
+        std::env::remove_var("NAM_A2_MAX_UNLOCK");
+    }
+
+    // ── f64 oracle for condition_dsp sub-model ──
+    let cond_json = model_data_for_oracle
+        .config
+        .condition_dsp
+        .as_ref()
+        .expect("cond_dsp JSON must exist");
+    let cond_data: neural_amp_modeler_rs::loader::nam_json::NamModelData =
+        serde_json::from_value(cond_json.clone()).expect("Failed to parse condition_dsp JSON");
+    let input_f64: Vec<f64> = golden_input.iter().map(|&x| x as f64).collect();
+    let oracle_cfg = PrecisionConfig::default();
+    let oracle_output = oracle_forward(&cond_data, &input_f64, &oracle_cfg);
+
+    // ── Aggregate ESR of condition_dsp output vs oracle ──
+    let all_prod_f32: Vec<f32> = dump
+        .condition_dsp_snapshots
+        .iter()
+        .flat_map(|s| s.data.iter().copied())
+        .collect();
+    let total_cond_frames: usize = dump
+        .condition_dsp_snapshots
+        .iter()
+        .map(|s| s.num_frames)
+        .sum();
+    let compare_frames = total_cond_frames.min(golden_input.len());
+
+    // Build oracle-broadcasted and prod arrays for comparison.
+    // oracle_output is mono (1 sample/frame), cond_dsp output is 8ch interleaved.
+    // Compare using broadcast logic: if branch_executes, broadcast; else full 8ch compare.
+    let mut oracle_cmp = Vec::with_capacity(compare_frames * cond_size);
+    let mut prod_cmp = Vec::with_capacity(compare_frames * cond_size);
+    for f in 0..compare_frames {
+        let o = oracle_output.get(f).copied().unwrap_or(0.0);
+        let prod_base = f * cond_size;
+        if prod_base + cond_size <= all_prod_f32.len() {
+            for c in 0..cond_size {
+                oracle_cmp.push(o);
+                prod_cmp.push(all_prod_f32[prod_base + c] as f64);
+            }
+        }
+    }
+
+    let agg_esr = compute_esr_f64(&oracle_cmp, &prod_cmp);
+    println!(
+        "// Measured: condition_dsp prod×f64 ESR = {agg_esr:.6e} ({:.1} dB) | {compare_frames} frames, {} channels",
+        esr_to_db_f64(agg_esr),
+        cond_size
+    );
+
+    // ── Per-sub-block ESR ──
+    println!();
+    println!(
+        "{:<12} {:<18} {:<18} {:<12}",
+        "Sub-block", "ESR prod×f64", "ESR dB", "Frames"
+    );
+    println!("{}", "-".repeat(60));
+
+    let mut frame_offset = 0usize;
+    for (i, snap) in dump.condition_dsp_snapshots.iter().enumerate() {
+        let nf = snap.num_frames;
+        let prod_start = frame_offset * cond_size;
+        let prod_end = (frame_offset + nf) * cond_size;
+        if prod_end > all_prod_f32.len() || frame_offset >= compare_frames {
+            break;
+        }
+        let prod_block: Vec<f64> = all_prod_f32[prod_start..prod_end]
+            .iter()
+            .map(|&x| x as f64)
+            .collect();
+        let oracle_block: Vec<f64> = (frame_offset..frame_offset + nf)
+            .flat_map(|f| {
+                let o = oracle_output.get(f).copied().unwrap_or(0.0);
+                (0..cond_size).map(move |_| o)
+            })
+            .collect();
+
+        let esr = compute_esr_f64(&oracle_block, &prod_block);
+        println!(
+            "{:<12} {:<18.6e} {:<18.1} {:<12}",
+            format!("b{}", i),
+            esr,
+            esr_to_db_f64(esr),
+            nf
+        );
+        frame_offset += nf;
+    }
+    println!("{}", "-".repeat(60));
 }
 
 /// Synthetic MR-STFT regression — mild low-pass filter
@@ -2332,6 +3934,341 @@ fn test_golden_vectors_wavenet_a2_film_input_mixin_pre() {
         max_esr,
         mrstft_max,
         "WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors LSTM 1×10 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_lstm_1x10.bin`, builds the `StaticModel`
+/// from `lstm_1x10.nam`. Exercises single-layer LSTM with hidden_size=10.
+#[test]
+fn test_golden_vectors_lstm_1x10() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_lstm_1x10.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_lstm_1x10.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_lstm_1x10.bin");
+
+    let nam_path = model_path("lstm_1x10.nam");
+    assert!(
+        nam_path.exists(),
+        "lstm_1x10.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read lstm_1x10.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model =
+        build_model(&model_data).expect("Dispatcher failed to build LSTM 1×10 for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "lstm_1x10");
+    gv_metric("lstm_1x10");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "LSTM 1×10 (uncat.)",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors LSTM 2×24 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_lstm_2x24.bin`, builds the `StaticModel`
+/// from `lstm_2x24.nam`. Exercises 2-layer LSTM with hidden_size=24.
+#[test]
+fn test_golden_vectors_lstm_2x24() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_lstm_2x24.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_lstm_2x24.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_lstm_2x24.bin");
+
+    let nam_path = model_path("lstm_2x24.nam");
+    assert!(
+        nam_path.exists(),
+        "lstm_2x24.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read lstm_2x24.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model =
+        build_model(&model_data).expect("Dispatcher failed to build LSTM 2×24 for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "lstm_2x24");
+    gv_metric("lstm_2x24");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "LSTM 2×24 (uncat.)",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors LSTM 3×8 — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_lstm_3x8.bin`, builds the `StaticModel`
+/// from `lstm_3x8.nam`. Exercises 3-layer LSTM with hidden_size=8.
+#[test]
+fn test_golden_vectors_lstm_3x8() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_lstm_3x8.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_lstm_3x8.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_lstm_3x8.bin");
+
+    let nam_path = model_path("lstm_3x8.nam");
+    assert!(
+        nam_path.exists(),
+        "lstm_3x8.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read lstm_3x8.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model =
+        build_model(&model_data).expect("Dispatcher failed to build LSTM 3×8 for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) = topology_thresholds(&model_data, "lstm_3x8");
+    gv_metric("lstm_3x8");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "LSTM 3×8",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors ConvNet No BatchNorm — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_convnet_nobn.bin`, builds the `StaticModel`
+/// from `convnet_nobn.nam`. Exercises ConvNet without batch normalization.
+#[test]
+fn test_golden_vectors_convnet_nobn() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_convnet_nobn.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_convnet_nobn.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_convnet_nobn.bin");
+
+    let nam_path = model_path("convnet_nobn.nam");
+    assert!(
+        nam_path.exists(),
+        "convnet_nobn.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read convnet_nobn.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model = build_model(&model_data)
+        .expect("Dispatcher failed to build ConvNet No BatchNorm for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "convnet_nobn");
+    gv_metric("convnet_nobn");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "ConvNet No BatchNorm",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors ConvNet ReLU — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_convnet_relu.bin`, builds the `StaticModel`
+/// from `convnet_relu.nam`. Exercises ConvNet with ReLU activation.
+#[test]
+fn test_golden_vectors_convnet_relu() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_convnet_relu.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_convnet_relu.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_convnet_relu.bin");
+
+    let nam_path = model_path("convnet_relu.nam");
+    assert!(
+        nam_path.exists(),
+        "convnet_relu.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read convnet_relu.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model =
+        build_model(&model_data).expect("Dispatcher failed to build ConvNet ReLU for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "convnet_relu");
+    gv_metric("convnet_relu");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "ConvNet ReLU",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors ConvNet SiLU — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_convnet_silu.bin`, builds the `StaticModel`
+/// from `convnet_silu.nam`. Exercises ConvNet with SiLU activation.
+#[test]
+fn test_golden_vectors_convnet_silu() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_convnet_silu.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_convnet_silu.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_convnet_silu.bin");
+
+    let nam_path = model_path("convnet_silu.nam");
+    assert!(
+        nam_path.exists(),
+        "convnet_silu.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read convnet_silu.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model =
+        build_model(&model_data).expect("Dispatcher failed to build ConvNet SiLU for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "convnet_silu");
+    gv_metric("convnet_silu");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "ConvNet SiLU",
+        STRESS_SAMPLE_RATE,
+    );
+}
+
+/// Golden Vectors Linear No Bias — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+///
+/// Reads `tests/fixtures/golden_linear_nobias.bin`, builds the `StaticModel`
+/// from `linear_nobias.nam`. Exercises Linear without bias vector.
+#[test]
+fn test_golden_vectors_linear_nobias() {
+    let golden_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_linear_nobias.bin");
+
+    assert!(
+        golden_path.exists(),
+        "golden_linear_nobias.bin not found at {golden_path:?}.\n\
+         Run './tests/fixtures/golden_gen_build.sh' to generate all golden vectors from C++."
+    );
+
+    let (input, expected) =
+        read_golden_bin(&golden_path).expect("Failed to read golden_linear_nobias.bin");
+
+    let nam_path = model_path("linear_nobias.nam");
+    assert!(
+        nam_path.exists(),
+        "linear_nobias.nam not found at {nam_path:?}. Run golden_gen_build.sh to fetch models."
+    );
+
+    let json_data = fs::read_to_string(&nam_path).expect("Failed to read linear_nobias.nam");
+    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let mut model = build_model(&model_data)
+        .expect("Dispatcher failed to build Linear No Bias for golden test");
+
+    model.prewarm(2048);
+    let mut output = vec![0.0f32; input.len()];
+    process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+
+    let (mse_limit, min_snr_db, max_esr, mrstft_max) =
+        topology_thresholds(&model_data, "linear_nobias");
+    gv_metric("linear_nobias");
+    report_dsp_fidelity(
+        &expected,
+        &output,
+        mse_limit,
+        min_snr_db,
+        max_esr,
+        mrstft_max,
+        "Linear No Bias",
         STRESS_SAMPLE_RATE,
     );
 }

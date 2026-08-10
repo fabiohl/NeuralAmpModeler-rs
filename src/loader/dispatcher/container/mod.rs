@@ -90,22 +90,61 @@ pub(crate) fn build_container_inner(
         }
 
         if inner_data.architecture == "SlimmableContainer" {
-            let model = build_container_inner(&inner_data, depth + 1).with_context(|| {
-                format!(
-                    "SlimmableContainer: nested container submodel[{}] build failed",
-                    i
-                )
-            })?;
+            let model = build_container_inner(&inner_data, depth + 1)
+                .with_context(|| format!("Container -> submodel[{}] (nested container)", i))?;
             submodels.push((max_value, model));
         } else {
             let model = super::build_model(&inner_data)
-                .with_context(|| format!("SlimmableContainer: submodel[{}] build failed", i))?;
+                .with_context(|| format!("Container -> submodel[{}]", i))?;
             submodels.push((max_value, model));
         }
     }
 
     let container = ContainerModel::new(submodels, container_sr)
-        .context("SlimmableContainer: failed to create ContainerModel")?;
+        .context("Container: failed to create ContainerModel")?;
 
     Ok(Box::new(StaticModel::Container(Box::new(container))))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common::diagnostics::SystemSnapshot;
+    use crate::loader::LoadOptions;
+    use crate::loader::load_and_build_model;
+    use crate::models::StaticModel;
+    use crate::testing::fixtures::model_path;
+
+    #[test]
+    fn test_container_builds_slimmable_with_relu_submodel() {
+        let sys = SystemSnapshot::capture();
+        let path = model_path("slimmable_container.nam");
+        let result = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        let model = result.expect(
+            "slimmable_container.nam must build successfully with ReLU activation supported",
+        );
+
+        let container = match model.model_l.as_ref().and_then(|m| match m.as_ref() {
+            StaticModel::Container(c) => Some(c),
+            _ => None,
+        }) {
+            Some(c) => c,
+            None => panic!("Expected StaticModel::Container, got a different variant"),
+        };
+
+        assert_eq!(container.submodels().len(), 3);
+        let max_values: Vec<f32> = container.submodels().iter().map(|(mv, _)| *mv).collect();
+        assert_eq!(max_values, vec![0.33, 0.66, 1.0]);
+
+        let sub_arches: Vec<&str> = container
+            .submodels()
+            .iter()
+            .map(|(_, sm)| match sm.as_ref() {
+                StaticModel::Lstm1x3(_) => "LSTM",
+                StaticModel::WavenetDyn(_) => "WaveNetDyn",
+                StaticModel::WavenetNano(_) => "Nano",
+                _ => "Unknown",
+            })
+            .collect();
+        assert_eq!(sub_arches, vec!["LSTM", "WaveNetDyn", "Nano"]);
+    }
 }

@@ -7,5 +7,6 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug, Clone)]
 pub struct ManifestEntry {
     pub filename: String,
-    pub expected_class: String,
+    #[serde(default)]
+    pub expected_class: Option<String>,
 }

@@ -27,7 +27,7 @@ pub use activation_parser::{
 };
 pub use data::{
     JsonError, LinearImplementation, NamConfig, NamDate, NamLayerConfig, NamMetadata, NamModelData,
-    WeightsLayout,
+    SlimmableConfig, SlimmableKwargs, WeightsLayout,
 };
 pub use parse::parse_nam_json;
 #[cfg(test)]

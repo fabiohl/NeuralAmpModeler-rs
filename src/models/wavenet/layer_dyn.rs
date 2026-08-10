@@ -6,6 +6,7 @@ use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::{AlignedVec, SimdMath};
+use crate::models::a2::activations::ActivationType;
 
 /// Complete Convolutional Cell (WaveNet Layer) with runtime dimensions.
 #[derive(Clone)]
@@ -16,6 +17,8 @@ pub struct WaveNetLayerDyn {
     pub input_mixin: DenseLayerDyn,
     /// 1x1 decompression linear affine transform of the layer.
     pub one_by_one: DenseLayerDyn,
+    /// Activation function for this layer (default: Tanh).
+    pub activation: ActivationType,
     /// Pre-allocated scratch buffer for conditioning mixin output
     /// (size: `ch * WAVENET_MAX_NUM_FRAMES`).
     pub scratch_mixin: AlignedVec<f32>,
@@ -41,6 +44,7 @@ impl WaveNetLayerDyn {
             conv1d,
             input_mixin,
             one_by_one,
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(scratch_size, 0.0f32)?,
             scratch_conv: AlignedVec::new(scratch_size, 0.0f32)?,
         })
@@ -82,11 +86,24 @@ impl WaveNetLayerDyn {
             );
 
             if let Some(s) = ctx.seed {
-                M::tanh_and_accumulate_with_seed(ctx.head_input, conv_slice, s);
+                match &self.activation {
+                    ActivationType::ReLU => {
+                        M::relu_and_accumulate_with_seed(ctx.head_input, conv_slice, s)
+                    }
+                    _ => M::tanh_and_accumulate_with_seed(ctx.head_input, conv_slice, s),
+                }
             } else if ctx.is_first_layer {
-                M::tanh_and_overwrite_block(ctx.head_input, conv_slice);
+                match &self.activation {
+                    ActivationType::ReLU => M::relu_and_overwrite_block(ctx.head_input, conv_slice),
+                    _ => M::tanh_and_overwrite_block(ctx.head_input, conv_slice),
+                }
             } else {
-                M::tanh_and_accumulate_block(ctx.head_input, conv_slice);
+                match &self.activation {
+                    ActivationType::ReLU => {
+                        M::relu_and_accumulate_block(ctx.head_input, conv_slice)
+                    }
+                    _ => M::tanh_and_accumulate_block(ctx.head_input, conv_slice),
+                }
             }
 
             let lb_offset = ctx.buffer_start * ch;

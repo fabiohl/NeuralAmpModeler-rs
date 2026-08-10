@@ -28,10 +28,14 @@
 #      debug-assertions ON. Verifies parser logic, state machines, loaders, SPSC,
 #      bitwise determinism, FSM. Excludes the measurement oracles from §7
 #      (→ Phase 2 release) and rt_deadline (→ long test suite).
+#      Includes active known-bug policy tests (e.g. wavenet_a2_max dispatch rejected
+#      — KB-A2-MAX / docs/cpp_parity_map.md §4.4.3). Does NOT run ignored A2 Max
+#      golden/meter/oracle pairs (those need NAM_A2_MAX_UNLOCK=1 and are not gates).
 #   2. Measurement oracles (release, docs/testing.md §7) — authoritative gate for
 #      production floats: golden_vectors v1, cpp_parity quick_parity,
 #      reference_oracle_f64, isa_parity (AVX2 self-consistency), spectral_fidelity.
 #      Graceful skip for missing dependencies (NAMCore/goldens).
+#      KB-A2-MAX fixtures stay #[ignore] / KNOWN_GAP — must not appear as green parity.
 #   3. Agile parser fuzzing (release, --ignored) — proptest_parsers (Tier 1:
 #      parser robustness/security) with reduced case count for speed
 #      (configurable via NAM_QUICK_PROPTEST_CASES).
@@ -357,6 +361,8 @@ fi
 
 if [ "$MEASUREMENT_STATUS" -ne 0 ]; then
     echo -e "${RED}${BOLD}❌ Measurement oracle gate (release) failed.${NC}"
+    echo -e "${RED}FIDELIDADE: FAIL${NC}"
+    echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
     exit 1
 fi
 
@@ -374,20 +380,28 @@ if [ "$GOLDEN_RAN" = true ] && [ "$CPP_PARITY_SKIPPED" = false ]; then
     echo -e "${GREEN}${BOLD}================================================================${NC}"
     echo -e "${GREEN}${BOLD}      All quick tests passed! (structural + measurement)         ${NC}"
     echo -e "${GREEN}${BOLD}================================================================${NC}"
+    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 elif [ "$GOLDEN_RAN" = true ]; then
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
     echo -e "${YELLOW}${BOLD}    Quick tests passed (cpp_parity skipped —                     ${NC}"
     echo -e "${YELLOW}${BOLD}     C++ render binary unavailable)                             ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
+    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 elif [ "$CPP_PARITY_SKIPPED" = false ]; then
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
     echo -e "${YELLOW}${BOLD}    Quick tests passed (golden_vectors + isa_parity              ${NC}"
     echo -e "${YELLOW}${BOLD}     skipped — generate golden vectors for full coverage)       ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
+    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 else
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
     echo -e "${YELLOW}${BOLD}    Quick tests passed (golden_vectors + isa_parity              ${NC}"
     echo -e "${YELLOW}${BOLD}     and cpp_parity skipped — generate goldens and C++ render    ${NC}"
     echo -e "${YELLOW}${BOLD}     for full coverage)                                         ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
+    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 fi

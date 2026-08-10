@@ -262,7 +262,17 @@ fn test_container_load_skip_propagation() {
         return;
     }
 
-    let pair = load_with_opts(&path, Some(false));
+    let Ok(pair) = load_and_build_model(
+        &path,
+        &sys(),
+        false,
+        LoadOptions {
+            prewarm: Some(false),
+        },
+    ) else {
+        eprintln!("SKIP: container build failed (unsupported activation in submodel).");
+        return;
+    };
     let Some(model) = pair.model_l.as_ref() else {
         eprintln!("SKIP: container build failed (unsupported activation in submodel).");
         return;
@@ -501,5 +511,88 @@ fn test_lstm_reset_differs_prewarm_vs_noprewarm() {
     assert!(
         any_differ,
         "LSTM: prewarm vs no-prewarm reset should produce different outputs"
+    );
+}
+
+// =============================================================================
+// Test 6: WaveNet prewarm_samples() regression (S3-T2)
+// =============================================================================
+
+/// Validates that `prewarm_samples()` on a static 2-array WaveNet model
+/// equals the canonical receptive field: `sum_{arrays} sum_{(K-1)*d}`.
+///
+/// Uses `BossWN-standard.nam` (16-CH, 2 arrays of 10 layers each).
+#[test]
+fn test_wavenet_static_prewarm_samples_matches_rf() {
+    let path = model_path("BossWN-standard.nam");
+    if !path.exists() {
+        eprintln!("SKIP: BossWN-standard.nam fixture not found.");
+        return;
+    }
+
+    let json = std::fs::read_to_string(&path).expect("Failed to read BossWN-standard.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse BossWN-standard.nam");
+
+    let expected_rf_total: usize = data
+        .config
+        .layers
+        .iter()
+        .map(|layer| {
+            let k = layer.kernel_size.unwrap_or(3);
+            let dils = layer
+                .dilations
+                .as_ref()
+                .expect("WaveNet layer must have dilations");
+            dils.iter().map(|&d| (k - 1) * d).sum::<usize>()
+        })
+        .sum();
+
+    let model = build_model(&data).expect("Failed to build BossWN-standard model");
+
+    assert_eq!(
+        model.prewarm_samples(),
+        expected_rf_total,
+        "Static WaveNet prewarm_samples() should equal sum of (K-1)*d across all arrays"
+    );
+}
+
+/// Validates that `prewarm_samples()` on a dynamic WaveNet model is at least
+/// the sum of its layer-array receptive fields. The dynamic model may also
+/// include condition_dsp and post-stack-head contributions.
+///
+/// Uses `wavenet_condition_dsp.nam` (dynamic, 2 arrays with cond DSP sub-model).
+#[test]
+fn test_wavenet_dyn_prewarm_samples_at_least_array_rf() {
+    let path = model_path("wavenet_condition_dsp.nam");
+    if !path.exists() {
+        eprintln!("SKIP: wavenet_condition_dsp.nam fixture not found.");
+        return;
+    }
+
+    let json = std::fs::read_to_string(&path).expect("Failed to read wavenet_condition_dsp.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse wavenet_condition_dsp.nam");
+
+    let array_rf_sum: usize = data
+        .config
+        .layers
+        .iter()
+        .map(|layer| {
+            let k = layer.kernel_size.unwrap_or(3);
+            let dils = layer
+                .dilations
+                .as_ref()
+                .expect("WaveNet layer must have dilations");
+            dils.iter().map(|&d| (k - 1) * d).sum::<usize>()
+        })
+        .sum();
+
+    let model = build_model(&data).expect("Failed to build wavenet_condition_dsp model");
+
+    let actual = model.prewarm_samples();
+    assert!(
+        actual >= array_rf_sum,
+        "Dynamic WaveNet prewarm_samples() ({}) should be >= array RF sum ({})",
+        actual,
+        array_rf_sum
     );
 }

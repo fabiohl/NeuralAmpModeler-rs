@@ -15,6 +15,7 @@ use crate::math::common::SimdMath;
 ///
 /// Array2 uses `HEAD` channels and projects to 1 output (`HEAD2=1`),
 /// following the C++ pattern: `WaveNetLayerArrayT<CH, 1, 1, HEAD, K, Dilations, true>`.
+#[derive(Clone)]
 pub struct WaveNetModel<const CH: usize, const K: usize, const HEAD: usize> {
     /// Inner array 01: IN=1, COND=1, CH channels, HEAD outputs, no HeadBias.
     pub array1: WaveNetLayerArray<1, 1, CH, K, HEAD>,
@@ -29,6 +30,13 @@ pub struct WaveNetModel<const CH: usize, const K: usize, const HEAD: usize> {
 }
 
 impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEAD> {
+    /// Creates a dedicated exact structural clone of the WaveNet model,
+    /// duplicating arrays, weights, topology, and state buffers without invoking
+    /// channel slicing.
+    #[inline]
+    pub fn clone_exact(&self) -> Self {
+        self.clone()
+    }
     /// Sets the effective number of layers on both arrays for soft-degrade.
     #[inline(always)]
     pub fn set_effective_layers(&mut self, n: usize) {

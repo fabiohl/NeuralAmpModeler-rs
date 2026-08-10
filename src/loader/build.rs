@@ -66,8 +66,15 @@ fn read_and_validate_model_bytes(
 
 /// Loads and builds a model pair from a file.
 ///
-/// When `stereo` is `false` only the left-channel model is built;
-/// `model_r` is left as `None`, avoiding wasted build time and prewarming.
+/// Returns `Ok(pair)` guaranteeing that `pair.model_l` is non-null (`Some`) and
+/// ready for real-time audio processing.
+///
+/// When `stereo` is `false`, only the left-channel model is built (`model_r` is `None`),
+/// avoiding unnecessary instantiation and prewarming. When `stereo` is `true`,
+/// both `model_l` and `model_r` are built (`Some`).
+///
+/// If file reading, format parsing, metadata validation, or architecture dispatching/construction
+/// fails for any requested channel, an error (`Err`) is returned.
 pub fn load_and_build_model(
     path: &Path,
     sys: &SystemSnapshot,
@@ -194,39 +201,42 @@ pub fn load_and_build_model(
         "[Loader] Dispatching model build: arch=\"{}\", layout={:?}",
         model_data.architecture, model_data.weights_layout
     );
-    let mut model_l = dispatcher::build_model(&model_data)
-        .inspect_err(|e| {
-            NamDiagnostic::new(NamErrorCode::ModelBuildFailed, sys)
-                .message(format!("Failed to build model (L): {}", path_str))
-                .param("detail", e.to_string())
-                .emit();
-        })
-        .ok();
-    if let Some(ref mut m) = model_l {
-        if options.prewarm == Some(false) {
-            m.set_prewarm_on_reset(false);
+    let mut model_l = dispatcher::build_model(&model_data).inspect_err(|e| {
+        let code = if e.to_string().contains("slimmable") {
+            NamErrorCode::InvalidModelTopology
         } else {
-            m.prewarm(m.prewarm_samples().max(2048));
-        }
+            NamErrorCode::ModelBuildFailed
+        };
+        NamDiagnostic::new(code, sys)
+            .message(format!("Failed to build model (L): {}", path_str))
+            .param("detail", e.to_string())
+            .emit();
+    })?;
+
+    if options.prewarm == Some(false) {
+        model_l.set_prewarm_on_reset(false);
+    } else {
+        model_l.prewarm(model_l.prewarm_samples().max(2048));
     }
 
     let model_r = if stereo {
-        let mut m = dispatcher::build_model(&model_data)
-            .inspect_err(|e| {
-                NamDiagnostic::new(NamErrorCode::ModelBuildFailed, sys)
-                    .message(format!("Failed to build model (R): {}", path_str))
-                    .param("detail", e.to_string())
-                    .emit();
-            })
-            .ok();
-        if let Some(ref mut model) = m {
-            if options.prewarm == Some(false) {
-                model.set_prewarm_on_reset(false);
+        let mut model = dispatcher::build_model(&model_data).inspect_err(|e| {
+            let code = if e.to_string().contains("slimmable") {
+                NamErrorCode::InvalidModelTopology
             } else {
-                model.prewarm(model.prewarm_samples().max(2048));
-            }
+                NamErrorCode::ModelBuildFailed
+            };
+            NamDiagnostic::new(code, sys)
+                .message(format!("Failed to build model (R): {}", path_str))
+                .param("detail", e.to_string())
+                .emit();
+        })?;
+        if options.prewarm == Some(false) {
+            model.set_prewarm_on_reset(false);
+        } else {
+            model.prewarm(model.prewarm_samples().max(2048));
         }
-        m
+        Some(model)
     } else {
         None
     };
@@ -295,16 +305,10 @@ pub fn load_and_build_model(
         }
     };
 
-    let has_l = model_l.is_some();
-    let has_r = model_r.is_some();
-    let channels = if has_l && has_r {
+    let channels = if model_r.is_some() {
         "stereo"
-    } else if has_l {
-        "mono (L only)"
-    } else if has_r {
-        "mono (R only, unexpected)"
     } else {
-        "none (build failed)"
+        "mono (L only)"
     };
     info!(
         "[Loader] Model built successfully: arch=\"{}\", topology=\"{}\", \
@@ -313,7 +317,7 @@ pub fn load_and_build_model(
     );
 
     Ok(LoadedModelPair {
-        model_l,
+        model_l: Some(model_l),
         model_r,
         input_mult_adj,
         output_mult_adj,
@@ -324,3 +328,7 @@ pub fn load_and_build_model(
         weights_layout: weights_layout_str,
     })
 }
+
+#[cfg(test)]
+#[path = "build_test.rs"]
+mod build_test;

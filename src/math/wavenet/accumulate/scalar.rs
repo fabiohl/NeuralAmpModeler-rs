@@ -111,3 +111,42 @@ pub unsafe fn gated_activation_and_overwrite_block_fallback(
         }
     }
 }
+
+/// Applies the 'ReLU' activation and accumulates into the main output.
+pub unsafe fn relu_and_accumulate_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
+    let len = head_input.len();
+    for i in 0..len {
+        let v = block[i];
+        let activated = if v > 0.0 { v } else { 0.0 };
+        block[i] = activated;
+        let acc = head_input[i] as f64 + activated as f64;
+        head_input[i] = acc as f32;
+    }
+}
+
+/// Applies the 'ReLU' activation and overwrites the main output.
+pub unsafe fn relu_and_overwrite_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
+    let len = head_input.len();
+    for i in 0..len {
+        let v = block[i];
+        let activated = if v > 0.0 { v } else { 0.0 };
+        block[i] = activated;
+        head_input[i] = activated;
+    }
+}
+
+/// Fused Seed + ReLU + Head Accumulate.
+pub unsafe fn relu_and_accumulate_with_seed_fallback(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    seed: &[f32],
+) {
+    let len = head_input.len();
+    for i in 0..len {
+        let v = block[i];
+        let activated = if v > 0.0 { v } else { 0.0 };
+        block[i] = activated;
+        let acc = seed[i] as f64 + activated as f64;
+        head_input[i] = acc as f32;
+    }
+}

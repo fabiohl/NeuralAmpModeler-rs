@@ -78,6 +78,8 @@ pub enum NamErrorCode {
     ModelBuildFailed,
     /// Model file exceeds the maximum allowed size (256 MiB).
     ModelTooLarge,
+    /// Slimmable metadata is invalid or inconsistent (channel mismatch, empty allowed list, etc.).
+    InvalidModelTopology,
 
     // E2xxx — Audio Backend / Processing
     /// Failed to initialize the audio backend (context/core).
@@ -147,6 +149,7 @@ impl NamErrorCode {
             Self::WeightCountMismatch => "E1302",
             Self::ModelBuildFailed => "E1303",
             Self::ModelTooLarge => "E1304",
+            Self::InvalidModelTopology => "E1305",
             Self::AudioInitFailed => "E2100",
             Self::StreamError => "E2101",
             Self::ResamplerBuildFailed => "E2200",
@@ -203,6 +206,7 @@ impl NamErrorCode {
             Self::WeightCountMismatch => "Weight count mismatch",
             Self::ModelBuildFailed => "Model build failed",
             Self::ModelTooLarge => "Model file too large",
+            Self::InvalidModelTopology => "Invalid slimmable model topology",
             Self::AudioInitFailed => "Audio backend initialization failed",
             Self::StreamError => "Audio stream error",
             Self::ResamplerBuildFailed => "Resampler build failed",
@@ -251,6 +255,7 @@ impl NamErrorCode {
             Self::WeightCountMismatch => "WEIGHT_COUNT_MISMATCH",
             Self::ModelBuildFailed => "MODEL_BUILD_FAILED",
             Self::ModelTooLarge => "MODEL_TOO_LARGE",
+            Self::InvalidModelTopology => "INVALID_MODEL_TOPOLOGY",
             Self::AudioInitFailed => "AUDIO_INIT_FAILED",
             Self::StreamError => "STREAM_ERROR",
             Self::ResamplerBuildFailed => "RESAMPLER_BUILD_FAILED",

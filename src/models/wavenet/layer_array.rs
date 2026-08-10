@@ -8,6 +8,7 @@ use crate::math::common::{AlignedVec, SimdMath};
 use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
 
 /// Grouped Multi-Layer WaveNet Unit.
+#[derive(Clone)]
 pub struct WaveNetLayerArray<
     const IN: usize,
     const COND: usize,

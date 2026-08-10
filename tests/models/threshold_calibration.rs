@@ -82,6 +82,16 @@ fn golden_bin_to_model_name(filename: &str) -> Option<&str> {
         "golden_linear_fft_rf2048" => Some("linear_fft_rf2048"),
         "golden_linear_fft_rf4096" => Some("linear_fft_rf4096"),
         "golden_linear_fft_rf8192" => Some("linear_fft_rf8192"),
+        // LSTM uncatalogued synthetic topologies
+        "golden_lstm_1x10" => Some("lstm_1x10"),
+        "golden_lstm_2x24" => Some("lstm_2x24"),
+        "golden_lstm_3x8" => Some("lstm_3x8"),
+        // ConvNet variants
+        "golden_convnet_nobn" => Some("convnet_nobn"),
+        "golden_convnet_relu" => Some("convnet_relu"),
+        "golden_convnet_silu" => Some("convnet_silu"),
+        // Linear without bias
+        "golden_linear_nobias" => Some("linear_nobias"),
         // cabsim goldens use their own oracle (convolution / C++ parity),
         // not topology_thresholds.
         _ => None,
@@ -191,6 +201,16 @@ fn test_all_calibrated_entries_have_measurement_comments() {
         "linear_fft_rf2048",
         "linear_fft_rf4096",
         "linear_fft_rf8192",
+        // LSTM uncatalogued synthetic topologies
+        "lstm_1x10",
+        "lstm_2x24",
+        "lstm_3x8",
+        // ConvNet variants
+        "convnet_nobn",
+        "convnet_relu",
+        "convnet_silu",
+        // Linear without bias
+        "linear_nobias",
     ];
 
     for &model in models {
@@ -793,6 +813,16 @@ fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Opt
         "linear_fft_rf4096" => Some("linear_fft_rf4096"),
         "linear_fft_rf8192" => Some("linear_fft_rf8192"),
         "linear_fft_rf320" => Some("linear_fft_rf320"),
+        // LSTM uncatalogued synthetic topologies
+        "lstm_1x10" => Some("lstm_1x10"),
+        "lstm_2x24" => Some("lstm_2x24"),
+        "lstm_3x8" => Some("lstm_3x8"),
+        // ConvNet variants
+        "convnet_nobn" => Some("convnet_nobn"),
+        "convnet_relu" => Some("convnet_relu"),
+        "convnet_silu" => Some("convnet_silu"),
+        // Linear without bias
+        "linear_nobias" => Some("linear_nobias"),
         _ => None,
     }
 }

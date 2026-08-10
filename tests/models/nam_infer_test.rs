@@ -11,6 +11,7 @@ use neural_amp_modeler_rs::loader::nam_json::{
 };
 use neural_amp_modeler_rs::math::activations::ActivationPrecision;
 use neural_amp_modeler_rs::math::common::AlignedVec;
+use neural_amp_modeler_rs::models::a2::activations::ActivationType;
 use neural_amp_modeler_rs::models::{NamModel, wavenet};
 use std::fs;
 use std::path::PathBuf;
@@ -62,6 +63,7 @@ fn make_wavenet_layer(
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
+        activation: ActivationType::Tanh,
         scratch_mixin: AlignedVec::new(ch * wavenet::WAVENET_MAX_NUM_FRAMES, 0.0f32)
             .expect("scratch alloc"),
         scratch_conv: AlignedVec::new(ch * wavenet::WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -102,6 +104,7 @@ fn make_wavenet_layer_a2(dilation: usize) -> wavenet::WaveNetLayer<1, 8, 3> {
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
+        activation: ActivationType::Tanh,
         scratch_mixin: AlignedVec::new(8 * wavenet::WAVENET_MAX_NUM_FRAMES, 0.0f32)
             .expect("scratch alloc"),
         scratch_conv: AlignedVec::new(8 * wavenet::WAVENET_MAX_NUM_FRAMES, 0.0f32)

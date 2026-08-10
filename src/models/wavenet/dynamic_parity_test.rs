@@ -18,6 +18,7 @@ use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
 use crate::loader::dispatcher::wavenet::layout::transpose_conv1d_interleaved_8wide;
 use crate::loader::dispatcher::wavenet::layout::transpose_conv1d_interleaved_16wide;
 use crate::math::common::AlignedVec;
+use crate::models::a2::activations::ActivationType;
 use crate::models::wavenet::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
 use crate::models::wavenet::conv1d::Conv1d;
 use crate::models::wavenet::conv1d_dyn::Conv1dDyn;
@@ -99,6 +100,7 @@ fn build_const_generic_model<const CH: usize, const K: usize, const HEAD: usize>
                 bias: make_bias(CH),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -157,6 +159,7 @@ fn build_const_generic_model<const CH: usize, const K: usize, const HEAD: usize>
                 bias: make_bias(HEAD),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(HEAD * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(HEAD * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -329,9 +332,12 @@ fn build_dynamic_model(ch: usize, k: usize, head: usize) -> WaveNetModelDyn {
         condition_dsp_output: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
             .expect("allocation should succeed for test-sized buffers"),
         post_stack_head: None,
-        head_output_scratch: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
+        head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        slimmable_capable: false,
+        allowed_channels: None,
+        pending_slim_channel: None,
     }
 }
 

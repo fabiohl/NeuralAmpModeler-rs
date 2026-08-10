@@ -1233,7 +1233,7 @@ fn test_lstm_rejects_zero_layers() {
         "weights": [0.0]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    assert_eq!(get_lstm_topology(&parsed), Ok(None));
+    assert!(get_lstm_topology(&parsed).is_err());
 }
 
 #[test]
@@ -1243,7 +1243,7 @@ fn test_lstm_rejects_num_layers_too_high() {
         MAX_LSTM_LAYERS + 1
     );
     let parsed = parse_nam_json(&json).expect("parse");
-    assert_eq!(get_lstm_topology(&parsed), Ok(None));
+    assert!(get_lstm_topology(&parsed).is_err());
 }
 
 #[test]
@@ -1268,6 +1268,30 @@ fn test_lstm_accepts_max_bounds() {
         get_lstm_topology(&parsed),
         Ok(Some((MAX_LSTM_LAYERS, MAX_HIDDEN_SIZE)))
     );
+}
+
+#[test]
+fn test_lstm_zero_layers_err() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "LSTM",
+        "config": {
+            "num_layers": 0,
+            "hidden_size": 8,
+            "layers": []
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).expect("parse");
+    match get_lstm_topology(&parsed) {
+        Err(JsonError::UnsupportedTopology { issue, .. }) => {
+            assert!(issue.contains("num_layers=0"));
+        }
+        other => panic!(
+            "expected UnsupportedTopology for num_layers=0, got {:?}",
+            other
+        ),
+    }
 }
 
 // ── WaveNet free-shape channels bounds ──

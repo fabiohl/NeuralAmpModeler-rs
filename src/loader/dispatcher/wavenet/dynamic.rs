@@ -9,6 +9,8 @@ use crate::loader::nam_json::{
     FreeWavenetGeometry, NamModelData, WavenetTopologyResult, get_wavenet_topology,
 };
 use crate::math::common::AlignedVec;
+use crate::models::a2::activations::ActivationType;
+use crate::models::wavenet::post_stack_head::parse_activation;
 use crate::models::wavenet::{
     DenseLayerDyn, PostStackHead, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn, WaveNetLayerDyn,
     WaveNetLayerState, WaveNetModelDyn,
@@ -44,6 +46,7 @@ fn build_wavenet_array_dyn(
     dilations: &[usize],
     has_head_bias: bool,
     alloc_num: &mut usize,
+    activation: &ActivationType,
 ) -> anyhow::Result<WaveNetLayerArrayDyn> {
     let rechannel = layout::read_dense_weights_typed::<DenseLayerDyn>(cursor, in_ch, ch, false)?;
 
@@ -61,6 +64,7 @@ fn build_wavenet_array_dyn(
         let one_by_one = layout::read_dense_weights_typed::<DenseLayerDyn>(cursor, ch, ch, true)?;
 
         layers.push(WaveNetLayerDyn::new(ch, conv1d, input_mixin, one_by_one)?);
+        layers.last_mut().unwrap().activation = activation.clone();
 
         let rf = (k - 1) * dilation;
         states.push(WaveNetLayerState::new(ch, rf, *alloc_num)?);
@@ -178,6 +182,7 @@ fn build_wavenet_dynamic_inner(
 
     debug_assert_eq!(geom.channels.len(), geom.num_arrays);
     debug_assert_eq!(geom.head_sizes.len(), geom.num_arrays);
+    debug_assert_eq!(geom.head_biases.len(), geom.num_arrays);
     debug_assert_eq!(geom.dilations.len(), geom.num_arrays);
     debug_assert_eq!(geom.kernel_sizes.len(), geom.num_arrays);
 
@@ -189,12 +194,21 @@ fn build_wavenet_dynamic_inner(
         let array_ch = geom.channels[i];
         let array_head = geom.head_sizes[i];
         let dilations = &geom.dilations[i];
-        let has_head_bias = i == geom.num_arrays - 1;
+        let has_head_bias = *geom.head_biases.get(i).unwrap_or(&false);
         let array_k = if geom.kernel_sizes[i] > 0 {
             geom.kernel_sizes[i]
         } else {
             geom.kernel_size
         };
+
+        let act_str = if let Some(lcfg) = data.config.layers.get(i)
+            && let Some(ref act) = lcfg.activation
+        {
+            act.as_str()
+        } else {
+            "Tanh"
+        };
+        let activation = parse_activation(act_str);
 
         let array = build_wavenet_array_dyn(
             &mut cursor,
@@ -206,6 +220,7 @@ fn build_wavenet_dynamic_inner(
             dilations,
             has_head_bias,
             &mut alloc_num,
+            &activation,
         )?;
         arrays.push(array);
     }
@@ -325,6 +340,9 @@ fn build_wavenet_dynamic_inner(
         post_stack_head,
         head_output_scratch,
         prewarm_on_reset: true,
+        slimmable_capable: data.is_slimmable_capable() || geom.allowed_channels.is_some(),
+        allowed_channels: geom.allowed_channels.clone(),
+        pending_slim_channel: None,
     };
 
     info!(

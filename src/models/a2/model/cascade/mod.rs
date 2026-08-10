@@ -132,10 +132,21 @@ impl WaveNetA2Cascade {
                 let dsp_ch = cond_dsp.num_output_channels();
                 if dsp_ch > 0 && dsp_ch < cond_size {
                     let buf = &mut self.condition_dsp_output[0..nf * cond_size];
-                    for f in (0..nf).rev() {
-                        let val = buf[f];
-                        for c in 1..cond_size {
-                            buf[f * cond_size + c] = val;
+                    if dsp_ch == 1 {
+                        for f in (0..nf).rev() {
+                            let val = buf[f];
+                            for c in 1..cond_size {
+                                buf[f * cond_size + c] = val;
+                            }
+                        }
+                    } else {
+                        for f in (0..nf).rev() {
+                            for c in (0..dsp_ch).rev() {
+                                buf[f * cond_size + c] = buf[f * dsp_ch + c];
+                            }
+                            for c in dsp_ch..cond_size {
+                                buf[f * cond_size + c] = buf[f * cond_size + (c % dsp_ch)];
+                            }
                         }
                     }
                 }

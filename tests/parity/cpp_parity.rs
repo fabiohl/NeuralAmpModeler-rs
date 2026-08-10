@@ -830,11 +830,89 @@ fn quick_parity_a2_full_v2_48k() {
     require_completed(outcome, "quick_parity_a2_full_v2_48k");
 }
 
+/// Quick v2 parity: SlimmableContainer A2 Example with 5-second stress signal at 48 kHz.
+/// Promoted to v2 alongside the 48k_only scope change (S4-T3).
+#[test]
+fn quick_parity_a2_example_slimmable_v2_48k() {
+    let outcome = run_render_comparison(
+        "a2_example.nam",
+        "a2_example",
+        "Quick SlimmableContainer A2 Example v2",
+        48000,
+        true,
+        true,
+        true,
+    );
+    require_completed(outcome, "quick_parity_a2_example_slimmable_v2_48k");
+}
+
 /// Quick parity: LSTM 1×10 (uncatalogued synthetic topology).
 #[test]
 fn quick_parity_lstm_1x10() {
     let outcome = run_v1("lstm_1x10.nam", "lstm_1x10", "Quick LSTM 1×10", true);
     require_completed(outcome, "quick_parity_lstm_1x10");
+}
+
+/// Quick parity: LSTM 2×24 (uncatalogued synthetic topology).
+#[test]
+fn quick_parity_lstm_2x24() {
+    let outcome = run_v1("lstm_2x24.nam", "lstm_2x24", "Quick LSTM 2×24", true);
+    require_completed(outcome, "quick_parity_lstm_2x24");
+}
+
+/// Quick parity: LSTM 3×8 (3-layer synthetic topology).
+#[test]
+fn quick_parity_lstm_3x8() {
+    let outcome = run_v1("lstm_3x8.nam", "lstm_3x8", "Quick LSTM 3×8", true);
+    require_completed(outcome, "quick_parity_lstm_3x8");
+}
+
+/// Quick parity: ConvNet No BatchNorm.
+#[test]
+fn quick_parity_convnet_nobn() {
+    let outcome = run_v1(
+        "convnet_nobn.nam",
+        "convnet_nobn",
+        "Quick ConvNet No BatchNorm",
+        true,
+    );
+    require_completed(outcome, "quick_parity_convnet_nobn");
+}
+
+/// Quick parity: ConvNet ReLU.
+#[test]
+fn quick_parity_convnet_relu() {
+    let outcome = run_v1(
+        "convnet_relu.nam",
+        "convnet_relu",
+        "Quick ConvNet ReLU",
+        true,
+    );
+    require_completed(outcome, "quick_parity_convnet_relu");
+}
+
+/// Quick parity: ConvNet SiLU.
+#[test]
+fn quick_parity_convnet_silu() {
+    let outcome = run_v1(
+        "convnet_silu.nam",
+        "convnet_silu",
+        "Quick ConvNet SiLU",
+        true,
+    );
+    require_completed(outcome, "quick_parity_convnet_silu");
+}
+
+/// Quick parity: Linear No Bias.
+#[test]
+fn quick_parity_linear_nobias() {
+    let outcome = run_v1(
+        "linear_nobias.nam",
+        "linear_nobias",
+        "Quick Linear No Bias",
+        true,
+    );
+    require_completed(outcome, "quick_parity_linear_nobias");
 }
 
 // =============================================================================
@@ -1182,6 +1260,17 @@ fn live_cross_validation_v2_wavenet_a2_lite() {
 
 #[test]
 #[ignore]
+fn live_cross_validation_v2_a2_example_slimmable() {
+    run_v2_multi_sr(
+        "a2_example.nam",
+        "a2_example",
+        "Live SlimmableContainer A2 Example (CH=3→6) (v2)",
+        true,
+    );
+}
+
+#[test]
+#[ignore]
 fn live_cross_validation_v2_wavenet_condition_dsp() {
     run_v2_multi_sr(
         "wavenet_condition_dsp.nam",
@@ -1191,22 +1280,75 @@ fn live_cross_validation_v2_wavenet_condition_dsp() {
     );
 }
 
+/// Upstream KnownGap: C++ render rejects / cannot golden LSTM-as-condition_dsp
+/// (channel mismatch). Mirrors v1 `live_cross_validation_wavenet_condition_lstm`
+/// — allow `SkippedRateRejected` without requiring Completed SRs and without
+/// `catch_unwind` (which polluted logs while still reporting ok).
 #[test]
 #[ignore]
 fn live_cross_validation_v2_wavenet_condition_lstm() {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_v2_multi_sr(
-            "wavenet_condition_lstm.nam",
-            "wavenet_condition_lstm",
-            "Live WaveNet Condition DSP LSTM (v2)",
-            true,
-        );
-    }));
-    if result.is_err() {
-        eprintln!(
-            "SKIP: Condition DSP LSTM (v2) — C++ render tool limitation (condition_size mismatch)"
+    let model_filename = "wavenet_condition_lstm.nam";
+    let label_base = "Live WaveNet Condition DSP LSTM (v2)";
+    let model_status = FIXTURE_CATALOG.check(model_filename);
+    if !model_status.is_available() {
+        if model_status == FixtureStatus::MissingOptional {
+            eprintln!("SKIP: {label_base} — optional fixture {model_filename} not found.");
+            return;
+        }
+        panic!(
+            "REQUIRED FIXTURE ABSENT: {label_base} — {model_filename} must exist for KnownGap policy test."
         );
     }
+
+    let expected_rates = v2_multi_sr_expected_rates(model_filename);
+    let mut outcomes: Vec<(u32, ParityOutcome)> = Vec::new();
+    for &sr in &expected_rates {
+        let label = format!("{label_base} @ {sr} Hz (v2, HF)");
+        let gname = format!("wavenet_condition_lstm_v2_{sr}");
+        let outcome = run_render_comparison(model_filename, &gname, &label, sr, true, true, true);
+        outcomes.push((sr, outcome));
+    }
+
+    println!("=== Multi-SR Summary: {label_base}, HF (KnownGap upstream) ===");
+    for &(sr, ref outcome) in &outcomes {
+        println!("{sr:<10} {outcome:?}");
+    }
+
+    for &(sr, ref outcome) in &outcomes {
+        match outcome {
+            ParityOutcome::Completed => {
+                // Unexpected success is fine if upstream ever gains support.
+            }
+            ParityOutcome::SkippedRateRejected
+            | ParityOutcome::SkippedToolNotAvailable
+            | ParityOutcome::SkippedModelNotFound => {
+                eprintln!(
+                    "SKIP: {label_base} @ {sr} Hz — C++ render tool limitation \
+                     (LSTM condition_dsp channel mismatch / KnownGap)"
+                );
+            }
+            ParityOutcome::SkippedGarbageOutput => {
+                panic!("[{label_base} @ {sr}] FAIL: SkippedGarbageOutput is never acceptable");
+            }
+        }
+    }
+
+    let unexpected: Vec<_> = outcomes
+        .iter()
+        .filter(|(_, o)| {
+            !matches!(
+                o,
+                ParityOutcome::Completed
+                    | ParityOutcome::SkippedRateRejected
+                    | ParityOutcome::SkippedToolNotAvailable
+                    | ParityOutcome::SkippedModelNotFound
+            )
+        })
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "{label_base}: unexpected parity outcomes: {unexpected:?}"
+    );
 }
 
 // SKIP_CAPABILITY (2026-08-03): Sprint 3 synthetic LSTM 1×10 produces
@@ -1414,9 +1556,8 @@ fn live_cross_validation_wavenet_a2_film_chaos_stress() {
     assert_eq!(outcome, ParityOutcome::Completed);
 }
 
-// wavenet_a2_max — DISABLED (§7.1); model inference is blocked at dispatch
-// by fail-closed guard is_disabled_broken_a2_flagship.
-// Uncomment once condition_dsp parity gap (§4.4) is resolved.
+// wavenet_a2_max — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
+// (prod f32×C++ SNR≈0.23 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
 // #[test]
 // #[ignore]
 // fn live_cross_validation_wavenet_a2_max() {
@@ -1496,7 +1637,8 @@ fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
     );
 }
 
-// wavenet_a2_max v2 — DISABLED (§7.1); see v1 note above.
+// wavenet_a2_max v2 — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
+// (prod f32×C++ SNR≈0.23 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
 // #[test]
 // #[ignore]
 // fn live_cross_validation_v2_wavenet_a2_max() {

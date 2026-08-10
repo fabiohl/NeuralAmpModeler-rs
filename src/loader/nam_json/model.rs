@@ -11,6 +11,28 @@ use super::validation::{
     deserialize_sample_rate, deserialize_submodels, deserialize_training, deserialize_weights,
 };
 
+/// Slimmable configuration extracted from per-layer metadata.
+///
+/// Mirrors the C++ NAMCore `slimmable` key in `.nam` layer objects.
+/// Supports `method = "slice_channels_uniform"` with a `.kwargs.allowed_channels`
+/// array of valid channel breakpoints.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct SlimmableConfig {
+    /// The slimmable method — currently only `"slice_channels_uniform"` is supported.
+    pub method: Option<String>,
+    /// Keyword arguments for the slimmable method.
+    pub kwargs: Option<SlimmableKwargs>,
+}
+
+/// Keyword arguments for a slimmable method.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct SlimmableKwargs {
+    /// Valid channel breakpoints (must be strictly descending, non-zero).
+    pub allowed_channels: Option<Vec<usize>>,
+}
+
 /// Structure representing a date and time associated with the model's metadata.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct NamDate {
@@ -73,6 +95,7 @@ struct NamLayerConfigHelper {
     gated: Option<bool>,
     head_bias: Option<bool>,
     bottleneck: Option<usize>,
+    slimmable: Option<SlimmableConfig>,
 }
 
 /// The structural configuration of a single layer of the network (whether WaveNet or LSTM).
@@ -100,6 +123,8 @@ pub struct NamLayerConfig {
     pub head_bias: Option<bool>,
     /// Optional: Bottleneck size (internal channel count for A2).
     pub bottleneck: Option<usize>,
+    /// Optional: Slimmable configuration per layer ("method", "kwargs.allowed_channels").
+    pub slimmable: Option<SlimmableConfig>,
     /// Raw JSON value for this layer, preserved for complex shape
     /// checks (activation arrays, FiLM keys, condition_dsp, etc.).
     /// `None` when the struct is constructed directly (not via JSON deserialization).
@@ -159,6 +184,7 @@ impl<'de> Deserialize<'de> for NamLayerConfig {
             gated: helper.gated,
             head_bias: helper.head_bias,
             bottleneck: helper.bottleneck,
+            slimmable: helper.slimmable,
             layer_raw: Some(raw_value),
         })
     }
@@ -346,4 +372,28 @@ pub struct NamModelData {
     /// Weight layout (used only in the .namb v2+ binary format).
     #[serde(skip)]
     pub weights_layout: WeightsLayout,
+}
+
+impl NamModelData {
+    /// Returns whether the model explicitly declares slimmability support in its architecture or metadata.
+    pub fn is_slimmable_capable(&self) -> bool {
+        if self.architecture == "SlimmableContainer" {
+            return true;
+        }
+        if self.architecture == "WaveNet"
+            && self.config.layers.iter().any(|l| l.slimmable.is_some())
+        {
+            return true;
+        }
+        if let Some(ref meta) = self.metadata
+            && let Some(ref training) = meta.training
+            && training
+                .get("slimmable")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            return true;
+        }
+        false
+    }
 }

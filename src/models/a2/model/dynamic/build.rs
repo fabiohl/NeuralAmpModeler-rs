@@ -55,8 +55,6 @@ impl WaveNetA2Dyn {
             layers.push(layer);
         }
 
-        self.load_head1x1_weights(weights, pos, total)?;
-
         self.load_head_conv_and_scale(weights, pos, total)?;
 
         self.layers = layers;
@@ -131,10 +129,14 @@ impl WaveNetA2Dyn {
             conv_w, conv_b, true, dilation, channels, conv_out, ksize,
         );
 
-        // 2c. Mixin (conv_out * condition_size elements, applied after conv).
-        // Standard A2: condition_size == 1, so conv_out elements.
-        // A2 generic: condition_size can be > 1, giving conv_out * condition_size.
-        let mixin_count = conv_out * self.condition_size;
+        // 2c. Mixin (group-aware).
+        // C++ Conv1x1 with groups: the weight stream stores only block-diagonal
+        // entries — G × out_per_group × in_per_group. Compact storage:
+        // [out_ch × in_per_group] row-major; group is determined by output index.
+        let mg: u32 = self.mixin_groups.max(1);
+        let mixin_in_pg = self.condition_size / mg as usize;
+        let mixin_out_per_g = conv_out / mg as usize;
+        let mixin_count = conv_out * mixin_in_pg;
         let mixin_w_f32 = super::super::set_weights::read_slice(
             weights,
             pos,
@@ -142,11 +144,36 @@ impl WaveNetA2Dyn {
             total,
             &format!("layer[{i}].mixin_w"),
         )?;
-        let mixin_w = AlignedVec::from_vec(mixin_w_f32.to_vec())
+        let mut mixin_w = AlignedVec::new(mixin_count, 0.0f32)
             .expect("allocation should succeed for test-sized buffers");
+        // Reorder from group-major to per-output-channel-major:
+        // Stream: for each group g, then oc, then ic.
+        // Storage: mixin_w[oc * in_per_group + ic_local].
+        {
+            let mut src_idx = 0usize;
+            for g in 0..mg as usize {
+                let out_start = g * mixin_out_per_g;
+                for oc in out_start..out_start + mixin_out_per_g {
+                    let dst_base = oc * mixin_in_pg;
+                    for ic in 0..mixin_in_pg {
+                        mixin_w[dst_base + ic] = mixin_w_f32[src_idx];
+                        src_idx += 1;
+                    }
+                }
+            }
+        }
 
-        // 2d. L1x1: bottleneck×channels + channels bias.
-        let l1x1_w_count = bottleneck * channels;
+        // 2d. L1x1 (group-aware).
+        // Groups=1: dense col-major `[bottleneck][channels]` (backward compat).
+        // Groups>1: compact `[channels × in_per_group]` row-major per output channel.
+        let lg: u32 = self.l1x1_groups.max(1);
+        let l1x1_in_pg = bottleneck / lg as usize;
+        let l1x1_out_per_g = channels / lg as usize;
+        let l1x1_w_count = if lg > 1 {
+            channels * l1x1_in_pg
+        } else {
+            bottleneck * channels
+        };
         let l1x1_w_f32 = super::super::set_weights::read_slice(
             weights,
             pos,
@@ -154,9 +181,27 @@ impl WaveNetA2Dyn {
             total,
             &format!("layer[{i}].l1x1_w"),
         )?;
-        let mut l1x1_w = AlignedVec::new(l1x1_w_count, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
-        transpose_dense_f32(l1x1_w_f32, &mut l1x1_w, bottleneck, channels);
+        let l1x1_w = if lg > 1 {
+            let mut w = AlignedVec::new(l1x1_w_count, 0.0f32)
+                .expect("allocation should succeed for test-sized buffers");
+            let mut src_idx = 0usize;
+            for g in 0..lg as usize {
+                let out_start = g * l1x1_out_per_g;
+                for oc in out_start..out_start + l1x1_out_per_g {
+                    let dst_base = oc * l1x1_in_pg;
+                    for ic in 0..l1x1_in_pg {
+                        w[dst_base + ic] = l1x1_w_f32[src_idx];
+                        src_idx += 1;
+                    }
+                }
+            }
+            w
+        } else {
+            let mut w = AlignedVec::new(l1x1_w_count, 0.0f32)
+                .expect("allocation should succeed for test-sized buffers");
+            transpose_dense_f32(l1x1_w_f32, &mut w, bottleneck, channels);
+            w
+        };
 
         let l1x1_b_f32 = super::super::set_weights::read_slice(
             weights,
@@ -177,6 +222,103 @@ impl WaveNetA2Dyn {
             bottleneck,
             self.condition_size,
         );
+        layer.mixin_groups = mg;
+        layer.l1x1_groups = lg;
+        debug_assert_eq!(
+            layer.l1x1_w.len(),
+            if lg > 1 {
+                channels * (bottleneck / lg as usize)
+            } else {
+                bottleneck * channels
+            },
+            "l1x1_w dimension mismatch: len={}, channels={}, bottleneck={}, groups={}",
+            layer.l1x1_w.len(),
+            channels,
+            bottleneck,
+            lg
+        );
+        debug_assert_eq!(
+            layer.mixin_w.len(),
+            conv_out * (self.condition_size / mg.max(1) as usize),
+            "mixin_w dimension mismatch: len={}, expected conv_out={} * (condition_size={} / groups={}) = {}",
+            layer.mixin_w.len(),
+            conv_out,
+            self.condition_size,
+            mg.max(1),
+            conv_out * (self.condition_size / mg.max(1) as usize)
+        );
+
+        // Load per-layer head1x1 projection weights (C++ `Layer::set_weights_`
+        // loads `_head1x1` immediately after `_layer1x1` before FiLM).
+        if self.head1x1_active {
+            let h1_in = self.head1x1_h1_in;
+            let h1_out = self.head_accum_size;
+            let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
+            let h1_is_grouped = h1_groups > 1;
+            // C++ Conv1x1 with groups: the weight stream stores only block-diagonal
+            // entries — G × out_per_group × in_per_group. Compact storage:
+            // [head_accum_size × h1_in] row-major per output channel.
+            // Groups=1: dense row-major (stream) → col-major (transpose_dense_f32),
+            //   matching the process.rs accessor `head1x1_w[oc * h1_in + ic]`.
+            // Groups>1: reorder from group-major to per-output-channel-major,
+            //   matching the same process.rs accessor pattern as mixin/l1x1.
+            let h1_w_count = h1_out * h1_in;
+            let h1_w_f32 = super::super::set_weights::read_slice(
+                weights,
+                pos,
+                h1_w_count,
+                total,
+                &format!("layer[{i}].head1x1_w"),
+            )?;
+            let h1_w = if h1_is_grouped {
+                let mut w = AlignedVec::new(h1_w_count, 0.0f32)
+                    .expect("allocation should succeed for test-sized buffers");
+                let out_per_g = h1_out / h1_groups;
+                let in_per_g = h1_in;
+                let mut src_idx = 0usize;
+                for g in 0..h1_groups {
+                    let out_start = g * out_per_g;
+                    for oc in out_start..out_start + out_per_g {
+                        let dst_base = oc * in_per_g;
+                        for ic in 0..in_per_g {
+                            w[dst_base + ic] = h1_w_f32[src_idx];
+                            src_idx += 1;
+                        }
+                    }
+                }
+                w
+            } else {
+                let mut w = AlignedVec::new(h1_w_count, 0.0f32)
+                    .expect("allocation should succeed for test-sized buffers");
+                transpose_dense_f32(h1_w_f32, &mut w, h1_in, h1_out);
+                w
+            };
+
+            let h1_b_f32 = super::super::set_weights::read_slice(
+                weights,
+                pos,
+                h1_out,
+                total,
+                &format!("layer[{i}].head1x1_b"),
+            )?;
+            let mut h1_b = AlignedVec::new(h1_out, 0.0f32)
+                .expect("allocation should succeed for test-sized buffers");
+            h1_b.copy_from_slice(h1_b_f32);
+
+            debug_assert_eq!(
+                h1_w.len(),
+                h1_out * h1_in,
+                "head1x1_w dimension mismatch: len={}, head_accum_size={}, h1_in={}, groups={}",
+                h1_w.len(),
+                h1_out,
+                h1_in,
+                h1_groups
+            );
+
+            layer.head1x1_active = true;
+            layer.head1x1_w = h1_w;
+            layer.head1x1_b = h1_b;
+        }
 
         // FiLM layers (if active in layer_raw JSON) — read weights after l1x1 bias.
         if let Some(ref raw) = self.layer_raw {
@@ -197,39 +339,6 @@ impl WaveNetA2Dyn {
         Ok(layer)
     }
 
-    /// Loads head1x1 projection weights from the stream (if active).
-    fn load_head1x1_weights(
-        &mut self,
-        weights: &[f32],
-        pos: &mut usize,
-        total: usize,
-    ) -> Result<(), String> {
-        if !self.head1x1_active {
-            return Ok(());
-        }
-        let channels = self.head_accum_size;
-
-        // S13.2: A2 generic models with condition_size > 1 may have
-        // grouped head1x1 (head1x1.groups > 1). Use reduced input dimension.
-        let h1_in = self.h1_in_size;
-        let h1_w_count = channels * h1_in;
-        let h1_w_f32 =
-            super::super::set_weights::read_slice(weights, pos, h1_w_count, total, "head1x1_w")?;
-        let mut h1_w = AlignedVec::new(h1_w_count, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
-        transpose_dense_f32(h1_w_f32, &mut h1_w, h1_in, channels);
-
-        let h1_b_f32 =
-            super::super::set_weights::read_slice(weights, pos, channels, total, "head1x1_b")?;
-        let mut h1_b = AlignedVec::new(channels, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
-        h1_b.copy_from_slice(h1_b_f32);
-
-        self.head1x1_w = h1_w;
-        self.head1x1_b = h1_b;
-        Ok(())
-    }
-
     /// Loads head conv weights (K=16), bias, and head scale from the stream.
     ///
     /// For head_size == 1, builds a mono `A2HeadConv`.
@@ -243,7 +352,7 @@ impl WaveNetA2Dyn {
         total: usize,
     ) -> Result<(), String> {
         let channels = self.head_accum_size;
-        let head_k = crate::models::a2::params::A2_HEAD_KERNEL_SIZE;
+        let head_k = self.head_kernel_size;
         let head_size = self.head_size;
 
         if head_size == 1 {
@@ -281,7 +390,9 @@ impl WaveNetA2Dyn {
                 s[0]
             };
 
-            self.head_conv = Some(A2HeadConv::new(head_w, head_b, head_scale, channels));
+            self.head_conv = Some(A2HeadConv::new_with_kernel(
+                head_w, head_b, head_scale, channels, head_k,
+            ));
         } else {
             // Multi-channel head: full Conv1D per output channel.
             let per_oc_w_count = head_k * channels;

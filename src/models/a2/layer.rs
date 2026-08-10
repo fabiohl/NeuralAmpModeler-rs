@@ -44,12 +44,21 @@ pub struct A2Layer {
     pub conv: A2Conv1d,
     /// CH-optimized conv (col-major-per-tap f32). `Some` when CH ∈ {3, 8}.
     pub conv_ch: Option<A2ConvCh>,
-    /// Input mixin weights (`CH` elements, f32).
+    /// Input mixin weights (cond_size=1: `CH` elements; cond_size>1: `CH × cond_size` row-major).
+    /// For grouped mixin (groups>1): compact `[out_ch × in_per_group]` row-major; group
+    /// membership is determined by output channel index.
     pub mixin_w: AlignedVec<f32>,
-    /// Layer1x1 weights (`CH × CH`, col-major: `[bottleneck][out]`).
+    /// Number of groups for the input mixin projection (C++ `groups_input_mixin`).
+    /// Default: 1 (dense).
+    pub mixin_groups: u32,
+    /// Layer1x1 weights (groups=1: `bottleneck × channels` col-major `[bottleneck][out]`);
+    /// groups>1: compact `[channels × in_per_group]` row-major per output channel.
     pub l1x1_w: AlignedVec<f32>,
-    /// Layer1x1 bias (`CH` elements, f32).
+    /// Layer1x1 bias (`CH` elements, f32). Bias is always dense (no grouping).
     pub l1x1_b: AlignedVec<f32>,
+    /// Number of groups for the layer1x1 projection (C++ `layer1x1.groups`).
+    /// Default: 1 (dense).
+    pub l1x1_groups: u32,
     /// FiLM before dilated convolution — modulates `layer_in` new frames in history buffer.
     pub conv_pre_film: Option<FiLMLayer>,
     /// FiLM after dilated convolution — modulates `z_buf` before mixin.
@@ -66,6 +75,15 @@ pub struct A2Layer {
     pub layer1x1_post_film: Option<FiLMLayer>,
     /// FiLM after head 1x1 (reserved for future general A2 engine).
     pub head1x1_post_film: Option<FiLMLayer>,
+    /// Whether the per-layer head1x1 projection (`bottleneck → channels`) is active.
+    /// Mirrors C++ `Layer::_head1x1` (model.cpp:273-297).
+    pub head1x1_active: bool,
+    /// Head1x1 projection weights — `[head_accum_size][bottleneck]` row-major
+    /// after transposition. Empty when `head1x1_active` is false.
+    pub head1x1_w: AlignedVec<f32>,
+    /// Head1x1 projection bias — `head_accum_size` elements.
+    /// Empty when `head1x1_active` is false.
+    pub head1x1_b: AlignedVec<f32>,
 }
 
 impl A2Layer {
@@ -84,8 +102,10 @@ impl A2Layer {
             conv,
             conv_ch: None,
             mixin_w,
+            mixin_groups: 1,
             l1x1_w,
             l1x1_b,
+            l1x1_groups: 1,
             conv_pre_film: None,
             conv_post_film: None,
             input_mixin_pre_film: None,
@@ -94,6 +114,9 @@ impl A2Layer {
             activation_post_film: None,
             layer1x1_post_film: None,
             head1x1_post_film: None,
+            head1x1_active: false,
+            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
+            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
         }
     }
 
@@ -113,8 +136,10 @@ impl A2Layer {
             conv,
             conv_ch: Some(A2ConvCh::Ch3(ch3_conv)),
             mixin_w,
+            mixin_groups: 1,
             l1x1_w,
             l1x1_b,
+            l1x1_groups: 1,
             conv_pre_film: None,
             conv_post_film: None,
             input_mixin_pre_film: None,
@@ -123,6 +148,9 @@ impl A2Layer {
             activation_post_film: None,
             layer1x1_post_film: None,
             head1x1_post_film: None,
+            head1x1_active: false,
+            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
+            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
         }
     }
 
@@ -142,8 +170,10 @@ impl A2Layer {
             conv,
             conv_ch: Some(A2ConvCh::Ch8(ch8_conv)),
             mixin_w,
+            mixin_groups: 1,
             l1x1_w,
             l1x1_b,
+            l1x1_groups: 1,
             conv_pre_film: None,
             conv_post_film: None,
             input_mixin_pre_film: None,
@@ -152,6 +182,9 @@ impl A2Layer {
             activation_post_film: None,
             layer1x1_post_film: None,
             head1x1_post_film: None,
+            head1x1_active: false,
+            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
+            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
         }
     }
 
@@ -162,28 +195,28 @@ impl A2Layer {
     /// `conv.out_ch()` is `2*bottleneck` but l1x1 operates on the post-gating
     /// bottleneck-wide output.
     ///
-    /// `condition_size` controls the mixin weight layout:
-    /// `mixin_w` has `conv.out_ch() * condition_size` elements, laid out as
-    /// row-major `[output_channel][condition_index]`.
+    /// `_condition_size` controls the mixin weight layout:
+    /// `mixin_w` has `conv.out_ch() * (condition_size / mixin_groups)` elements
+    /// for grouped mixin, or `conv.out_ch() * condition_size` when ungrouped,
+    /// laid out as row-major `[output_channel][condition_index]`.
     pub fn new_dyn(
         conv: A2Conv1d,
         mixin_w: AlignedVec<f32>,
         l1x1_w: AlignedVec<f32>,
         l1x1_b: AlignedVec<f32>,
         l1x1_out_ch: usize,
-        bottleneck: usize,
-        condition_size: usize,
+        _bottleneck: usize,
+        _condition_size: usize,
     ) -> Self {
-        let ch = conv.out_ch();
-        debug_assert_eq!(mixin_w.len(), ch * condition_size);
-        debug_assert_eq!(l1x1_w.len(), bottleneck * l1x1_out_ch);
         debug_assert_eq!(l1x1_b.len(), l1x1_out_ch);
         Self {
             conv,
             conv_ch: None,
             mixin_w,
+            mixin_groups: 1,
             l1x1_w,
             l1x1_b,
+            l1x1_groups: 1,
             conv_pre_film: None,
             conv_post_film: None,
             input_mixin_pre_film: None,
@@ -192,6 +225,9 @@ impl A2Layer {
             activation_post_film: None,
             layer1x1_post_film: None,
             head1x1_post_film: None,
+            head1x1_active: false,
+            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
+            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
         }
     }
 

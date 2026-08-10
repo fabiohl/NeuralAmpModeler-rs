@@ -132,6 +132,9 @@ fn make_full_model(ch: usize, head: usize) -> WaveNetModelDyn {
         head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        slimmable_capable: true,
+        allowed_channels: None,
+        pending_slim_channel: None,
     }
 }
 
@@ -187,17 +190,33 @@ fn test_slice_conv1d_bias_match() {
 }
 
 #[test]
-#[should_panic(expected = "slice_conv1d: new_in_ch")]
-fn test_slice_conv1d_bigger_in_ch_panics() {
+fn test_slice_conv1d_bigger_in_ch_returns_err() {
     let conv = make_conv1d(CH_FULL, CH_FULL);
-    slice_conv1d(&conv, CH_FULL + 1, CH_FULL).unwrap();
+    let Err(err) = slice_conv1d(&conv, CH_FULL + 1, CH_FULL) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::InvalidInputChannels {
+            requested: CH_FULL + 1,
+            available: CH_FULL
+        }
+    );
 }
 
 #[test]
-#[should_panic(expected = "slice_conv1d: new_out_ch")]
-fn test_slice_conv1d_bigger_out_ch_panics() {
+fn test_slice_conv1d_bigger_out_ch_returns_err() {
     let conv = make_conv1d(CH_FULL, CH_FULL);
-    slice_conv1d(&conv, CH_FULL, CH_FULL + 1).unwrap();
+    let Err(err) = slice_conv1d(&conv, CH_FULL, CH_FULL + 1) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::InvalidOutputChannels {
+            requested: CH_FULL + 1,
+            available: CH_FULL
+        }
+    );
 }
 
 // =====================================================================
@@ -259,10 +278,33 @@ fn test_slice_dense_asymmetric() {
 }
 
 #[test]
-#[should_panic(expected = "slice_dense: new_in_ch")]
-fn test_slice_dense_bigger_in_ch_panics() {
+fn test_slice_dense_bigger_in_ch_returns_err() {
     let dense = make_dense(CH_FULL, CH_FULL);
-    slice_dense(&dense, CH_FULL + 1, CH_FULL).unwrap();
+    let Err(err) = slice_dense(&dense, CH_FULL + 1, CH_FULL) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::InvalidInputChannels {
+            requested: CH_FULL + 1,
+            available: CH_FULL
+        }
+    );
+}
+
+#[test]
+fn test_slice_dense_bigger_out_ch_returns_err() {
+    let dense = make_dense(CH_FULL, CH_FULL);
+    let Err(err) = slice_dense(&dense, CH_FULL, CH_FULL + 1) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::InvalidOutputChannels {
+            requested: CH_FULL + 1,
+            available: CH_FULL
+        }
+    );
 }
 
 // =====================================================================
@@ -402,17 +444,27 @@ fn test_slice_wavenet_model_preserves_inference_shape() {
 }
 
 #[test]
-#[should_panic(expected = "slice_wavenet_model: new_ch must be > 0")]
-fn test_slice_wavenet_model_zero_ch_panics() {
+fn test_slice_wavenet_model_zero_ch_returns_err() {
     let model = make_full_model(CH_FULL, CH_SLIM);
-    slice_wavenet_model(&model, 0).unwrap();
+    let Err(err) = slice_wavenet_model(&model, 0) else {
+        panic!("expected Err");
+    };
+    assert_eq!(err, SlicingError::ZeroChannelCount);
 }
 
 #[test]
-#[should_panic(expected = "slice_wavenet_model: new_ch")]
-fn test_slice_wavenet_model_too_large_ch_panics() {
+fn test_slice_wavenet_model_too_large_ch_returns_err() {
     let model = make_full_model(CH_FULL, CH_SLIM);
-    slice_wavenet_model(&model, CH_FULL + 1).unwrap();
+    let Err(err) = slice_wavenet_model(&model, CH_FULL + 1) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::RequestedChannelExceedsModel {
+            requested: CH_FULL + 1,
+            available: CH_FULL
+        }
+    );
 }
 
 #[test]
@@ -427,8 +479,43 @@ fn test_slice_wavenet_model_arrays_different_ch() {
 }
 
 #[test]
-#[should_panic(expected = "exceeds minimum array channel count")]
-fn test_slice_wavenet_model_exceeds_min_array_ch_panics() {
+fn test_slice_wavenet_model_exceeds_min_array_ch_returns_err() {
     let model = make_full_model(8, 4);
-    slice_wavenet_model(&model, 5).unwrap();
+    let Err(err) = slice_wavenet_model(&model, 5) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err,
+        SlicingError::RequestedChannelExceedsMinArray {
+            requested: 5,
+            min_array_ch: 4
+        }
+    );
+}
+
+#[test]
+fn test_clone_exact_heterogeneous_model() {
+    let model = make_full_model(8, 4);
+    let cloned = model.clone_exact();
+    assert_eq!(cloned.ch, 8);
+    assert_eq!(cloned.arrays.len(), 2);
+    assert_eq!(cloned.arrays[0].ch, 8);
+    assert_eq!(cloned.arrays[1].ch, 4);
+    assert_eq!(cloned.head_scale, model.head_scale);
+}
+
+#[test]
+fn test_clone_wavenet_for_slimmable_storage_heterogeneous() {
+    let model = make_full_model(8, 4);
+    let storage_clone = crate::models::slimmable::clone_wavenet_for_slimmable_storage(&model);
+    assert!(storage_clone.is_ok());
+    if let Ok(boxed_sm) = storage_clone
+        && let crate::models::StaticModel::WavenetDyn(m) = *boxed_sm
+    {
+        assert_eq!(m.ch, 8);
+        assert_eq!(m.arrays[0].ch, 8);
+        assert_eq!(m.arrays[1].ch, 4);
+    } else {
+        panic!("expected StaticModel::WavenetDyn");
+    }
 }

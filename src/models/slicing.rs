@@ -16,6 +16,106 @@ use crate::models::wavenet::{
 };
 use crate::models::{NamModel, StaticModel};
 
+/// Typed error representing slicing failures in `SlimmableModel`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlicingError {
+    /// Requested input channels exceed original layer input channels.
+    InvalidInputChannels {
+        /// Requested input channel count.
+        requested: usize,
+        /// Available input channel count in layer.
+        available: usize,
+    },
+    /// Requested output channels exceed original layer output channels.
+    InvalidOutputChannels {
+        /// Requested output channel count.
+        requested: usize,
+        /// Available output channel count in layer.
+        available: usize,
+    },
+    /// Target channel count must be greater than zero.
+    ZeroChannelCount,
+    /// Requested channel count exceeds original model channel count.
+    RequestedChannelExceedsModel {
+        /// Requested channel count.
+        requested: usize,
+        /// Available model channel count.
+        available: usize,
+    },
+    /// Requested channel count exceeds minimum channel count across arrays.
+    RequestedChannelExceedsMinArray {
+        /// Requested channel count.
+        requested: usize,
+        /// Minimum channel count across all layer arrays.
+        min_array_ch: usize,
+    },
+    /// Allocation error during slicing.
+    Allocation(NamErrorCode),
+}
+
+impl std::fmt::Display for SlicingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInputChannels {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Slicing invalid input channels: requested {requested} > available {available}"
+                )
+            }
+            Self::InvalidOutputChannels {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Slicing invalid output channels: requested {requested} > available {available}"
+                )
+            }
+            Self::ZeroChannelCount => {
+                write!(f, "Slicing target channel count must be > 0")
+            }
+            Self::RequestedChannelExceedsModel {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Slicing target channel count ({requested}) exceeds model channel count ({available})"
+                )
+            }
+            Self::RequestedChannelExceedsMinArray {
+                requested,
+                min_array_ch,
+            } => {
+                write!(
+                    f,
+                    "Slicing target channel count ({requested}) exceeds minimum array channel count ({min_array_ch})"
+                )
+            }
+            Self::Allocation(code) => {
+                write!(f, "Slicing allocation failure: {code:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SlicingError {}
+
+impl From<NamErrorCode> for SlicingError {
+    fn from(code: NamErrorCode) -> Self {
+        SlicingError::Allocation(code)
+    }
+}
+
+impl From<SlicingError> for std::io::Error {
+    fn from(err: SlicingError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, err)
+    }
+}
+
 /// Slices a `Conv1dDyn` to a reduced channel configuration.
 ///
 /// The convolution weight layout is `[block][kernel][in_ch][4]`
@@ -23,25 +123,26 @@ use crate::models::{NamModel, StaticModel};
 /// `new_in_ch` input channels and first `new_out_ch` output channels,
 /// keeping the same `kernel` size and `dilation`.
 ///
-/// # Panics
-/// Panics if `new_in_ch > conv.in_ch` or `new_out_ch > conv.out_ch`.
+/// # Errors
+/// Returns [`SlicingError`] if `new_in_ch > conv.in_ch` or `new_out_ch > conv.out_ch`,
+/// or if weight allocation fails.
 pub fn slice_conv1d(
     conv: &Conv1dDyn,
     new_in_ch: usize,
     new_out_ch: usize,
-) -> Result<Conv1dDyn, NamErrorCode> {
-    assert!(
-        new_in_ch <= conv.in_ch,
-        "slice_conv1d: new_in_ch ({}) > in_ch ({})",
-        new_in_ch,
-        conv.in_ch
-    );
-    assert!(
-        new_out_ch <= conv.out_ch,
-        "slice_conv1d: new_out_ch ({}) > out_ch ({})",
-        new_out_ch,
-        conv.out_ch
-    );
+) -> Result<Conv1dDyn, SlicingError> {
+    if new_in_ch > conv.in_ch {
+        return Err(SlicingError::InvalidInputChannels {
+            requested: new_in_ch,
+            available: conv.in_ch,
+        });
+    }
+    if new_out_ch > conv.out_ch {
+        return Err(SlicingError::InvalidOutputChannels {
+            requested: new_out_ch,
+            available: conv.out_ch,
+        });
+    }
 
     let dst_width = select_interleave_width(new_out_ch);
     let src_width = conv.interleave_width;
@@ -93,25 +194,26 @@ pub fn slice_conv1d(
 /// This extracts the first `new_in_ch` input channels and first `new_out_ch`
 /// output channels.
 ///
-/// # Panics
-/// Panics if `new_in_ch > dense.in_ch` or `new_out_ch > dense.out_ch`.
+/// # Errors
+/// Returns [`SlicingError`] if `new_in_ch > dense.in_ch` or `new_out_ch > dense.out_ch`,
+/// or if weight allocation fails.
 pub fn slice_dense(
     dense: &DenseLayerDyn,
     new_in_ch: usize,
     new_out_ch: usize,
-) -> Result<DenseLayerDyn, NamErrorCode> {
-    assert!(
-        new_in_ch <= dense.in_ch,
-        "slice_dense: new_in_ch ({}) > in_ch ({})",
-        new_in_ch,
-        dense.in_ch
-    );
-    assert!(
-        new_out_ch <= dense.out_ch,
-        "slice_dense: new_out_ch ({}) > out_ch ({})",
-        new_out_ch,
-        dense.out_ch
-    );
+) -> Result<DenseLayerDyn, SlicingError> {
+    if new_in_ch > dense.in_ch {
+        return Err(SlicingError::InvalidInputChannels {
+            requested: new_in_ch,
+            available: dense.in_ch,
+        });
+    }
+    if new_out_ch > dense.out_ch {
+        return Err(SlicingError::InvalidOutputChannels {
+            requested: new_out_ch,
+            available: dense.out_ch,
+        });
+    }
 
     let mut new_weights = AlignedVec::new(new_in_ch * new_out_ch, 0.0f32)?;
 
@@ -143,11 +245,11 @@ pub fn slice_dense(
 pub fn slice_wavenet_layer(
     layer: &WaveNetLayerDyn,
     new_ch: usize,
-) -> Result<WaveNetLayerDyn, NamErrorCode> {
+) -> Result<WaveNetLayerDyn, SlicingError> {
     let conv1d = slice_conv1d(&layer.conv1d, new_ch, new_ch)?;
     let input_mixin = slice_dense(&layer.input_mixin, layer.input_mixin.in_ch, new_ch)?;
     let one_by_one = slice_dense(&layer.one_by_one, new_ch, new_ch)?;
-    WaveNetLayerDyn::new(new_ch, conv1d, input_mixin, one_by_one)
+    WaveNetLayerDyn::new(new_ch, conv1d, input_mixin, one_by_one).map_err(SlicingError::Allocation)
 }
 
 /// Creates a new `WaveNetLayerArrayDyn` with reduced internal channel count.
@@ -165,26 +267,23 @@ pub fn slice_wavenet_array(
     new_in_ch: usize,
     new_ch: usize,
     alloc_num: &mut usize,
-) -> std::io::Result<WaveNetLayerArrayDyn> {
-    let rechannel = slice_dense(&array.rechannel, new_in_ch, new_ch)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+) -> Result<WaveNetLayerArrayDyn, SlicingError> {
+    let rechannel = slice_dense(&array.rechannel, new_in_ch, new_ch)?;
 
     let mut layers = Vec::with_capacity(array.layers.len());
     let mut states = Vec::with_capacity(array.layers.len());
 
     for layer in &array.layers {
-        layers.push(
-            slice_wavenet_layer(layer, new_ch).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}"))
-            })?,
-        );
+        layers.push(slice_wavenet_layer(layer, new_ch)?);
         let rf = (layer.conv1d.kernel - 1) * layer.conv1d.dilation;
-        states.push(WaveNetLayerState::new(new_ch, rf, *alloc_num)?);
+        states.push(
+            WaveNetLayerState::new(new_ch, rf, *alloc_num)
+                .map_err(|_| SlicingError::Allocation(NamErrorCode::OutOfMemory))?,
+        );
         *alloc_num += 1;
     }
 
-    let head_rechannel = slice_dense(&array.head_rechannel, new_ch, array.head)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+    let head_rechannel = slice_dense(&array.head_rechannel, new_ch, array.head)?;
 
     let receptive_field_size: usize = array
         .layers
@@ -205,16 +304,12 @@ pub fn slice_wavenet_array(
         states,
         rechannel,
         head_rechannel,
-        array_outputs: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?,
-        head_accum: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?,
-        head_outputs: AlignedVec::new(array.head * WAVENET_MAX_NUM_FRAMES, 0.0)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?,
+        array_outputs: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?,
+        head_accum: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?,
+        head_outputs: AlignedVec::new(array.head * WAVENET_MAX_NUM_FRAMES, 0.0)?,
         receptive_field_size,
         block_size,
-        block_buffer: AlignedVec::new(block_size * WAVENET_MAX_NUM_FRAMES, 0.0)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?,
+        block_buffer: AlignedVec::new(block_size * WAVENET_MAX_NUM_FRAMES, 0.0)?,
         effective_layers: num_layers,
     })
 }
@@ -233,28 +328,30 @@ pub fn slice_wavenet_array(
 ///   `condition_dsp_output` buffers are allocated fresh.
 /// - **`post_stack_head`**: Cloned as-is (not affected by channel slicing).
 ///
-/// # Panics
-/// Panics if `new_ch` is zero or exceeds the original channel count,
-/// or if arrays have non-uniform channel counts.
+/// # Errors
+/// Returns [`SlicingError`] if `new_ch == 0`, `new_ch > model.ch`, or `new_ch` exceeds
+/// the minimum channel count across arrays.
 pub fn slice_wavenet_model(
     model: &WaveNetModelDyn,
     new_ch: usize,
-) -> std::io::Result<WaveNetModelDyn> {
-    assert!(new_ch > 0, "slice_wavenet_model: new_ch must be > 0");
-    assert!(
-        new_ch <= model.ch,
-        "slice_wavenet_model: new_ch ({}) > model.ch ({})",
-        new_ch,
-        model.ch
-    );
+) -> Result<WaveNetModelDyn, SlicingError> {
+    if new_ch == 0 {
+        return Err(SlicingError::ZeroChannelCount);
+    }
+    if new_ch > model.ch {
+        return Err(SlicingError::RequestedChannelExceedsModel {
+            requested: new_ch,
+            available: model.ch,
+        });
+    }
 
     let min_array_ch = model.arrays.iter().map(|a| a.ch).min().unwrap_or(model.ch);
-    assert!(
-        new_ch <= min_array_ch,
-        "slice_wavenet_model: new_ch ({}) exceeds minimum array channel count ({})",
-        new_ch,
-        min_array_ch
-    );
+    if new_ch > min_array_ch {
+        return Err(SlicingError::RequestedChannelExceedsMinArray {
+            requested: new_ch,
+            min_array_ch,
+        });
+    }
 
     let mut alloc_num = 0usize;
     let mut arrays = Vec::with_capacity(model.arrays.len());
@@ -272,8 +369,7 @@ pub fn slice_wavenet_model(
         .as_ref()
         .map(|h| h.out_channels())
         .unwrap_or(1);
-    let head_output_scratch = AlignedVec::new(head_out_ch * WAVENET_MAX_NUM_FRAMES, 0.0)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+    let head_output_scratch = AlignedVec::new(head_out_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?;
 
     let mut rf = arrays
         .iter()
@@ -292,23 +388,25 @@ pub fn slice_wavenet_model(
         head_scale: model.head_scale,
         receptive_field_size: rf,
         condition_dsp: crate::models::clone_condition_dsp(&model.condition_dsp),
-        condition_dsp_output: AlignedVec::new(cond_dsp_output_size, 0.0)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?,
+        condition_dsp_output: AlignedVec::new(cond_dsp_output_size, 0.0)?,
         post_stack_head: model.post_stack_head.clone(),
         head_output_scratch,
         prewarm_on_reset: model.prewarm_on_reset,
+        slimmable_capable: model.slimmable_capable,
+        allowed_channels: model.allowed_channels.clone(),
+        pending_slim_channel: None,
     })
 }
 
 /// Usage:
-/// Creates a full clone of a WaveNet model for storage, enabling main-thread
-/// slimmable rebuilds. The clone uses `slice_wavenet_model` with the original
-/// channel count — the immutable weights are duplicated, while states and scratch
-/// buffers are allocated fresh (to be reused for inference during rebuild).
+/// Creates a full exact clone of a WaveNet model for storage, enabling main-thread
+/// slimmable rebuilds. Uses `clone_exact()` so that immutable weights and topology
+/// are duplicated with absolute fidelity for both homogeneous and heterogeneous models
+/// without invoking channel slicing.
 pub fn clone_wavenet_for_slimmable_storage(
     model: &WaveNetModelDyn,
 ) -> std::io::Result<Box<StaticModel>> {
-    let full_copy = slice_wavenet_model(model, model.ch)?;
+    let full_copy = model.clone_exact();
     Ok(Box::new(StaticModel::WavenetDyn(Box::new(full_copy))))
 }
 

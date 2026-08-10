@@ -5,6 +5,7 @@ use super::common::WavenetProcessContext;
 use super::conv1d::Conv1d;
 use super::dense::DenseLayer;
 use crate::math::common::{AlignedVec, SimdMath};
+use crate::models::a2::activations::ActivationType;
 
 #[cfg(test)]
 pub(crate) use telemetry_vars::*;
@@ -32,6 +33,8 @@ pub struct WaveNetLayer<const COND: usize, const CH: usize, const K: usize> {
     pub input_mixin: DenseLayer<COND, CH>,
     /// 1x1 decompression linear affine transform of the layer.
     pub one_by_one: DenseLayer<CH, CH>,
+    /// Activation function for this layer (default: Tanh).
+    pub activation: ActivationType,
     /// Pre-allocated scratch buffer for conditioning mixin output
     /// (size: `CH * WAVENET_MAX_NUM_FRAMES`).
     pub scratch_mixin: AlignedVec<f32>,
@@ -158,11 +161,22 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
             };
 
             if let Some(s) = seed {
-                M::tanh_and_accumulate_with_seed(head_input, conv_slice, s);
+                match &self.activation {
+                    ActivationType::ReLU => {
+                        M::relu_and_accumulate_with_seed(head_input, conv_slice, s)
+                    }
+                    _ => M::tanh_and_accumulate_with_seed(head_input, conv_slice, s),
+                }
             } else if is_first_layer {
-                M::tanh_and_overwrite_block(head_input, conv_slice);
+                match &self.activation {
+                    ActivationType::ReLU => M::relu_and_overwrite_block(head_input, conv_slice),
+                    _ => M::tanh_and_overwrite_block(head_input, conv_slice),
+                }
             } else {
-                M::tanh_and_accumulate_block(head_input, conv_slice);
+                match &self.activation {
+                    ActivationType::ReLU => M::relu_and_accumulate_block(head_input, conv_slice),
+                    _ => M::tanh_and_accumulate_block(head_input, conv_slice),
+                }
             }
 
             #[cfg(test)]

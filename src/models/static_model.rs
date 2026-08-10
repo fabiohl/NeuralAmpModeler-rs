@@ -18,6 +18,18 @@ impl StaticModel {
         }
     }
 
+    /// Returns whether the model is capable of dynamic channel slimming (slimmable rebuilds).
+    ///
+    /// Conventional WaveNet models (fixed topology, no slimmable metadata) return `false`.
+    /// `SlimmableContainer` and models explicitly marked as slimmable return `true`.
+    pub fn is_slimmable_capable(&self) -> bool {
+        match self {
+            Self::Container(_) => true,
+            Self::WavenetDyn(m) => m.is_slimmable_capable(),
+            _ => false,
+        }
+    }
+
     /// Scalar processing path for LSTM models (exact tanh/sigmoid via libm).
     ///
     /// Only available under `#[cfg(test)]` or `#[cfg(feature = "testing")]`.
@@ -114,8 +126,10 @@ impl StaticModel {
         val: f32,
         rt_status: Option<&crate::common::spsc::RtStatusFlags>,
     ) {
-        if let Self::Container(c) = self {
-            c.set_slimmable_size(val, rt_status);
+        match self {
+            Self::Container(c) => c.set_slimmable_size(val, rt_status),
+            Self::WavenetDyn(m) => m.set_slimmable_size(val, rt_status),
+            _ => {}
         }
     }
 
@@ -124,10 +138,10 @@ impl StaticModel {
     /// Delegates to `ContainerModel::slimmable_breakpoints()` when this is a
     /// `Container` variant. Returns an empty vector for all other variants.
     pub fn slimmable_breakpoints(&self) -> Box<[f64]> {
-        if let Self::Container(c) = self {
-            SlimmableModel::slimmable_breakpoints(c.as_ref())
-        } else {
-            Box::new([])
+        match self {
+            Self::Container(c) => SlimmableModel::slimmable_breakpoints(c.as_ref()),
+            Self::WavenetDyn(m) => SlimmableModel::slimmable_breakpoints(m.as_ref()),
+            _ => Box::new([]),
         }
     }
 

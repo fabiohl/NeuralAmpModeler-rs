@@ -1078,6 +1078,7 @@ _red_zone_tags() {
         *"Dynamic Blended"*)                         gate="1.0e-12" ;;
         *"Dynamic Gated"*)                           gate="1.0e-9" ;;
         *"condition_lstm"*|*"Condition DSP LSTM"*)   gate="fail-closed" ;;
+        *"a2_max"*|*"A2 Max"*|*"A2-Max"*|*"KB-A2-MAX"*) gate="known-bug KB-A2-MAX" ;;
         *)                                           gate="0.1" ;;
     esac
     tags="$tags${YELLOW}[gate: ${gate}]${NC}"
@@ -1874,7 +1875,8 @@ load_contract_baseline() {
 # Mandatory phase receipts must all show PASS before threshold analysis.
 
 verify_contract() {
-    local violations=0
+    local fidelity_violations=0
+    local perf_violations=0
     local review_required=0
 
     echo ""
@@ -1893,7 +1895,7 @@ verify_contract() {
     phase_fail=$(grep -c '"status":"FAIL"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null || true)
     if [ -n "$phase_fail" ] && [ "$phase_fail" -gt 0 ]; then
         echo -e "  ${RED}✗${NC} ${phase_fail} fase(s) do dashboard falharam — ver receipt: ${DASHBOARD_PHASE_RECEIPT}"
-        violations=$((violations + phase_fail))
+        fidelity_violations=$((fidelity_violations + phase_fail))
     fi
 
     for phase_id in "${!PHASE_MANDATORY[@]}"; do
@@ -1901,7 +1903,7 @@ verify_contract() {
         phase_status=$(grep "\"phase_id\":\"${phase_id}\"" "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "NOT_RUN")
         if [ "$phase_status" != "PASS" ]; then
             echo -e "  ${RED}✗ PHASE_FAILED${NC} Fase obrigatoria '${phase_id}': status=${phase_status} (requer PASS)"
-            violations=$((violations + 1))
+            fidelity_violations=$((fidelity_violations + 1))
         fi
     done
     echo ""
@@ -1912,7 +1914,12 @@ verify_contract() {
         if [ -z "$lat_contract_count" ] || [ "$lat_contract_count" -eq 0 ]; then
             echo -e "  ${YELLOW}(i) Arquivo de contrato vazio ou sem metricas reconhecidas.${NC}"
             echo ""
-            [ "$violations" -gt 0 ] && return 1
+            local total_violations=$((fidelity_violations + perf_violations))
+            if [ "$total_violations" -gt 0 ]; then
+                echo -e "  ${RED}CONTRATO VIOLADO — ${total_violations} violacao(oes) detectada(s).${NC}"
+                echo ""
+                return 1
+            fi
             return 0
         fi
     fi
@@ -1959,11 +1966,11 @@ verify_contract() {
 
                     if [ "$esr_safety_fail" = "1" ]; then
                         echo -e "    ${RED}✗ SAFETY CEILING${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > safety ${safety_limit} (baseline: ${esr_ctr})"
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                         namcore_ok=0
                     elif [ "$esr_noise_fail" = "1" ]; then
                         echo -e "    ${YELLOW}⚠ NOISE ENVELOPE${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > noise ${noise_limit} (baseline: ${esr_ctr})"
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                         namcore_ok=0
                     else
                         echo -e "    ${GREEN}ok${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} (baseline: ${esr_ctr})"
@@ -1987,7 +1994,7 @@ verify_contract() {
 
                     if [ "$f64_safety_fail" = "1" ]; then
                         echo -e "    ${RED}✗ SAFETY CEILING f64${NC} ${contract_label}: ESR f64 ${esr_f64_cur_fmt} > safety ${f64_safety_limit} (baseline f64: ${esr_f64_ctr})"
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                         if [ "$namcore_ok" -eq 1 ]; then
                             echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} NAMCore ESR ok, mas f64 viola safety ceiling. Oraculos divergem."
                             review_required=1
@@ -1998,11 +2005,11 @@ verify_contract() {
                             echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} NAMCore ESR ok, mas f64 degradou alem do noise envelope. Oraculos divergem."
                             review_required=1
                         fi
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                     fi
                 elif [ -n "$esr_f64_ctr" ] && [ "$esr_f64_ctr" != "N/A" ] && [ "$esr_f64_cur" = "N/A" ]; then
                     echo -e "    ${RED}MISSING${NC} ${contract_label}: ESR f64 nao medido mas presente no contrato (f64 baseline: ${esr_f64_ctr})"
-                    violations=$((violations + 1))
+                    fidelity_violations=$((fidelity_violations + 1))
                 fi
 
                 local snr_cur="${SNR_DB[$dash_key]:-N/A}"
@@ -2015,7 +2022,7 @@ verify_contract() {
                         'BEGIN { if (cur+0 < ctr-6.0) print "1"; else print "0" }')
                     if [ "$snr_fail" = "1" ]; then
                         echo -e "    ${RED}✗${NC} ${contract_label}: SNR regrediu ${snr_cur_fmt} dB (contrato: ${snr_ctr} dB, limite: $(LC_ALL=C awk -v c="$snr_ctr" 'BEGIN { printf "%.1f", c-6.0 }') dB)"
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                     fi
                 fi
 
@@ -2029,7 +2036,7 @@ verify_contract() {
                         'BEGIN { if (cur+0 > ctr*10.0) print "1"; else print "0" }')
                     if [ "$mrstft_fail" = "1" ]; then
                         echo -e "    ${RED}✗${NC} ${contract_label}: MR-STFT regrediu ${mrstft_cur_fmt} (contrato: ${mrstft_ctr}, limite: $(LC_ALL=C awk -v c="$mrstft_ctr" 'BEGIN { printf "%.4f", c*10.0 }'))"
-                        violations=$((violations + 1))
+                        fidelity_violations=$((fidelity_violations + 1))
                     fi
                 fi
             else
@@ -2041,7 +2048,7 @@ verify_contract() {
                     echo -e "    ${YELLOW}(i) OPTIONAL_SKIPPED${NC} ${contract_label}: modelo nao-distribuivel ausente no ambiente local (teste ignorado graciosamente)"
                 else
                     echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: rotulo de contrato obrigatorio nao encontrado na execucao atual"
-                    violations=$((violations + 1))
+                    fidelity_violations=$((fidelity_violations + 1))
                 fi
             fi
         done
@@ -2072,7 +2079,7 @@ verify_contract() {
                             'BEGIN { limit = ctr * 1.10; if (limit < ctr + 0.05) limit = ctr + 0.05; if (cur+0 > limit) print "1"; else print "0" }')
                         if [ "$lat_fail" = "1" ]; then
                             echo -e "    ${RED}✗${NC} ${contract_label}: latencia regrediu ${lat_cur} us (contrato: ${lat_ctr} us, limite: $(LC_ALL=C awk -v c="$lat_ctr" 'BEGIN { lim = c * 1.10; if (lim < c + 0.05) lim = c + 0.05; printf "%.1f", lim }') us)"
-                            violations=$((violations + 1))
+                            perf_violations=$((perf_violations + 1))
                         else
                             echo -e "    ${GREEN}ok${NC} ${contract_label}: latencia ${lat_cur} us (contrato: ${lat_ctr} us)"
                         fi
@@ -2082,32 +2089,45 @@ verify_contract() {
             done
             if [ "$matched" = false ]; then
                 echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: rotulo de contrato nao encontrado na execucao atual"
-                violations=$((violations + 1))
+                perf_violations=$((perf_violations + 1))
             fi
         done
         set -u
         echo ""
     fi
 
-    if [ "$violations" -gt 0 ]; then
-        echo -e "  ${RED}CONTRATO VIOLADO — ${violations} violacao(oes) detectada(s).${NC}"
+    if [ "$fidelity_violations" -gt 0 ]; then
+        echo -e "  ${RED}FIDELIDADE: FAIL (${fidelity_violations} violacao(oes))${NC}"
         if [ "$review_required" -gt 0 ]; then
             echo -e "  ${YELLOW}[GOVERNANCA] REVIEW_REQUIRED — Divergencia NAMCore vs f64 detectada em modelo(s).${NC}"
             echo -e "  ${YELLOW}              Nenhum oraculo vence automaticamente. Investigar divergencia.${NC}"
         fi
+        if [ "$perf_violations" -gt 0 ]; then
+            echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
+        fi
+        echo -e "  ${RED}CONTRATO VIOLADO${NC}"
         echo ""
         return 1
-    else
-        if [ "$review_required" -gt 0 ]; then
-            echo -e "  ${YELLOW}CONTRATO EM REVISAO — metricas numericas ok, mas divergencia oracular requer investigacao.${NC}"
-            echo -e "  ${YELLOW}                     Nenhum oraculo vence automaticamente.${NC}"
-            echo ""
-            return 1
-        fi
-        echo -e "  ${GREEN}CONTRATO OK — Todas as metricas dentro das tolerancias.${NC}"
-        echo ""
-        return 0
     fi
+
+    if [ "$perf_violations" -gt 0 ]; then
+        echo -e "  ${GREEN}FIDELIDADE: OK${NC}"
+        echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
+        echo ""
+        return 1
+    fi
+
+    if [ "$review_required" -gt 0 ]; then
+        echo -e "  ${YELLOW}CONTRATO EM REVISAO — metricas numericas ok, mas divergencia oracular requer investigacao.${NC}"
+        echo -e "  ${YELLOW}                     Nenhum oraculo vence automaticamente.${NC}"
+        echo ""
+        return 1
+    fi
+
+    echo -e "  ${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "  ${GREEN}PERFORMANCE: OK${NC}"
+    echo ""
+    return 0
 }
 
 # ── Main ────────────────────────────────────────────────────────────────────

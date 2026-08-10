@@ -36,6 +36,11 @@ use crate::models::a2::gating::{BlendingActivationConfig, GatingActivationConfig
 use crate::models::a2::layer::A2Layer;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
+#[cfg(any(test, feature = "testing"))]
+use crate::math::common::AlignedVec;
+#[cfg(any(test, feature = "testing"))]
+use crate::testing::diagnostics::{ConditionDspSnapshot, HeadPerLayerSnapshot};
+
 use super::WaveNetA2Dyn;
 
 impl WaveNetA2Dyn {
@@ -80,6 +85,13 @@ impl WaveNetA2Dyn {
         );
         let nf_total = total.min(self.max_buffer_size);
 
+        #[cfg(any(test, feature = "testing"))]
+        {
+            if let Some(ref mut dump) = self.diag.dump {
+                dump.total_frames = nf_total;
+            }
+        }
+
         let cond_size = self.condition_size;
 
         let mut pos = 0;
@@ -97,15 +109,44 @@ impl WaveNetA2Dyn {
                 let dsp_ch = cond_dsp.num_output_channels();
                 if dsp_ch > 0 && dsp_ch < cond_size {
                     let buf = &mut self.condition_dsp_output[0..nf * cond_size];
-                    for f in (0..nf).rev() {
-                        let val = buf[f];
-                        for c in 1..cond_size {
-                            buf[f * cond_size + c] = val;
+                    if dsp_ch == 1 {
+                        for f in (0..nf).rev() {
+                            let val = buf[f];
+                            for c in 1..cond_size {
+                                buf[f * cond_size + c] = val;
+                            }
+                        }
+                    } else {
+                        for f in (0..nf).rev() {
+                            for c in (0..dsp_ch).rev() {
+                                buf[f * cond_size + c] = buf[f * dsp_ch + c];
+                            }
+                            for c in dsp_ch..cond_size {
+                                buf[f * cond_size + c] = buf[f * cond_size + (c % dsp_ch)];
+                            }
                         }
                     }
                 }
             }
             let use_cond_dsp = self.condition_dsp.is_some();
+
+            #[cfg(any(test, feature = "testing"))]
+            {
+                if let Some(ref mut dump) = self.diag.dump
+                    && use_cond_dsp
+                    && dump.total_frames > 0
+                    && self.diag.config.capture_condition_dsp
+                {
+                    let d = &self.condition_dsp_output[..nf * cond_size];
+                    let mut snap = AlignedVec::new(d.len(), 0.0f32).expect("diagnostic alloc");
+                    snap.copy_from_slice(d);
+                    dump.condition_dsp_snapshots.push(ConditionDspSnapshot {
+                        channels: cond_size,
+                        num_frames: nf,
+                        data: snap,
+                    });
+                }
+            }
 
             self.rechannel_prescale(input, pos, nf);
             let head_wp = self.advance_head_ring(nf);
@@ -121,10 +162,53 @@ impl WaveNetA2Dyn {
                     cond_size,
                     true,
                 );
+
+                #[cfg(any(test, feature = "testing"))]
+                {
+                    if let Some(ref mut dump) = self.diag.dump
+                        && dump.total_frames > 0
+                        && self.diag.config.capture_head_per_layer
+                    {
+                        let accum_size = self.head_accum_size;
+                        let region_len = nf * accum_size;
+                        let start = head_wp * accum_size;
+                        let mut data =
+                            AlignedVec::new(region_len, 0.0f32).expect("diagnostic alloc");
+                        let end = start + region_len;
+                        if end <= self.head_accum.len() {
+                            data.copy_from_slice(&self.head_accum[start..end]);
+                        } else {
+                            let head_cap = self.head_ring_mask + 1;
+                            let first_part = head_cap * accum_size - start;
+                            data[..first_part].copy_from_slice(&self.head_accum[start..]);
+                            data[first_part..]
+                                .copy_from_slice(&self.head_accum[..region_len - first_part]);
+                        }
+                        dump.head_per_layer_snapshots.push(HeadPerLayerSnapshot {
+                            layer: li,
+                            accum_size,
+                            num_frames: nf,
+                            head_wp,
+                            data,
+                        });
+                    }
+                }
             }
 
             self.head_finalize(head_wp, nf, &mut output[pos..pos + nf]);
             pos += nf;
+        }
+
+        #[cfg(any(test, feature = "testing"))]
+        {
+            if let Some(ref mut dump) = self.diag.dump
+                && dump.total_frames > 0
+                && self.diag.config.capture_final_output
+            {
+                let mut out = AlignedVec::new(nf_total, 0.0f32).expect("diagnostic alloc");
+                out.copy_from_slice(&output[..nf_total]);
+                dump.final_output = Some(out);
+            }
         }
     }
 
@@ -165,7 +249,7 @@ impl WaveNetA2Dyn {
     /// for use by the layer loop.
     #[inline(always)]
     pub(crate) fn advance_head_ring(&mut self, nf: usize) -> usize {
-        let head_keep = super::super::super::params::A2_HEAD_KERNEL_SIZE - 1;
+        let head_keep = self.head_kernel_size.saturating_sub(1);
         let head_cap = self.head_ring_mask + 1;
         if self.head_write_pos + nf > head_cap {
             let keep_start = self.head_write_pos - head_keep;
@@ -258,8 +342,6 @@ impl WaveNetA2Dyn {
             let layer_in = &mut self.layer_in;
             let head1x1_scratch = &mut self.head1x1_scratch;
             let cond_scratch = &mut self.cond_scratch;
-            let head1x1_w = &self.head1x1_w;
-            let head1x1_b = &self.head1x1_b;
             let gating_config = self.gating_configs[li].as_ref();
             let mut blending_config = self.blending_configs[li].as_mut();
             let activation = &self.activations[li];
@@ -287,7 +369,6 @@ impl WaveNetA2Dyn {
                         self.channels,
                         self.head_accum_size,
                         self.bottleneck,
-                        self.head1x1_active,
                         z_scratch,
                         mixin_scratch,
                         l1x1_scratch,
@@ -295,8 +376,6 @@ impl WaveNetA2Dyn {
                         layer_in,
                         head1x1_scratch,
                         cond_scratch,
-                        head1x1_w,
-                        head1x1_b,
                         gating_config,
                         bc,
                         activation,
@@ -352,7 +431,6 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     channels: usize,
     head_accum_size: usize,
     bottleneck: usize,
-    head1x1_active: bool,
     z_scratch: &mut [f32],
     mixin_scratch: &mut [f32],
     l1x1_scratch: &mut [f32],
@@ -360,8 +438,6 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     layer_in: &mut [f32],
     head1x1_scratch: &mut [f32],
     cond_scratch: &mut [f32],
-    head1x1_w: &[f32],
-    head1x1_b: &[f32],
     gating_config: Option<&GatingActivationConfig>,
     blending_config: Option<&mut BlendingActivationConfig>,
     activation: &ActivationType,
@@ -410,13 +486,31 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             cond_slice
         };
 
-        for c in 0..z_out_ch {
-            let base = c * cond_size;
-            let mut sum = 0.0;
-            for k in 0..cond_size {
-                sum += layer.mixin_w[base + k] * cond_for_mixin[k];
+        // Flat single-group path: every output channel reads from all input channels.
+        if layer.mixin_groups <= 1 {
+            for c in 0..z_out_ch {
+                let base = c * cond_size;
+                let mut sum = 0.0;
+                for k in 0..cond_size {
+                    sum += layer.mixin_w[base + k] * cond_for_mixin[k];
+                }
+                mixin_scratch[c] = sum;
             }
-            mixin_scratch[c] = sum;
+        } else {
+            let in_pg = cond_size / layer.mixin_groups as usize;
+            let out_per_g = z_out_ch / layer.mixin_groups as usize;
+            for g in 0..layer.mixin_groups as usize {
+                let in_start = g * in_pg;
+                let out_start = g * out_per_g;
+                for oc in out_start..out_start + out_per_g {
+                    let mut sum = 0.0;
+                    let w_base = oc * in_pg;
+                    for ic in 0..in_pg {
+                        sum += layer.mixin_w[w_base + ic] * cond_for_mixin[in_start + ic];
+                    }
+                    mixin_scratch[oc] = sum;
+                }
+            }
         }
     }
 
@@ -468,7 +562,9 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         }
     }
 
-    // 4. Head accumulator.
+    let head1x1_active = layer.head1x1_active;
+    let head1x1_w = &layer.head1x1_w;
+    let head1x1_b = &layer.head1x1_b;
     let head_off = (head_wp + f) * head_accum_size;
     if head1x1_active {
         // Correct grouped head1x1 accumulation.
@@ -524,12 +620,29 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         let base = f * channels;
         let l1x1_w = &layer.l1x1_w;
         let l1x1_b = &layer.l1x1_b;
-        for oc in 0..channels {
-            let mut sum = l1x1_b[oc];
-            for ic in 0..bottleneck {
-                sum += l1x1_w[ic * channels + oc] * z_scratch[ic];
+        if layer.l1x1_groups <= 1 {
+            for oc in 0..channels {
+                let mut sum = l1x1_b[oc];
+                for ic in 0..bottleneck {
+                    sum += l1x1_w[ic * channels + oc] * z_scratch[ic];
+                }
+                l1x1_scratch[oc] = sum;
             }
-            l1x1_scratch[oc] = sum;
+        } else {
+            let in_pg = bottleneck / layer.l1x1_groups as usize;
+            let out_per_g = channels / layer.l1x1_groups as usize;
+            for g in 0..layer.l1x1_groups as usize {
+                let in_start = g * in_pg;
+                let out_start = g * out_per_g;
+                for oc in out_start..out_start + out_per_g {
+                    let mut sum = l1x1_b[oc];
+                    let w_base = oc * in_pg;
+                    for ic in 0..in_pg {
+                        sum += l1x1_w[w_base + ic] * z_scratch[in_start + ic];
+                    }
+                    l1x1_scratch[oc] = sum;
+                }
+            }
         }
         if let Some(ref mut film) = layer.layer1x1_post_film.as_mut().filter(|_| use_blending) {
             unsafe {

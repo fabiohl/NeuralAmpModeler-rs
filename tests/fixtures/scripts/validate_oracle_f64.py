@@ -894,7 +894,16 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         rechannel_w = weights[cursor : cursor + rw_count].copy()
         cursor += rw_count
 
+        head_accum_size_for_film = (
+            int(layer_raw.get("head1x1", {}).get("out_channels", bottleneck))
+            if head1x1_active
+            else bottleneck
+        )
+
         # Per-layer weights
+        mixin_groups = int(layer_raw.get("groups_input_mixin", 1))
+        l1x1_groups = int(layer_raw.get("layer1x1", {}).get("groups", 1))
+
         layer_weights = []
         for li in range(num_layers):
             ks = kernel_sizes[li]
@@ -908,12 +917,48 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
             cursor += n_conv
             conv_b = weights[cursor : cursor + conv_out].copy()
             cursor += conv_out
-            n_mixin = conv_out * cond_size
-            mixin_w = weights[cursor : cursor + n_mixin].reshape(conv_out, cond_size).copy()
-            cursor += n_mixin
-            n_l1x1 = bottleneck * ch
-            l1x1_w = weights[cursor : cursor + n_l1x1].reshape(ch, bottleneck).copy()
-            cursor += n_l1x1
+
+            # Mixin: group-aware (C++ Conv1x1 with groups).
+            if mixin_groups > 1:
+                mixin_in_pg = cond_size // mixin_groups
+                n_mixin = conv_out * mixin_in_pg
+                mixin_w_raw = weights[cursor : cursor + n_mixin].copy()
+                cursor += n_mixin
+                mixin_w = np.zeros(conv_out * mixin_in_pg, dtype=np.float64)
+                src_idx = 0
+                for g in range(mixin_groups):
+                    out_pg = conv_out // mixin_groups
+                    out_start = g * out_pg
+                    for oc in range(out_start, out_start + out_pg):
+                        dst_base = oc * mixin_in_pg
+                        for ic in range(mixin_in_pg):
+                            mixin_w[dst_base + ic] = mixin_w_raw[src_idx]
+                            src_idx += 1
+            else:
+                n_mixin = conv_out * cond_size
+                mixin_w = weights[cursor : cursor + n_mixin].copy()
+                cursor += n_mixin
+
+            # L1x1: group-aware.
+            if l1x1_groups > 1:
+                l1x1_in_pg = bottleneck // l1x1_groups
+                n_l1x1 = ch * l1x1_in_pg
+                l1x1_w_raw = weights[cursor : cursor + n_l1x1].copy()
+                cursor += n_l1x1
+                l1x1_w = np.zeros(ch * l1x1_in_pg, dtype=np.float64)
+                src_idx = 0
+                for g in range(l1x1_groups):
+                    out_pg = ch // l1x1_groups
+                    out_start = g * out_pg
+                    for oc in range(out_start, out_start + out_pg):
+                        dst_base = oc * l1x1_in_pg
+                        for ic in range(l1x1_in_pg):
+                            l1x1_w[dst_base + ic] = l1x1_w_raw[src_idx]
+                            src_idx += 1
+            else:
+                n_l1x1 = bottleneck * ch
+                l1x1_w = weights[cursor : cursor + n_l1x1].copy()
+                cursor += n_l1x1
             l1x1_b = weights[cursor : cursor + ch].copy()
             cursor += ch
 
@@ -924,10 +969,11 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 scfg = film_slot_configs[slot_idx]
                 g = int(scfg["groups"])
                 shift = scfg["shift"]
-                # C++ convention (slimmable.cpp): slot 2 → cond_size, slot 7 → head1x1_out
-                film_ch = (1 if slot_idx == 2 else
-                           1 if slot_idx == 7 else
-                           ch)
+                film_ch = (
+                    head_accum_size_for_film if slot_idx == 7 else
+                    cond_size if slot_idx == 2 else
+                    ch
+                )
                 if cond_size > 1:
                     wc = film_weight_count_generic(g, cond_size, film_ch, shift)
                     bc = film_bias_count_generic(film_ch)
@@ -948,6 +994,8 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 "film": film_slots, "gating_mode": gmode,
                 "activation": act, "secondary_activation": sec_act,
                 "conv_out": conv_out,
+                "mixin_groups": mixin_groups,
+                "l1x1_groups": l1x1_groups,
             })
 
         # Head1x1 weights
@@ -957,24 +1005,25 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         if head1x1_active:
             h1_groups = layer_raw.get("head1x1", {}).get("groups", 1)
             head1x1_in = bottleneck // h1_groups
-            n_h1 = ch * head1x1_in
-            head1x1_w = weights[cursor : cursor + n_h1].reshape(ch, head1x1_in).copy()
+            n_h1 = head_accum_size_for_film * head1x1_in
+            head1x1_w = weights[cursor : cursor + n_h1].reshape(head_accum_size_for_film, head1x1_in).copy()
             cursor += n_h1
-            head1x1_b = weights[cursor : cursor + ch].copy()
-            cursor += ch
+            head1x1_b = weights[cursor : cursor + head_accum_size_for_film].copy()
+            cursor += head_accum_size_for_film
+
+        # Head kernel size — legacy models use implicit K=1.
+        head_k_raw = layer_raw.get("head", {})
+        if isinstance(head_k_raw, dict):
+            head_k = int(head_k_raw.get("kernel_size", 1))
+        else:
+            head_k = 1
 
         # Head conv weights
-        head_accum_size = int(layer_raw.get("head1x1", {}).get("out_channels", bottleneck)) if head1x1_active else bottleneck
+        head_accum_size = head_accum_size_for_film
 
-        # S16.4 (T5.1): head layout format — A2 legacy (no explicit head_size in
-        # JSON) vs rechannel (explicit head_size).  A2 uses K=16 Conv1D with
-        # per-array bias+scale; rechannel uses a simple dense readout with
-        # per-array bias (only when head_bias=True) and a global head_scale at
-        # the end of the weight stream.
-        head_size_raw = layer_raw.get("head_size")
-        is_head_rechannel = head_size_raw is not None
+        head_size = int(layer_raw.get("head_size", 1))
+        is_head_rechannel = head_size > 1
         if is_head_rechannel:
-            head_size = int(head_size_raw)
             hw_count = head_accum_size * head_size
             head_w = weights[cursor : cursor + hw_count].copy()
             cursor += hw_count
@@ -986,14 +1035,13 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 head_b_arr = np.zeros(head_size, dtype=np.float64)
             head_b = np.float64(head_b_arr[0]) if len(head_b_arr) == 1 else head_b_arr
         else:
-            # Legacy A2 format: head_size not in JSON → A2_HEAD_K=16 Conv1D
-            head_size = 1
-            head_w_raw = weights[cursor : cursor + A2_HEAD_K * head_accum_size]
-            cursor += A2_HEAD_K * head_accum_size
-            head_w = np.zeros(A2_HEAD_K * head_accum_size, dtype=np.float64)
-            for tap in range(A2_HEAD_K):
+            # Legacy A2 format: K=head_k Conv1D + bias + scale from weight stream
+            head_w_raw = weights[cursor : cursor + head_k * head_accum_size]
+            cursor += head_k * head_accum_size
+            head_w = np.zeros(head_k * head_accum_size, dtype=np.float64)
+            for tap in range(head_k):
                 for c in range(head_accum_size):
-                    head_w[tap * head_accum_size + c] = head_w_raw[c * A2_HEAD_K + tap]
+                    head_w[tap * head_accum_size + c] = head_w_raw[c * head_k + tap]
             head_b = np.float64(weights[cursor])
             cursor += 1
             _head_scale_val = np.float64(weights[cursor])
@@ -1001,6 +1049,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
 
         arr = ArrayWeights()
         arr.head_accum_size = head_accum_size
+        arr.head_k = head_k
         arr.ch = ch
         arr.bottleneck = bottleneck
         arr.cond_size = cond_size
@@ -1127,7 +1176,21 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 if film[2] is not None:
                     film[2].apply(condition_mod, condition[:cond_size])
                 mixin_contrib = np.zeros_like(z)
-                if len(condition_mod) > 0:
+                mixin_groups_fwd = lw.get("mixin_groups", 1)
+                if mixin_groups_fwd > 1:
+                    mixin_in_pg = cond_size // mixin_groups_fwd
+                    mixin_out_per_g = conv_out // mixin_groups_fwd
+                    for g in range(mixin_groups_fwd):
+                        in_start = g * mixin_in_pg
+                        out_start = g * mixin_out_per_g
+                        for oc in range(out_start, out_start + mixin_out_per_g):
+                            s = 0.0
+                            w_base = oc * mixin_in_pg
+                            for ic in range(mixin_in_pg):
+                                if in_start + ic < len(condition_mod):
+                                    s += float(lw["mixin_w"][w_base + ic]) * float(condition_mod[in_start + ic])
+                            mixin_contrib[oc] = s
+                elif len(condition_mod) > 0:
                     k_used = min(cond_size, len(condition_mod))
                     for c in range(conv_out):
                         mixin_contrib[c] = np.dot(lw["mixin_w"][c, :k_used], condition_mod[:k_used])
@@ -1170,9 +1233,9 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 head_off = head_col * max_ch
                 if arr.head1x1_active:
                     h1_groups = layer_raw.get("head1x1", {}).get("groups", 1)
-                    ch_per_group = ch // h1_groups
+                    ch_per_group = arr.head_accum_size // h1_groups
                     h1x1_out = np.zeros(arr.head_accum_size, dtype=np.float64)
-                    h1x1_out[:ch] = arr.head1x1_b
+                    h1x1_out[:arr.head_accum_size] = arr.head1x1_b
                     for grp in range(h1_groups):
                         for oc in range(grp * ch_per_group, (grp + 1) * ch_per_group):
                             for ic in range(arr.head1x1_in):
@@ -1194,7 +1257,22 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
 
                 # L1x1 residual
                 if li < num_layers - 1:
-                    residual = z[:bottleneck] @ lw["l1x1_w"].T + lw["l1x1_b"]
+                    l1x1_groups_fwd = lw.get("l1x1_groups", 1)
+                    if l1x1_groups_fwd > 1:
+                        in_pg = bottleneck // l1x1_groups_fwd
+                        out_per_g = ch // l1x1_groups_fwd
+                        residual = np.zeros(ch, dtype=np.float64)
+                        for g in range(l1x1_groups_fwd):
+                            in_start = g * in_pg
+                            out_start = g * out_per_g
+                            for oc in range(out_start, out_start + out_per_g):
+                                s = float(lw["l1x1_b"][oc])
+                                w_base = oc * in_pg
+                                for ic in range(in_pg):
+                                    s += float(lw["l1x1_w"][w_base + ic]) * float(z[in_start + ic])
+                                residual[oc] = s
+                    else:
+                        residual = z[:bottleneck] @ lw["l1x1_w"].T + lw["l1x1_b"]
                     if use_blending:
                         if film[6] is not None:
                             film[6].apply(residual, condition)
@@ -1211,7 +1289,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         if last_arr.head_is_rechannel:
             k = last_arr.head_size
         else:
-            k = A2_HEAD_K if last_arr.head_size == 1 else last_arr.head_size
+            k = last_arr.head_k if last_arr.head_size == 1 else last_arr.head_size
         cb = head_col - (k - 1)
         y = float(last_arr.head_b) if np.ndim(last_arr.head_b) == 0 else float(last_arr.head_b[0])
         for t in range(k):

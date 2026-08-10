@@ -76,7 +76,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Perform off-RT loading and compilation of model data.
     let start_time = std::time::Instant::now();
-    let model_pair = load_and_build_model(&path, &sys, false, options)?;
+    let model_pair = match load_and_build_model(&path, &sys, false, options) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!(
+                "\n[Error] Failed to load model from \"{}\":",
+                path.display()
+            );
+            eprintln!("  {:#}", err);
+            process::exit(1);
+        }
+    };
     let elapsed = start_time.elapsed();
 
     // 5. Query and display model metadata & execution parameters.
@@ -90,19 +100,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Receptive Field    : {} samples", info.receptive_field);
     println!("  Weights Layout     : {}", model_pair.weights_layout);
     println!(
-        "  Left Channel Model : {}",
-        if model_pair.model_l.is_some() {
-            "Ready (Mono)"
+        "  Left Channel Model : Ready ({})",
+        if model_pair.model_r.is_some() {
+            "Stereo L"
         } else {
-            "None"
+            "Mono"
         }
     );
     println!(
         "  Right Channel Model: {}",
         if model_pair.model_r.is_some() {
-            "Ready (Stereo)"
+            "Ready (Stereo R)"
         } else {
-            "None"
+            "None (Mono Load)"
         }
     );
 

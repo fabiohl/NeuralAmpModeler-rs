@@ -79,6 +79,8 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector.
 
+- **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through a shared `resolve_nam_model()` function that mirrors the 5-step search order of `tests/common/io_helpers.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `$NAM_THIRD_PARTY_DIR/nam_t3k/`, (3) `tests/fixtures/models-nondist`, (4) `../third-party/nam_t3k/`, (5) `tests/fixtures/models`. See [tests/fixtures/README.md](../tests/fixtures/README.md) for the complete policy on skip semantics and non-distributable golden handling.
+
 - **Libm Export Guard:** [utils/debug/verify_no_libm_exports.sh](../utils/debug/verify_no_libm_exports.sh) is a diagnostic ELF surface verification script that inspects compiled artifacts to confirm they do not export libm symbols with global/weak linkage, preventing runtime symbol interposition bugs (documented in [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)).
 
 ---
@@ -234,7 +236,7 @@ The project includes a comprehensive measurement framework for audio fidelity as
 
 - **Two references:** Parity (C++ NAMCore f32) measures implementation agreement; absolute (f64 Oracle) measures intrinsic quality loss from f32 approximations.
 - **ESR as primary gate:** Normalizes error by reference energy — invariant to linear scale mismatch.
-- **ISA parity:** End-to-end cross-ISA determinism via `TEST_ISA_OVERRIDE`. Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets.
+- **ISA parity:** End-to-end cross-ISA determinism via `TEST_ISA_OVERRIDE`. Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets. Full cross-ISA matrix (AVX-512/VNNI+BF16) and per-model spectral baselines are long-suite only (`#[ignore]`d in quick); quick covers AVX2 self-consistency + synthetic spectral.
 - **MR-STFT dual gate:** Hard gate at 44.1/48 kHz (`mrstft_max` calibrated per model); soft informational gate at higher sample rates (88.2–192 kHz).
 - **RT-safety:** All metrics run off-RT. Hot-path audio processing uses sample-peak detection only.
 
@@ -308,7 +310,30 @@ The `--check` mode applies statistical margins to separate measurement noise fro
 > [!IMPORTANT]
 > [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the **primary statistical authority** for performance regressions (two-sample t-test vs Criterion baseline, p < 0.05). The quality contract serves as a fast second line of defense.
 
-### 9.3. Daily Workflow
+### 9.3. Perf vermelho ≠ regressão de paridade
+
+A violação de latência **não** implica degradação de qualidade sonora ou perda de
+paridade com o NAMCore. O pipeline de teste separa explicitamente o domínio da
+fidelidade (ESR, SNR, MR-STFT, oráculo f64) do domínio do desempenho (latência µs,
+CPU budget). Ambas são importantes, mas respondem a causas distintas:
+
+- **Fidelidade vermelha** (ESR/SNR/MR-STFT violado) é um *gate duro*: indica perda
+  de paridade numérica com a referência C++ ou degradação espectral audível.
+- **Performance vermelha** (latência acima do contrato) é um alerta de que o modelo
+  está mais lento que o baseline *no hardware atual*, mas não altera o som produzido.
+  Pode ser sazonal (thermals, governor), ambiental (OS noise, CPU contention) ou
+  estrutural (novo caminho de código mais lento para o mesmo resultado correto).
+
+Os scripts de QA reportam esses domínios independentemente: `FIDELIDADE: OK` /
+`PERFORMANCE: FAIL (N)` sinaliza que a qualidade sonora está preservada e apenas o
+orçamento de tempo excedeu o contrato.
+
+> [!NOTE]
+> O [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) é a
+> autoridade estatística primária para regressão de performance (teste t de duas amostras,
+> p < 0.05); o quality contract atua como segunda linha de defesa rápida.
+
+### 9.4. Daily Workflow
 
 ```sh
 # Run full quality check against baseline contract
@@ -318,7 +343,7 @@ The `--check` mode applies statistical margins to separate measurement noise fro
 ./utils/tests-performance-regression.sh --check
 ```
 
-### 9.4. Baseline Renewal Procedure
+### 9.5. Baseline Renewal Procedure
 
 Baseline renewal is a deliberate action requiring explicit justification:
 

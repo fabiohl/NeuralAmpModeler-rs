@@ -58,9 +58,13 @@ pub(crate) fn film_bias_count(channels: usize, shift: bool) -> usize {
     if shift { channels * 2 } else { channels }
 }
 
-/// Simplified film_bias_count for A2 generic models — always `channels`.
-pub(crate) fn film_bias_count_generic(channels: usize) -> usize {
-    channels
+/// Bias count for A2 generic models (cond_size > 1).
+/// Dense bias (always `channels * mult`, matching
+/// `film_weight_count_generic` without the `cond_size / groups`
+/// term since bias is not grouped).
+pub(crate) fn film_bias_count_generic(channels: usize, shift: bool) -> usize {
+    let mult = if shift { 2 } else { 1 };
+    channels * mult
 }
 
 // ── Transpose helpers ───────────────────────────────────────────────────

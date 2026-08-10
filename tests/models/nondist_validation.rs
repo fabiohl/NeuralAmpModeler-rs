@@ -106,20 +106,20 @@ fn test_nondist_models_validation() {
         // 2. Classification validation (manifest-driven)
         if let Some(ref manifest) = manifest
             && let Some(entry) = manifest.iter().find(|e| e.filename == filename)
+            && let Some(ref expected) = entry.expected_class
         {
-            if entry.expected_class.starts_with("Unknown") {
+            if expected.starts_with("Unknown") {
                 println!(
                     "  ∎ Classification skip: {filename} — expected_class \
-                     is '{expected}' (unsupported architecture, skip assertion)",
-                    expected = entry.expected_class
+                     is '{expected}' (unsupported architecture, skip assertion)"
                 );
             } else {
                 let class_label = model.class_label();
                 assert_eq!(
-                    class_label, entry.expected_class,
+                    class_label,
+                    expected.as_str(),
                     "Classification mismatch for {filename}: \
-                     expected '{}', got '{}'",
-                    entry.expected_class, class_label
+                     expected '{expected}', got '{class_label}'"
                 );
             }
         }

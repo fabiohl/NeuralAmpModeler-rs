@@ -5,6 +5,8 @@ use super::super::WeightCursor;
 use super::layout;
 use crate::loader::nam_json::{NamModelData, NamWavenetTopology};
 use crate::math::common::AlignedVec;
+use crate::models::a2::activations::ActivationType;
+use crate::models::wavenet::post_stack_head::parse_activation;
 use crate::models::wavenet::{DenseLayer, WaveNetLayer, WaveNetLayerArray, WaveNetModel};
 use crate::models::wavenet::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
 use anyhow::Context;
@@ -34,6 +36,8 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
     debug_assert!(data.config.layers.len() >= 2);
     let l0 = &data.config.layers[0];
     let l1 = &data.config.layers[1];
+    let act0 = parse_activation(l0.activation.as_deref().unwrap_or("Tanh"));
+    let act1 = parse_activation(l1.activation.as_deref().unwrap_or("Tanh"));
     let dils_0 = l0
         .dilations
         .as_deref()
@@ -50,6 +54,7 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
         dilations: dils_0,
         has_head_bias: false,
         alloc_num: &mut alloc_num,
+        activation: act0,
     })?;
 
     let array2 = build_wavenet_array::<CH, 1, HEAD, K, 1>(WaveNetArrayConfig {
@@ -57,6 +62,7 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
         dilations: dils_1,
         has_head_bias: true,
         alloc_num: &mut alloc_num,
+        activation: act1,
     })?;
 
     let head_scale = cursor.read_f32_finite()?;
@@ -96,6 +102,7 @@ pub(crate) struct WaveNetArrayConfig<'a, 'b, 'c> {
     pub dilations: &'c [usize],
     pub has_head_bias: bool,
     pub alloc_num: &'a mut usize,
+    pub activation: ActivationType,
 }
 
 /// Builds a `WaveNetLayerArray` by reading weights cursor-forward.
@@ -123,6 +130,7 @@ pub(crate) fn build_wavenet_array<
         dilations,
         has_head_bias,
         alloc_num,
+        activation,
     } = config;
 
     let rechannel = layout::read_dense_weights_typed::<DenseLayer<IN, CH>>(cursor, IN, CH, false)?;
@@ -145,6 +153,7 @@ pub(crate) fn build_wavenet_array<
             conv1d,
             input_mixin,
             one_by_one,
+            activation: activation.clone(),
             scratch_mixin: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
             scratch_conv: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
         });

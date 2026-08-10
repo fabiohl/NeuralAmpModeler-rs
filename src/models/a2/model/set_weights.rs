@@ -331,7 +331,7 @@ pub(crate) fn load_film_for_layer(
             // A2 generic: integer-safe formula with channels-sized bias
             (
                 film_weight_count_generic(config.groups, cond_size, film_channels, config.shift),
-                film_bias_count_generic(film_channels),
+                film_bias_count_generic(film_channels, config.shift),
             )
         } else {
             (

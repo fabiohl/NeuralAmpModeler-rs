@@ -80,6 +80,54 @@ mkdir -p "$LOGS_DIR"
 PHASE_TOTAL=12
 source "$PROJECT_ROOT/utils/_lib.sh"
 
+# Shell shared resolve — mirrors tests/common/io_helpers.rs::model_path order.
+# Usage: resolve_nam_model <filename>  →  echoes absolute path || return 1
+resolve_nam_model() {
+    local filename="$1"
+    local p
+
+    # (1) NAM_MODELS_DIR env var (explicit override) — io_helpers step 1
+    if [ -n "${NAM_MODELS_DIR:-}" ]; then
+        p="$NAM_MODELS_DIR/$filename"
+        if [ -f "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    fi
+
+    # (2) NAM_THIRD_PARTY_DIR/nam_t3k/ (workspace vendor area) — io_helpers step 2
+    if [ -n "${NAM_THIRD_PARTY_DIR:-}" ]; then
+        p="$NAM_THIRD_PARTY_DIR/nam_t3k/$filename"
+        if [ -f "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    fi
+
+    # (3) tests/fixtures/models-nondist (local non-distributable override) — io_helpers step 3
+    p="$FIXTURES_DIR/models-nondist/$filename"
+    if [ -f "$p" ]; then
+        echo "$p"
+        return 0
+    fi
+
+    # (4) ../third-party/nam_t3k/ (workspace third-party archive, relative to crate) — io_helpers step 4
+    p="$PROJECT_ROOT/../third-party/nam_t3k/$filename"
+    if [ -f "$p" ]; then
+        echo "$p"
+        return 0
+    fi
+
+    # (5) tests/fixtures/models (default — distributed with the repository) — io_helpers step 5
+    p="$MODELS_DIR/$filename"
+    if [ -f "$p" ]; then
+        echo "$p"
+        return 0
+    fi
+
+    return 1
+}
+
 # Load pinned versions from single source of truth (variables.env).
 if [ ! -f "$VARIABLES_ENV" ]; then
     echo "ERROR: variables.env not found at $VARIABLES_ENV."
@@ -374,7 +422,7 @@ CATALOG=(
     "wavenet_a2_lite.nam:golden_wavenet_a2_lite:A2-Lite (CH=3):48k_only"
     "wavenet_condition_dsp.nam:golden_wavenet_condition_dsp:Condition DSP (CH=3, cond=3):48k_only"
     "wavenet_condition_lstm.nam:golden_wavenet_condition_lstm:Condition DSP LSTM (CH=3, cond=3, LSTM):48k_only::C++ upstream limitation: LSTM condition_dsp sub-model channel mismatch (uses input_size=1 instead of hidden_size=3) — golden binary cannot be generated (2026-07-11)"
-    "a2_example.nam:golden_a2_example:SlimmableContainer A2 Example (CH=3→6):none"
+    "a2_example.nam:golden_a2_example:SlimmableContainer A2 Example (CH=3→6):48k_only"
     "APP-EVH-Stealth100-Dialled-xSTD.nam:golden_wavenet_app_evh:APP EVH Stealth 100:48k_only"
     "Boss BD-2 H2O Mod T-12_00 G-12_00.nam:golden_wavenet_boss_bd2:Boss BD-2 H2O Mod:48k_only"
     "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam:golden_wavenet_slammin_marshall:SLAMMIN MARSHALL J45:48k_only"
@@ -393,15 +441,15 @@ CATALOG=(
     "linear_fft_rf4096.nam:golden_linear_fft_rf4096:Linear FFT RF=4096:none"
     "linear_fft_rf8192.nam:golden_linear_fft_rf8192:Linear FFT RF=8192:none"
     # LSTM uncatalogued hidden sizes and 3-layer topology
-    "lstm_1x10.nam:golden_lstm_1x10:LSTM 1×10 (uncat.):48k_only::Synthetic model — pending offline golden build (2026-07-31)"
-    "lstm_2x24.nam:golden_lstm_2x24:LSTM 2×24 (uncat.):48k_only::Synthetic model — pending offline golden build (2026-07-31)"
-    "lstm_3x8.nam:golden_lstm_3x8:LSTM 3×8:48k_only::Synthetic model — pending offline golden build (2026-07-31)"
+    "lstm_1x10.nam:golden_lstm_1x10:LSTM 1×10 (uncat.):48k_only"
+    "lstm_2x24.nam:golden_lstm_2x24:LSTM 2×24 (uncat.):48k_only"
+    "lstm_3x8.nam:golden_lstm_3x8:LSTM 3×8:48k_only"
     # ConvNet variants (nobn, ReLU, SiLU)
-    "convnet_nobn.nam:golden_convnet_nobn:ConvNet No BatchNorm:48k_only::Synthetic model — pending offline golden build (2026-07-31)"
-    "convnet_relu.nam:golden_convnet_relu:ConvNet ReLU:48k_only::Synthetic model — pending offline golden build (2026-07-31)"
-    "convnet_silu.nam:golden_convnet_silu:ConvNet SiLU:48k_only::Synthetic model — pending offline golden build (2026-07-31)"
+    "convnet_nobn.nam:golden_convnet_nobn:ConvNet No BatchNorm:48k_only"
+    "convnet_relu.nam:golden_convnet_relu:ConvNet ReLU:48k_only"
+    "convnet_silu.nam:golden_convnet_silu:ConvNet SiLU:48k_only"
     # Linear without bias
-    "linear_nobias.nam:golden_linear_nobias:Linear No Bias:48k_only::Synthetic model — pending offline golden build (2026-07-31)"
+    "linear_nobias.nam:golden_linear_nobias:Linear No Bias:48k_only"
     # Rejection test fixture
     "wavenet_a1_secondary_act.nam:golden_wavenet_a1_secondary_act:WaveNet A1 Secondary Activation Rejection:none::Rejection fixture for non-null secondary_activation (2026-08-03)"
 )
@@ -413,7 +461,6 @@ mkdir -p "$TEMP_DIR"
 
 for entry in "${CATALOG[@]}"; do
     IFS=':' read -r nam_file golden_name label v2_scope skip_srs skip_reason <<< "$entry"
-    MODEL_PATH="$MODELS_DIR/$nam_file"
     OUTPUT_WAV="$TEMP_DIR/${golden_name}.wav"
     GOLDEN_BIN="$FIXTURES_DIR/${golden_name}.bin"
 
@@ -422,12 +469,8 @@ for entry in "${CATALOG[@]}"; do
         continue
     fi
 
-    if [ ! -f "$MODEL_PATH" ]; then
-        MODEL_PATH="$FIXTURES_DIR/models-nondist/$nam_file"
-    fi
-
-    if [ ! -f "$MODEL_PATH" ]; then
-        echo "  SKIP: $nam_file not found at $MODELS_DIR or models-nondist"
+    if ! MODEL_PATH=$(resolve_nam_model "$nam_file"); then
+        echo "  SKIP: $nam_file not found"
         continue
     fi
 
@@ -482,12 +525,8 @@ for entry in "${CATALOG[@]}"; do
         continue
     fi
 
-    MODEL_PATH="$MODELS_DIR/$nam_file"
-    if [ ! -f "$MODEL_PATH" ]; then
-        MODEL_PATH="$FIXTURES_DIR/models-nondist/$nam_file"
-    fi
-    if [ ! -f "$MODEL_PATH" ]; then
-        echo "  SKIP v2: $nam_file not found at $MODELS_DIR or models-nondist"
+    if ! MODEL_PATH=$(resolve_nam_model "$nam_file"); then
+        echo "  SKIP v2: $nam_file not found"
         continue
     fi
 

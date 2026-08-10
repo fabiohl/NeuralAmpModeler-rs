@@ -17,6 +17,24 @@ use crate::models::a2::layer::A2Layer;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 use serde_json::Value;
 
+#[cfg(any(test, feature = "testing"))]
+use crate::testing::diagnostics::{DiagnosticConfig, DiagnosticDump};
+
+/// Off-RT diagnostic state (zero-cost when compiled out).
+///
+/// In release builds, this is a zero-sized struct; in debug/test builds,
+/// it holds the capture config and the accumulated dump for the current
+/// `process()` call.
+#[derive(Default)]
+pub struct DiagnosticState {
+    #[cfg(any(test, feature = "testing"))]
+    /// Diagnostic capture config (off-RT only).
+    pub config: DiagnosticConfig,
+    #[cfg(any(test, feature = "testing"))]
+    /// Accumulated diagnostic dump for the current `process()` call.
+    pub dump: Option<DiagnosticDump>,
+}
+
 /// Weight-loading routines (`set_weights` and helpers).
 pub mod build;
 /// Pre-warm implementation (fills receptive field with silence).
@@ -60,6 +78,9 @@ pub struct WaveNetA2Dyn {
     /// Head convolution (K=16 over head accumulator, bias, head_scale).
     /// Used when head_size == 1 (mono output).
     pub head_conv: Option<A2HeadConv>,
+    /// Head convolution kernel size (= 16 for A2 canonical, = 1 for legacy models).
+    /// Controls weight count, receptive field, and ring buffer keep size.
+    pub head_kernel_size: usize,
     /// Head rechannel weights for multi-channel output (head_size > 1).
     /// Layout: per output channel `[K][head_accum_size]` column-major per tap,
     /// concatenated as `head_size * K * head_accum_size` f32, matching
@@ -107,16 +128,24 @@ pub struct WaveNetA2Dyn {
     /// Pre-allocated blending configs per layer (None when gating_mode != Blended).
     pub blending_configs: Vec<Option<BlendingActivationConfig>>,
 
-    /// Whether head1x1 projection (`bottleneck → channels`) is active.
+    /// Whether head1x1 projection is active for this layer array.
+    /// Config flag derived from JSON `head1x1.active`. The weights
+    /// themselves are stored per-layer in `A2Layer.head1x1_w` / `.head1x1_b`.
     pub head1x1_active: bool,
+    /// Input channel count to each head1x1 layer (= bottleneck / groups).
+    /// Per-array config; used during weight loading to size each layer's
+    /// head1x1 weight matrices.
+    pub head1x1_h1_in: usize,
+    /// Number of groups for the input mixin projection across all layers
+    /// (C++ `groups_input_mixin`). Per-array config, default 1.
+    pub mixin_groups: u32,
+    /// Number of groups for the layer1x1 projection across all layers
+    /// (C++ `layer1x1.groups`). Per-array config, default 1.
+    pub l1x1_groups: u32,
     /// Dimension size of the head accumulator (output size of head1x1 projection).
     pub head_accum_size: usize,
-    /// Size of the input to head1x1 layer.
-    pub h1_in_size: usize,
-    /// Head1x1 weights: `[channels][bottleneck]` row-major (channels rows × bottleneck cols).
-    pub head1x1_w: AlignedVec<f32>,
-    /// Head1x1 bias: `channels` elements.
-    pub head1x1_b: AlignedVec<f32>,
+    /// Scratch buffer for head1x1 projection output (channels elements).
+    pub head1x1_scratch: AlignedVec<f32>,
 
     /// Total receptive field: sum of `(kernel-1)*dilation` + head kernel - 1.
     pub receptive_field_size: usize,
@@ -136,8 +165,6 @@ pub struct WaveNetA2Dyn {
     /// Scratch buffer for isolated mixin output before FiLM (2*bottleneck elements).
     pub mixin_scratch: AlignedVec<f32>,
 
-    /// Scratch buffer for head1x1 projection output (channels elements).
-    pub head1x1_scratch: AlignedVec<f32>,
     /// Scratch buffer for layer1x1 projection output (channels elements).
     pub l1x1_scratch: AlignedVec<f32>,
     /// Scratch buffer for input_mixin_pre_film condition modulation (condition_size elements).
@@ -157,6 +184,9 @@ pub struct WaveNetA2Dyn {
     ///
     /// Size: `condition_size × WAVENET_MAX_NUM_FRAMES`.
     pub condition_dsp_output: AlignedVec<f32>,
+
+    /// Off-RT diagnostic capture state (zero-cost in release builds).
+    pub diag: DiagnosticState,
 }
 
 impl WaveNetA2Dyn {
@@ -177,13 +207,13 @@ impl WaveNetA2Dyn {
         bottleneck: usize,
         head_size: usize,
         head_accum_size: usize,
-        h1_in_size: usize,
+        head1x1_h1_in: usize,
+        head_kernel_size: usize,
         kernel_sizes: &[usize],
         dilations: &[usize],
         activations: Vec<ActivationType>,
         gating_modes: Vec<GatingMode>,
         secondary_activations: Vec<Option<ActivationType>>,
-        head1x1_active: bool,
     ) -> anyhow::Result<Self> {
         let num_layers = kernel_sizes.len();
         assert_eq!(dilations.len(), num_layers);
@@ -197,7 +227,7 @@ impl WaveNetA2Dyn {
         for i in 0..num_layers {
             rf += (kernel_sizes[i] - 1) * dilations[i];
         }
-        rf += super::super::params::A2_HEAD_KERNEL_SIZE - 1;
+        rf += head_kernel_size.saturating_sub(1);
 
         let head_ring_size = (rf + max_buf + 1).next_power_of_two();
         let head_ring_mask = head_ring_size - 1;
@@ -248,30 +278,13 @@ impl WaveNetA2Dyn {
             blending_configs.push(bc);
         }
 
-        let head1x1_w = if head1x1_active {
-            AlignedVec::new(head_accum_size * h1_in_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers")
-        } else {
-            AlignedVec::new(0, 0.0f32).expect("allocation should succeed for test-sized buffers")
-        };
-        let head1x1_b = if head1x1_active {
-            AlignedVec::new(head_accum_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers")
-        } else {
-            AlignedVec::new(0, 0.0f32).expect("allocation should succeed for test-sized buffers")
-        };
-        let head1x1_scratch = if head1x1_active {
-            AlignedVec::new(head_accum_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers")
-        } else {
-            AlignedVec::new(0, 0.0f32).expect("allocation should succeed for test-sized buffers")
-        };
+        let head1x1_scratch = AlignedVec::new(head_accum_size, 0.0f32)
+            .expect("allocation should succeed for test-sized buffers");
 
         Ok(Self {
             input_channels,
             head_size,
             head_accum_size,
-            h1_in_size,
             channels,
             bottleneck,
             num_layers,
@@ -279,8 +292,9 @@ impl WaveNetA2Dyn {
             rechannel_w_f32: AlignedVec::new(input_channels * channels, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
             head_conv: None,
+            head_kernel_size,
             head_rechannel_w: AlignedVec::new(
-                head_size.max(1) * super::super::params::A2_HEAD_KERNEL_SIZE * head_accum_size,
+                head_size.max(1) * head_kernel_size * head_accum_size,
                 0.0f32,
             )
             .expect("allocation should succeed for test-sized buffers"),
@@ -305,9 +319,10 @@ impl WaveNetA2Dyn {
             secondary_activations,
             gating_configs,
             blending_configs,
-            head1x1_active,
-            head1x1_w,
-            head1x1_b,
+            head1x1_active: false,
+            head1x1_h1_in,
+            mixin_groups: 1,
+            l1x1_groups: 1,
             receptive_field_size: rf,
             max_buffer_size: max_buf,
             layer_raw: None,
@@ -325,6 +340,7 @@ impl WaveNetA2Dyn {
             condition_dsp: None,
             condition_dsp_output: AlignedVec::new(0, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
+            diag: DiagnosticState::default(),
         })
     }
 
@@ -368,6 +384,21 @@ impl WaveNetA2Dyn {
     #[inline(always)]
     pub fn has_weights(&self) -> bool {
         !self.layers.is_empty()
+    }
+
+    /// Enables diagnostic capture for the next `process()` call.
+    ///
+    /// Allocates a new `DiagnosticDump`. Not compiled in release builds.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn enable_diagnostics(&mut self, config: DiagnosticConfig) {
+        self.diag.config = config;
+        self.diag.dump = Some(DiagnosticDump::new(0));
+    }
+
+    /// Takes the accumulated diagnostic dump, resetting internal state.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn take_diagnostics(&mut self) -> Option<DiagnosticDump> {
+        self.diag.dump.take()
     }
 
     /// Reallocates internal buffers to support the given maximum block size.
@@ -422,7 +453,7 @@ impl WaveNetA2Dyn {
 
         let head_ring_size = (rf + max_buf + 1).next_power_of_two();
         self.head_ring_mask = head_ring_size - 1;
-        self.head_accum = AlignedVec::new(head_ring_size * channels, 0.0f32)
+        self.head_accum = AlignedVec::new(head_ring_size * self.head_accum_size, 0.0f32)
             .expect("allocation should succeed for test-sized buffers");
         self.head_write_pos = rf;
 

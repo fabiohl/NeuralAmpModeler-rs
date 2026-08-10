@@ -148,6 +148,9 @@ fn build_minimal_model_with_head() -> WaveNetModelDyn {
         head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        slimmable_capable: false,
+        allowed_channels: None,
+        pending_slim_channel: None,
     }
 }
 
@@ -435,6 +438,9 @@ fn test_post_stack_head_multi_array_determinism() {
             head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
             prewarm_on_reset: true,
+            slimmable_capable: false,
+            allowed_channels: None,
+            pending_slim_channel: None,
         }
     }
 

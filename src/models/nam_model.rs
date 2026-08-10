@@ -229,10 +229,10 @@ impl NamModel for StaticModel {
     }
 
     fn slimmable_breakpoints(&self) -> Box<[f64]> {
-        if let Self::Container(c) = self {
-            SlimmableModel::slimmable_breakpoints(c.as_ref())
-        } else {
-            Box::new([])
+        match self {
+            Self::Container(c) => SlimmableModel::slimmable_breakpoints(c.as_ref()),
+            Self::WavenetDyn(m) => SlimmableModel::slimmable_breakpoints(m.as_ref()),
+            _ => Box::new([]),
         }
     }
 }

@@ -65,7 +65,7 @@ impl WaveNetA2Dyn {
             }
         } else {
             let channels = self.head_accum_size;
-            let k = crate::models::a2::params::A2_HEAD_KERNEL_SIZE;
+            let k = self.head_kernel_size;
             let hw = &self.head_rechannel_w;
             let hb = &self.head_rechannel_b;
             let hs = &self.head_rechannel_scale;

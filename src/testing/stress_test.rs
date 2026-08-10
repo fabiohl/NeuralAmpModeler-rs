@@ -68,3 +68,76 @@ fn test_v2_non_silent_segments() {
         );
     }
 }
+
+#[test]
+fn test_finitude_check() {
+    let clean = vec![0.0f32, 0.5, -0.2, 0.95];
+    assert!(check_finitude(&clean));
+
+    let with_nan = vec![0.0f32, f32::NAN, -0.2];
+    assert!(!check_finitude(&with_nan));
+
+    let with_inf = vec![0.0f32, f32::INFINITY, -0.2];
+    assert!(!check_finitude(&with_inf));
+}
+
+#[test]
+fn test_rms_and_peak_dbfs() {
+    // 0 dBFS peak sine: RMS is 1/sqrt(2) ≈ -3.01 dBFS
+    let sr = 48000;
+    let n = 48000;
+    let sine: Vec<f32> = (0..n)
+        .map(|i| (2.0 * std::f64::consts::PI * 440.0 * i as f64 / sr as f64).sin() as f32)
+        .collect();
+
+    let rms = compute_rms_dbfs(&sine);
+    let peak = compute_peak_dbfs(&sine);
+
+    assert!(
+        (rms - -3.01).abs() < 0.1,
+        "RMS should be ~-3.01 dBFS, got {rms}"
+    );
+    assert!(
+        (peak - 0.0).abs() < 0.1,
+        "Peak should be ~0.0 dBFS, got {peak}"
+    );
+
+    // Silence
+    let silence = vec![0.0f32; 100];
+    assert_eq!(compute_rms_dbfs(&silence), f64::NEG_INFINITY);
+    assert_eq!(compute_peak_dbfs(&silence), f64::NEG_INFINITY);
+}
+
+#[test]
+fn test_evaluate_signal_energy() {
+    let sig = generate_stress_signal_v1();
+    let eval = evaluate_signal_energy(&sig, -80.0);
+    assert!(eval.is_finite, "v1 signal must be 100% finite");
+    assert!(eval.is_active, "v1 signal must be active above -80 dBFS");
+    assert!(
+        eval.rms_dbfs > -30.0,
+        "v1 signal RMS energy expected > -30 dBFS, got {}",
+        eval.rms_dbfs
+    );
+}
+
+#[test]
+fn test_block_invariance_helper() {
+    use crate::loader::nam_json::LinearImplementation;
+    use crate::models::linear::LinearModel;
+    let sig = generate_stress_signal_v1();
+    let res = verify_block_invariance_for_model(
+        || Box::new(LinearModel::new(vec![1.0], 0.0, LinearImplementation::Direct).unwrap()),
+        &sig,
+        &[1, 8, 32, 64, 128, 512],
+        64,
+        1e-6,
+    );
+
+    assert!(
+        res.is_invariant,
+        "Linear passthrough model must be 100% block-size invariant"
+    );
+    assert_eq!(res.max_abs_error, 0.0);
+    assert_eq!(res.errors_by_block_size.len(), 6);
+}

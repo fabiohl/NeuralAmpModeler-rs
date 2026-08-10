@@ -14,6 +14,7 @@
 
 use neural_amp_modeler_rs::math::common::AlignedVec;
 use neural_amp_modeler_rs::models::NamModel;
+use neural_amp_modeler_rs::models::a2::activations::ActivationType;
 use neural_amp_modeler_rs::models::wavenet::{
     Conv1d, DenseLayer, WAVENET_MAX_NUM_FRAMES, WaveNetLayer, WaveNetLayerArray, WaveNetLayerState,
     WaveNetModel,
@@ -64,6 +65,7 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -108,6 +110,7 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -370,6 +373,7 @@ fn test_prewarm_zero_rf() {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32).expect("scratch alloc"),
             scratch_conv: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32).expect("scratch alloc"),
         }

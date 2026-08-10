@@ -8,5 +8,5 @@
 pub use super::error::JsonError;
 pub use super::model::{
     LinearImplementation, NamConfig, NamDate, NamLayerConfig, NamMetadata, NamModelData,
-    WeightsLayout,
+    SlimmableConfig, SlimmableKwargs, WeightsLayout,
 };

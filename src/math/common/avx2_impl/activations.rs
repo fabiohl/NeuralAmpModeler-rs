@@ -32,6 +32,15 @@ macro_rules! impl_avx2_activations {
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn relu_and_accumulate_block(head_input: &mut [f32], block: &mut [f32]) {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::wavenet::accumulate::relu_and_accumulate_block_avx2(head_input, block)
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn gated_activation_and_accumulate_block(
             head_input: &mut [f32],
             block: &mut [f32],
@@ -56,6 +65,15 @@ macro_rules! impl_avx2_activations {
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn relu_and_overwrite_block(head_input: &mut [f32], block: &mut [f32]) {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::wavenet::accumulate::relu_and_overwrite_block_avx2(head_input, block)
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn tanh_and_accumulate_with_seed(
             head_input: &mut [f32],
             block: &mut [f32],
@@ -64,6 +82,21 @@ macro_rules! impl_avx2_activations {
             // SAFETY: arguments satisfy the function's documented invariants.
             unsafe {
                 super::super::wavenet::accumulate::tanh_and_accumulate_with_seed_avx2(
+                    head_input, block, seed,
+                )
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn relu_and_accumulate_with_seed(
+            head_input: &mut [f32],
+            block: &mut [f32],
+            seed: &[f32],
+        ) {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::wavenet::accumulate::relu_and_accumulate_with_seed_avx2(
                     head_input, block, seed,
                 )
             }

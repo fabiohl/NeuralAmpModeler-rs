@@ -61,6 +61,12 @@ mutants.out.old/
 /tests/fixtures/.temp_golden/
 /tests/fixtures/.temp_live/
 
+# Lixo de regeneração de âncoras f64 (nunca commitar .new / backups ao lado do bin canônico)
+tests/fixtures/f64_anchors/*.bin.new
+tests/fixtures/f64_anchors/*.bin.old
+tests/fixtures/f64_anchors/*.bin.old.backup
+tests/fixtures/f64_anchors/*.backup
+
 # Artefatos de bytecode Python (scripts de fixtures/utilitários)
 __pycache__/
 *.pyc

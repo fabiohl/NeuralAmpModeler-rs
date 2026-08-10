@@ -598,4 +598,63 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn non_slimmable_wavenet_protection_under_cpu_degradation() {
+        let flags = rt_flags();
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let budget = 1000;
+
+        // Register a conventional WaveNet model with 16 channels, capable = false
+        adaptive.set_wavenet_full_ch(16, false);
+
+        // Force CPU degradation to Reduced
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.71), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Reduced);
+
+        // Standard target returns full channels (16) and take_slimmable_rebuild returns None
+        assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(16));
+        assert_eq!(adaptive.take_slimmable_rebuild(), None);
+
+        // Force CPU degradation to Minimal
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.86), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Minimal);
+
+        // Still returns None - standard WaveNet is protected from channel slicing
+        assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(16));
+        assert_eq!(adaptive.take_slimmable_rebuild(), None);
+    }
+
+    #[test]
+    fn slimmable_capable_wavenet_rebuild_under_cpu_degradation() {
+        let flags = rt_flags();
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let budget = 1000;
+
+        // Register a slimmable WaveNet model with 16 channels, capable = true
+        adaptive.set_wavenet_full_ch(16, true);
+
+        // Force CPU degradation to Reduced (75% channels = 12)
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.71), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Reduced);
+        assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(12));
+        assert_eq!(adaptive.take_slimmable_rebuild(), Some(12));
+
+        // Subsequent call returns None since channel 12 is already active
+        assert_eq!(adaptive.take_slimmable_rebuild(), None);
+
+        // Force CPU degradation to Minimal (50% channels = 8)
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.86), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Minimal);
+        assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(8));
+        assert_eq!(adaptive.take_slimmable_rebuild(), Some(8));
+    }
 }

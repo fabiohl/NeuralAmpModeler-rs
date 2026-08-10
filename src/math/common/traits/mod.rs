@@ -506,6 +506,16 @@ pub trait SimdMath {
     /// and must not alias.
     unsafe fn tanh_and_accumulate_block(head_input: &mut [f32], block: &mut [f32]);
 
+    /// Fused ReLU + Head Accumulate.
+    ///
+    /// Computes `head_input[i] += max(0.0, block[i])`.
+    /// No alignment required.
+    ///
+    /// # Safety
+    /// `head_input.len() == block.len()`. Both slices must be valid
+    /// and must not alias.
+    unsafe fn relu_and_accumulate_block(head_input: &mut [f32], block: &mut [f32]);
+
     /// Fused Gated Activation + Head Accumulate.
     ///
     /// For each channel group of size `ch`, applies `tanh` to the gated portion
@@ -532,6 +542,16 @@ pub trait SimdMath {
     /// and must not alias.
     unsafe fn tanh_and_overwrite_block(head_input: &mut [f32], block: &mut [f32]);
 
+    /// Fused ReLU + Head Overwrite.
+    ///
+    /// Computes `head_input[i] = max(0.0, block[i])`.
+    /// No alignment required.
+    ///
+    /// # Safety
+    /// `head_input.len() == block.len()`. Both slices must be valid
+    /// and must not alias.
+    unsafe fn relu_and_overwrite_block(head_input: &mut [f32], block: &mut [f32]);
+
     /// Fused Seed + Tanh + Head Accumulate.
     ///
     /// Computes `head_input[i] = seed[i] + tanh(block[i])`.
@@ -543,6 +563,22 @@ pub trait SimdMath {
     /// `head_input.len() == block.len() == seed.len()`.
     /// All slices must be valid and must not alias.
     unsafe fn tanh_and_accumulate_with_seed(
+        head_input: &mut [f32],
+        block: &mut [f32],
+        seed: &[f32],
+    );
+
+    /// Fused Seed + ReLU + Head Accumulate.
+    ///
+    /// Computes `head_input[i] = seed[i] + max(0.0, block[i])`.
+    /// Eliminates the separate `copy_from_slice(seed)` before
+    /// `relu_and_accumulate_block` on the first layer of a cascaded array.
+    /// No alignment required.
+    ///
+    /// # Safety
+    /// `head_input.len() == block.len() == seed.len()`.
+    /// All slices must be valid and must not alias.
+    unsafe fn relu_and_accumulate_with_seed(
         head_input: &mut [f32],
         block: &mut [f32],
         seed: &[f32],

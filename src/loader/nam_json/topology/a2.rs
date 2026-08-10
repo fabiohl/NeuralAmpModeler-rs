@@ -32,6 +32,14 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
         return None;
     }
 
+    // T5.1: Slimmable WaveNet models go through the A1 free-geometry path
+    // (get_wavenet_topology), which handles slimmable metadata parsing and
+    // permitted-channel validation. The A2 fast-path and dynamic engine do not
+    // support slimmable channel slicing.
+    if data.config.layers.iter().any(|l| l.slimmable.is_some()) {
+        return None;
+    }
+
     // A2 models do not use Tanh as their main activation.
     // If any layer explicitly requests Tanh, this is an A1 (standard WaveNet) model.
     for l in &data.config.layers {

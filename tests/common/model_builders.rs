@@ -7,6 +7,7 @@
 //! `soak_test.rs` and `wavenet_prewarm_edge.rs`.
 
 use neural_amp_modeler_rs::math::common::AlignedVec;
+use neural_amp_modeler_rs::models::a2::activations::ActivationType;
 use neural_amp_modeler_rs::models::a2::{
     A2_DILATIONS, A2_HEAD_KERNEL_SIZE, A2_KERNEL_SIZES, WaveNetA2, a2_weight_count,
 };
@@ -62,6 +63,7 @@ pub fn build_soak_wavenet() -> WaveNetModel<16, 3, 8> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(16 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(16 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -150,6 +152,7 @@ pub fn build_soak_wavenet() -> WaveNetModel<16, 3, 8> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(8 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(8 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -243,6 +246,7 @@ pub fn build_k5_large_rf_wavenet() -> WaveNetModel<4, 5, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -283,6 +287,7 @@ pub fn build_k5_large_rf_wavenet() -> WaveNetModel<4, 5, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)

@@ -32,12 +32,12 @@ fn test_wavenet_a2_dyn_new_ch3() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
 
@@ -62,12 +62,12 @@ fn test_wavenet_a2_dyn_new_ch8() {
         1,
         8,
         8,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
 
@@ -79,27 +79,29 @@ fn test_wavenet_a2_dyn_new_ch8() {
 
 #[test]
 fn test_wavenet_a2_dyn_bottleneck_neq_channels() {
-    let model = WaveNetA2Dyn::new(
+    let mut model = WaveNetA2Dyn::new(
         1,
         8,
         4,
         1,
         4,
         4,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        true,
     )
     .unwrap();
 
+    model.head1x1_active = true;
+    model.head1x1_h1_in = 4;
     assert_eq!(model.channels, 8);
     assert_eq!(model.bottleneck, 4);
     assert!(model.head1x1_active);
-    assert_eq!(model.head1x1_w.len(), 4 * 4);
-    assert_eq!(model.head1x1_b.len(), 4);
+    // head1x1 weights are now per-layer (loaded via build.rs),
+    // not pre-allocated at model level
 }
 
 #[test]
@@ -119,12 +121,12 @@ fn test_wavenet_a2_dyn_gating_prealloc() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(num),
         gating,
         sec,
-        false,
     )
     .unwrap();
 
@@ -143,12 +145,12 @@ fn test_wavenet_a2_dyn_process_empty_input() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let input: [f32; 0] = [];
@@ -165,12 +167,12 @@ fn test_wavenet_a2_dyn_process_silence_no_weights() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let input = vec![0.5f32; 64];
@@ -190,12 +192,12 @@ fn test_wavenet_a2_dyn_prewarm_zeroes() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     for buf in &mut model.layer_buffers {
@@ -228,12 +230,12 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_noop() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let orig_sizes: Vec<usize> = model.layer_ring_sizes.clone();
@@ -250,12 +252,12 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_grows() {
         1,
         8,
         8,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let orig_sizes: Vec<usize> = model.layer_ring_sizes.clone();
@@ -277,12 +279,12 @@ fn test_wavenet_a2_dyn_has_weights_false_initially() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     assert!(!model.has_weights());
@@ -297,12 +299,12 @@ fn test_wavenet_a2_dyn_receptive_field() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let expected = {
@@ -327,12 +329,12 @@ fn test_wavenet_a2_dyn_head_write_pos_never_exceeds_ring_mask() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let ring_mask = model.head_ring_mask;
@@ -359,12 +361,12 @@ fn test_wavenet_a2_dyn_head_write_pos_wraps_correctly() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let ring_mask = model.head_ring_mask;
@@ -398,12 +400,12 @@ fn test_wavenet_a2_dyn_head_write_pos_reset_after_prewarm() {
         1,
         3,
         3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
         &A2_KERNEL_SIZES,
         &A2_DILATIONS,
         make_standard_activations(A2_NUM_LAYERS),
         make_standard_gating(A2_NUM_LAYERS),
         make_standard_secondary(A2_NUM_LAYERS),
-        false,
     )
     .unwrap();
     let rf = model.receptive_field_size;
@@ -439,6 +441,7 @@ fn test_wavenet_a2_dyn_bug_b1_mixin_post_film() {
         1,    // head_size
         1,    // head_accum_size
         1,    // h1_in_size
+        1,    // head_kernel_size
         &[1], // kernel_sizes
         &[1], // dilations
         vec![ActivationType::LeakyReLU {
@@ -446,7 +449,6 @@ fn test_wavenet_a2_dyn_bug_b1_mixin_post_film() {
         }], // activations (identity)
         vec![GatingMode::None], // gating_modes
         vec![None], // secondary_activations
-        false, // head1x1_active
     )
     .unwrap();
 
@@ -526,14 +528,15 @@ fn test_wavenet_a2_dyn_bug_b2_l1x1_gating_modes() {
     // Helper closure to create and run the 2-layer model with a specific gating mode and film activity
     let run_model = |gating: GatingMode, film_active: bool| -> f32 {
         let mut model = WaveNetA2Dyn::new(
-            1,       // input_channels
-            1,       // channels
-            1,       // bottleneck
-            1,       // head_size
-            1,       // head_accum_size
-            1,       // h1_in_size
-            &[1, 1], // kernel_sizes
-            &[1, 1], // dilations
+            1,                                              // input_channels
+            1,                                              // channels
+            1,                                              // bottleneck
+            1,                                              // head_size
+            1,                                              // head_accum_size
+            1,                                              // h1_in_size (line 536 area)
+            crate::models::a2::params::A2_HEAD_KERNEL_SIZE, // head_kernel_size
+            &[1, 1],                                        // kernel_sizes
+            &[1, 1],                                        // dilations
             vec![
                 ActivationType::LeakyReLU {
                     negative_slope: 1.0,
@@ -542,9 +545,8 @@ fn test_wavenet_a2_dyn_bug_b2_l1x1_gating_modes() {
                     negative_slope: 1.0,
                 },
             ], // activations (identity)
-            vec![gating, GatingMode::None], // gating_modes
-            vec![None, None], // secondary_activations
-            false,   // head1x1_active
+            vec![gating, GatingMode::None],                 // gating_modes
+            vec![None, None],                               // secondary_activations
         )
         .unwrap();
 
@@ -653,14 +655,15 @@ fn test_wavenet_a2_dyn_bug_b3_l1x1_residual_modulation() {
     use crate::models::a2::layer::A2Layer;
 
     let mut model = WaveNetA2Dyn::new(
-        1,       // input_channels
-        1,       // channels
-        1,       // bottleneck
-        1,       // head_size
-        1,       // head_accum_size
-        1,       // h1_in_size
-        &[1, 1], // kernel_sizes
-        &[1, 1], // dilations
+        1,                                              // input_channels
+        1,                                              // channels
+        1,                                              // bottleneck
+        1,                                              // head_size
+        1,                                              // head_accum_size
+        1,                                              // h1_in_size
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE, // head_kernel_size
+        &[1, 1],                                        // kernel_sizes
+        &[1, 1],                                        // dilations
         vec![
             ActivationType::LeakyReLU {
                 negative_slope: 1.0,
@@ -669,9 +672,8 @@ fn test_wavenet_a2_dyn_bug_b3_l1x1_residual_modulation() {
                 negative_slope: 1.0,
             },
         ], // activations (identity)
-        vec![GatingMode::Blended, GatingMode::None], // gating_modes
-        vec![None, None], // secondary_activations
-        false,   // head1x1_active
+        vec![GatingMode::Blended, GatingMode::None],    // gating_modes
+        vec![None, None],                               // secondary_activations
     )
     .unwrap();
 
@@ -769,6 +771,7 @@ fn test_wavenet_a2_dyn_bug_c1_mixin_pre_film_modulates_condition() {
         1,
         1,
         1,
+        1,    // head_kernel_size
         &[1], // kernel_sizes
         &[1], // dilations
         vec![ActivationType::LeakyReLU {
@@ -776,7 +779,6 @@ fn test_wavenet_a2_dyn_bug_c1_mixin_pre_film_modulates_condition() {
         }],
         vec![GatingMode::None],
         vec![None],
-        false,
     )
     .unwrap();
 
@@ -863,6 +865,7 @@ fn test_wavenet_a2_dyn_head1x1_post_film_modulates_projection() {
         1,    // head_size
         1,    // head_accum_size
         1,    // h1_in_size (= bottleneck / groups = 1)
+        1,    // head_kernel_size
         &[1], // kernel_sizes
         &[1], // dilations
         vec![ActivationType::LeakyReLU {
@@ -870,14 +873,12 @@ fn test_wavenet_a2_dyn_head1x1_post_film_modulates_projection() {
         }],
         vec![GatingMode::None],
         vec![None],
-        true, // head1x1_active
     )
     .unwrap();
 
     model.rechannel_w_f32 = AlignedVec::from_vec(vec![1.0]).unwrap();
-    // head1x1_w: [head_accum_size * h1_in_size] = [1 * 1] = 1 element
-    model.head1x1_w = AlignedVec::from_vec(vec![1.0]).unwrap();
-    model.head1x1_b = AlignedVec::from_vec(vec![0.0]).unwrap();
+    model.head1x1_active = true;
+    model.head1x1_h1_in = 1;
 
     // Dilated causal Conv1D: bias = 3.0, weights = 0.0
     let conv = A2Conv1d::new(
@@ -910,6 +911,11 @@ fn test_wavenet_a2_dyn_head1x1_post_film_modulates_projection() {
     )
     .unwrap();
     layer.head1x1_post_film = Some(film_layer);
+
+    // Per-layer head1x1 weights (bottleneck=1, head_accum_size=1)
+    layer.head1x1_active = true;
+    layer.head1x1_w = AlignedVec::from_vec(vec![1.0]).unwrap();
+    layer.head1x1_b = AlignedVec::from_vec(vec![0.0]).unwrap();
 
     model.layers = vec![layer];
 

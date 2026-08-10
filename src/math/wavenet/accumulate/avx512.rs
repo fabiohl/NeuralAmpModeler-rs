@@ -180,3 +180,78 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512(
         _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
     }
 }
+
+/// Applies ReLU in-place on block and accumulates into head_input using AVX-512.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub unsafe fn relu_and_accumulate_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
+    let len = block.len();
+    let mut i = 0;
+    while i + 16 <= len {
+        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+        let vh = _mm512_loadu_ps(head_input.as_ptr().add(i));
+        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vh, vt));
+        i += 16;
+    }
+    if i < len {
+        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+
+        let vh = _mm512_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
+        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vh, vt));
+    }
+}
+
+/// Applies ReLU in-place on block and overwrites head_input using AVX-512.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub unsafe fn relu_and_overwrite_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
+    let len = block.len();
+    let mut i = 0;
+    while i + 16 <= len {
+        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+        i += 16;
+    }
+    if i < len {
+        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+    }
+}
+
+/// Fused Seed + ReLU + Head Accumulate using AVX-512.
+#[target_feature(enable = "avx512f,avx512vl")]
+pub unsafe fn relu_and_accumulate_with_seed_avx512(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    seed: &[f32],
+) {
+    let len = block.len();
+    let mut i = 0;
+    while i + 16 <= len {
+        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+        let vs = _mm512_loadu_ps(seed.as_ptr().add(i));
+        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vs, vt));
+        i += 16;
+    }
+    if i < len {
+        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+
+        let vs = _mm512_maskz_loadu_ps(mask, seed.as_ptr().add(i));
+        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
+    }
+}

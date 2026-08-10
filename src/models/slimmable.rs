@@ -49,6 +49,19 @@
 //!    — a simple pointer swap, no atomics needed on the stack-local `Option`.
 //!
 //! 3. The old `Box<StaticModel>` is handed to `gc_cascade` for non-RT disposal.
+//!
+//! ## Multi-size NAMCore parity disclaimer (S4-T1)
+//!
+//! NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API. It loads and
+//! renders the full WaveNet topology but cannot produce output at intermediate
+//! channel counts (`allowed_channels` breakpoints). Consequently, C++-adjudicated
+//! golden and live multi-size parity is architecturally infeasible.
+//!
+//! This crate is **inference-only** for `SlimmableWavenet`. Load, breakpoint,
+//! and slice-inference tests (`test_loader_gap_slimmable_wavenet`,
+//! `test_slimmable_wavenet_inference_and_breakpoints`) remain active and green.
+//! No claim of multi-size NAMCore parity is made; zero parity-related marketing
+//! language appears in user-facing surfaces (README, parity-map §6, §7.4 P6).
 
 /// Trait for models that can dynamically scale quality/complexity at runtime
 /// without reallocation.

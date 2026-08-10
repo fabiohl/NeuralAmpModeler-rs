@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use crate::math::common::AlignedVec;
+use crate::models::a2::activations::ActivationType;
 use crate::models::wavenet::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
 use crate::models::wavenet::conv1d::Conv1d;
 use crate::models::wavenet::conv1d_dyn::Conv1dDyn;
@@ -59,6 +60,7 @@ fn build_tiny_wavenet() -> WaveNetModel<4, 3, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -103,6 +105,7 @@ fn build_tiny_wavenet() -> WaveNetModel<4, 3, 2> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)

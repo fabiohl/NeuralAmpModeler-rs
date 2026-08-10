@@ -36,6 +36,12 @@ set -euo pipefail
 
 # AI NOTE: Due to the long runtime by design, AI agents MUST NOT execute this script directly.
 # Ask the human operator to run it and report the results if needed.
+#
+# Known bug KB-A2-MAX (`wavenet_a2_max.nam`, docs/cpp_parity_map.md §4.4.3):
+#   - NOT in REQUIRED_GOLDEN / V2_* release model lists below (by design).
+#   - Public path is fail-closed; golden/live/paired tests stay #[ignore].
+#   - Do not add a2_max to long parity phases as a green gate until §4.4.3 reopening.
+#   - Neighbor A2 Full/Lite + condition_dsp remain first-class long/quick gates.
 
 # ── Test-to-entry-point module mapping ──────────────────────────────────────
 # Maps test names to their modular entry-point test files (tests/models.rs,
@@ -368,12 +374,25 @@ if ! cargo test --features testing --release $(_test_flag meta_coherence); then
 fi
 echo -e "${GREEN}✓ Golden catalog matches tests coherently.${NC}"
 
+# ── Phase classification for fidelity/performance split ──────────────────────
+# Fidelity phases: 1 (Soak), 2 (Proptests/Parity/Golden), 3 (Heap-Audit), 6 (Loom)
+# Performance phases: 4 (RT Deadline), 5 (RT Jitter)
+declare -A PHASE_CLASS=(
+    [0]="fidelity"
+    [1]="fidelity"
+    [2]="fidelity"
+    [3]="performance"
+    [4]="performance"
+    [5]="fidelity"
+)
+
 # Trackers for the final summary
 declare -a PHASE_NAMES
 declare -a PHASE_COMMANDS
 declare -a PHASE_STATUS
 declare -a PHASE_DURATIONS
 declare -a PHASE_SUB_TIMINGS
+declare -a PHASE_CLASSES
 PHASE_COUNT=0
 N_TOP_SLOWEST=5
 
@@ -467,6 +486,7 @@ run_phase() {
     PHASE_NAMES[$PHASE_COUNT]="$name"
     PHASE_COMMANDS[$PHASE_COUNT]="$cmd"
     PHASE_DURATIONS[$PHASE_COUNT]="$duration"
+    PHASE_CLASSES[$PHASE_COUNT]="${PHASE_CLASS[$PHASE_COUNT]:-fidelity}"
 
     # Capture sub-timings for this phase
     PHASE_SUB_TIMINGS[$PHASE_COUNT]="$(extract_sub_timings)"
@@ -537,7 +557,13 @@ run_proptests_parity_phase() {
     timed_cargo_test "t33_diagnostic_recurrent_drift_lstm_1x16" --release --no-fail-fast $(_test_flag t33_diagnostic_recurrent_drift_lstm_1x16) -- --ignored --nocapture || status=1
     timed_cargo_test "t33b_diagnostic_recurrent_drift_lstm_1x16_paired" --release --no-fail-fast $(_test_flag t33b_diagnostic_recurrent_drift_lstm_1x16_paired) -- --ignored --nocapture || status=1
     # Golden vectors v2 (multi-SR); v1 already covered by quick's Phase 2.
-    timed_cargo_test "golden_vectors_v2" --release --no-fail-fast $(_test_flag golden_vectors) -- v2_ --ignored --nocapture || status=1
+    # Filter MUST be a single libtest substring after `--`. Do not also pass
+    # `golden_vectors` as a cargo TESTNAME: multiple filters are OR'd by libtest,
+    # which previously pulled in KB-A2-MAX ignored diagnostics
+    # (`test_golden_vectors_wavenet_a2_max`, H0/H5 meters) and failed Phase 2.
+    # Match only multi-SR v2 goldens: test_golden_vectors_v2_*.
+    timed_cargo_test "golden_vectors_v2" --release --no-fail-fast --test models \
+        -- test_golden_vectors_v2_ --ignored --nocapture || status=1
     # Heavy/long receptive-field golden regression (quick only runs the
     # cheap non-ignored linear_golden cases).
     timed_cargo_test "linear_golden_heavy" --release --no-fail-fast $(_test_flag linear_golden) -- --ignored --nocapture || status=1
@@ -625,10 +651,13 @@ printf " | %-45s | %-10s | %-10s |\n" "Phase Name" "Duration" "Status"
 printf " |-%-45s-|-%-10s-|-%-10s-|\n" "---------------------------------------------" "----------" "----------"
 
 ANY_FAILED=0
+ANY_FIDELITY_FAILED=0
+ANY_PERF_FAILED=0
 for ((i=0; i<PHASE_COUNT; i++)); do
     name="${PHASE_NAMES[$i]}"
     duration="${PHASE_DURATIONS[$i]}s"
     status="${PHASE_STATUS[$i]}"
+    class="${PHASE_CLASSES[$i]:-fidelity}"
 
     if [ "$status" = "PASSED" ]; then
         status_colored="${GREEN}${status}${NC}"
@@ -637,6 +666,11 @@ for ((i=0; i<PHASE_COUNT; i++)); do
     else
         status_colored="${RED}${status}${NC}"
         ANY_FAILED=1
+        if [ "$class" = "performance" ]; then
+            ANY_PERF_FAILED=1
+        else
+            ANY_FIDELITY_FAILED=1
+        fi
     fi
     printf " | %-45s | %-10s | %-19b |\n" "$name" "$duration" "$status_colored"
 done
@@ -670,8 +704,20 @@ rm -f "$TIMED_TRACKER"
 
 if [ $ANY_FAILED -eq 0 ]; then
     echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
+    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}PERFORMANCE: OK${NC}"
     exit 0
 else
     echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check logs in target/logs/${NC}"
+    if [ $ANY_FIDELITY_FAILED -eq 1 ]; then
+        echo -e "${RED}FIDELIDADE: FAIL${NC}"
+    else
+        echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    fi
+    if [ $ANY_PERF_FAILED -eq 1 ]; then
+        echo -e "${RED}PERFORMANCE: FAIL${NC}"
+    else
+        echo -e "${GREEN}PERFORMANCE: OK${NC}"
+    fi
     exit 1
 fi

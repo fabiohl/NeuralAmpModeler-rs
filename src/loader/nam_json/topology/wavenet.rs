@@ -4,7 +4,7 @@
 //! Detection of WaveNet topologies from model data.
 
 use super::super::data::NamModelData;
-use super::super::model::HeadConfig;
+use super::super::model::{HeadConfig, SlimmableConfig};
 
 /// The closed and supported topologies within native WaveNet modeling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,9 @@ pub struct FreeWavenetGeometry {
     /// `head_sizes.last()` determines `NumOutputChannels()` for the model
     /// (C++ `wave_net_output_channels` returns `layer_array_params.back().head_size`).
     pub head_sizes: Vec<usize>,
+    /// Per-layer-array head_bias flag. `head_biases.last()` determines whether
+    /// the final head_rechannel has a bias term (C++ `LayerArrayParams::HasHeadBias`).
+    pub head_biases: Vec<bool>,
     /// Dilations per layer-array.
     pub dilations: Vec<Vec<usize>>,
     /// Number of layer-arrays.
@@ -59,6 +62,13 @@ pub struct FreeWavenetGeometry {
     /// the signal after all layer arrays, before `head_scale` and output.
     /// `None` means no post-stack head is present (standard behavior).
     pub post_stack_head: Option<HeadConfig>,
+    /// Allowed channel breakpoints for slimmable WaveNet models.
+    ///
+    /// When `Some`, the model supports `SlimmableWavenet` channel slicing.
+    /// The first element must match the model's full channel count.
+    /// Each subsequent element defines a lower-quality tier (fewer channels).
+    /// `None` means the model is not slimmable-capable.
+    pub allowed_channels: Option<Vec<usize>>,
 }
 
 /// Result of WaveNet topology detection.
@@ -72,7 +82,7 @@ pub enum WavenetTopologyResult {
     /// Matches a known catalog SKU — use const-generic fast-path.
     Known(NamWavenetTopology),
     /// Valid geometry not in the catalog — use dynamic engine.
-    Free(FreeWavenetGeometry),
+    Free(Box<FreeWavenetGeometry>),
     /// Rejected due to unsupported feature or invalid shape.
     Rejected(String),
 }
@@ -107,6 +117,11 @@ impl NamModelData {
     ///    model with a high version string from being silently misrouted.
     pub fn is_wavenet_a2(&self) -> bool {
         if self.architecture != "WaveNet" {
+            return false;
+        }
+
+        // T5.1: Slimmable WaveNet models go through the A1 free-geometry path.
+        if self.config.layers.iter().any(|l| l.slimmable.is_some()) {
             return false;
         }
 
@@ -191,18 +206,10 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     let mut head_sizes: Vec<usize> = Vec::with_capacity(layers.len());
     let mut channels: Vec<usize> = Vec::with_capacity(layers.len());
     let mut kernel_sizes: Vec<usize> = Vec::with_capacity(layers.len());
+    let mut head_biases: Vec<bool> = Vec::with_capacity(layers.len());
+    let mut slimmable_layers: Vec<Option<SlimmableConfig>> = Vec::with_capacity(layers.len());
 
     for (i, layer) in layers.iter().enumerate() {
-        if let Some(ref raw) = layer.layer_raw
-            && raw
-                .as_object()
-                .is_some_and(|obj| obj.get("slimmable").is_some_and(|v| !v.is_null()))
-        {
-            return WavenetTopologyResult::Rejected(
-                "slimmable single-net weight slicing is not supported; use SlimmableContainer instead"
-                    .to_string(),
-            );
-        }
         let ch = match layer.channels {
             Some(c) if c > 0 => {
                 if c > MAX_WAVENET_FREE_CHANNELS {
@@ -283,7 +290,9 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         channels.push(ch);
         kernel_sizes.push(k.unwrap_or(0));
         head_sizes.push(hd);
+        head_biases.push(layer.head_bias.unwrap_or(i == layers.len() - 1));
         dilations.push(dils);
+        slimmable_layers.push(layer.slimmable.clone());
     }
 
     // ── Aggregate state budget check ──
@@ -409,6 +418,105 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         }
     }
 
+    // ── Slimmable metadata validation ──
+    // Parse allowed_channels from per-layer `slimmable` objects. All layers
+    // must declare the same list (slice_channels_uniform invariant).
+    let mut allowed_channels: Option<Vec<usize>> = None;
+
+    for (i, sl) in slimmable_layers.iter().enumerate() {
+        if let Some(cfg) = sl {
+            if cfg
+                .method
+                .as_deref()
+                .is_some_and(|m| m != "slice_channels_uniform")
+            {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} has unsupported slimmable method '{}'. \
+                     Only 'slice_channels_uniform' is supported.",
+                    cfg.method.as_deref().unwrap_or("(none)")
+                ));
+            }
+            let ac = match cfg
+                .kwargs
+                .as_ref()
+                .and_then(|k| k.allowed_channels.as_deref())
+            {
+                Some(ac) => ac,
+                None => {
+                    return WavenetTopologyResult::Rejected(format!(
+                        "Layer {i} has slimmable config but missing kwargs.allowed_channels."
+                    ));
+                }
+            };
+            if ac.is_empty() {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} has an empty 'slimmable' allowed_channels list."
+                ));
+            }
+            if ac.len() > MAX_WAVENET_ARRAYS {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} has {} slimmable breakpoints, exceeding maximum {} — \
+                     DoS/OOM protection.",
+                    ac.len(),
+                    MAX_WAVENET_ARRAYS
+                ));
+            }
+            // Verify ascending order (must increase monotonically)
+            for w in ac.windows(2) {
+                if w[0] >= w[1] {
+                    return WavenetTopologyResult::Rejected(format!(
+                        "Layer {i} slimmable channels must be strictly ascending: {:?}.",
+                        ac
+                    ));
+                }
+            }
+            // Verify all values are non-zero
+            if ac.contains(&0) {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} slimmable channels contain a zero value: {:?}.",
+                    ac
+                ));
+            }
+            // Verify no value exceeds MAX_WAVENET_FREE_CHANNELS
+            if ac.iter().any(|&c| c > MAX_WAVENET_FREE_CHANNELS) {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} slimmable channels contain a value exceeding maximum {}: {:?}.",
+                    MAX_WAVENET_FREE_CHANNELS, ac
+                ));
+            }
+            match &allowed_channels {
+                None => {
+                    allowed_channels = Some(ac.to_vec());
+                }
+                Some(existing) if existing != ac => {
+                    return WavenetTopologyResult::Rejected(format!(
+                        "Slimmable allowed_channels mismatch: layer 0 has {:?}, \
+                         layer {i} has {:?}. All layers must declare the same list \
+                         for slice_channels_uniform.",
+                        existing, ac
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ── Validate model channels against allowed_channels ──
+    // When slimmable metadata is present, every layer's channel count must be
+    // present in the allowed_channels list (invariant: only declared breakpoints
+    // are valid).
+    if let Some(ref allowed) = allowed_channels {
+        for (i, &ch) in channels.iter().enumerate() {
+            if !allowed.contains(&ch) {
+                return WavenetTopologyResult::Rejected(format!(
+                    "Layer {i} channels ({}) is not in the declared \
+                     slimmable allowed_channels: {:?}.",
+                    ch, allowed
+                ));
+            }
+        }
+    }
+
     // ── Try matching a known catalog SKU (fast-path) ──
     if layers.len() == 2 {
         let l0 = &layers[0];
@@ -424,7 +532,8 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             && !l0_head_bias
             && l1_head_bias
             && condition_size <= 1
-            && data.config.condition_dsp.is_none();
+            && data.config.condition_dsp.is_none()
+            && allowed_channels.is_none();
 
         if catalog_compatible {
             let dils_0 = &dilations[0];
@@ -471,14 +580,16 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         );
     }
 
-    WavenetTopologyResult::Free(FreeWavenetGeometry {
+    WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
         channels,
         kernel_size,
         kernel_sizes,
         head_sizes,
+        head_biases,
         condition_size,
         num_arrays: layers.len(),
         dilations,
         post_stack_head: data.config.parse_head(),
-    })
+        allowed_channels,
+    }))
 }

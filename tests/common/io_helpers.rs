@@ -40,12 +40,18 @@ pub enum ExecutionProfile {
 /// Applicable oracles encoded as bitflags for a single fixture entry.
 ///
 /// Each fixture may be validated against one or both reference oracles.
+/// Zero (`KNOWN_GAP`) denotes a known architectural gap where no
+/// oracle gate is currently executable — the model is present in the
+/// catalog for structural/policy testing but does not claim parity.
 pub struct ApplicableOracle;
 
 impl ApplicableOracle {
     pub const NAMCORE_F32: u8 = 1 << 0;
     pub const F64: u8 = 1 << 1;
     pub const BOTH: u8 = Self::NAMCORE_F32 | Self::F64;
+    /// Known architectural gap — no oracle gate is currently executable.
+    /// The fixture is present for structural/policy testing only.
+    pub const KNOWN_GAP: u8 = 0;
 }
 
 /// Typed outcome of a fixture availability check, replacing ad-hoc
@@ -252,7 +258,7 @@ impl FixtureCatalog {
             } else if entry.applicable_oracles & ApplicableOracle::F64 != 0 {
                 "f64"
             } else {
-                "none"
+                "KnownGap"
             };
 
             lines.push(format!(
@@ -289,7 +295,7 @@ pub static FIXTURE_CATALOG: FixtureCatalog = FixtureCatalog {
         FixtureEntry { name: "wavenet_a2_container.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "SlimmableContainer A2" },
         FixtureEntry { name: "a2_example.nam",             origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "SlimmableContainer A2 Example" },
         FixtureEntry { name: "wavenet_condition_dsp.nam",  origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "WaveNet Condition DSP" },
-        FixtureEntry { name: "wavenet_condition_lstm.nam", origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "WaveNet Condition LSTM (fail-closed)" },
+        FixtureEntry { name: "wavenet_condition_lstm.nam", origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::KNOWN_GAP, description: "WaveNet Condition LSTM — policy/negative (fail-closed, LSTM condition_dsp not supported)" },
         FixtureEntry { name: "wavenet_official.nam",       origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "WaveNet Official free-geom CH=3" },
         FixtureEntry { name: "wavenet_dyn_free.nam",       origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "WaveNetDyn Free-Shape" },
         FixtureEntry { name: "lstm_dyn_test.nam",          origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "LSTM-Dyn 1×7" },
@@ -303,8 +309,8 @@ pub static FIXTURE_CATALOG: FixtureCatalog = FixtureCatalog {
         FixtureEntry { name: "lstm_2x24.nam",              origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "LSTM 2×24" },
         FixtureEntry { name: "lstm_3x8.nam",               origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "LSTM 3×8" },
         FixtureEntry { name: "slimmable_container.nam",    origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "Slimmable Container 3 submodels" },
-        FixtureEntry { name: "slimmable_wavenet.nam",      origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "Slimmable single-net WaveNet (fail-closed)" },
-        FixtureEntry { name: "wavenet_a2_max.nam",         origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "WaveNet A2 Max (fail-closed §7.1)" },
+        FixtureEntry { name: "slimmable_wavenet.nam",      origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "Slimmable single-net WaveNet — inference-only; sem claim de paridade multi-size NAMCore (S4-T1 disclaimer)" },
+        FixtureEntry { name: "wavenet_a2_max.nam",         origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::KNOWN_GAP, description: "WaveNet A2 Max — KB-A2-MAX known bug (prod×C++ ~0.23 dB; fail-closed TR1.1; §4.4.3)" },
         FixtureEntry { name: "a2_dynamic_gated_ch8.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2 Dynamic Gated CH=8" },
         FixtureEntry { name: "a2_dynamic_blended_ch3.nam", origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2 Dynamic Blended CH=3" },
         FixtureEntry { name: "wavenet_a2_film_lite.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2-FiLM-Lite CH=3" },

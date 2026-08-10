@@ -170,14 +170,14 @@ fn main() {
 
 `NeuralAmpModeler-rs` includes 6 runnable examples in `examples/` demonstrating key features:
 
-| Example                                            | Description                                                                    | Run Command                                                 |
-|:-------------------------------------------------- |:------------------------------------------------------------------------------ |:----------------------------------------------------------- |
-| [`load_model`](examples/load_model.rs)             | Off-RT `.nam`/`.namb` model file loading & SIMD prewarming                     | `cargo run --example load_model -- <path/to/model.nam>`     |
-| [`inspect_model`](examples/inspect_model.rs)       | Detailed inspection & metadata report of `.nam`/`.namb` files (Text/JSON/Batch)| `cargo run --example inspect_model -- <path/to/model.nam>`  |
-| [`offline_render`](examples/offline_render.rs)     | Offline audio rendering with 4× polyphase oversampling (HQ mode)               | `cargo run --example offline_render -- <path/to/model.nam>` |
-| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling              | `cargo run --example cabsim -- <path/to/ir.wav>`            |
-| [`diagnostics`](examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export | `cargo run --example diagnostics`                           |
-| [`math_activations`](examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`) | `cargo run --example math_activations`                      |
+| Example                                            | Description                                                                     | Run Command                                                 |
+|:-------------------------------------------------- |:------------------------------------------------------------------------------- |:----------------------------------------------------------- |
+| [`load_model`](examples/load_model.rs)             | Off-RT `.nam`/`.namb` model file loading & SIMD prewarming                      | `cargo run --example load_model -- <path/to/model.nam>`     |
+| [`inspect_model`](examples/inspect_model.rs)       | Detailed inspection & metadata report of `.nam`/`.namb` files (Text/JSON/Batch) | `cargo run --example inspect_model -- <path/to/model.nam>`  |
+| [`offline_render`](examples/offline_render.rs)     | Offline audio rendering with 4× polyphase oversampling (HQ mode)                | `cargo run --example offline_render -- <path/to/model.nam>` |
+| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling               | `cargo run --example cabsim -- <path/to/ir.wav>`            |
+| [`diagnostics`](examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export  | `cargo run --example diagnostics`                           |
+| [`math_activations`](examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`                      |
 
 ---
 

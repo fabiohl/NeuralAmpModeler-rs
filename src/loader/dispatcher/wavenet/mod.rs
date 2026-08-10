@@ -21,18 +21,6 @@ pub use layout::transpose_conv1d_interleaved_16wide;
 
 /// Detects the WaveNet topology and branches to the correct const-generic builder.
 pub(crate) fn build_wavenet(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
-    for layer in &data.config.layers {
-        if let Some(ref raw) = layer.layer_raw
-            && raw
-                .as_object()
-                .is_some_and(|obj| obj.get("slimmable").is_some_and(|v| !v.is_null()))
-        {
-            bail!(
-                "slimmable single-net weight slicing is not supported; use SlimmableContainer instead"
-            );
-        }
-    }
-
     // ── A2: first-class branch (detected by shape) ──
     if let Some(topo) = is_a2_shape(data) {
         return static_factory::build_wavenet_a2(data, topo);

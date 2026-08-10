@@ -10,6 +10,7 @@
 use crate::loader::nam_json::{
     A2TopologyResult, NamModelData, WavenetTopologyResult, get_wavenet_topology,
 };
+use crate::math::common::AlignedVec;
 use crate::models::StaticModel;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
@@ -34,9 +35,9 @@ use log::info;
 pub(crate) fn validate_layer_activations(data: &NamModelData) -> anyhow::Result<()> {
     for (idx, layer) in data.config.layers.iter().enumerate() {
         let act = layer.activation.as_deref().unwrap_or("Tanh");
-        if act != "Tanh" {
+        if act != "Tanh" && act != "ReLU" {
             bail!(
-                "Activation '{}' in layer {} is not supported. Only 'Tanh' is implemented.",
+                "Activation '{}' in layer {} is not supported. Only 'Tanh' and 'ReLU' are implemented.",
                 act,
                 idx
             );
@@ -69,47 +70,6 @@ pub(crate) fn reject_condition_dsp_lstm(cond_dsp_data: &NamModelData) -> anyhow:
         );
     }
     Ok(())
-}
-
-/// Predicate that identifies the known-broken WaveNet A2 flagship model
-/// (`wavenet_a2_max.nam`) by structural signature.
-///
-/// The guard is **fail-closed**: it returns `true` only for models whose audio
-/// output is confirmed wrong against the NAMcore C++ golden reference
-/// (see [`docs/cpp_parity_map.md` §7.1][§7.1]). No `unsafe` code; the engine
-/// and cascade code paths remain intact — this function merely prevents
-/// construction at the dispatch layer.
-///
-/// **Detection signature** (narrow enough to preserve all other verified
-/// A2 Dynamic fixtures):
-///
-/// - `num_arrays == 1` (single-array; multi-array cascade models are unaffected)
-/// - `has_condition_dsp` (the model embeds a `condition_dsp` sub-model)
-/// - `condition_size == 8` (the flagship's specific condition input width)
-///
-/// **Invariants:**
-///
-/// - No `unsafe` — pure structural check on parsed model metadata.
-/// - Fail-closed: `true` → reject model before weights are touched.
-/// - Engine code (`process.rs`, `cascade.rs`, `condition_dsp`) is never removed
-///   or altered by this guard.
-///
-/// **Tradeoff (documented):** if a future model with correct output happens to
-/// match this exact signature, it will be blocked. This is acceptable until the
-/// `condition_dsp` parity gap against C++ is closed
-/// ([`docs/cpp_parity_map.md` §4.4][§4.4]) — then the guard is removed or
-/// narrowed.
-///
-/// [§7.1]: docs/cpp_parity_map.md
-/// [§4.4]: docs/cpp_parity_map.md
-#[cold]
-#[inline(never)]
-pub(crate) fn is_disabled_broken_a2_flagship(
-    num_arrays: usize,
-    condition_size: usize,
-    has_condition_dsp: bool,
-) -> bool {
-    num_arrays == 1 && has_condition_dsp && condition_size == 8
 }
 
 // =============================================================================
@@ -175,10 +135,112 @@ pub(crate) fn build_wavenet_a2(
 }
 
 // =============================================================================
+// A2 Max flagship fail-closed guard
+// =============================================================================
+
+/// Rejects WaveNet A2 models matching the `wavenet_a2_max.nam` structural class.
+///
+/// **Known bug (KB-A2-MAX, permanent until reopening criteria):** This class
+/// (`condition_size >= 2` + FiLM active + `head1x1` groups > 1 +
+/// `groups_input_mixin > 1` + nested `condition_dsp`) has a **structural**
+/// production×NAMCore parity gap. Measured prod f32 × C++ golden:
+/// **SNR ≈ 0.23 dB** (ESR ≈ 9.49e-1). The f64 oracle also diverges from C++ on
+/// this fixture (H0 Case D) and must not adjudicate. Fail-closed: no public
+/// `Ok` path while the gap is open. Diagnostic unlock:
+/// `NAM_A2_MAX_UNLOCK=1` under `cfg(test)` / feature `testing` only.
+///
+/// See `docs/cpp_parity_map.md` §4.4 / §4.4.3.
+///
+/// **Scope:** A2 Dynamic models only.
+#[cold]
+#[inline(never)]
+fn reject_wavenet_a2_max_class(data: &NamModelData) -> anyhow::Result<()> {
+    let has_cond_dsp = data.config.condition_dsp.is_some();
+    if !has_cond_dsp {
+        return Ok(());
+    }
+
+    let mut has_film = false;
+    let mut has_head1x1_groups = false;
+    let mut has_mixin_groups = false;
+    let mut cond_size_ge_2 = false;
+
+    for l in &data.config.layers {
+        if l.condition_size.unwrap_or(0) >= 2 {
+            cond_size_ge_2 = true;
+        }
+        let Some(ref raw) = l.layer_raw else { continue };
+
+        for key in &[
+            "conv_pre_film",
+            "conv_post_film",
+            "input_mixin_pre_film",
+            "input_mixin_post_film",
+            "activation_pre_film",
+            "activation_post_film",
+            "layer1x1_post_film",
+            "head1x1_post_film",
+        ] {
+            if raw
+                .get(key)
+                .and_then(|v| v.get("active"))
+                .and_then(|a| a.as_bool())
+                .unwrap_or(false)
+            {
+                has_film = true;
+                break;
+            }
+        }
+
+        if raw
+            .get("head1x1")
+            .and_then(|h| h.get("active"))
+            .and_then(|a| a.as_bool())
+            .unwrap_or(false)
+            && raw
+                .get("head1x1")
+                .and_then(|h| h.get("groups"))
+                .and_then(|g| g.as_u64())
+                .unwrap_or(1)
+                > 1
+        {
+            has_head1x1_groups = true;
+        }
+
+        if raw
+            .get("groups_input_mixin")
+            .and_then(|g| g.as_u64())
+            .unwrap_or(1)
+            > 1
+        {
+            has_mixin_groups = true;
+        }
+    }
+
+    if cond_size_ge_2 && has_film && has_head1x1_groups && has_mixin_groups {
+        #[cfg(any(test, feature = "testing"))]
+        {
+            if std::env::var("NAM_A2_MAX_UNLOCK").as_deref() == Ok("1") {
+                return Ok(());
+            }
+        }
+        bail!(
+            "A2 Max flagship topology is not supported (known bug KB-A2-MAX) — \
+             production f32 diverges from the NAMCore C++ golden (measured \
+             SNR ≈ 0.23 dB; structural parity gap). fail-closed until a future \
+             investigation meets the reopening criteria in docs/cpp_parity_map.md \
+             §4.4.3. Neighbors (A2 Full/Lite/FiLM, condition_dsp standalone) remain supported."
+        );
+    }
+    Ok(())
+}
+
+// =============================================================================
 // A2 dynamic / cascade builder
 // =============================================================================
 
 fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
+    reject_wavenet_a2_max_class(data)?;
     use crate::loader::nam_json::validation::{MAX_A2_DYN_BOTTLENECK, MAX_A2_DYN_CHANNELS};
 
     let num_arrays = data.config.layers.len();
@@ -208,17 +270,6 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     }
 
     let l0 = &data.config.layers[0];
-
-    let condition_size = l0.condition_size.unwrap_or(1);
-    let has_condition_dsp = data.config.condition_dsp.is_some();
-    if is_disabled_broken_a2_flagship(num_arrays, condition_size, has_condition_dsp) {
-        bail!(
-            "WaveNet A2 flagship (single-array, condition_dsp, condition_size=8) is disabled: \
-             confirmed wrong audio output vs NAMcore golden — see docs/cpp_parity_map.md §7.1. \
-             Model is not removed; re-enable requires closing the condition_dsp parity gap (§4.4)."
-        );
-    }
-
     let mut arrays: Vec<WaveNetA2Dyn> = Vec::with_capacity(num_arrays);
 
     for (ai, layer_cfg) in data.config.layers.iter().enumerate() {
@@ -300,6 +351,16 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             bottleneck
         };
 
+        // Head kernel size — legacy models use `head_size`/`head_bias` format
+        // with implicit kernel=1; new models use `head.kernel_size`.
+        let head_kernel_size = layer_cfg
+            .layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("head"))
+            .and_then(|h| h.get("kernel_size"))
+            .and_then(|k| k.as_u64())
+            .unwrap_or(1) as usize;
+
         let mut model = WaveNetA2Dyn::new(
             input_channels,
             channels,
@@ -307,15 +368,35 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             head_size,
             head_accum_size,
             h1_in_size,
+            head_kernel_size,
             &kernel_sizes,
             &dilations,
             activations,
             gating_modes,
             secondary_activations,
-            head1x1_active,
         )?;
+        model.head1x1_active = head1x1_active;
+        model.head1x1_h1_in = h1_in_size;
+
+        // Group configs (per-array, uniform across layers inside the array).
+        model.mixin_groups = layer_cfg
+            .layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("groups_input_mixin"))
+            .and_then(|g| g.as_u64())
+            .unwrap_or(1) as u32;
+        model.l1x1_groups = layer_cfg
+            .layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("layer1x1"))
+            .and_then(|l| l.get("groups"))
+            .and_then(|g| g.as_u64())
+            .unwrap_or(1) as u32;
+
         model.set_layer_raw(layer_cfg.layer_raw.clone());
         model.condition_size = condition_size;
+        model.cond_scratch = AlignedVec::new(condition_size, 0.0f32)
+            .expect("cond_scratch allocation should succeed for test-sized condition size");
 
         model
             .load_weights_inner(&data.weights, &mut weight_pos, total_weights)
@@ -436,6 +517,58 @@ pub(crate) fn build_wavenet_a1(data: &NamModelData) -> anyhow::Result<Box<Static
                  Detected: {} layer(s) with geometry {layer_info:?}",
                 data.config.layers.len(),
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::loader::dispatcher::build_model;
+    use crate::loader::nam_json::parse_nam_json;
+    use std::fs;
+
+    const A2_MAX_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/models/wavenet_a2_max.nam"
+    );
+
+    #[test]
+    fn test_a2_max_flag_controlled() {
+        let json =
+            fs::read_to_string(A2_MAX_FIXTURE).expect("Fixture wavenet_a2_max.nam not found");
+        let data = parse_nam_json(&json).expect("Failed to parse fixture");
+
+        unsafe {
+            std::env::remove_var("NAM_A2_MAX_UNLOCK");
+        }
+        let result = build_model(&data);
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
+                    "Error must cite KB-A2-MAX / parity gap, got: {msg}"
+                );
+                assert!(
+                    msg.contains("fail-closed"),
+                    "Error must cite fail-closed, got: {msg}"
+                );
+            }
+            Ok(_) => panic!("A2 Max must be rejected by default (no unlock flag set)"),
+        }
+
+        unsafe {
+            std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
+        }
+        let model = build_model(&data).expect("A2 Max must build under NAM_A2_MAX_UNLOCK=1");
+        assert!(
+            matches!(*model, StaticModel::WavenetA2Dyn(_)),
+            "Expected WavenetA2Dyn variant under unlock"
+        );
+
+        unsafe {
+            std::env::remove_var("NAM_A2_MAX_UNLOCK");
         }
     }
 }

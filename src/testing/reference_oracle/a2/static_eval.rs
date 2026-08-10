@@ -11,8 +11,6 @@ use crate::models::a2::weights_layout::{
 
 use super::super::*;
 
-pub(crate) const A2_HEAD_KERNEL: usize = 16;
-
 #[derive(Clone)]
 pub(crate) struct FiLMOracleSlot {
     pub shift: bool,
@@ -304,6 +302,11 @@ pub(crate) struct A2OracleLayerWeights {
     pub activation: ActivationConfig,
     pub secondary_activation: ActivationConfig,
     pub conv_out: usize,
+    pub head1x1_active: bool,
+    pub head1x1_w: Vec<f64>,
+    pub head1x1_b: Vec<f64>,
+    pub mixin_groups: u32,
+    pub l1x1_groups: u32,
 }
 
 pub(crate) struct ArrayState {
@@ -315,13 +318,9 @@ pub(crate) struct ArrayState {
     pub head_is_rechannel: bool,
     pub rechannel_w: Vec<f64>,
     pub lws: Vec<A2OracleLayerWeights>,
-    pub head1x1_active: bool,
-    pub h1_groups: usize,
-    pub h1_in_size: usize,
-    pub head1x1_w: Vec<f64>,
-    pub head1x1_b: Vec<f64>,
     pub head_w: Vec<f64>,
     pub head_b: Vec<f64>,
+    pub head_kernel_size: usize,
     pub fwd_bufs: Vec<Vec<f64>>,
 }
 
@@ -407,6 +406,17 @@ pub(crate) fn build_a2_arrays(
         };
         let rechannel_w = cursor.read_f64(in_ch * ch);
 
+        let head_accum_size_for_film = if head1x1_active {
+            layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("head1x1"))
+                .and_then(|h| h.get("out_channels"))
+                .and_then(|a| a.as_u64())
+                .unwrap_or(bottleneck as u64) as usize
+        } else {
+            bottleneck
+        };
+
         let mut lws: Vec<A2OracleLayerWeights> = Vec::new();
         for li in 0..num_layers {
             let ks = kernel_sizes[li];
@@ -421,9 +431,60 @@ pub(crate) fn build_a2_arrays(
 
             let conv_w = cursor.read_f64(ch * conv_out * ks);
             let conv_b = cursor.read_f64(conv_out);
-            let mixin_w = cursor.read_f64(conv_out * cond_size);
-            let l1x1_w = cursor.read_f64(bottleneck * ch);
+
+            // Group config (per-array, applied to mixin and l1x1).
+            let mixin_groups = layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("groups_input_mixin"))
+                .and_then(|g| g.as_u64())
+                .unwrap_or(1) as u32;
+            let l1x1_groups = layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("layer1x1"))
+                .and_then(|l| l.get("groups"))
+                .and_then(|g| g.as_u64())
+                .unwrap_or(1) as u32;
+
+            let mg: u32 = mixin_groups.max(1);
+            let mixin_in_pg = cond_size / mg as usize;
+            let _mixin_out_per_g = conv_out / mg as usize;
+            let mixin_w = if mg > 1 {
+                cursor.read_f64(conv_out * mixin_in_pg)
+            } else {
+                cursor.read_f64(conv_out * cond_size)
+            };
+
+            let lg: u32 = l1x1_groups.max(1);
+            let l1x1_in_pg = bottleneck / lg as usize;
+            let _l1x1_out_per_g = ch / lg as usize;
+            let l1x1_w = if lg > 1 {
+                cursor.read_f64(ch * l1x1_in_pg)
+            } else {
+                cursor.read_f64(bottleneck * ch)
+            };
             let l1x1_b = cursor.read_f64(ch);
+
+            // Per-layer head1x1 weights (C++ order: after l1x1, before FiLM).
+            let (h1_active, h1_w, h1_b) = if head1x1_active {
+                let h1_groups = layer_raw
+                    .as_ref()
+                    .and_then(|raw| raw.get("head1x1"))
+                    .and_then(|h| h.get("groups"))
+                    .and_then(|g| g.as_u64())
+                    .unwrap_or(1) as usize;
+                let h1_in_size = bottleneck / h1_groups;
+                let h1_out = layer_raw
+                    .as_ref()
+                    .and_then(|raw| raw.get("head1x1"))
+                    .and_then(|h| h.get("out_channels"))
+                    .and_then(|a| a.as_u64())
+                    .unwrap_or(bottleneck as u64) as usize;
+                let h1_w = cursor.read_f64(h1_out * h1_in_size);
+                let h1_b = cursor.read_f64(h1_out);
+                (true, h1_w, h1_b)
+            } else {
+                (false, vec![], vec![])
+            };
 
             let mut film_slots: Vec<Option<FiLMOracleSlot>> = vec![None; 8];
             for slot_idx in 0..8 {
@@ -451,14 +512,14 @@ pub(crate) fn build_a2_arrays(
 
                 let film_ch = match slot_idx {
                     2 => cond_size,
-                    7 => 1.min(cond_size),
+                    7 => head_accum_size_for_film,
                     _ => ch,
                 };
 
                 let (w_count, b_count) = if cond_size > 1 {
                     (
                         film_weight_count_generic(g, cond_size, film_ch, shift),
-                        film_bias_count_generic(film_ch),
+                        film_bias_count_generic(film_ch, shift),
                     )
                 } else {
                     (
@@ -484,44 +545,27 @@ pub(crate) fn build_a2_arrays(
                 activation: pre_activations[li].clone(),
                 secondary_activation: pre_secondary_activations[li].clone(),
                 conv_out,
+                head1x1_active: h1_active,
+                head1x1_w: h1_w,
+                head1x1_b: h1_b,
+                mixin_groups,
+                l1x1_groups,
             });
         }
 
-        let h1_groups = layer_raw
-            .as_ref()
-            .and_then(|raw| raw.get("head1x1"))
-            .and_then(|h| h.get("groups"))
-            .and_then(|g| g.as_u64())
-            .unwrap_or(1) as usize;
-        let h1_in_size = if head1x1_active {
-            bottleneck / h1_groups
-        } else {
-            0
-        };
-        let head_accum_size = if head1x1_active {
-            layer_raw
-                .as_ref()
-                .and_then(|raw| raw.get("head1x1"))
-                .and_then(|h| h.get("out_channels"))
-                .and_then(|a| a.as_u64())
-                .unwrap_or(bottleneck as u64) as usize
-        } else {
-            bottleneck
-        };
-        let head1x1_w: Vec<f64> = if head1x1_active {
-            cursor.read_f64(head_accum_size * h1_in_size)
-        } else {
-            vec![]
-        };
-        let head1x1_b: Vec<f64> = if head1x1_active {
-            cursor.read_f64(head_accum_size)
-        } else {
-            vec![]
-        };
+        let head_accum_size = head_accum_size_for_film;
 
-        let head_size_raw = layer_cfg.head_size;
-        let head_is_rechannel = head_size_raw.is_some();
-        let head_size = head_size_raw.unwrap_or(1);
+        let head_size = layer_cfg.head_size.unwrap_or(1);
+        let head_is_rechannel = head_size > 1;
+
+        // Head kernel size — legacy models use implicit K=1.
+        let head_k = layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("head"))
+            .and_then(|h| h.get("kernel_size"))
+            .and_then(|k| k.as_u64())
+            .unwrap_or(1) as usize;
+
         let (head_w, head_b) = if head_is_rechannel {
             let hw_count = head_accum_size * head_size;
             let head_w = cursor.read_f64(hw_count);
@@ -533,11 +577,11 @@ pub(crate) fn build_a2_arrays(
             };
             (head_w, head_b)
         } else {
-            let head_w_raw = cursor.read_f64(A2_HEAD_KERNEL * head_accum_size);
-            let mut head_w = vec![0.0f64; A2_HEAD_KERNEL * head_accum_size];
-            for tap in 0..A2_HEAD_KERNEL {
+            let head_w_raw = cursor.read_f64(head_k * head_accum_size);
+            let mut head_w = vec![0.0f64; head_k * head_accum_size];
+            for tap in 0..head_k {
                 for c in 0..head_accum_size {
-                    head_w[tap * head_accum_size + c] = head_w_raw[c * A2_HEAD_KERNEL + tap];
+                    head_w[tap * head_accum_size + c] = head_w_raw[c * head_k + tap];
                 }
             }
             let head_b = vec![cursor.read_one_f64()];
@@ -554,13 +598,9 @@ pub(crate) fn build_a2_arrays(
             head_is_rechannel,
             rechannel_w,
             lws,
-            head1x1_active,
-            h1_groups,
-            h1_in_size,
-            head1x1_w,
-            head1x1_b,
             head_w,
             head_b,
+            head_kernel_size: head_k,
             fwd_bufs: vec![],
         });
     }

@@ -135,6 +135,11 @@ path = "src/bin/gen_stress.rs"
 required-features = ["testing"]
 
 [[bin]]
+name = "capability_receipt"
+path = "src/bin/capability_receipt.rs"
+required-features = ["testing"]
+
+[[bin]]
 name = "wav_to_golden"
 path = "src/bin/wav_to_golden.rs"
 required-features = ["testing"]

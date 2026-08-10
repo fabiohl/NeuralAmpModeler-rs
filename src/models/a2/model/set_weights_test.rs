@@ -816,9 +816,9 @@ fn test_load_film_with_groups() {
     };
     // ch=8, g=2, cond=4, shift=true → generic path (cond_size > 1)
     // w = channels * mult * cond_size / g = 8*2*4/2 = 32
-    // b = film_bias_count_generic(channels) = 8
+    // b = film_bias_count_generic(channels, shift=true) = 8*2 = 16
     let w_count = 32;
-    let b_count = 8;
+    let b_count = 16;
     let total = w_count + b_count;
     let weights = vec![0.0f32; total];
     let mut pos = 0;

@@ -823,23 +823,13 @@ pub fn get_calibrated_threshold(
                 Some(1.0e-4),
             ))
         }
-        // --- WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1, real capture) ---
-        // DISABLED — §7.1 (dead threshold; retained for meta-test calibration
-        // discipline). Model confirmed broken against NAMcore C++ golden;
-        // inference path blocked at dispatch by fail-closed guard
-        // (`is_disabled_broken_a2_flagship`). Threshold is dead — no test
-        // references it; kept only to preserve the match arm for the meta-test
-        // calibration discipline (`tests/threshold_calibration.rs`).
-        // Empirically measured (bypassing guard): SNR=−15.6 dB, ESR=3.61e1
-        // (noise power 36× signal power — severe architectural mismatch between
-        // Rust WaveNetA2Dyn native FiLM and C++ Eigen-based generic WaveNet).
-        // Original S13.3 (PM-05): Official A2 flagship model with condition_dsp
-        // sub-model, 8 FiLM slots, head1x1 (groups=2), Softsign activation,
-        // condition_size=8. C++ routes to generic WaveNet (Eigen), Rust routes to
-        // WaveNetA2Dyn with native FiLM. Re-enable only after closing §4.4.
+        // --- WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) — KB-A2-MAX ---
+        // Fail-closed TR1.1. Thresholds are placeholders for a future un-ignore
+        // only after §4.4.3 reopening (SNR≥90 dB). HEAD measured ~0.23 dB.
+        // Do not use these gates to claim parity while the guard is active.
         "wavenet_a2_max" => {
-            let snr_db = 10.0;
-            Some((Some(snr_to_mse(snr_db)), snr_db, Some(5.0e-2), Some(0.49)))
+            let snr_db = 90.0;
+            Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-9), Some(0.05)))
         }
         // --- WaveNet A2 Dynamic Gated CH=8 (Task 3.3) ---
         // Gating doubles conv output (channels × 2*bottleneck) and applies
@@ -942,6 +932,51 @@ pub fn get_calibrated_threshold(
         // Thresholds apply to all Linear FFT receptive field sizes:
         // RF=2048, RF=4096, RF=8192 — FFT precision is RF-independent at f32.
         "linear_fft_rf320" | "linear_fft_rf2048" | "linear_fft_rf4096" | "linear_fft_rf8192" => {
+            let snr_db = 125.0;
+            Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-10), Some(0.12)))
+        }
+        // LSTM uncatalogued synthetic topologies (golden v1, 2026-08-10, Standard engine)
+        //
+        // Measured: lstm_1x10 SNR=144.0 dB, ESR=4.01e-15, MR-STFT=1.25e-6
+        // Measured: lstm_2x24 SNR=135.7 dB, ESR=2.71e-14, MR-STFT=3.50e-6
+        // Measured: lstm_3x8  SNR=144.4 dB, ESR=3.66e-15, MR-STFT=5.55e-7
+        //
+        // Floor: SNR - 19..26 dB from measured, ESR factor ~185..273×.
+        // MR-STFT factor ~80..180×. Worst case across all 3 topologies.
+        "lstm_1x10" | "lstm_2x24" | "lstm_3x8" => {
+            let snr_db = 110.0;
+            Some((
+                Some(snr_to_mse(snr_db)),
+                snr_db,
+                Some(5.0e-12),
+                Some(5.0e-4),
+            ))
+        }
+        // ConvNet variants (golden v1, 2026-08-10, Standard engine)
+        //
+        // Measured: convnet_nobn SNR=134.9 dB, ESR=3.23e-14, MR-STFT=5.62e-6
+        // Measured: convnet_relu SNR=141.6 dB, ESR=6.84e-15, MR-STFT=2.27e-6
+        // Measured: convnet_silu SNR=∞, ESR=2.58e-13, MR-STFT=8.67e-6
+        //
+        // Floor: SNR - 20..22 dB from worst (nobn), ESR factor ~31..146×,
+        // MR-STFT factor ~44..89×. Calibrated conservatively across all variants.
+        "convnet_nobn" | "convnet_relu" | "convnet_silu" => {
+            let snr_db = 115.0;
+            Some((
+                Some(snr_to_mse(snr_db)),
+                snr_db,
+                Some(1.0e-11),
+                Some(5.0e-4),
+            ))
+        }
+        // Linear No Bias (golden v1, 2026-08-10, Standard engine)
+        //
+        // Measured: SNR=144.1 dB, ESR=3.89e-15, MR-STFT=1.64e-6
+        // (2048-sample v1 stress, 48 kHz). Near-bit-exact FFT round-trip
+        // like other Linear variants; same conservative floor as linear_fft.
+        //
+        // Floor: SNR - 19.1 dB, ESR factor ~2.6e4×, MR-STFT factor ~7.3e4×.
+        "linear_nobias" => {
             let snr_db = 125.0;
             Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-10), Some(0.12)))
         }

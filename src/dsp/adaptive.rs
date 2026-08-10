@@ -147,6 +147,9 @@ pub struct AdaptiveCompute {
     /// Current slimmable channel count of the active WaveNet model.
     /// Tracks the last value applied via `take_slimmable_rebuild`.
     wavenet_slim_ch_current: Option<usize>,
+    /// Whether the loaded WaveNet model explicitly declares slimmability support.
+    /// Conventional WaveNets (default) set this to `false` and maintain full channel size.
+    wavenet_slimmable_capable: bool,
 }
 
 const DEGRADE_CONSECUTIVE: u32 = 3;
@@ -177,6 +180,7 @@ impl AdaptiveCompute {
             slim_override: SlimOverride::Auto,
             wavenet_full_ch: None,
             wavenet_slim_ch_current: None,
+            wavenet_slimmable_capable: false,
         }
     }
 
@@ -455,6 +459,9 @@ impl AdaptiveCompute {
     /// Clamped to `[4, original_ch]` (4 is the minimum viable channel count).
     pub fn wavenet_slimmable_ch_target(&self) -> Option<usize> {
         let original = self.wavenet_full_ch?;
+        if !self.wavenet_slimmable_capable {
+            return Some(original);
+        }
         let fraction = match self.slim_override {
             SlimOverride::ForceFull => 1.0,
             SlimOverride::ForceLite => 0.75,
@@ -468,23 +475,28 @@ impl AdaptiveCompute {
         Some(target.max(4).min(original))
     }
 
-    /// Records the full-quality channel count of the currently loaded WaveNet model.
+    /// Records the full-quality channel count of the currently loaded WaveNet model
+    /// and whether it explicitly declares slimmability capability.
     ///
-    /// Must be called once when a WaveNet model is first detected (cold load or
-    /// initial `configure_adaptive_model`). Subsequent slimmable rebuilds update
-    /// `wavenet_slim_ch_current` via `take_slimmable_rebuild`.
-    pub fn set_wavenet_full_ch(&mut self, ch: usize) {
+    /// Conventional WaveNet models without slimmability metadata pass `capable = false`,
+    /// preventing `take_slimmable_rebuild` from altering their array widths.
+    pub fn set_wavenet_full_ch(&mut self, ch: usize, capable: bool) {
         self.wavenet_full_ch = Some(ch);
         self.wavenet_slim_ch_current = Some(ch);
+        self.wavenet_slimmable_capable = capable;
     }
 
     /// Returns `Some(target_ch)` if a WaveNet slimmable rebuild is needed,
     /// i.e., the FSM/override demands a different channel count than what's
     /// currently loaded. Clears the pending flag and updates tracking.
     ///
+    /// Returns `None` if the model is not slimmable-capable.
     /// Must be called **before** DSP (in `process_events` / `receive_commands`)
     /// to perform the allocation-intensive `slice_channels` off the hot-path.
     pub fn take_slimmable_rebuild(&mut self) -> Option<usize> {
+        if !self.wavenet_slimmable_capable {
+            return None;
+        }
         let target = self.wavenet_slimmable_ch_target()?;
         let current = self.wavenet_slim_ch_current?;
         if current != target && target >= 4 {

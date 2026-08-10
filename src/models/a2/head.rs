@@ -58,18 +58,38 @@ impl A2HeadConv {
     /// `head_w` must contain exactly `HEAD_KERNEL_SIZE * num_channels` f32 values,
     /// stored column-major per tap as loaded by `_load_weights` (see `a2_fast.cpp:262-275`).
     pub fn new(head_w: AlignedVec<f32>, head_b: f32, head_scale: f32, num_channels: usize) -> Self {
-        let k = Self::HEAD_KERNEL_SIZE;
+        Self::new_with_kernel(
+            head_w,
+            head_b,
+            head_scale,
+            num_channels,
+            Self::HEAD_KERNEL_SIZE,
+        )
+    }
+
+    /// Creates a new `A2HeadConv` with a non-standard kernel size.
+    ///
+    /// Legacy models may have `head_kernel_size = 1` (1×1 rechannel, no temporal
+    /// context). The SIMD fast-paths require `kernel_size == 16`; for other sizes,
+    /// the scalar fallback is used.
+    pub fn new_with_kernel(
+        head_w: AlignedVec<f32>,
+        head_b: f32,
+        head_scale: f32,
+        num_channels: usize,
+        kernel_size: usize,
+    ) -> Self {
         assert_eq!(
             head_w.len(),
-            k * num_channels,
-            "head_w must have HEAD_KERNEL_SIZE * num_channels elements"
+            kernel_size * num_channels,
+            "head_w must have kernel_size * num_channels elements"
         );
         Self {
             head_w,
             head_b,
             head_scale,
             num_channels,
-            kernel_size: k,
+            kernel_size,
         }
     }
 
@@ -93,41 +113,43 @@ impl A2HeadConv {
         debug_assert!(output.len() >= num_frames);
         debug_assert!(head_history.len() >= (ring_mask + 1) * self.num_channels);
 
-        // Dispatch to SIMD kernels when available.
-        match self.num_channels {
-            8 => {
-                // SAFETY: x86-64-v3 guarantees AVX2+FMA.
-                unsafe {
-                    head_process_ch8_avx2(
-                        &self.head_w,
-                        self.head_b,
-                        self.head_scale,
-                        head_history,
-                        head_write_pos,
-                        ring_mask,
-                        num_frames,
-                        output,
-                    );
+        // Dispatch to SIMD kernels when the canonical A2 kernel size is active.
+        if self.kernel_size == Self::HEAD_KERNEL_SIZE {
+            match self.num_channels {
+                8 => {
+                    // SAFETY: x86-64-v3 guarantees AVX2+FMA.
+                    unsafe {
+                        head_process_ch8_avx2(
+                            &self.head_w,
+                            self.head_b,
+                            self.head_scale,
+                            head_history,
+                            head_write_pos,
+                            ring_mask,
+                            num_frames,
+                            output,
+                        );
+                    }
+                    return;
                 }
-                return;
-            }
-            3 => {
-                // SAFETY: x86-64-v3 guarantees FMA.
-                unsafe {
-                    head_process_ch3_sse(
-                        &self.head_w,
-                        self.head_b,
-                        self.head_scale,
-                        head_history,
-                        head_write_pos,
-                        ring_mask,
-                        num_frames,
-                        output,
-                    );
+                3 => {
+                    // SAFETY: x86-64-v3 guarantees FMA.
+                    unsafe {
+                        head_process_ch3_sse(
+                            &self.head_w,
+                            self.head_b,
+                            self.head_scale,
+                            head_history,
+                            head_write_pos,
+                            ring_mask,
+                            num_frames,
+                            output,
+                        );
+                    }
+                    return;
                 }
-                return;
+                _ => {}
             }
-            _ => {}
         }
 
         // Scalar fallback.

@@ -224,6 +224,142 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx2(
 
 #[cold]
 #[inline(never)]
+fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    for i in 0..block.len() {
+        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
+        block[i] = val;
+        let acc = head_input[i] as f64 + val as f64;
+        head_input[i] = acc as f32;
+    }
+}
+
+/// Applies ReLU in-place on block and accumulates into head_input using AVX2.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
+    let len = block.len();
+    let mut i = 0;
+    let zero = _mm256_setzero_ps();
+    while i + 16 <= len {
+        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+        let vt0 = _mm256_max_ps(vb0, zero);
+        let vt1 = _mm256_max_ps(vb1, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+
+        let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
+        let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
+        i += 16;
+    }
+    wavenet_simd_avx2!(i, len, {
+        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+        let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
+    });
+    if i < len {
+        relu_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    for i in 0..block.len() {
+        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
+        block[i] = val;
+        head_input[i] = val;
+    }
+}
+
+/// Applies ReLU in-place on block and overwrites head_input using AVX2.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
+    let len = block.len();
+    let mut i = 0;
+    let zero = _mm256_setzero_ps();
+    while i + 16 <= len {
+        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+        let vt0 = _mm256_max_ps(vb0, zero);
+        let vt1 = _mm256_max_ps(vb1, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
+        i += 16;
+    }
+    wavenet_simd_avx2!(i, len, {
+        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+    });
+    if i < len {
+        relu_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn relu_and_accumulate_with_seed_avx2_tail(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    seed: &[f32],
+) {
+    for i in 0..block.len() {
+        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
+        block[i] = val;
+        let acc = seed[i] as f64 + val as f64;
+        head_input[i] = acc as f32;
+    }
+}
+
+/// Fused Seed + ReLU + Head Accumulate using AVX2.
+///
+/// Computes `head_input[i] = seed[i] + max(0.0, block[i])`.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn relu_and_accumulate_with_seed_avx2(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    seed: &[f32],
+) {
+    let len = block.len();
+    let mut i = 0;
+    let zero = _mm256_setzero_ps();
+    while i + 16 <= len {
+        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+        let vt0 = _mm256_max_ps(vb0, zero);
+        let vt1 = _mm256_max_ps(vb1, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+
+        let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
+        let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
+        i += 16;
+    }
+    wavenet_simd_avx2!(i, len, {
+        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+        let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
+        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
+    });
+    if i < len {
+        relu_and_accumulate_with_seed_avx2_tail(&mut head_input[i..], &mut block[i..], &seed[i..]);
+    }
+}
+
+#[cold]
+#[inline(never)]
 fn gated_activation_and_overwrite_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],

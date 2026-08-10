@@ -133,7 +133,7 @@ pub(crate) fn oracle_a2_forward(
 
             // Per-array history buffers.
             let num_layers = arr.lws.len();
-            let mut head1x1_scratch = if arr.head1x1_active {
+            let mut head1x1_scratch = if arr.lws.iter().any(|lw| lw.head1x1_active) {
                 vec![0.0f64; arr.head_accum_size]
             } else {
                 vec![]
@@ -216,12 +216,32 @@ pub(crate) fn oracle_a2_forward(
                 };
                 let mut mixin_contrib = vec![0.0f64; z_out_ch];
                 if !condition_mod.is_empty() {
-                    for c in 0..z_out_ch {
-                        let mut sum = 0.0;
-                        for k in 0..cond_size.min(condition_mod.len()) {
-                            sum += lw.mixin_w[c * cond_size + k] * condition_mod[k];
+                    if lw.mixin_groups <= 1 {
+                        for c in 0..z_out_ch {
+                            let mut sum = 0.0;
+                            for k in 0..cond_size.min(condition_mod.len()) {
+                                sum += lw.mixin_w[c * cond_size + k] * condition_mod[k];
+                            }
+                            mixin_contrib[c] = sum;
                         }
-                        mixin_contrib[c] = sum;
+                    } else {
+                        let in_pg = cond_size / lw.mixin_groups as usize;
+                        let out_per_g = z_out_ch / lw.mixin_groups as usize;
+                        for g in 0..lw.mixin_groups as usize {
+                            let in_start = g * in_pg;
+                            let out_start = g * out_per_g;
+                            for oc in out_start..out_start + out_per_g {
+                                let mut sum = 0.0;
+                                let w_base = oc * in_pg;
+                                for ic in 0..in_pg {
+                                    if in_start + ic < condition_mod.len() {
+                                        sum +=
+                                            lw.mixin_w[w_base + ic] * condition_mod[in_start + ic];
+                                    }
+                                }
+                                mixin_contrib[oc] = sum;
+                            }
+                        }
                     }
                 }
 
@@ -277,18 +297,22 @@ pub(crate) fn oracle_a2_forward(
 
                 // Head accumulate
                 let head_off = head_col * max_ch;
-                if arr.head1x1_active {
-                    let h1_groups = arr.h1_groups;
-                    let h1_in_size = arr.h1_in_size;
+                if lw.head1x1_active {
+                    let h1_in = if lw.head1x1_w.is_empty() {
+                        0
+                    } else {
+                        lw.head1x1_w.len() / arr.head_accum_size
+                    };
+                    let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
                     let ch_per_group = arr.head_accum_size / h1_groups;
                     head1x1_scratch.fill(0.0);
                     for grp in 0..h1_groups {
                         for oc in grp * ch_per_group..(grp + 1) * ch_per_group {
-                            let mut sum = arr.head1x1_b[oc];
-                            for ic in 0..h1_in_size {
+                            let mut sum = lw.head1x1_b[oc];
+                            for ic in 0..h1_in {
                                 sum = mul_add_f64(
-                                    z_scratch[grp * h1_in_size + ic],
-                                    arr.head1x1_w[oc * h1_in_size + ic],
+                                    z_scratch[grp * h1_in + ic],
+                                    lw.head1x1_w[oc * h1_in + ic],
                                     sum,
                                     acc_mode,
                                 );
@@ -322,17 +346,39 @@ pub(crate) fn oracle_a2_forward(
                 // L1x1 residual
                 if li < num_layers - 1 {
                     let mut l1x1_contrib = vec![0.0f64; ch];
-                    for oc in 0..ch {
-                        let mut sum = lw.l1x1_b[oc];
-                        for ic in 0..bottleneck {
-                            sum = mul_add_f64(
-                                z_scratch[ic],
-                                lw.l1x1_w[oc * bottleneck + ic],
-                                sum,
-                                acc_mode,
-                            );
+                    if lw.l1x1_groups <= 1 {
+                        for oc in 0..ch {
+                            let mut sum = lw.l1x1_b[oc];
+                            for ic in 0..bottleneck {
+                                sum = mul_add_f64(
+                                    z_scratch[ic],
+                                    lw.l1x1_w[oc * bottleneck + ic],
+                                    sum,
+                                    acc_mode,
+                                );
+                            }
+                            l1x1_contrib[oc] = sum;
                         }
-                        l1x1_contrib[oc] = sum;
+                    } else {
+                        let in_pg = bottleneck / lw.l1x1_groups as usize;
+                        let out_per_g = ch / lw.l1x1_groups as usize;
+                        for g in 0..lw.l1x1_groups as usize {
+                            let in_start = g * in_pg;
+                            let out_start = g * out_per_g;
+                            for oc in out_start..out_start + out_per_g {
+                                let mut sum = lw.l1x1_b[oc];
+                                let w_base = oc * in_pg;
+                                for ic in 0..in_pg {
+                                    sum = mul_add_f64(
+                                        z_scratch[in_start + ic],
+                                        lw.l1x1_w[w_base + ic],
+                                        sum,
+                                        acc_mode,
+                                    );
+                                }
+                                l1x1_contrib[oc] = sum;
+                            }
+                        }
                     }
                     if use_blending && lw.film[6].is_some() {
                         let film = lw.film[6].as_mut().unwrap();
@@ -364,7 +410,7 @@ pub(crate) fn oracle_a2_forward(
             last_arr.head_size
         } else {
             if last_arr.head_size == 1 {
-                A2_HEAD_KERNEL
+                last_arr.head_kernel_size
             } else {
                 last_arr.head_size
             }

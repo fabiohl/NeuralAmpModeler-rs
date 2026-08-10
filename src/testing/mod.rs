@@ -12,9 +12,12 @@
 //! - WAV I/O helpers for test fixtures
 
 pub mod aliasing;
+pub mod catalog;
+pub mod diagnostics;
 pub mod fixtures;
 pub mod mushra;
 pub mod perceptual;
+pub mod receipt;
 pub mod reference_oracle;
 pub mod spectral;
 pub mod stress;

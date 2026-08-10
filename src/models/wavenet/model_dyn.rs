@@ -123,6 +123,19 @@ pub struct WaveNetModelDyn {
     pub head_output_scratch: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Whether this dynamic WaveNet model explicitly supports dynamic channel slimming.
+    pub slimmable_capable: bool,
+    /// Allowed channel breakpoints for slimmable channel slicing.
+    ///
+    /// When `Some`, contains the valid channel counts for this model in
+    /// ascending order (e.g. `[1, 2, 3]` for a CH=3 model with 3 tiers).
+    /// `None` means no slimmable breakpoints are defined.
+    pub allowed_channels: Option<Vec<usize>>,
+    /// Pending slimmable channel target set by `set_slimmable_size`.
+    ///
+    /// Consumed by `try_slimmable_rebuild_single` before DSP processing.
+    /// `None` means no pending change.
+    pub pending_slim_channel: Option<usize>,
 }
 
 impl Clone for WaveNetModelDyn {
@@ -140,11 +153,20 @@ impl Clone for WaveNetModelDyn {
             post_stack_head: self.post_stack_head.clone(),
             head_output_scratch: self.head_output_scratch.clone(),
             prewarm_on_reset: self.prewarm_on_reset,
+            slimmable_capable: self.slimmable_capable,
+            allowed_channels: self.allowed_channels.clone(),
+            pending_slim_channel: self.pending_slim_channel,
         }
     }
 }
 
 impl WaveNetModelDyn {
+    /// Returns whether this dynamic WaveNet model was explicitly constructed as slimmable capable.
+    #[inline(always)]
+    pub fn is_slimmable_capable(&self) -> bool {
+        self.slimmable_capable
+    }
+
     /// Sets the effective number of layers on all arrays for soft-degrade.
     #[inline(always)]
     pub fn set_effective_layers(&mut self, n: usize) {
@@ -186,11 +208,22 @@ impl WaveNetModelDyn {
     /// calls this to produce a lightweight copy that can be atomically swapped
     /// in via `gc_cascade`.
     ///
-    /// # Panics
-    /// Panics if `new_ch` is zero, exceeds the original channel count, or if
-    /// arrays have non-uniform channel counts.
-    pub fn slice_channels(&self, new_ch: usize) -> std::io::Result<Self> {
+    /// # Errors
+    /// Returns [`crate::models::slimmable::SlicingError`] if `new_ch` is zero,
+    /// exceeds the original channel count, or exceeds array minimum channels.
+    pub fn slice_channels(
+        &self,
+        new_ch: usize,
+    ) -> Result<Self, crate::models::slimmable::SlicingError> {
         crate::models::slimmable::slice_wavenet_model(self, new_ch)
+    }
+
+    /// Creates a dedicated exact structural clone of the WaveNet model,
+    /// duplicating arrays, weights, topology, and state buffers without invoking
+    /// `slice_wavenet_model` or applying any channel reductions.
+    #[inline]
+    pub fn clone_exact(&self) -> Self {
+        self.clone()
     }
 
     /// Resolves the full forward pass and produces waveform samples in zero allocation (DSP).
@@ -394,5 +427,43 @@ impl WaveNetModelDyn {
         if let Some(ref mut head_proc) = self.post_stack_head {
             head_proc.prewarm();
         }
+    }
+}
+
+use crate::models::slimmable::SlimmableModel;
+
+impl SlimmableModel for WaveNetModelDyn {
+    fn set_slimmable_size(
+        &mut self,
+        val: f32,
+        _rt_status: Option<&crate::common::spsc::RtStatusFlags>,
+    ) {
+        let Some(ref allowed) = self.allowed_channels else {
+            return;
+        };
+        if allowed.is_empty() {
+            return;
+        }
+        let val = val.clamp(0.0, 1.0);
+        let num_tiers = allowed.len();
+        let tier = ((val * (num_tiers as f32 - 1.0)).round() as usize).min(num_tiers - 1);
+        self.pending_slim_channel = Some(allowed[tier]);
+    }
+
+    fn slimmable_breakpoints(&self) -> Box<[f64]> {
+        let Some(ref allowed) = self.allowed_channels else {
+            return Box::new([]);
+        };
+        if allowed.len() < 2 {
+            return Box::new([]);
+        }
+        let max_ch = *allowed.last().unwrap_or(&1) as f64;
+        if max_ch <= 0.0 {
+            return Box::new([]);
+        }
+        allowed[..allowed.len() - 1]
+            .iter()
+            .map(|&ch| (ch as f64) / max_ch)
+            .collect()
     }
 }

@@ -17,12 +17,22 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 // ── Model Loading & Parsing Submodules ────────────────────────────────────────
 #[path = "models/a2_loader.rs"]
 mod a2_loader;
+#[path = "models/block_invariance_test.rs"]
+mod block_invariance_test;
+#[path = "models/catalog_test.rs"]
+mod catalog_test;
 #[path = "models/container_slimmable.rs"]
 mod container_slimmable;
+#[path = "models/deterministic_energy_test.rs"]
+mod deterministic_energy_test;
 #[path = "models/diagnostic_bundle.rs"]
 mod diagnostic_bundle;
 #[path = "models/doc_inventory.rs"]
 mod doc_inventory;
+#[path = "models/receipt_test.rs"]
+mod receipt_test;
+#[path = "models/wavenet_clone_exact_test.rs"]
+mod wavenet_clone_exact_test;
 
 // ── Activation Precision & FSM Submodules ────────────────────────────────────
 #[path = "models/activation_precision.rs"]

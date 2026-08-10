@@ -9,6 +9,7 @@ use neural_amp_modeler_rs::loader::dispatcher::wavenet::transpose_conv1d_interle
 use neural_amp_modeler_rs::loader::dispatcher::wavenet::transpose_conv1d_interleaved_8wide;
 use neural_amp_modeler_rs::loader::dispatcher::wavenet::transpose_conv1d_interleaved_16wide;
 use neural_amp_modeler_rs::math::common::AlignedVec;
+use neural_amp_modeler_rs::models::a2::activations::ActivationType;
 use neural_amp_modeler_rs::models::wavenet::{
     Conv1d, DenseLayer, WAVENET_MAX_NUM_FRAMES, WaveNetLayer, WaveNetLayerArray, WaveNetLayerState,
     WaveNetModel,
@@ -62,6 +63,7 @@ fn build_tiny_lite_wavenet() -> WaveNetModel<12, 3, 6> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(12 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(12 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -90,6 +92,7 @@ fn build_tiny_lite_wavenet() -> WaveNetModel<12, 3, 6> {
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
+            activation: ActivationType::Tanh,
             scratch_mixin: AlignedVec::new(6 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("scratch alloc"),
             scratch_conv: AlignedVec::new(6 * WAVENET_MAX_NUM_FRAMES, 0.0f32)

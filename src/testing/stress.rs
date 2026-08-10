@@ -296,6 +296,166 @@ pub fn generate_stress_signal_v2_default(sample_rate: u32) -> Vec<f32> {
 }
 
 // =============================================================================
+// Signal Energy & Numerical Finitude Evaluation
+// =============================================================================
+
+/// Result of evaluating numerical finitude and RMS energy of an audio buffer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnergyEvaluation {
+    /// Root-mean-square energy in dBFS (`20 · log10(RMS)`).
+    /// Returns `f64::NEG_INFINITY` if signal is strictly silent.
+    pub rms_dbfs: f64,
+    /// Absolute peak level in dBFS (`20 · log10(max |sample|)`).
+    pub peak_dbfs: f64,
+    /// Whether all samples in the buffer are finite (zero NaN or Inf).
+    pub is_finite: bool,
+    /// Whether RMS energy meets or exceeds the minimum active threshold (e.g., -80.0 dBFS).
+    pub is_active: bool,
+}
+
+/// Verifies that 100% of samples in `samples` are finite numbers (no NaN or Inf).
+pub fn check_finitude(samples: &[f32]) -> bool {
+    samples.iter().all(|s| s.is_finite())
+}
+
+/// Computes the RMS energy in dBFS for the given audio buffer.
+pub fn compute_rms_dbfs(samples: &[f32]) -> f64 {
+    if samples.is_empty() {
+        return f64::NEG_INFINITY;
+    }
+    let sum_sq: f64 = samples.iter().map(|&s| (s as f64).powi(2)).sum();
+    let mean_sq = sum_sq / samples.len() as f64;
+    let rms = mean_sq.sqrt();
+    if rms <= f64::EPSILON {
+        f64::NEG_INFINITY
+    } else {
+        20.0 * rms.log10()
+    }
+}
+
+/// Computes the peak level in dBFS for the given audio buffer.
+pub fn compute_peak_dbfs(samples: &[f32]) -> f64 {
+    if samples.is_empty() {
+        return f64::NEG_INFINITY;
+    }
+    let max_abs = samples
+        .iter()
+        .map(|&s| (s as f64).abs())
+        .fold(0.0f64, f64::max);
+    if max_abs <= f64::EPSILON {
+        f64::NEG_INFINITY
+    } else {
+        20.0 * max_abs.log10()
+    }
+}
+
+/// Evaluates finitude, RMS energy, and peak level of `samples` against `min_rms_dbfs`.
+///
+/// Default active threshold is typically -80.0 dBFS.
+pub fn evaluate_signal_energy(samples: &[f32], min_rms_dbfs: f64) -> EnergyEvaluation {
+    let is_finite = check_finitude(samples);
+    let rms_dbfs = compute_rms_dbfs(samples);
+    let peak_dbfs = compute_peak_dbfs(samples);
+    let is_active = rms_dbfs >= min_rms_dbfs;
+
+    EnergyEvaluation {
+        rms_dbfs,
+        peak_dbfs,
+        is_finite,
+        is_active,
+    }
+}
+
+// =============================================================================
+// Block-Size Invariance Verification
+// =============================================================================
+
+/// Standard block sizes used for block-size invariance testing: 1, 8, 32, 64, 128, 512, 2048.
+pub const STANDARD_TEST_BLOCK_SIZES: &[usize] = &[1, 8, 32, 64, 128, 512, 2048];
+
+/// Result of evaluating block-size invariance across arbitrary block sizes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockInvarianceResult {
+    /// Maximum absolute sample difference observed across all block size comparisons.
+    pub max_abs_error: f32,
+    /// Baseline block size used as ground truth (typically 64).
+    pub baseline_block_size: usize,
+    /// Errors for each tested block size relative to baseline output: `(block_size, max_abs_err)`.
+    pub errors_by_block_size: Vec<(usize, f32)>,
+    /// Whether all tested block sizes stayed within `max_allowed_error` (typically 1e-6 f32).
+    pub is_invariant: bool,
+}
+
+/// Evaluates block-size invariance for a model instance by processing `input_signal`
+/// in blocks of size `baseline_block_size` vs each size in `block_sizes`.
+///
+/// Returns a `BlockInvarianceResult` comparing continuous output signals sample-by-sample.
+pub fn verify_block_invariance_for_model<M: crate::models::NamModel + ?Sized, F: Fn() -> Box<M>>(
+    create_model: F,
+    input_signal: &[f32],
+    block_sizes: &[usize],
+    baseline_block_size: usize,
+    max_allowed_error: f32,
+) -> BlockInvarianceResult {
+    let sizes = if block_sizes.is_empty() {
+        STANDARD_TEST_BLOCK_SIZES
+    } else {
+        block_sizes
+    };
+
+    // 1. Process baseline signal
+    let mut baseline_model = create_model();
+    let _ = baseline_model.set_max_buffer_size(baseline_block_size);
+    baseline_model.prewarm(2048);
+    let mut baseline_output = vec![0.0f32; input_signal.len()];
+
+    for (in_chunk, out_chunk) in input_signal
+        .chunks(baseline_block_size)
+        .zip(baseline_output.chunks_mut(baseline_block_size))
+    {
+        baseline_model.process(in_chunk, out_chunk);
+    }
+
+    let mut overall_max_err = 0.0f32;
+    let mut errors_by_size = Vec::new();
+
+    // 2. Process each test block size
+    for &bs in sizes {
+        let mut test_model = create_model();
+        let _ = test_model.set_max_buffer_size(bs);
+        test_model.prewarm(2048);
+        let mut test_output = vec![0.0f32; input_signal.len()];
+
+        for (in_chunk, out_chunk) in input_signal.chunks(bs).zip(test_output.chunks_mut(bs)) {
+            test_model.process(in_chunk, out_chunk);
+        }
+
+        let mut max_err_for_bs = 0.0f32;
+        for (&b_sample, &t_sample) in baseline_output.iter().zip(test_output.iter()) {
+            let diff = (b_sample - t_sample).abs();
+            if diff > max_err_for_bs {
+                max_err_for_bs = diff;
+            }
+        }
+
+        if max_err_for_bs > overall_max_err {
+            overall_max_err = max_err_for_bs;
+        }
+
+        errors_by_size.push((bs, max_err_for_bs));
+    }
+
+    let is_invariant = overall_max_err <= max_allowed_error;
+
+    BlockInvarianceResult {
+        max_abs_error: overall_max_err,
+        baseline_block_size,
+        errors_by_block_size: errors_by_size,
+        is_invariant,
+    }
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 

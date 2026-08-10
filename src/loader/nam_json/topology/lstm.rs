@@ -8,14 +8,13 @@ use super::super::data::{JsonError, NamModelData};
 /// Checks and returns the LSTM geometry (num_layers, hidden_size).
 ///
 /// Returns `Ok(Some(...))` for valid LSTM topologies that can be dispatched.
-/// Returns `Ok(None)` when the model is not LSTM or has unsupported structural
-/// parameters (num_layers=0, bounds exceeded — these don't carry a dedicated
-/// error code because they are caught upstream or are DoS-guard rejections).
-/// Returns `Err` for multi-channel LSTM — an explicit diagnostic error.
-///
-/// Rejects topologies that exceed safe bounds to prevent DoS/OOM:
+/// Returns `Ok(None)` when the model is not LSTM or when required config fields
+/// (`num_layers`, `hidden_size`) are missing.
+/// Returns `Err` for invalid structural parameters:
+/// - `num_layers == 0`
 /// - `num_layers > MAX_LSTM_LAYERS` (16)
 /// - `hidden_size > MAX_LSTM_HIDDEN_SIZE` (1024)
+/// - Multi-channel I/O (`in_channels != 1` or `out_channels != 1`)
 pub fn get_lstm_topology(data: &NamModelData) -> Result<Option<(usize, usize)>, JsonError> {
     use super::super::validation::{MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_LAYERS};
 
@@ -55,18 +54,25 @@ pub fn get_lstm_topology(data: &NamModelData) -> Result<Option<(usize, usize)>, 
     };
 
     if num_layers == 0 {
-        log::error!("LSTM num_layers=0 — rejected (no valid model can have zero layers)");
-        return Ok(None);
+        return Err(JsonError::UnsupportedTopology {
+            architecture: data.architecture.clone(),
+            issue: "num_layers=0 (no valid model can have zero layers)".into(),
+            limit: 0,
+        });
     }
     if num_layers > MAX_LSTM_LAYERS {
-        log::error!("LSTM num_layers={num_layers} exceeds maximum {MAX_LSTM_LAYERS} — rejected");
-        return Ok(None);
+        return Err(JsonError::UnsupportedTopology {
+            architecture: data.architecture.clone(),
+            issue: format!("num_layers={num_layers} exceeds maximum {MAX_LSTM_LAYERS}"),
+            limit: MAX_LSTM_LAYERS,
+        });
     }
     if hidden_size > MAX_LSTM_HIDDEN_SIZE {
-        log::error!(
-            "LSTM hidden_size={hidden_size} exceeds maximum {MAX_LSTM_HIDDEN_SIZE} — rejected"
-        );
-        return Ok(None);
+        return Err(JsonError::UnsupportedTopology {
+            architecture: data.architecture.clone(),
+            issue: format!("hidden_size={hidden_size} exceeds maximum {MAX_LSTM_HIDDEN_SIZE}"),
+            limit: MAX_LSTM_HIDDEN_SIZE,
+        });
     }
     Ok(Some((num_layers, hidden_size)))
 }
