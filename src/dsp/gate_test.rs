@@ -233,7 +233,7 @@ mod tests {
     }
 
     /// Tests processing with blocks of only 1 sample (n_samples = 1).
-    /// This is critical for CLAP hosts that may arbitrarily subdivide blocks.
+    /// This is critical for audio hosts that may arbitrarily subdivide blocks.
     #[test]
     fn test_unit_block_processing() {
         let mut dh = DynamicHysteresis::new();

@@ -200,7 +200,7 @@ impl<T: Clone> MirroredBuffer<T> {
 /// `MirroredBuffer<T>`. Rust's derive macro requires all fields to implement `Clone`,
 /// and an infallible `Clone` satisfies that constraint.
 ///
-/// For **fallible** duplication in CLAP activation paths, use `try_clone()` instead.
+/// For **fallible** duplication in host activation paths, use `try_clone()` instead.
 /// Panicking across the FFI boundary is undefined behavior, so `Clone::clone()` must
 /// only be called in initialization/control paths where allocation failures are fatal.
 impl<T: Clone> Clone for MirroredBuffer<T> {

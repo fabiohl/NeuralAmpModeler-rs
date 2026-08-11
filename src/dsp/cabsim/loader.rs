@@ -118,7 +118,7 @@ impl CabSimIr {
     /// Resamples `input` from `input_rate` to `output_rate` using the polyphase resampler.
     ///
     /// Public delegate to `ir_resample::resample` — preserved for external consumers
-    /// (e.g. NAM-Plug tests).
+    /// (e.g. downstream integration test suites).
     pub fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::Result<Vec<f32>> {
         ir_resample::resample(input, input_rate, output_rate)
     }

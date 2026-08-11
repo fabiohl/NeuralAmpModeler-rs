@@ -88,10 +88,12 @@ fn test_hotpath_gate_closed_and_silence() {
         conv: None,
     };
 
-    let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
     let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
     let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-    let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
     let bufs = DspBuffers {
         resamp_mid_l: &mut resamp_mid_l,
@@ -104,6 +106,8 @@ fn test_hotpath_gate_closed_and_silence() {
         os_in_r: os_in_r_slice,
         os_model_l: os_model_l_slice,
         os_model_r: os_model_r_slice,
+        crossfade_scratch_l,
+        crossfade_scratch_r,
     };
 
     // Memory allocation watchdog.
@@ -210,10 +214,12 @@ fn test_hotpath_gate_fading() {
         conv: None,
     };
 
-    let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
     let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
     let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-    let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
     let bufs = DspBuffers {
         resamp_mid_l: &mut resamp_mid_l,
@@ -226,6 +232,8 @@ fn test_hotpath_gate_fading() {
         os_in_r: os_in_r_slice,
         os_model_l: os_model_l_slice,
         os_model_r: os_model_r_slice,
+        crossfade_scratch_l,
+        crossfade_scratch_r,
     };
 
     let _guard = TrackingGuard::new();
@@ -314,10 +322,12 @@ fn test_hotpath_clipping_detection() {
         conv: None,
     };
 
-    let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
     let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
     let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-    let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
     let bufs = DspBuffers {
         resamp_mid_l: &mut resamp_mid_l,
@@ -330,6 +340,8 @@ fn test_hotpath_clipping_detection() {
         os_in_r: os_in_r_slice,
         os_model_l: os_model_l_slice,
         os_model_r: os_model_r_slice,
+        crossfade_scratch_l,
+        crossfade_scratch_r,
     };
 
     let _guard = TrackingGuard::new();
@@ -413,10 +425,12 @@ fn test_hotpath_dropped_frames() {
         conv: None,
     };
 
-    let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
     let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
     let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-    let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
     let bufs = DspBuffers {
         resamp_mid_l: &mut resamp_mid_l,
@@ -429,6 +443,8 @@ fn test_hotpath_dropped_frames() {
         os_in_r: os_in_r_slice,
         os_model_l: os_model_l_slice,
         os_model_r: os_model_r_slice,
+        crossfade_scratch_l,
+        crossfade_scratch_r,
     };
     capture_dsp_pipeline(&mut samples_l, &mut samples_r, n, ctx, bufs, 48000);
 
@@ -459,10 +475,12 @@ fn test_hotpath_dropped_frames() {
         conv: None,
     };
 
-    let mut os_buf2: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+    let mut os_buf2: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
     let (os_in_l_slice2, rest2) = os_buf2.split_at_mut(MAX_RESAMP_BUF);
     let (os_in_r_slice2, rest2) = rest2.split_at_mut(MAX_RESAMP_BUF);
-    let (os_model_l_slice2, os_model_r_slice2) = rest2.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice2, rest2) = rest2.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice2, rest2) = rest2.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l2, crossfade_scratch_r2) = rest2.split_at_mut(MAX_RESAMP_BUF);
 
     let bufs2 = DspBuffers {
         resamp_mid_l: &mut resamp_mid_l,
@@ -475,6 +493,8 @@ fn test_hotpath_dropped_frames() {
         os_in_r: os_in_r_slice2,
         os_model_l: os_model_l_slice2,
         os_model_r: os_model_r_slice2,
+        crossfade_scratch_l: crossfade_scratch_l2,
+        crossfade_scratch_r: crossfade_scratch_r2,
     };
 
     let _guard = TrackingGuard::new();

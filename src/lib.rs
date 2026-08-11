@@ -53,7 +53,6 @@
 //! |                  |         | perceptual metrics (`testing` module).                             |
 //! | `heap-audit`     | No      | Enables heap-allocation auditing infrastructure.                   |
 //! | `long_bench`     | No      | Enables long-form inference benchmarks.                            |
-//! | `pgo`            | No      | Build with PGO (Profile-Guided Optimization) support.              |
 //! | `dynamic-engine` | No      | Enables generic dynamic-dimension fallback execution paths for     |
 //! |                  |         | arbitrary non-standard model topologies.                           |
 //!

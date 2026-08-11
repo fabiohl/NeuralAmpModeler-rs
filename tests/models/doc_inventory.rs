@@ -107,7 +107,6 @@ fn extract_feature_refs(text: &str) -> HashSet<String> {
         "testing",
         "heap-audit",
         "long_bench",
-        "pgo",
         "dynamic-engine",
     ];
     let lower = text.to_lowercase();

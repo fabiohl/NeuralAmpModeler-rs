@@ -14,6 +14,23 @@ use crate::math::common::{
 use super::super::sinc_kernel::{NUM_PHASES, PolyphaseBank};
 use super::delay_line::DelayLine;
 
+/// Progress returned by a single resampler processing call.
+///
+/// - `samples_read`: number of input samples consumed (in each of L/R).
+/// - `samples_written`: number of output samples produced (in each of L/R).
+///
+/// When the output buffer fills before all input is consumed, `samples_read` may
+/// be less than the input length. Unconsumed input is NOT pushed to the delay lines
+/// and the resampler state (`phase_accum`, delay lines) remains exactly at the
+/// point of suspension — ready for the next call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResamplerProgress {
+    /// Number of input samples consumed (per L/R channel).
+    pub samples_read: usize,
+    /// Number of output samples produced (per L/R channel).
+    pub samples_written: usize,
+}
+
 /// Resampling engine for one direction (input or output).
 ///
 /// Contains the polyphase bank and the fractional state for tracking
@@ -65,14 +82,16 @@ impl ResamplerCore {
 
     /// Processes a stereo block. RT-safe: zero allocations.
     ///
-    /// Returns the number of samples written to `out_l` / `out_r`.
+    /// Returns `ResamplerProgress` with samples read and written.
+    /// When the output buffer fills, processing stops immediately
+    /// without consuming remaining input or mutating state.
     fn process_internal<M: SimdMath>(
         &mut self,
         in_l: &[f32],
         in_r: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let n_in = in_l.len().min(in_r.len());
         let n_out_max = out_l.len().min(out_r.len());
         let mut in_idx = 0usize;
@@ -83,12 +102,11 @@ impl ResamplerCore {
         while out_idx < n_out_max {
             while self.phase_accum >= num_phases_fp {
                 if in_idx >= n_in {
-                    return out_idx;
+                    return ResamplerProgress {
+                        samples_read: in_idx,
+                        samples_written: out_idx,
+                    };
                 }
-                // SAFETY: `in_idx < n_in` is checked immediately above
-                // on L78. The while-loop condition ensures we only
-                // enter the body when `phase_accum >= num_phases_fp`,
-                // and `in_idx` is only incremented after push.
                 unsafe {
                     self.state_l.push(*in_l.get_unchecked(in_idx));
                     self.state_r.push(*in_r.get_unchecked(in_idx));
@@ -109,13 +127,6 @@ impl ResamplerCore {
             };
 
             let (y_l, y_r) = unsafe {
-                // SAFETY: `phase_idx` and `phase_next` are in [0, NUM_PHASES)
-                // (guarded by the modulo on L95-99). `self.state_l.window_ptr()`
-                // and `self.state_r.window_ptr()` return pointers to internal
-                // delay-line buffers whose length ≥ `taps`, validated at
-                // construction time. `phase_ptr` returns a pointer into the
-                // pre-allocated polyphase coefficient bank (length
-                // `NUM_PHASES * taps_per_phase`).
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
                 let x_l = self.state_l.window_ptr();
@@ -126,10 +137,6 @@ impl ResamplerCore {
                 (y0_l + frac * (y1_l - y0_l), y0_r + frac * (y1_r - y0_r))
             };
 
-            // SAFETY: `out_idx < n_out_max` is checked by the outer
-            // while-loop on L77. Both `out_l` and `out_r` have length
-            // ≥ `n_out_max` (L71). No other mutable access to these
-            // buffers exists during the loop.
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_r;
@@ -139,30 +146,23 @@ impl ResamplerCore {
             self.phase_accum += self.phase_step;
         }
 
-        while self.phase_accum >= num_phases_fp && in_idx < n_in {
-            // SAFETY: `in_idx < n_in` is checked in the while-loop
-            // condition. The loop body executes at most `n_in - in_idx`
-            // times, draining the remaining samples.
-            unsafe {
-                self.state_l.push(*in_l.get_unchecked(in_idx));
-                self.state_r.push(*in_r.get_unchecked(in_idx));
-            }
-            self.phase_accum -= num_phases_fp;
-            in_idx += 1;
+        ResamplerProgress {
+            samples_read: in_idx,
+            samples_written: out_idx,
         }
-
-        out_idx
     }
 
     /// Processes a mono block. RT-safe: zero allocations.
     ///
-    /// Returns the number of samples written to `out_l` / `out_r`.
+    /// Returns `ResamplerProgress` with samples read and written.
+    /// When the output buffer fills, processing stops immediately
+    /// without consuming remaining input or mutating state.
     fn process_internal_mono<M: SimdMath>(
         &mut self,
         in_l: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let n_in = in_l.len();
         let n_out_max = out_l.len().min(out_r.len());
         let mut in_idx = 0usize;
@@ -173,11 +173,11 @@ impl ResamplerCore {
         while out_idx < n_out_max {
             while self.phase_accum >= num_phases_fp {
                 if in_idx >= n_in {
-                    return out_idx;
+                    return ResamplerProgress {
+                        samples_read: in_idx,
+                        samples_written: out_idx,
+                    };
                 }
-                // SAFETY: `in_idx < n_in` is checked immediately above.
-                // The loop body only executes after the while condition
-                // is satisfied, and `in_idx` is incremented after each push.
                 unsafe {
                     self.state_l.push(*in_l.get_unchecked(in_idx));
                 }
@@ -197,9 +197,6 @@ impl ResamplerCore {
             };
 
             let y_l = unsafe {
-                // SAFETY: `phase_idx` and `phase_next` are in [0, NUM_PHASES).
-                // `window_ptr` and `phase_ptr` return pointers to
-                // pre-allocated, valid buffers whose length ≥ `taps`.
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
                 let x_l = self.state_l.window_ptr();
@@ -209,10 +206,6 @@ impl ResamplerCore {
                 y0_l + frac * (y1_l - y0_l)
             };
 
-            // SAFETY: `out_idx < n_out_max` is checked by the outer
-            // while-loop on L149. Both `out_l` and `out_r` have length
-            // ≥ `n_out_max` (L143). Mono path writes the same sample
-            // to both channels.
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_l;
@@ -222,17 +215,10 @@ impl ResamplerCore {
             self.phase_accum += self.phase_step;
         }
 
-        while self.phase_accum >= num_phases_fp && in_idx < n_in {
-            // SAFETY: `in_idx < n_in` is checked in the while-loop
-            // condition. Mono path only pushes to the left channel.
-            unsafe {
-                self.state_l.push(*in_l.get_unchecked(in_idx));
-            }
-            self.phase_accum -= num_phases_fp;
-            in_idx += 1;
+        ResamplerProgress {
+            samples_read: in_idx,
+            samples_written: out_idx,
         }
-
-        out_idx
     }
 
     /// Performs ISA-dispatched static stereo resampling.
@@ -243,7 +229,7 @@ impl ResamplerCore {
         in_r: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         match effective_instruction_set() {
             InstructionSet::Avx2 => self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r),
             InstructionSet::Avx512 => self.process_internal::<Avx512Math>(in_l, in_r, out_l, out_r),
@@ -260,7 +246,7 @@ impl ResamplerCore {
         in_l: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         match effective_instruction_set() {
             InstructionSet::Avx2 => self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r),
             InstructionSet::Avx512 => self.process_internal_mono::<Avx512Math>(in_l, out_l, out_r),

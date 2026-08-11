@@ -16,7 +16,13 @@ pub const MAX_BRIDGE_BUF: usize = 8192;
 /// **RT Safety Contract**: This value determines the size of pre-allocated buffers
 /// in `DspPipelineContext`. Increasing this value impacts the size of the processing
 /// closure object (which must fit on the RT thread stack or be moved to the heap).
-/// Currently fixed at 4096 samples (16 KiB per channel).
+/// Currently fixed at 8192 samples (32 KiB per channel).
+///
+/// **Ratio-Aware Safety**: The resampler may produce more output than input during
+/// upsampling (e.g. 44100→48000 Hz). The inference pipeline handles this via
+/// internal chunking: input is sliced into blocks bounded by
+/// `NamResampler::max_input_samples(MAX_RESAMP_BUF, host_rate, nam_rate)`,
+/// ensuring no buffer overflow even at maximum host quantum.
 pub const MAX_RESAMP_BUF: usize = 8192;
 
 /// Individual audio buffer for the DspBridge (double-buffer).
@@ -102,7 +108,7 @@ impl BridgeRef {
 pub struct DspBridgeWriter(std::ptr::NonNull<DspBridge>);
 
 /// SAFETY: DspBridgeWriter owns a `NonNull<DspBridge>` that points to a heap-immortal
-/// allocation (Box::leak in standalone mode, or CLAP plugin lifecycle memory).
+/// allocation (Box::leak in standalone mode, or host/plugin lifecycle memory).
 /// The capture thread has exclusive write access to the back-buffer; the playback
 /// thread only reads the active front-buffer. All synchronization uses atomic
 /// ordering (Release/Acquire). Sending between threads for initialization is safe.
@@ -227,7 +233,7 @@ impl DspBridgeWriter {
 pub struct DspBridgeReader(std::ptr::NonNull<DspBridge>);
 
 /// SAFETY: DspBridgeReader owns a `NonNull<DspBridge>` pointing to a heap-immortal
-/// allocation (same lifecycle as DspBridgeWriter — Box::leaked or CLAP plugin memory).
+/// allocation (same lifecycle as DspBridgeWriter — Box::leaked or host/plugin memory).
 /// The playback thread has exclusive read access to the active front-buffer (indicated
 /// by `active_read_idx`) while the capture thread writes the back-buffer. All
 /// synchronization uses atomic ordering. Sending between threads for init is safe.

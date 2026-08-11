@@ -72,7 +72,7 @@ impl ParamSmoother {
                 // Fade-to-zero guard (RT-Safety §2.1).
                 //
                 // With DAZ/FTZ active in MXCSR (set at boot and periodically
-                // reaffirmed in the CLAP processor), actual f32 subnormals
+                // reaffirmed by the host/runtime processor), actual f32 subnormals
                 // (abs < ~1.18e-38) are never created — FPU hardware flushes
                 // them to zero automatically.  Therefore this check is not
                 // about denormal protection (which DAZ/FTZ already provides).

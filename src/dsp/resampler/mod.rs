@@ -52,6 +52,8 @@ mod delay_line;
 
 use core::ResamplerCore;
 
+pub use core::ResamplerProgress;
+
 /// RT-safe wrapper for bidirectional Minimum-Phase Polyphase Sinc FIR resampling.
 ///
 /// Encapsulates two independent pre-allocated engines (input + output).
@@ -240,26 +242,85 @@ impl NamResampler {
         (delay_in + delay_out).round() as u32
     }
 
+    /// Computes the minimum guaranteed output buffer size that accommodates
+    /// all output samples produced when consuming `input_samples` at the
+    /// given sample rates, including worst-case fractional phase offset
+    /// and tail-phase drain.
+    ///
+    /// Uses integer arithmetic only (`checked_mul`, `div_ceil`) with zero
+    /// heap allocations. Overflow saturates at `usize::MAX`.
+    ///
+    /// Consumer-neutral capacity helper (host-agnostic).
+    ///
+    /// # Parameters
+    /// - `input_samples`: number of input samples to be processed.
+    /// - `in_rate`: input sample rate (Hz).
+    /// - `out_rate`: output sample rate (Hz).
+    #[inline]
+    pub fn min_output_samples(input_samples: usize, in_rate: u32, out_rate: u32) -> usize {
+        let numer = if let Some(v) = (input_samples as u64).checked_mul(out_rate as u64) {
+            v
+        } else {
+            return usize::MAX;
+        };
+        let denom = in_rate as u64;
+        let min = numer.div_ceil(denom);
+        if min > usize::MAX as u64 {
+            usize::MAX
+        } else {
+            min as usize
+        }
+    }
+
+    /// Computes the maximum number of input samples that can be safely
+    /// processed without exceeding `output_capacity` output buffer samples,
+    /// given the sample rates.
+    ///
+    /// Uses integer arithmetic only (`checked_mul`, `div_ceil`) with zero
+    /// heap allocations. Overflow saturates at `usize::MAX`.
+    ///
+    /// Consumer-neutral capacity helper (host-agnostic).
+    ///
+    /// # Parameters
+    /// - `output_capacity`: available output buffer size (samples).
+    /// - `in_rate`: input sample rate (Hz).
+    /// - `out_rate`: output sample rate (Hz).
+    #[inline]
+    pub fn max_input_samples(output_capacity: usize, in_rate: u32, out_rate: u32) -> usize {
+        let numer = if let Some(v) = (output_capacity as u64).checked_mul(in_rate as u64) {
+            v
+        } else {
+            return usize::MAX;
+        };
+        let denom = out_rate as u64;
+        let max = numer / denom;
+        if max > usize::MAX as u64 {
+            usize::MAX
+        } else {
+            max as usize
+        }
+    }
+
     /// **Input resampling** (input path): `host_rate → nam_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
-    ///
-    /// # Returns
-    /// Number of samples written to `out_l` / `out_r`.
     pub fn process_input(
         &mut self,
         in_l: &[f32],
         in_r: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let Some(ref mut core) = self.inner else {
             let n = in_l.len().min(in_r.len()).min(out_l.len()).min(out_r.len());
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_r.as_ptr(), out_r.as_mut_ptr(), n);
             }
-            return n;
+            return ResamplerProgress {
+                samples_read: n,
+                samples_written: n,
+            };
         };
         core.process_static_stereo(in_l, in_r, out_l, out_r)
     }
@@ -267,23 +328,23 @@ impl NamResampler {
     /// **Output resampling** (output path): `nam_rate → host_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
-    ///
-    /// # Returns
-    /// Number of samples written to `out_l` / `out_r`.
     pub fn process_output(
         &mut self,
         in_l: &[f32],
         in_r: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let Some(ref mut core) = self.outer else {
             let n = in_l.len().min(in_r.len()).min(out_l.len()).min(out_r.len());
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_r.as_ptr(), out_r.as_mut_ptr(), n);
             }
-            return n;
+            return ResamplerProgress {
+                samples_read: n,
+                samples_written: n,
+            };
         };
         core.process_static_stereo(in_l, in_r, out_l, out_r)
     }
@@ -291,22 +352,22 @@ impl NamResampler {
     /// **Mono input resampling** (input path): `host_rate → nam_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
-    ///
-    /// # Returns
-    /// Number of samples written to `out_l` / `out_r`.
     pub fn process_input_mono(
         &mut self,
         in_l: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let Some(ref mut core) = self.inner else {
             let n = in_l.len().min(out_l.len()).min(out_r.len());
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_r.as_mut_ptr(), n);
             }
-            return n;
+            return ResamplerProgress {
+                samples_read: n,
+                samples_written: n,
+            };
         };
         core.process_static_mono(in_l, out_l, out_r)
     }
@@ -314,22 +375,22 @@ impl NamResampler {
     /// **Mono output resampling** (output path): `nam_rate → host_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
-    ///
-    /// # Returns
-    /// Number of samples written to `out_l` / `out_r`.
     pub fn process_output_mono(
         &mut self,
         in_l: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
-    ) -> usize {
+    ) -> ResamplerProgress {
         let Some(ref mut core) = self.outer else {
             let n = in_l.len().min(out_l.len()).min(out_r.len());
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_r.as_mut_ptr(), n);
             }
-            return n;
+            return ResamplerProgress {
+                samples_read: n,
+                samples_written: n,
+            };
         };
         core.process_static_mono(in_l, out_l, out_r)
     }

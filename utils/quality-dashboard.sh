@@ -358,12 +358,50 @@ run_quick_parity() {
 }
 
 # ── Run: regression_gate benchmarks ────────────────────────────────────────
+# Invokes the performance regression gate (tests-performance-regression.sh --check)
+# which validates fingerprint compatibility before running benchmarks.
+# INCOMPARABLE_ENVIRONMENT failures are decoupled from fidelity gates —
+# the dashboard continues reporting audio fidelity independently.
+BENCH_ENV_INCOMPARABLE=0
 
 run_benchmarks() {
     local start_t end_t
     start_t=$(date +%s%N)
-    run_dashboard_phase "regression_gate" 10 \
-        "cargo bench --bench regression_gate --features testing > \"$LOGDIR/regression_gate.log\" 2>&1"
+
+    local reg_script="$PROJECT_DIR/utils/tests-performance-regression.sh"
+    local bench_log="$LOGDIR/regression_gate.log"
+
+    if [ -x "$reg_script" ]; then
+        set +e
+        "$reg_script" --check > "$bench_log" 2>&1
+        local reg_exit=$?
+        set -e
+
+        if grep -qi 'INCOMPARABLE_ENVIRONMENT' "$bench_log" 2>/dev/null; then
+            BENCH_ENV_INCOMPARABLE=1
+            echo -e "  ${YELLOW}⚠ INCOMPARABLE_ENVIRONMENT${NC} benchmark environment diverges from baseline"
+            echo -e "  ${YELLOW}  Fidelity gates proceed independently.${NC}"
+            dashboard_phase_receipt "regression_gate" "SKIP_CAPABILITY" 0 0 10 "INCOMPARABLE_ENVIRONMENT"
+        elif [ "$reg_exit" -ne 0 ]; then
+            DASHBOARD_PHASE_HAD_FAILURE=1
+            dashboard_phase_receipt "regression_gate" "FAIL" "$reg_exit" 0 10 "Performance regression check failed"
+            echo -e "  ${RED}✗${NC} regression_gate check failed (exit=${reg_exit})"
+        else
+            dashboard_phase_receipt "regression_gate" "PASS" 0 10 10 ""
+            echo -e "  ${GREEN}ok${NC} regression_gate passed — no performance regression"
+        fi
+
+        # Copy Criterion benchmark output from the regression script's log
+        # so parse_benchmarks() can extract individual latency measurements.
+        local criterion_log="target/logs/regression-check.log"
+        if [ -f "$criterion_log" ]; then
+            cp "$criterion_log" "$bench_log"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ regression script not found at $reg_script — skipping${NC}"
+        dashboard_phase_receipt "regression_gate" "SKIP_CAPABILITY" 0 0 10 "regression_script_missing"
+    fi
+
     end_t=$(date +%s%N)
     BENCH_DURATION_S=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
 }
@@ -1284,6 +1322,17 @@ render_performance() {
     echo "  Efficiency: µs per MMAC (mega-MACs) — lower is better"
     echo ""
 
+    if [ "${BENCH_ENV_INCOMPARABLE:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠ INCOMPARABLE_ENVIRONMENT${NC} — benchmark environment diverges from baseline."
+        echo -e "  ${YELLOW}  Performance comparison against baseline is not valid.${NC}"
+        echo -e "  ${YELLOW}  Fidelity gates (below) were validated independently.${NC}"
+        if [ ${#ALL_BENCH_NAMES[@]} -gt 0 ]; then
+            echo ""
+            echo -e "  ${YELLOW}  Raw measurements for reference (not comparable to baseline):${NC}"
+            echo ""
+        fi
+    fi
+
     if [ ${#ALL_BENCH_NAMES[@]} -eq 0 ]; then
         echo -e "  ${YELLOW}(i) Nenhum dado de performance disponivel.${NC}"
         echo ""
@@ -1744,6 +1793,11 @@ render_footer() {
     local bench_count="${#ALL_BENCH_NAMES[@]}"
     local phase_failures="${DASHBOARD_PHASE_HAD_FAILURE:-0}"
 
+    if [ "${BENCH_ENV_INCOMPARABLE:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠ Benchmark environment INCOMPARABLE — fidelity gates validated independently.${NC}"
+        echo ""
+    fi
+
     if [ "$phase_failures" -ne 0 ]; then
         echo -e "  ${RED}⚠ Uma ou mais fases do dashboard falharam (ver receipt: ${DASHBOARD_PHASE_RECEIPT}).${NC}"
         echo ""
@@ -2185,14 +2239,31 @@ main() {
     extract_test_counts
     render_dashboard
 
-    if [ -n "$SAVE_FILE" ]; then
-        render_dashboard_plain > "$SAVE_FILE"
-        echo -e "${GREEN}ok${NC} Dashboard salvo em: ${SAVE_FILE} (plain text, sem ANSI)"
-    fi
-
     local final_exit=0
     if [ "${DASHBOARD_PHASE_HAD_FAILURE:-0}" -ne 0 ]; then
         final_exit=1
+    fi
+
+    # --save: transactional atomic write — only promoted to the final
+    # file after all phases succeed (INCOMPARABLE benchmarks do not
+    # block saving; fidelity gates are validated independently).
+    # Automated/CI agents are strictly prohibited from invoking --save.
+    if [ -n "$SAVE_FILE" ]; then
+        local tmp_save
+        tmp_save="$(mktemp "$TMPDIR/nam-dashboard-save-XXXXXX")"
+        if render_dashboard_plain > "$tmp_save"; then
+            if [ "$final_exit" -eq 0 ]; then
+                mv "$tmp_save" "$SAVE_FILE"
+                echo -e "${GREEN}ok${NC} Dashboard salvo em: ${SAVE_FILE} (plain text, sem ANSI)"
+            else
+                rm -f "$tmp_save"
+                echo -e "${RED}✗${NC} Dashboard NOT saved: phase failure(s) detected (--save requires all phases to pass)"
+            fi
+        else
+            rm -f "$tmp_save"
+            echo -e "${RED}✗${NC} Dashboard save failed: render error"
+            final_exit=1
+        fi
     fi
 
     if [ -n "$CHECK_FILE" ]; then

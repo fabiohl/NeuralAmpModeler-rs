@@ -24,6 +24,8 @@ pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::
             ))
         })?;
 
+    let max_input_chunk = NamResampler::max_input_samples(MAX_RESAMP_BUF, input_rate, output_rate);
+
     let est_len =
         ((input.len() as f64 * output_rate as f64 / input_rate as f64).ceil() as usize) + 256;
     let mut output = Vec::with_capacity(est_len);
@@ -34,9 +36,11 @@ pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::
 
     let mut pos = 0usize;
     while pos < input.len() {
-        let chunk = (input.len() - pos).min(MAX_RESAMP_BUF);
+        let chunk = (input.len() - pos).min(max_input_chunk);
         in_buf[..chunk].copy_from_slice(&input[pos..pos + chunk]);
-        let written = resampler.process_input_mono(&in_buf[..chunk], &mut out_l, &mut out_r);
+        let written = resampler
+            .process_input_mono(&in_buf[..chunk], &mut out_l, &mut out_r)
+            .samples_written;
         output.extend_from_slice(&out_l[..written]);
         pos += chunk;
     }
@@ -44,7 +48,9 @@ pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::
     in_buf.fill(0.0);
     let flush_iters = TAPS_PER_PHASE * 2;
     for _ in 0..flush_iters {
-        let written = resampler.process_input_mono(&in_buf, &mut out_l, &mut out_r);
+        let written = resampler
+            .process_input_mono(&in_buf, &mut out_l, &mut out_r)
+            .samples_written;
         if written == 0 {
             break;
         }

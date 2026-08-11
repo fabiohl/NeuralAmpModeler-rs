@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.94.0"
 license = "Apache-2.0"
@@ -124,8 +124,6 @@ testing = []
 heap-audit = []
 # Enables long-form inference benchmarks.
 long_bench = []
-# Build with PGO (Profile-Guided Optimization) support.
-pgo = []
 # Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies.
 dynamic-engine = []
 

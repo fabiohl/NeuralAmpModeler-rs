@@ -43,45 +43,6 @@ source "$SCRIPT_DIR/_lib.sh"
 
 trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" failed at line $LINENO with status $?. Aborting.${NC}"; exit 1' ERR
 
-NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
-BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
-BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
-MODE="${1:---check}"
-
-BASELINE_DIR="target/performance-baselines"
-FINGERPRINT_FILE="${BASELINE_DIR}/baseline-fingerprint.json"
-CRITERION_BASELINE_TARGET="target/criterion"
-
-TASKSET=()
-if command -v taskset >/dev/null 2>&1; then
-    TASKSET=(taskset -c "${BENCH_CORE}")
-else
-    echo -e "  ${YELLOW}⚠ taskset not found — running without core pinning.${NC}"
-fi
-
-echo -e "${BLUE}${BOLD}  Performance Regression Gate${NC}"
-echo -e "  Core: ${YELLOW}${BENCH_CORE}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}"
-echo -e "${BLUE}${BOLD}  Estimated time: ± 2.0 minutes${NC}"
-
-# ── JSONL receipt infrastructure (T-E4.6-2) ──────────────────────────────────
-REGRESSION_RECEIPT_DIR="$PROJECT_DIR/target/logs"
-REGRESSION_RECEIPT="${REGRESSION_RECEIPT_DIR}/regression_phase_receipt.jsonl"
-mkdir -p "$REGRESSION_RECEIPT_DIR"
-: > "$REGRESSION_RECEIPT"
-DASHBOARD_PHASE_RECEIPT="$REGRESSION_RECEIPT"
-
-REGR_RUSTC_VER=$(rustc --version 2>/dev/null || echo 'unknown')
-REGR_TARGET_TRIPLE=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || echo 'unknown')
-REGR_CPU_MODEL=$(detect_cpu_model)
-REGR_CPU_MICROARCH=$(detect_cpu_microarch)
-REGR_FREQ_GOV=$(detect_freq_governor)
-REGR_GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
-
-printf '{"kind":"build_metadata","pipeline":"performance-regression","cargo_profile":"release","target_triple":"%s","rustflags":"%s","rustc_version":"%s","cpu_model":"%s","cpu_microarch":"%s","frequency_governor":"%s","git_commit":"%s","bench_core":"%s"}\n' \
-    "$REGR_TARGET_TRIPLE" "${RUSTFLAGS:-}" "$REGR_RUSTC_VER" "$REGR_CPU_MODEL" "$REGR_CPU_MICROARCH" \
-    "$REGR_FREQ_GOV" "$REGR_GIT_COMMIT" "$BENCH_CORE" >> "$REGRESSION_RECEIPT"
-
 # ── Environment detection helpers ───────────────────────────────────────────
 
 detect_cpu_model() {
@@ -101,7 +62,7 @@ detect_cpu_microarch() {
 }
 
 detect_physical_cores() {
-    grep -c '^cpu cores' /proc/cpuinfo 2>/dev/null | head -1 || echo "$NUM_CORES"
+    grep -m1 '^cpu cores' /proc/cpuinfo 2>/dev/null | awk '{print $4}' || echo "$NUM_CORES"
 }
 
 detect_freq_governor() {
@@ -116,7 +77,7 @@ detect_git_commit() {
 
 generate_fingerprint() {
     local cpu_model cpu_microarch phys_cores rustc_ver target_triple \
-          rustflags build_profile freq_gov git_commit
+          rustflags build_profile freq_gov git_commit bench_core
     cpu_model=$(detect_cpu_model)
     cpu_microarch=$(detect_cpu_microarch)
     phys_cores=$(detect_physical_cores)
@@ -126,6 +87,7 @@ generate_fingerprint() {
     build_profile="release"
     freq_gov=$(detect_freq_governor)
     git_commit=$(detect_git_commit)
+    bench_core="${BENCH_CORE}"
 
     mkdir -p "$BASELINE_DIR"
 
@@ -139,7 +101,8 @@ generate_fingerprint() {
   "rustflags": "$rustflags",
   "build_profile": "$build_profile",
   "frequency_governor": "$freq_gov",
-  "git_commit": "$git_commit"
+  "git_commit": "$git_commit",
+  "bench_core": "$bench_core"
 }
 FINGERPRINT
 }
@@ -154,20 +117,36 @@ compare_fingerprint() {
         return 1
     fi
 
-    local cpu_microarch_now rustc_now target_now rustflags_now freq_gov_now
+    local cpu_model_now cpu_microarch_now rustc_now target_now rustflags_now \
+          build_profile_now freq_gov_now bench_core_now
+    cpu_model_now=$(detect_cpu_model)
     cpu_microarch_now=$(detect_cpu_microarch)
     rustc_now=$(rustc --version 2>/dev/null || echo 'unknown')
     target_now=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || echo 'unknown')
     rustflags_now="${RUSTFLAGS:-}"
+    build_profile_now="release"
     freq_gov_now=$(detect_freq_governor)
+    bench_core_now="${BENCH_CORE}"
 
-    local stored_cpu_microarch stored_rustc stored_target stored_rustflags
+    local stored_cpu_model stored_cpu_microarch stored_build_profile \
+          stored_rustc stored_target stored_rustflags stored_freq_gov stored_bench_core
+    stored_cpu_model=$(sed -n 's/.*"cpu_model": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
     stored_cpu_microarch=$(sed -n 's/.*"cpu_microarchitecture": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
+    stored_build_profile=$(sed -n 's/.*"build_profile": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
     stored_rustc=$(sed -n 's/.*"rustc_version": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
     stored_target=$(sed -n 's/.*"target_triple": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
     stored_rustflags=$(sed -n 's/.*"rustflags": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
+    stored_freq_gov=$(sed -n 's/.*"frequency_governor": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
+    stored_bench_core=$(sed -n 's/.*"bench_core": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
 
     local incomparable=0
+
+    if [ "$cpu_model_now" != "$stored_cpu_model" ]; then
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} CPU model mismatch"
+        echo -e "    Baseline: ${YELLOW}$stored_cpu_model${NC}"
+        echo -e "    Current:  ${YELLOW}$cpu_model_now${NC}"
+        incomparable=1
+    fi
 
     if [ "$cpu_microarch_now" != "$stored_cpu_microarch" ]; then
         echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} CPU microarchitecture mismatch"
@@ -197,8 +176,28 @@ compare_fingerprint() {
         incomparable=1
     fi
 
+    if [ "$build_profile_now" != "$stored_build_profile" ]; then
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} build profile mismatch"
+        echo -e "    Baseline: ${YELLOW}$stored_build_profile${NC}"
+        echo -e "    Current:  ${YELLOW}$build_profile_now${NC}"
+        incomparable=1
+    fi
+
     if [ "$freq_gov_now" != "performance" ]; then
-        echo -e "  ${YELLOW}WARNING${NC} CPU frequency governor is '${freq_gov_now}' (recommended: 'performance')"
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} CPU frequency governor is '${freq_gov_now}' (baseline requires 'performance')"
+        incomparable=1
+    elif [ -n "$stored_freq_gov" ] && [ "$freq_gov_now" != "$stored_freq_gov" ]; then
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} frequency governor mismatch"
+        echo -e "    Baseline: ${YELLOW}$stored_freq_gov${NC}"
+        echo -e "    Current:  ${YELLOW}$freq_gov_now${NC}"
+        incomparable=1
+    fi
+
+    if [ -n "$stored_bench_core" ] && [ "$bench_core_now" != "$stored_bench_core" ]; then
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} bench_core pinning mismatch"
+        echo -e "    Baseline: ${YELLOW}$stored_bench_core${NC}"
+        echo -e "    Current:  ${YELLOW}$bench_core_now${NC}"
+        incomparable=1
     fi
 
     return $incomparable
@@ -314,16 +313,62 @@ check_regression() {
     dashboard_phase_receipt "regression_check" "PASS" 0 1 1 ""
 }
 
-case "$MODE" in
-    --bootstrap-baseline)
-        bootstrap_baseline
-        ;;
-    --check)
-        check_regression
-        ;;
-    *)
-        echo -e "${RED}Unknown mode: $MODE${NC}"
-        echo "Usage: $0 [--check|--bootstrap-baseline]"
-        exit 1
-        ;;
-esac
+# ── Main entry point ───────────────────────────────────────────────────────
+# All top-level logic is encapsulated here so that every helper function is
+# defined before its first invocation (hoisting), respecting set -euo pipefail.
+main() {
+    NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+    DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
+    BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
+    BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
+    MODE="${1:---check}"
+
+    BASELINE_DIR="target/performance-baselines"
+    FINGERPRINT_FILE="${BASELINE_DIR}/baseline-fingerprint.json"
+    CRITERION_BASELINE_TARGET="target/criterion"
+
+    TASKSET=()
+    if command -v taskset >/dev/null 2>&1; then
+        TASKSET=(taskset -c "${BENCH_CORE}")
+    else
+        echo -e "  ${YELLOW}⚠ taskset not found — running without core pinning.${NC}"
+    fi
+
+    echo -e "${BLUE}${BOLD}  Performance Regression Gate${NC}"
+    echo -e "  Core: ${YELLOW}${BENCH_CORE}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}"
+    echo -e "${BLUE}${BOLD}  Estimated time: ± 2.0 minutes${NC}"
+
+    # ── JSONL receipt infrastructure (T-E4.6-2) ────────────────────────────
+    REGRESSION_RECEIPT_DIR="$PROJECT_DIR/target/logs"
+    REGRESSION_RECEIPT="${REGRESSION_RECEIPT_DIR}/regression_phase_receipt.jsonl"
+    mkdir -p "$REGRESSION_RECEIPT_DIR"
+    : > "$REGRESSION_RECEIPT"
+    DASHBOARD_PHASE_RECEIPT="$REGRESSION_RECEIPT"
+
+    REGR_RUSTC_VER=$(rustc --version 2>/dev/null || echo 'unknown')
+    REGR_TARGET_TRIPLE=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || echo 'unknown')
+    REGR_CPU_MODEL=$(detect_cpu_model)
+    REGR_CPU_MICROARCH=$(detect_cpu_microarch)
+    REGR_FREQ_GOV=$(detect_freq_governor)
+    REGR_GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    printf '{"kind":"build_metadata","pipeline":"performance-regression","cargo_profile":"release","target_triple":"%s","rustflags":"%s","rustc_version":"%s","cpu_model":"%s","cpu_microarch":"%s","frequency_governor":"%s","git_commit":"%s","bench_core":"%s"}\n' \
+        "$REGR_TARGET_TRIPLE" "${RUSTFLAGS:-}" "$REGR_RUSTC_VER" "$REGR_CPU_MODEL" "$REGR_CPU_MICROARCH" \
+        "$REGR_FREQ_GOV" "$REGR_GIT_COMMIT" "$BENCH_CORE" >> "$REGRESSION_RECEIPT"
+
+    case "$MODE" in
+        --bootstrap-baseline)
+            bootstrap_baseline
+            ;;
+        --check)
+            check_regression
+            ;;
+        *)
+            echo -e "${RED}Unknown mode: $MODE${NC}"
+            echo "Usage: $0 [--check|--bootstrap-baseline]"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

@@ -297,7 +297,7 @@ impl DynamicHysteresis {
                 // Computes the volume "step" for each sound sample.
                 // NOTE: If n_samples = 1, step = (end - start) / 1.0.
                 // The resulting value will be applied to the single sample, which is the
-                // expected behavior for sample-accurate transitions in CLAP.
+                // expected behavior for sample-accurate transitions in host block subdivision.
                 let step = (end_mult - start_mult) / (n_samples as f32);
                 crate::math::dsp::gain::apply_ramp_simd(buffer, start_mult, step);
             }

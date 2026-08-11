@@ -150,15 +150,218 @@ fn run_v2_golden_test(
     }
 }
 
-/// Convenience: all 5 supported sample rates.
-const ALL_SR: &[u32] = &[44100, 48000, 88200, 96000, 192000];
+// =============================================================================
+// V2 Multi-SR Catalog — Single Source of Truth for Sample Rates per Model
+// =============================================================================
+//
+// This catalog mirrors the canonical CATALOG array in
+// tests/fixtures/golden_gen_build.sh. It is the single point of truth for
+// which sample rates each model/SKU supports in v2 golden vector tests.
+// No parallel lists (ALL_SR / SR_EX_192K / V2_EX_192K_MODELS) exist
+// elsewhere — every test consumer looks up its model here.
+//
+// Entry format: (nam_filename, golden_name_prefix, label, scope)
+//   scope ∈ { MultiSr, MultiSrEx192k, Sr48kOnly }
+//     MultiSr        — all 5 sample rates (44100, 48000, 88200, 96000, 192000)
+//     MultiSrEx192k  — all except 192k (LSTM recurrent drift over 5s stress)
+//     Sr48kOnly      — only 48000 Hz (model declares expected_sample_rate=48000
+//                       or C++ render tool rejects other SRs)
 
-/// All SRs except 192k (LSTM models exhibit significant recurrent drift at 192k
-/// over 5s stress signal — 960k uncompensated samples is an unrealistic extreme).
-const SR_EX_192K: &[u32] = &[44100, 48000, 88200, 96000];
+/// Sample-rate scope for v2 multi-SR golden vector tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SrScope {
+    MultiSr,
+    MultiSrEx192k,
+    Sr48kOnly,
+}
 
-/// Convenience: 48 kHz only (models with C++ render tool SR constraint).
-const SR_48K_ONLY: &[u32] = &[48000];
+/// Single catalog entry mapping a model file to its supported sample rates.
+#[expect(dead_code)]
+struct CatalogEntry {
+    nam_file: &'static str,
+    golden_name: &'static str,
+    label: &'static str,
+    scope: SrScope,
+}
+
+/// Backing sample-rate slices referenced by the catalog entries.
+const MULTI_SR_RATES: &[u32] = &[44100, 48000, 88200, 96000, 192000];
+const MULTI_SR_EX_192K_RATES: &[u32] = &[44100, 48000, 88200, 96000];
+const SR_48K_RATES: &[u32] = &[48000];
+
+/// Canonical v2 multi-SR catalog — single source of truth.
+///
+/// Kept in sync with the CATALOG array in `golden_gen_build.sh`.
+/// Models with `v2_scope=none` or `skip_reason` in the shell script are
+/// intentionally absent — their golden vectors are not generated.
+///
+/// When adding a new model here, also add it to the shell CATALOG.
+const V2_CATALOG: &[CatalogEntry] = &[
+    CatalogEntry {
+        nam_file: "BossWN-standard.nam",
+        golden_name: "golden_wavenet_standard",
+        label: "WaveNet Standard (CH=16)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "EVH-5150-Lite.nam",
+        golden_name: "golden_wavenet_lite",
+        label: "WaveNet Lite (CH=12)",
+        scope: SrScope::MultiSr,
+    },
+    CatalogEntry {
+        nam_file: "BossWN-feather.nam",
+        golden_name: "golden_wavenet_feather",
+        label: "WaveNet Feather (CH=8)",
+        scope: SrScope::MultiSr,
+    },
+    CatalogEntry {
+        nam_file: "BossWN-nano.nam",
+        golden_name: "golden_wavenet_nano",
+        label: "WaveNet Nano (CH=4)",
+        scope: SrScope::MultiSr,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_a1_standard.nam",
+        golden_name: "golden_wavenet_a1_standard",
+        label: "WaveNet A1 Standard (Official)",
+        scope: SrScope::MultiSr,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_official.nam",
+        golden_name: "golden_wavenet_official",
+        label: "WaveNet Official (CH=3, dynamic)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "BossLSTM-1x16.nam",
+        golden_name: "golden_lstm_1x16",
+        label: "LSTM 1×16",
+        scope: SrScope::MultiSrEx192k,
+    },
+    CatalogEntry {
+        nam_file: "BossLSTM-2x8.nam",
+        golden_name: "golden_lstm_2x8",
+        label: "LSTM 2×8",
+        scope: SrScope::MultiSrEx192k,
+    },
+    CatalogEntry {
+        nam_file: "lstm.nam",
+        golden_name: "golden_lstm_official",
+        label: "LSTM Official",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_a2_full.nam",
+        golden_name: "golden_wavenet_a2_full",
+        label: "WaveNet A2-Full (CH=8)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_a2_lite.nam",
+        golden_name: "golden_wavenet_a2_lite",
+        label: "WaveNet A2-Lite (CH=3)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_condition_dsp.nam",
+        golden_name: "golden_wavenet_condition_dsp",
+        label: "WaveNet Condition DSP (CH=3, cond=3, dynamic)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "wavenet_condition_lstm.nam",
+        golden_name: "golden_wavenet_condition_lstm",
+        label: "WaveNet Condition DSP LSTM (CH=3, cond=3, LSTM)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "a2_example.nam",
+        golden_name: "golden_a2_example",
+        label: "SlimmableContainer A2 Example (CH=3→6)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "APP-EVH-Stealth100-Dialled-xSTD.nam",
+        golden_name: "golden_wavenet_app_evh",
+        label: "APP EVH Stealth 100",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
+        golden_name: "golden_wavenet_boss_bd2",
+        label: "Boss BD-2 H2O Mod",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
+        golden_name: "golden_wavenet_slammin_marshall",
+        label: "SLAMMIN MARSHALL JTM 45",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "lstm_1x10.nam",
+        golden_name: "golden_lstm_1x10",
+        label: "LSTM 1×10 (uncat.)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "lstm_2x24.nam",
+        golden_name: "golden_lstm_2x24",
+        label: "LSTM 2×24 (uncat.)",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "lstm_3x8.nam",
+        golden_name: "golden_lstm_3x8",
+        label: "LSTM 3×8",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "convnet_nobn.nam",
+        golden_name: "golden_convnet_nobn",
+        label: "ConvNet No BatchNorm",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "convnet_relu.nam",
+        golden_name: "golden_convnet_relu",
+        label: "ConvNet ReLU",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "convnet_silu.nam",
+        golden_name: "golden_convnet_silu",
+        label: "ConvNet SiLU",
+        scope: SrScope::Sr48kOnly,
+    },
+    CatalogEntry {
+        nam_file: "linear_nobias.nam",
+        golden_name: "golden_linear_nobias",
+        label: "Linear No Bias",
+        scope: SrScope::Sr48kOnly,
+    },
+];
+
+/// Looks up the sample-rate slice for a model from the canonical V2_CATALOG.
+///
+/// Falls back to 48 kHz only with a warning if the model is not in the catalog.
+fn v2_sample_rates_for(nam_file: &str) -> &[u32] {
+    match V2_CATALOG.iter().find(|e| e.nam_file == nam_file) {
+        Some(entry) => match entry.scope {
+            SrScope::MultiSr => MULTI_SR_RATES,
+            SrScope::MultiSrEx192k => MULTI_SR_EX_192K_RATES,
+            SrScope::Sr48kOnly => SR_48K_RATES,
+        },
+        None => {
+            eprintln!(
+                "WARNING: {nam_file} not in V2_CATALOG — defaulting to 48 kHz only. \
+                 Add the model to the V2_CATALOG table in golden_vectors.rs."
+            );
+            SR_48K_RATES
+        }
+    }
+}
 
 // =============================================================================
 // Golden Vector Tests (Cross-Reference C++ ↔ Rust)
@@ -2198,7 +2401,7 @@ fn test_golden_vectors_v2_wavenet_standard() {
         "golden_wavenet_standard",
         "WaveNet Standard (CH=16)",
         "BossWN-standard",
-        SR_48K_ONLY,
+        v2_sample_rates_for("BossWN-standard.nam"),
         true,
     );
 }
@@ -2211,7 +2414,7 @@ fn test_golden_vectors_v2_wavenet_feather() {
         "golden_wavenet_feather",
         "WaveNet Feather (CH=8)",
         "BossWN-feather",
-        ALL_SR,
+        v2_sample_rates_for("BossWN-feather.nam"),
         true,
     );
 }
@@ -2224,7 +2427,7 @@ fn test_golden_vectors_v2_wavenet_nano() {
         "golden_wavenet_nano",
         "WaveNet Nano (CH=4)",
         "BossWN-nano",
-        ALL_SR,
+        v2_sample_rates_for("BossWN-nano.nam"),
         true,
     );
 }
@@ -2237,7 +2440,7 @@ fn test_golden_vectors_v2_wavenet_lite() {
         "golden_wavenet_lite",
         "WaveNet Lite (CH=12)",
         "EVH-5150-Lite",
-        ALL_SR,
+        v2_sample_rates_for("EVH-5150-Lite.nam"),
         true,
     );
 }
@@ -2250,7 +2453,7 @@ fn test_golden_vectors_v2_lstm_1x16() {
         "golden_lstm_1x16",
         "LSTM 1×16",
         "BossLSTM-1x16",
-        SR_EX_192K,
+        v2_sample_rates_for("BossLSTM-1x16.nam"),
         true,
     );
 }
@@ -2263,7 +2466,7 @@ fn test_golden_vectors_v2_app_evh() {
         "golden_wavenet_app_evh",
         "APP EVH Stealth 100",
         "APP-EVH-Stealth100-Dialled-xSTD",
-        ALL_SR,
+        v2_sample_rates_for("APP-EVH-Stealth100-Dialled-xSTD.nam"),
         true,
     );
 }
@@ -2276,7 +2479,7 @@ fn test_golden_vectors_v2_boss_bd2() {
         "golden_wavenet_boss_bd2",
         "Boss BD-2 H2O Mod",
         "Boss BD-2 H2O Mod T-12_00 G-12_00",
-        ALL_SR,
+        v2_sample_rates_for("Boss BD-2 H2O Mod T-12_00 G-12_00.nam"),
         true,
     );
 }
@@ -2289,7 +2492,7 @@ fn test_golden_vectors_v2_slammin_marshall() {
         "golden_wavenet_slammin_marshall",
         "SLAMMIN MARSHALL JTM 45",
         "SLAMMIN MARSHALL JTM 45 REISSUE",
-        ALL_SR,
+        v2_sample_rates_for("SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam"),
         true,
     );
 }
@@ -2302,7 +2505,7 @@ fn test_golden_vectors_v2_lstm_2x8() {
         "golden_lstm_2x8",
         "LSTM 2×8",
         "BossLSTM-2x8",
-        SR_EX_192K,
+        v2_sample_rates_for("BossLSTM-2x8.nam"),
         true,
     );
 }
@@ -2315,7 +2518,7 @@ fn test_golden_vectors_v2_wavenet_a1_standard() {
         "golden_wavenet_a1_standard",
         "WaveNet A1 Standard (Official)",
         "wavenet_a1_standard",
-        ALL_SR,
+        v2_sample_rates_for("wavenet_a1_standard.nam"),
         true,
     );
 }
@@ -2323,15 +2526,12 @@ fn test_golden_vectors_v2_wavenet_a1_standard() {
 #[test]
 #[ignore]
 fn test_golden_vectors_v2_wavenet_official() {
-    // The C++ render tool only generates `wavenet_official` at 48 kHz (the model's
-    // expected rate); golden_gen_build.sh skips the other SRs ("Input WAV sample
-    // rate does not match model expected rate (48000 Hz)"). Match lstm_official / A2.
     run_v2_golden_test(
         "wavenet_official.nam",
         "golden_wavenet_official",
         "WaveNet Official (CH=3, dynamic)",
         "wavenet_official",
-        SR_48K_ONLY,
+        v2_sample_rates_for("wavenet_official.nam"),
         true,
     );
 }
@@ -2344,7 +2544,7 @@ fn test_golden_vectors_v2_lstm_official() {
         "golden_lstm_official",
         "LSTM Official",
         "lstm (Official)",
-        SR_48K_ONLY,
+        v2_sample_rates_for("lstm.nam"),
         true,
     );
 }
@@ -2357,7 +2557,7 @@ fn test_golden_vectors_v2_wavenet_a2_full() {
         "golden_wavenet_a2_full",
         "WaveNet A2-Full (CH=8)",
         "wavenet_a2_full",
-        SR_48K_ONLY,
+        v2_sample_rates_for("wavenet_a2_full.nam"),
         true,
     );
 }
@@ -2370,7 +2570,7 @@ fn test_golden_vectors_v2_wavenet_a2_lite() {
         "golden_wavenet_a2_lite",
         "WaveNet A2-Lite (CH=3)",
         "wavenet_a2_lite",
-        SR_48K_ONLY,
+        v2_sample_rates_for("wavenet_a2_lite.nam"),
         true,
     );
 }
@@ -2383,7 +2583,7 @@ fn test_golden_vectors_v2_wavenet_condition_dsp() {
         "golden_wavenet_condition_dsp",
         "WaveNet Condition DSP (CH=3, cond=3, dynamic)",
         "wavenet_condition_dsp",
-        SR_48K_ONLY,
+        v2_sample_rates_for("wavenet_condition_dsp.nam"),
         true,
     );
 }
@@ -2396,7 +2596,7 @@ fn test_golden_vectors_v2_wavenet_condition_lstm() {
         "golden_wavenet_condition_lstm",
         "WaveNet Condition DSP LSTM (CH=3, cond=3, LSTM)",
         "wavenet_condition_lstm",
-        SR_48K_ONLY,
+        v2_sample_rates_for("wavenet_condition_lstm.nam"),
         true,
     );
 }
@@ -2413,7 +2613,7 @@ fn test_golden_vectors_v2_lstm_1x10() {
         "golden_lstm_1x10",
         "LSTM 1×10 (uncat., v2)",
         "lstm_1x10",
-        SR_48K_ONLY,
+        v2_sample_rates_for("lstm_1x10.nam"),
         false,
     );
 }
@@ -2430,7 +2630,7 @@ fn test_golden_vectors_v2_lstm_2x24() {
         "golden_lstm_2x24",
         "LSTM 2×24 (uncat., v2)",
         "lstm_2x24",
-        SR_48K_ONLY,
+        v2_sample_rates_for("lstm_2x24.nam"),
         false,
     );
 }
@@ -2444,7 +2644,7 @@ fn test_golden_vectors_v2_lstm_3x8() {
         "golden_lstm_3x8",
         "LSTM 3×8 (v2)",
         "lstm_3x8",
-        SR_48K_ONLY,
+        v2_sample_rates_for("lstm_3x8.nam"),
         true,
     );
 }
@@ -2458,7 +2658,7 @@ fn test_golden_vectors_v2_convnet_nobn() {
         "golden_convnet_nobn",
         "ConvNet No BatchNorm (v2)",
         "convnet_nobn",
-        SR_48K_ONLY,
+        v2_sample_rates_for("convnet_nobn.nam"),
         true,
     );
 }
@@ -2475,7 +2675,7 @@ fn test_golden_vectors_v2_convnet_relu() {
         "golden_convnet_relu",
         "ConvNet ReLU (v2)",
         "convnet_relu",
-        SR_48K_ONLY,
+        v2_sample_rates_for("convnet_relu.nam"),
         false,
     );
 }
@@ -2489,7 +2689,7 @@ fn test_golden_vectors_v2_convnet_silu() {
         "golden_convnet_silu",
         "ConvNet SiLU (v2)",
         "convnet_silu",
-        SR_48K_ONLY,
+        v2_sample_rates_for("convnet_silu.nam"),
         true,
     );
 }
@@ -2503,7 +2703,7 @@ fn test_golden_vectors_v2_linear_nobias() {
         "golden_linear_nobias",
         "Linear No Bias (v2)",
         "linear_nobias",
-        SR_48K_ONLY,
+        v2_sample_rates_for("linear_nobias.nam"),
         true,
     );
 }

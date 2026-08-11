@@ -169,10 +169,12 @@ mod tests {
                 conv: None,
             };
 
-            let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+            let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
             let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
             let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-            let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
             let bufs = DspBuffers {
                 resamp_mid_l: &mut resamp_mid_l,
@@ -185,6 +187,8 @@ mod tests {
                 os_in_r: os_in_r_slice,
                 os_model_l: os_model_l_slice,
                 os_model_r: os_model_r_slice,
+                crossfade_scratch_l,
+                crossfade_scratch_r,
             };
             capture_dsp_pipeline(
                 &mut samples_l,
@@ -248,10 +252,12 @@ mod tests {
                 conv: None,
             };
 
-            let mut os_buf: [f32; MAX_RESAMP_BUF * 4] = [0.0f32; MAX_RESAMP_BUF * 4];
+            let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
             let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
             let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
-            let (os_model_l_slice, os_model_r_slice) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+            let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
 
             let bufs = DspBuffers {
                 resamp_mid_l: &mut resamp_mid_l,
@@ -264,6 +270,8 @@ mod tests {
                 os_in_r: os_in_r_slice,
                 os_model_l: os_model_l_slice,
                 os_model_r: os_model_r_slice,
+                crossfade_scratch_l,
+                crossfade_scratch_r,
             };
 
             capture_dsp_pipeline(

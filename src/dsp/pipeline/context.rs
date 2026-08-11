@@ -83,4 +83,9 @@ pub struct DspBuffers<'a> {
     pub os_model_l: &'a mut [f32],
     /// Oversampled model output buffer for right channel (post-neural model, 2× or 4× host rate).
     pub os_model_r: &'a mut [f32],
+    /// Scratch buffer for WaveNet crossfade second-pass output in inference stage,
+    /// used when processing is chunked to avoid overlap with accumulated output.
+    pub crossfade_scratch_l: &'a mut [f32],
+    /// Scratch buffer for WaveNet crossfade second-pass output (right channel).
+    pub crossfade_scratch_r: &'a mut [f32],
 }

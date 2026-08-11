@@ -453,7 +453,7 @@ fn asr_aggregate_across_pitches() {
 /// Run this test when models change or Sprint S5 begins:
 ///
 /// ```bash
-/// cargo test --test spectral_fidelity generate_spectral_fidelity_baseline -- --ignored --nocapture
+/// cargo test --test models spectral_fidelity::generate_spectral_fidelity_baseline -- --ignored --nocapture
 /// ```
 #[test]
 #[ignore = "generates baseline fixture — run manually when models change"]
@@ -622,7 +622,7 @@ fn validate_model_against_baseline(filename: &str, label: &str, sr: u32) {
     let fixture_entry = fixture.models.get(label).unwrap_or_else(|| {
         panic!(
             "{label}: not found in baseline fixture. \
-             Run 'cargo test --test spectral_fidelity generate_spectral_fidelity_baseline -- --ignored' to regenerate."
+             Run 'cargo test --test models spectral_fidelity::generate_spectral_fidelity_baseline -- --ignored' to regenerate."
         )
     });
 

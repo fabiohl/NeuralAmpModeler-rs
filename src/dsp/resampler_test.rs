@@ -14,22 +14,30 @@ fn test_bypass_asymmetric_buffers() {
     let mut out_full = [0.0f32; 8];
     let mut out_short = [0.0f32; 3];
 
-    let n = rs.process_input(&in_full, &in_short, &mut out_full, &mut out_short);
+    let n = rs
+        .process_input(&in_full, &in_short, &mut out_full, &mut out_short)
+        .samples_written;
     assert_eq!(n, 3);
     assert_eq!(&out_full[..3], &in_full[..3]);
     assert_eq!(&out_short[..3], &in_short[..3]);
 
-    let n = rs.process_input(&in_short, &in_full, &mut out_full, &mut out_short);
+    let n = rs
+        .process_input(&in_short, &in_full, &mut out_full, &mut out_short)
+        .samples_written;
     assert_eq!(n, 3);
     assert_eq!(&out_full[..3], &in_short[..3]);
     assert_eq!(&out_short[..3], &in_full[..3]);
 
-    let n = rs.process_output(&in_full, &in_short, &mut out_full, &mut out_short);
+    let n = rs
+        .process_output(&in_full, &in_short, &mut out_full, &mut out_short)
+        .samples_written;
     assert_eq!(n, 3);
     assert_eq!(&out_full[..3], &in_full[..3]);
     assert_eq!(&out_short[..3], &in_short[..3]);
 
-    let n = rs.process_output(&in_short, &in_full, &mut out_full, &mut out_short);
+    let n = rs
+        .process_output(&in_short, &in_full, &mut out_full, &mut out_short)
+        .samples_written;
     assert_eq!(n, 3);
     assert_eq!(&out_full[..3], &in_short[..3]);
     assert_eq!(&out_short[..3], &in_full[..3]);
@@ -45,12 +53,16 @@ fn test_bypass_48k() {
     let mut output = [0.0f32; 5];
     let mut output_r = [0.0f32; 5];
 
-    let n = rs.process_input(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_input(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
     assert_eq!(n, 5);
     assert_eq!(output, input, "bypass must copy exactly L");
     assert_eq!(output_r, input_r, "bypass must copy exactly R");
 
-    let n2 = rs.process_output(&input, &input_r, &mut output, &mut output_r);
+    let n2 = rs
+        .process_output(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
     assert_eq!(n2, 5);
     assert_eq!(output, input);
     assert_eq!(output_r, input_r);
@@ -66,7 +78,9 @@ fn test_downsample_96k_to_48k() {
     let input_r = vec![0.5f32; chunk];
     let mut output = vec![0.0f32; chunk * 2];
     let mut output_r = vec![0.0f32; chunk * 2];
-    let n = rs.process_input(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_input(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
 
     let expected_approx = chunk / 2;
     assert!(
@@ -85,7 +99,9 @@ fn test_upsample_44k_to_48k() {
     let input_r = vec![0.3f32; chunk];
     let mut output = vec![0.0f32; chunk * 2];
     let mut output_r = vec![0.0f32; chunk * 2];
-    let n = rs.process_input(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_input(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
 
     let expected_approx = (chunk as f64 * 48_000.0 / 44_100.0) as usize;
     assert!(
@@ -104,7 +120,9 @@ fn test_output_upsample_48k_to_96k() {
     let input_r = vec![0.4f32; inner_out_size];
     let mut output = vec![0.0f32; chunk * 2];
     let mut output_r = vec![0.0f32; chunk * 2];
-    let n = rs.process_output(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_output(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
 
     let expected_approx = inner_out_size * 2;
     assert!(
@@ -136,14 +154,18 @@ fn test_roundtrip_96k() {
 
         let mut mid = vec![0.0f32; chunk];
         let mut mid_r = vec![0.0f32; chunk];
-        let n_mid = rs.process_input(blk_l, blk_r, &mut mid, &mut mid_r);
+        let n_mid = rs
+            .process_input(blk_l, blk_r, &mut mid, &mut mid_r)
+            .samples_written;
         total_mid += n_mid;
         mid_energy_sum += mid[..n_mid].iter().map(|x| x * x).sum::<f32>();
 
         if n_mid > 0 {
             let mut out = vec![0.0f32; chunk * 2];
             let mut out_r = vec![0.0f32; chunk * 2];
-            let n_out = rs.process_output(&mid[..n_mid], &mid_r[..n_mid], &mut out, &mut out_r);
+            let n_out = rs
+                .process_output(&mid[..n_mid], &mid_r[..n_mid], &mut out, &mut out_r)
+                .samples_written;
             total_out += n_out;
             out_energy_sum += out[..n_out].iter().map(|x| x * x).sum::<f32>();
         }
@@ -184,7 +206,9 @@ fn test_impulse_response_input() {
 
     let mut output = vec![0.0f32; chunk];
     let mut output_r = vec![0.0f32; chunk];
-    let n = rs.process_input(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_input(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
     assert!(n > 0);
 
     let energy: f32 = output[..n].iter().map(|x| x * x).sum();
@@ -209,7 +233,9 @@ fn test_impulse_response_output() {
 
     let mut output = vec![0.0f32; chunk];
     let mut output_r = vec![0.0f32; chunk];
-    let n = rs.process_output(&input, &input_r, &mut output, &mut output_r);
+    let n = rs
+        .process_output(&input, &input_r, &mut output, &mut output_r)
+        .samples_written;
     assert!(n > 0);
 
     let energy: f32 = output[..n].iter().map(|x| x * x).sum();
@@ -234,7 +260,9 @@ fn test_phase_accum_underflow_guard() {
     let mut out_l = [0.0f32; 64];
     let mut out_r = [0.0f32; 64];
 
-    let n = core.process_static_stereo(&in_l, &in_r, &mut out_l, &mut out_r);
+    let n = core
+        .process_static_stereo(&in_l, &in_r, &mut out_l, &mut out_r)
+        .samples_written;
     assert!(n > 0);
 }
 
@@ -260,7 +288,9 @@ fn test_resampler_micro_soak() {
         let mut rs = NamResampler::new(from, to, chunk_size).unwrap();
 
         for _ in 0..n_iterations {
-            let n = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+            let n = rs
+                .process_input(&in_l, &in_r, &mut out_l, &mut out_r)
+                .samples_written;
 
             for i in 0..n {
                 assert!(out_l[i].is_finite());
@@ -328,7 +358,9 @@ fn test_resampler_snr_against_reference() {
             ((input.len() as f64 * to_rate as f64 / from_rate as f64).ceil() as usize) + 128;
         let mut out_l = vec![0.0f32; output_capacity];
         let mut out_r = vec![0.0f32; output_capacity];
-        let produced = resampler.process_input_mono(&input, &mut out_l, &mut out_r);
+        let produced = resampler
+            .process_input_mono(&input, &mut out_l, &mut out_r)
+            .samples_written;
         assert!(produced > 0, "No output for {}->{}", from_rate, to_rate);
         let output = &out_l[..produced];
 
@@ -413,7 +445,9 @@ fn test_resampler_linear_snr() {
             ((input.len() as f64 * to_rate as f64 / from_rate as f64).ceil() as usize) + 128;
         let mut out_l = vec![0.0f32; output_capacity];
         let mut out_r = vec![0.0f32; output_capacity];
-        let produced = resampler.process_input_mono(&input, &mut out_l, &mut out_r);
+        let produced = resampler
+            .process_input_mono(&input, &mut out_l, &mut out_r)
+            .samples_written;
         assert!(
             produced > 0,
             "No output for {}->{} (linear)",
@@ -470,12 +504,16 @@ fn test_linear_phase_roundtrip() {
 
     let mut mid = vec![0.0f32; chunk];
     let mut mid_r = vec![0.0f32; chunk];
-    let n_mid = rs.process_input(&input, &input_r, &mut mid, &mut mid_r);
+    let n_mid = rs
+        .process_input(&input, &input_r, &mut mid, &mut mid_r)
+        .samples_written;
     assert!(n_mid > 0);
 
     let mut out = vec![0.0f32; chunk];
     let mut out_r = vec![0.0f32; chunk];
-    let n_out = rs.process_output(&mid[..n_mid], &mid_r[..n_mid], &mut out, &mut out_r);
+    let n_out = rs
+        .process_output(&mid[..n_mid], &mid_r[..n_mid], &mut out, &mut out_r)
+        .samples_written;
     assert!(n_out > 0);
 
     let energy_in: f32 = input.iter().map(|x| x * x).sum();
@@ -540,16 +578,24 @@ fn test_resampler_mono_equivalence() {
         let mut out_l_mono = [0.0f32; 5];
         let mut out_r_mono = [0.0f32; 5];
 
-        let n_stereo = rs.process_input(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo);
-        let n_mono = rs.process_input_mono(&in_l, &mut out_l_mono, &mut out_r_mono);
+        let n_stereo = rs
+            .process_input(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo)
+            .samples_written;
+        let n_mono = rs
+            .process_input_mono(&in_l, &mut out_l_mono, &mut out_r_mono)
+            .samples_written;
 
         assert_eq!(n_stereo, n_mono);
         assert_eq!(out_l_stereo, out_l_mono);
         assert_eq!(out_r_stereo, out_r_mono);
         assert_eq!(out_l_mono, out_r_mono);
 
-        let n_out_stereo = rs.process_output(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo);
-        let n_out_mono = rs.process_output_mono(&in_l, &mut out_l_mono, &mut out_r_mono);
+        let n_out_stereo = rs
+            .process_output(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo)
+            .samples_written;
+        let n_out_mono = rs
+            .process_output_mono(&in_l, &mut out_l_mono, &mut out_r_mono)
+            .samples_written;
 
         assert_eq!(n_out_stereo, n_out_mono);
         assert_eq!(out_l_stereo, out_l_mono);
@@ -567,8 +613,12 @@ fn test_resampler_mono_equivalence() {
         let mut out_l_mono = vec![0.0f32; chunk * 2];
         let mut out_r_mono = vec![0.0f32; chunk * 2];
 
-        let n_stereo = rs_stereo.process_input(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo);
-        let n_mono = rs_mono.process_input_mono(&in_l, &mut out_l_mono, &mut out_r_mono);
+        let n_stereo = rs_stereo
+            .process_input(&in_l, &in_l, &mut out_l_stereo, &mut out_r_stereo)
+            .samples_written;
+        let n_mono = rs_mono
+            .process_input_mono(&in_l, &mut out_l_mono, &mut out_r_mono)
+            .samples_written;
 
         assert_eq!(n_stereo, n_mono);
         for i in 0..n_stereo {
@@ -594,14 +644,17 @@ fn test_resampler_mono_equivalence() {
         let mut out_final_l_mono = vec![0.0f32; chunk * 2];
         let mut out_final_r_mono = vec![0.0f32; chunk * 2];
 
-        let n_final_stereo = rs_out_stereo.process_output(
-            in_mid,
-            in_mid,
-            &mut out_final_l_stereo,
-            &mut out_final_r_stereo,
-        );
-        let n_final_mono =
-            rs_out_mono.process_output_mono(in_mid, &mut out_final_l_mono, &mut out_final_r_mono);
+        let n_final_stereo = rs_out_stereo
+            .process_output(
+                in_mid,
+                in_mid,
+                &mut out_final_l_stereo,
+                &mut out_final_r_stereo,
+            )
+            .samples_written;
+        let n_final_mono = rs_out_mono
+            .process_output_mono(in_mid, &mut out_final_l_mono, &mut out_final_r_mono)
+            .samples_written;
 
         assert_eq!(n_final_stereo, n_final_mono);
         for i in 0..n_final_stereo {
@@ -668,6 +721,275 @@ fn test_fixed_point_drift_random_ratios() {
 }
 
 // =============================================================================
+// Edge-Case Tests — T2.1.3
+// =============================================================================
+
+#[test]
+fn test_exact_output_buffer_size() {
+    for &in_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+        for &out_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+            if in_rate == out_rate {
+                continue;
+            }
+            let n_in: usize = 128;
+            let exact = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+            let mut rs = NamResampler::new(in_rate, out_rate, 64).unwrap();
+
+            let in_l = vec![0.5f32; n_in];
+            let in_r = vec![0.5f32; n_in];
+            let mut out_l = vec![0.0f32; exact];
+            let mut out_r = vec![0.0f32; exact];
+
+            let progress = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+            assert_eq!(
+                progress.samples_written, exact,
+                "exact buffer ({in_rate}→{out_rate}): expected {exact} written, got {}",
+                progress.samples_written
+            );
+            assert!(
+                progress.samples_read <= n_in,
+                "exact buffer: consumed {}/{} inputs",
+                progress.samples_read,
+                n_in
+            );
+            for i in 0..exact {
+                assert!(out_l[i].is_finite(), "non-finite output at idx {i}");
+                assert!(out_r[i].is_finite(), "non-finite output at idx {i}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_output_buffer_one_short() {
+    for &in_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+        for &out_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+            if in_rate == out_rate {
+                continue;
+            }
+            let n_in: usize = 256;
+            let required = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+            if required < 2 {
+                continue;
+            }
+            let capped = required - 1;
+
+            let mut rs = NamResampler::new(in_rate, out_rate, 64).unwrap();
+
+            let in_l: Vec<f32> = (0..n_in).map(|i| (i as f32 * 0.3).sin()).collect();
+            let in_r: Vec<f32> = (0..n_in).map(|i| ((i + 1000) as f32 * 0.3).sin()).collect();
+
+            let mut out_l = vec![0.0f32; capped];
+            let mut out_r = vec![0.0f32; capped];
+
+            let progress = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+
+            assert_eq!(
+                progress.samples_written, capped,
+                "one-short ({in_rate}→{out_rate}): expected {capped} written, got {}",
+                progress.samples_written
+            );
+            assert!(
+                progress.samples_read <= n_in,
+                "one-short ({in_rate}→{out_rate}): consumed {} > available {n_in}",
+                progress.samples_read
+            );
+            assert!(
+                progress.samples_read > 0,
+                "one-short ({in_rate}→{out_rate}): must consume at least 1 input"
+            );
+
+            for i in 0..capped {
+                assert!(out_l[i].is_finite(), "non-finite output at idx {i}");
+                assert!(out_r[i].is_finite(), "non-finite output at idx {i}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_output_buffer_zero_capacity_no_state_mutation() {
+    for &in_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+        for &out_rate in &[22_050, 44_100, 48_000, 88_200, 96_000] {
+            if in_rate == out_rate {
+                continue;
+            }
+            let mut rs = NamResampler::new(in_rate, out_rate, 64).unwrap();
+            let phase_before = rs.inner.as_ref().map(|c| c.phase_accum);
+
+            let in_l = vec![0.5f32; 128];
+            let in_r = vec![0.5f32; 128];
+            let mut out_l: [f32; 0] = [];
+            let mut out_r: [f32; 0] = [];
+
+            let progress = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+            assert_eq!(
+                progress.samples_read, 0,
+                "zero-capacity ({in_rate}→{out_rate}): must not consume any input"
+            );
+            assert_eq!(
+                progress.samples_written, 0,
+                "zero-capacity ({in_rate}→{out_rate}): must not produce any output"
+            );
+
+            let phase_after = rs.inner.as_ref().map(|c| c.phase_accum);
+            assert_eq!(
+                phase_before, phase_after,
+                "zero-capacity ({in_rate}→{out_rate}): state must be unchanged"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_extreme_upsampling() {
+    let cases = [(22_050, 96_000), (44_100, 192_000)];
+    let n_in: usize = 512;
+
+    for &(in_rate, out_rate) in &cases {
+        let mut rs = NamResampler::new(in_rate, out_rate, 64).unwrap();
+        let required = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+
+        let in_l: Vec<f32> = (0..n_in)
+            .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / in_rate as f32).sin())
+            .collect();
+        let in_r = in_l.clone();
+        let mut out_l = vec![0.0f32; required];
+        let mut out_r = vec![0.0f32; required];
+
+        let progress = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+        assert!(progress.samples_written > 0);
+        assert!(progress.samples_read > 0);
+
+        let energy: f32 = out_l[..progress.samples_written]
+            .iter()
+            .map(|x| x * x)
+            .sum();
+        assert!(
+            energy > 0.0,
+            "extreme upsample {in_rate}→{out_rate}: no energy"
+        );
+
+        for i in 0..progress.samples_written {
+            assert!(out_l[i].is_finite(), "non-finite sample at idx {i}");
+            assert!(out_r[i].is_finite(), "non-finite sample at idx {i}");
+        }
+    }
+}
+
+#[test]
+fn test_extreme_downsampling() {
+    let cases = [(96_000, 22_050)];
+    let n_in: usize = 512;
+
+    for &(in_rate, out_rate) in &cases {
+        let mut rs = NamResampler::new(in_rate, out_rate, 64).unwrap();
+        let required = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+
+        let in_l: Vec<f32> = (0..n_in)
+            .map(|i| (2.0 * std::f32::consts::PI * 500.0 * i as f32 / in_rate as f32).sin())
+            .collect();
+        let in_r = in_l.clone();
+        let mut out_l = vec![0.0f32; required];
+        let mut out_r = vec![0.0f32; required];
+
+        let progress = rs.process_input(&in_l, &in_r, &mut out_l, &mut out_r);
+        assert!(progress.samples_written > 0);
+        assert!(progress.samples_read > 0);
+
+        let energy: f32 = out_l[..progress.samples_written]
+            .iter()
+            .map(|x| x * x)
+            .sum();
+        assert!(
+            energy > 0.0,
+            "extreme downsample {in_rate}→{out_rate}: no energy"
+        );
+
+        for i in 0..progress.samples_written {
+            assert!(out_l[i].is_finite(), "non-finite sample at idx {i}");
+            assert!(out_r[i].is_finite(), "non-finite sample at idx {i}");
+        }
+    }
+}
+
+#[test]
+fn test_phase_continuity_fragmented_buffers() {
+    let rate_pairs = [
+        (44_100, 48_000),
+        (48_000, 44_100),
+        (22_050, 48_000),
+        (96_000, 48_000),
+    ];
+
+    for &(in_rate, out_rate) in &rate_pairs {
+        let n_total = 4096;
+        let freq = 440.0f32;
+        let in_full: Vec<f32> = (0..n_total)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / in_rate as f32).sin())
+            .collect();
+        let in_full_r = in_full.clone();
+
+        let required_single = NamResampler::min_output_samples(n_total, in_rate, out_rate);
+
+        let mut rs_one = NamResampler::new(in_rate, out_rate, 64).unwrap();
+        let mut out_single_l = vec![0.0f32; required_single];
+        let mut out_single_r = vec![0.0f32; required_single];
+        let progress_single =
+            rs_one.process_input(&in_full, &in_full_r, &mut out_single_l, &mut out_single_r);
+        let n_single = progress_single.samples_written;
+
+        let mut rs_frag = NamResampler::new(in_rate, out_rate, 64).unwrap();
+        let frag_size = 64;
+        let max_frag_out =
+            NamResampler::max_input_samples(required_single.max(8192), in_rate, out_rate)
+                .clamp(256, 2048);
+        let mut out_total = Vec::with_capacity(required_single);
+        let mut out_total_r = Vec::with_capacity(required_single);
+        let mut buf_l = vec![0.0f32; max_frag_out];
+        let mut buf_r = vec![0.0f32; max_frag_out];
+
+        let mut pos = 0;
+        while pos < n_total {
+            let chunk = frag_size.min(n_total - pos);
+            let progress = rs_frag.process_input(
+                &in_full[pos..pos + chunk],
+                &in_full_r[pos..pos + chunk],
+                &mut buf_l,
+                &mut buf_r,
+            );
+            out_total.extend_from_slice(&buf_l[..progress.samples_written]);
+            out_total_r.extend_from_slice(&buf_r[..progress.samples_written]);
+            pos += chunk;
+        }
+
+        let common = n_single.min(out_total.len());
+        assert!(
+            common >= 16,
+            "{in_rate}→{out_rate}: too few common samples (single={n_single}, frag={})",
+            out_total.len()
+        );
+
+        let rmse: f32 = ((0..common)
+            .map(|i| (out_single_l[i] - out_total[i]).powi(2))
+            .sum::<f32>()
+            / common as f32)
+            .sqrt();
+        let rms_ref: f32 = (out_single_l[..common]
+            .iter()
+            .map(|x| x.powi(2))
+            .sum::<f32>()
+            / common as f32)
+            .sqrt();
+
+        assert!(
+            rmse < rms_ref * 0.15,
+            "{in_rate}→{out_rate}: phase discontinuity detected (RMSE={rmse:.6}, ref_RMS={rms_ref:.6}, common={common})"
+        );
+    }
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -699,6 +1021,127 @@ fn goertzel_magnitude(signal: &[f32], freq: f32, sample_rate: u32) -> f32 {
 
     let mag_sq = s1.powi(2) + s0.powi(2) - coeff * s1 * s0;
     if mag_sq < 0.0 { 0.0 } else { mag_sq.sqrt() }
+}
+
+const TEST_RATES: &[u32] = &[22_050, 44_100, 48_000, 88_200, 96_000, 192_000];
+const TEST_BUFFER_SIZES: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+#[test]
+fn test_min_output_samples_empirical_sweep() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            if in_rate == out_rate {
+                continue;
+            }
+            let mut rs = NamResampler::new(in_rate, out_rate, 128).expect("new failed");
+            for &n_in in TEST_BUFFER_SIZES {
+                let min_out = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+                let in_l = vec![0.0f32; n_in];
+                let in_r = vec![0.0f32; n_in];
+                let mut out_l = vec![0.0f32; min_out];
+                let mut out_r = vec![0.0f32; min_out];
+                let written = rs
+                    .process_input(&in_l, &in_r, &mut out_l, &mut out_r)
+                    .samples_written;
+                assert!(
+                    written <= min_out,
+                    "in_rate={} out_rate={} n_in={} min_out={} written={}",
+                    in_rate,
+                    out_rate,
+                    n_in,
+                    min_out,
+                    written
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_max_input_samples_empirical_sweep() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            if in_rate == out_rate {
+                continue;
+            }
+            let mut rs = NamResampler::new(in_rate, out_rate, 128).expect("new failed");
+            for &cap in TEST_BUFFER_SIZES {
+                let max_in = NamResampler::max_input_samples(cap, in_rate, out_rate);
+                if max_in == 0 {
+                    continue;
+                }
+                let in_l = vec![0.0f32; max_in];
+                let in_r = vec![0.0f32; max_in];
+                let mut out_l = vec![0.0f32; cap];
+                let mut out_r = vec![0.0f32; cap];
+                let written = rs
+                    .process_input(&in_l, &in_r, &mut out_l, &mut out_r)
+                    .samples_written;
+                assert!(
+                    written <= cap,
+                    "in_rate={} out_rate={} cap={} max_in={} written={}",
+                    in_rate,
+                    out_rate,
+                    cap,
+                    max_in,
+                    written
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_helpers_reciprocal_consistency() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            if in_rate == out_rate {
+                continue;
+            }
+            for &n_in in TEST_BUFFER_SIZES {
+                let min_out = NamResampler::min_output_samples(n_in, in_rate, out_rate);
+                let max_from_out = NamResampler::max_input_samples(min_out, in_rate, out_rate);
+                assert!(
+                    max_from_out >= n_in,
+                    "reciprocal fail: in_rate={} out_rate={} n_in={} min_out={} max_in={}",
+                    in_rate,
+                    out_rate,
+                    n_in,
+                    min_out,
+                    max_from_out
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_min_output_samples_zero_input() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            let m = NamResampler::min_output_samples(0, in_rate, out_rate);
+            assert_eq!(m, 0, "zero input should require zero output");
+        }
+    }
+}
+
+#[test]
+fn test_max_input_samples_zero_capacity() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            let m = NamResampler::max_input_samples(0, in_rate, out_rate);
+            assert_eq!(m, 0, "zero capacity should yield zero max input");
+        }
+    }
+}
+
+#[test]
+fn test_helpers_overflow_protection() {
+    let huge = NamResampler::min_output_samples(usize::MAX, 192_000, 4_000);
+    assert_eq!(huge, usize::MAX, "overflow must saturate at usize::MAX");
+
+    let huge_inv = NamResampler::max_input_samples(usize::MAX, 192_000, 4_000);
+    assert_eq!(huge_inv, usize::MAX, "overflow must saturate at usize::MAX");
 }
 
 fn read_raw_f32(path: &std::path::Path) -> Vec<f32> {

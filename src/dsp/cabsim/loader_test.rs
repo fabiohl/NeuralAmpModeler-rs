@@ -407,3 +407,89 @@ fn test_load_extensible_float32_wav() {
 
     std::fs::remove_file(path).ok();
 }
+
+/// IR resampling preserves sample count proportional to rate ratio.
+#[test]
+fn test_ir_resample_rate_ratio_consistency() {
+    let rate_pairs: &[(u32, u32)] = &[
+        (48000, 44100), // downsampling
+        (44100, 48000), // upsampling — triggers chunking
+        (44100, 96000), // aggressive upsampling — strong chunking
+        (96000, 48000), // 2:1 downsampling
+        (88200, 48000), // fractional downsampling
+        (48000, 96000), // 2:1 upsampling
+    ];
+
+    for &(input_rate, output_rate) in rate_pairs {
+        let ir_len = 1024;
+        let samples: Vec<f32> = (0..ir_len)
+            .map(|i| {
+                let t = i as f32 / input_rate as f32;
+                (std::f32::consts::TAU * 500.0 * t).sin() * (-8.0 * t).exp()
+            })
+            .collect();
+
+        let resampled = ir_resample::resample(&samples, input_rate, output_rate)
+            .unwrap_or_else(|_| panic!("resample {}→{} failed", input_rate, output_rate));
+
+        assert!(
+            !resampled.is_empty(),
+            "resampled IR must not be empty ({}→{})",
+            input_rate,
+            output_rate
+        );
+
+        for (i, &s) in resampled.iter().enumerate() {
+            assert!(
+                s.is_finite(),
+                "non-finite sample at index {i} for {}→{}",
+                input_rate,
+                output_rate
+            );
+        }
+
+        let theoretical_min =
+            (ir_len as f64 * output_rate as f64 / input_rate as f64).ceil() as usize;
+        assert!(
+            resampled.len() >= theoretical_min,
+            "resampled length {} below theoretical min {theoretical_min} for {}→{}",
+            resampled.len(),
+            input_rate,
+            output_rate,
+        );
+    }
+}
+
+/// Long IR stress-test: verify chunking loop processes all samples.
+#[test]
+fn test_ir_resample_long_ir_chunking() {
+    let input_rate = 44100u32;
+    let output_rate = 48000u32;
+    let ir_len = 65536;
+
+    let samples: Vec<f32> = (0..ir_len)
+        .map(|i| {
+            let t = i as f32 / input_rate as f32;
+            (std::f32::consts::TAU * 300.0 * t).sin() * (-4.0 * t).exp()
+        })
+        .collect();
+
+    let resampled = ir_resample::resample(&samples, input_rate, output_rate)
+        .expect("long IR resample should succeed");
+
+    assert!(
+        !resampled.is_empty(),
+        "long IR resample output must not be empty"
+    );
+
+    let theoretical_min = (ir_len as f64 * output_rate as f64 / input_rate as f64).ceil() as usize;
+    assert!(
+        resampled.len() >= theoretical_min,
+        "long IR: resampled length {} below theoretical min {theoretical_min}",
+        resampled.len(),
+    );
+
+    for (i, &s) in resampled.iter().enumerate() {
+        assert!(s.is_finite(), "long IR: non-finite sample at index {i}");
+    }
+}

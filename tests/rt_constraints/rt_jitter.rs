@@ -216,12 +216,26 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
         println!("[STATUS] INCONCLUSIVE — skipping jitter characterization");
         println!("  Environment preconditions not met; jitter telemetry would be");
         println!("  invalid without CPU isolation and performance governor.");
+        println!(
+            "[RECEIPT] status=INCONCLUSIVE reason=\"preflight_failed\" p50_us=N/A p99_us=N/A p99.9_us=N/A exact_max_us=N/A"
+        );
         return;
     }
 
     println!("[STATUS] PASS — preflight OK");
     if let Some(mut model) = load_and_prewarm("BossWN-standard.nam") {
         let baseline = measure_latency("WaveNet-Std-char-baseline", &mut model, 0);
+
+        // Emit typed receipt with percentiles as completion marker
+        println!(
+            "[RECEIPT] status=PASS p50_us={} p99_us={} p99.9_us={} exact_max_us={} violations={}/{}",
+            baseline.p50_us,
+            baseline.p99_us,
+            baseline.p999_us,
+            baseline.exact_max_us,
+            baseline.violations,
+            baseline.total_blocks,
+        );
 
         // Run stress characterizations with delta against this baseline
         run_jitter_characterization("WaveNet-Std-char-stress-1", &mut model, Some(&baseline));
@@ -253,6 +267,11 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
         println!(
             "[WaveNet-Std-char-saturate] Violations under saturation — \
              environmental characterization, NOT a deadline gate."
+        );
+    } else {
+        println!("[STATUS] SKIP_CAPABILITY — required test model not available");
+        println!(
+            "[RECEIPT] status=SKIP_CAPABILITY reason=\"model_not_found\" p50_us=N/A p99_us=N/A p99.9_us=N/A exact_max_us=N/A"
         );
     }
 }

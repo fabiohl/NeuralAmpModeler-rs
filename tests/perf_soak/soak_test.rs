@@ -417,106 +417,167 @@ fn test_lstm_noise_soak() {
 
 /// Soak Test: Resampler stability under long-duration asynchronous conversions.
 ///
-/// The resampler uses polynomial interpolation and phase accumulation. Small rounding
-/// errors in the phase increment can accumulate over millions of samples,
-/// causing "clicks" or NaNs. This test validates Upsampling and Downsampling scenarios.
+/// The resampler uses polyphase interpolation and 24.40 fixed-point phase accumulation.
+/// Small rounding errors in the phase increment can accumulate over millions of samples,
+/// causing "clicks" or NaNs. This test validates Upsampling and Downsampling scenarios
+/// with strict temporal conservation (no silent truncation of output samples).
+///
+/// Invariants:
+/// - Output buffer sized with `NamResampler::min_output_samples` — no truncation.
+/// - `processed_out` deviates from `(processed_in * out_sr / in_sr).round()` by at most
+///   the documented sinc filter group delay (≤ TAPS_PER_PHASE samples per stage).
 #[test]
 #[ignore]
 fn test_resampler_drift_soak() {
-    // Scenario 1: Upsampling (22050 -> 48000)
-    let mut resampler = NamResampler::new(22050, 48000, 64).unwrap();
-    let mut pcg = SimplePcg::new(777);
-    let num_samples = 50_000_000; // 50 million samples (~17 minutes at 48kHz)
-    let mut processed_in = 0;
-    let mut processed_out = 0;
+    test_resampler_drift_soak_scenario(22050, 48000, "Upsampling");
+    test_resampler_drift_soak_scenario(96000, 48000, "Downsampling");
+}
 
-    let mut in_l = vec![0.0f32; 1024];
-    let mut in_r = vec![0.0f32; 1024];
-    let mut out_l = vec![0.0f32; 2048];
-    let mut out_r = vec![0.0f32; 2048];
+fn test_resampler_drift_soak_scenario(in_sr: u32, out_sr: u32, label: &str) {
+    const TAPS_PER_PHASE: usize = 64;
+    const BLOCK_SIZE: usize = 1024;
+    const NUM_SAMPLES: usize = 50_000_000;
+
+    let mut resampler = NamResampler::new(in_sr, out_sr, 64).unwrap();
+    let mut pcg = SimplePcg::new(777);
+
+    let out_cap = NamResampler::min_output_samples(BLOCK_SIZE, in_sr, out_sr);
+
+    let mut processed_in: usize = 0;
+    let mut processed_out: usize = 0;
+
+    let mut in_l = vec![0.0f32; BLOCK_SIZE];
+    let mut in_r = vec![0.0f32; BLOCK_SIZE];
+    let mut out_l = vec![0.0f32; out_cap];
+    let mut out_r = vec![0.0f32; out_cap];
 
     let start = Instant::now();
-    while processed_in < num_samples {
-        for i in 0..1024 {
+    while processed_in < NUM_SAMPLES {
+        for i in 0..BLOCK_SIZE {
             in_l[i] = pcg.next_f32();
             in_r[i] = pcg.next_f32();
         }
-        let n = resampler.process_input(
+        let progress = resampler.process_input(
             std::hint::black_box(&in_l),
             std::hint::black_box(&in_r),
             std::hint::black_box(&mut out_l),
             std::hint::black_box(&mut out_r),
         );
-        processed_in += 1024;
+        let n = progress.samples_written;
+        let r = progress.samples_read;
+
+        assert!(
+            r > 0,
+            "{}: zero samples consumed at processed_in={}",
+            label,
+            processed_in
+        );
+        assert!(
+            n > 0,
+            "{}: zero samples produced at processed_in={}",
+            label,
+            processed_in
+        );
+        assert!(
+            n <= out_cap,
+            "{}: output overflow: {} > cap {}",
+            label,
+            n,
+            out_cap
+        );
+
+        processed_in += r;
         processed_out += n;
 
         for i in 0..n {
-            assert!(out_l[i].is_finite(), "NaN in Resampler Out L (Upsampling)");
-            assert!(out_r[i].is_finite(), "NaN in Resampler Out R (Upsampling)");
+            assert!(out_l[i].is_finite(), "NaN in Resampler Out L ({label})");
+            assert!(out_r[i].is_finite(), "NaN in Resampler Out R ({label})");
         }
         let rms_l = (out_l[..n].iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64).sqrt();
         let rms_r = (out_r[..n].iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64).sqrt();
         assert!(
             rms_l > 0.0001 && rms_l < 10.0,
-            "Resampler Upsampling L RMS do loop out of range: {}",
+            "Resampler {label} L RMS do loop out of range: {}",
             rms_l
         );
         assert!(
             rms_r > 0.0001 && rms_r < 10.0,
-            "Resampler Upsampling R RMS do loop out of range: {}",
+            "Resampler {label} R RMS do loop out of range: {}",
             rms_r
         );
     }
+
+    let expected_out = (processed_in as f64 * out_sr as f64 / in_sr as f64).round() as usize;
+    let delta = processed_out.max(expected_out) - processed_out.min(expected_out);
+    let tolerance = TAPS_PER_PHASE;
+
     let duration = start.elapsed();
 
-    println!("--- Resampler Drift Soak (22050->48000) ---");
-    println!("Duration: {:?}", duration);
-    println!("Samples In: {}, Out: {}", processed_in, processed_out);
+    println!("╔══════════════════════════════════════════════════════╗");
+    println!(
+        "║  Resampler Drift Soak ({}→{}) - {label:<8}   ║",
+        in_sr, out_sr
+    );
+    println!("╠══════════════════════════════════════════════════════╣");
+    println!(
+        "║  Duration:     {}                     ║",
+        format_args!("{:>12?}", duration)
+    );
+    println!(
+        "║  Samples In:     {:>12}                         ║",
+        processed_in
+    );
+    println!(
+        "║  Expected Out:   {:>12}                         ║",
+        expected_out
+    );
+    println!(
+        "║  Actual Out:     {:>12}                         ║",
+        processed_out
+    );
+    println!("║  Delta:          {:>12}                         ║", delta);
+    println!(
+        "║  Tolerance:      {:>12} (TAPS_PER_PHASE)        ║",
+        tolerance
+    );
+    println!(
+        "║  Verdict:        {:>12}                         ║",
+        if delta <= tolerance { "PASS" } else { "FAIL" }
+    );
+    println!("╚══════════════════════════════════════════════════════╝");
 
-    // Scenario 2: Downsampling (96000 -> 48000)
-    let mut resampler = NamResampler::new(96000, 48000, 64).unwrap();
-    processed_in = 0;
-    processed_out = 0;
-    let start = Instant::now();
-    while processed_in < num_samples {
-        for i in 0..1024 {
-            in_l[i] = pcg.next_f32();
-            in_r[i] = pcg.next_f32();
-        }
-        let n = resampler.process_input(
-            std::hint::black_box(&in_l),
-            std::hint::black_box(&in_r),
-            std::hint::black_box(&mut out_l[..512]),
-            std::hint::black_box(&mut out_r[..512]),
-        );
-        processed_in += 1024;
-        processed_out += n;
-        for i in 0..n {
-            assert!(
-                out_l[i].is_finite(),
-                "NaN in Resampler Out L (Downsampling)"
-            );
-            assert!(
-                out_r[i].is_finite(),
-                "NaN in Resampler Out R (Downsampling)"
-            );
-        }
-        let rms_l = (out_l[..n].iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64).sqrt();
-        let rms_r = (out_r[..n].iter().map(|x| (x * x) as f64).sum::<f64>() / n as f64).sqrt();
+    assert!(
+        delta <= tolerance,
+        "Temporal conservation violated ({}→{}): delta={} exceeds tolerance={} (TAPS_PER_PHASE)\n\
+         in={} expected={} actual={}",
+        in_sr,
+        out_sr,
+        delta,
+        tolerance,
+        processed_in,
+        expected_out,
+        processed_out
+    );
+
+    let min_expected_out = processed_in.saturating_mul(out_sr as usize) / in_sr as usize;
+    let max_expected_out = min_expected_out + tolerance;
+    assert!(
+        processed_out >= min_expected_out && processed_out <= max_expected_out,
+        "{}→{}: output {} outside [{}, {}] — possible silent truncation",
+        in_sr,
+        out_sr,
+        processed_out,
+        min_expected_out,
+        max_expected_out
+    );
+
+    if in_sr == 22050 && out_sr == 48000 {
         assert!(
-            rms_l > 0.0001 && rms_l < 10.0,
-            "Resampler Downsampling L RMS do loop out of range: {}",
-            rms_l
-        );
-        assert!(
-            rms_r > 0.0001 && rms_r < 10.0,
-            "Resampler Downsampling R RMS do loop out of range: {}",
-            rms_r
+            processed_out > 108_000_000,
+            "22050→48000 soak: output {} has stalled far below expected ~108.8M — suspected truncation bug",
+            processed_out
         );
     }
-    println!("--- Resampler Drift Soak (96000->48000) ---");
-    println!("Duration: {:?}", start.elapsed());
-    println!("Samples In: {}, Out: {}", processed_in, processed_out);
 }
 
 /// Soak Test: MirroredBuffer memory integrity.

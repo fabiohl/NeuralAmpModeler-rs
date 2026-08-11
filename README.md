@@ -11,7 +11,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 Designed for embedding in audio hosts, CLAP plugins, standalone audio hosts, offline renderers, and embedded DSP pipelines, it guarantees **zero heap allocations**, **zero locks**, and **zero blocking system calls** on the real-time audio processing thread.
 
-NeuralAmpModeler-rs is an independent public library for the wider audio and Rust communities. Public APIs and policies remain strictly host-agnostic and generally reusable; integration-specific logic belongs in downstream crates (such as `NAM-Audio-Pipe` and `NAM-Plug`).
+NeuralAmpModeler-rs is an independent public library for the wider audio and Rust communities. Public APIs and policies remain strictly host-agnostic and generally reusable; integration-specific logic belongs in downstream crates (such as standalone audio hosts, CLAP plugins, and real-time processing applications).
 
 > **❤️‍🔥 NeuralAmpModeler-rs is in beta stage.** Feedback, bug reports, performance metrics, and patch contributions are very welcome!
 
@@ -63,7 +63,7 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 | Dependency                | Minimum Version                               | Package / Command     |
 |:------------------------- |:--------------------------------------------- |:--------------------- |
 | **CPU Architecture**      | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | `lscpu`               |
-| **Rust Toolchain**        | ≥ 1.85                                        | `rustc --version`     |
+| **Rust Toolchain**        | ≥ 1.94.0 (Edition 2024)                       | `rustc --version`     |
 | **Development Libraries** | `build-essential`, `pkg-config`, `cmake`      | See apt command below |
 
 ### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
@@ -98,7 +98,6 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 | `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics |
 | `heap-audit`     | Enables heap-allocation auditing infrastructure                          |
 | `long_bench`     | Enables long-form inference benchmarks                                   |
-| `pgo`            | Build with PGO (Profile-Guided Optimization) support                     |
 | `dynamic-engine` | Enables scalar fallback for non-standard A2 convolution geometries       |
 
 ---
