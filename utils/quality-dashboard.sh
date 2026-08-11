@@ -266,7 +266,7 @@ declare -A PHASE_MANDATORY=(
     ["quick_parity"]="1"
 )
 
-# ── Coverage matrix axes (governança de cobertura) ──────────────────────────
+# ── Coverage matrix axes (coverage governance) ─────────────────────────────
 # Tracks per-axis coverage info for the coverage matrix summary.
 COVERAGE_NAMCORE_PARITY=0
 COVERAGE_F64_ORACLE=0
@@ -574,7 +574,7 @@ parse_oracle_f64() {
             if _is_numeric_esr "$esr_lin"; then
                 ESR_F64_PAIRED["$filename"]="$esr_lin"
             else
-                echo "  ⚠ Descartando entrada f64 nao-numerica para '$filename': [$esr_lin] (linha malformada em reference_oracle_f64.log)" >&2
+                echo "  ⚠ Dropping non-numeric f64 entry for '$filename': [$esr_lin] (malformed line in reference_oracle_f64.log)" >&2
             fi
         fi
         [ -n "$filename" ] && [ -n "$esr_db" ] && ESR_F64_DB_PAIRED["$filename"]="$esr_db"
@@ -607,7 +607,7 @@ parse_oracle_f64() {
             if _is_numeric_esr "$esr"; then
                 ESR_F64_PAIRED["$label"]="$esr"
             else
-                echo "  ⚠ Descartando entrada f64 nao-numerica para familia '$label': [$esr] (linha malformada em reference_oracle_f64.log)" >&2
+                echo "  ⚠ Dropping non-numeric f64 entry for family '$label': [$esr] (malformed line in reference_oracle_f64.log)" >&2
             fi
         fi
         [ -n "$label" ] && [ -n "$esr_db" ] && ESR_F64_DB_PAIRED["$label"]="$esr_db"
@@ -850,7 +850,7 @@ esr_verdict() {
     local esr="$1"
     [ -z "$esr" ] || [ "$esr" = "N/A" ] && { echo "N/A"; return; }
     LC_ALL=C awk -v v="$esr" 'BEGIN {
-        if (v+0 < 1e-10) print "IDENTICO"
+        if (v+0 < 1e-10) print "IDENTICAL"
         else if (v+0 < 1e-5) print "IMPERCEPTIVEL"
         else if (v+0 < 1e-2) print "AUDIVEL APENAS COM A/B CIENTIFICO"
         else if (v+0 < 1e-1) print "AUDIVEL EM COMPARACAO DIRETA"
@@ -870,7 +870,7 @@ esr_verdict_short() {
         else print "5"
     }')
     case "$cmp" in
-        1) echo -e "${GREEN}IDENTICO${NC}" ;;
+        1) echo -e "${GREEN}IDENTICAL${NC}" ;;
         2) echo -e "${GREEN}IMPERCEPTIVEL${NC}" ;;
         3) echo -e "${YELLOW}A/B CIENTIFICO${NC}" ;;
         4) echo -e "${YELLOW}AUDIVEL DIRETO${NC}" ;;
@@ -950,7 +950,7 @@ render_header() {
     printf "╔══════════════════════════════════════════════════════════════════╗\n"
     printf "║              NeuralAmpModeler-rs Quality Dashboard                            ║\n"
     printf "║              ------------------------------                      ║\n"
-    printf "║              Medido em: %-25.25s                ║\n" "$NOW"
+    printf "║              Measured at: %-24.24s                ║\n" "$NOW"
     printf "║              ISA: %-46.46s ║\n" "$ISA"
     printf "║              CPU: %-46.46s ║\n" "$cpu_short"
     printf "║              rustc: %-44.44s ║\n" "$RUSTC_VER"
@@ -961,7 +961,7 @@ render_header() {
 
 render_quick_summary() {
     echo ""
-    echo "🎯 RESUMO RAPIDO (para nao-cientistas)"
+    echo "🎯 QUICK SUMMARY (non-specialist)"
     echo "═══════════════════════════════════════"
     echo ""
 
@@ -1013,7 +1013,7 @@ render_quick_summary() {
             pct_budget=$(budget_pct "$latency")
             cpu_colored=$(_cpu_color "$pct_budget")
         fi
-        printf "  %s %-38s  vs NAMcore: %-10s %b  │  vs Ideal (f64): %-10s  │  ⚡ CPU: %s do budget\n" \
+        printf "  %s %-38s  vs NAMcore: %-10s %b  │  vs Ideal (f64): %-10s  │  ⚡ CPU: %s of budget\n" \
             "$icon" "${label:0:38}" "$esr_nam_display" "$verdict" "$esr_f64_colored" "$cpu_colored"
     }
 
@@ -1060,7 +1060,7 @@ _red_zone_tags() {
     [ "$is_red" -eq 0 ] && { echo ""; return; }
 
     if [[ "$label" == *"condition_lstm"* ]] || [[ "$label" == *"Condition DSP LSTM"* ]]; then
-        tags="$tags${RED}[EM INVESTIGAÇÃO]${NC} "
+        tags="$tags${RED}[UNDER INVESTIGATION]${NC} "
     fi
 
     if [ "$esr_f64" != "N/A" ] && [ "$esr_nam" != "N/A" ]; then
@@ -1097,7 +1097,7 @@ _render_fidelity_row() {
 # Renders the header row for fidelity tables.
 _render_fidelity_header() {
     printf "  %-38s │ %-16s │ %-12s │ %-8s │ %-8s │ %s\n" \
-        "Modelo" "ESR (vs NAMcore)" "ESR (vs f64)" "SNR dB" "MR-STFT" "Modo"
+        "Model" "ESR (vs NAMcore)" "ESR (vs f64)" "SNR dB" "MR-STFT" "Mode"
     printf "  %s │ %s │ %s │ %s │ %s │ %s\n" \
         "$(printf '─%.0s' {1..38})" "$(printf '─%.0s' {1..16})" \
         "$(printf '─%.0s' {1..12})" "$(printf '─%.0s' {1..8})" \
@@ -1105,12 +1105,12 @@ _render_fidelity_header() {
 }
 
 render_fidelity_details() {
-    echo "📊 FIDELIDADE SONORA — Detalhes Tecnicos"
+    echo "📊 AUDIO FIDELITY — Technical Details"
     echo "═════════════════════════════════════════"
     echo ""
 
     if [ ${#MODEL_ORDER[@]} -eq 0 ]; then
-        echo -e "  ${YELLOW}(i) Nenhum dado de fidelidade disponivel.${NC}"
+        echo -e "  ${YELLOW}(i) No fidelity data available.${NC}"
         echo ""
         return
     fi
@@ -1130,7 +1130,7 @@ render_fidelity_details() {
 
     # ── Canonical table ──────────────────────────────────────────────────
     if [ ${#canonicals[@]} -gt 0 ]; then
-        echo "  ── Fidelidade Canônica (golden_vectors) ──"
+        echo "  ── Canonical Fidelity (golden_vectors) ──"
         echo ""
         _render_fidelity_header
 
@@ -1190,9 +1190,9 @@ render_fidelity_details() {
 
     # ── Redundant/coverage table ─────────────────────────────────────────
     if [ ${#redundants[@]} -gt 0 ]; then
-        echo "  ── Cobertura Adicional (quick_parity, containers, regression gates) ──"
-        echo "  (i) Estas medições validam os mesmos modelos por entry points alternativos."
-        echo "       Linhas equivalentes da tabela canônica acima."
+        echo "  ── Additional Coverage (quick_parity, containers, regression gates) ──"
+        echo "  (i) These measurements validate the same models via alternate entry points."
+        echo "       Equivalent rows from the canonical table above."
         echo ""
         _render_fidelity_header
 
@@ -1250,10 +1250,10 @@ render_fidelity_details() {
         echo ""
     fi
 
-    echo "  Legenda qualitativa (limites de audibilidade do ESR):"
-    echo -e "    ${GREEN}verde${NC} = imperceptivel (ESR < 1e-5)"
-    echo -e "    ${YELLOW}amarelo${NC} = audivel apenas com A/B cientifico (ESR < 1e-2)"
-    echo -e "    ${RED}vermelho${NC} = ⚠ audivel — necessita investigacao (ESR >= 1e-1)"
+    echo "  Qualitative legend (ESR audibility bounds):"
+    echo -e "    ${GREEN}green${NC} = imperceptible (ESR < 1e-5)"
+    echo -e "    ${YELLOW}yellow${NC} = audible only with scientific A/B (ESR < 1e-2)"
+    echo -e "    ${RED}red${NC} = ⚠ audible — needs investigation (ESR >= 1e-1)"
     echo ""
 }
 
@@ -1278,10 +1278,10 @@ _median() {
 }
 
 render_performance() {
-    echo "⚡ PERFORMANCE — Latencia por Bloco (64 amostras @ 48kHz)"
+    echo "⚡ PERFORMANCE — Block Latency (64 samples @ 48kHz)"
     echo "══════════════════════════════════════════════════════════"
-    echo "  Deadline RT: 1333 µs (1.33 ms)"
-    echo "  Eficiencia: µs por MMAC (mega-MACs) — menor e melhor"
+    echo "  RT deadline: 1333 µs (1.33 ms)"
+    echo "  Efficiency: µs per MMAC (mega-MACs) — lower is better"
     echo ""
 
     if [ ${#ALL_BENCH_NAMES[@]} -eq 0 ]; then
@@ -1291,7 +1291,7 @@ render_performance() {
     fi
 
     printf "  %-28s │ %-16s │ %-10s │ %-14s │ %s\n" \
-        "Modelo" "Latencia Mediana" "% Budget" "µs/MMAC" "Folga"
+        "Model" "Median Latency" "% Budget" "µs/MMAC" "Headroom"
     printf "  %s │ %s │ %s │ %s │ %s\n" \
         "$(printf '─%.0s' {1..28})" "$(printf '─%.0s' {1..16})" \
         "$(printf '─%.0s' {1..10})" "$(printf '─%.0s' {1..14})" \
@@ -1348,9 +1348,9 @@ render_performance() {
     done
 
     echo ""
-    echo "  (i) Folga > 50%:  Pode usar oversampling 2x sem xruns"
-    echo "  (i) Folga > 75%:  Pode usar oversampling 4x sem xruns"
-    echo "  (i) Folga < 25%:  ⚠ Risco de xruns com buffer de 64 amostras"
+    echo "  (i) Headroom > 50%:  2x oversampling usually safe without xruns"
+    echo "  (i) Headroom > 75%:  4x oversampling usually safe without xruns"
+    echo "  (i) Headroom < 25%:  ⚠ xrun risk with a 64-sample buffer"
     echo ""
 
     # WaveNet efficiency check — excludes micro models where fixed per-block
@@ -1380,7 +1380,7 @@ render_performance() {
             local is_outlier
             is_outlier=$(LC_ALL=C awk -v e="$eff" -v m="$median_eff" 'BEGIN { if (m > 0 && e > m * 2.0) print "1"; else print "0" }')
             if [ "$is_outlier" = "1" ]; then
-                echo -e "  ${YELLOW}⚠ WARN:${NC} $label eficiencia $(LC_ALL=C printf "%.2f" "$eff") µs/MMAC — outlier >2× mediana ($median_rounded µs/MMAC)"
+                echo -e "  ${YELLOW}⚠ WARN:${NC} $label efficiency $(LC_ALL=C printf "%.2f" "$eff") µs/MMAC — outlier >2× median ($median_rounded µs/MMAC)"
             fi
         done
         echo "  (i) µs/MMAC outlier detection excludes models with total MMAC < ${MIN_MMAC_THRESHOLD} (overhead-dominated regime)"
@@ -1398,7 +1398,7 @@ render_isa_parity() {
     local count
     set +u; count="${#ISA_RESULTS[@]}"; set -u
     if [ -z "$count" ] || [ "$count" -eq 0 ]; then
-        echo -e "  ${YELLOW}(i) Nao coberto no modo quick — rode tests-long para verificacao completa.${NC}"
+        echo -e "  ${YELLOW}(i) Not covered in quick mode — run tests-long for full verification.${NC}"
         echo ""
         return
     fi
@@ -1431,7 +1431,7 @@ render_isa_parity() {
     elif [ "$cross_isa_count" -gt 0 ]; then
         echo -e "  AVX2 vs AVX-512: ${YELLOW}divergent on $((cross_isa_count - cross_isa_pass))/$cross_isa_count models ⚠${NC}"
     else
-        echo "  AVX2 vs AVX-512: sem dados (CPU pode nao ter AVX-512)"
+        echo "  AVX2 vs AVX-512: no data (CPU may lack AVX-512)"
     fi
 
     echo "  Self-consistency checks: $self_consistency_count executados"
@@ -1470,7 +1470,7 @@ render_activation_precision() {
     fi
 
     printf "  %-20s │ %-14s │ %-14s │ %s\n" \
-        "Modelo" "Fast(Pade)" "Standard(exact)" "Δ SNR"
+        "Model" "Fast(Pade)" "Standard(exact)" "Δ SNR"
     printf "  %s │ %s │ %s │ %s\n" \
         "$(printf '─%.0s' {1..20})" "$(printf '─%.0s' {1..14})" \
         "$(printf '─%.0s' {1..14})" "$(printf '─%.0s' {1..10})"
@@ -1511,7 +1511,7 @@ render_activation_precision() {
     if [ "$count_num" -gt 0 ]; then
         local avg
         avg=$(awk -v t="$total" -v c="$count_num" 'BEGIN { printf "%.1f", t / c }')
-        echo "  Ganho SNR medio com Standard(exact): +${avg} dB (sobre ${count_num} modelos LSTM)"
+        echo "  Mean SNR gain with Standard(exact): +${avg} dB (sobre ${count_num} modelos LSTM)"
     fi
     echo ""
 }
@@ -1546,12 +1546,12 @@ render_f64_decomposition() {
     echo "🔍 F64 ORACLE — Decomposicao de Fontes de Erro"
     echo "══════════════════════════════════════════════"
     echo ""
-    echo "  (i) Estas medicoes sao cold-start (256 amostras, SEM prewarm) — NAO"
-    echo "      comparaveis aos valores 'vs Ideal (f64)' da tabela de fidelidade"
-    echo "      acima (medidos com warmup de 24k amostras). Para WaveNet/A2, o"
-    echo "      campo receptivo e maior que a janela de 256 amostras, entao o"
+    echo "  (i) These measurements are cold-start (256 samples, NO prewarm) — NOT"
+    echo "      comparable to the 'vs Ideal (f64)' values in the fidelity table"
+    echo "      above (measured with 24k-sample warmup). For WaveNet/A2, the"
+    echo "      receptive field is larger than the 256-sample window, so the"
     echo "      ESR total abaixo reflete majoritariamente o transiente de"
-    echo "      preenchimento do buffer, nao o piso de precisao em regime"
+    echo "      buffer fill-in, not the steady-state precision floor"
     echo "      permanente. Ver docs/perceptual_validation.md#decomposition-cold-start."
     echo ""
     set +u
@@ -1579,8 +1579,8 @@ render_f64_decomposition() {
             }' 2>/dev/null || echo "n/a")
             if [ "$ratio_flag" != "n/a" ] && [ "$ratio_flag" -gt 10 ] 2>/dev/null; then
                 echo -e "    ${YELLOW}⚠ Rule 5 (Σ sources ≈ total, within 10×) violada: total/combinado ≈ ${ratio_flag}×.${NC}"
-                echo -e "    ${YELLOW}  Esperado para modelos com campo receptivo > janela de medicao (cold-start).${NC}"
-                echo -e "    ${YELLOW}  Nao usar este numero como piso de precisao calibrado sem medicao pareada-com-prewarm.${NC}"
+                echo -e "    ${YELLOW}  Expected for models whose receptive field exceeds the measurement window (cold-start).${NC}"
+                echo -e "    ${YELLOW}  Do not treat this number as a calibrated precision floor without paired prewarm measurement.${NC}"
             fi
         fi
         echo ""
@@ -1596,9 +1596,9 @@ render_spectral_summary() {
     echo "═════════════════════"
     echo ""
     if [ "$count" -gt 0 ]; then
-        echo -e "  ${GREEN}ok${NC} ${count} modelo(s) com metricas espectrais dentro da baseline."
+        echo -e "  ${GREEN}ok${NC} ${count} model(s) with spectral metrics inside baseline."
     else
-        echo -e "  ${YELLOW}(i) Nao coberto no modo quick — rode tests-long para verificacao completa.${NC}"
+        echo -e "  ${YELLOW}(i) Not covered in quick mode — run tests-long for full verification.${NC}"
     fi
     echo ""
 }
@@ -1666,7 +1666,7 @@ extract_test_counts() {
 # ── Render: coverage matrix ─────────────────────────────────────────────────
 
 render_coverage_matrix() {
-    echo "📋 MATRIZ DE COBERTURA POR EIXO (Governanca)"
+    echo "📋 COVERAGE MATRIX BY AXIS (Governance)"
     echo "════════════════════════════════════════════"
     echo ""
 
@@ -1679,46 +1679,46 @@ render_coverage_matrix() {
     local n
     n="${COVERAGE_NAMCORE_PARITY:-0}"
     if [ "$n" -gt 0 ]; then
-        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "NAMCore Parity" "$n" "coberto"
+        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "NAMCore Parity" "$n" "covered"
         covered_axes=$((covered_axes + 1))
     else
-        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "NAMCore Parity" "$n" "nao coberto"
+        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "NAMCore Parity" "$n" "not covered"
     fi
 
     n="${COVERAGE_F64_ORACLE:-0}"
     if [ "$n" -gt 0 ]; then
-        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "f64 Oracle Fidelity" "$n" "coberto"
+        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "f64 Oracle Fidelity" "$n" "covered"
         covered_axes=$((covered_axes + 1))
     else
-        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "f64 Oracle Fidelity" "$n" "nao coberto"
+        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "f64 Oracle Fidelity" "$n" "not covered"
     fi
 
     n="${COVERAGE_ISA_OPTIMIZATIONS:-0}"
     if [ "$n" -gt 0 ]; then
-        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "ISA Optimizations" "$n" "coberto"
+        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "ISA Optimizations" "$n" "covered"
         covered_axes=$((covered_axes + 1))
     else
-        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "ISA Optimizations" "$n" "nao coberto"
+        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "ISA Optimizations" "$n" "not covered"
     fi
 
     n="${COVERAGE_SPECTRAL_BASELINES:-0}"
     if [ "$n" -gt 0 ]; then
-        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "Spectral Baselines" "$n" "coberto"
+        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "Spectral Baselines" "$n" "covered"
         covered_axes=$((covered_axes + 1))
     else
-        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "Spectral Baselines" "$n" "nao coberto"
+        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "Spectral Baselines" "$n" "not covered"
     fi
 
     n="${COVERAGE_RT_PERFORMANCE:-0}"
     if [ "$n" -gt 0 ]; then
-        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "RT Performance" "$n" "coberto"
+        printf "  %-28s │ %-10s │ ${GREEN}%-20s${NC}\n" "RT Performance" "$n" "covered"
         covered_axes=$((covered_axes + 1))
     else
-        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "RT Performance" "$n" "nao coberto"
+        printf "  %-28s │ %-10s │ ${YELLOW}%-20s${NC}\n" "RT Performance" "$n" "not covered"
     fi
 
     echo ""
-    echo "  Cobertura: ${covered_axes}/${total_axes} eixos cobertos"
+    echo "  Coverage: ${covered_axes}/${total_axes} axes covered"
     echo ""
 
     echo "  Contagens de testes no receipt:"
@@ -1736,7 +1736,7 @@ render_footer() {
     end_t=$(date +%s%N)
     total_s=$(awk -v ns=$((end_t - OVERALL_START)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
     echo "───────────────────────────────────────────────────────────────"
-    echo -e "  Dashboard gerado em ${total_s}s (fidelidade: ${FIDELITY_DURATION_S}s, performance: ${BENCH_DURATION_S}s)"
+    echo -e "  Dashboard generated in ${total_s}s (fidelity: ${FIDELITY_DURATION_S}s, performance: ${BENCH_DURATION_S}s)"
     echo ""
 
     local skipped=0
@@ -1750,16 +1750,16 @@ render_footer() {
         skipped=1
     fi
     if [ "$order_count" -eq 0 ] && [ "$MODE" != "bench" ]; then
-        echo -e "  ${YELLOW}(i) Testes de fidelidade nao produziram dados parseaveis.${NC}"
+        echo -e "  ${YELLOW}(i) Fidelity tests produced no parseable data.${NC}"
         echo -e "  ${YELLOW}   Verifique se os modelos e golden vectors estao presentes.${NC}"
         skipped=1
     fi
     if [ "$bench_count" -eq 0 ] && [ "$MODE" != "fidelity" ]; then
-        echo -e "  ${YELLOW}(i) Benchmarks nao produziram dados parseaveis.${NC}"
+        echo -e "  ${YELLOW}(i) Benchmarks produced no parseable data.${NC}"
         skipped=1
     fi
     if [ "$skipped" -eq 1 ] && [ "$phase_failures" -eq 0 ]; then
-        echo -e "  ${YELLOW}(i) Exit code 0 (graceful skip) — dados incompletos nao sao erros de infra.${NC}"
+        echo -e "  ${YELLOW}(i) Exit code 0 (graceful skip) — incomplete data is not an infra error.${NC}"
     fi
     echo ""
 }
@@ -1815,7 +1815,7 @@ load_contract_baseline() {
         elif [ -f "$(basename "$file")" ]; then
             file="$(basename "$file")"
         else
-            echo "ERRO: Arquivo de contrato nao encontrado: ${file}" >&2
+            echo "ERROR: Contract file not found: ${file}" >&2
             exit 2
         fi
     fi
@@ -1823,7 +1823,7 @@ load_contract_baseline() {
     local parsed="$PARSEDIR/contract_baseline.parsed"
     LC_ALL=C awk -F'│' '
     BEGIN { section = "" }
-    /FIDELIDADE[[:space:]]+SONORA/ { section = "fidelity"; next }
+    /AUDIO[[:space:]]+FIDELITY/ { section = "fidelity"; next }
     /PERFORMANCE/ { section = "performance"; next }
     /ACTIVATION|ISA[[:space:]]+PARITY|SPECTRAL[[:space:]]+FIDELITY|F64[[:space:]]+ORACLE/ { section = ""; next }
 
@@ -1834,7 +1834,7 @@ load_contract_baseline() {
         snr = $4; gsub(/^[[:space:]]+|[[:space:]]+$/, "", snr)
         mrstft = $5; gsub(/^[[:space:]]+|[[:space:]]+$/, "", mrstft)
 
-        if (m != "" && m !~ /^[─═]/ && m != "Modelo" && m != "Padrao") {
+        if (m != "" && m !~ /^[─═]/ && m != "Model" && m != "Modelo" && m != "Padrao" && m != "Standard") {
             if (esr_nam ~ /^[0-9.]/) printf "CONTRACT_ESR\t%s\t%s\n", m, esr_nam
             if (esr_f64 ~ /^[0-9.]/ || esr_f64 == "N/A") printf "CONTRACT_ESR_F64\t%s\t%s\n", m, esr_f64
             if (snr ~ /^[0-9.-]/) printf "CONTRACT_SNR\t%s\t%s\n", m, snr
@@ -1845,7 +1845,7 @@ load_contract_baseline() {
         m = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", m)
         lat = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", lat); sub(/[[:space:]]*us$/, "", lat)
 
-        if (m != "" && m !~ /^[─═]/ && m != "Modelo") {
+        if (m != "" && m !~ /^[─═]/ && m != "Model" && m != "Modelo") {
             if (lat ~ /^[0-9.]/) printf "CONTRACT_LATENCY\t%s\t%s\n", m, lat
         }
     }
@@ -1881,12 +1881,12 @@ verify_contract() {
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
-    echo "  VERIFICACAO DE CONTRATO DE QUALIDADE"
+    echo "  QUALITY CONTRACT VERIFICATION"
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
 
     if [ ! -f "$DASHBOARD_PHASE_RECEIPT" ]; then
-        echo -e "  ${RED}✗${NC} Receipt de fases ausente — nao e possivel verificar o contrato."
+        echo -e "  ${RED}✗${NC} Phase receipt missing — cannot verify the contract."
         echo ""
         return 1
     fi
@@ -1894,7 +1894,7 @@ verify_contract() {
     local phase_fail
     phase_fail=$(grep -c '"status":"FAIL"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null || true)
     if [ -n "$phase_fail" ] && [ "$phase_fail" -gt 0 ]; then
-        echo -e "  ${RED}✗${NC} ${phase_fail} fase(s) do dashboard falharam — ver receipt: ${DASHBOARD_PHASE_RECEIPT}"
+        echo -e "  ${RED}✗${NC} ${phase_fail} dashboard phase(s) failed — see receipt: ${DASHBOARD_PHASE_RECEIPT}"
         fidelity_violations=$((fidelity_violations + phase_fail))
     fi
 
@@ -1902,7 +1902,7 @@ verify_contract() {
         local phase_status
         phase_status=$(grep "\"phase_id\":\"${phase_id}\"" "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "NOT_RUN")
         if [ "$phase_status" != "PASS" ]; then
-            echo -e "  ${RED}✗ PHASE_FAILED${NC} Fase obrigatoria '${phase_id}': status=${phase_status} (requer PASS)"
+            echo -e "  ${RED}✗ PHASE_FAILED${NC} Mandatory phase '${phase_id}': status=${phase_status} (requires PASS)"
             fidelity_violations=$((fidelity_violations + 1))
         fi
     done
@@ -1912,11 +1912,11 @@ verify_contract() {
     set +u; esr_contract_count="${#CONTRACT_ESR[@]}"; lat_contract_count="${#CONTRACT_LATENCY[@]}"; set -u
     if [ -z "$esr_contract_count" ] || [ "$esr_contract_count" -eq 0 ]; then
         if [ -z "$lat_contract_count" ] || [ "$lat_contract_count" -eq 0 ]; then
-            echo -e "  ${YELLOW}(i) Arquivo de contrato vazio ou sem metricas reconhecidas.${NC}"
+            echo -e "  ${YELLOW}(i) Contract file empty or has no recognized metrics.${NC}"
             echo ""
             local total_violations=$((fidelity_violations + perf_violations))
             if [ "$total_violations" -gt 0 ]; then
-                echo -e "  ${RED}CONTRATO VIOLADO — ${total_violations} violacao(oes) detectada(s).${NC}"
+                echo -e "  ${RED}CONTRACT VIOLATED — ${total_violations} violation(s) detected.${NC}"
                 echo ""
                 return 1
             fi
@@ -1925,7 +1925,7 @@ verify_contract() {
     fi
 
     if [ -n "$esr_contract_count" ] && [ "$esr_contract_count" -gt 0 ]; then
-        echo "  FIDELIDADE — ${esr_contract_count} modelo(s) no contrato"
+        echo "  FIDELITY — ${esr_contract_count} model(s) in contract"
         echo "  ─────────────────────────────────────────────"
         echo ""
 
@@ -2008,7 +2008,7 @@ verify_contract() {
                         fidelity_violations=$((fidelity_violations + 1))
                     fi
                 elif [ -n "$esr_f64_ctr" ] && [ "$esr_f64_ctr" != "N/A" ] && [ "$esr_f64_cur" = "N/A" ]; then
-                    echo -e "    ${RED}MISSING${NC} ${contract_label}: ESR f64 nao medido mas presente no contrato (f64 baseline: ${esr_f64_ctr})"
+                    echo -e "    ${RED}MISSING${NC} ${contract_label}: f64 ESR not measured but present in contract (f64 baseline: ${esr_f64_ctr})"
                     fidelity_violations=$((fidelity_violations + 1))
                 fi
 
@@ -2021,7 +2021,7 @@ verify_contract() {
                     snr_fail=$(LC_ALL=C awk -v cur="$snr_cur" -v ctr="$snr_ctr" \
                         'BEGIN { if (cur+0 < ctr-6.0) print "1"; else print "0" }')
                     if [ "$snr_fail" = "1" ]; then
-                        echo -e "    ${RED}✗${NC} ${contract_label}: SNR regrediu ${snr_cur_fmt} dB (contrato: ${snr_ctr} dB, limite: $(LC_ALL=C awk -v c="$snr_ctr" 'BEGIN { printf "%.1f", c-6.0 }') dB)"
+                        echo -e "    ${RED}✗${NC} ${contract_label}: SNR regressed ${snr_cur_fmt} dB (contract: ${snr_ctr} dB, limite: $(LC_ALL=C awk -v c="$snr_ctr" 'BEGIN { printf "%.1f", c-6.0 }') dB)"
                         fidelity_violations=$((fidelity_violations + 1))
                     fi
                 fi
@@ -2035,7 +2035,7 @@ verify_contract() {
                     mrstft_fail=$(LC_ALL=C awk -v cur="$mrstft_cur" -v ctr="$mrstft_ctr" \
                         'BEGIN { if (cur+0 > ctr*10.0) print "1"; else print "0" }')
                     if [ "$mrstft_fail" = "1" ]; then
-                        echo -e "    ${RED}✗${NC} ${contract_label}: MR-STFT regrediu ${mrstft_cur_fmt} (contrato: ${mrstft_ctr}, limite: $(LC_ALL=C awk -v c="$mrstft_ctr" 'BEGIN { printf "%.4f", c*10.0 }'))"
+                        echo -e "    ${RED}✗${NC} ${contract_label}: MR-STFT regressed ${mrstft_cur_fmt} (contract: ${mrstft_ctr}, limite: $(LC_ALL=C awk -v c="$mrstft_ctr" 'BEGIN { printf "%.4f", c*10.0 }'))"
                         fidelity_violations=$((fidelity_violations + 1))
                     fi
                 fi
@@ -2045,9 +2045,9 @@ verify_contract() {
                     *"EVH-5150-Lite"*) is_optional_nondist=1 ;;
                 esac
                 if [ "$is_optional_nondist" -eq 1 ]; then
-                    echo -e "    ${YELLOW}(i) OPTIONAL_SKIPPED${NC} ${contract_label}: modelo nao-distribuivel ausente no ambiente local (teste ignorado graciosamente)"
+                    echo -e "    ${YELLOW}(i) OPTIONAL_SKIPPED${NC} ${contract_label}: non-distributable model absent in the local environment (teste ignorado graciosamente)"
                 else
-                    echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: rotulo de contrato obrigatorio nao encontrado na execucao atual"
+                    echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: mandatory contract label not found in current run"
                     fidelity_violations=$((fidelity_violations + 1))
                 fi
             fi
@@ -2057,7 +2057,7 @@ verify_contract() {
     fi
 
     if [ -n "$lat_contract_count" ] && [ "$lat_contract_count" -gt 0 ]; then
-        echo "  PERFORMANCE — ${lat_contract_count} benchmark(s) no contrato"
+        echo "  PERFORMANCE — ${lat_contract_count} benchmark(s) in contract"
         echo "  ─────────────────────────────────────────────────"
         echo ""
 
@@ -2078,17 +2078,17 @@ verify_contract() {
                         lat_fail=$(LC_ALL=C awk -v cur="$lat_cur" -v ctr="$lat_ctr" \
                             'BEGIN { limit = ctr * 1.10; if (limit < ctr + 0.05) limit = ctr + 0.05; if (cur+0 > limit) print "1"; else print "0" }')
                         if [ "$lat_fail" = "1" ]; then
-                            echo -e "    ${RED}✗${NC} ${contract_label}: latencia regrediu ${lat_cur} us (contrato: ${lat_ctr} us, limite: $(LC_ALL=C awk -v c="$lat_ctr" 'BEGIN { lim = c * 1.10; if (lim < c + 0.05) lim = c + 0.05; printf "%.1f", lim }') us)"
+                            echo -e "    ${RED}✗${NC} ${contract_label}: latency regressed ${lat_cur} us (contract: ${lat_ctr} us, limite: $(LC_ALL=C awk -v c="$lat_ctr" 'BEGIN { lim = c * 1.10; if (lim < c + 0.05) lim = c + 0.05; printf "%.1f", lim }') us)"
                             perf_violations=$((perf_violations + 1))
                         else
-                            echo -e "    ${GREEN}ok${NC} ${contract_label}: latencia ${lat_cur} us (contrato: ${lat_ctr} us)"
+                            echo -e "    ${GREEN}ok${NC} ${contract_label}: latency ${lat_cur} us (contract: ${lat_ctr} us)"
                         fi
                     fi
                     break
                 fi
             done
             if [ "$matched" = false ]; then
-                echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: rotulo de contrato nao encontrado na execucao atual"
+                echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: mandatory contract label not found in current run"
                 perf_violations=$((perf_violations + 1))
             fi
         done
@@ -2097,34 +2097,34 @@ verify_contract() {
     fi
 
     if [ "$fidelity_violations" -gt 0 ]; then
-        echo -e "  ${RED}FIDELIDADE: FAIL (${fidelity_violations} violacao(oes))${NC}"
+        echo -e "  ${RED}FIDELITY: FAIL (${fidelity_violations} violation(s))${NC}"
         if [ "$review_required" -gt 0 ]; then
-            echo -e "  ${YELLOW}[GOVERNANCA] REVIEW_REQUIRED — Divergencia NAMCore vs f64 detectada em modelo(s).${NC}"
+            echo -e "  ${YELLOW}[GOVERNANCE] REVIEW_REQUIRED — NAMCore vs f64 divergence detected on model(s).${NC}"
             echo -e "  ${YELLOW}              Nenhum oraculo vence automaticamente. Investigar divergencia.${NC}"
         fi
         if [ "$perf_violations" -gt 0 ]; then
             echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
         fi
-        echo -e "  ${RED}CONTRATO VIOLADO${NC}"
+        echo -e "  ${RED}CONTRACT VIOLATED${NC}"
         echo ""
         return 1
     fi
 
     if [ "$perf_violations" -gt 0 ]; then
-        echo -e "  ${GREEN}FIDELIDADE: OK${NC}"
+        echo -e "  ${GREEN}FIDELITY: OK${NC}"
         echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
         echo ""
         return 1
     fi
 
     if [ "$review_required" -gt 0 ]; then
-        echo -e "  ${YELLOW}CONTRATO EM REVISAO — metricas numericas ok, mas divergencia oracular requer investigacao.${NC}"
+        echo -e "  ${YELLOW}CONTRACT UNDER REVIEW — numeric metrics OK, but oracle divergence needs investigation.${NC}"
         echo -e "  ${YELLOW}                     Nenhum oraculo vence automaticamente.${NC}"
         echo ""
         return 1
     fi
 
-    echo -e "  ${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "  ${GREEN}FIDELITY: OK${NC}"
     echo -e "  ${GREEN}PERFORMANCE: OK${NC}"
     echo ""
     return 0

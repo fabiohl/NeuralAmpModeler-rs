@@ -20,10 +20,7 @@ use crate::common::generate_sine_440hz as generate_sine;
 
 /// Helper: resolves the absolute path to test fixtures.
 fn model_path(filename: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests/fixtures/models");
-    path.push(filename);
-    path
+    neural_amp_modeler_rs::testing::fixtures::model_path(filename)
 }
 
 /// Computes the Mean Squared Error (MSE) using double precision (`f64`).

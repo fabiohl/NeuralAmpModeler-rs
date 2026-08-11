@@ -25,10 +25,7 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 fn model_path(filename: &str) -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("tests/fixtures/models");
-    p.push(filename);
-    p
+    neural_amp_modeler_rs::testing::fixtures::model_path(filename)
 }
 
 fn make_a2_data(channels: u8, dilations: Vec<usize>) -> NamModelData {

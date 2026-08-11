@@ -354,16 +354,26 @@ fn test_quality_contract_uniqueness() {
     let mut in_fidelity = false;
 
     for line in content.lines() {
-        if line.contains("FIDELIDADE") && line.contains("SONORA") {
+        // Section headers (EN after localization; keep PT fallbacks for older snapshots).
+        if (line.contains("AUDIO FIDELITY") && line.contains("Technical Details"))
+            || (line.contains("FIDELIDADE") && line.contains("SONORA"))
+        {
             in_fidelity = true;
             continue;
         }
-        if in_fidelity && (line.contains("Legenda qualitativa") || line.contains("PERFORMANCE")) {
+        if in_fidelity
+            && (line.contains("PERFORMANCE")
+                || line.contains("Qualitative legend")
+                || line.contains("Legenda qualitativa"))
+        {
             break;
         }
         if in_fidelity && line.starts_with("  ") {
             let trimmed = line.trim();
-            if trimmed.contains('│') && !trimmed.starts_with("──") && !trimmed.starts_with("Modelo")
+            if trimmed.contains('│')
+                && !trimmed.starts_with("──")
+                && !trimmed.starts_with("Model")
+                && !trimmed.starts_with("Modelo")
             {
                 let label = trimmed.split('│').next().unwrap_or("").trim().to_string();
                 if !label.is_empty() {

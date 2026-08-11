@@ -79,7 +79,7 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector.
 
-- **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through a shared `resolve_nam_model()` function that mirrors the 5-step search order of `tests/common/io_helpers.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `$NAM_THIRD_PARTY_DIR/nam_t3k/`, (3) `tests/fixtures/models-nondist`, (4) `../third-party/nam_t3k/`, (5) `tests/fixtures/models`. See [tests/fixtures/README.md](../tests/fixtures/README.md) for the complete policy on skip semantics and non-distributable golden handling.
+- **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through `resolve_nam_model()`, matching `src/testing/fixtures.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `third-party/community_models/` (via `NAM_THIRD_PARTY_DIR`), (3) `tests/fixtures/models-nondist`, (4) `tests/fixtures/models`. See [tests/fixtures/README.md](../tests/fixtures/README.md) for skip semantics and non-distributable golden handling.
 
 - **Libm Export Guard:** [utils/debug/verify_no_libm_exports.sh](../utils/debug/verify_no_libm_exports.sh) is a diagnostic ELF surface verification script that inspects compiled artifacts to confirm they do not export libm symbols with global/weak linkage, preventing runtime symbol interposition bugs (documented in [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)).
 
@@ -324,9 +324,9 @@ CPU budget). Ambas são importantes, mas respondem a causas distintas:
   Pode ser sazonal (thermals, governor), ambiental (OS noise, CPU contention) ou
   estrutural (novo caminho de código mais lento para o mesmo resultado correto).
 
-Os scripts de QA reportam esses domínios independentemente: `FIDELIDADE: OK` /
-`PERFORMANCE: FAIL (N)` sinaliza que a qualidade sonora está preservada e apenas o
-orçamento de tempo excedeu o contrato.
+QA scripts report these domains independently: `FIDELITY: OK` /
+`PERFORMANCE: FAIL (N)` means audio quality is preserved and only the
+time budget exceeded the contract.
 
 > [!NOTE]
 > O [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) é a

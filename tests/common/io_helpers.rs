@@ -443,44 +443,11 @@ pub fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-/// Resolves the path to a test model in `tests/fixtures/models/`.
+/// Resolves a test model by basename.
 ///
-/// Search order:
-/// 1. `NAM_MODELS_DIR` environment variable (explicit override)
-/// 2. `NAM_THIRD_PARTY_DIR` + `/nam_t3k/` (workspace vendor area)
-/// 3. `tests/fixtures/models-nondist` (local non-distributable override)
-/// 4. `../third-party/nam_t3k/` (workspace third-party model archive)
-/// 5. `tests/fixtures/models` (default — distributed with the repository)
-pub fn model_path(filename: &str) -> PathBuf {
-    if let Ok(dir) = std::env::var("NAM_MODELS_DIR") {
-        let p = PathBuf::from(&dir).join(filename);
-        if p.exists() {
-            return p;
-        }
-    }
-    if let Ok(tp_dir) = std::env::var("NAM_THIRD_PARTY_DIR") {
-        let p = PathBuf::from(&tp_dir).join("nam_t3k").join(filename);
-        if p.exists() {
-            return p;
-        }
-    }
-    let mut base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut nondist = base.clone();
-    nondist.push("tests/fixtures/models-nondist");
-    nondist.push(filename);
-    if nondist.exists() {
-        return nondist;
-    }
-    let mut t3k = base.clone();
-    t3k.push("../third-party/nam_t3k");
-    t3k.push(filename);
-    if t3k.exists() {
-        return t3k;
-    }
-    base.push("tests/fixtures/models");
-    base.push(filename);
-    base
-}
+/// Thin re-export of [`neural_amp_modeler_rs::testing::fixtures::model_path`]
+/// so integration tests share one search chain with the `testing` feature API.
+pub use neural_amp_modeler_rs::testing::fixtures::model_path;
 
 /// Processes an input block through the model in chunks of `block_size`.
 pub fn process_in_blocks(

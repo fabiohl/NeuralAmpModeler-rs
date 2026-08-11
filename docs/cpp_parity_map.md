@@ -6,7 +6,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 # C++ ↔ Rust Parity Audit — NeuralAmpModelerCore × NAM-rs
 
 Ground-truth comparison between the canonical C++ reference, **NeuralAmpModelerCore**
-("NAMcore", vendored read-only at `../third-party/NeuralAmpModelerCore/`), and the NAM-rs
+("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the NAM-rs
 Rust engine (`src/`). NAMcore is the **sole source of truth** for parity — the f64 reference
 oracle and the NumPy anchor are error-decomposition tools, not arbiters of correctness (see
 [§1.2](#12-the-f64-oracle-is-a-decomposition-tool-not-a-gate)).
@@ -61,7 +61,7 @@ C++ — never the other way around.
 
 ### 1.3 Reference version
 
-The vendored working copy at `../third-party/NeuralAmpModelerCore/` is checked out at tag
+The vendored working copy at `third-party/NeuralAmpModelerCore/` is checked out at tag
 `v0.5.4` (commit `1f42f88`; `NAM/version.h` still says `0.5.3` — the header wasn't bumped for
 the tag). Some older committed golden vectors were generated at `v0.5.3` (`9c7b185`). This
 patch-level drift is below the interop noise floor for all architectures except where explicitly
@@ -84,7 +84,7 @@ model *and* its golden. Verified as a **hard gate** in `utils/tests-quick.sh` Fa
 
 **NAMcore mirror pinning:** `variables.env` pins the vendored C++ reference at
 `NAM_CORE_COMMIT=1f42f88535884450104b8711d7595019afa0495b` (tag `v0.5.4`). Update
-via `utils/mod-update.sh`. See `tests/fixtures/README.md` for the full regeneration walkthrough.
+via `utils/setup-third-party.sh`. See `tests/fixtures/README.md` for the full regeneration walkthrough.
 
 **Calibrated thresholds:** per-model SNR/ESR gates cross-checked by
 `tests/models/threshold_calibration.rs` (anti-placebo meta-tests, `// Measured:` provenance
@@ -464,7 +464,7 @@ All WaveNet A1 catalog models pass their calibrated quality gates with multi-ord
 
 #### 3.9.1 C++ semantics — `WaveNet::_process_condition` and sizing
 
-**Source:** `../third-party/NeuralAmpModelerCore/NAM/wavenet/model.cpp`
+**Source:** `third-party/NeuralAmpModelerCore/NAM/wavenet/model.cpp`
 
 The `condition` matrix flowing through the WaveNet layer cascade is `_condition_output`
 (`Eigen::MatrixXf`, `model.h:76`). Its dimensions are decided in `SetMaxBufferSize`
@@ -1312,10 +1312,10 @@ These do not produce wrong audio, but they can make the *evidence* for parity ev
 - **Non-distributable / external catalog path drift.** `golden_gen_build.sh` resolves models
   through a shared `resolve_nam_model()` shell function that mirrors
   `tests/common/io_helpers.rs::model_path` — scanning five locations in order
-  (`$NAM_MODELS_DIR`, `$NAM_THIRD_PARTY_DIR/nam_t3k/`, `tests/fixtures/models-nondist`,
-  `../third-party/nam_t3k/`, `tests/fixtures/models`). Community captures used in live tests
+  (`$NAM_MODELS_DIR`, `$NAM_THIRD_PARTY_DIR/community_models/`, `tests/fixtures/models-nondist`,
+  `third-party/community_models/`, `tests/fixtures/models`). Community captures used in live tests
   (e.g. `EVH-5150-Lite.nam`, APP-EVH, Boss BD-2, SLAMMIN) are resolved transparently from
-  `third-party/nam_t3k/` when placed there. The stale "not found at … models-nondist" skip
+  `third-party/community_models/` when placed there. The stale "not found at … models-nondist" skip
   from before S2-T1 is eliminated — if a `.nam` file exists at any path, the gen script
   will find and render it. Freshness manifest still gates *present* artifacts; it does not
   prove every catalog entry was regenerated in the last run.

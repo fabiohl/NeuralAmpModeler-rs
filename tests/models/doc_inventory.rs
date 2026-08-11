@@ -227,6 +227,8 @@ fn collect_scripts() -> Vec<String> {
 
 /// Scripts that may be referenced in historical/postmortem docs but
 /// no longer exist (e.g., one-shot debug scripts that were archived).
+// Scripts allowed as doc references even when not treated as standalone
+// user-facing entry points (shared libs / supply-chain helpers).
 const SCRIPT_DOC_EXEMPT: &[&str] = &["utils/_lib.sh", "utils/mod-update.sh"];
 
 /// Known stale source paths in documentation — to be fixed in the

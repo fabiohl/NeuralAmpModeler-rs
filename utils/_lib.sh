@@ -73,7 +73,7 @@ run_dashboard_phase() {
 
     local log_path="$LOGDIR/${phase_id}.log"
 
-    echo -e "${BLUE}${BOLD}-> Executando ${phase_id}...${NC}"
+    echo -e "${BLUE}${BOLD}-> Running ${phase_id}...${NC}"
 
     local start_t end_t exit_code
     start_t=$(date +%s%N)
@@ -96,13 +96,13 @@ run_dashboard_phase() {
     if [ "$exit_code" -ne 0 ]; then
         status="FAIL"
         reason="subprocess exited with code ${exit_code}"
-        echo -e "  ${RED}✗${NC} ${phase_id} falhou (exit_code=${exit_code}, ${dur_s}s, ${observed} linhas)"
+        echo -e "  ${RED}✗${NC} ${phase_id} failed (exit_code=${exit_code}, ${dur_s}s, ${observed} lines)"
     elif [ "$observed" -lt "$min_records" ] && [ "$min_records" -gt 0 ]; then
         status="FAIL"
         reason="min_records=${min_records} not met (observed=${observed})"
-        echo -e "  ${RED}✗${NC} ${phase_id} registros insuficientes: ${observed}/${min_records} (${dur_s}s)"
+        echo -e "  ${RED}✗${NC} ${phase_id} insufficient records: ${observed}/${min_records} (${dur_s}s)"
     else
-        echo -e "  ${GREEN}ok${NC} ${phase_id} concluido (${dur_s}s, ${observed} linhas)"
+        echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_s}s, ${observed} lines)"
     fi
 
     dashboard_phase_receipt "$phase_id" "$status" "$exit_code" "$observed" "$min_records" "$reason"
@@ -114,16 +114,70 @@ run_dashboard_phase() {
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$LIB_DIR")"
 
-# Workspace-level third-party area: vendor mirrors (NeuralAmpModelerCore,
-# NeuralAmpModelerPlugin) live there. The pinned-version source of truth
-# (variables.env) lives at the root of NeuralAmpModeler-rs.
-THIRD_PARTY_DIR="${NAM_THIRD_PARTY_DIR:-$(cd "$PROJECT_DIR/.." 2>/dev/null && pwd)/third-party}"
+# Repo-local third-party area (gitignored): vendor mirrors
+# (NeuralAmpModelerCore, NeuralAmpModelerPlugin) and optional community_models.
+# Populated by utils/setup-third-party.sh. Pins live in variables.env.
+# Override base with NAM_THIRD_PARTY_DIR, or individual trees with NAM_CORE_DIR /
+# NAM_PLUGIN_DIR, when the layout differs.
+THIRD_PARTY_DIR="${NAM_THIRD_PARTY_DIR:-$PROJECT_DIR/third-party}"
 NAM_CORE_DIR="${NAM_CORE_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerCore}"
 NAM_PLUGIN_DIR="${NAM_PLUGIN_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerPlugin}"
 VARIABLES_ENV="${NAM_VARIABLES_ENV:-$PROJECT_DIR/variables.env}"
+SETUP_THIRD_PARTY_SH="${SETUP_THIRD_PARTY_SH:-$PROJECT_DIR/utils/setup-third-party.sh}"
 
 # Automatically enter the project root directory
 cd "$PROJECT_DIR"
+
+# Ensure vendor mirrors exist when a script needs them.
+#
+# Modes:
+#   soft  — if Core is missing, run setup-third-party.sh once; on failure or
+#           still-missing Core, print a warning and return 1 (caller may SKIP).
+#   hard  — same attempt; if Core is still missing afterward, return 1 and the
+#           caller should abort (used by long / golden pipelines).
+#
+# community_models remains optional and is never required here.
+# Skip auto-setup with NAM_SKIP_THIRD_PARTY_SETUP=1.
+ensure_third_party() {
+    local mode="${1:-soft}"
+
+    if [ -d "$NAM_CORE_DIR" ] && [ -e "$NAM_CORE_DIR/.git" ]; then
+        return 0
+    fi
+
+    if [ "${NAM_SKIP_THIRD_PARTY_SETUP:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}ⓘ NAM_SKIP_THIRD_PARTY_SETUP=1 — third-party auto-setup skipped.${NC}"
+        return 1
+    fi
+
+    if [ ! -x "$SETUP_THIRD_PARTY_SH" ] && [ ! -f "$SETUP_THIRD_PARTY_SH" ]; then
+        echo -e "  ${YELLOW}ⓘ setup-third-party.sh not found at $SETUP_THIRD_PARTY_SH.${NC}"
+        return 1
+    fi
+
+    echo -e "  ${BLUE}→ third-party mirrors missing — running utils/setup-third-party.sh...${NC}"
+    if ! bash "$SETUP_THIRD_PARTY_SH"; then
+        echo -e "  ${YELLOW}ⓘ setup-third-party.sh failed.${NC}"
+        return 1
+    fi
+
+    # Re-resolve in case the script used overrides / created trees.
+    THIRD_PARTY_DIR="${NAM_THIRD_PARTY_DIR:-$PROJECT_DIR/third-party}"
+    NAM_CORE_DIR="${NAM_CORE_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerCore}"
+    NAM_PLUGIN_DIR="${NAM_PLUGIN_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerPlugin}"
+
+    if [ -d "$NAM_CORE_DIR" ]; then
+        echo -e "  ${GREEN}✓ third-party ready ($NAM_CORE_DIR).${NC}"
+        return 0
+    fi
+
+    if [ "$mode" = "hard" ]; then
+        echo -e "  ${RED}${BOLD}❌ NeuralAmpModelerCore still missing at $NAM_CORE_DIR after setup.${NC}"
+    else
+        echo -e "  ${YELLOW}ⓘ NeuralAmpModelerCore still missing at $NAM_CORE_DIR — dependent stages will SKIP.${NC}"
+    fi
+    return 1
+}
 
 # ── Toolchain fingerprint check (F-I4 / Tarefa 3.2) ──────────────────────────
 # Reads the # TOOLCHAIN: lines from .golden_manifest.sha256 and compares
@@ -188,17 +242,20 @@ check_toolchain_fingerprint() {
 # ── Centralized freshness gate (F-X4 / Tarefa 3.4) ──────────────────────────
 # Unified freshness validator for golden manifest integrity.
 # Usage: check_freshness <mode>
-#   mode = hard-fail  → RED messages, returns 1 on failure (CI / quick suite)
-#   mode = warn-only  → YELLOW messages, returns 0 always (local dev convenience)
+#   mode = hard-fail       → artifact integrity + generator provenance hard-fail
+#                            (long suite / pre-release)
+#   mode = artifacts-hard  → artifact integrity hard-fail; generator drift warn-only
+#                            (quick suite — daily first line)
+#   mode = warn-only       → all issues YELLOW; always returns 0
 # Bypass: NAM_BYPASS_FRESHNESS=1 skips the entire check (returns 0).
 # Validates:
-#   1. Manifest existence
-#   2. EXPECTED golden files missing from disk
-#   3. Catalog model↔golden SHA pairs (stale models)
-#   4. Standalone fixtures (hash integrity)
-#   5. Generator scripts (warn on change)
-#   6. Reverse-check: .nam files in models/ not registered in manifest
-#   7. Toolchain fingerprint drift (warn-only, always non-blocking)
+#   1. Manifest existence                         (artifact)
+#   2. EXPECTED golden files missing from disk    (artifact)
+#   3. Catalog model↔golden SHA pairs             (artifact)
+#   4. Standalone fixtures (hash integrity)       (artifact)
+#   5. Generator scripts changed                  (provenance; severity by mode)
+#   6. Reverse-check: orphan .nam in models/      (artifact)
+#   7. Toolchain fingerprint drift                (always warn-only)
 check_freshness() {
     local mode="${1:-hard-fail}"
     if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
@@ -209,15 +266,28 @@ check_freshness() {
     local PREFIX=""
     local FAIL_PREFIX=""
     local STALE_PREFIX=""
-    if [ "$mode" = "warn-only" ]; then
-        PREFIX="${YELLOW}⚠"
-        FAIL_PREFIX="${YELLOW}${BOLD}⚠"
-        STALE_PREFIX="${YELLOW}▲"
-    else
-        PREFIX="${RED}${BOLD}❌"
-        FAIL_PREFIX="${RED}${BOLD}❌"
-        STALE_PREFIX="${RED}▲"
-    fi
+    local GEN_HARD=0
+    case "$mode" in
+        warn-only)
+            PREFIX="${YELLOW}⚠"
+            FAIL_PREFIX="${YELLOW}${BOLD}⚠"
+            STALE_PREFIX="${YELLOW}▲"
+            GEN_HARD=0
+            ;;
+        artifacts-hard)
+            PREFIX="${RED}${BOLD}❌"
+            FAIL_PREFIX="${RED}${BOLD}❌"
+            STALE_PREFIX="${RED}▲"
+            GEN_HARD=0
+            ;;
+        hard-fail|*)
+            PREFIX="${RED}${BOLD}❌"
+            FAIL_PREFIX="${RED}${BOLD}❌"
+            STALE_PREFIX="${RED}▲"
+            GEN_HARD=1
+            mode="hard-fail"
+            ;;
+    esac
 
     local MANIFEST="tests/fixtures/.golden_manifest.sha256"
     local MODELS_DIR="tests/fixtures/models"
@@ -226,8 +296,9 @@ check_freshness() {
     if [ ! -f "$MANIFEST" ]; then
         echo -e "${FAIL_PREFIX} Freshness manifest missing: $MANIFEST${NC}"
         echo -e "  ${PREFIX} Run './tests/fixtures/golden_gen_build.sh' to generate goldens and manifest.${NC}"
-        [ "$mode" = "hard-fail" ] && return 1
-        return 0
+        # Missing manifest is artifact integrity — hard in hard-fail and artifacts-hard.
+        [ "$mode" = "warn-only" ] && return 0
+        return 1
     fi
 
     local STALE_COUNT=0
@@ -343,11 +414,16 @@ check_freshness() {
     fi
 
     if [ "$GEN_STALE_COUNT" -gt 0 ]; then
-        echo -e "  ${PREFIX} $GEN_STALE_COUNT generator(s) changed — fixture provenance stale.${NC}"
-        echo -e "  ${PREFIX} Re-run './tests/fixtures/golden_gen_build.sh' to regenerate goldens from current generators.${NC}"
-        echo -e "  ${PREFIX} Golden files may still be *internally consistent* but their provenance no longer matches the generator.${NC}"
         GENERATOR_PROVENANCE_OK=0
-        HAD_FAILURE=1
+        if [ "$GEN_HARD" -eq 1 ]; then
+            echo -e "  ${PREFIX} $GEN_STALE_COUNT generator(s) changed — fixture provenance stale.${NC}"
+            echo -e "  ${PREFIX} Re-run './tests/fixtures/golden_gen_build.sh' to regenerate goldens from current generators.${NC}"
+            echo -e "  ${PREFIX} Golden files may still be *internally consistent* but their provenance no longer matches the generator.${NC}"
+            HAD_FAILURE=1
+        else
+            echo -e "  ${YELLOW}⚠ $GEN_STALE_COUNT generator(s) changed — provenance drift (non-blocking in this mode).${NC}"
+            echo -e "  ${YELLOW}  Goldens may still be internally consistent. Re-run './tests/fixtures/golden_gen_build.sh' before long/pre-release.${NC}"
+        fi
     fi
 
     check_toolchain_fingerprint
@@ -357,8 +433,8 @@ check_freshness() {
     fi
 
     if [ "$HAD_FAILURE" -eq 1 ]; then
-        [ "$mode" = "hard-fail" ] && return 1
-        return 0
+        [ "$mode" = "warn-only" ] && return 0
+        return 1
     fi
 
     local summary="Freshness gate passed"

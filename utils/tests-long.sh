@@ -118,11 +118,11 @@ trap 'rm -f "$TIMED_TRACKER"' EXIT
 # Cleanup accumulated live-test artifacts from previous runs (41+ MB WAVs)
 rm -rf tests/fixtures/.temp_live/
 
-# Verify NeuralAmpModelerCore presence (workspace third-party mirror,
+# Verify NeuralAmpModelerCore presence (repo-local third-party mirror,
 # resolved by _lib.sh; override via NAM_THIRD_PARTY_DIR or NAM_CORE_DIR).
-if [ ! -d "$NAM_CORE_DIR" ]; then
-    echo -e "${RED}${BOLD}❌ NeuralAmpModelerCore not found in $NAM_CORE_DIR.${NC}"
-    echo -e "${YELLOW}Please run './utils/mod-update.sh' to clone and setup workspace dependencies.${NC}"
+# Auto-populate once if missing (hard: abort long suite without Core).
+if ! ensure_third_party hard; then
+    echo -e "${RED}${BOLD}❌ NeuralAmpModelerCore not available — long suite requires it.${NC}"
     exit 1
 fi
 
@@ -313,7 +313,7 @@ if [ ${#MISSING_GOLDENS[@]} -gt 0 ] || [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
         if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
             echo -e "  ${YELLOW}→ Install: cmake >= 3.10, g++/clang++ with C++20 support${NC}"
         fi
-        echo -e "  ${YELLOW}→ Run: ./utils/mod-update.sh${NC}"
+        echo -e "  ${YELLOW}→ Run: ./utils/setup-third-party.sh${NC}"
         exit 1
     fi
 fi
@@ -355,7 +355,8 @@ fi
 echo -e "${GREEN}✓ Package exclusion verified — no models-nondist/ or third-party/ artifacts in crate.${NC}"
 
 # ── Freshness gate (blocking, centralized) ──
-# Both quick and long now use the same hard-fail gate from _lib.sh.
+# hard-fail: artifact integrity + generator provenance (stricter than quick's
+# artifacts-hard, which only warns on generator-script drift).
 # Bypass with NAM_BYPASS_FRESHNESS=1 for local developer convenience.
 echo -e "\n→ Checking freshness of test fixtures and goldens..."
 check_freshness hard-fail || exit 1
@@ -704,15 +705,15 @@ rm -f "$TIMED_TRACKER"
 
 if [ $ANY_FAILED -eq 0 ]; then
     echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
-    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
     echo -e "${GREEN}PERFORMANCE: OK${NC}"
     exit 0
 else
     echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check logs in target/logs/${NC}"
     if [ $ANY_FIDELITY_FAILED -eq 1 ]; then
-        echo -e "${RED}FIDELIDADE: FAIL${NC}"
+        echo -e "${RED}FIDELITY: FAIL${NC}"
     else
-        echo -e "${GREEN}FIDELIDADE: OK${NC}"
+        echo -e "${GREEN}FIDELITY: OK${NC}"
     fi
     if [ $ANY_PERF_FAILED -eq 1 ]; then
         echo -e "${RED}PERFORMANCE: FAIL${NC}"

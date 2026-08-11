@@ -10,7 +10,7 @@
 //! - Internal neural state consistency across audio buffer fragmentation.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
@@ -20,23 +20,8 @@ use neural_amp_modeler_rs::testing::stress::{
     STANDARD_TEST_BLOCK_SIZES, generate_stress_signal_v1, verify_block_invariance_for_model,
 };
 
-fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
 fn resolve_fixture_path(path_str: &str) -> Option<PathBuf> {
-    let manifest = manifest_dir();
-    let workspace_root = manifest.parent().unwrap_or(&manifest);
-    let p = Path::new(path_str);
-    let cand1 = manifest.join(p);
-    if cand1.exists() {
-        return Some(cand1);
-    }
-    let cand2 = workspace_root.join(p);
-    if cand2.exists() {
-        return Some(cand2);
-    }
-    None
+    neural_amp_modeler_rs::testing::fixtures::resolve_repo_path(path_str)
 }
 
 #[test]

@@ -16,14 +16,13 @@ fn test_nondist_models_validation() {
     nondist_path.push("tests/fixtures/models-nondist");
 
     if !nondist_path.exists() {
-        let mut third_party_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        third_party_path.push("../third-party/nam_t3k");
-        if third_party_path.exists() {
-            nondist_path = third_party_path;
+        let community = neural_amp_modeler_rs::testing::fixtures::community_models_dir();
+        if community.exists() {
+            nondist_path = community;
         } else {
             println!(
-                "SKIP: Non-distributable models directory {:?} not found.",
-                nondist_path
+                "SKIP: Non-distributable models directory not found \
+                 (tests/fixtures/models-nondist or third-party/community_models)."
             );
             return;
         }

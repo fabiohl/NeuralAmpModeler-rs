@@ -9,7 +9,7 @@
 # NeuralAmpModelerPlugin (IR reference, tag also pinned in variables.env).
 # All goldens (A1/LSTM/WaveNet/A2/ConvNet/Dyn) are rendered from a single pinned
 # commit.  Pinned versions (commits, tags, repo URLs) live in
-# variables.env — sourced by both this script and utils/mod-update.sh.
+# variables.env — sourced by both this script and utils/setup-third-party.sh.
 # A mismatch between the vendored working copy and the pin in variables.env causes
 # this script's version-mismatch guard (below) to hard-fail. Some older committed
 # goldens were rendered at v0.5.3 (9c7b185); the patch-level diff is below the
@@ -32,10 +32,11 @@
 # Usage:
 #   ./tests/fixtures/golden_gen_build.sh
 #
-# Workspace-level vendor mirrors (managed by utils/mod-update.sh):
-#   ../third-party/NeuralAmpModelerCore/   (~143 MB) — C++ upstream render engine
-#   ../third-party/NeuralAmpModelerPlugin/ (~164 MB) — C++ upstream plugin (IR reference)
-#   build/namcore_render/                  (~6 MB)   — C++ build artifacts (repo-local, gitignored)
+# Repo-local vendor mirrors (managed by utils/setup-third-party.sh):
+#   third-party/NeuralAmpModelerCore/   (~143 MB) — C++ upstream render engine
+#   third-party/NeuralAmpModelerPlugin/ (~164 MB) — C++ upstream plugin (IR reference)
+#   third-party/community_models/       (optional symlink) — non-distributable test models
+#   build/namcore_render/               (~6 MB)   — C++ build artifacts (repo-local, gitignored)
 #   The third-party base directory can be overridden via NAM_THIRD_PARTY_DIR.
 #
 # Output (tests/fixtures/):
@@ -77,16 +78,16 @@ mkdir -p "$LOGS_DIR"
 
 # Load common utilities (phase helper, color vars, third-party resolution:
 # THIRD_PARTY_DIR, NAM_CORE_DIR, NAM_PLUGIN_DIR, VARIABLES_ENV).
-PHASE_TOTAL=12
+PHASE_TOTAL=13
 source "$PROJECT_ROOT/utils/_lib.sh"
 
-# Shell shared resolve — mirrors tests/common/io_helpers.rs::model_path order.
+# Shell shared resolve — mirrors src/testing/fixtures.rs::model_path order.
 # Usage: resolve_nam_model <filename>  →  echoes absolute path || return 1
 resolve_nam_model() {
     local filename="$1"
     local p
 
-    # (1) NAM_MODELS_DIR env var (explicit override) — io_helpers step 1
+    # (1) NAM_MODELS_DIR env var (explicit override)
     if [ -n "${NAM_MODELS_DIR:-}" ]; then
         p="$NAM_MODELS_DIR/$filename"
         if [ -f "$p" ]; then
@@ -95,30 +96,21 @@ resolve_nam_model() {
         fi
     fi
 
-    # (2) NAM_THIRD_PARTY_DIR/nam_t3k/ (workspace vendor area) — io_helpers step 2
-    if [ -n "${NAM_THIRD_PARTY_DIR:-}" ]; then
-        p="$NAM_THIRD_PARTY_DIR/nam_t3k/$filename"
-        if [ -f "$p" ]; then
-            echo "$p"
-            return 0
-        fi
+    # (2) third-party/community_models/ (respects NAM_THIRD_PARTY_DIR via _lib.sh)
+    p="$THIRD_PARTY_DIR/community_models/$filename"
+    if [ -f "$p" ]; then
+        echo "$p"
+        return 0
     fi
 
-    # (3) tests/fixtures/models-nondist (local non-distributable override) — io_helpers step 3
+    # (3) tests/fixtures/models-nondist (local non-distributable override)
     p="$FIXTURES_DIR/models-nondist/$filename"
     if [ -f "$p" ]; then
         echo "$p"
         return 0
     fi
 
-    # (4) ../third-party/nam_t3k/ (workspace third-party archive, relative to crate) — io_helpers step 4
-    p="$PROJECT_ROOT/../third-party/nam_t3k/$filename"
-    if [ -f "$p" ]; then
-        echo "$p"
-        return 0
-    fi
-
-    # (5) tests/fixtures/models (default — distributed with the repository) — io_helpers step 5
+    # (4) tests/fixtures/models (default — distributed with the repository)
     p="$MODELS_DIR/$filename"
     if [ -f "$p" ]; then
         echo "$p"
@@ -163,26 +155,35 @@ fi
 echo "  C++ Compiler: $CXX"
 
 # =============================================================================
+# Ensure vendor mirrors (Core + Plugin) are present
+# =============================================================================
+phase "Ensuring third-party vendor mirrors..."
+if ! ensure_third_party hard; then
+    echo "ERROR: third-party vendor mirrors unavailable after setup."
+    exit 1
+fi
+
+# =============================================================================
 # Verify NeuralAmpModelerPlugin and dependencies
 # =============================================================================
 phase "Verifying NeuralAmpModelerPlugin (C++ IR reference)..."
 if [ ! -d "$NAM_PLUGIN_DIR" ]; then
     echo "ERROR: NeuralAmpModelerPlugin not found at $NAM_PLUGIN_DIR."
-    echo "Please run './utils/mod-update.sh' to download and setup dependencies."
+    echo "Please run './utils/setup-third-party.sh' to download and setup dependencies."
     exit 1
 fi
 
 CURRENT_PLUGIN_SHA=$(cd "$NAM_PLUGIN_DIR" && git rev-parse HEAD 2>/dev/null || echo "unknown")
 if [ "$CURRENT_PLUGIN_SHA" != "$NAM_PLUGIN_COMMIT" ]; then
     echo "ERROR: NeuralAmpModelerPlugin version mismatch ($NAM_PLUGIN_TAG @ $NAM_PLUGIN_COMMIT expected, installed: $CURRENT_PLUGIN_SHA)."
-    echo "Please run './utils/mod-update.sh' to synchronize dependencies."
+    echo "Please run './utils/setup-third-party.sh' to synchronize dependencies."
     exit 1
 fi
 
 AUDIO_DSP_TOOLS_DIR="$NAM_PLUGIN_DIR/AudioDSPTools"
 if [ ! -f "$AUDIO_DSP_TOOLS_DIR/dsp/ImpulseResponse.cpp" ] || [ ! -d "$AUDIO_DSP_TOOLS_DIR/Dependencies/eigen/Eigen" ]; then
     echo "ERROR: Submodules for NeuralAmpModelerPlugin are missing."
-    echo "Please run './utils/mod-update.sh' to initialize submodules."
+    echo "Please run './utils/setup-third-party.sh' to initialize submodules."
     exit 1
 fi
 echo "  NeuralAmpModelerPlugin verified ($NAM_PLUGIN_TAG @ $NAM_PLUGIN_COMMIT, submodules present)"
@@ -193,14 +194,14 @@ echo "  NeuralAmpModelerPlugin verified ($NAM_PLUGIN_TAG @ $NAM_PLUGIN_COMMIT, s
 phase "Verifying NeuralAmpModelerCore..."
 if [ ! -d "$NAM_CORE_DIR" ]; then
     echo "ERROR: NeuralAmpModelerCore not found at $NAM_CORE_DIR."
-    echo "Please run './utils/mod-update.sh' to download and setup dependencies."
+    echo "Please run './utils/setup-third-party.sh' to download and setup dependencies."
     exit 1
 fi
 
 CURRENT_CORE_SHA=$(cd "$NAM_CORE_DIR" && git rev-parse HEAD 2>/dev/null || echo "unknown")
 if [ "$CURRENT_CORE_SHA" != "$NAM_CORE_COMMIT" ]; then
     echo "ERROR: NeuralAmpModelerCore version mismatch ($NAM_CORE_TAG @ $NAM_CORE_COMMIT expected, installed: $CURRENT_CORE_SHA)."
-    echo "Please run './utils/mod-update.sh' to synchronize dependencies."
+    echo "Please run './utils/setup-third-party.sh' to synchronize dependencies."
     exit 1
 fi
 
@@ -208,7 +209,7 @@ for sub in eigen AudioDSPTools; do
     sub_path="$NAM_CORE_DIR/Dependencies/$sub"
     if [ ! -d "$sub_path" ] || [ -z "$(ls -A "$sub_path" 2>/dev/null)" ]; then
         echo "ERROR: Submodule $sub is missing in NeuralAmpModelerCore."
-        echo "Please run './utils/mod-update.sh' to initialize submodules."
+        echo "Please run './utils/setup-third-party.sh' to initialize submodules."
         exit 1
     fi
 done

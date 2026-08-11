@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-# Ignorar arquivos temporários
+# Temporary / OS junk
 *.tmp*
 .DS_Store
 Thumbs.db
@@ -10,69 +10,64 @@ repomix-*.xml
 *.swp
 *.log
 
-# Defesa em profundidade: impede commit de metadados .git/ aninhados em qualquer subdiretório
-# (ex.: se /github.com/ for futuramente unignorado por engano, .git/ aninhados não serão stagedos).
+# Defense in depth: never stage nested .git/ metadata under any subdirectory
 **/.git/
 
-# Ignorar artefatos do Rust
-#Cargo.lock
+# Rust build artifacts
 /target
 
-# Ignorar diretório de scratch (artefatos de debug/protótipos temporários)
+# Scratch / ad-hoc debug prototypes
 scratch/
 scratch
 scratch.rs
 
-# Binários e scripts de debug compilados ad-hoc na raiz
+# Ad-hoc root binaries and scripts (keep the tests/ tree)
 /test_*
 !/tests/
 
-# Golden vectors de validação numérica (não ignorar)
+# Golden vectors for numerical validation (do not ignore)
 !tests/fixtures/*.bin
 
-# Ignorar arquivos json desnecessários mas liberar os de testes
+# Ignore stray JSON except test fixtures
 *.json
 !tests/fixtures/**/*.json
 
-# Proptest regression files (gerados automaticamente)
+# Proptest regression files (auto-generated)
 *.proptest-regressions
 
-# Fuzzing (cargo-fuzz)
-# Mantemos apenas os targets e a configuração. Ignoramos o corpus evoluído e artefatos de crash.
+# cargo-fuzz: keep targets/config; ignore evolved corpus and crash artifacts
 fuzz/target/
 fuzz/artifacts/
 fuzz/corpus/
 fuzz/Cargo.lock
 
-# Artefatos do cargo-mutants
+# cargo-mutants artifacts
 .mutants/
 .out/
 mutants.out.old/
 
-# Artefatos de terceiros
+# Local-only third-party area (populated by utils/setup-third-party.sh).
+# Holds pinned upstream mirrors (NeuralAmpModelerCore, NeuralAmpModelerPlugin)
+# and the optional community_models symlink — never commit vendor trees.
 /third-party
 
-# C++ upstream vendor mirrors NÃO vivem mais neste repositório:
-# ficam concentrados na área third-party do workspace (../third-party/),
-# sincronizados por utils/mod-update.sh com pins de ../third-party/variables.env.
-
-# Build artifacts do render tool C++
+# C++ render-tool build artifacts
 /tests/fixtures/render_ir
 /build/
 
-# Arquivos temporários dos scripts de geração de golden vectors
+# Temporary files from golden-vector generation scripts
 /tests/fixtures/.temp_golden/
 /tests/fixtures/.temp_live/
 
-# Lixo de regeneração de âncoras f64 (nunca commitar .new / backups ao lado do bin canônico)
+# f64 anchor regeneration junk (never commit .new / backups next to canonical bins)
 tests/fixtures/f64_anchors/*.bin.new
 tests/fixtures/f64_anchors/*.bin.old
 tests/fixtures/f64_anchors/*.bin.old.backup
 tests/fixtures/f64_anchors/*.backup
 
-# Artefatos de bytecode Python (scripts de fixtures/utilitários)
+# Python bytecode from fixture/utility scripts
 __pycache__/
 *.pyc
 
-# Artefatos de ferramentas locais de IDE:
+# Local IDE tooling
 /.kilo/

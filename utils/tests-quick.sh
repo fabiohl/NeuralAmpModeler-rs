@@ -66,7 +66,7 @@
 # CMake configure / build failure       cmake fails to configure or         cpp_parity entirely skipped.
 #                                       build the C++ render binary         Tracked by: CPP_PARITY_SKIPPED
 #
-# NAMCore not checked out               ../third-party/NeuralAmpModeler     cpp_parity entirely skipped.
+# NAMCore not checked out               third-party/NeuralAmpModelerCore    cpp_parity entirely skipped.
 #                                       Core directory absent               Tracked by: CPP_PARITY_SKIPPED
 #
 # All mandatory tests are NOT skippable — their failure always produces exit
@@ -263,9 +263,10 @@ fi
 # In debug mode, this would measure a non-optimized binary.
 phase "Measurement oracles (release — production float gate)..."
 
-# Freshness gate (blocking): detects modified .nam models without corresponding
-# golden regeneration. Hard fail — "Every Golden Must Be Able To Fail".
-if ! check_freshness; then
+# Freshness gate: artifact integrity hard-fails (missing/stale goldens, orphan
+# models). Generator-script drift is warn-only here — hard-fail is reserved for
+# tests-long / pre-release (see check_freshness artifacts-hard vs hard-fail).
+if ! check_freshness artifacts-hard; then
     exit 1
 fi
 
@@ -297,7 +298,9 @@ fi
 # C++ Parity — separate invocation because the `quick_parity` filter
 # (required to run only the agile subset) would suppress other oracles if combined.
 # Self-skips gracefully if C++ render binary cannot be compiled.
-# The NAMCore mirror lives in third-party workspace directory (resolved in _lib.sh).
+# The NAMCore mirror lives in repo-local third-party/ (resolved in _lib.sh).
+# Auto-populate once if missing (soft: SKIP cpp_parity on failure).
+ensure_third_party soft || true
 if [ -d "$NAM_CORE_DIR" ]; then
     # ── Preventive render compilation ────────────────────────────
     # Build the C++ render binary before cargo test so the CMake build time
@@ -321,7 +324,6 @@ if [ -d "$NAM_CORE_DIR" ]; then
             echo -e "  ${YELLOW}ⓘ C++ compiler not found — skipping cpp_parity.${NC}"
             SKIP_CPP_PARITY=true
         else
-            source "$VARIABLES_ENV" 2>/dev/null || true
             mkdir -p "$RENDER_BUILD_DIR"
             NPROC_CMD=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
             if cmake -S "$NAM_CORE_DIR" -B "$RENDER_BUILD_DIR" \
@@ -354,14 +356,14 @@ if [ -d "$NAM_CORE_DIR" ]; then
     fi
 else
     echo -e "  ${YELLOW}ⓘ NeuralAmpModelerCore not found in $NAM_CORE_DIR.${NC}"
-    echo -e "  ${YELLOW}  Run './utils/mod-update.sh' to synchronize the third-party mirror.${NC}"
+    echo -e "  ${YELLOW}  Run './utils/setup-third-party.sh' to populate the third-party mirrors.${NC}"
     echo -e "  ${YELLOW}  Skipping cpp_parity (live C++ parity).${NC}"
     CPP_PARITY_SKIPPED=true
 fi
 
 if [ "$MEASUREMENT_STATUS" -ne 0 ]; then
     echo -e "${RED}${BOLD}❌ Measurement oracle gate (release) failed.${NC}"
-    echo -e "${RED}FIDELIDADE: FAIL${NC}"
+    echo -e "${RED}FIDELITY: FAIL${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
     exit 1
 fi
@@ -380,21 +382,21 @@ if [ "$GOLDEN_RAN" = true ] && [ "$CPP_PARITY_SKIPPED" = false ]; then
     echo -e "${GREEN}${BOLD}================================================================${NC}"
     echo -e "${GREEN}${BOLD}      All quick tests passed! (structural + measurement)         ${NC}"
     echo -e "${GREEN}${BOLD}================================================================${NC}"
-    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 elif [ "$GOLDEN_RAN" = true ]; then
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
     echo -e "${YELLOW}${BOLD}    Quick tests passed (cpp_parity skipped —                     ${NC}"
     echo -e "${YELLOW}${BOLD}     C++ render binary unavailable)                             ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
-    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 elif [ "$CPP_PARITY_SKIPPED" = false ]; then
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
     echo -e "${YELLOW}${BOLD}    Quick tests passed (golden_vectors + isa_parity              ${NC}"
     echo -e "${YELLOW}${BOLD}     skipped — generate golden vectors for full coverage)       ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
-    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 else
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
@@ -402,6 +404,6 @@ else
     echo -e "${YELLOW}${BOLD}     and cpp_parity skipped — generate goldens and C++ render    ${NC}"
     echo -e "${YELLOW}${BOLD}     for full coverage)                                         ${NC}"
     echo -e "${YELLOW}${BOLD}================================================================${NC}"
-    echo -e "${GREEN}FIDELIDADE: OK${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A (use tests-long.sh)${NC}"
 fi

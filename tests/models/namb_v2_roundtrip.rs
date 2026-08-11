@@ -27,10 +27,7 @@ use crate::common::generate_sine_440hz as generate_sine;
 // =============================================================================
 
 fn model_path(filename: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests/fixtures/models");
-    path.push(filename);
-    path
+    neural_amp_modeler_rs::testing::fixtures::model_path(filename)
 }
 
 fn compute_mse(a: &[f32], b: &[f32]) -> f64 {

@@ -211,17 +211,51 @@ Full API documentation:
 
 ---
 
+## 🧰 Local Development Environment (engine maintainers)
+
+Crate **consumers** only need a Rust toolchain and the published crate — no vendor trees.
+
+Developers working **on NeuralAmpModeler-rs itself** (parity, golden regeneration, cabsim C++
+cross-validation, optional community-model tests) should prepare a local `third-party/` tree
+after clone. That directory is **gitignored** and is never part of the published package:
+
+```bash
+# From the NeuralAmpModeler-rs repository root:
+./utils/setup-third-party.sh
+
+# Optional: link a private non-distributable model archive
+NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models ./utils/setup-third-party.sh
+# or: ln -s /path/to/your/nam_models third-party/community_models
+```
+
+| Path | Role |
+|:----- |:----- |
+| `third-party/NeuralAmpModelerCore/` | Pinned C++ NAMCore mirror (render / parity) |
+| `third-party/NeuralAmpModelerPlugin/` | Pinned C++ plugin mirror (IR / cabsim xref) |
+| `third-party/community_models/` | Optional symlink to local community models (not redistributable) |
+| `variables.env` | Version-controlled pin file (tags/commits/URLs) |
+
+Tests and scripts **skip gracefully** when these artifacts are missing. Override locations with
+`NAM_THIRD_PARTY_DIR`, `NAM_CORE_DIR`, `NAM_PLUGIN_DIR`, or `NAM_MODELS_DIR` if needed.
+See [`tests/fixtures/README.md`](tests/fixtures/README.md) for the full model search order.
+
+Rust dependency supply-chain updates remain separate: `./utils/mod-update.sh`.
+
+---
+
 ## 🧪 CI & QA Automation Suite (`./utils/`)
 
 The `./utils/` directory contains maintainer tools and standard scripts for code quality, numerical verification, and continuous integration:
 
-| Script                                                     | Purpose & Execution Scope                                                                                                                                                                                                                                                          |
-|:---------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`utils/lints.sh`](utils/lints.sh)                         | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                               |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)             | **Agile 1st Line QA:** Runs structural unit and integration tests (`cargo test`) in both debug and release modes with low CPU/IO priority.                                                                                                                                         |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh) | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.txt`.                                                                                                                                                      |
-| [`utils/check-model.sh`](utils/check-model.sh)             | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                   |
-| [`utils/tests-long.sh`](utils/tests-long.sh)               | **Nightly / Pre-Release Suite:** Executes heavy soak tests, full proptest/fuzz sweeps, full C++ parity audits, cross-ISA tests, real-time safety, and heap-allocation audits. *(AI agents must not run this script directly due to runtime length; ask human operator if needed).* |
+| Script                                                           | Purpose & Execution Scope                                                                                                                                                                                                                                                          |
+|:---------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`utils/setup-third-party.sh`](utils/setup-third-party.sh)       | **Local env bootstrap:** Clones/syncs pinned NAMCore + Plugin mirrors into `third-party/` and optionally links `community_models`. Required for full parity/golden work; not needed by crate consumers.                                                                            |
+| [`utils/mod-update.sh`](utils/mod-update.sh)                     | **Rust supply chain:** Updates rustup toolchain, `cargo upgrade`, and `Cargo.lock` (does **not** manage vendor mirrors).                                                                                                                                                           |
+| [`utils/lints.sh`](utils/lints.sh)                               | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                               |
+| [`utils/tests-quick.sh`](utils/tests-quick.sh)                   | **Agile 1st Line QA:** Runs structural unit and integration tests (`cargo test`) in both debug and release modes with low CPU/IO priority.                                                                                                                                         |
+| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)       | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.txt`.                                                                                                                                                      |
+| [`utils/check-model.sh`](utils/check-model.sh)                   | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                   |
+| [`utils/tests-long.sh`](utils/tests-long.sh)                     | **Nightly / Pre-Release Suite:** Executes heavy soak tests, full proptest/fuzz sweeps, full C++ parity audits, cross-ISA tests, real-time safety, and heap-allocation audits. *(AI agents must not run this script directly due to runtime length; ask human operator if needed).* |
 
 ---
 

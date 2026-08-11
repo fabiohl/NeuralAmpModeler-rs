@@ -382,7 +382,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "7c0b6a15058c7a6d8d9025c7bd96a4563a637dbe4b2506fbfe003ed157b97616",
-        canonical_path: "third-party/nam_t3k/APP-EVH-Stealth100-Dialled-xSTD.nam",
+        canonical_path: "third-party/community_models/APP-EVH-Stealth100-Dialled-xSTD.nam",
         aliases: &[],
         architecture: "{'channels': 8, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -390,7 +390,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "cddd9e9e8fdeccb9f51b34f4c23f0f0d444c3faed307e962f76db7c6d287e1bf",
-        canonical_path: "third-party/nam_t3k/BOG UU II Gain BAL CAB.nam",
+        canonical_path: "third-party/community_models/BOG UU II Gain BAL CAB.nam",
         aliases: &[],
         architecture: "{'channels': 8, 'topology': 'Unknown', 'type': 'SlimmableContainer', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -398,7 +398,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "7ffd11c244664c737363d8d8753c3843f124b76a7afac7f15bcaebe0b6fd59f0",
-        canonical_path: "third-party/nam_t3k/Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
+        canonical_path: "third-party/community_models/Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
         aliases: &[],
         architecture: "{'channels': 9, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -406,7 +406,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "66a4be684f6599c172d406af8f7206539fde8ffda9fd9eaefe5f3a09f388a0b8",
-        canonical_path: "third-party/nam_t3k/ChandlerRedd47-Gain34-Standard.nam",
+        canonical_path: "third-party/community_models/ChandlerRedd47-Gain34-Standard.nam",
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -414,7 +414,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "4404e56fbe20a30d57735a3294c8023c22a27bc63d0f4994b3d889605c445ad6",
-        canonical_path: "third-party/nam_t3k/EVH-5150-Lite.nam",
+        canonical_path: "third-party/community_models/EVH-5150-Lite.nam",
         aliases: &[],
         architecture: "{'channels': 12, 'topology': 'Lite', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -422,7 +422,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "d3f6c9e6f08cdd2a2f99ef910abdd5e37a6e1a83f79f47f40011aefcb7ec1f66",
-        canonical_path: "third-party/nam_t3k/little-bear-t7_phono-aux-tube-preamp_line-in_Standard.nam",
+        canonical_path: "third-party/community_models/little-bear-t7_phono-aux-tube-preamp_line-in_Standard.nam",
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -430,7 +430,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "4257fc55a0cf105292613a7ed8864b933f809cc265694e8f14b5b522223697fe",
-        canonical_path: "third-party/nam_t3k/NEVE1073-Standard.nam",
+        canonical_path: "third-party/community_models/NEVE1073-Standard.nam",
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -438,7 +438,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "c76c0666945213deb8f43b53690ef64ce72e5b8c562725d75a1b106372e81a61",
-        canonical_path: "third-party/nam_t3k/SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
+        canonical_path: "third-party/community_models/SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
         aliases: &[],
         architecture: "{'channels': 32, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
@@ -446,7 +446,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
     },
     ModelCatalogEntry {
         sha256: "203fac43316573ecb56e4e060d361d29669084259362b09b6e728e3f3d548a2d",
-        canonical_path: "third-party/nam_t3k/UA610B-Gain+10-Standard.nam",
+        canonical_path: "third-party/community_models/UA610B-Gain+10-Standard.nam",
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,

@@ -65,11 +65,10 @@ fn resolve_model_path(model_filename: &str) -> PathBuf {
     if nondist.exists() {
         return nondist;
     }
-    let t3k = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../third-party/nam_t3k")
-        .join(model_filename);
-    if t3k.exists() {
-        return t3k;
+    let community =
+        neural_amp_modeler_rs::testing::fixtures::community_models_dir().join(model_filename);
+    if community.exists() {
+        return community;
     }
     path
 }

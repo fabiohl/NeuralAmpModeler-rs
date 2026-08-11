@@ -92,19 +92,9 @@ fn require_completed(outcome: ParityOutcome, test_name: &str) {
 
 /// Resolves the NeuralAmpModelerCore vendor mirror directory.
 ///
-/// Search order:
-/// 1. `NAM_CORE_DIR` environment variable (explicit override)
-/// 2. `../third-party/NeuralAmpModelerCore` relative to this crate's manifest
-///    (workspace-level vendor area, synced by `utils/mod-update.sh`)
-///
-/// The mirror lives outside this repository to keep it clean; override
-/// `NAM_THIRD_PARTY_DIR` (honored by the shell scripts) or `NAM_CORE_DIR`
-/// when the workspace layout differs.
+/// See [`neural_amp_modeler_rs::testing::fixtures::nam_core_dir`].
 fn nam_core_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("NAM_CORE_DIR") {
-        return PathBuf::from(dir);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../third-party/NeuralAmpModelerCore")
+    neural_amp_modeler_rs::testing::fixtures::nam_core_dir()
 }
 
 const BUILD_DIR: &str = "build/namcore_render";

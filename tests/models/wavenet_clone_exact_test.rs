@@ -9,21 +9,12 @@ use neural_amp_modeler_rs::loader::nam_json::NamModelData;
 use neural_amp_modeler_rs::models::StaticModel;
 use neural_amp_modeler_rs::models::slimmable::clone_wavenet_for_slimmable_storage;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn find_model_path(basename: &str) -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let p1 = manifest_dir.join("tests/fixtures/models").join(basename);
-    if p1.exists() {
-        return p1;
-    }
-    let p2 = manifest_dir
-        .parent()
-        .unwrap_or(manifest_dir)
-        .join("third-party/nam_t3k")
-        .join(basename);
-    if p2.exists() {
-        return p2;
+    let path = neural_amp_modeler_rs::testing::fixtures::model_path(basename);
+    if path.exists() {
+        return path;
     }
     panic!("Model file not found: {basename}");
 }

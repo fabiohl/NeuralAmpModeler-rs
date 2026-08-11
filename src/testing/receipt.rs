@@ -18,7 +18,7 @@
 //! - `SKIPPED_ENVIRONMENTAL`: Stage skipped due to missing optional third-party fixtures or hardware environment constraints.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -175,18 +175,7 @@ impl CapabilityReceipt {
 }
 
 fn resolve_fixture_path(path_str: &str) -> Option<PathBuf> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest.parent().unwrap_or(&manifest);
-    let p = Path::new(path_str);
-    let cand1 = manifest.join(p);
-    if cand1.exists() {
-        return Some(cand1);
-    }
-    let cand2 = workspace_root.join(p);
-    if cand2.exists() {
-        return Some(cand2);
-    }
-    None
+    crate::testing::fixtures::resolve_repo_path(path_str)
 }
 
 /// Generates the capability receipt for all 51 canonical model identities.

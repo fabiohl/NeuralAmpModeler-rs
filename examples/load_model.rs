@@ -150,8 +150,8 @@ fn find_sample_model() -> Option<PathBuf> {
         "tests/fixtures/models/lstm.nam",
         "tests/fixtures/models-nondist/sample.nam",
         "tests/fixtures/models-nondist/sample.namb",
-        "../third-party/nam_t3k/models/sample.nam",
-        "../third-party/nam_t3k/models/sample.namb",
+        "third-party/community_models/sample.nam",
+        "third-party/community_models/sample.namb",
     ];
 
     for candidate in candidate_paths {
