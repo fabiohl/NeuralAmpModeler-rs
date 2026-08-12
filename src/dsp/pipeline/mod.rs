@@ -17,20 +17,30 @@ mod stages;
 
 // Re-exports — preserve the same visibility as the original pipeline.rs.
 
+/// Bridge buffer structs and reader/writer interfaces for inter-stage data transfer.
 pub use bridge::{BridgeBuffer, BridgeRef, DspBridge, DspBridgeReader, DspBridgeWriter};
+/// Maximum bridge and resampler buffer capacities (in samples).
 pub use bridge::{MAX_BRIDGE_BUF, MAX_RESAMP_BUF};
 
+/// DSP buffer types and pipeline context for per-call stack allocation.
 pub use context::{DspBuffers, DspPipelineContext};
 
+/// Denormal dither offset value for FTZ/DAZ protection on the hot path.
 pub use stages::DENORMAL_DITHER_OFFSET;
 #[cfg(feature = "testing")]
 pub use stages::DISABLE_GATE;
+/// Input stage: gate processing, denormal dither, and silence bypass detection.
 pub use stages::apply_input_stage;
+/// Output stage: final volume adjustment, clipping detection, and post-DSP smoothing.
 pub use stages::apply_output_stage;
+/// Silence bypass: zero-fills output buffer when gate is fully closed and signal is silent.
 pub use stages::handle_silence_bypass;
+/// Model inference dispatcher: routes to the correct architecture-specific process method.
 pub use stages::run_inference;
+/// Bridge write-out: copies processed output into the inter-stage bridge buffer.
 pub use stages::write_bridge;
 
+/// Full DSP pipeline capture: input → processing chain → bridge in a single pass.
 pub use capture::capture_dsp_pipeline;
 
 #[cfg(any(test, feature = "testing"))]

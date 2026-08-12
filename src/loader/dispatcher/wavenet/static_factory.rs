@@ -15,6 +15,7 @@ use crate::models::StaticModel;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
 use crate::models::a2::params::{A2_DILATIONS, A2_KERNEL_SIZES, A2_LEAKY_SLOPE};
+use crate::models::a2::weights_layout::FILM_KEYS;
 use crate::models::a2::{WaveNetA2, WaveNetA2Cascade, WaveNetA2Dyn};
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 use anyhow::bail;
@@ -140,7 +141,7 @@ pub(crate) fn build_wavenet_a2(
 
 /// Rejects WaveNet A2 models matching the `wavenet_a2_max.nam` structural class.
 ///
-/// **Known bug (KB-A2-MAX, permanent until reopening criteria):** This class
+/// **Known bug (permanent until reopening criteria):** This class
 /// (`condition_size >= 2` + FiLM active + `head1x1` groups > 1 +
 /// `groups_input_mixin > 1` + nested `condition_dsp`) has a **structural**
 /// production×NAMCore parity gap. Measured prod f32 × C++ golden:
@@ -171,16 +172,7 @@ fn reject_wavenet_a2_max_class(data: &NamModelData) -> anyhow::Result<()> {
         }
         let Some(ref raw) = l.layer_raw else { continue };
 
-        for key in &[
-            "conv_pre_film",
-            "conv_post_film",
-            "input_mixin_pre_film",
-            "input_mixin_post_film",
-            "activation_pre_film",
-            "activation_post_film",
-            "layer1x1_post_film",
-            "head1x1_post_film",
-        ] {
+        for &(key, _) in FILM_KEYS {
             if raw
                 .get(key)
                 .and_then(|v| v.get("active"))

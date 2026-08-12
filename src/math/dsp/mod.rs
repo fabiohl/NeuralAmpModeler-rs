@@ -15,11 +15,16 @@
 //! Contains implementations of optimized audio algorithms, including
 //! energy calculations, correlations, and filters.
 
+/// Radix-2 Decimation-in-Time (DIT) FFT with SIMD acceleration.
 pub mod fft;
-// Research artifact — Task A9 (Spr.4). Prototype only; Radix-2 SIMD is canonical.
-// See module-level docs in fft_radix4.rs for decision rationale and benchmarks.
+/// Radix-4 DIT FFT — research prototype preserved for reference. Radix-2 SIMD is canonical for production.
+/// See module-level docs in `fft_radix4.rs` for decision rationale and benchmarks.
 pub mod fft_radix4;
+/// Linear gain application and SIMD ramp kernels for smooth audio transitions.
 pub mod gain;
+/// Pre-computed dB-to-linear gain lookup table.
 pub mod gain_lut;
+/// Real-valued FFT (RFFT) for spectrum analysis.
 pub mod rfft;
+/// Stereo audio utilities: convolution, energy computation, peak detection.
 pub mod stereo;

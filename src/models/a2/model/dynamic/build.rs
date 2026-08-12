@@ -271,75 +271,7 @@ impl WaveNetA2Dyn {
 
         // Load per-layer head1x1 projection weights (C++ `Layer::set_weights_`
         // loads `_head1x1` immediately after `_layer1x1` before FiLM).
-        if self.head1x1_active {
-            let h1_in = self.head1x1_h1_in;
-            let h1_out = self.head_accum_size;
-            let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
-            let h1_is_grouped = h1_groups > 1;
-            // C++ Conv1x1 with groups: the weight stream stores only block-diagonal
-            // entries — G × out_per_group × in_per_group. Compact storage:
-            // [head_accum_size × h1_in] row-major per output channel.
-            // Groups=1: dense row-major (stream) → col-major (transpose_dense_f32),
-            //   matching the process.rs accessor `head1x1_w[oc * h1_in + ic]`.
-            // Groups>1: reorder from group-major to per-output-channel-major,
-            //   matching the same process.rs accessor pattern as mixin/l1x1.
-            let h1_w_count = h1_out * h1_in;
-            let h1_w_f32 = super::super::set_weights::read_slice(
-                weights,
-                pos,
-                h1_w_count,
-                total,
-                &format!("layer[{i}].head1x1_w"),
-            )?;
-            let h1_w = if h1_is_grouped {
-                let mut w = AlignedVec::new(h1_w_count, 0.0f32)
-                    .expect("allocation should succeed for test-sized buffers");
-                let out_per_g = h1_out / h1_groups;
-                let in_per_g = h1_in;
-                let mut src_idx = 0usize;
-                for g in 0..h1_groups {
-                    let out_start = g * out_per_g;
-                    for oc in out_start..out_start + out_per_g {
-                        let dst_base = oc * in_per_g;
-                        for ic in 0..in_per_g {
-                            w[dst_base + ic] = h1_w_f32[src_idx];
-                            src_idx += 1;
-                        }
-                    }
-                }
-                w
-            } else {
-                let mut w = AlignedVec::new(h1_w_count, 0.0f32)
-                    .expect("allocation should succeed for test-sized buffers");
-                transpose_dense_f32(h1_w_f32, &mut w, h1_in, h1_out);
-                w
-            };
-
-            let h1_b_f32 = super::super::set_weights::read_slice(
-                weights,
-                pos,
-                h1_out,
-                total,
-                &format!("layer[{i}].head1x1_b"),
-            )?;
-            let mut h1_b = AlignedVec::new(h1_out, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
-            h1_b.copy_from_slice(h1_b_f32);
-
-            debug_assert_eq!(
-                h1_w.len(),
-                h1_out * h1_in,
-                "head1x1_w dimension mismatch: len={}, head_accum_size={}, h1_in={}, groups={}",
-                h1_w.len(),
-                h1_out,
-                h1_in,
-                h1_groups
-            );
-
-            layer.head1x1_active = true;
-            layer.head1x1_w = h1_w;
-            layer.head1x1_b = h1_b;
-        }
+        self.load_head1x1_for_layer(&mut layer, weights, pos, total, i, bottleneck)?;
 
         // FiLM layers (if active in layer_raw JSON) — read weights after l1x1 bias.
         if let Some(ref raw) = self.layer_raw {
@@ -358,6 +290,82 @@ impl WaveNetA2Dyn {
         }
 
         Ok(layer)
+    }
+
+    /// Loads per-layer head1x1 projection weights and bias into the layer.
+    ///
+    /// C++ `Layer::set_weights_` loads `_head1x1` immediately after `_layer1x1`
+    /// before FiLM. Supports both dense (groups=1) and grouped (>1) layouts.
+    fn load_head1x1_for_layer(
+        &self,
+        layer: &mut A2Layer,
+        weights: &[f32],
+        pos: &mut usize,
+        total: usize,
+        i: usize,
+        bottleneck: usize,
+    ) -> Result<(), String> {
+        if !self.head1x1_active {
+            return Ok(());
+        }
+        let h1_in = self.head1x1_h1_in;
+        let h1_out = self.head_accum_size;
+        let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
+        let h1_is_grouped = h1_groups > 1;
+        let h1_w_count = h1_out * h1_in;
+        let h1_w_f32 = super::super::set_weights::read_slice(
+            weights,
+            pos,
+            h1_w_count,
+            total,
+            &format!("layer[{i}].head1x1_w"),
+        )?;
+        let h1_w = if h1_is_grouped {
+            let mut w = AlignedVec::new(h1_w_count, 0.0f32)
+                .expect("allocation should succeed for test-sized buffers");
+            let out_per_g = h1_out / h1_groups;
+            let in_per_g = h1_in;
+            let mut src_idx = 0usize;
+            for g in 0..h1_groups {
+                let out_start = g * out_per_g;
+                for oc in out_start..out_start + out_per_g {
+                    let dst_base = oc * in_per_g;
+                    for ic in 0..in_per_g {
+                        w[dst_base + ic] = h1_w_f32[src_idx];
+                        src_idx += 1;
+                    }
+                }
+            }
+            w
+        } else {
+            let mut w = AlignedVec::new(h1_w_count, 0.0f32)
+                .expect("allocation should succeed for test-sized buffers");
+            transpose_dense_f32(h1_w_f32, &mut w, h1_in, h1_out);
+            w
+        };
+        let h1_b_f32 = super::super::set_weights::read_slice(
+            weights,
+            pos,
+            h1_out,
+            total,
+            &format!("layer[{i}].head1x1_b"),
+        )?;
+        let mut h1_b = AlignedVec::new(h1_out, 0.0f32)
+            .expect("allocation should succeed for test-sized buffers");
+        h1_b.copy_from_slice(h1_b_f32);
+        debug_assert_eq!(
+            h1_w.len(),
+            h1_out * h1_in,
+            "head1x1_w dimension mismatch: len={}, head_accum_size={}, h1_in={}, groups={}",
+            h1_w.len(),
+            h1_out,
+            h1_in,
+            h1_groups
+        );
+        layer.head1x1_active = true;
+        layer.head1x1_w = h1_w;
+        layer.head1x1_b = h1_b;
+        Ok(())
     }
 
     /// Loads head conv weights (K=16), bias, and head scale from the stream.

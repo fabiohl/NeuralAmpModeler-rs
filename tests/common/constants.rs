@@ -48,7 +48,7 @@ pub const CONVNET_ESR_LIMIT: f64 = 1e-12;
 /// Calibrated ESR limit for WaveNet A2-FiLM model oracle parity (see methodology above).
 pub const A2_FILM_ESR_LIMIT: f64 = 1e-9;
 // A2 Generic (wavenet_a2_max.nam) — KB-A2-MAX known bug; fail-closed TR1.1; threshold
-// recalibration only after RF5 close (Sprint R3–R4) when production×C++ ≥ 90 dB SNR.
+// recalibration only after RF5 close when production×C++ ≥ 90 dB SNR.
 /// Calibrated ESR limit for WaveNet A2 Generic — pending RF5 parity close (guard TR1.1 active).
 pub const A2_GENERIC_ESR_LIMIT: f64 = 1e-9;
 

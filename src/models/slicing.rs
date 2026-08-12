@@ -324,7 +324,7 @@ pub fn slice_wavenet_array(
 ///
 /// - **`condition_dsp`**: Cloned from the original model. Only `WavenetDyn`
 ///   sub-models are supported for deep cloning; other variants fall back to
-///   `None` (matching pre-Task-2.1.2 behavior). The `post_stack_head` and
+///   `None`. The `post_stack_head` and
 ///   `condition_dsp_output` buffers are allocated fresh.
 /// - **`post_stack_head`**: Cloned as-is (not affected by channel slicing).
 ///

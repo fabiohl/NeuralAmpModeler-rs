@@ -252,7 +252,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &["third-party/NeuralAmpModelerCore/example_models/slimmable_container.nam"],
         architecture: "{'channels': None, 'topology': 'Unknown', 'type': 'SlimmableContainer', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Slimmable Container 3 submodels (LSTM, WaveNetDyn, Nano) with ReLU — permanent regression fixture (Sprint 8)",
+        description: "Slimmable Container 3 submodels (LSTM, WaveNetDyn, Nano) with ReLU — permanent regression fixture",
     },
     ModelCatalogEntry {
         sha256: "735c1a86e18140b7cfe90c08427ca6a85f62c32d34cc4048997933652aa774b4",

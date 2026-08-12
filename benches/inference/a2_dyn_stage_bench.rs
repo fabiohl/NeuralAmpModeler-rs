@@ -236,6 +236,7 @@ fn bench_all_stages_combined(c: &mut Criterion) {
 
 // ── Criterion harness ─────────────────────────────────────────────────
 
+/// Registers A2 dynamic engine stage-level micro-benchmarks with Criterion.
 pub fn bench_a2dyn_stages(c: &mut Criterion) {
     bench_a2dyn_full(c);
     bench_stage_conv(c);

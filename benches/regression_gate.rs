@@ -113,7 +113,7 @@ fn bench_convnet(c: &mut Criterion) {
     regression_bench!(c, "RT_ConvNet", "convnet_test.nam");
 }
 
-// ── Model Inference Core: Dynamic Models (PERF-004) ──────────────────────────
+// ── Model Inference Core: Dynamic Models ─────────────────────────────────────
 
 fn bench_wavenet_dyn_free(c: &mut Criterion) {
     regression_bench!(c, "RT_WaveNet_Dyn_Free", "wavenet_dyn_free.nam");
@@ -131,7 +131,7 @@ fn bench_a2_dyn_blended(c: &mut Criterion) {
     regression_bench!(c, "RT_A2_Dyn_Blended_CH3", "a2_dynamic_blended_ch3.nam");
 }
 
-// ── DSP Infrastructure (PERF-004) ────────────────────────────────────────────
+// ── DSP Infrastructure ───────────────────────────────────────────────────────
 
 // Sub-µs kernels need batched work per Criterion sample. A single 64-sample
 // block is ~0.7–1.4 µs and trips the 2% noise wall from timer jitter alone.

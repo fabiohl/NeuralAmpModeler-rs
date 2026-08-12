@@ -3,7 +3,7 @@
 
 //! True-peak (dBTP) — ITU-R BS.1770-4 Annex 2 — 4× oversampling FIR.
 //!
-//! RT-SAFETY DECISION (2026-06-26):
+//! RT-SAFETY DECISION:
 //!   - RT hot-path (src/dsp/pipeline/stages/output.rs): keeps sample-peak
 //!     detection for `RT_STATUS_HAS_CLIPPED`. True-peak with 48-tap FIR × 4×
 //!     oversampling adds ~48 MAC/sample (12 per phase × 4) — prohibitive in the
@@ -12,7 +12,7 @@
 //!     `compute_true_peak_db()` and `find_true_peak_overs()`. The main-thread
 //!     telemetry loop (src/standalone/rt_setup/telemetry.rs:81) can optionally
 //!     run these on buffered audio for comprehensive inter-sample over detection.
-//!   - Bench number (linked to P-7): pending hardware-validation measurements.
+//!   - Bench number: pending hardware-validation measurements.
 
 /// Oversampling factor for BS.1770-4 true-peak measurement.
 const TP_OVERSAMPLE: usize = 4;

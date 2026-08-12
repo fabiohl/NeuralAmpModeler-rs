@@ -45,6 +45,11 @@ pub(crate) struct HalfBandFilter {
 }
 
 impl HalfBandFilter {
+    /// Designs a half-band FIR filter using a Kaiser window.
+    ///
+    /// The center tap (h[HB_DELAY]) is determined separately via `dc_gain` normalization.
+    /// Odd-indexed coefficients are zero for half-band filters; only odd taps
+    /// are stored.
     pub(crate) fn design(beta: f64, dc_gain: f64) -> Self {
         let i0_beta = bessel_i0(beta);
         let half = HB_DELAY as f64;
@@ -102,6 +107,10 @@ pub(crate) struct X2Stage {
 }
 
 impl X2Stage {
+    /// Creates a new 2× oversampling stage with default Kaiser beta=12.0 filters.
+    ///
+    /// Allocates mirrored delay-line buffers for contiguous SIMD access.
+    /// Returns `Err(NamErrorCode)` on aligned allocation failure.
     pub(crate) fn new() -> Result<Self, NamErrorCode> {
         let dc_up = 2.0;
         let dc_down = 1.0;
@@ -120,6 +129,15 @@ impl X2Stage {
         })
     }
 
+    /// Upsamples `input` by 2× using the half-band FIR kernel.
+    ///
+    /// Produces interleaved even/odd output samples. Even samples use the
+    /// center tap; odd samples are convolved against the odd-coefficient
+    /// filter bank using AVX2 FMA.
+    ///
+    /// # Returns
+    ///
+    /// Number of output samples written (always `2 * input.len()`).
     #[inline(always)]
     pub(crate) fn upsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let coeffs = &self.up_filter.coeffs;
@@ -128,6 +146,7 @@ impl X2Stage {
         let n_in = input.len();
 
         for (i, &x) in input.iter().enumerate() {
+            // ── Step 1: Write sample into double-buffer delay line ──
             let p = self.up_pos;
             // SAFETY: p < HB_DELAY by invariant; p+n < UP_DELAY_LINE_LEN.
             // The mirror buffer is double-mapped, so both writes target the
@@ -140,14 +159,17 @@ impl X2Stage {
             self.up_ring[p + n] = x;
             self.up_pos = (p + 1) % n;
 
+            // ── Step 2: Read from delay line at write-head position ──
             // SAFETY: up_pos < HB_DELAY and up_ring has UP_DELAY_LINE_LEN elements
             // (verified by the compile-time assertion above). Reads at offsets 0..11
             // stay within bounds: up_pos + 11 < UP_DELAY_LINE_LEN.
             let wptr = unsafe { self.up_ring.as_ptr().add(self.up_pos) };
 
+            // ── Step 3: Even output = center tap × delay[5] ──
             // SAFETY: wptr.add(5) is in bounds — see invariant above.
             let even_out = unsafe { *wptr.add(5) * center };
 
+            // ── Step 4: Odd output = AVX2 8-wise dot product + scalar tail ──
             let odd_out = unsafe {
                 let c8 = _mm256_loadu_ps(coeffs.as_ptr());
                 let s8 = _mm256_loadu_ps(wptr);
@@ -165,6 +187,7 @@ impl X2Stage {
                 sum
             };
 
+            // ── Step 5: Write interleaved output pair ──
             // SAFETY: output has 2*n_in elements (output.len() == 2 * input.len()).
             // 2*i+1 < 2*n_in for all i < n_in.
             unsafe {
@@ -178,6 +201,14 @@ impl X2Stage {
         n_in * 2
     }
 
+    /// Downsamples `input` by 2× using the half-band FIR kernel.
+    ///
+    /// Splits arrivals into even/odd sample queues, then processes each
+    /// complete even/odd pair using a 12-tap half-band convolution.
+    ///
+    /// # Returns
+    ///
+    /// Number of output samples written (`input.len() / 2`, truncated).
     #[inline(always)]
     pub(crate) fn downsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let coeffs = &self.down_filter.coeffs;
@@ -185,6 +216,7 @@ impl X2Stage {
         let mut out_idx = 0;
 
         for &x in input.iter() {
+            // ── Step 1: Demux input samples into even/odd delay lines ──
             let is_even = (self.down_total & 1) == 0;
             if is_even {
                 let p = self.down_pos_even;
@@ -210,13 +242,16 @@ impl X2Stage {
             }
             self.down_total += 1;
 
+            // ── Step 2: Every odd count after HB_TAPS samples, produce one output ──
             if self.down_total >= HB_TAPS as u64 && (self.down_total & 1) == 1 {
+                // ── Step 2a: Read center tap from even delay line at offset 6 ──
                 // SAFETY: down_pos_even < DOWN_EVEN_LEN; the mirror buffer doubles
                 // the capacity, so reads up to offset 6 stay within bounds.
                 let ev_ptr = unsafe { self.down_ring_even.as_ptr().add(self.down_pos_even) };
                 let center_sample = unsafe { *ev_ptr.add(6) };
                 let mut sum = center_sample * center;
 
+                // ── Step 2b: Accumulate AVX2 8-wise dot product from odd delay line ──
                 // SAFETY: down_pos_odd < DOWN_ODD_LEN; max access at offset 11
                 // fits within DOWN_ODD_DELAY_LINE_LEN (2*DOWN_ODD_LEN).
                 let od_ptr = unsafe { self.down_ring_odd.as_ptr().add(self.down_pos_odd) };
@@ -236,6 +271,7 @@ impl X2Stage {
                     sum += coeffs[11] * *od_ptr.add(11);
                 }
 
+                // ── Step 2c: Emit completed downsampled sample ──
                 if out_idx < output.len() {
                     output[out_idx] = sum;
                     out_idx += 1;

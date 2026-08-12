@@ -54,6 +54,11 @@ use core::ResamplerCore;
 
 pub use core::ResamplerProgress;
 
+enum PhaseType {
+    Minimum,
+    Linear,
+}
+
 /// RT-safe wrapper for bidirectional Minimum-Phase Polyphase Sinc FIR resampling.
 ///
 /// Encapsulates two independent pre-allocated engines (input + output).
@@ -74,6 +79,68 @@ pub struct NamResampler {
 }
 
 impl NamResampler {
+    #[cold]
+    fn new_inner(host_rate: u32, nam_rate: u32, phase: PhaseType) -> Result<Self> {
+        if !(MIN_RATE..=MAX_RATE).contains(&host_rate) || !(MIN_RATE..=MAX_RATE).contains(&nam_rate)
+        {
+            bail!(
+                "NamResampler: sample rates must be in range {}-{}, got host={} nam={}",
+                MIN_RATE,
+                MAX_RATE,
+                host_rate,
+                nam_rate
+            );
+        }
+
+        if host_rate == nam_rate {
+            let label = match phase {
+                PhaseType::Minimum => "Bypass",
+                PhaseType::Linear => "Linear-phase bypass",
+            };
+            info!(
+                "[Resampler] {label}: host_rate={}, nam_rate={} (match)",
+                host_rate, nam_rate
+            );
+            return Ok(Self {
+                inner: None,
+                outer: None,
+                host_rate,
+                nam_rate,
+            });
+        }
+
+        let gen_bank = match phase {
+            PhaseType::Minimum => generate_polyphase_bank,
+            PhaseType::Linear => generate_polyphase_bank_linear,
+        };
+
+        let inner = ResamplerCore::new(
+            host_rate,
+            nam_rate,
+            gen_bank(host_rate, nam_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
+        )?;
+        let outer = ResamplerCore::new(
+            nam_rate,
+            host_rate,
+            gen_bank(nam_rate, host_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
+        )?;
+
+        let label = match phase {
+            PhaseType::Minimum => "Minimum-phase",
+            PhaseType::Linear => "Linear-phase",
+        };
+        info!(
+            "[Resampler] {label} resampler built: host_rate={}, nam_rate={}",
+            host_rate, nam_rate
+        );
+
+        Ok(Self {
+            inner: Some(inner),
+            outer: Some(outer),
+            host_rate,
+            nam_rate,
+        })
+    }
     /// Creates the pair of resamplers (input+output), pre-allocating all buffers.
     ///
     /// Produces a **minimum-phase** polyphase resampler — the production default.
@@ -88,52 +155,7 @@ impl NamResampler {
     /// - `_chunk_size`: kept for API compatibility (not used internally).
     #[cold]
     pub fn new(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
-        if !(MIN_RATE..=MAX_RATE).contains(&host_rate) || !(MIN_RATE..=MAX_RATE).contains(&nam_rate)
-        {
-            bail!(
-                "NamResampler: sample rates must be in range {}-{}, got host={} nam={}",
-                MIN_RATE,
-                MAX_RATE,
-                host_rate,
-                nam_rate
-            );
-        }
-
-        if host_rate == nam_rate {
-            info!(
-                "[Resampler] Bypass: host_rate={}, nam_rate={} (match)",
-                host_rate, nam_rate
-            );
-            return Ok(Self {
-                inner: None,
-                outer: None,
-                host_rate,
-                nam_rate,
-            });
-        }
-
-        let inner = ResamplerCore::new(
-            host_rate,
-            nam_rate,
-            generate_polyphase_bank(host_rate, nam_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
-        let outer = ResamplerCore::new(
-            nam_rate,
-            host_rate,
-            generate_polyphase_bank(nam_rate, host_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
-
-        info!(
-            "[Resampler] Minimum-phase resampler built: host_rate={}, nam_rate={}",
-            host_rate, nam_rate
-        );
-
-        Ok(Self {
-            inner: Some(inner),
-            outer: Some(outer),
-            host_rate,
-            nam_rate,
-        })
+        Self::new_inner(host_rate, nam_rate, PhaseType::Minimum)
     }
 
     /// Creates the pair of resamplers using **linear-phase** polyphase banks.
@@ -145,54 +167,7 @@ impl NamResampler {
     /// If `host_rate == nam_rate`, full bypass with no overhead.
     #[cold]
     pub fn new_linear(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
-        if !(MIN_RATE..=MAX_RATE).contains(&host_rate) || !(MIN_RATE..=MAX_RATE).contains(&nam_rate)
-        {
-            bail!(
-                "NamResampler: sample rates must be in range {}-{}, got host={} nam={}",
-                MIN_RATE,
-                MAX_RATE,
-                host_rate,
-                nam_rate
-            );
-        }
-
-        if host_rate == nam_rate {
-            info!(
-                "[Resampler] Linear-phase bypass: host_rate={}, nam_rate={} (match)",
-                host_rate, nam_rate
-            );
-            return Ok(Self {
-                inner: None,
-                outer: None,
-                host_rate,
-                nam_rate,
-            });
-        }
-
-        let inner = ResamplerCore::new(
-            host_rate,
-            nam_rate,
-            generate_polyphase_bank_linear(host_rate, nam_rate)
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
-        let outer = ResamplerCore::new(
-            nam_rate,
-            host_rate,
-            generate_polyphase_bank_linear(nam_rate, host_rate)
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
-
-        info!(
-            "[Resampler] Linear-phase resampler built: host_rate={}, nam_rate={}",
-            host_rate, nam_rate
-        );
-
-        Ok(Self {
-            inner: Some(inner),
-            outer: Some(outer),
-            host_rate,
-            nam_rate,
-        })
+        Self::new_inner(host_rate, nam_rate, PhaseType::Linear)
     }
 
     /// Returns `true` when `host_rate == nam_rate` (bypass).

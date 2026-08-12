@@ -4,6 +4,7 @@
 //! A2 Shape Detection — Hybrid Dispatch (A2 Fast-Path vs A2 Dynamic)
 
 use super::super::data::NamModelData;
+use crate::models::a2::weights_layout::FILM_KEYS;
 
 /// Valid A2 topologies.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +33,7 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
         return None;
     }
 
-    // T5.1: Slimmable WaveNet models go through the A1 free-geometry path
+    // Slimmable WaveNet models go through the A1 free-geometry path
     // (get_wavenet_topology), which handles slimmable metadata parsing and
     // permitted-channel validation. The A2 fast-path and dynamic engine do not
     // support slimmable channel slicing.
@@ -106,7 +107,7 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
             }
         }
         if any_layer_raw && !has_a2_feature {
-            // T5.1: condition_dsp is an A2-specific feature — the oracle always
+            // condition_dsp is an A2-specific feature — the oracle always
             // routes models with condition_dsp through the A2 path. The builder
             // must match to avoid architecture mismatch.
             if data.config.condition_dsp.is_some() {
@@ -132,7 +133,7 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
 
     // 10. kernel_sizes must match A2_KERNEL_SIZES exactly for fast-path (a2_fast.cpp:910-918).
     // Non-canonical sizes indicate an A2-generic model → route to Dynamic.
-    // S13.2: also accept models with scalar kernel_size (plural absent); those
+    // Also accept models with scalar kernel_size (plural absent); those
     // are always A2-generic (Dynamic).
     let ks = match l0.kernel_sizes.as_deref() {
         Some(s) => s.to_vec(),
@@ -221,7 +222,7 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
         }
 
         if !check_film_all_inactive(raw) {
-            // B.1.1 (F5): FiLM routing policy — C++ a2_fast.cpp rejects FiLM
+            // FiLM routing policy — C++ a2_fast.cpp rejects FiLM
             // models, routing them to the generic WaveNet engine. Rust fast-path
             // output diverges from C++ (measured CH=3 SNR 18.1 dB, CH=8 SNR 36.0 dB).
             // Route to WaveNetA2Dyn to match C++ behavior.
@@ -346,17 +347,7 @@ fn check_layer_array_head(raw: &serde_json::Value) -> bool {
 
 /// Checks that all 8 FiLM keys are inactive (absent, null, not an object, or active==false).
 fn check_film_all_inactive(raw: &serde_json::Value) -> bool {
-    const FILM_KEYS: &[&str] = &[
-        "conv_pre_film",
-        "conv_post_film",
-        "input_mixin_pre_film",
-        "input_mixin_post_film",
-        "activation_pre_film",
-        "activation_post_film",
-        "layer1x1_post_film",
-        "head1x1_post_film",
-    ];
-    for key in FILM_KEYS {
+    for &(key, _) in FILM_KEYS {
         match raw.get(key) {
             None | Some(serde_json::Value::Null) => continue,
             Some(v) => match v.as_object() {

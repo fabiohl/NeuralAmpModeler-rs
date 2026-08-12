@@ -3,16 +3,16 @@
 
 //! A2 Architecture.
 //!
-//! Este módulo isola componentes da arquitetura A2 (v0.6+), incluindo
-//! ativações, FiLM, gating, parâmetros e os modelos A2.
+//! This module isolates A2 architecture components (v0.6+), including
+//! activations, FiLM, gating, parameters, and A2 models.
 //!
 //! ## Status
 //!
-//! O scaffolding existente inclui a definição completa de parâmetros e
-//! constantes arquiteturais (espelhando `a2_fast.h`). O fast-path
-//! A2-Full/Lite (fast-path) utiliza um subconjunto destes structs;
-//! os campos de FiLM, gating (`Gated`/`Blended`), `head1x1`, `bottleneck ≠ channels`
-//! e ativações heterogêneas estão reservados para o motor A2 geral (futuro).
+//! The existing scaffolding includes complete parameter definitions and
+//! architectural constants (mirroring `a2_fast.h`). The A2-Full/Lite
+//! fast-path uses a subset of these structs; FiLM, gating (`Gated`/`Blended`),
+//! `head1x1`, `bottleneck ≠ channels`, and heterogeneous activation fields
+//! are reserved for the future general A2 engine.
 
 pub mod activations;
 pub mod conv1d;

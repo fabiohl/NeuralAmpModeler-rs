@@ -6,6 +6,42 @@ use core::arch::x86_64::*;
 
 const SMALL_IN_LEN_THRESHOLD_AVX2: usize = 4;
 
+/// 8×8 matrix transpose: row_k holds frame (n+k)'s 8 input channels at
+/// offset ic. unpack → shuffle → permute2f128 converts from row-major
+/// [frame][channel] to column-major [channel][frame] layout, so v_in_k
+/// broadcasts channel k across all 8 frames.
+macro_rules! transpose_8x8_f32_avx2 {
+    ($row0:ident, $row1:ident, $row2:ident, $row3:ident,
+     $row4:ident, $row5:ident, $row6:ident, $row7:ident,
+     $v_in0:ident, $v_in1:ident, $v_in2:ident, $v_in3:ident,
+     $v_in4:ident, $v_in5:ident, $v_in6:ident, $v_in7:ident) => {
+        let t0 = _mm256_unpacklo_ps($row0, $row1);
+        let t1 = _mm256_unpackhi_ps($row0, $row1);
+        let t2 = _mm256_unpacklo_ps($row2, $row3);
+        let t3 = _mm256_unpackhi_ps($row2, $row3);
+        let t4 = _mm256_unpacklo_ps($row4, $row5);
+        let t5 = _mm256_unpackhi_ps($row4, $row5);
+        let t6 = _mm256_unpacklo_ps($row6, $row7);
+        let t7 = _mm256_unpackhi_ps($row6, $row7);
+        let s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+        let s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+        let s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+        let s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+        let s4 = _mm256_shuffle_ps(t4, t6, 0x44);
+        let s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+        let s6 = _mm256_shuffle_ps(t5, t7, 0x44);
+        let s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+        let $v_in0 = _mm256_permute2f128_ps(s0, s4, 0x20);
+        let $v_in1 = _mm256_permute2f128_ps(s1, s5, 0x20);
+        let $v_in2 = _mm256_permute2f128_ps(s2, s6, 0x20);
+        let $v_in3 = _mm256_permute2f128_ps(s3, s7, 0x20);
+        let $v_in4 = _mm256_permute2f128_ps(s0, s4, 0x31);
+        let $v_in5 = _mm256_permute2f128_ps(s1, s5, 0x31);
+        let $v_in6 = _mm256_permute2f128_ps(s2, s6, 0x31);
+        let $v_in7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+    };
+}
+
 // ── Batched f32 GEMV ──────────────────────────────────────────────────────────
 
 /// Batch GEMV overwrite with bias using native f32 weights via AVX2.
@@ -117,34 +153,10 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                     let row5 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 5) * in_len + ic));
                     let row6 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 6) * in_len + ic));
                     let row7 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 7) * in_len + ic));
-                    // 8×8 matrix transpose: row_k holds frame (n+k)'s 8 input channels
-                    // at offset ic. unpack → shuffle → permute2f128 converts from
-                    // row-major [frame][channel] to column-major [channel][frame]
-                    // layout, so v_in_k broadcasts channel k across all 8 frames.
-                    let t0 = _mm256_unpacklo_ps(row0, row1);
-                    let t1 = _mm256_unpackhi_ps(row0, row1);
-                    let t2 = _mm256_unpacklo_ps(row2, row3);
-                    let t3 = _mm256_unpackhi_ps(row2, row3);
-                    let t4 = _mm256_unpacklo_ps(row4, row5);
-                    let t5 = _mm256_unpackhi_ps(row4, row5);
-                    let t6 = _mm256_unpacklo_ps(row6, row7);
-                    let t7 = _mm256_unpackhi_ps(row6, row7);
-                    let s0 = _mm256_shuffle_ps(t0, t2, 0x44);
-                    let s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
-                    let s2 = _mm256_shuffle_ps(t1, t3, 0x44);
-                    let s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
-                    let s4 = _mm256_shuffle_ps(t4, t6, 0x44);
-                    let s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
-                    let s6 = _mm256_shuffle_ps(t5, t7, 0x44);
-                    let s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
-                    let v_in0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-                    let v_in1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-                    let v_in2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-                    let v_in3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-                    let v_in4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-                    let v_in5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-                    let v_in6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-                    let v_in7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+                    transpose_8x8_f32_avx2!(
+                        row0, row1, row2, row3, row4, row5, row6, row7, v_in0, v_in1, v_in2, v_in3,
+                        v_in4, v_in5, v_in6, v_in7
+                    );
                     acc0 = _mm256_fmadd_ps(v_in0, v_w0, acc0);
                     acc1 = _mm256_fmadd_ps(v_in1, v_w1, acc1);
                     acc2 = _mm256_fmadd_ps(v_in2, v_w2, acc2);
@@ -414,34 +426,10 @@ pub unsafe fn gemv_no_bias_f32_avx2(
                     let row5 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 5) * in_len + ic));
                     let row6 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 6) * in_len + ic));
                     let row7 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 7) * in_len + ic));
-                    // 8×8 matrix transpose: row_k holds frame (n+k)'s 8 input channels
-                    // at offset ic. unpack → shuffle → permute2f128 converts from
-                    // row-major [frame][channel] to column-major [channel][frame]
-                    // layout, so v_in_k broadcasts channel k across all 8 frames.
-                    let t0 = _mm256_unpacklo_ps(row0, row1);
-                    let t1 = _mm256_unpackhi_ps(row0, row1);
-                    let t2 = _mm256_unpacklo_ps(row2, row3);
-                    let t3 = _mm256_unpackhi_ps(row2, row3);
-                    let t4 = _mm256_unpacklo_ps(row4, row5);
-                    let t5 = _mm256_unpackhi_ps(row4, row5);
-                    let t6 = _mm256_unpacklo_ps(row6, row7);
-                    let t7 = _mm256_unpackhi_ps(row6, row7);
-                    let s0 = _mm256_shuffle_ps(t0, t2, 0x44);
-                    let s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
-                    let s2 = _mm256_shuffle_ps(t1, t3, 0x44);
-                    let s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
-                    let s4 = _mm256_shuffle_ps(t4, t6, 0x44);
-                    let s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
-                    let s6 = _mm256_shuffle_ps(t5, t7, 0x44);
-                    let s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
-                    let v_in0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-                    let v_in1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-                    let v_in2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-                    let v_in3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-                    let v_in4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-                    let v_in5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-                    let v_in6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-                    let v_in7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+                    transpose_8x8_f32_avx2!(
+                        row0, row1, row2, row3, row4, row5, row6, row7, v_in0, v_in1, v_in2, v_in3,
+                        v_in4, v_in5, v_in6, v_in7
+                    );
                     acc0 = _mm256_fmadd_ps(v_in0, v_w0, acc0);
                     acc1 = _mm256_fmadd_ps(v_in1, v_w1, acc1);
                     acc2 = _mm256_fmadd_ps(v_in2, v_w2, acc2);

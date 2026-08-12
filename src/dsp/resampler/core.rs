@@ -100,6 +100,8 @@ impl ResamplerCore {
         let num_phases_fp = (NUM_PHASES as u64) << 40;
 
         while out_idx < n_out_max {
+            // ── Step 1: Accumulate phase. When it rolls past NUM_PHASES, consume
+            //    one input sample and push it into both delay lines. ──
             while self.phase_accum >= num_phases_fp {
                 if in_idx >= n_in {
                     return ResamplerProgress {
@@ -115,17 +117,22 @@ impl ResamplerCore {
                 in_idx += 1;
             }
 
+            // ── Step 2: Extract integer phase index and fractional sub-phase ──
             let phase_idx = (self.phase_accum >> 40) as usize;
             const FRAC_MASK: u64 = (1u64 << 40) - 1;
             let frac_bits = self.phase_accum & FRAC_MASK;
+            // Convert 40-bit fraction to f32 in [0, 1) range
             let frac = ((frac_bits >> 9) as i32 as f32) * (1.0 / (1u32 << 31) as f32);
 
+            // ── Step 3: Determine next phase for linear interpolation ──
             let phase_next = if phase_idx + 1 >= NUM_PHASES {
                 0
             } else {
                 phase_idx + 1
             };
 
+            // ── Step 4: Convolve with current and next polyphase banks, then
+            //    linearly interpolate between the two results for smooth output ──
             let (y_l, y_r) = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
@@ -134,9 +141,11 @@ impl ResamplerCore {
                 let taps = self.bank.taps_per_phase;
 
                 let ((y0_l, y0_r), (y1_l, y1_r)) = M::convolve_stereo_dual(c0, c1, x_l, x_r, taps);
+                // Linear interpolation: lerp(phase0, phase1, frac)
                 (y0_l + frac * (y1_l - y0_l), y0_r + frac * (y1_r - y0_r))
             };
 
+            // ── Step 5: Write interpolated output and advance phase ──
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_r;
@@ -171,6 +180,7 @@ impl ResamplerCore {
         let num_phases_fp = (NUM_PHASES as u64) << 40;
 
         while out_idx < n_out_max {
+            // ── Step 1: Accumulate phase; push mono input into left delay line when phase rolls ──
             while self.phase_accum >= num_phases_fp {
                 if in_idx >= n_in {
                     return ResamplerProgress {
@@ -185,6 +195,7 @@ impl ResamplerCore {
                 in_idx += 1;
             }
 
+            // ── Step 2: Extract phase index and fractional sub-phase ──
             let phase_idx = (self.phase_accum >> 40) as usize;
             const FRAC_MASK: u64 = (1u64 << 40) - 1;
             let frac_bits = self.phase_accum & FRAC_MASK;
@@ -196,6 +207,7 @@ impl ResamplerCore {
                 phase_idx + 1
             };
 
+            // ── Step 3: Dual-phase convolution + linear interpolation (mono) ──
             let y_l = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
@@ -206,6 +218,7 @@ impl ResamplerCore {
                 y0_l + frac * (y1_l - y0_l)
             };
 
+            // ── Step 4: Write mono output to both channels and advance phase ──
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_l;

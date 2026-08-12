@@ -600,7 +600,7 @@ fn flush_idempotent() {
 }
 
 // =========================================================================
-// Task 4.3.1 — wall-clock format and LogRecord timestamp integrity
+// Wall-clock format and LogRecord timestamp integrity tests
 // =========================================================================
 
 #[test]

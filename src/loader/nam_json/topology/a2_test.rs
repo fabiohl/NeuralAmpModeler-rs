@@ -4,7 +4,7 @@
 use super::*;
 use crate::loader::nam_json::NamModelData;
 
-/// B.1.1: Verifies that is_a2_shape routes FiLM-active models to Dynamic.
+/// Verifies that is_a2_shape routes FiLM-active models to Dynamic.
 #[test]
 fn test_a2_film_routes_to_dynamic() {
     let json = r#"{

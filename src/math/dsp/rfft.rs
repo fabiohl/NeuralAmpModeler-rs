@@ -3,7 +3,7 @@
 
 //! Pre-computed real-to-complex FFT plan (Radix-2 DIT).
 //!
-//! Uses the inner [`FftPlanner`] for the complex half-size transform,
+//! Uses the inner [`FftPlanner`](crate::math::dsp::fft::FftPlanner) for the complex half-size transform,
 //! plus O(N) Hermitian-symmetry unpacking.
 
 use super::fft::{FftFloat, FftPlanner};

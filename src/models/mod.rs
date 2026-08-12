@@ -6,14 +6,21 @@
 //! This module contains the acoustic brains of the program: neural networks that have learned how,
 //! for example, a real amplifier or pedal distorts and colors a guitar sound.
 
+/// A2 architecture (v0.6+): FiLM, gating, head1x1, bottleneck, multi-array cascades.
 pub mod a2;
+/// Slimmable model container: multi-size bundles with quality-threshold based dispatch.
 pub mod container;
-/// ConvNet feed-forward architecture (F4).
+/// ConvNet feed-forward architecture.
 pub mod convnet;
+/// Linear FIR model: dot product of input history with learned weights + bias.
 pub mod linear;
+/// Linear FFT model: frequency-domain overlap-save FIR convolution kernel.
 pub mod linear_fft;
+/// LSTM recurrent architecture: configurable layers × hidden units, gate-level SIMD acceleration.
 pub mod lstm;
+/// Slimmable channel-slicing dispatcher for WaveNet quality-tier transitions.
 pub mod slimmable;
+/// WaveNet dilated convolution architecture: Standard, Lite, Feather, Nano, Dynamic variants.
 pub mod wavenet;
 
 /// NamModel trait implementation for StaticModel (dispatch methods).

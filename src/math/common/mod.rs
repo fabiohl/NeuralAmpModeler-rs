@@ -15,20 +15,31 @@
 //! - `scalar_ref`: Fallback implementations for compatibility and testing.
 //! - `aligned`: Structures to guarantee memory alignment (RT-Safety).
 
+/// 64-byte aligned memory primitives: `Aligned64` newtype and `AlignedVec`.
 pub mod aligned;
+/// AVX2 kernel implementations: activations, DSP, GEMV, reductions, BF16.
 pub mod avx2_impl;
+/// Half-precision (f16/bf16) conversion and helper types.
 pub mod half;
+/// Huge-page allocation support: `HugePageVec` for 2 MB TLB-friendly buffers.
 pub mod huge_alloc;
 pub use huge_alloc::HugePageVec;
+/// AVX-512 kernel implementations: activations, DSP/VNNI-BF16, reductions, BF16.
 pub mod avx512;
 /// Unit tests for the common math infrastructure.
 #[cfg(test)]
 pub mod common_test;
+/// Instruction set dispatch: runtime CPU feature detection and ISA selection.
 pub mod dispatch;
+/// Kahan compensated summation: error-bounded floating-point accumulation kernels.
 pub mod kahan;
+/// Common mathematical operations and SIMD utility functions.
 pub mod ops;
+/// Scalar reference implementations: portable fallback kernels for testing and oracles.
 pub mod scalar_ref;
+/// SIMD traits: abstract interfaces for architecture-specific math kernels.
 pub mod traits;
+/// General-purpose SIMD utility functions (horizontal sums, shuffles, broadcasts).
 pub mod utility;
 
 pub use aligned::Aligned64;
@@ -37,6 +48,7 @@ pub use avx2_impl::Avx2Math;
 pub use avx512::{Avx512Math, Avx512VnniBf16Math};
 pub use dispatch::{InstructionSet, SIMD_MATH, SimdMathConfig, TEST_ISA_OVERRIDE};
 pub use dispatch::{decode_isa_override, effective_instruction_set, encode_isa_override};
+/// Kahan compensated summation types and accumulator.
 pub use kahan::{Kahan4F32, KahanF32, kahan_add};
 pub use ops::*;
 pub use scalar_ref::*;

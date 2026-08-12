@@ -10,7 +10,7 @@
 //! Generates thin wrappers that delegate to the AVX2 kernels in
 //! [`crate::math::wavenet::accumulate`], [`crate::math::activations`], etc.
 //! This macro is invoked by the top-level [`dispatch_simd!`] machinery in
-//! [`crate::math::common::mod`] when AVX2+FMA is detected at runtime.
+//! [`crate::math::common`] when AVX2+FMA is detected at runtime.
 
 macro_rules! impl_avx2_activations {
     () => {

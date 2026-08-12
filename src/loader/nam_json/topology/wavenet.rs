@@ -4,7 +4,12 @@
 //! Detection of WaveNet topologies from model data.
 
 use super::super::data::NamModelData;
-use super::super::model::{HeadConfig, SlimmableConfig};
+use super::super::model::HeadConfig;
+use super::super::validation::{
+    MAX_DILATION, MAX_DILATIONS_PER_ARRAY, MAX_HEAD_SIZE, MAX_KERNEL_SIZE, MAX_TOTAL_STATE_FRAMES,
+    MAX_WAVENET_ARRAYS, MAX_WAVENET_FREE_CHANNELS,
+};
+use crate::models::a2::weights_layout::FILM_KEYS;
 
 /// The closed and supported topologies within native WaveNet modeling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +125,7 @@ impl NamModelData {
             return false;
         }
 
-        // T5.1: Slimmable WaveNet models go through the A1 free-geometry path.
+        // Slimmable WaveNet models go through the A1 free-geometry path.
         if self.config.layers.iter().any(|l| l.slimmable.is_some()) {
             return false;
         }
@@ -158,7 +163,7 @@ impl NamModelData {
     }
 }
 
-/// Detects the WaveNet topology, distinguishing known SKUs from free geometries.
+/// Entry-point: detects the WaveNet topology, distinguishing known SKUs from free geometries.
 ///
 /// Returns [`WavenetTopologyResult`] with three possible outcomes:
 /// - `Known(SKU)`: matches a catalog variant (Standard/Lite/Feather/Nano) —
@@ -171,11 +176,6 @@ impl NamModelData {
 /// Mirror of C++ `NeuralModel.cpp` (L:155-218) generalized to accept any valid
 /// WaveNet A1 geometry, not only the four catalog SKUs.
 pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
-    use super::super::validation::{
-        MAX_DILATION, MAX_DILATIONS_PER_ARRAY, MAX_HEAD_SIZE, MAX_KERNEL_SIZE,
-        MAX_TOTAL_STATE_FRAMES, MAX_WAVENET_ARRAYS, MAX_WAVENET_FREE_CHANNELS,
-    };
-
     // ── Architecture gate ──
     if data.architecture != "WaveNet" {
         return WavenetTopologyResult::Rejected("Not a WaveNet model.".to_string());
@@ -195,62 +195,140 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         ));
     }
 
-    // ── Extract condition_size from first layer (all layers share the same value) ──
     let condition_size = layers[0].condition_size.unwrap_or(1);
 
-    // ── Extract per-layer fields (gently — full validation deferred to free geometry) ──
+    let extract = match extract_layer_metadata(layers) {
+        Ok(m) => m,
+        Err(reason) => return WavenetTopologyResult::Rejected(reason),
+    };
+
+    // ── Aggregate state budget check ──
+    if let Err(reason) =
+        compute_state_budget(&extract.dilations, &extract.kernel_sizes, &extract.channels)
+    {
+        return WavenetTopologyResult::Rejected(reason);
+    }
+
+    // ── Guardrail: Reject A1 models with A2-specific features ──
+    if let Err(reason) = validate_a1_guardrail(layers) {
+        return WavenetTopologyResult::Rejected(reason);
+    }
+
+    // ── Slimmable metadata validation ──
+    let allowed_channels = match validate_slimmable_metadata(layers, &extract.channels) {
+        Err(reason) => return WavenetTopologyResult::Rejected(reason),
+        Ok(ac) => ac,
+    };
+
+    // ── Try matching a known catalog SKU (fast-path) ──
+    if layers.len() == 2 {
+        let catalog_compatible = !layers[0].gated.unwrap_or(false)
+            && !layers[1].gated.unwrap_or(false)
+            && !layers[0].head_bias.unwrap_or(false)
+            && layers[1].head_bias.unwrap_or(false)
+            && condition_size <= 1
+            && data.config.condition_dsp.is_none()
+            && allowed_channels.is_none();
+
+        if catalog_compatible
+            && let Some(sku) = try_match_catalog_sku(extract.first_channels, &extract.dilations)
+        {
+            return WavenetTopologyResult::Known(sku);
+        }
+    }
+
+    // ── Free geometry (valid A1, but not in catalog) ──
+    let kernel_size = match extract.first_kernel_size {
+        Some(k) => k,
+        None => {
+            return WavenetTopologyResult::Rejected(
+                "Layer 0 is missing or has invalid 'kernel_size' — required for \
+                 free geometry WaveNet A1."
+                    .to_string(),
+            );
+        }
+    };
+    if extract.first_head_size.is_none_or(|h| h == 0) {
+        return WavenetTopologyResult::Rejected(
+            "Layer 0 is missing or has invalid 'head_size' — required for \
+             WaveNet A1 geometries (determines the head projection dimension)."
+                .to_string(),
+        );
+    }
+
+    WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
+        channels: extract.channels,
+        kernel_size,
+        kernel_sizes: extract.kernel_sizes,
+        head_sizes: extract.head_sizes,
+        head_biases: extract.head_biases,
+        condition_size,
+        num_arrays: layers.len(),
+        dilations: extract.dilations,
+        post_stack_head: data.config.parse_head(),
+        allowed_channels,
+    }))
+}
+
+// ── Layer metadata extraction ─────────────────────────────────────────────
+
+struct LayerMetadata {
+    first_channels: usize,
+    first_kernel_size: Option<usize>,
+    first_head_size: Option<usize>,
+    dilations: Vec<Vec<usize>>,
+    head_sizes: Vec<usize>,
+    channels: Vec<usize>,
+    kernel_sizes: Vec<usize>,
+    head_biases: Vec<bool>,
+}
+
+fn extract_layer_metadata(
+    layers: &[crate::loader::nam_json::model::NamLayerConfig],
+) -> Result<LayerMetadata, String> {
     let mut first_channels: Option<usize> = None;
     let mut first_kernel_size: Option<usize> = None;
     let mut first_head_size: Option<usize> = None;
-    let mut dilations: Vec<Vec<usize>> = Vec::with_capacity(layers.len());
-    let mut head_sizes: Vec<usize> = Vec::with_capacity(layers.len());
-    let mut channels: Vec<usize> = Vec::with_capacity(layers.len());
-    let mut kernel_sizes: Vec<usize> = Vec::with_capacity(layers.len());
-    let mut head_biases: Vec<bool> = Vec::with_capacity(layers.len());
-    let mut slimmable_layers: Vec<Option<SlimmableConfig>> = Vec::with_capacity(layers.len());
+    let mut dilations = Vec::with_capacity(layers.len());
+    let mut head_sizes = Vec::with_capacity(layers.len());
+    let mut channels = Vec::with_capacity(layers.len());
+    let mut kernel_sizes = Vec::with_capacity(layers.len());
+    let mut head_biases = Vec::with_capacity(layers.len());
 
     for (i, layer) in layers.iter().enumerate() {
         let ch = match layer.channels {
             Some(c) if c > 0 => {
                 if c > MAX_WAVENET_FREE_CHANNELS {
-                    return WavenetTopologyResult::Rejected(format!(
-                        "Layer {} channels ({}) exceeds maximum {} — \
-                         OOM/DoS protection.",
+                    return Err(format!(
+                        "Layer {} channels ({}) exceeds maximum {} — OOM/DoS protection.",
                         i, c, MAX_WAVENET_FREE_CHANNELS
                     ));
                 }
                 c
             }
-            _ => {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {} is missing or has invalid 'channels'.",
-                    i
-                ));
-            }
+            _ => return Err(format!("Layer {} is missing or has invalid 'channels'.", i)),
         };
         let k = layer.kernel_size.filter(|&k| k > 0);
         if let Some(k) = k
             && k > MAX_KERNEL_SIZE
         {
-            return WavenetTopologyResult::Rejected(format!(
-                "Layer {} kernel_size ({}) exceeds maximum {} — \
-                 DoS/OOM protection.",
+            return Err(format!(
+                "Layer {} kernel_size ({}) exceeds maximum {} — DoS/OOM protection.",
                 i, k, MAX_KERNEL_SIZE
             ));
         }
         let dils = match layer.dilations.as_deref() {
             Some(d) if !d.is_empty() => d.to_vec(),
             _ => {
-                return WavenetTopologyResult::Rejected(format!(
+                return Err(format!(
                     "Layer {} is missing or has invalid 'dilations'.",
                     i
                 ));
             }
         };
         if dils.len() > MAX_DILATIONS_PER_ARRAY {
-            return WavenetTopologyResult::Rejected(format!(
-                "Layer {} has {} dilations, exceeding maximum {} — \
-                 DoS/OOM protection.",
+            return Err(format!(
+                "Layer {} has {} dilations, exceeding maximum {} — DoS/OOM protection.",
                 i,
                 dils.len(),
                 MAX_DILATIONS_PER_ARRAY
@@ -258,48 +336,59 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         }
         for (j, &d) in dils.iter().enumerate() {
             if d > MAX_DILATION {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {} dilation[{}] ({}) exceeds maximum {} — \
-                     DoS/OOM protection.",
+                return Err(format!(
+                    "Layer {} dilation[{}] ({}) exceeds maximum {} — DoS/OOM protection.",
                     i, j, d, MAX_DILATION
                 ));
             }
         }
-
         if i == 0 {
             first_channels = Some(ch);
             first_kernel_size = k;
             first_head_size = layer.head_size;
         }
-
         let hd = layer.head_size.unwrap_or(1);
         if hd == 0 {
-            return WavenetTopologyResult::Rejected(format!(
-                "Layer {} has invalid head_size=0.",
-                i
-            ));
+            return Err(format!("Layer {} has invalid head_size=0.", i));
         }
         if hd > MAX_HEAD_SIZE {
-            return WavenetTopologyResult::Rejected(format!(
-                "Layer {} head_size ({}) exceeds maximum {} — \
-                 DoS/OOM protection.",
+            return Err(format!(
+                "Layer {} head_size ({}) exceeds maximum {} — DoS/OOM protection.",
                 i, hd, MAX_HEAD_SIZE
             ));
         }
-
         channels.push(ch);
         kernel_sizes.push(k.unwrap_or(0));
         head_sizes.push(hd);
         head_biases.push(layer.head_bias.unwrap_or(i == layers.len() - 1));
         dilations.push(dils);
-        slimmable_layers.push(layer.slimmable.clone());
     }
 
-    // ── Aggregate state budget check ──
-    // Computes total receptive-field × channels across all layers.
-    // Prevents DoS via amplification: a tiny model file (few KB of weights
-    // with channels=1) can trigger ~1 GB of mirrored buffer allocation
-    // when kernel_size × dilation × layer_count is extreme (F12).
+    let first_channels_val = first_channels.ok_or_else(|| {
+        "Layer 0 is missing or has invalid 'channels' — required for \
+         WaveNet topology detection."
+            .to_string()
+    })?;
+
+    Ok(LayerMetadata {
+        first_channels: first_channels_val,
+        first_kernel_size,
+        first_head_size,
+        dilations,
+        head_sizes,
+        channels,
+        kernel_sizes,
+        head_biases,
+    })
+}
+
+// ── State budget validation ────────────────────────────────────────────────
+
+fn compute_state_budget(
+    dilations: &[Vec<usize>],
+    kernel_sizes: &[usize],
+    channels: &[usize],
+) -> Result<(), String> {
     let total_state_frames: usize = dilations
         .iter()
         .zip(kernel_sizes.iter())
@@ -312,28 +401,21 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         })
         .unwrap_or(usize::MAX);
     if total_state_frames > MAX_TOTAL_STATE_FRAMES {
-        return WavenetTopologyResult::Rejected(format!(
+        Err(format!(
             "Aggregate state budget exceeded: {} total state frames vs max {} — \
-             OOM/DoS protection (F12).",
+             OOM/DoS prevention guardrail active.",
             total_state_frames, MAX_TOTAL_STATE_FRAMES
-        ));
+        ))
+    } else {
+        Ok(())
     }
+}
 
-    let first_channels_val = match first_channels {
-        Some(c) => c,
-        None => {
-            return WavenetTopologyResult::Rejected(
-                "Layer 0 is missing or has invalid 'channels' — required for \
-                 WaveNet topology detection."
-                    .to_string(),
-            );
-        }
-    };
+// ── A1 guardrail ───────────────────────────────────────────────────────────
 
-    // ── Guardrail: Reject A1 models with A2-specific features ──
-    // Models with gating_mode, head1x1, layer1x1, or FiLM features carry
-    // A2 semantics and cannot be processed by WaveNet A1 (catalog or free).
-    // (Finding 7.2.2 / Task T2.1; review: extended to cover catalog SKU path).
+fn validate_a1_guardrail(
+    layers: &[crate::loader::nam_json::model::NamLayerConfig],
+) -> Result<(), String> {
     for (i, layer) in layers.iter().enumerate() {
         let Some(ref raw) = layer.layer_raw else {
             continue;
@@ -344,12 +426,12 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
                     .iter()
                     .any(|v| !(v.as_str() == Some("none") || v.is_null()))
                 {
-                    return WavenetTopologyResult::Rejected(format!(
+                    return Err(format!(
                         "Layer {i} has non-none gating_mode — A2 feature not supported in WaveNet A1."
                     ));
                 }
             } else if !gm.is_null() {
-                return WavenetTopologyResult::Rejected(format!(
+                return Err(format!(
                     "Layer {i} has non-array gating_mode — A2 feature not supported in WaveNet A1."
                 ));
             }
@@ -360,7 +442,7 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             .and_then(|a| a.as_bool())
             .unwrap_or(false)
         {
-            return WavenetTopologyResult::Rejected(format!(
+            return Err(format!(
                 "Layer {i} has active head1x1 — A2 feature not supported in WaveNet A1."
             ));
         }
@@ -370,34 +452,24 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             .and_then(|a| a.as_bool())
             .unwrap_or(false)
         {
-            return WavenetTopologyResult::Rejected(format!(
+            return Err(format!(
                 "Layer {i} has active layer1x1 — A2 feature not supported in WaveNet A1."
             ));
         }
-        const FILM_KEYS: &[&str] = &[
-            "conv_pre_film",
-            "conv_post_film",
-            "input_mixin_pre_film",
-            "input_mixin_post_film",
-            "activation_pre_film",
-            "activation_post_film",
-            "layer1x1_post_film",
-            "head1x1_post_film",
-        ];
-        for key in FILM_KEYS {
+        for &(key, _) in FILM_KEYS {
             if raw
                 .get(key)
                 .and_then(|f| f.get("active"))
                 .and_then(|a| a.as_bool())
                 .unwrap_or(false)
             {
-                return WavenetTopologyResult::Rejected(format!(
+                return Err(format!(
                     "Layer {i} has active {key} — A2 feature not supported in WaveNet A1."
                 ));
             }
         }
         if layer.gated.unwrap_or(false) {
-            return WavenetTopologyResult::Rejected(format!(
+            return Err(format!(
                 "Layer {i} has gated=true — A2 feature not supported in WaveNet A1."
             ));
         }
@@ -411,104 +483,102 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
                 _ => true,
             };
             if has_non_trivial {
-                return WavenetTopologyResult::Rejected(format!(
+                return Err(format!(
                     "Layer {i} has non-trivial secondary_activation — A2 feature not supported in WaveNet A1."
                 ));
             }
         }
     }
+    Ok(())
+}
 
-    // ── Slimmable metadata validation ──
-    // Parse allowed_channels from per-layer `slimmable` objects. All layers
-    // must declare the same list (slice_channels_uniform invariant).
+// ── Slimmable metadata validation ──────────────────────────────────────────
+
+fn validate_slimmable_metadata(
+    layers: &[crate::loader::nam_json::model::NamLayerConfig],
+    channels: &[usize],
+) -> Result<Option<Vec<usize>>, String> {
     let mut allowed_channels: Option<Vec<usize>> = None;
 
-    for (i, sl) in slimmable_layers.iter().enumerate() {
-        if let Some(cfg) = sl {
-            if cfg
-                .method
-                .as_deref()
-                .is_some_and(|m| m != "slice_channels_uniform")
-            {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {i} has unsupported slimmable method '{}'. \
-                     Only 'slice_channels_uniform' is supported.",
-                    cfg.method.as_deref().unwrap_or("(none)")
+    for (i, layer) in layers.iter().enumerate() {
+        let Some(ref cfg) = layer.slimmable else {
+            continue;
+        };
+        if cfg
+            .method
+            .as_deref()
+            .is_some_and(|m| m != "slice_channels_uniform")
+        {
+            return Err(format!(
+                "Layer {i} has unsupported slimmable method '{}'. \
+                 Only 'slice_channels_uniform' is supported.",
+                cfg.method.as_deref().unwrap_or("(none)")
+            ));
+        }
+        let ac = match cfg
+            .kwargs
+            .as_ref()
+            .and_then(|k| k.allowed_channels.as_deref())
+        {
+            Some(ac) => ac,
+            None => {
+                return Err(format!(
+                    "Layer {i} has slimmable config but missing kwargs.allowed_channels."
                 ));
             }
-            let ac = match cfg
-                .kwargs
-                .as_ref()
-                .and_then(|k| k.allowed_channels.as_deref())
-            {
-                Some(ac) => ac,
-                None => {
-                    return WavenetTopologyResult::Rejected(format!(
-                        "Layer {i} has slimmable config but missing kwargs.allowed_channels."
-                    ));
-                }
-            };
-            if ac.is_empty() {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {i} has an empty 'slimmable' allowed_channels list."
-                ));
-            }
-            if ac.len() > MAX_WAVENET_ARRAYS {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {i} has {} slimmable breakpoints, exceeding maximum {} — \
-                     DoS/OOM protection.",
-                    ac.len(),
-                    MAX_WAVENET_ARRAYS
-                ));
-            }
-            // Verify ascending order (must increase monotonically)
-            for w in ac.windows(2) {
-                if w[0] >= w[1] {
-                    return WavenetTopologyResult::Rejected(format!(
-                        "Layer {i} slimmable channels must be strictly ascending: {:?}.",
-                        ac
-                    ));
-                }
-            }
-            // Verify all values are non-zero
-            if ac.contains(&0) {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {i} slimmable channels contain a zero value: {:?}.",
+        };
+        if ac.is_empty() {
+            return Err(format!(
+                "Layer {i} has an empty 'slimmable' allowed_channels list."
+            ));
+        }
+        if ac.len() > MAX_WAVENET_ARRAYS {
+            return Err(format!(
+                "Layer {i} has {} slimmable breakpoints, exceeding maximum {} — DoS/OOM protection.",
+                ac.len(),
+                MAX_WAVENET_ARRAYS
+            ));
+        }
+        for w in ac.windows(2) {
+            if w[0] >= w[1] {
+                return Err(format!(
+                    "Layer {i} slimmable channels must be strictly ascending: {:?}.",
                     ac
                 ));
             }
-            // Verify no value exceeds MAX_WAVENET_FREE_CHANNELS
-            if ac.iter().any(|&c| c > MAX_WAVENET_FREE_CHANNELS) {
-                return WavenetTopologyResult::Rejected(format!(
-                    "Layer {i} slimmable channels contain a value exceeding maximum {}: {:?}.",
-                    MAX_WAVENET_FREE_CHANNELS, ac
+        }
+        if ac.contains(&0) {
+            return Err(format!(
+                "Layer {i} slimmable channels contain a zero value: {:?}.",
+                ac
+            ));
+        }
+        if ac.iter().any(|&c| c > MAX_WAVENET_FREE_CHANNELS) {
+            return Err(format!(
+                "Layer {i} slimmable channels contain a value exceeding maximum {}: {:?}.",
+                MAX_WAVENET_FREE_CHANNELS, ac
+            ));
+        }
+        match &allowed_channels {
+            None => {
+                allowed_channels = Some(ac.to_vec());
+            }
+            Some(existing) if existing != ac => {
+                return Err(format!(
+                    "Slimmable allowed_channels mismatch: layer 0 has {:?}, \
+                     layer {i} has {:?}. All layers must declare the same list \
+                     for slice_channels_uniform.",
+                    existing, ac
                 ));
             }
-            match &allowed_channels {
-                None => {
-                    allowed_channels = Some(ac.to_vec());
-                }
-                Some(existing) if existing != ac => {
-                    return WavenetTopologyResult::Rejected(format!(
-                        "Slimmable allowed_channels mismatch: layer 0 has {:?}, \
-                         layer {i} has {:?}. All layers must declare the same list \
-                         for slice_channels_uniform.",
-                        existing, ac
-                    ));
-                }
-                _ => {}
-            }
+            _ => {}
         }
     }
 
-    // ── Validate model channels against allowed_channels ──
-    // When slimmable metadata is present, every layer's channel count must be
-    // present in the allowed_channels list (invariant: only declared breakpoints
-    // are valid).
     if let Some(ref allowed) = allowed_channels {
         for (i, &ch) in channels.iter().enumerate() {
             if !allowed.contains(&ch) {
-                return WavenetTopologyResult::Rejected(format!(
+                return Err(format!(
                     "Layer {i} channels ({}) is not in the declared \
                      slimmable allowed_channels: {:?}.",
                     ch, allowed
@@ -517,79 +587,30 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         }
     }
 
-    // ── Try matching a known catalog SKU (fast-path) ──
-    if layers.len() == 2 {
-        let l0 = &layers[0];
-        let l1 = &layers[1];
+    Ok(allowed_channels)
+}
 
-        let l0_gated = l0.gated.unwrap_or(false);
-        let l1_gated = l1.gated.unwrap_or(false);
-        let l0_head_bias = l0.head_bias.unwrap_or(false);
-        let l1_head_bias = l1.head_bias.unwrap_or(false);
+// ── Catalog SKU matching ───────────────────────────────────────────────────
 
-        let catalog_compatible = !l0_gated
-            && !l1_gated
-            && !l0_head_bias
-            && l1_head_bias
-            && condition_size <= 1
-            && data.config.condition_dsp.is_none()
-            && allowed_channels.is_none();
-
-        if catalog_compatible {
-            let dils_0 = &dilations[0];
-            let dils_1 = &dilations[1];
-
-            let result = match first_channels_val {
-                16 if dils_0 == STD_DILATIONS && dils_1 == STD_DILATIONS => {
-                    Some(NamWavenetTopology::Standard)
-                }
-                12 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
-                    Some(NamWavenetTopology::Lite)
-                }
-                8 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
-                    Some(NamWavenetTopology::Feather)
-                }
-                4 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
-                    Some(NamWavenetTopology::Nano)
-                }
-                _ => None,
-            };
-
-            if let Some(sku) = result {
-                return WavenetTopologyResult::Known(sku);
-            }
+fn try_match_catalog_sku(
+    first_channels: usize,
+    dilations: &[Vec<usize>],
+) -> Option<NamWavenetTopology> {
+    let dils_0 = &dilations[0];
+    let dils_1 = &dilations[1];
+    match first_channels {
+        16 if dils_0 == STD_DILATIONS && dils_1 == STD_DILATIONS => {
+            Some(NamWavenetTopology::Standard)
         }
-    }
-
-    // ── Free geometry (valid A1, but not in catalog) ──
-    let kernel_size = match first_kernel_size {
-        Some(k) => k,
-        None => {
-            return WavenetTopologyResult::Rejected(
-                "Layer 0 is missing or has invalid 'kernel_size' — required for \
-                 free geometry WaveNet A1."
-                    .to_string(),
-            );
+        12 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
+            Some(NamWavenetTopology::Lite)
         }
-    };
-    if first_head_size.is_none_or(|h| h == 0) {
-        return WavenetTopologyResult::Rejected(
-            "Layer 0 is missing or has invalid 'head_size' — required for \
-             WaveNet A1 geometries (determines the head projection dimension)."
-                .to_string(),
-        );
+        8 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
+            Some(NamWavenetTopology::Feather)
+        }
+        4 if dils_0 == LITE_DILATIONS && dils_1 == LITE_DILATIONS_2 => {
+            Some(NamWavenetTopology::Nano)
+        }
+        _ => None,
     }
-
-    WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
-        channels,
-        kernel_size,
-        kernel_sizes,
-        head_sizes,
-        head_biases,
-        condition_size,
-        num_arrays: layers.len(),
-        dilations,
-        post_stack_head: data.config.parse_head(),
-        allowed_channels,
-    }))
 }

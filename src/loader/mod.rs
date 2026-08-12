@@ -7,13 +7,19 @@
 //! The entire loading process occurs **outside** the RT thread to
 //! avoid any unwanted allocation during audio processing.
 
+/// Model construction: assembles `StaticModel` instances from parsed weight data.
 pub mod build;
+/// Architecture-specific model dispatcher: routes parsed weights to concrete model builders.
 pub mod dispatcher;
 /// Struct, constants, and Debug impl for `LoadedModelPair`.
 pub mod loaded_model_pair;
+/// `.nam` (JSON) format parser: schema validation, topology parsing, activation detection.
 pub mod nam_json;
+/// `.namb` (binary) format: header parsing, layout decoding, buffer-to-model construction.
 pub mod namb;
+/// `.namb` encoder: serializes `NamModelData` into the binary compact profile format.
 pub mod namb_encoder;
+/// Weight matrix transposition utilities for interleaved memory layouts.
 pub mod transpose;
 
 pub use build::load_and_build_model;

@@ -50,7 +50,7 @@
 //!
 //! 3. The old `Box<StaticModel>` is handed to `gc_cascade` for non-RT disposal.
 //!
-//! ## Multi-size NAMCore parity disclaimer (S4-T1)
+//! ## Multi-size NAMCore parity disclaimer
 //!
 //! NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API. It loads and
 //! renders the full WaveNet topology but cannot produce output at intermediate

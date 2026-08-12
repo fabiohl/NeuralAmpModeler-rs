@@ -1,57 +1,58 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Radix-4 Decimation-in-Time (DIT) FFT — Research Prototype (Task A9, Spr.4).
+//! Radix-4 Decimation-in-Time (DIT) FFT — Research Prototype
 //!
-//! **Status: CONCLUÍDO — NÃO USAR EM PRODUÇÃO.**
+//! **Status: Complete — Do not use in production.**
 //!
-//! Este módulo é um artefato de pesquisa preservado para referência futura.
-//! O protótipo implementa um FFT Radix-4 DIT iterativo in-place sobre buffers
-//! SoA (`&mut [T]`), with API compatible with the `FftPlanner` (Radix-2) from
-//! produção.
+//! This module is a research artifact preserved for future reference.
+//! The prototype implements an in-place iterative Radix-4 DIT FFT over
+//! SoA buffers (`&mut [T]`), with an API compatible with the production
+//! `FftPlanner` (Radix-2).
 //!
-//! # Decisão de engenharia
+//! # Engineering Decision
 //!
-//! Os benchmarks criterion (N=256 e N=1024, f32) demonstram que o Radix-4
-//! escalar é **7–19% mais lento** que o Radix-2 escalar, apesar de ter metade
-//! dos estágios (`log₄N` vs `log₂N`). As causas identificadas:
+//! Criterion benchmarks (N=256 and N=1024, f32) demonstrate that the scalar
+//! Radix-4 is **7–19% slower** than the scalar Radix-2, despite having half
+//! the stages (`log₄N` vs `log₂N`). Root causes:
 //!
-//! 1. **3× mais acessos a twiddles** por butterfly (W¹, W², W³), sobrecarregando
-//!    cache L1 de dados.
-//! 2. **Padrão de acesso strided** (L, 2L, 3L) que prejudica prefetch de hardware.
-//! 3. **Butterfly mais pesado**: 30 operações para 4 elementos vs 8 operações
-//!    para 2 elementos no Radix-2 — na prática pior que a razão teórica de
-//!    3.75:4 ops/elemento devido a pressão de registrador e branching.
-//! 4. **Branch condicional** (`if inverse`) no laço interno, quebrando
-//!    pipelining do compilador.
+//! 1. **3× more twiddle accesses** per butterfly (W¹, W², W³), stressing L1
+//!    data cache.
+//! 2. **Strided access pattern** (L, 2L, 3L) that degrades hardware prefetch.
+//! 3. **Heavier butterfly**: 30 operations for 4 elements vs 8 operations for
+//!    2 elements in Radix-2 — in practice worse than the theoretical 3.75:4
+//!    ops/element due to register pressure and branching.
+//! 4. **Conditional branch** (`if inverse`) in the inner loop, breaking
+//!    compiler pipelining.
 //!
-//! Stockham (auto-sort, elimina bit-reversal) e Split-Radix também foram
-//! analisados e descartados. O bit-reversal representa <2% do tempo total
-//! para N≤1024; Split-Radix tem padrão de acesso irregular que impede
-//! vetorização SIMD eficiente.
+//! Stockham (auto-sort, eliminates bit-reversal) and Split-Radix were also
+//! analyzed and discarded. Bit-reversal represents <2% of total time for
+//! N≤1024; Split-Radix has an irregular access pattern that prevents
+//! efficient SIMD vectorization.
 //!
-//! O algoritmo canônico do projeto permanece sendo o Radix-2 DIT com SIMD
-//! (Tarefa A8), implementado em [`super::fft`].
+//! The canonical project algorithm remains the Radix-2 DIT with SIMD
+//! acceleration, implemented in the canonical Radix-2 SIMD FFT planner.
 //!
-//! # Histórico da pesquisa
+//! # Research History
 //!
-//! * **Teoria**: Radix-4 DIT teria vantagem teórica (~6% menos operações),
-//!   metade dos estágios e potencial de SIMD com reuse de registrador.
-//! * **Protótipo**: Implementação funcional com 14 testes (paridade forward
-//!   vs Radix-2 para N=4,16,64,256,1024; roundtrip; impulso; f64).
-//!   Correções aplicadas: bit-reversal em base-4 (ao invés de base-2) e
-//!   swap das fórmulas de X₁/X₃ no butterfly inverso.
+//! * **Theory**: Radix-4 DIT would have a theoretical advantage (~6% fewer
+//!   operations), half the stages, and SIMD potential with register reuse.
+//! * **Prototype**: Functional implementation with 14 tests (forward parity
+//!   vs Radix-2 for N=4,16,64,256,1024; roundtrip; impulse; f64). Applied
+//!   corrections: base-4 bit-reversal (instead of base-2) and swapping the
+//!   X₁/X₃ formulas in the inverse butterfly.
 //! * **Benchmarks**: `cargo bench --bench fft_radix4_bench`
-//! * **Conclusão**: 2026-06-25. Radix-4, Stockham e Split-Radix não justificam
-//!   a complexidade adicional frente ao Radix-2 SIMD.
+//! * **Conclusion**: Radix-4, Stockham, and Split-Radix do not justify the
+//!   added complexity compared to Radix-2 SIMD.
 //!
-//! # Limitações técnicas (para referência)
+//! # Technical Limitations (for reference)
 //!
-//! * N deve ser **potência de 4** (4, 16, 64, 256, 1024, …). Para tamanhos
-//!   mistos (512, 2048), seria necessário um híbrido Radix-2+4.
-//! * Protótipo **escalar**; SIMD exigiria um novo método no trait `SimdMath`
-//!   (análogo a `fft_butterfly_stage`) com shuffle/permute para recombinar
-//!   os 4 outputs do butterfly a partir dos 3 inputs twiddlados.
+//! * N must be a **power of 4** (4, 16, 64, 256, 1024, …). For mixed sizes
+//!   (512, 2048), a hybrid Radix-2+4 would be required.
+//! * Prototype is **scalar**; SIMD would require a new method in the
+//!   `SimdMath` trait (analogous to `fft_butterfly_stage`) with
+//!   shuffle/permute to recombine the 4 butterfly outputs from the 3
+//!   twiddled inputs.
 
 #[cfg(any(test, feature = "long_bench"))]
 use super::fft::FftFloat;

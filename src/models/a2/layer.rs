@@ -87,25 +87,23 @@ pub struct A2Layer {
 }
 
 impl A2Layer {
-    /// The mixin has no bias in the A2 fast-path (cond_size=1, `Conv1x1 condition→CH`).
-    pub fn new(
+    fn new_base(
         conv: A2Conv1d,
+        conv_ch: Option<A2ConvCh>,
         mixin_w: AlignedVec<f32>,
+        mixin_groups: u32,
         l1x1_w: AlignedVec<f32>,
         l1x1_b: AlignedVec<f32>,
+        l1x1_groups: u32,
     ) -> Self {
-        let ch = conv.out_ch();
-        debug_assert_eq!(mixin_w.len(), ch);
-        debug_assert_eq!(l1x1_w.len(), ch * ch);
-        debug_assert_eq!(l1x1_b.len(), ch);
         Self {
             conv,
-            conv_ch: None,
+            conv_ch,
             mixin_w,
-            mixin_groups: 1,
+            mixin_groups,
             l1x1_w,
             l1x1_b,
-            l1x1_groups: 1,
+            l1x1_groups,
             conv_pre_film: None,
             conv_post_film: None,
             input_mixin_pre_film: None,
@@ -118,6 +116,20 @@ impl A2Layer {
             head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
             head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
         }
+    }
+
+    /// The mixin has no bias in the A2 fast-path (cond_size=1, `Conv1x1 condition→CH`).
+    pub fn new(
+        conv: A2Conv1d,
+        mixin_w: AlignedVec<f32>,
+        l1x1_w: AlignedVec<f32>,
+        l1x1_b: AlignedVec<f32>,
+    ) -> Self {
+        let ch = conv.out_ch();
+        debug_assert_eq!(mixin_w.len(), ch);
+        debug_assert_eq!(l1x1_w.len(), ch * ch);
+        debug_assert_eq!(l1x1_b.len(), ch);
+        Self::new_base(conv, None, mixin_w, 1, l1x1_w, l1x1_b, 1)
     }
 
     /// Creates a CH=3 layer with f32-native col-major-per-tap weights.
@@ -132,26 +144,15 @@ impl A2Layer {
         debug_assert_eq!(mixin_w.len(), 3);
         debug_assert_eq!(l1x1_w.len(), 9);
         debug_assert_eq!(l1x1_b.len(), 3);
-        Self {
+        Self::new_base(
             conv,
-            conv_ch: Some(A2ConvCh::Ch3(ch3_conv)),
+            Some(A2ConvCh::Ch3(ch3_conv)),
             mixin_w,
-            mixin_groups: 1,
+            1,
             l1x1_w,
             l1x1_b,
-            l1x1_groups: 1,
-            conv_pre_film: None,
-            conv_post_film: None,
-            input_mixin_pre_film: None,
-            input_mixin_post_film: None,
-            activation_pre_film: None,
-            activation_post_film: None,
-            layer1x1_post_film: None,
-            head1x1_post_film: None,
-            head1x1_active: false,
-            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
-            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
-        }
+            1,
+        )
     }
 
     /// Creates a layer with CH=8 optimized weights.
@@ -166,26 +167,15 @@ impl A2Layer {
         debug_assert_eq!(mixin_w.len(), 8);
         debug_assert_eq!(l1x1_w.len(), 64);
         debug_assert_eq!(l1x1_b.len(), 8);
-        Self {
+        Self::new_base(
             conv,
-            conv_ch: Some(A2ConvCh::Ch8(ch8_conv)),
+            Some(A2ConvCh::Ch8(ch8_conv)),
             mixin_w,
-            mixin_groups: 1,
+            1,
             l1x1_w,
             l1x1_b,
-            l1x1_groups: 1,
-            conv_pre_film: None,
-            conv_post_film: None,
-            input_mixin_pre_film: None,
-            input_mixin_post_film: None,
-            activation_pre_film: None,
-            activation_post_film: None,
-            layer1x1_post_film: None,
-            head1x1_post_film: None,
-            head1x1_active: false,
-            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
-            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
-        }
+            1,
+        )
     }
 
     /// Creates a layer with arbitrary l1x1 dimensions (bottleneck → channels).
@@ -209,26 +199,7 @@ impl A2Layer {
         _condition_size: usize,
     ) -> Self {
         debug_assert_eq!(l1x1_b.len(), l1x1_out_ch);
-        Self {
-            conv,
-            conv_ch: None,
-            mixin_w,
-            mixin_groups: 1,
-            l1x1_w,
-            l1x1_b,
-            l1x1_groups: 1,
-            conv_pre_film: None,
-            conv_post_film: None,
-            input_mixin_pre_film: None,
-            input_mixin_post_film: None,
-            activation_pre_film: None,
-            activation_post_film: None,
-            layer1x1_post_film: None,
-            head1x1_post_film: None,
-            head1x1_active: false,
-            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
-            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
-        }
+        Self::new_base(conv, None, mixin_w, 1, l1x1_w, l1x1_b, 1)
     }
 
     /// Channel count (bottleneck == channels in A2 fast-path).

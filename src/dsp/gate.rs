@@ -331,7 +331,7 @@ impl DynamicHysteresis {
         n_samples: usize,
     ) {
         if self.ramp_samples == 0 {
-            // Stable volume for both channels.
+            // ── Case A: No ramp — apply constant gain to entire block ──
             if self.current_multiplier == 0.0 {
                 left.fill(0.0);
                 right.fill(0.0);
@@ -349,7 +349,7 @@ impl DynamicHysteresis {
         let end_mult = self.current_multiplier;
 
         if self.ramp_samples >= n_samples {
-            // Smooth change across both channels for the entire block.
+            // ── Case B: Ramp spans the entire block (no stable tail) ──
             if (start_mult - end_mult).abs() < 1e-6 {
                 // SAFETY: same invariants as apply_gain_stereo above.
                 unsafe { M::apply_gain_stereo(left, right, end_mult) };
@@ -364,7 +364,7 @@ impl DynamicHysteresis {
                 unsafe { M::apply_ramp_stereo(left, right, start_mult, step) };
             }
         } else {
-            // Smooth change finishes before the end of the block for both channels.
+            // ── Case C: Ramp finishes mid-block → split into ramp + stable regions ──
             let (ramp_l, const_l) = left.split_at_mut(self.ramp_samples);
             let (ramp_r, const_r) = right.split_at_mut(self.ramp_samples);
 
@@ -379,7 +379,7 @@ impl DynamicHysteresis {
                 unsafe { M::apply_ramp_stereo(ramp_l, ramp_r, start_mult, step) };
             }
 
-            // Finalizes the rest of the block with stable volume.
+            // ── Stable tail: apply constant end gain to the remainder ──
             if end_mult == 0.0 {
                 const_l.fill(0.0);
                 const_r.fill(0.0);

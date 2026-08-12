@@ -7,7 +7,7 @@
 //! indexing must go through these helpers to prevent silent wrapping in
 //! release builds (where `overflow-checks` is disabled by default).
 //!
-//! F2: DoS/OOM prevention — unchecked arithmetic on adversarial dimensions.
+//! DoS/OOM prevention — unchecked arithmetic on adversarial dimensions.
 
 /// Builds a `Layout::from_size_align` with checked element count.
 ///

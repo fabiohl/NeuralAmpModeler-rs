@@ -810,7 +810,6 @@ fn quick_parity_wavenet_standard_v2_48k() {
 }
 
 /// Quick v2 parity: A2 Full with 5-second stress signal at 48 kHz.
-/// Added per PO request alongside the WaveNet Standard v2 quick test.
 #[test]
 fn quick_parity_a2_full_v2_48k() {
     let outcome = run_render_comparison(

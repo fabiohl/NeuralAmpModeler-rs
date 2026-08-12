@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Canonical mapping from [`GateState`] to [`RtStatusFlags`] bits
+//! Canonical mapping from [`GateState`](crate::dsp::gate::GateState) to [`RtStatusFlags`](crate::common::spsc::RtStatusFlags) bits
 //! (`RT_STATUS_IS_SILENT`, `RT_STATUS_IS_FADING`).
 //!
 //! This module is the single source of truth; processing pipelines and host
-//! adapters use [`report_gate_flags`] instead of duplicating the match arms.
+//! adapters use [`report_gate_flags`](crate::dsp::gate_flags::report_gate_flags) instead of duplicating the match arms.
 
 use crate::common::spsc::RtStatusFlags;
 use crate::dsp::gate::GateState;

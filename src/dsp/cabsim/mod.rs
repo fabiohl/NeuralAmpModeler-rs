@@ -7,8 +7,11 @@
 //! resamples them to the active sample rate, and delivers them
 //! to the DSP thread via lock-free SPSC transfer.
 
+/// SPSC adapter: bridges the off-RT loader to the RT convolution engine.
 pub mod adapter;
+/// Frequency-domain block convolution kernel: partitioned overlap-save FFT.
 pub mod conv;
 pub(crate) mod ir_parse;
 pub(crate) mod ir_resample;
+/// IR loader: parses WAV files, resamples to target rate, builds convolution buffers.
 pub mod loader;

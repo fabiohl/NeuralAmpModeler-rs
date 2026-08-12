@@ -198,6 +198,7 @@ compile_error!(
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
 
+/// Host-agnostic infrastructure: diagnostics, SPSC protocol, alloc audit, panic hooks.
 pub mod common;
 
 // API Surface Policy:
@@ -206,22 +207,26 @@ pub mod common;
 // accessible via its qualified path (neural_amp_modeler_rs::common::spsc::*).
 // Do NOT add glob re-exports (pub use common::*) to this file.
 
-// Curated public re-exports for audio host integration and engine configuration.
-// Diagnostics and system support reporting for host applications:
+/// Diagnostic and system support reporting for host applications.
 pub use common::diagnostics::{DiagnosticBundle, SystemSnapshot};
-// Global processing parameters and configuration mode enums:
+/// Zero-allocation panic dump hook facility for crash reporting.
+pub use common::panic_hook::install_panic_hook;
+/// Global processing parameters and configuration mode enums.
 pub use common::params::{
     ActivationPrecision, AdaptiveComputeMode, ProcessingParams, RtProcessingParams, SlimOverride,
 };
-// Zero-allocation panic dump hook facility for crash reporting:
-pub use common::panic_hook::install_panic_hook;
 
+/// Digital Signal Processing engine: oversampling, gate, resampler, cab-sim, pipelines.
 pub mod dsp;
+/// Model loader: parser and builder for `.nam` (JSON) and `.namb` (binary) formats.
 pub mod loader;
+/// Mathematical primitives: SIMD kernels, activations, GEMM, FFT, DSP utilities.
 pub mod math;
+/// Neural network architectures (WaveNet A1/A2, LSTM, ConvNet, Linear) and runtime dispatch.
 pub mod models;
 
 #[cfg(any(test, feature = "testing"))]
+/// Off-RT test utilities, perceptual metrics, and signal generators. Requires `testing` feature.
 pub mod testing;
 
 // Backward compatibility with older GLIBC versions (e.g. for Flatpak/Bitwig).

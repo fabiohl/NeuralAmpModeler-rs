@@ -4,8 +4,8 @@
 //! Native Complex FFT — Radix-2 Decimation-in-Time (DIT).
 //!
 //! Generic over `f32` and `f64`. All twiddle factors and bit-reversal
-//! tables are pre-computed at construction time, so the [`FftPlanner::process`]
-//! routine operates on SoA (Struct-of-Arrays) buffers with zero heap
+//! tables are pre-computed at construction time, so the
+//! `FftPlanner::process` routine operates on SoA (Struct-of-Arrays) buffers with zero heap
 //! allocations — safe for real-time audio threads.
 //!
 //! # Algorithm
@@ -15,7 +15,7 @@
 //!
 //! For `f32` processing, stages where `half >= 8` are accelerated via
 //! AVX2/AVX-512 SIMD butterfly kernels, dispatched at runtime through
-//! the [`dispatch_simd`] macro.
+//! the [`dispatch_simd!`](crate::dispatch_simd) macro.
 
 use crate::dispatch_simd;
 use std::f64::consts::TAU;

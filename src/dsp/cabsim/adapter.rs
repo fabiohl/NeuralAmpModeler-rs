@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! RT-safe variable-block adapter for [`ConvEngine`].
+//! RT-safe variable-block adapter for
+//! [`ConvEngine`](crate::dsp::cabsim::conv::ConvEngine).
 //!
-//! [`ConvEngine::process()`] requires exactly `partition_size` samples per call.
+//! [`ConvEngine::process()`](crate::dsp::cabsim::conv::ConvEngine::process) requires exactly
+//! `partition_size` samples per call.
 //! Audio hosts fragment blocks into arbitrary-sized sub-blocks due to
 //! sample-accurate parameter automation events. `CabSimAdapter` accumulates
 //! sub-blocks until a full partition is available, processes it through
@@ -15,11 +17,13 @@
 //! *   **FIFO input accumulator** — sub-blocks are buffered until
 //!     `partition_size` samples are collected.
 //! *   **FIFO output queue** — processed partitions are staged and slices
-//!     are returned on subsequent [`process_variable()`](CabSimAdapter::process_variable) calls. The output
+//!     are returned on subsequent
+//!     [`process_variable()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_variable) calls. The output
 //!     buffer is `2 × partition_size` to avoid overwriting unconsumed
 //!     output when a second partition completes before the first is fully
 //!     drained.
-//! *   **Zero-alloc hot path** — all buffers are pre-allocated in [`new()`](CabSimAdapter::new).
+//! *   **Zero-alloc hot path** — all buffers are pre-allocated in
+//!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
 //! *   **Causal output** — the adapter respects the engine's intrinsic
 //!     latency. Until the first partition is fully accumulated, output is
 //!     silence.

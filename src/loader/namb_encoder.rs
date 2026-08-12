@@ -12,7 +12,22 @@ use super::transpose::{lstm::transpose_lstm_gate_major, wavenet::transpose_waven
 use anyhow::Result;
 use std::io::Write;
 
-/// Encodes a `NamModelData` into the `.namb` binary format.
+/// Encodes a [`NamModelData`] into the `.namb` v2 binary format.
+///
+/// Accepts a JSON-parsed model data structure, a target binary format version,
+/// and a requested weight layout. Transposes weights to the target layout
+/// (if different from `Original`), builds a V2 header, computes a CRC-32
+/// checksum over the weight stream, and returns the complete `.namb` byte buffer.
+///
+/// # Arguments
+///
+/// * `data` — Parsed model data (architecture, layers, weights, metadata).
+/// * `version` — `.namb` format version number (currently v2).
+/// * `target_layout` — Weight matrix memory layout (`Original`, `Interleaved4`, etc.).
+///
+/// # Returns
+///
+/// Complete `.namb` byte buffer ready for writing to disk.
 pub fn encode_namb(
     data: &NamModelData,
     version: u16,

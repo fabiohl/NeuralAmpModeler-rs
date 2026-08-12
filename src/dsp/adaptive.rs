@@ -285,6 +285,7 @@ impl AdaptiveCompute {
             return;
         }
 
+        // ── Step 1: Compute latency/budget ratio and hysteresis thresholds ──
         let ratio = latency_us as f32 / budget_us as f32;
         let (full_to_reduced, reduced_to_minimal) = match self.mode {
             AdaptiveComputeMode::Conservative => (
@@ -298,12 +299,15 @@ impl AdaptiveCompute {
             AdaptiveComputeMode::Off => return,
         };
 
+        // Recovery thresholds use 50% hysteresis to prevent oscillation
         let recovery_reduced = full_to_reduced * 0.5;
         let recovery_minimal = reduced_to_minimal * 0.5;
 
+        // ── Step 2: FSM state transition with consecutive-sample confirmation ──
         match self.state {
             AdaptiveState::Full => {
                 if ratio > full_to_reduced {
+                    // Overload detected — increment counter toward degradation
                     self.overload_counter = self.overload_counter.saturating_add(1);
                     self.recovery_counter = 0;
                     if self.overload_counter >= DEGRADE_CONSECUTIVE {
@@ -315,12 +319,14 @@ impl AdaptiveCompute {
             }
             AdaptiveState::Reduced => {
                 if ratio > reduced_to_minimal {
+                    // Further degradation — escalate to Minimal
                     self.overload_counter = self.overload_counter.saturating_add(1);
                     self.recovery_counter = 0;
                     if self.overload_counter >= DEGRADE_CONSECUTIVE {
                         self.transition_to(AdaptiveState::Minimal, sample_rate, rt_status);
                     }
                 } else if ratio < recovery_reduced {
+                    // Headroom recovered — potentially restore Full
                     self.recovery_counter = self.recovery_counter.saturating_add(1);
                     self.overload_counter = 0;
                     if self.recovery_counter >= RECOVER_CONSECUTIVE {
@@ -328,12 +334,14 @@ impl AdaptiveCompute {
                         self.recovery_counter = 0;
                     }
                 } else {
+                    // Within steady-state band — reset counters
                     self.overload_counter = 0;
                     self.recovery_counter = 0;
                 }
             }
             AdaptiveState::Minimal => {
                 if ratio < recovery_minimal {
+                    // Headroom recovered — restore to Reduced
                     self.recovery_counter = self.recovery_counter.saturating_add(1);
                     if self.recovery_counter >= RECOVER_CONSECUTIVE {
                         self.transition_to(AdaptiveState::Reduced, sample_rate, rt_status);
