@@ -133,6 +133,11 @@ impl WaveNetA2Dyn {
         // C++ Conv1x1 with groups: the weight stream stores only block-diagonal
         // entries — G × out_per_group × in_per_group. Compact storage:
         // [out_ch × in_per_group] row-major; group is determined by output index.
+        //
+        // After reorder: transpose from row-major [out_ch][in_pg] to
+        // col-major [in_pg][out_ch] so the hot path can use contiguous
+        // 8-wide SIMD loads across output channels with broadcast condition
+        // (T4.3 vectorization).
         let mg: u32 = self.mixin_groups.max(1);
         let mixin_in_pg = self.condition_size / mg as usize;
         let mixin_out_per_g = conv_out / mg as usize;
@@ -144,11 +149,11 @@ impl WaveNetA2Dyn {
             total,
             &format!("layer[{i}].mixin_w"),
         )?;
-        let mut mixin_w = AlignedVec::new(mixin_count, 0.0f32)
+        let mut mixin_w_row = AlignedVec::new(mixin_count, 0.0f32)
             .expect("allocation should succeed for test-sized buffers");
         // Reorder from group-major to per-output-channel-major:
         // Stream: for each group g, then oc, then ic.
-        // Storage: mixin_w[oc * in_per_group + ic_local].
+        // Storage: mixin_w_row[oc * in_per_group + ic_local].
         {
             let mut src_idx = 0usize;
             for g in 0..mg as usize {
@@ -156,9 +161,25 @@ impl WaveNetA2Dyn {
                 for oc in out_start..out_start + mixin_out_per_g {
                     let dst_base = oc * mixin_in_pg;
                     for ic in 0..mixin_in_pg {
-                        mixin_w[dst_base + ic] = mixin_w_f32[src_idx];
+                        mixin_w_row[dst_base + ic] = mixin_w_f32[src_idx];
                         src_idx += 1;
                     }
+                }
+            }
+        }
+        // Transpose from row-major [out_per_g][in_pg] to col-major
+        // [in_pg][out_per_g] within each group block, so the hot path can
+        // use contiguous 8-wide SIMD loads across output channels with
+        // broadcast condition (T4.3).
+        let mut mixin_w = AlignedVec::new(mixin_count, 0.0f32)
+            .expect("allocation should succeed for test-sized buffers");
+        for g in 0..mg as usize {
+            let group_base = g * mixin_out_per_g * mixin_in_pg;
+            let out_start = g * mixin_out_per_g;
+            for ic in 0..mixin_in_pg {
+                for oc in 0..mixin_out_per_g {
+                    mixin_w[group_base + ic * mixin_out_per_g + oc] =
+                        mixin_w_row[(out_start + oc) * mixin_in_pg + ic];
                 }
             }
         }

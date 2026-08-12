@@ -294,20 +294,23 @@ The official baseline resides in [docs/quality-contract.txt](quality-contract.tx
 
 ### 9.2. Tolerance Margins
 
-The `--check` mode applies statistical margins to separate measurement noise from actual regressions:
+The `--check` mode separates measurement noise from real regressions:
 
-| Metric                         | Failure Criterion                     | Justification                                                |
-|:------------------------------ |:------------------------------------- |:------------------------------------------------------------ |
-| **Fidelity — ESR**             | `new_esr > contract_esr × 10.0`       | Absorbs ISA variation and f32/f64 codegen paths.             |
-| **Fidelity — SNR (dB)**        | `new_snr < contract_snr − 6.0`        | 6 dB margin covering quantization and scheduling noise.      |
-| **Fidelity — MR-STFT**         | `new_mrstft > contract_mrstft × 10.0` | Floating-point variance margin.                              |
-| **Performance — Latency (µs)** | `new_lat > contract_lat × 1.10`       | 10% margin over median latency; smaller shifts are OS noise. |
+| Metric | Failure Criterion | Justification |
+| :------------------------------ | :----------------- | :------------- |
+| **Fidelity — ESR** | Per-SKU noise envelope (PERF-009): roughly `noise_limit = max(baseline×3, baseline+5e-14)` and a higher safety ceiling; not a global 10× multiplier | Catches subtle 2×–5× ESR regressions on ultra-precise models |
+| **Fidelity — SNR (dB)** | `new_snr < contract_snr − 6.0` | Quantization / scheduling margin |
+| **Fidelity — MR-STFT** | Envelope / relative ceiling vs contract | Spectral variance margin |
+| **Oracle divergence** | `REVIEW_REQUIRED` when NAMCore and f64 move in opposite directions beyond calibrated ratios | Neither oracle auto-wins |
+| **Performance — Latency (µs)** | Contract: `new_lat > contract_lat × 1.10`. Primary gate: Criterion t-test via `tests-performance-regression.sh` | 10% contract margin absorbs OS noise; Criterion is the statistical authority |
 
 > [!NOTE]
 > Fields with value `N/A` in the contract file are skipped during check.
+> When `regression_gate != PASS`, the dashboard reports `PERFORMANCE: NOT_VERIFIED`
+> and refuses to certify contract performance metrics (fail-closed; no stale log reuse).
 >
 > [!IMPORTANT]
-> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the **primary statistical authority** for performance regressions (two-sample t-test vs Criterion baseline, p < 0.05). The quality contract serves as a fast second line of defense.
+> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the **primary statistical authority** for performance regressions (two-sample t-test vs Criterion baseline under `.performance-baselines/`, p < 0.05). The quality contract is the integrated second line (fidelity + median latency snapshot).
 
 ### 9.3. Perf vermelho ≠ regressão de paridade
 
@@ -323,9 +326,15 @@ CPU budget). Ambas são importantes, mas respondem a causas distintas:
   Pode ser sazonal (thermals, governor), ambiental (OS noise, CPU contention) ou
   estrutural (novo caminho de código mais lento para o mesmo resultado correto).
 
-QA scripts report these domains independently: `FIDELITY: OK` /
-`PERFORMANCE: FAIL (N)` means audio quality is preserved and only the
-time budget exceeded the contract.
+QA scripts report these domains independently:
+
+- `FIDELITY: OK` / `PERFORMANCE: NOT_VERIFIED` — all fidelity phases and ESR/SNR
+  envelopes passed; only `regression_gate` failed or was skipped (Criterion noise,
+  missing baseline, or incomparable environment). **Not** a sonic regression.
+- `FIDELITY: FAIL` / `PERFORMANCE: *` — at least one mandatory fidelity phase or
+  metric envelope failed. Investigate audio parity first.
+- A `regression_gate` FAIL must **never** be counted as a fidelity violation
+  (dashboard `verify_contract` attributes phase failures by domain).
 
 > [!NOTE]
 > O [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) é a
@@ -342,11 +351,44 @@ time budget exceeded the contract.
 ./utils/tests-performance-regression.sh --check
 ```
 
-### 9.5. Baseline Renewal Procedure
+### 9.5. Baseline Renewal Procedure (Human-Only)
 
-Baseline renewal is a deliberate action requiring explicit justification:
+Two artifacts must stay aligned after intentional performance or fidelity changes:
 
-1. **Pre-conditions:** All validation gates must pass (`utils/lints.sh`, `utils/tests-quick.sh`, `utils/tests-performance-regression.sh --check`).
-2. **Regenerate baseline:** `./utils/quality-dashboard.sh --save docs/quality-contract.txt`
-3. **Verify:** `./utils/quality-dashboard.sh --check docs/quality-contract.txt`
-4. **Commit:** Commit message must document the technical reason for updating the baseline and the measured impact.
+| Artifact | Location | Owner command |
+| --- | --- | --- |
+| Criterion statistical baseline | `.performance-baselines/` (gitignored) | `utils/tests-performance-regression.sh --bootstrap-baseline` |
+| Quality contract snapshot | `docs/quality-contract.txt` (committed) | `utils/quality-dashboard.sh --save docs/quality-contract.txt` |
+
+**Agents/CI must never run bootstrap or `--save`.** Operator machine: governor
+`performance`, low load, optional `NAM_BENCH_CORE`.
+
+```sh
+# 1) Preconditions (fidelity / structure)
+utils/lints.sh
+utils/tests-quick.sh   # at most once as final structural gate
+
+# 2) Renew Criterion baseline FIRST (absorbs intentional latency shifts)
+utils/tests-performance-regression.sh --bootstrap-baseline
+utils/tests-performance-regression.sh --check   # MUST exit 0
+
+# 3) Freeze integrated contract (fails closed if regression_gate != PASS)
+utils/quality-dashboard.sh --save docs/quality-contract.txt
+
+# 4) Verify on the same revision
+utils/quality-dashboard.sh --check docs/quality-contract.txt
+```
+
+**Provenance:** the saved contract header records `git_commit`, dirty/clean state,
+`run_id`, `effective_isa` (full x86-64-v3 label), CPU, and rustc. Prefer a **clean**
+git tree before `--save` so the commit hash is unambiguous.
+
+**Flaky Criterion after a green standalone `--check`:** the dashboard runs fidelity
+phases for ~minutes before Criterion, so micro-benches can trip p&lt;0.05 noise
+(e.g. `RT_LSTM_2x8` +3–5% with no code change). Re-run standalone `--check` cold;
+bootstrap again only if the delta is intentional or reproducible under isolation.
+See [benchmarks.md — First-Time Setup and Post-Optimization Renewal](benchmarks.md#first-time-setup-and-post-optimization-renewal-human-only).
+
+1. **Commit** `docs/quality-contract.txt` (and any related docs) with measured
+   before/after numbers. Do **not** commit `.performance-baselines/` (local,
+   machine-specific). Each developer/CI host bootstraps its own Criterion baseline.

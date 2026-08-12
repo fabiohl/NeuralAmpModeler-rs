@@ -36,6 +36,11 @@ use crate::models::a2::gating::{BlendingActivationConfig, GatingActivationConfig
 use crate::models::a2::layer::A2Layer;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
+use core::arch::x86_64::{
+    _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
+    _mm256_storeu_ps,
+};
+
 #[cfg(any(test, feature = "testing"))]
 use crate::math::common::AlignedVec;
 #[cfg(any(test, feature = "testing"))]
@@ -471,6 +476,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     // When input_mixin_pre_film is active, the condition vector is first
     // modulated by FiLM (self-modulation, C++ model.cpp:188-197), then the
     // modulated condition feeds the mixin instead of the raw condition.
+    //
+    // Weights are stored col-major [in_pg][out_per_g] per group (T4.3
+    // transposition in builder.rs). Each condition channel broadcasts
+    // into 8-wide SIMD FMA over contiguous output weights.
     {
         let mut cond_is_modulated = false;
         if let Some(ref mut film) = layer.input_mixin_pre_film {
@@ -486,29 +495,61 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             cond_slice
         };
 
-        // Flat single-group path: every output channel reads from all input channels.
-        if layer.mixin_groups <= 1 {
-            for c in 0..z_out_ch {
-                let base = c * cond_size;
-                let mut sum = 0.0;
-                for k in 0..cond_size {
-                    sum += layer.mixin_w[base + k] * cond_for_mixin[k];
-                }
-                mixin_scratch[c] = sum;
-            }
+        let in_pg = if layer.mixin_groups <= 1 {
+            cond_size
         } else {
-            let in_pg = cond_size / layer.mixin_groups as usize;
-            let out_per_g = z_out_ch / layer.mixin_groups as usize;
-            for g in 0..layer.mixin_groups as usize {
+            cond_size / layer.mixin_groups as usize
+        };
+        let out_per_g = if layer.mixin_groups <= 1 {
+            z_out_ch
+        } else {
+            z_out_ch / layer.mixin_groups as usize
+        };
+        let num_groups = layer.mixin_groups.max(1) as usize;
+
+        if out_per_g >= 8 {
+            for g in 0..num_groups {
+                let group_base = g * out_per_g * in_pg;
                 let in_start = g * in_pg;
                 let out_start = g * out_per_g;
-                for oc in out_start..out_start + out_per_g {
-                    let mut sum = 0.0;
-                    let w_base = oc * in_pg;
-                    for ic in 0..in_pg {
-                        sum += layer.mixin_w[w_base + ic] * cond_for_mixin[in_start + ic];
+                unsafe {
+                    let mut oc = 0;
+                    while oc + 8 <= out_per_g {
+                        let mut acc = _mm256_setzero_ps();
+                        for ic in 0..in_pg {
+                            let cond = _mm256_set1_ps(cond_for_mixin[in_start + ic]);
+                            let w = _mm256_loadu_ps(
+                                layer.mixin_w.as_ptr().add(group_base + ic * out_per_g + oc),
+                            );
+                            acc = _mm256_fmadd_ps(cond, w, acc);
+                        }
+                        _mm256_storeu_ps(mixin_scratch.as_mut_ptr().add(out_start + oc), acc);
+                        oc += 8;
                     }
-                    mixin_scratch[oc] = sum;
+                    // Scalar tail for remaining output channels in this group.
+                    for oc in oc..out_per_g {
+                        let mut sum = 0.0;
+                        for ic in 0..in_pg {
+                            sum += layer.mixin_w[group_base + ic * out_per_g + oc]
+                                * cond_for_mixin[in_start + ic];
+                        }
+                        mixin_scratch[out_start + oc] = sum;
+                    }
+                }
+            }
+        } else {
+            // Scalar fallback for small groups (out_per_g < 8).
+            for g in 0..num_groups {
+                let group_base = g * out_per_g * in_pg;
+                let in_start = g * in_pg;
+                let out_start = g * out_per_g;
+                for oc in 0..out_per_g {
+                    let mut sum = 0.0;
+                    for ic in 0..in_pg {
+                        sum += layer.mixin_w[group_base + ic * out_per_g + oc]
+                            * cond_for_mixin[in_start + ic];
+                    }
+                    mixin_scratch[out_start + oc] = sum;
                 }
             }
         }
@@ -522,9 +563,24 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         }
     }
 
-    // Sum mixin output to z_scratch.
-    for c in 0..z_out_ch {
-        z_scratch[c] += mixin_scratch[c];
+    // Sum mixin output to z_scratch (vectorized 8-wide).
+    if z_out_ch >= 8 {
+        unsafe {
+            let mut c = 0;
+            while c + 8 <= z_out_ch {
+                let src = _mm256_loadu_ps(mixin_scratch.as_ptr().add(c));
+                let dst = _mm256_loadu_ps(z_scratch.as_ptr().add(c));
+                _mm256_storeu_ps(z_scratch.as_mut_ptr().add(c), _mm256_add_ps(dst, src));
+                c += 8;
+            }
+            for c in c..z_out_ch {
+                z_scratch[c] += mixin_scratch[c];
+            }
+        }
+    } else {
+        for c in 0..z_out_ch {
+            z_scratch[c] += mixin_scratch[c];
+        }
     }
 
     if let Some(ref mut film) = layer.activation_pre_film {
@@ -567,9 +623,7 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     let head1x1_b = &layer.head1x1_b;
     let head_off = (head_wp + f) * head_accum_size;
     if head1x1_active {
-        // Correct grouped head1x1 accumulation.
-        // head1x1_w is [head_accum_size][h1_in] (transposed in build.rs).
-        // For grouped models, each group uses a subset of z_scratch.
+        // head1x1_w is [head_accum_size][h1_in] row-major (transposed in build.rs).
         let h1_in = if head1x1_w.is_empty() {
             0
         } else {
@@ -578,13 +632,48 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
         let ch_per_group = head_accum_size / h1_groups;
         for grp in 0..h1_groups {
-            for oc in grp * ch_per_group..(grp + 1) * ch_per_group {
-                let mut sum = head1x1_b[oc];
-                let b_start = oc * h1_in;
-                for ic in 0..h1_in {
-                    sum += head1x1_w[b_start + ic] * z_scratch[grp * h1_in + ic];
+            let z_off = grp * h1_in;
+            let ch_start = grp * ch_per_group;
+            let ch_end = (grp + 1) * ch_per_group;
+            // Vectorized inner dot product for each output channel.
+            // Processes h1_in in 8-wide SIMD steps, extracting lanes
+            // sequentially to preserve exact left-to-right accumulation.
+            if h1_in >= 8 {
+                for oc in ch_start..ch_end {
+                    unsafe {
+                        let mut acc = _mm256_setzero_ps();
+                        let mut ic = 0;
+                        while ic + 8 <= h1_in {
+                            let inputs = _mm256_loadu_ps(z_scratch.as_ptr().add(z_off + ic));
+                            let weights = _mm256_loadu_ps(head1x1_w.as_ptr().add(oc * h1_in + ic));
+                            acc = _mm256_fmadd_ps(inputs, weights, acc);
+                            ic += 8;
+                        }
+                        // Extract lanes preserving left-to-right accumulation order.
+                        let mut sum = head1x1_b[oc];
+                        {
+                            let mut lane_buf = [0.0f32; 8];
+                            _mm256_storeu_ps(lane_buf.as_mut_ptr(), acc);
+                            for v in &lane_buf {
+                                sum += *v;
+                            }
+                        }
+                        // Scalar tail for remaining h1_in.
+                        for ic in ic..h1_in {
+                            sum += head1x1_w[oc * h1_in + ic] * z_scratch[z_off + ic];
+                        }
+                        head1x1_scratch[oc] = sum;
+                    }
                 }
-                head1x1_scratch[oc] = sum;
+            } else {
+                for oc in ch_start..ch_end {
+                    let mut sum = head1x1_b[oc];
+                    let b_start = oc * h1_in;
+                    for ic in 0..h1_in {
+                        sum += head1x1_w[b_start + ic] * z_scratch[z_off + ic];
+                    }
+                    head1x1_scratch[oc] = sum;
+                }
             }
         }
         // FiLM after head1x1 projection (C++ model.cpp:283-287).
@@ -597,8 +686,21 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             head_accum[head_off..head_off + head_accum_size]
                 .copy_from_slice(&head1x1_scratch[..head_accum_size]);
         } else {
-            for c in 0..head_accum_size {
-                head_accum[head_off + c] += head1x1_scratch[c];
+            // Vectorized accumulation into head ring buffer.
+            unsafe {
+                let mut c = 0;
+                while c + 8 <= head_accum_size {
+                    let src = _mm256_loadu_ps(head1x1_scratch.as_ptr().add(c));
+                    let dst = _mm256_loadu_ps(head_accum.as_ptr().add(head_off + c));
+                    _mm256_storeu_ps(
+                        head_accum.as_mut_ptr().add(head_off + c),
+                        _mm256_add_ps(dst, src),
+                    );
+                    c += 8;
+                }
+                for c in c..head_accum_size {
+                    head_accum[head_off + c] += head1x1_scratch[c];
+                }
             }
         }
     } else {
@@ -609,8 +711,20 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         if is_first {
             head_accum[head_off..head_off + bottleneck].copy_from_slice(&z_scratch[..bottleneck]);
         } else {
-            for c in 0..bottleneck {
-                head_accum[head_off + c] += z_scratch[c];
+            unsafe {
+                let mut c = 0;
+                while c + 8 <= bottleneck {
+                    let src = _mm256_loadu_ps(z_scratch.as_ptr().add(c));
+                    let dst = _mm256_loadu_ps(head_accum.as_ptr().add(head_off + c));
+                    _mm256_storeu_ps(
+                        head_accum.as_mut_ptr().add(head_off + c),
+                        _mm256_add_ps(dst, src),
+                    );
+                    c += 8;
+                }
+                for c in c..bottleneck {
+                    head_accum[head_off + c] += z_scratch[c];
+                }
             }
         }
     }
@@ -621,26 +735,85 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         let l1x1_w = &layer.l1x1_w;
         let l1x1_b = &layer.l1x1_b;
         if layer.l1x1_groups <= 1 {
-            for oc in 0..channels {
-                let mut sum = l1x1_b[oc];
-                for ic in 0..bottleneck {
-                    sum += l1x1_w[ic * channels + oc] * z_scratch[ic];
+            // Dense L1x1: weights are col-major [bottleneck][channels].
+            // Each ic row has `channels` contiguous weights, enabling
+            // 8-wide SIMD across output channels with broadcast input.
+            if channels >= 8 {
+                let channels_aligned = channels & !7;
+                unsafe {
+                    for oc in (0..channels_aligned).step_by(8) {
+                        let mut acc = _mm256_loadu_ps(l1x1_b.as_ptr().add(oc));
+                        for ic in 0..bottleneck {
+                            let z = _mm256_set1_ps(z_scratch[ic]);
+                            let w = _mm256_loadu_ps(l1x1_w.as_ptr().add(ic * channels + oc));
+                            acc = _mm256_fmadd_ps(z, w, acc);
+                        }
+                        _mm256_storeu_ps(l1x1_scratch.as_mut_ptr().add(oc), acc);
+                    }
                 }
-                l1x1_scratch[oc] = sum;
+                // Scalar tail.
+                for oc in channels_aligned..channels {
+                    let mut sum = l1x1_b[oc];
+                    for ic in 0..bottleneck {
+                        sum += l1x1_w[ic * channels + oc] * z_scratch[ic];
+                    }
+                    l1x1_scratch[oc] = sum;
+                }
+            } else {
+                for oc in 0..channels {
+                    let mut sum = l1x1_b[oc];
+                    for ic in 0..bottleneck {
+                        sum += l1x1_w[ic * channels + oc] * z_scratch[ic];
+                    }
+                    l1x1_scratch[oc] = sum;
+                }
             }
         } else {
             let in_pg = bottleneck / layer.l1x1_groups as usize;
             let out_per_g = channels / layer.l1x1_groups as usize;
-            for g in 0..layer.l1x1_groups as usize {
-                let in_start = g * in_pg;
-                let out_start = g * out_per_g;
-                for oc in out_start..out_start + out_per_g {
-                    let mut sum = l1x1_b[oc];
-                    let w_base = oc * in_pg;
-                    for ic in 0..in_pg {
-                        sum += l1x1_w[w_base + ic] * z_scratch[in_start + ic];
+            // Grouped L1x1: weights are row-major [channels][in_pg].
+            // Vectorize inner dot product over in_pg dimension.
+            if in_pg >= 8 {
+                for g in 0..layer.l1x1_groups as usize {
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    for oc in out_start..out_start + out_per_g {
+                        unsafe {
+                            let mut acc = _mm256_setzero_ps();
+                            let mut ic = 0;
+                            while ic + 8 <= in_pg {
+                                let inputs = _mm256_loadu_ps(z_scratch.as_ptr().add(in_start + ic));
+                                let weights = _mm256_loadu_ps(l1x1_w.as_ptr().add(oc * in_pg + ic));
+                                acc = _mm256_fmadd_ps(inputs, weights, acc);
+                                ic += 8;
+                            }
+                            let mut sum = l1x1_b[oc];
+                            {
+                                let mut lane_buf = [0.0f32; 8];
+                                _mm256_storeu_ps(lane_buf.as_mut_ptr(), acc);
+                                for v in &lane_buf {
+                                    sum += *v;
+                                }
+                            }
+                            for ic in ic..in_pg {
+                                sum += l1x1_w[oc * in_pg + ic] * z_scratch[in_start + ic];
+                            }
+                            l1x1_scratch[oc] = sum;
+                        }
                     }
-                    l1x1_scratch[oc] = sum;
+                }
+            } else {
+                for g in 0..layer.l1x1_groups as usize {
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    for oc in out_start..out_start + out_per_g {
+                        let mut sum = l1x1_b[oc];
+                        let w_base = oc * in_pg;
+                        for ic in 0..in_pg {
+                            sum += l1x1_w[w_base + ic] * z_scratch[in_start + ic];
+                        }
+                        l1x1_scratch[oc] = sum;
+                    }
                 }
             }
         }
@@ -649,8 +822,27 @@ unsafe fn process_frame_dyn<M: SimdMath>(
                 film.process(&mut l1x1_scratch[..channels], cond_slice);
             }
         }
-        for oc in 0..channels {
-            layer_in[base + oc] += l1x1_scratch[oc];
+        // Vectorized accumulation into layer_in.
+        if channels >= 8 {
+            unsafe {
+                let mut oc = 0;
+                while oc + 8 <= channels {
+                    let src = _mm256_loadu_ps(l1x1_scratch.as_ptr().add(oc));
+                    let dst = _mm256_loadu_ps(layer_in.as_ptr().add(base + oc));
+                    _mm256_storeu_ps(
+                        layer_in.as_mut_ptr().add(base + oc),
+                        _mm256_add_ps(dst, src),
+                    );
+                    oc += 8;
+                }
+                for oc in oc..channels {
+                    layer_in[base + oc] += l1x1_scratch[oc];
+                }
+            }
+        } else {
+            for oc in 0..channels {
+                layer_in[base + oc] += l1x1_scratch[oc];
+            }
         }
     }
 }

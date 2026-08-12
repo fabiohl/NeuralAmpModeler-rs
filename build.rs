@@ -33,12 +33,21 @@ fn main() {
     let target_feature = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
     let features: Vec<&str> = target_feature.split(',').collect();
 
-    let has_avx2 = features.iter().any(|f| f.trim() == "avx2");
-    let has_fma = features.iter().any(|f| f.trim() == "fma");
+    let required_v3_features = [
+        "avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "lzcnt", "movbe",
+    ];
 
-    if !has_avx2 || !has_fma {
+    let missing_features: Vec<&str> = required_v3_features
+        .iter()
+        .copied()
+        .filter(|&req| !features.iter().any(|f| f.trim() == req))
+        .collect();
+
+    if !missing_features.is_empty() {
+        let missing_str = missing_features.join(", ");
         let msg = format!(
-            "NeuralAmpModeler-rs requires x86-64-v3 (avx2+fma). \
+            "NeuralAmpModeler-rs requires full x86-64-v3 target support. \
+             Missing required feature(s): {missing_str}. \
              Set RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\" to compile. \
              Detected features: {target_feature}"
         );

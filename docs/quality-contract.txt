@@ -1,8 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║              NeuralAmpModeler-rs Quality Dashboard                            ║
 ║              ------------------------------                      ║
-║              Measured at: 2026-08-03 14:13:30 -0300                ║
-║              ISA: AVX2 (x86-64-v3)                               ║
+║              Measured at: 2026-08-12 09:20:03 -030                ║
+║              Commit: 0e22ea4ec247 (dirty)                              ║
+║              Run ID: 1786537203076204151-15755                         ║
+║              ISA: x86-64-v3 (AVX2/FMA/F16C/BMI)                  ║
 ║              CPU: AMD Ryzen 7 5700U with Radeon Graphics         ║
 ║              rustc: rustc 1.97.1 (8bab26f4f 2026-07-14)          ║
 ╚══════════════════════════════════════════════════════════════════╝
@@ -12,13 +14,13 @@
 
   🎸 WaveNet Standard (CH16)                 vs NAMcore: 2.31e-14   IDENTICAL  │  vs Ideal (f64): 9.05e-15  │  ⚡ CPU: 2.8% of budget
   🎸 WaveNet A1 Standard                     vs NAMcore: 1.20e-13   IDENTICAL  │  vs Ideal (f64): 1.05e-13  │  ⚡ CPU: 2.8% of budget
-  🎸 WaveNet Feather (CH8)                   vs NAMcore: 4.74e-14   IDENTICAL  │  vs Ideal (f64): 2.00e-14  │  ⚡ CPU: 1.4% of budget
+  🎸 WaveNet Feather (CH8)                   vs NAMcore: 4.74e-14   IDENTICAL  │  vs Ideal (f64): 2.00e-14  │  ⚡ CPU: 1.5% of budget
   🎸 LSTM 1x16 (BossLSTM)                    vs NAMcore: 8.50e-12   IDENTICAL  │  vs Ideal (f64): 8.90e-13  │  ⚡ CPU: 0.6% of budget
   🎸 LSTM 2x8 (BossLSTM)                     vs NAMcore: 1.00e-11   IDENTICAL  │  vs Ideal (f64): 5.68e-13  │  ⚡ CPU: 0.6% of budget
-  🎸 A2 Full (CH8)                           vs NAMcore: 1.46e-13   IDENTICAL  │  vs Ideal (f64): N/A         │  ⚡ CPU: 2.0% of budget
+  🎸 A2 Full (CH8)                           vs NAMcore: 1.46e-13   IDENTICAL  │  vs Ideal (f64): N/A         │  ⚡ CPU: 2.1% of budget
   🎸 A2 Lite (CH3)                           vs NAMcore: 8.36e-14   IDENTICAL  │  vs Ideal (f64): 1.82e-14  │  ⚡ CPU: 1.4% of budget
   🎸 A2-FiLM Lite (CH3)                      vs NAMcore: 3.82e-13   IDENTICAL  │  vs Ideal (f64): 1.61e-13  │  ⚡ CPU: 1.4% of budget
-  🎸 ConvNet                                 vs NAMcore: 4.20e-15   IDENTICAL  │  vs Ideal (f64): 3.57e-15  │  ⚡ CPU: 0.8% of budget
+  🎸 ConvNet                                 vs NAMcore: 3.14e-14   IDENTICAL  │  vs Ideal (f64): N/A         │  ⚡ CPU: 0.8% of budget
   🎸 Linear (RF=2048)                        vs NAMcore: 1.70e-14   IDENTICAL  │  vs Ideal (f64): N/A         │  ⚡ CPU: 0.0% of budget
 
 📊 AUDIO FIDELITY — Technical Details
@@ -33,16 +35,17 @@
   BossWN-feather @48000 Live             │ 4.74e-14        │ 2.00e-14 │ 133.2    │ 8.86e-06 │ Live   
   BossWN-nano @48000 Live                │ 6.43e-14        │ 3.05e-14 │ 131.9    │ 7.67e-06 │ Live   
   BossWN-standard @48000 Live            │ 2.31e-14        │ 9.05e-15 │ 136.4    │ 6.46e-06 │ Live   
-  ConvNet Test @48000 Live               │ 4.20e-15        │ 3.57e-15 │ 143.8    │ 1.20e-06 │ Live   
+  ConvNet Test @48000 Live               │ 4.23e-15        │ 3.57e-15 │ 143.7    │ 1.17e-06 │ Live   
+  EVH-5150-Lite @48000 Live              │ 7.87e-13        │ 2.64e-13 │ 121.0    │ 4.31e-06 │ Live   
   LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live │ 3.70e-15        │ 2.86e-15 │ 144.3    │ 1.45e-06 │ Live   
   Linear FFT RF=2048 (C++ golden) @48000 │ 1.70e-14        │ N/A          │ 137.7    │ 2.17e-06 │ Live   
   Linear FFT RF=4096 (C++ golden) @48000 │ 1.62e-14        │ N/A          │ 137.9    │ 4.09e-06 │ Live   
   Linear FFT RF=8192 (C++ golden) @48000 │ 1.69e-14        │ N/A          │ 137.7    │ 5.20e-06 │ Live   
   SlimmableContainer A2 Example (CH=3→6) C++ cross-reference @48000 Live │ 7.28e-14        │ 1.82e-14 │ 131.4    │ 1.73e-05 │ Live   
   WaveNet A2 Dynamic Blended (CH=3, blended layers 2/23) C++ cross-reference @48000 Live │ 5.35e-14        │ 2.65e-14 │ 132.7    │ 9.97e-06 │ Live   
-  WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live │ 5.03e-11        │ 1.00e-10 │ 103.0    │ 6.63e-05 │ Live   
+  WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live │ 5.03e-11        │ 1.00e-10 │ 103.0    │ 6.64e-05 │ Live   
   WaveNet A2-FiLM Chaos Stress (CH=3, FiLM active) C++ cross-reference @48000 Live │ 1.26e-14        │ 1.03e-14 │ 139.0    │ 7.00e-06 │ Live   
-  WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference @48000 Live │ 1.18e-14        │ 8.75e-15 │ 139.3    │ 7.85e-06 │ Live   
+  WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference @48000 Live │ 1.16e-14        │ 6.42e-15 │ 139.4    │ 7.85e-06 │ Live   
   WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference @48000 Live │ 3.44e-14        │ 2.21e-14 │ 134.6    │ 6.92e-06 │ Live   
   WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference @48000 Live │ 3.82e-13        │ 1.61e-13 │ 124.2    │ 1.69e-05 │ Live   
   WaveNet A2-Full (CH=8) C++ cross-reference @48000 Live │ 1.46e-13        │ 7.83e-14 │ 128.3    │ 1.68e-05 │ Live   
@@ -52,7 +55,14 @@
   WaveNet Official (CH=3, dynamic path) C++ cross-reference @48000 Live │ 9.03e-14        │ 6.13e-14 │ 130.4    │ 1.66e-05 │ Live   
   WaveNet Standard polynomial SIMD (regression gate) @48000 Live │ 2.31e-14        │ N/A          │ 136.4    │ 6.46e-06 │ Live   
   WaveNetDyn Free-Shape (CH=7→4, dynamic path) C++ cross-reference @48000 Live │ 4.10e-13        │ 1.06e-12 │ 123.9    │ 2.58e-05 │ Live   
+  convnet_nobn @48000 Live               │ 3.23e-14        │ N/A          │ 134.9    │ 5.62e-06 │ Live   
+  convnet_relu @48000 Live               │ 6.84e-15        │ N/A          │ 141.6    │ 2.27e-06 │ Live   
+  convnet_silu @48000 Live               │ 2.58e-13        │ N/A          │ N/A      │ 8.67e-06 │ Live   
+  linear_nobias @48000 Live              │ 3.89e-15        │ N/A          │ 144.1    │ 1.64e-06 │ Live   
   lstm (Official) @48000 Live            │ 7.86e-13        │ 2.71e-12 │ 121.0    │ 3.08e-05 │ Live   
+  lstm_1x10 @48000 Live                  │ 4.01e-15        │ N/A          │ 144.0    │ 1.25e-06 │ Live   
+  lstm_2x24 @48000 Live                  │ 2.71e-14        │ N/A          │ 135.7    │ 3.50e-06 │ Live   
+  lstm_3x8 @48000 Live                   │ 3.66e-15        │ N/A          │ 144.4    │ 5.55e-07 │ Live   
   wavenet_a1_standard (Official) @48000 Live │ 1.20e-13        │ 1.05e-13 │ 129.2    │ 2.26e-06 │ Live   
 
   ── Additional Coverage (quick_parity, containers, regression gates) ──
@@ -65,12 +75,19 @@
   Container A2-Lite (CH=3) C++ cross-reference @48000 Live │ 8.36e-14        │ 1.82e-14 │ 130.8    │ 9.54e-06 │ Live   
   Container File A2-Full (CH=8) C++ cross-reference @48000 Live │ 1.46e-13        │ 7.83e-14 │ 128.3    │ 1.68e-05 │ Live   
   Container File A2-Lite (CH=3) C++ cross-reference @48000 Live │ 8.36e-14        │ 1.82e-14 │ 130.8    │ 9.54e-06 │ Live   
-  Quick A2-Full @48000 Live              │ 1.50e-13        │ 7.83e-14 │ 128.3    │ 1.72e-05 │ Live   
-  Quick A2-Full v2 @48000 Live           │ 1.58e-13        │ N/A          │ 128.0    │ 2.76e-05 │ Live   
-  Quick LSTM 1×10 @48000 Live           │ 4.05e-15        │ N/A          │ 143.9    │ 1.32e-06 │ Live   
-  Quick LSTM 1×16 @48000 Live           │ 8.72e-12        │ 8.90e-13 │ 110.6    │ 2.95e-05 │ Live   
-  Quick WaveNet CH16 @48000 Live         │ 2.31e-14        │ 9.05e-15 │ 136.4    │ 6.46e-06 │ Live   
-  Quick WaveNet Standard v2 @48000 Live  │ 9.92e-14        │ N/A          │ 130.0    │ 4.31e-05 │ Live   
+  Quick A2-Full @48000 Live              │ 1.12e-13        │ 7.83e-14 │ 129.5    │ 1.49e-05 │ Live   
+  Quick A2-Full v2 @48000 Live           │ 1.20e-13        │ N/A          │ 129.2    │ 2.40e-05 │ Live   
+  Quick ConvNet No BatchNorm @48000 Live │ 3.14e-14        │ N/A          │ 135.0    │ 5.54e-06 │ Live   
+  Quick ConvNet ReLU @48000 Live         │ 6.76e-15        │ N/A          │ 141.7    │ 2.25e-06 │ Live   
+  Quick ConvNet SiLU @48000 Live         │ 5.26e-13        │ N/A          │ 122.8    │ 1.42e-05 │ Live   
+  Quick LSTM 1×10 @48000 Live           │ 4.08e-15        │ N/A          │ 143.9    │ 1.35e-06 │ Live   
+  Quick LSTM 1×16 @48000 Live           │ 1.45e-11        │ 8.90e-13 │ 108.4    │ 3.20e-05 │ Live   
+  Quick LSTM 2×24 @48000 Live           │ 2.78e-14        │ N/A          │ 135.6    │ 3.73e-06 │ Live   
+  Quick LSTM 3×8 @48000 Live            │ 3.61e-15        │ N/A          │ 144.4    │ 6.22e-07 │ Live   
+  Quick Linear No Bias @48000 Live       │ 3.89e-15        │ N/A          │ 144.1    │ 1.64e-06 │ Live   
+  Quick SlimmableContainer A2 Example v2 @48000 Live │ 4.08e-14        │ N/A          │ 133.9    │ 9.17e-05 │ Live   
+  Quick WaveNet CH16 @48000 Live         │ 2.46e-14        │ 9.05e-15 │ 136.1    │ 6.89e-06 │ Live   
+  Quick WaveNet Standard v2 @48000 Live  │ 9.96e-14        │ N/A          │ 130.0    │ 4.29e-05 │ Live   
 
   Qualitative legend (ESR audibility bounds):
     green = imperceptible (ESR < 1e-5)
@@ -82,18 +99,34 @@
   RT deadline: 1333 µs (1.33 ms)
   Efficiency: µs per MMAC (mega-MACs) — lower is better
 
-  Model                        │ Median Latency   │ % Budget   │ µs/MMAC       │ Headroom
+  ── Model Inference Core ──
+
+  Model / Component            │ Median Latency   │ % Budget   │ µs/MMAC       │ Headroom
   ──────────────────────────── │ ──────────────── │ ────────── │ ────────────── │ ──────────────────
-  WaveNet Standard CH16        │ 36.9 us          │ 2.8%       │ 2404.30 us/MMAC │ 97.2% ok
-  WaveNet Feather CH8          │ 19.3 us          │ 1.4%       │ 5031.25 us/MMAC │ 98.6% ok
-  WaveNet Lite CH12            │ 52.2 us          │ 3.9%       │ 6039.35 us/MMAC │ 96.1% ok
-  WaveNet Nano CH4             │ 17.2 us          │ 1.3%       │ 17968.75 us/MMAC │ 98.7% ok
-  A2 Full CH8                  │ 27.3 us          │ 2.0%       │ N/A            │ 98.0% ok
+  WaveNet Standard CH16        │ 36.9 us          │ 2.8%       │ 2402.34 us/MMAC │ 97.2% ok
+  WaveNet Feather CH8          │ 19.4 us          │ 1.5%       │ 5039.06 us/MMAC │ 98.5% ok
+  WaveNet Lite CH12            │ 52.6 us          │ 3.9%       │ 6092.59 us/MMAC │ 96.1% ok
+  WaveNet Nano CH4             │ 17.4 us          │ 1.3%       │ 18072.92 us/MMAC │ 98.7% ok
+  A2 Full CH8                  │ 27.6 us          │ 2.1%       │ N/A            │ 97.9% ok
   A2 Lite CH3                  │ 18.4 us          │ 1.4%       │ N/A            │ 98.6% ok
   LSTM 1x16                    │ 7.5 us           │ 0.6%       │ N/A            │ 99.4% ok
-  LSTM 2x8                     │ 7.5 us           │ 0.6%       │ N/A            │ 99.4% ok
+  LSTM 2x8                     │ 7.6 us           │ 0.6%       │ N/A            │ 99.4% ok
   Linear RF=2048               │ 0.3 us           │ 0.0%       │ N/A            │ 100.0% ok
   ConvNet                      │ 10.2 us          │ 0.8%       │ N/A            │ 99.2% ok
+  WaveNet Dyn Free             │ 22.5 us          │ 1.7%       │ N/A            │ 98.3% ok
+  LSTM Dyn 1x7                 │ 8.2 us           │ 0.6%       │ N/A            │ 99.4% ok
+  A2 Dyn Gated CH8             │ 170.8 us         │ 12.8%      │ N/A            │ 87.2% ok
+  A2 Dyn Blended CH3           │ 136.2 us         │ 10.2%      │ N/A            │ 89.8% ok
+
+  ── DSP Infrastructure ──
+
+  Model / Component            │ Median Latency   │ % Budget   │ µs/MMAC       │ Headroom
+  ──────────────────────────── │ ──────────────── │ ────────── │ ────────────── │ ──────────────────
+  DSP Resampler 44.1k->48k     │ 1.3 us           │ 0.1%       │ N/A            │ 99.9% ok
+  DSP Resampler 96k->48k       │ 0.7 us           │ 0.1%       │ N/A            │ 99.9% ok
+  DSP CabSim IR Medium         │ 1.3 us           │ 0.1%       │ N/A            │ 99.9% ok
+  DSP Pipeline Base (No OS)    │ 37.2 us          │ 2.8%       │ N/A            │ 97.2% ok
+  DSP Pipeline HQ (4x OS)      │ 150.6 us         │ 11.3%      │ N/A            │ 88.7% ok
 
   (i) Headroom > 50%:  2x oversampling usually safe without xruns
   (i) Headroom > 75%:  4x oversampling usually safe without xruns
@@ -192,13 +225,13 @@
 
   Eixo                         │ Registros  │ Cobertura
   ──────────────────────────── │ ────────── │ ────────────────────
-  NAMCore Parity               │ 36         │ covered             
-  f64 Oracle Fidelity          │ 41         │ covered             
+  NAMCore Parity               │ 51         │ covered             
+  f64 Oracle Fidelity          │ 43         │ covered             
   ISA Optimizations            │ 0          │ not covered         
   Spectral Baselines           │ 0          │ not covered         
-  RT Performance               │ 10         │ covered             
+  RT Performance               │ 19         │ covered             
 
-  Cobertura: 3/5 eixos covereds
+  Coverage: 3/5 axes covered
 
   Contagens de testes no receipt:
     passed:          7
@@ -208,6 +241,6 @@
     filtered:        0
 
 ───────────────────────────────────────────────────────────────
-  Dashboard generated in 85.1s (fidelity: 12.4s, performance: 70.9s)
+  Dashboard generated in 149.4s (fidelity: 12.6s, performance: 134.3s)
 
 

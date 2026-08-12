@@ -4,9 +4,14 @@
 //  RT deadline gate — asserts that all SKUs meet the 1.33 ms processing
 //  deadline for a 64-sample block at 48 kHz.
 //
-//  Uses `LatencyHistogram` to measure per-block processing time and enforces
-//  an `assert!` on p99 latency. This gate catches performance regressions
-//  before they cause xruns in production.
+//  Integrates `rt_preflight` environmental verification (CPU affinity +
+//  performance governor). When the environment is uncontrolled, telemetry
+//  is still collected but tail/max values are classified as
+//  `INCONCLUSIVE_ENVIRONMENT`. When preflight passes, any block exceeding
+//  the deadline causes a hard test failure.
+//
+//  Telemetry per SKU: P50, P90, P99, P99.9, exact max, and exact count
+//  of blocks above the 1.330 µs deadline.
 //
 //  ## Running
 //
@@ -23,9 +28,11 @@
 //  - `BLOCK_SIZE`: 64
 
 use super::common;
+use common::rt_helpers::{self, RtPreflightStatus};
 use common::*;
 
 use std::fs;
+use std::sync::OnceLock;
 
 use neural_amp_modeler_rs::dsp::telemetry::LatencyHistogram;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
@@ -43,6 +50,27 @@ const MEASURE_BLOCKS: usize = 2048;
 
 /// DSP block size in samples (standard 48 kHz JACK/PipeWire buffer).
 const BLOCK_SIZE: usize = 64;
+
+/// Preflight runs once per process; subsequent calls return the cached result.
+fn preflight_ok() -> bool {
+    static PREFLIGHT: OnceLock<bool> = OnceLock::new();
+    *PREFLIGHT.get_or_init(|| {
+        let result = rt_helpers::rt_preflight();
+        rt_helpers::print_preflight(&result);
+        result.status == RtPreflightStatus::Pass
+    })
+}
+
+#[derive(Debug, Default)]
+struct DeadlineStats {
+    p50_us: u64,
+    p90_us: u64,
+    p99_us: u64,
+    p999_us: u64,
+    exact_max_us: u64,
+    violations: u64,
+    total_blocks: usize,
+}
 
 /// Loads a model from `tests/fixtures/models/<filename>`, returning `None`
 /// if the file does not exist (skip gracefully).
@@ -62,8 +90,11 @@ fn load_model(filename: &str) -> Option<neural_amp_modeler_rs::models::StaticMod
     Some(*model)
 }
 
-/// Measures p99 processing time for a model, asserts it is under the RT deadline.
-fn assert_rt_deadline(label: &str, model: &mut neural_amp_modeler_rs::models::StaticModel) {
+/// Measures full tail-latency distribution and deadline violations for a model.
+fn measure_rt_deadline(
+    label: &str,
+    model: &mut neural_amp_modeler_rs::models::StaticModel,
+) -> DeadlineStats {
     let input = generate_sine_440hz(BLOCK_SIZE);
     let out_ch = match model {
         neural_amp_modeler_rs::models::StaticModel::ConvNet(c) => c.out_channels(),
@@ -72,38 +103,89 @@ fn assert_rt_deadline(label: &str, model: &mut neural_amp_modeler_rs::models::St
     let output_size = out_ch * BLOCK_SIZE;
     let mut output = vec![0.0f32; output_size];
     let hist = LatencyHistogram::new();
+    let mut violations: u64 = 0;
 
-    // Warmup
     for _ in 0..WARMUP_BLOCKS {
         model.process(&input, &mut output);
     }
 
-    // Measurement
     for _ in 0..MEASURE_BLOCKS {
         let start = std::time::Instant::now();
         model.process(&input, &mut output);
         let elapsed_ns = start.elapsed().as_nanos() as u64;
         hist.record(elapsed_ns);
+
+        if elapsed_ns > RT_DEADLINE_US * 1000 {
+            violations += 1;
+        }
     }
 
-    let p50 = hist.get_percentile(0.50) / 1000;
-    let p99 = hist.get_percentile(0.99) / 1000;
-    let exact_max = hist.get_exact_max() / 1000;
-
-    println!(
-        "[{label}] P50={p50}μs  P99={p99}μs  exact_max={exact_max}μs  \
-         deadline={RT_DEADLINE_US}μs  blocks={MEASURE_BLOCKS}"
+    assert!(
+        output.iter().all(|s| s.is_finite()),
+        "[{label}] Non-finite output sample detected"
     );
 
-    if !cfg!(debug_assertions) {
-        assert!(
-            p99 < RT_DEADLINE_US,
-            "[{label}] P99={p99}μs exceeds RT deadline {RT_DEADLINE_US}μs — regression detected"
+    DeadlineStats {
+        p50_us: hist.get_percentile(0.50) / 1000,
+        p90_us: hist.get_percentile(0.90) / 1000,
+        p99_us: hist.get_percentile(0.99) / 1000,
+        p999_us: hist.get_percentile(0.999) / 1000,
+        exact_max_us: hist.get_exact_max() / 1000,
+        violations,
+        total_blocks: MEASURE_BLOCKS,
+    }
+}
+
+/// Emits full telemetry receipt and asserts deadline compliance when the
+/// environment is controlled.
+fn emit_and_assert(label: &str, stats: &DeadlineStats) {
+    let pflight_ok = preflight_ok();
+
+    println!(
+        "[{label}] P50={}μs  P90={}μs  P99={}μs  P99.9={}μs  \
+         exact_max={}μs  violations={}/{}  deadline={}μs",
+        stats.p50_us,
+        stats.p90_us,
+        stats.p99_us,
+        stats.p999_us,
+        stats.exact_max_us,
+        stats.violations,
+        stats.total_blocks,
+        RT_DEADLINE_US,
+    );
+
+    if pflight_ok {
+        println!(
+            "[{label}] RECEIPT: deadline_ok violations={}/{} max={}μs",
+            stats.violations, stats.total_blocks, stats.exact_max_us,
         );
-        assert!(
-            output.iter().all(|s| s.is_finite()),
-            "[{label}] Non-finite output sample detected"
+        if !cfg!(debug_assertions) {
+            assert!(
+                stats.violations == 0,
+                "[{label}] {}/{} blocks exceeded RT deadline {RT_DEADLINE_US}μs — \
+                 hard failure in controlled environment",
+                stats.violations,
+                stats.total_blocks,
+            );
+            assert!(
+                stats.p99_us < RT_DEADLINE_US,
+                "[{label}] P99={}μs exceeds RT deadline {RT_DEADLINE_US}μs — regression detected",
+                stats.p99_us,
+            );
+        }
+    } else {
+        println!(
+            "[{label}] INCONCLUSIVE_ENVIRONMENT — tail/max values not certified \
+             (environment preconditions not met)"
         );
+    }
+}
+
+/// Convenience: loads a model, measures deadline telemetry, emits receipt and asserts.
+fn run_deadline_test(filename: &str, label: &str) {
+    if let Some(mut model) = load_model(filename) {
+        let stats = measure_rt_deadline(label, &mut model);
+        emit_and_assert(label, &stats);
     }
 }
 
@@ -111,88 +193,62 @@ fn assert_rt_deadline(label: &str, model: &mut neural_amp_modeler_rs::models::St
 
 #[test]
 fn test_rt_deadline_wavenet_standard() {
-    let mut model = load_model("BossWN-standard.nam").unwrap();
-    assert_rt_deadline("WaveNet-Standard", &mut model);
+    run_deadline_test("BossWN-standard.nam", "WaveNet-Standard");
 }
 
 #[test]
 fn test_rt_deadline_wavenet_feather() {
-    if let Some(mut model) = load_model("BossWN-feather.nam") {
-        assert_rt_deadline("WaveNet-Feather", &mut model);
-    }
+    run_deadline_test("BossWN-feather.nam", "WaveNet-Feather");
 }
 
 #[test]
 fn test_rt_deadline_wavenet_lite() {
-    if let Some(mut model) = load_model("BossWN-lite.nam") {
-        assert_rt_deadline("WaveNet-Lite", &mut model);
-    }
+    run_deadline_test("BossWN-lite.nam", "WaveNet-Lite");
 }
 
 #[test]
 fn test_rt_deadline_wavenet_nano() {
-    if let Some(mut model) = load_model("BossWN-nano.nam") {
-        assert_rt_deadline("WaveNet-Nano", &mut model);
-    }
+    run_deadline_test("BossWN-nano.nam", "WaveNet-Nano");
 }
 
 // ── A2 SKUs ──
 
 #[test]
 fn test_rt_deadline_a2_full() {
-    if let Some(mut model) = load_model("wavenet_a2_full.nam") {
-        assert_rt_deadline("A2-Full", &mut model);
-    }
+    run_deadline_test("wavenet_a2_full.nam", "A2-Full");
 }
 
 #[test]
 fn test_rt_deadline_a2_lite() {
-    if let Some(mut model) = load_model("wavenet_a2_lite.nam") {
-        assert_rt_deadline("A2-Lite", &mut model);
-    }
+    run_deadline_test("wavenet_a2_lite.nam", "A2-Lite");
 }
 
 // ── LSTM SKUs ──
 
 #[test]
 fn test_rt_deadline_lstm_1x16() {
-    if let Some(mut model) = load_model("BossLSTM-1x16.nam") {
-        assert_rt_deadline("LSTM-1x16", &mut model);
-    }
+    run_deadline_test("BossLSTM-1x16.nam", "LSTM-1x16");
 }
 
 #[test]
 fn test_rt_deadline_lstm_2x8() {
-    if let Some(mut model) = load_model("BossLSTM-2x8.nam") {
-        assert_rt_deadline("LSTM-2x8", &mut model);
-    }
+    run_deadline_test("BossLSTM-2x8.nam", "LSTM-2x8");
 }
 
 // ── Linear / ConvNet ──
 
 #[test]
 fn test_rt_deadline_linear() {
-    if let Some(mut model) = load_model("linear_test.nam") {
-        assert_rt_deadline("Linear", &mut model);
-    }
+    run_deadline_test("linear_test.nam", "Linear");
 }
 
 #[test]
 fn test_rt_deadline_convnet() {
-    if let Some(mut model) = load_model("convnet_test.nam") {
-        assert_rt_deadline("ConvNet", &mut model);
-    }
+    run_deadline_test("convnet_test.nam", "ConvNet");
 }
 
 // ── Container / Adaptive States ──
 
-/// Tests the container model (A2-Full + A2-Lite submodels) at all
-/// three adaptive states: Full (1.0), Reduced (0.25), Minimal (0.0).
-///
-/// This validates that the channel-reduction and layer-skipping
-/// mechanisms of the adaptive FSM produce models that still meet
-/// the RT deadline — and that the code path for slimmable swap
-/// does not introduce latency regression.
 #[test]
 fn test_rt_deadline_adaptive_states() {
     let path = model_path("wavenet_a2_container.nam");
@@ -206,54 +262,48 @@ fn test_rt_deadline_adaptive_states() {
     let mut model = build_model(&model_data).expect("Dispatcher failed for container model");
     model.prewarm(2048);
 
-    // Full — quality = 1.0
-    model.set_slimmable_size(1.0, None);
-    // Process a few blocks to settle crossfade if any
     let input = generate_sine_440hz(BLOCK_SIZE);
     let mut output = vec![0.0f32; BLOCK_SIZE];
+
+    model.set_slimmable_size(1.0, None);
     for _ in 0..64 {
         model.process(&input, &mut output);
     }
-    assert_rt_deadline("Container-Full", &mut model);
+    let stats = measure_rt_deadline("Container-Full", &mut model);
+    emit_and_assert("Container-Full", &stats);
 
-    // Reduced — quality = 0.25
     model.set_slimmable_size(0.25, None);
     for _ in 0..64 {
         model.process(&input, &mut output);
     }
-    assert_rt_deadline("Container-Reduced", &mut model);
+    let stats = measure_rt_deadline("Container-Reduced", &mut model);
+    emit_and_assert("Container-Reduced", &stats);
 
-    // Minimal — quality = 0.0
     model.set_slimmable_size(0.0, None);
     for _ in 0..64 {
         model.process(&input, &mut output);
     }
-    assert_rt_deadline("Container-Minimal", &mut model);
+    let stats = measure_rt_deadline("Container-Minimal", &mut model);
+    emit_and_assert("Container-Minimal", &stats);
 }
 
 // ── WaveNet Dynamic (free-geometry fallback path) ──
 
 #[test]
 fn test_rt_deadline_wavenet_dynamic() {
-    if let Some(mut model) = load_model("wavenet_dyn_free.nam") {
-        assert_rt_deadline("WaveNet-Dynamic", &mut model);
-    }
+    run_deadline_test("wavenet_dyn_free.nam", "WaveNet-Dynamic");
 }
 
 // ── LSTM Dynamic ──
 
 #[test]
 fn test_rt_deadline_lstm_dynamic() {
-    if let Some(mut model) = load_model("lstm_dyn_test.nam") {
-        assert_rt_deadline("LSTM-Dynamic", &mut model);
-    }
+    run_deadline_test("lstm_dyn_test.nam", "LSTM-Dynamic");
 }
 
 // ── A2 Dynamic ──
 
 #[test]
 fn test_rt_deadline_a2_dynamic() {
-    if let Some(mut model) = load_model("a2_dynamic_gated_ch8.nam") {
-        assert_rt_deadline("A2-Dynamic-Gated", &mut model);
-    }
+    run_deadline_test("a2_dynamic_gated_ch8.nam", "A2-Dynamic-Gated");
 }

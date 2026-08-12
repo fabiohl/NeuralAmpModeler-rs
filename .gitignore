@@ -15,6 +15,7 @@ repomix-*.xml
 
 # Rust build artifacts
 /target
+.performance-baselines/
 
 # Scratch / ad-hoc debug prototypes
 scratch/

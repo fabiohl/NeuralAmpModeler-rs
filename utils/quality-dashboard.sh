@@ -94,10 +94,20 @@ trap 'rm -rf "$PARSEDIR"' EXIT INT TERM
 detect_isa() {
     local flags
     flags=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null || true)
-    if echo "$flags" | grep -q 'avx512f'; then
+    if echo "$flags" | grep -q -w 'avx512f'; then
         echo "AVX-512"
-    elif echo "$flags" | grep -q 'avx2'; then
-        echo "AVX2 (x86-64-v3)"
+    # Linux /proc/cpuinfo exposes LZCNT as "lzcnt" and/or "abm" (AMD ABM).
+    elif echo "$flags" | grep -q -w 'avx' && \
+         echo "$flags" | grep -q -w 'avx2' && \
+         echo "$flags" | grep -q -w 'bmi1' && \
+         echo "$flags" | grep -q -w 'bmi2' && \
+         echo "$flags" | grep -q -w 'f16c' && \
+         echo "$flags" | grep -q -w 'fma' && \
+         (echo "$flags" | grep -q -w 'lzcnt' || echo "$flags" | grep -q -w 'abm') && \
+         echo "$flags" | grep -q -w 'movbe'; then
+        echo "x86-64-v3 (AVX2/FMA/F16C/BMI)"
+    elif echo "$flags" | grep -q -w 'avx2'; then
+        echo "AVX2 (incompleto / unsupported)"
     else
         echo "x86-64 (base)"
     fi
@@ -126,8 +136,11 @@ write_build_metadata() {
     if [ -z "${DASHBOARD_PHASE_RECEIPT:-}" ] || [ ! -f "$DASHBOARD_PHASE_RECEIPT" ]; then
         return 0
     fi
-    printf '{"kind":"build_metadata","cargo_profile":"%s","target_triple":"%s","rustflags":"%s","rustc_version":"%s"}\n' \
-        "$CARGO_PROFILE" "$CARGO_TARGET_TRIPLE" "${CARGO_RUSTFLAGS:-}" "$RUSTC_VER" >> "$DASHBOARD_PHASE_RECEIPT"
+    local git_commit git_dirty
+    git_commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then git_dirty="true"; else git_dirty="false"; fi
+    printf '{"kind":"build_metadata","cargo_profile":"%s","target_triple":"%s","rustflags":"%s","rustc_version":"%s","git_commit":"%s","git_dirty_state":%s,"run_id":"%s","effective_isa":"%s"}\n' \
+        "$CARGO_PROFILE" "$CARGO_TARGET_TRIPLE" "${CARGO_RUSTFLAGS:-}" "$RUSTC_VER" "$git_commit" "$git_dirty" "${NAM_RUN_ID:-$RUN_ID}" "$ISA" >> "$DASHBOARD_PHASE_RECEIPT"
 }
 
 # Unified metric formatter — locale-safe (LC_ALL=C), auto-detects scientific notation.
@@ -251,8 +264,10 @@ declare -A F64_DECOMPOSITION
 declare -A MODEL_ESR_F64_TABLE
 declare -A MODEL_MACS
 
-declare -a MODEL_ORDER
-declare -a ALL_BENCH_NAMES
+declare -a MODEL_ORDER=()
+declare -a MODEL_BENCH_NAMES=()
+declare -a DSP_BENCH_NAMES=()
+declare -a ALL_BENCH_NAMES=()
 
 SPECTRAL_PASSED_COUNT=0
 
@@ -370,12 +385,21 @@ run_benchmarks() {
 
     local reg_script="$PROJECT_DIR/utils/tests-performance-regression.sh"
     local bench_log="$LOGDIR/regression_gate.log"
+    : > "$bench_log"
 
     if [ -x "$reg_script" ]; then
         set +e
-        "$reg_script" --check > "$bench_log" 2>&1
+        NAM_RUN_ID="$RUN_ID" "$reg_script" --check > "$bench_log" 2>&1
         local reg_exit=$?
         set -e
+
+        local reg_receipt_file="$PROJECT_DIR/target/logs/regression_phase_receipt.jsonl"
+        local receipt_run_id=""
+        local receipt_status=""
+        if [ -f "$reg_receipt_file" ]; then
+            receipt_run_id=$(grep '"phase_id":"regression_check"' "$reg_receipt_file" 2>/dev/null | grep -o '"run_id":"[^"]*"' | cut -d'"' -f4 || echo "")
+            receipt_status=$(grep '"phase_id":"regression_check"' "$reg_receipt_file" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
+        fi
 
         if grep -qi 'INCOMPARABLE_ENVIRONMENT' "$bench_log" 2>/dev/null; then
             BENCH_ENV_INCOMPARABLE=1
@@ -392,10 +416,12 @@ run_benchmarks() {
         fi
 
         # Copy Criterion benchmark output from the regression script's log
-        # so parse_benchmarks() can extract individual latency measurements.
+        # strictly when reg_exit == 0 AND receipt_status == PASS AND receipt_run_id == RUN_ID.
         local criterion_log="target/logs/regression-check.log"
-        if [ -f "$criterion_log" ]; then
+        if [ "$reg_exit" -eq 0 ] && [ "$receipt_status" = "PASS" ] && [ -n "$RUN_ID" ] && [ "$receipt_run_id" = "$RUN_ID" ] && [ -f "$criterion_log" ]; then
             cp "$criterion_log" "$bench_log"
+        else
+            : > "$bench_log"
         fi
     else
         echo -e "  ${YELLOW}⚠ regression script not found at $reg_script — skipping${NC}"
@@ -827,6 +853,7 @@ parse_benchmarks() {
     local log="$LOGDIR/regression_gate.log"
     [ -f "$log" ] || return 0
 
+    # Model Inference Core
     BENCH_MODEL_MAP["RT_WaveNet_Std_CH16"]="WaveNet Standard CH16"
     BENCH_MODEL_MAP["RT_WaveNet_Feather_CH8"]="WaveNet Feather CH8"
     BENCH_MODEL_MAP["RT_WaveNet_Lite_CH12"]="WaveNet Lite CH12"
@@ -837,6 +864,17 @@ parse_benchmarks() {
     BENCH_MODEL_MAP["RT_LSTM_2x8"]="LSTM 2x8"
     BENCH_MODEL_MAP["RT_Linear"]="Linear RF=2048"
     BENCH_MODEL_MAP["RT_ConvNet"]="ConvNet"
+    BENCH_MODEL_MAP["RT_WaveNet_Dyn_Free"]="WaveNet Dyn Free"
+    BENCH_MODEL_MAP["RT_LSTM_Dyn_1x7"]="LSTM Dyn 1x7"
+    BENCH_MODEL_MAP["RT_A2_Dyn_Gated_CH8"]="A2 Dyn Gated CH8"
+    BENCH_MODEL_MAP["RT_A2_Dyn_Blended_CH3"]="A2 Dyn Blended CH3"
+
+    # DSP Infrastructure
+    BENCH_MODEL_MAP["RT_DSP_Resampler_44k1_to_48k"]="DSP Resampler 44.1k->48k"
+    BENCH_MODEL_MAP["RT_DSP_Resampler_96k_to_48k"]="DSP Resampler 96k->48k"
+    BENCH_MODEL_MAP["RT_DSP_CabSim_IR_Medium"]="DSP CabSim IR Medium"
+    BENCH_MODEL_MAP["RT_DSP_Pipeline_Base_NoOS"]="DSP Pipeline Base (No OS)"
+    BENCH_MODEL_MAP["RT_DSP_Pipeline_HQ_4xOS"]="DSP Pipeline HQ (4x OS)"
 
     # MACs constants: total_layers * CH^2 * K
     MODEL_MACS["WaveNet Standard CH16"]="15360"
@@ -845,8 +883,15 @@ parse_benchmarks() {
     MODEL_MACS["WaveNet Nano CH4"]="960"
 
     local parsed="$PARSEDIR/benchmarks.parsed"
+    # Micro DSP benches run DSP_MICRO_BATCH (64) blocks per Criterion sample
+    # so timer noise stays below the 2% wall. Report per-block latency here.
     LC_ALL=C awk '
-    BEGIN { bench = "" }
+    BEGIN {
+        bench = ""
+        micro_batch["RT_DSP_Resampler_44k1_to_48k"] = 64
+        micro_batch["RT_DSP_Resampler_96k_to_48k"] = 64
+        micro_batch["RT_DSP_CabSim_IR_Medium"] = 64
+    }
     /^RT_/ && !/regression_gate/ && length($1) > 3 { bench = $1 }
     bench != "" && /time:.*\[/ {
         line = $0
@@ -863,6 +908,9 @@ parse_benchmarks() {
                 else if (median_unit == "ms") us = median_val * 1000
                 else if (median_unit == "s")  us = median_val * 1000000
                 else                          us = median_val
+                if (bench in micro_batch && micro_batch[bench] > 0) {
+                    us = us / micro_batch[bench]
+                }
                 printf "LATENCY\t%s\t%.2f\n", bench, us
             }
         }
@@ -875,11 +923,32 @@ parse_benchmarks() {
         LATENCY_US["$bench"]="$latency"
     done < "$parsed"
 
-    for bn in RT_WaveNet_Std_CH16 RT_WaveNet_Feather_CH8 RT_WaveNet_Lite_CH12 \
-              RT_WaveNet_Nano_CH4 RT_A2_Full_CH8 RT_A2_Lite_CH3 \
-              RT_LSTM_1x16 RT_LSTM_2x8 RT_Linear RT_ConvNet; do
-        ALL_BENCH_NAMES+=("$bn")
-    done
+    MODEL_BENCH_NAMES=(
+        RT_WaveNet_Std_CH16
+        RT_WaveNet_Feather_CH8
+        RT_WaveNet_Lite_CH12
+        RT_WaveNet_Nano_CH4
+        RT_A2_Full_CH8
+        RT_A2_Lite_CH3
+        RT_LSTM_1x16
+        RT_LSTM_2x8
+        RT_Linear
+        RT_ConvNet
+        RT_WaveNet_Dyn_Free
+        RT_LSTM_Dyn_1x7
+        RT_A2_Dyn_Gated_CH8
+        RT_A2_Dyn_Blended_CH3
+    )
+
+    DSP_BENCH_NAMES=(
+        RT_DSP_Resampler_44k1_to_48k
+        RT_DSP_Resampler_96k_to_48k
+        RT_DSP_CabSim_IR_Medium
+        RT_DSP_Pipeline_Base_NoOS
+        RT_DSP_Pipeline_HQ_4xOS
+    )
+
+    ALL_BENCH_NAMES=("${MODEL_BENCH_NAMES[@]}" "${DSP_BENCH_NAMES[@]}")
 }
 
 # ── ESR verdict translation ─────────────────────────────────────────────────
@@ -985,10 +1054,22 @@ folga_color() {
 
 render_header() {
     local cpu_short="${CPU_MODEL:0:46}"
+    local git_commit git_dirty git_str
+    git_commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    git_commit_short="${git_commit:0:12}"
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        git_dirty="dirty"
+    else
+        git_dirty="clean"
+    fi
+    git_str="${git_commit_short} (${git_dirty})"
+
     printf "╔══════════════════════════════════════════════════════════════════╗\n"
     printf "║              NeuralAmpModeler-rs Quality Dashboard                            ║\n"
     printf "║              ------------------------------                      ║\n"
     printf "║              Measured at: %-24.24s                ║\n" "$NOW"
+    printf "║              Commit: %-49.49s ║\n" "$git_str"
+    printf "║              Run ID: %-49.49s ║\n" "${NAM_RUN_ID:-$RUN_ID}"
     printf "║              ISA: %-46.46s ║\n" "$ISA"
     printf "║              CPU: %-46.46s ║\n" "$cpu_short"
     printf "║              rustc: %-44.44s ║\n" "$RUSTC_VER"
@@ -1322,39 +1403,41 @@ render_performance() {
     echo "  Efficiency: µs per MMAC (mega-MACs) — lower is better"
     echo ""
 
+    local total_benches=0
+    set +u; total_benches="${#ALL_BENCH_NAMES[@]}"; set -u
+
     if [ "${BENCH_ENV_INCOMPARABLE:-0}" = "1" ]; then
         echo -e "  ${YELLOW}⚠ INCOMPARABLE_ENVIRONMENT${NC} — benchmark environment diverges from baseline."
         echo -e "  ${YELLOW}  Performance comparison against baseline is not valid.${NC}"
         echo -e "  ${YELLOW}  Fidelity gates (below) were validated independently.${NC}"
-        if [ ${#ALL_BENCH_NAMES[@]} -gt 0 ]; then
+        if [ "$total_benches" -gt 0 ]; then
             echo ""
             echo -e "  ${YELLOW}  Raw measurements for reference (not comparable to baseline):${NC}"
             echo ""
         fi
     fi
 
-    if [ ${#ALL_BENCH_NAMES[@]} -eq 0 ]; then
+    if [ "$total_benches" -eq 0 ]; then
         echo -e "  ${YELLOW}(i) Nenhum dado de performance disponivel.${NC}"
         echo ""
         return
     fi
 
-    printf "  %-28s │ %-16s │ %-10s │ %-14s │ %s\n" \
-        "Model" "Median Latency" "% Budget" "µs/MMAC" "Headroom"
-    printf "  %s │ %s │ %s │ %s │ %s\n" \
-        "$(printf '─%.0s' {1..28})" "$(printf '─%.0s' {1..16})" \
-        "$(printf '─%.0s' {1..10})" "$(printf '─%.0s' {1..14})" \
-        "$(printf '─%.0s' {1..18})"
-
-    # Collect WaveNet efficiency values for headroom gate
-    # Micro models (total MMAC < MIN_MMAC_THRESHOLD) are excluded from
-    # median/outlier calculation because fixed per-block overhead dominates
-    # their small denominator (F-18). Their µs/MMAC is still displayed.
     local MIN_MMAC_THRESHOLD="0.005"
     local -a wavenet_eff=()
     local -A efficiency_map
 
-    for bn in "${ALL_BENCH_NAMES[@]}"; do
+    _render_perf_header() {
+        printf "  %-28s │ %-16s │ %-10s │ %-14s │ %s\n" \
+            "Model / Component" "Median Latency" "% Budget" "µs/MMAC" "Headroom"
+        printf "  %s │ %s │ %s │ %s │ %s\n" \
+            "$(printf '─%.0s' {1..28})" "$(printf '─%.0s' {1..16})" \
+            "$(printf '─%.0s' {1..10})" "$(printf '─%.0s' {1..14})" \
+            "$(printf '─%.0s' {1..18})"
+    }
+
+    _render_perf_row() {
+        local bn="$1"
         local label latency pct folga folga_colored latency_display macs eff_display eff_val
         set +u
         label="${BENCH_MODEL_MAP[$bn]:-$bn}"
@@ -1394,9 +1477,34 @@ render_performance() {
 
         printf "  %-28s │ %-16s │ %-10s │ %-14s │ %b\n" \
             "$label" "$latency_display" "${pct}%" "$eff_display" "$folga_colored"
-    done
+    }
 
-    echo ""
+    local model_benches_cnt=0 dsp_benches_cnt=0
+    set +u
+    model_benches_cnt="${#MODEL_BENCH_NAMES[@]}"
+    dsp_benches_cnt="${#DSP_BENCH_NAMES[@]}"
+    set -u
+
+    if [ "$model_benches_cnt" -gt 0 ]; then
+        echo "  ── Model Inference Core ──"
+        echo ""
+        _render_perf_header
+        for bn in "${MODEL_BENCH_NAMES[@]}"; do
+            _render_perf_row "$bn"
+        done
+        echo ""
+    fi
+
+    if [ "$dsp_benches_cnt" -gt 0 ]; then
+        echo "  ── DSP Infrastructure ──"
+        echo ""
+        _render_perf_header
+        for bn in "${DSP_BENCH_NAMES[@]}"; do
+            _render_perf_row "$bn"
+        done
+        echo ""
+    fi
+
     echo "  (i) Headroom > 50%:  2x oversampling usually safe without xruns"
     echo "  (i) Headroom > 75%:  4x oversampling usually safe without xruns"
     echo "  (i) Headroom < 25%:  ⚠ xrun risk with a 64-sample buffer"
@@ -1411,7 +1519,7 @@ render_performance() {
         local median_eff median_rounded
         median_eff=$(_median "${wavenet_eff[@]}")
         median_rounded=$(LC_ALL=C awk -v m="$median_eff" 'BEGIN { printf "%.2f", m }')
-        for bn in "${ALL_BENCH_NAMES[@]}"; do
+        for bn in "${MODEL_BENCH_NAMES[@]}"; do
             local label
             set +u; label="${BENCH_MODEL_MAP[$bn]:-$bn}"; set -u
             [[ "$label" == WaveNet* ]] || continue
@@ -1899,7 +2007,7 @@ load_contract_baseline() {
         m = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", m)
         lat = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", lat); sub(/[[:space:]]*us$/, "", lat)
 
-        if (m != "" && m !~ /^[─═]/ && m != "Model" && m != "Modelo") {
+        if (m != "" && m !~ /^[─═]/ && m != "Model" && m != "Modelo" && m != "Model / Component" && m !~ /^──/) {
             if (lat ~ /^[0-9.]/) printf "CONTRACT_LATENCY\t%s\t%s\n", m, lat
         }
     }
@@ -1945,19 +2053,55 @@ verify_contract() {
         return 1
     fi
 
-    local phase_fail
-    phase_fail=$(grep -c '"status":"FAIL"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null || true)
-    if [ -n "$phase_fail" ] && [ "$phase_fail" -gt 0 ]; then
-        echo -e "  ${RED}✗${NC} ${phase_fail} dashboard phase(s) failed — see receipt: ${DASHBOARD_PHASE_RECEIPT}"
-        fidelity_violations=$((fidelity_violations + phase_fail))
+    # Provenance verification: validate receipt build_metadata presence (T0.4)
+    local meta_record
+    meta_record=$(grep '"kind":"build_metadata"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null || echo "")
+    if [ -n "$meta_record" ]; then
+        local rec_commit rec_dirty rec_isa rec_run_id
+        rec_commit=$(echo "$meta_record" | grep -o '"git_commit":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+        rec_dirty=$(echo "$meta_record" | grep -o '"git_dirty_state":[^,}]*' | cut -d':' -f2 || echo "false")
+        rec_isa=$(echo "$meta_record" | grep -o '"effective_isa":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+        rec_run_id=$(echo "$meta_record" | grep -o '"run_id":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+        echo -e "  ${GREEN}✓${NC} Provenance verified: commit=${rec_commit:0:12} (${rec_dirty}), ISA=${rec_isa}, run_id=${rec_run_id}"
+    else
+        echo -e "  ${YELLOW}⚠ PROVENANCE_WARNING${NC} Receipt does not contain build_metadata provenance record."
+    fi
+
+    # Attribute phase failures to the correct domain (PERF-006 / docs §9.3):
+    # regression_gate is performance-only; mandatory fidelity phases stay on
+    # the fidelity counter. Never promote a perf FAIL into FIDELITY: FAIL.
+    local fidelity_phase_fail=0
+    local perf_phase_fail=0
+    while IFS= read -r _prec; do
+        [ -z "$_prec" ] && continue
+        local _pid _pst
+        _pid=$(echo "$_prec" | grep -o '"phase_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+        _pst=$(echo "$_prec" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+        [ "$_pst" = "FAIL" ] || continue
+        if [ "$_pid" = "regression_gate" ]; then
+            perf_phase_fail=$((perf_phase_fail + 1))
+        else
+            fidelity_phase_fail=$((fidelity_phase_fail + 1))
+        fi
+    done < <(grep '"phase_id"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null || true)
+
+    if [ "$fidelity_phase_fail" -gt 0 ] || [ "$perf_phase_fail" -gt 0 ]; then
+        echo -e "  ${RED}✗${NC} dashboard phase failure(s): fidelity=${fidelity_phase_fail} performance=${perf_phase_fail} — see receipt: ${DASHBOARD_PHASE_RECEIPT}"
+        fidelity_violations=$((fidelity_violations + fidelity_phase_fail))
+        # perf_phase_fail is counted once below via PERFORMANCE: NOT_VERIFIED
+        # when regression_gate != PASS (avoid double-counting).
     fi
 
     for phase_id in "${!PHASE_MANDATORY[@]}"; do
         local phase_status
         phase_status=$(grep "\"phase_id\":\"${phase_id}\"" "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "NOT_RUN")
         if [ "$phase_status" != "PASS" ]; then
-            echo -e "  ${RED}✗ PHASE_FAILED${NC} Mandatory phase '${phase_id}': status=${phase_status} (requires PASS)"
-            fidelity_violations=$((fidelity_violations + 1))
+            echo -e "  ${RED}✗ PHASE_FAILED${NC} Mandatory fidelity phase '${phase_id}': status=${phase_status} (requires PASS)"
+            # Only increment if not already counted from the FAIL scan above
+            # (NOT_RUN / SKIP would not appear as FAIL).
+            if [ "$phase_status" != "FAIL" ]; then
+                fidelity_violations=$((fidelity_violations + 1))
+            fi
         fi
     done
     echo ""
@@ -2011,8 +2155,16 @@ verify_contract() {
                     local esr_cur_fmt
                     esr_cur_fmt=$(_fmt_metric "$esr_cur")
                     local noise_limit safety_limit
-                    noise_limit=$(LC_ALL=C awk -v c="$esr_ctr" -v m="$ESR_NOISE_MULT" 'BEGIN { printf "%.2e", c*m }')
-                    safety_limit=$(LC_ALL=C awk -v c="$esr_ctr" -v m="$ESR_SAFETY_MULT" 'BEGIN { printf "%.2e", c*m }')
+                    noise_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
+                        lim = c * 3.0;
+                        if (lim < c + 5.0e-14) lim = c + 5.0e-14;
+                        printf "%.2e", lim
+                    }')
+                    safety_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
+                        lim = c * 10.0;
+                        if (lim < 1.0e-12) lim = 1.0e-12;
+                        printf "%.2e", lim
+                    }')
 
                     local esr_noise_fail esr_safety_fail
                     esr_noise_fail=$(LC_ALL=C awk -v cur="$esr_cur" -v lim="$noise_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
@@ -2039,8 +2191,16 @@ verify_contract() {
                     local esr_f64_cur_fmt
                     esr_f64_cur_fmt=$(_fmt_metric "$esr_f64_cur")
                     local f64_noise_limit f64_safety_limit
-                    f64_noise_limit=$(LC_ALL=C awk -v c="$esr_f64_ctr" -v m="$ESR_NOISE_MULT" 'BEGIN { printf "%.2e", c*m }')
-                    f64_safety_limit=$(LC_ALL=C awk -v c="$esr_f64_ctr" -v m="$ESR_SAFETY_MULT" 'BEGIN { printf "%.2e", c*m }')
+                    f64_noise_limit=$(LC_ALL=C awk -v c="$esr_f64_ctr" 'BEGIN {
+                        lim = c * 3.0;
+                        if (lim < c + 5.0e-14) lim = c + 5.0e-14;
+                        printf "%.2e", lim
+                    }')
+                    f64_safety_limit=$(LC_ALL=C awk -v c="$esr_f64_ctr" 'BEGIN {
+                        lim = c * 10.0;
+                        if (lim < 1.0e-12) lim = 1.0e-12;
+                        printf "%.2e", lim
+                    }')
 
                     local f64_noise_fail f64_safety_fail
                     f64_noise_fail=$(LC_ALL=C awk -v cur="$esr_f64_cur" -v lim="$f64_noise_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
@@ -2050,16 +2210,35 @@ verify_contract() {
                         echo -e "    ${RED}✗ SAFETY CEILING f64${NC} ${contract_label}: ESR f64 ${esr_f64_cur_fmt} > safety ${f64_safety_limit} (baseline f64: ${esr_f64_ctr})"
                         fidelity_violations=$((fidelity_violations + 1))
                         if [ "$namcore_ok" -eq 1 ]; then
-                            echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} NAMCore ESR ok, mas f64 viola safety ceiling. Oraculos divergem."
-                            review_required=1
+                            echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} ${contract_label}: Oraculos divergem (NAMCore ok, mas f64 viola safety ceiling)."
+                            review_required=$((review_required + 1))
                         fi
                     elif [ "$f64_noise_fail" = "1" ]; then
                         echo -e "    ${YELLOW}⚠ NOISE ENVELOPE f64${NC} ${contract_label}: ESR f64 ${esr_f64_cur_fmt} > noise ${f64_noise_limit} (baseline f64: ${esr_f64_ctr})"
-                        if [ "$namcore_ok" -eq 1 ]; then
-                            echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} NAMCore ESR ok, mas f64 degradou alem do noise envelope. Oraculos divergem."
-                            review_required=1
-                        fi
                         fidelity_violations=$((fidelity_violations + 1))
+                        if [ "$namcore_ok" -eq 1 ]; then
+                            echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} ${contract_label}: Oraculos divergem (NAMCore ok, mas f64 viola noise envelope)."
+                            review_required=$((review_required + 1))
+                        fi
+                    else
+                        if [ "$namcore_ok" -eq 0 ]; then
+                            echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} ${contract_label}: Oraculos divergem (f64 ok, mas NAMCore viola envelope)."
+                            review_required=$((review_required + 1))
+                        fi
+                    fi
+
+                    local directional_div
+                    directional_div=$(LC_ALL=C awk -v cur_n="$esr_cur" -v ctr_n="$esr_ctr" -v cur_f="$esr_f64_cur" -v ctr_f="$esr_f64_ctr" 'BEGIN {
+                        if (ctr_n + 0 > 0 && ctr_f + 0 > 0 && cur_n != "N/A" && cur_f != "N/A") {
+                            rn = cur_n / ctr_n;
+                            rf = cur_f / ctr_f;
+                            if ((rn < 0.85 && rf > 1.15) || (rn > 1.15 && rf < 0.85)) print "1";
+                            else print "0";
+                        } else print "0";
+                    }')
+                    if [ "$directional_div" = "1" ]; then
+                        echo -e "    ${YELLOW}[REVIEW_REQUIRED]${NC} ${contract_label}: Oraculos divergem direcionalmente (NAMCore ratio $(LC_ALL=C awk -v c="$esr_cur" -v b="$esr_ctr" 'BEGIN { printf "%.2f", c/b }'), f64 ratio $(LC_ALL=C awk -v c="$esr_f64_cur" -v b="$esr_f64_ctr" 'BEGIN { printf "%.2f", c/b }')). Auditoria humana necessaria."
+                        review_required=$((review_required + 1))
                     fi
                 elif [ -n "$esr_f64_ctr" ] && [ "$esr_f64_ctr" != "N/A" ] && [ "$esr_f64_cur" = "N/A" ]; then
                     echo -e "    ${RED}MISSING${NC} ${contract_label}: f64 ESR not measured but present in contract (f64 baseline: ${esr_f64_ctr})"
@@ -2115,39 +2294,62 @@ verify_contract() {
         echo "  ─────────────────────────────────────────────────"
         echo ""
 
-        set +u
-        for contract_label in "${!CONTRACT_LATENCY[@]}"; do
-            local matched=false
-            for bn in "${ALL_BENCH_NAMES[@]}"; do
-                local dash_label="${BENCH_MODEL_MAP[$bn]:-$bn}"
-                local dash_norm="${dash_label//×/x}"
-                local ctr_norm="${contract_label//×/x}"
-                if [ "$dash_norm" = "$ctr_norm" ]; then
-                    matched=true
-                    local lat_cur="${LATENCY_US[$bn]:-N/A}"
-                    local lat_ctr="${CONTRACT_LATENCY[$contract_label]}"
+        local reg_gate_status
+        reg_gate_status=$(grep '"phase_id":"regression_gate"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "NOT_RUN")
 
-                    if [ "$lat_cur" != "N/A" ] && [ "$lat_ctr" != "N/A" ] && [ -n "$lat_ctr" ]; then
-                        local lat_fail
-                        lat_fail=$(LC_ALL=C awk -v cur="$lat_cur" -v ctr="$lat_ctr" \
-                            'BEGIN { limit = ctr * 1.10; if (limit < ctr + 0.05) limit = ctr + 0.05; if (cur+0 > limit) print "1"; else print "0" }')
-                        if [ "$lat_fail" = "1" ]; then
-                            echo -e "    ${RED}✗${NC} ${contract_label}: latency regressed ${lat_cur} us (contract: ${lat_ctr} us, limite: $(LC_ALL=C awk -v c="$lat_ctr" 'BEGIN { lim = c * 1.10; if (lim < c + 0.05) lim = c + 0.05; printf "%.1f", lim }') us)"
-                            perf_violations=$((perf_violations + 1))
+        if [ "$reg_gate_status" != "PASS" ]; then
+            echo -e "    ${RED}PERFORMANCE: NOT_VERIFIED${NC} (regression_gate status=${reg_gate_status})"
+            echo -e "    ${YELLOW}  Contract performance metrics cannot be certified when regression_gate != PASS.${NC}"
+            echo ""
+            perf_violations=$((perf_violations + 1))
+            perf_not_verified=1
+        else
+            set +u
+            for contract_label in "${!CONTRACT_LATENCY[@]}"; do
+                local matched=false
+                for bn in "${ALL_BENCH_NAMES[@]}"; do
+                    local dash_label="${BENCH_MODEL_MAP[$bn]:-$bn}"
+                    local dash_norm="${dash_label//×/x}"
+                    dash_norm="${dash_norm//→/->}"
+                    dash_norm="${dash_norm//  / }"
+                    local ctr_norm="${contract_label//×/x}"
+                    ctr_norm="${ctr_norm//→/->}"
+                    ctr_norm="${ctr_norm//  / }"
+                    if [ "$dash_norm" = "$ctr_norm" ] || [ "$bn" = "$contract_label" ] || [ "${dash_label,,}" = "${contract_label,,}" ]; then
+                        matched=true
+                        local lat_cur="${LATENCY_US[$bn]:-N/A}"
+                        local lat_ctr="${CONTRACT_LATENCY[$contract_label]}"
+
+                        if [ "$lat_cur" != "N/A" ] && [ "$lat_ctr" != "N/A" ] && [ -n "$lat_ctr" ]; then
+                            local lat_fail
+                            lat_fail=$(LC_ALL=C awk -v cur="$lat_cur" -v ctr="$lat_ctr" \
+                                'BEGIN { limit = ctr * 1.10; if (limit < ctr + 0.05) limit = ctr + 0.05; if (cur+0 > limit) print "1"; else print "0" }')
+                            if [ "$lat_fail" = "1" ]; then
+                                echo -e "    ${RED}✗${NC} ${contract_label}: latency regressed ${lat_cur} us (contract: ${lat_ctr} us, limite: $(LC_ALL=C awk -v c="$lat_ctr" 'BEGIN { lim = c * 1.10; if (lim < c + 0.05) lim = c + 0.05; printf "%.1f", lim }') us)"
+                                perf_violations=$((perf_violations + 1))
+                            else
+                                echo -e "    ${GREEN}ok${NC} ${contract_label}: latency ${lat_cur} us (contract: ${lat_ctr} us)"
+                            fi
                         else
-                            echo -e "    ${GREEN}ok${NC} ${contract_label}: latency ${lat_cur} us (contract: ${lat_ctr} us)"
+                            echo -e "    ${RED}MISSING_LATENCY${NC} ${contract_label}: benchmark data not available"
+                            perf_violations=$((perf_violations + 1))
                         fi
+                        break
                     fi
-                    break
+                done
+                if [ "$matched" = false ]; then
+                    echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: mandatory contract label not found in current run"
+                    perf_violations=$((perf_violations + 1))
                 fi
             done
-            if [ "$matched" = false ]; then
-                echo -e "    ${RED}MISSING_LABEL${NC} ${contract_label}: mandatory contract label not found in current run"
-                perf_violations=$((perf_violations + 1))
-            fi
-        done
-        set -u
-        echo ""
+            set -u
+            echo ""
+        fi
+    fi
+
+    local perf_status_text="FAIL (${perf_violations})"
+    if [ "${perf_not_verified:-0}" -eq 1 ]; then
+        perf_status_text="NOT_VERIFIED"
     fi
 
     if [ "$fidelity_violations" -gt 0 ]; then
@@ -2157,7 +2359,7 @@ verify_contract() {
             echo -e "  ${YELLOW}              Nenhum oraculo vence automaticamente. Investigar divergencia.${NC}"
         fi
         if [ "$perf_violations" -gt 0 ]; then
-            echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
+            echo -e "  ${RED}PERFORMANCE: ${perf_status_text}${NC}"
         fi
         echo -e "  ${RED}CONTRACT VIOLATED${NC}"
         echo ""
@@ -2166,7 +2368,8 @@ verify_contract() {
 
     if [ "$perf_violations" -gt 0 ]; then
         echo -e "  ${GREEN}FIDELITY: OK${NC}"
-        echo -e "  ${RED}PERFORMANCE: FAIL (${perf_violations})${NC}"
+        echo -e "  ${RED}PERFORMANCE: ${perf_status_text}${NC}"
+        echo -e "  ${RED}CONTRACT VIOLATED${NC}"
         echo ""
         return 1
     fi
@@ -2187,6 +2390,9 @@ verify_contract() {
 # ── Main ────────────────────────────────────────────────────────────────────
 
 main() {
+    RUN_ID="${NAM_RUN_ID:-$(date +%s%N-$$)}"
+    export NAM_RUN_ID="$RUN_ID"
+
     local run_phases=0
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "fidelity" ]; then
         run_phases=$((run_phases + 6))

@@ -207,6 +207,39 @@ pub fn load_and_prewarm(filename: &str) -> Option<neural_amp_modeler_rs::models:
     Some(*model)
 }
 
+/// Loads and prewarms a model fixture (2048 samples). Panics with an explicit
+/// error message if the file is missing or fails to parse/build — required for
+/// regression gate tests where missing fixtures are prohibited.
+pub fn load_and_prewarm_required(filename: &str) -> neural_amp_modeler_rs::models::StaticModel {
+    let path = model_path(filename);
+    if !path.exists() {
+        panic!(
+            "Required benchmark model fixture '{}' not found at {:?}",
+            filename, path
+        );
+    }
+    let json_data = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read required benchmark model fixture '{}': {e}",
+            filename
+        )
+    });
+    let model_data = parse_nam_json(&json_data).unwrap_or_else(|e| {
+        panic!(
+            "Failed to parse JSON for required benchmark model fixture '{}': {e}",
+            filename
+        )
+    });
+    let mut model = build_model(&model_data).unwrap_or_else(|e| {
+        panic!(
+            "Failed to build model for required benchmark model fixture '{}': {e}",
+            filename
+        )
+    });
+    model.prewarm(2048);
+    *model
+}
+
 /// Loads and parses a model fixture into `NamModelData` without building the
 /// model. Returns `None` if the file is missing or fails to parse. Used by
 /// benches that need `model_data` downstream (e.g. prewarm cost with

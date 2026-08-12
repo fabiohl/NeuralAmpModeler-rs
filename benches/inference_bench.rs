@@ -45,6 +45,9 @@ mod a2;
 #[path = "inference/misc_bench.rs"]
 mod misc;
 
+#[path = "inference/a2_dyn_stage_bench.rs"]
+mod a2_dyn_stage;
+
 use criterion::{criterion_group, criterion_main};
 
 criterion_group!(
@@ -77,7 +80,8 @@ criterion_group!(
     wavenet::bench_wavenet_comparison,
     a2::bench_a2_comparison,
     misc::bench_nondist_models,
-    misc::bench_convnet_model_process
+    misc::bench_convnet_model_process,
+    a2_dyn_stage::bench_a2dyn_stages
 );
 
 criterion_main!(benches);

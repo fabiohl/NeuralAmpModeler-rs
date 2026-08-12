@@ -52,10 +52,20 @@ detect_cpu_model() {
 detect_cpu_microarch() {
     local flags
     flags=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null || true)
-    if echo "$flags" | grep -q 'avx512f'; then
+    if echo "$flags" | grep -q -w 'avx512f'; then
         echo "AVX-512"
-    elif echo "$flags" | grep -q 'avx2'; then
-        echo "AVX2 (x86-64-v3)"
+    # Linux /proc/cpuinfo exposes LZCNT as "lzcnt" and/or "abm" (AMD ABM).
+    elif echo "$flags" | grep -q -w 'avx' && \
+         echo "$flags" | grep -q -w 'avx2' && \
+         echo "$flags" | grep -q -w 'bmi1' && \
+         echo "$flags" | grep -q -w 'bmi2' && \
+         echo "$flags" | grep -q -w 'f16c' && \
+         echo "$flags" | grep -q -w 'fma' && \
+         (echo "$flags" | grep -q -w 'lzcnt' || echo "$flags" | grep -q -w 'abm') && \
+         echo "$flags" | grep -q -w 'movbe'; then
+        echo "x86-64-v3 (AVX2/FMA/F16C/BMI)"
+    elif echo "$flags" | grep -q -w 'avx2'; then
+        echo "AVX2 (incompleto / unsupported)"
     else
         echo "x86-64 (base)"
     fi
@@ -205,31 +215,97 @@ compare_fingerprint() {
 
 # ── Baseline persistence ───────────────────────────────────────────────────
 # Copies Criterion baselines from target/criterion to the persistent
-# target/performance-baselines/ directory so they survive cargo clean.
+# .performance-baselines/ directory so they survive cargo clean.
+#
+# IMPORTANT: only top-level baseline dirs are considered:
+#   target/criterion/<bench>/$BASELINE_NAME
+# Nested paths like .../ci-baseline/ci-baseline are corruption from older
+# `cp -a src dest` when dest already existed (cp copies *into* dest). They
+# must never be re-persisted or re-restored.
+
+# List only depth-2 baseline directories: <root>/<bench>/$BASELINE_NAME
+list_top_level_baselines() {
+    local root="$1"
+    if [ ! -d "$root" ]; then
+        return 0
+    fi
+    find "$root" -mindepth 2 -maxdepth 2 -type d -name "$BASELINE_NAME" 2>/dev/null | sort
+}
+
+# Drop nested baseline dirs (depth >= 3) left by historical cp nesting.
+sanitize_nested_baselines() {
+    local root="$1"
+    if [ ! -d "$root" ]; then
+        return 0
+    fi
+    # Delete deepest first so parents can be removed cleanly.
+    local nested
+    nested=$(find "$root" -mindepth 3 -type d -name "$BASELINE_NAME" 2>/dev/null | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2- || true)
+    if [ -z "$nested" ]; then
+        return 0
+    fi
+    local n=0
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        rm -rf "$path"
+        n=$((n + 1))
+    done <<< "$nested"
+    if [ "$n" -gt 0 ]; then
+        echo -e "  ${YELLOW}⚠${NC} Removed ${n} nested '${BASELINE_NAME}/' dir(s) under ${root}"
+    fi
+}
+
+# Replace-copy one directory tree: never nest into an existing dest.
+replace_copy_dir() {
+    local src="$1"
+    local dest="$2"
+    rm -rf "$dest"
+    mkdir -p "$(dirname "$dest")"
+    cp -a "$src" "$dest"
+    # Defensive: strip any nested baseline that may have been inside src.
+    find "$dest" -mindepth 1 -type d -name "$BASELINE_NAME" -exec rm -rf {} + 2>/dev/null || true
+}
 
 persist_baseline() {
     mkdir -p "$BASELINE_DIR"
     if [ -d "$CRITERION_BASELINE_TARGET" ]; then
-        find "$CRITERION_BASELINE_TARGET" -type d -name "$BASELINE_NAME" 2>/dev/null | while read -r baseline_path; do
+        sanitize_nested_baselines "$CRITERION_BASELINE_TARGET"
+        local count=0
+        while IFS= read -r baseline_path; do
+            [ -z "$baseline_path" ] && continue
             local rel_path="${baseline_path#$CRITERION_BASELINE_TARGET/}"
             local dest="$BASELINE_DIR/$rel_path"
-            mkdir -p "$(dirname "$dest")"
-            cp -a "$baseline_path" "$dest"
-        done
-        echo -e "  ${GREEN}✓${NC} Baseline persisted to ${BASELINE_DIR}"
+            replace_copy_dir "$baseline_path" "$dest"
+            count=$((count + 1))
+        done < <(list_top_level_baselines "$CRITERION_BASELINE_TARGET")
+        sanitize_nested_baselines "$BASELINE_DIR"
+        echo -e "  ${GREEN}✓${NC} Baseline persisted to ${BASELINE_DIR} (${count} series)"
     fi
 }
 
 # Restores baselines from the persistent directory back into target/criterion
 # so Criterion can find them for --baseline comparisons.
 restore_baseline() {
-    if [ -d "$BASELINE_DIR" ]; then
-        find "$BASELINE_DIR" -type d -name "$BASELINE_NAME" 2>/dev/null | while read -r persisted_path; do
-            local rel_path="${persisted_path#$BASELINE_DIR/}"
-            local dest="$CRITERION_BASELINE_TARGET/$rel_path"
-            mkdir -p "$(dirname "$dest")"
-            cp -a "$persisted_path" "$dest"
-        done
+    if [ ! -d "$BASELINE_DIR" ]; then
+        return 0
+    fi
+    sanitize_nested_baselines "$BASELINE_DIR"
+    # Wipe prior Criterion state so leftover new/change/nested dirs cannot
+    # pollute comparison or the next persist cycle.
+    rm -rf "$CRITERION_BASELINE_TARGET"
+    mkdir -p "$CRITERION_BASELINE_TARGET"
+    local count=0
+    while IFS= read -r persisted_path; do
+        [ -z "$persisted_path" ] && continue
+        local rel_path="${persisted_path#$BASELINE_DIR/}"
+        local dest="$CRITERION_BASELINE_TARGET/$rel_path"
+        replace_copy_dir "$persisted_path" "$dest"
+        count=$((count + 1))
+    done < <(list_top_level_baselines "$BASELINE_DIR")
+    if [ "$count" -eq 0 ]; then
+        echo -e "  ${YELLOW}⚠${NC} No top-level '${BASELINE_NAME}' series found under ${BASELINE_DIR}"
+    else
+        echo -e "  ${GREEN}✓${NC} Restored ${count} baseline series into ${CRITERION_BASELINE_TARGET}"
     fi
 }
 
@@ -256,6 +332,11 @@ bootstrap_baseline() {
 
 check_regression() {
     echo -e "\n${BLUE}${BOLD}[CHECK] Comparing against CI baseline...${NC}"
+
+    # Unconditionally clear any previous benchmark log prior to environment checks
+    mkdir -p "$PROJECT_DIR/target/logs"
+    LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"
+    : > "$LOG_FILE"
 
     if [ ! -f "$FINGERPRINT_FILE" ]; then
         echo -e "${RED}${BOLD}MISSING_BASELINE${NC} No baseline found under ${BASELINE_DIR}/"
@@ -323,7 +404,7 @@ main() {
     BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
     MODE="${1:---check}"
 
-    BASELINE_DIR="target/performance-baselines"
+    BASELINE_DIR=".performance-baselines"
     FINGERPRINT_FILE="${BASELINE_DIR}/baseline-fingerprint.json"
     CRITERION_BASELINE_TARGET="target/criterion"
 
@@ -352,9 +433,12 @@ main() {
     REGR_FREQ_GOV=$(detect_freq_governor)
     REGR_GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 
-    printf '{"kind":"build_metadata","pipeline":"performance-regression","cargo_profile":"release","target_triple":"%s","rustflags":"%s","rustc_version":"%s","cpu_model":"%s","cpu_microarch":"%s","frequency_governor":"%s","git_commit":"%s","bench_core":"%s"}\n' \
-        "$REGR_TARGET_TRIPLE" "${RUSTFLAGS:-}" "$REGR_RUSTC_VER" "$REGR_CPU_MODEL" "$REGR_CPU_MICROARCH" \
-        "$REGR_FREQ_GOV" "$REGR_GIT_COMMIT" "$BENCH_CORE" >> "$REGRESSION_RECEIPT"
+    NAM_RUN_ID="${NAM_RUN_ID:-$(date +%s%N-$$)}"
+    export NAM_RUN_ID
+
+    printf '{"kind":"build_metadata","pipeline":"performance-regression","cargo_profile":"release","target_triple":"%s","rustflags":"%s","rustc_version":"%s","cpu_model":"%s","cpu_microarch":"%s","effective_isa":"%s","frequency_governor":"%s","git_commit":"%s","bench_core":"%s","run_id":"%s"}\n' \
+        "$REGR_TARGET_TRIPLE" "${RUSTFLAGS:-}" "$REGR_RUSTC_VER" "$REGR_CPU_MODEL" "$REGR_CPU_MICROARCH" "$REGR_CPU_MICROARCH" \
+        "$REGR_FREQ_GOV" "$REGR_GIT_COMMIT" "$BENCH_CORE" "$NAM_RUN_ID" >> "$REGRESSION_RECEIPT"
 
     case "$MODE" in
         --bootstrap-baseline)

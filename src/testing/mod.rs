@@ -15,6 +15,7 @@ pub mod aliasing;
 pub mod catalog;
 pub mod diagnostics;
 pub mod fixtures;
+pub mod isa_guard;
 pub mod mushra;
 pub mod perceptual;
 pub mod receipt;
@@ -22,3 +23,5 @@ pub mod reference_oracle;
 pub mod spectral;
 pub mod stress;
 pub mod wav;
+
+pub use isa_guard::ForceAvx2Guard;

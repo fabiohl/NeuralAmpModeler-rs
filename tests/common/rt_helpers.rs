@@ -27,10 +27,6 @@ pub struct RtPreflightResult {
 }
 
 fn check_cpu_affinity() -> (bool, Option<usize>) {
-    let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-
     #[cfg(target_os = "linux")]
     {
         let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
@@ -41,7 +37,7 @@ fn check_cpu_affinity() -> (bool, Option<usize>) {
         }
 
         let mut pinned: Vec<usize> = Vec::new();
-        for cpu in 0..num_cpus.min(libc::CPU_SETSIZE as usize) {
+        for cpu in 0..libc::CPU_SETSIZE as usize {
             if unsafe { libc::CPU_ISSET(cpu, &set) } {
                 pinned.push(cpu);
             }
@@ -86,6 +82,26 @@ fn read_load_1m() -> Result<f64, io::Error> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+fn system_cpu_count() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_CONF) };
+        if count > 0 {
+            count as usize
+        } else {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    }
+}
+
 fn check_background_load(num_cpus: usize) -> (bool, Option<f64>) {
     match read_load_1m() {
         Ok(load) => {
@@ -98,9 +114,7 @@ fn check_background_load(num_cpus: usize) -> (bool, Option<f64>) {
 }
 
 pub fn rt_preflight() -> RtPreflightResult {
-    let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
+    let num_cpus = system_cpu_count();
 
     let (cpu_affinity_ok, pinned_core) = check_cpu_affinity();
     let (governor_ok, governor) = check_governor();

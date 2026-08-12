@@ -34,6 +34,19 @@
 
 set -euo pipefail
 
+STRICT_PRE_RELEASE=0
+for arg in "$@"; do
+    case "$arg" in
+        --strict-pre-release)
+            STRICT_PRE_RELEASE=1
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--strict-pre-release]"
+            exit 0
+            ;;
+    esac
+done
+
 # AI NOTE: Due to the long runtime by design, AI agents MUST NOT execute this script directly.
 # Ask the human operator to run it and report the results if needed.
 #
@@ -99,6 +112,16 @@ _test_flag() {
 
 # Shared style helpers (RED/GREEN/YELLOW/BLUE/BOLD/NC) + cd to project root.
 source "$(dirname "$0")/_lib.sh"
+
+# CPU core pinning for performance-sensitive phases (RT Deadline, RT Jitter).
+# Override with NAM_BENCH_CORE; defaults to the middle physical core.
+NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
+BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
+HAS_TASKSET=0
+if command -v taskset >/dev/null 2>&1; then
+    HAS_TASKSET=1
+fi
 
 # Setup defensive error trap (message-only; phase failures are isolated via
 # `run_phase ... || true` below and never reach this trap — see §6.2).
@@ -675,12 +698,39 @@ run_phase "Resampler, Cabsim & A2 Heap-Audit" "run_heap_audit_phase" "phase3-hea
 # Absolute latency ceiling: assert!(p99 < 1.33 ms) for every model SKU.
 # This is the definitive gate — a regression that pushes p99 past the
 # audio buffer deadline fails the build deterministically.
+#
+# Runs under explicit CPU core pinning (taskset -c $BENCH_CORE) so that
+# the preflight check inside rt_deadline.rs can certify the environment.
+# When preflight detects an uncontrolled environment, tail/max values are
+# classified as INCONCLUSIVE_ENVIRONMENT and the gate is not certified.
 run_rt_deadline_gate_phase() {
     local status=0
-    timed_cargo_test "rt_deadline" --release --no-fail-fast $(_test_flag rt_deadline) -- --nocapture || status=1
+    local start_t
+    start_t=$(date +%s%N)
+    local flag=$(_test_flag rt_deadline)
+    if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
+        taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
+    else
+        cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
+    fi
+    local end_t
+    end_t=$(date +%s%N)
+    local duration_ns=$((end_t - start_t))
+    local duration_s
+    duration_s=$(LC_NUMERIC=C awk -v ns="$duration_ns" 'BEGIN { printf "%.3f", ns / 1000000000 }')
+    echo "TIMED: $duration_s rt_deadline" >> "$TIMED_TRACKER"
     return $status
 }
 run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase4-rt-deadline.log" || true
+
+# Post-phase: detect INCONCLUSIVE_ENVIRONMENT from the deadline log.
+# When the Rust preflight reports uncontrolled environment, the test exits 0
+# (no assertion) but the log contains the marker — this is NOT a PASS.
+DEADLINE_LOG="target/logs/phase4-rt-deadline.log"
+if grep -qF "INCONCLUSIVE_ENVIRONMENT" "$DEADLINE_LOG" 2>/dev/null; then
+    DEADLINE_IDX=$((PHASE_COUNT - 1))
+    PHASE_STATUS[$DEADLINE_IDX]="INCONCLUSIVE"
+fi
 
 # --- Phase 5: RT Jitter Characterization (environmental telemetry) ---
 # Characterizes tail latency under CPU contention. This is diagnostic
@@ -688,8 +738,22 @@ run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase
 # result is expected when environment preconditions (CPU pinning,
 # performance governor, low background load) are not met.
 run_rt_jitter_characterization_phase() {
+    # Same core pin as Phase 4: jitter preflight requires single-CPU affinity.
     local status=0
-    timed_cargo_test "rt_jitter" --release --no-fail-fast $(_test_flag rt_jitter) -- --ignored --nocapture || status=1
+    local start_t
+    start_t=$(date +%s%N)
+    local flag=$(_test_flag rt_jitter)
+    if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
+        taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
+    else
+        cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
+    fi
+    local end_t
+    end_t=$(date +%s%N)
+    local duration_ns=$((end_t - start_t))
+    local duration_s
+    duration_s=$(LC_NUMERIC=C awk -v ns="$duration_ns" 'BEGIN { printf "%.3f", ns / 1000000000 }')
+    echo "TIMED: $duration_s rt_jitter" >> "$TIMED_TRACKER"
     return $status
 }
 run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase5-rt-jitter.log" || true
@@ -731,6 +795,12 @@ printf " |-%-45s-|-%-10s-|-%-10s-|\n" "-----------------------------------------
 
 ANY_FAILED=0
 ANY_FIDELITY_FAILED=0
+COUNT_PASSED=0
+COUNT_FAILED=0
+COUNT_INCONCLUSIVE=0
+COUNT_SKIP=0
+COUNT_NOT_RUN=0
+
 RT_DEADLINE_STATUS="PASS"
 RT_JITTER_STATUS="PASS"
 for ((i=0; i<PHASE_COUNT; i++)); do
@@ -739,17 +809,32 @@ for ((i=0; i<PHASE_COUNT; i++)); do
     status="${PHASE_STATUS[$i]}"
     class="${PHASE_CLASSES[$i]:-fidelity}"
 
-    if [ "$status" = "PASSED" ]; then
-        status_colored="${GREEN}${status}${NC}"
-    elif [ "$status" = "SKIPPED" ] || [ "$status" = "SKIP_CAPABILITY" ] || [ "$status" = "INCONCLUSIVE" ]; then
-        status_colored="${YELLOW}${status}${NC}"
-    else
-        status_colored="${RED}${status}${NC}"
-        ANY_FAILED=1
-        if [ "$class" != "performance" ]; then
-            ANY_FIDELITY_FAILED=1
-        fi
-    fi
+    case "$status" in
+        PASSED)
+            COUNT_PASSED=$((COUNT_PASSED + 1))
+            status_colored="${GREEN}${status}${NC}"
+            ;;
+        SKIPPED|SKIP_CAPABILITY)
+            COUNT_SKIP=$((COUNT_SKIP + 1))
+            status_colored="${YELLOW}${status}${NC}"
+            ;;
+        INCONCLUSIVE)
+            COUNT_INCONCLUSIVE=$((COUNT_INCONCLUSIVE + 1))
+            status_colored="${YELLOW}${status}${NC}"
+            ;;
+        NOT_RUN)
+            COUNT_NOT_RUN=$((COUNT_NOT_RUN + 1))
+            status_colored="${YELLOW}${status}${NC}"
+            ;;
+        *)
+            COUNT_FAILED=$((COUNT_FAILED + 1))
+            status_colored="${RED}${status}${NC}"
+            ANY_FAILED=1
+            if [ "$class" != "performance" ]; then
+                ANY_FIDELITY_FAILED=1
+            fi
+            ;;
+    esac
 
     # ── Per-phase typed status tracking for disaggregated performance summary ──
     if [[ "$name" == *"RT Deadline"* ]]; then
@@ -812,12 +897,13 @@ render_performance_summary() {
     echo -e "${YELLOW}PERF_REGRESSION: NOT_RUN${NC}"
 }
 
-if [ $ANY_FAILED -eq 0 ]; then
-    echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
-    echo -e "${GREEN}FIDELITY: OK${NC}"
-    render_performance_summary
-    exit 0
-else
+HAS_GAPS=0
+if [ "$COUNT_INCONCLUSIVE" -gt 0 ] || [ "$COUNT_SKIP" -gt 0 ] || [ "$COUNT_NOT_RUN" -gt 0 ] || \
+   [ "$RT_JITTER_STATUS" != "PASS" ] || [ "$RT_DEADLINE_STATUS" != "PASS" ]; then
+    HAS_GAPS=1
+fi
+
+if [ $ANY_FAILED -ne 0 ]; then
     echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check logs in target/logs/${NC}"
     if [ $ANY_FIDELITY_FAILED -eq 1 ]; then
         echo -e "${RED}FIDELITY: FAIL${NC}"
@@ -825,5 +911,24 @@ else
         echo -e "${GREEN}FIDELITY: OK${NC}"
     fi
     render_performance_summary
+    echo -e "${RED}${BOLD}OVERALL: FAILED${NC}"
     exit 1
+elif [ $HAS_GAPS -eq 1 ]; then
+    echo -e "${YELLOW}${BOLD}⚠ Audit completed with declared gaps (inconclusive / skipped / unexecuted stages).${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
+    render_performance_summary
+    echo -e "${YELLOW}${BOLD}OVERALL: COMPLETED_WITH_GAPS${NC}"
+
+    if [ "${STRICT_PRE_RELEASE:-0}" -eq 1 ]; then
+        echo -e "${RED}${BOLD}❌ --strict-pre-release mode: failing audit due to declared gaps (INCONCLUSIVE/NOT_RUN).${NC}"
+        exit 1
+    else
+        exit 0
+    fi
+else
+    echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
+    echo -e "${GREEN}FIDELITY: OK${NC}"
+    render_performance_summary
+    echo -e "${GREEN}${BOLD}OVERALL: PASSED${NC}"
+    exit 0
 fi

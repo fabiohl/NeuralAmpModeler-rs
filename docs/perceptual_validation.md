@@ -143,6 +143,17 @@ ABSOLUTE_SNR_FLOOR = 5.0 dB                              // absolute minimum SNR
 If `max_esr > ABSOLUTE_ESR_CAP` after relaxation, it is scaled back to 6.23e-3 and `mse_limit`
 is proportionally tightened. `min_snr_db` is clamped to at least 5.0 dB.
 
+### Quality Dashboard Contract Envelopes & Oracle Governance
+
+For build-to-build contract verification (`utils/quality-dashboard.sh --check`), ESR limits are governed by model-calibrated noise envelopes rather than permissive global multipliers (PERF-009):
+
+- **Noise Envelope:** `noise_limit = max(baseline * 3.0, baseline + 5.0e-14)`. Tight $3\times$ ceiling anchored by an absolute floor of $5 \times 10^{-14}$ for models with extreme parity ($< 10^{-12}$). Prevents silent $2\times$–$5\times$ deterministic regressions while avoiding false positives from machine-level floating point noise.
+- **Safety Ceiling:** `safety_limit = max(baseline * 10.0, 1.0e-12)`. Hard upper ceiling for contract verification.
+- **Dual-Oracle Governance (`REVIEW_REQUIRED`):**
+  - **Threshold Disagreement:** Triggered when NAMCore parity passes but the f64 oracle fails (or vice versa).
+  - **Directional Divergence:** Triggered when one oracle ratio improves ($R < 0.85$) while the other degrades ($R > 1.15$).
+  - **Policy:** Neither oracle automatically wins. Any oracle divergence blocks automatic contract approval, producing a `REVIEW_REQUIRED` failure state that mandates human inspection before baseline renewal.
+
 ---
 
 ## MR-STFT — Multi-Resolution STFT Loss (Hard + Soft Spectral Gate)

@@ -179,9 +179,22 @@
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("NeuralAmpModeler-rs requires x86_64 architecture");
 
-#[cfg(not(any(doc, all(target_feature = "avx2", target_feature = "fma"))))]
+#[cfg(not(any(
+    doc,
+    all(
+        target_feature = "avx",
+        target_feature = "avx2",
+        target_feature = "bmi1",
+        target_feature = "bmi2",
+        target_feature = "f16c",
+        target_feature = "fma",
+        target_feature = "lzcnt",
+        target_feature = "movbe"
+    )
+)))]
 compile_error!(
-    "NeuralAmpModeler-rs requires x86-64-v3 (AVX2 + FMA). \
+    "NeuralAmpModeler-rs requires full x86-64-v3 target support \
+     (avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe). \
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
 

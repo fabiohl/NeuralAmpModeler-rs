@@ -45,8 +45,9 @@ dashboard_phase_receipt() {
     local observed="${observed_records:-0}"
     local expected="${expected_records:-0}"
     local ecode="${exit_code:-0}"
-    printf '{"phase_id":"%s","status":"%s","exit_code":%s,"observed_records":%s,"expected_records":%s,"reason":"%s"}\n' \
-        "$phase_id" "$status" "$ecode" "$observed" "$expected" "$reason" >> "$DASHBOARD_PHASE_RECEIPT"
+    local run_id="${NAM_RUN_ID:-}"
+    printf '{"phase_id":"%s","status":"%s","exit_code":%s,"observed_records":%s,"expected_records":%s,"reason":"%s","run_id":"%s"}\n' \
+        "$phase_id" "$status" "$ecode" "$observed" "$expected" "$reason" "$run_id" >> "$DASHBOARD_PHASE_RECEIPT"
     if [ "$status" = "FAIL" ]; then
         DASHBOARD_PHASE_HAD_FAILURE=1
     fi

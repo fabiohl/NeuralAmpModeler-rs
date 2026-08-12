@@ -119,10 +119,11 @@ regressions): its only mandate is baseline-gated performance.
 ### How It Works
 
 1. **Core pinning** — The script uses `taskset -c <core>` (dynamically defaulting to `nproc / 2` to avoid OS/IRQ noise; configurable via `NAM_BENCH_CORE`) to lock the benchmark to a single CPU core, eliminating scheduler noise and cache-line bouncing between cores.
-2. **Statistical rigor** — The `regression_gate` bench suite runs each model (WaveNet Std/Feather/Nano/Lite, A2-Full/Lite, LSTM 1x16/2x8, Linear, ConvNet) with `sample_size=100, measurement_time=5s, noise_threshold=0.02`.
-3. **Baseline comparison** — Criterion performs a two-sample t-test between the current run and the stored baseline. If it detects a statistically significant regression (p < 0.05), the script exits with code 1.
-4. **Baseline storage** — Baselines are persisted under `target/performance-baselines/` (not `target/criterion/`) so they survive `cargo clean`. An environment fingerprint (`baseline-fingerprint.json`) is recorded alongside the baseline data to detect incompatible environments (CPU microarchitecture, rustc version, target triple, RUSTFLAGS).
+2. **Statistical rigor** — The `regression_gate` bench suite runs **19** targets (10 static models + 4 dynamic models + 5 DSP infrastructure benches) with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.02`. Dispatch is forced to `InstructionSet::Avx2` via `ForceAvx2Guard` so hosts with AVX-512 still measure the x86-64-v3 contract path.
+3. **Baseline comparison** — Criterion performs a two-sample t-test between the current run and the stored baseline. If it detects a statistically significant regression (p < 0.05 **and** outside the 2% noise band), the script exits with code 1.
+4. **Baseline storage** — Baselines are persisted under **`.performance-baselines/`** (repo-local, gitignored). `target/criterion/` is only a **transient** Criterion working area restored from `.performance-baselines/` before each run. Persist/restore use **replace-copy of top-level** `…/<bench>/ci-baseline/` only; nested `ci-baseline/ci-baseline/…` paths (historical `cp -a` into an existing dest) are sanitized and never re-copied. An environment fingerprint (`.performance-baselines/baseline-fingerprint.json`) records CPU model, full x86-64-v3 ISA label (`AVX2/FMA/F16C/BMI`, including LZCNT via `lzcnt` or Linux `abm`), rustc, target triple, governor, bench core, and producing commit.
 5. **Immutability** — `--check` is strictly read-only. It never auto-creates a baseline. If no baseline exists, it fails with `MISSING_BASELINE` and exit code 1, directing the operator to run `--bootstrap-baseline` manually.
+6. **Sub-µs DSP micro-benches** — `RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium` process a fixed batch of **64 blocks** per Criterion sample so timer noise stays under the 2% wall. The quality dashboard divides those medians by 64 and reports **per-block** latency (contract units unchanged). Changing the batch size requires a human baseline renewal.
 
 ### Daily Workflow
 
@@ -146,23 +147,53 @@ utils/tests-performance-regression.sh --check
 utils/tests-performance-regression.sh --bootstrap-baseline
 ```
 
-### First-Time Setup
+### First-Time Setup and Post-Optimization Renewal (Human-Only)
 
-Before the regression gate can operate, a human operator must bootstrap the baseline:
+Agents and CI **must not** run `--bootstrap-baseline` or `quality-dashboard.sh --save`.
+Both are deliberate human operations on a machine with governor `performance`,
+low background load, and preferably a single pinned core (`NAM_BENCH_CORE`).
+
+**Canonical sequence after intentional DSP/perf changes (or first clone):**
 
 ```sh
-# One-time: create the initial baseline and environment fingerprint.
-# This MUST be performed manually — automated/CI/agent-driven execution is prohibited.
+# 0. Optional: commit shell/docs-only fixes first so the tree is clean.
+#    Prefer a clean tree for provenance; dirty state is recorded but harder to audit.
+
+# 1. Create / replace the Criterion baseline under .performance-baselines/
 utils/tests-performance-regression.sh --bootstrap-baseline
 
-# Then activate the gate:
+# 2. Prove the new baseline is readable (standalone gate must be green)
 utils/tests-performance-regression.sh --check
+# Expected: "No performance regression detected." exit 0
+
+# 3. Only then freeze the integrated fidelity+perf contract
+utils/quality-dashboard.sh --save docs/quality-contract.txt
+# Requires ALL dashboard phases PASS (including regression_gate).
+# Fail-closed: if regression_gate != PASS, the file is NOT written.
+
+# 4. Close the loop on the same revision
+utils/quality-dashboard.sh --check docs/quality-contract.txt
+# Expected: FIDELITY OK + PERFORMANCE OK + contract satisfied
 ```
 
-`--check` is strictly read-only. If the baseline is missing, it fails with
-`MISSING_BASELINE` (exit code 1) and prints the bootstrap command — it never
-auto-creates a reference, preventing a regressing branch from silently becoming
-the new baseline after `cargo clean` or a fresh clone.
+**Why step 2 can PASS and step 4 still fail:** the dashboard runs ~2 minutes of
+fidelity work (goldens, f64 oracle, quick_parity, …) **before** invoking the
+regression gate. That raises thermals/OS noise versus a cold standalone
+`--check`. Micro-benches near the noise floor (e.g. `RT_LSTM_2x8` ~7.5 µs,
+`RT_Linear` ~340 ns) may then report a Criterion "regressed" of a few percent
+even with **no code change**. This is environmental, not a fidelity bug.
+
+**Operator response to a flaky dashboard `--check` after a green standalone gate:**
+
+1. Inspect `target/logs/regression-check.log` for the `"Performance has regressed"` line.
+2. Re-run **only** `utils/tests-performance-regression.sh --check` with load ≪ 1.
+3. If standalone is green again: re-run `utils/quality-dashboard.sh --check …`
+   after a short cool-down; do **not** bootstrap solely to silence noise.
+4. Bootstrap again only when the delta is intentional (real code change) or
+   reproducible under isolation across multiple cold runs.
+
+`--check` never auto-creates a baseline after `cargo clean` or a fresh clone:
+missing `.performance-baselines/` → `MISSING_BASELINE`, exit 1.
 
 ### Script Modes
 
@@ -237,19 +268,20 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 56 µs → 95 µs is a clear violation).
 
 > [!NOTE]
-> The contract's performance check uses the same `regression_gate` bench that
-> `utils/tests-performance-regression.sh` runs, but via the dashboard's integrated
-> runner. Do not run both sequentially; use `--check` directly when focusing on
-> perf-only changes.
+> The contract's performance section is filled from the same `regression_gate`
+> Criterion run that `utils/tests-performance-regression.sh` drives. The dashboard
+> copies latencies **only** when `regression_gate=PASS` for the current `run_id`
+> (stale `target/logs/regression-check.log` is never reused — PERF-002).
 >
-> 1. **Benchmark baseline vs. Quality contract baseline:**
->    * **Performance regression baseline:** stored in `target/criterion/ci-baseline/`.
->    * **Quality contract baseline:** stored in `docs/quality-contract.txt`.
->    * Both are checked by `utils/quality-dashboard.sh --check docs/quality-contract.txt`.
->    * The Criterion `ci-baseline` (managed by `utils/tests-performance-regression.sh`) and the Quality Contract baseline (`docs/quality-contract.txt`) are
->    **independent artifacts** with different purposes. Updating one does not
->    automatically update the other. Both must be regenerated and committed when
->    a deliberate performance characteristic changes.
+> **Two independent artifacts (both human-renewed when perf intentionally changes):**
+>
+> | Artifact | Path | Role |
+> | --- | --- | --- |
+> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (t-test, p&lt;0.05) |
+> | Quality contract | `docs/quality-contract.txt` | Frozen fidelity + median latency snapshot for `--check` |
+>
+> Updating one does **not** update the other. Order is always:
+> bootstrap Criterion → standalone `--check` green → dashboard `--save` → dashboard `--check`.
 
 ### Baselines and Renewal
 
@@ -259,11 +291,12 @@ fidelity metrics. The **full renewal procedure** — including prerequisites, th
 documented in [`testing.md`](testing.md#94-procedimento-de-renovação-deliberada-do-baseline).
 
 > [!CAUTION]
-> The Criterion `ci-baseline` (managed by `utils/tests-performance-regression.sh
-> --bootstrap-baseline`) and the Quality Contract baseline (`docs/quality-contract.txt`) are
-> **independent artifacts** with different purposes. Updating one does not
-> automatically update the other. Both must be regenerated and committed when
-> a deliberate performance characteristic changes.
+> The Criterion baseline (`.performance-baselines/`, managed by
+> `utils/tests-performance-regression.sh --bootstrap-baseline`) and the Quality
+> Contract (`docs/quality-contract.txt`) are **independent**. Updating one does
+> not update the other. Criterion data is local/gitignored; the contract file is
+> committed. Both must be renewed (human-only) when latency or fidelity
+> characteristics intentionally change — always Criterion first, then `--save`.
 
 ---
 
@@ -458,3 +491,58 @@ These optimizations reduced the global median latency of WaveNet Lite CH12 from 
 Assembly comparison and stride analysis revealed that fixed setup overhead (prologue, dispatch, bounds checks) accounts for 54% of instructions in Lite CH12 versus 34.5% in Standard CH16. On AVX2, the 8+4 channel split operates with 128-bit XMM instructions for the upper 4 lanes, yielding higher instruction counts per layer than standard 16-channel YMM operations.
 
 **Final Decision:** The WaveNet Lite CH12 SKU operates cleanly at **~52.7 µs** (96.1% headroom from the 1333 µs RT deadline), with 1e-7 parity tolerance restored and zero unneeded technical debt.
+
+---
+
+## Sprint 4 — A2 Dynamic AVX2+FMA Vectorization (PERF-007)
+
+### Context
+
+The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallback engine for non-catalog A2 geometries (gating, blending, head1x1, heterogeneous activations, FiLM). Prior to Sprint 4, its hot-path was predominantly scalar with LLVM auto-vectorization failing on the double-nested GEMV loops (mixin, head1x1, L1x1 residual). Assembly profiling (T4.1) confirmed:
+
+* **Dilated Conv**: Unrolled scalar (optimal for depthwise), with `prefetcht0` L1 prefetch
+* **Mixin GEMV**: Fully scalar with register spills to stack — primary target
+* **Head 1×1 Projection**: Fully scalar — secondary target
+* **L1×1 Residual**: Fully scalar — tertiary target
+* **Activation/Gating**: Already vectorized via `SimdMath` trait
+
+### Implemented Optimizations (T4.2 + T4.3)
+
+**T4.2 — Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process.rs`](../src/models/a2/model/dynamic/process.rs)):
+
+* **Head 1×1**: 8-wide `_mm256_fmadd_ps` over the `h1_in` dimension per output channel. Lane extraction preserves exact left-to-right accumulation order for bit-identical golden vector output.
+* **L1×1 Dense**: 8-wide `_mm256_set1_ps` (broadcast) + `_mm256_fmadd_ps` over contiguous col-major weight rows (`bottleneck × channels`).
+* **L1×1 Grouped**: 8-wide SIMD dot product for `in_pg ≥ 8`, scalar fallback otherwise.
+* **Accumulation loops** (`head_accum += scratch`, `layer_in += scratch`): `_mm256_add_ps` with scalar tail.
+
+**T4.3 — Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`process.rs`](../src/models/a2/model/dynamic/process.rs)):
+
+* **Builder**: One-time per-group transposition from row-major `[out_per_g][in_pg]` to col-major `[in_pg][out_per_g]` during `set_weights`. No transposition in the hot path.
+* **Hot Path**: `_mm256_set1_ps` (broadcast condition) + `_mm256_loadu_ps` (8 contiguous weights) + `_mm256_fmadd_ps` per input channel. Unified flat (groups=1) and grouped (groups>1) paths.
+
+### Performance Results (Regression Gate, `--baseline ci-baseline`)
+
+| Benchmark | Pre-Sprint 4 | Post-Sprint 4 (contract 2026-08-12) | Change | Notes |
+| ----------- | ------------- | ------------------------------------- | -------- | ------- |
+| `RT_A2_Dyn_Gated_CH8` | ~259 µs | **170.9 µs** (~12.8% of 1.33 ms budget) | **≈ −34%** | Primary win; CH=8 fully uses 8-wide FMA paths |
+| `RT_A2_Dyn_Blended_CH3` | ~133 µs | **135.9 µs** (~10.2% of budget) | ≈ +2–3% | CH=3 stays on scalar fallbacks; accepted trade-off |
+| `RT_LSTM_Dyn_1x7` | (pre-T3.3 scalar tail) | **~7.9 µs** | **≈ −50%** vs pre-vectorization tail | Sprint 3 AVX2 H&lt;8 gates |
+
+The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. After Sprint 3/4 the Criterion baseline and `docs/quality-contract.txt` were human-renewed so subsequent `--check` runs compare against these post-optimization medians, not the Sprint 2 snapshot.
+
+### Fidelity & Invariants
+
+* **Golden Vectors**: `a2_dynamic_gated_ch8` and `a2_dynamic_blended_ch3` both pass with bit-identical output (MSE=0.0 vs reference).
+* **f64 Oracle**: `test_oracle_vs_python_anchor_a2_gated` and `_blended` pass with exact match.
+* **Block Invariance**: All A2 catalog models pass block-size invariance tests.
+* **Zero-Alloc**: Heap audit confirms zero allocations on the hot path (only YMM registers + stack `[f32; 8]` lane buffers).
+* **`utils/tests-quick.sh`**: Full FIDELITY: OK — structural + measurement oracles + parser fuzzing all green.
+* **No regressions in non-A2Dyn models**: Changes are scoped exclusively to `WaveNetA2Dyn` (dynamic path); static A2 Full/Lite and other model families use separate compilation units.
+
+### Assembly Confirmation
+
+Post-optimization assembly (`cargo rustc --release --bench regression_gate -- --emit=asm`) confirms:
+
+* **12,594 FMA instructions** in the release binary (vs. 24,342 packed SIMD overall), with `vfmadd231ps` present in the mixin, head1x1, and L1x1 inner loops.
+* **No register spills** in the SIMD paths: accumulators remain in YMM registers throughout the inner loops.
+* **Scalar tail code** retains exact arithmetic order (sequential lane extraction from YMM → `[f32; 8]` on stack), preserving golden vector parity.

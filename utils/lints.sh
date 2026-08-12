@@ -72,7 +72,7 @@ phase "Validating SPDX license headers..."
 spdx_scope=$(
     {
         find src benches tests -type f -name '*.rs'
-        find utils -type f -name '*.sh'
+        find utils tests -type f -name '*.sh'
         echo "build.rs"
         echo "Cargo.toml"
     } || true
