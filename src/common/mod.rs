@@ -3,6 +3,14 @@
 
 //! Host-agnostic infrastructure shared by engine integrations.
 
+/// Crossfade duration in milliseconds for level transitions
+/// (adaptive degradation FSM and slimmable container submodel swaps).
+///
+/// Single source of truth (F-18): imported by `dsp::adaptive` and
+/// `models::container`. Keep both consumers on this constant to prevent
+/// silent tuning drift.
+pub(crate) const CROSSFADE_DURATION_MS: f32 = 32.0;
+
 /// Compile-time heap-allocation auditing infrastructure for RT safety verification.
 pub mod alloc_audit;
 /// Diagnostic engine: error codes, snapshots, system info, runtime log formatting.

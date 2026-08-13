@@ -287,26 +287,30 @@ use std::ptr::NonNull;
 /// Unlike `AlignedVec`, this type carries the deallocation metadata (mmap size)
 /// and is intended for allocations ≥ 1 MiB where TLB pressure matters.
 ///
+/// `T: Copy` is a design invariant (F-10): like `AlignedVec`, this container
+/// deallocates its raw block in `Drop` **without** running per-element
+/// destructors, so non-`Copy` element types (which may carry `Drop` glue) are
+/// rejected at compile time.
+///
 /// Layout (24 bytes): larger than `AlignedVec` (16 bytes), but only used for
 /// large allocations where the overhead is negligible.
 #[derive(Debug)]
-pub struct HugePageVec<T> {
+pub struct HugePageVec<T: Copy> {
     ptr: NonNull<T>,
     len: usize,
     alloc_info: AllocInfo,
 }
 
-impl<T> HugePageVec<T> {
+impl<T: Copy> HugePageVec<T> {
     /// Creates a new huge-page-backed buffer filled with `default`.
     ///
     /// # Errors
     /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
-    pub fn new(len: usize, default: T) -> Result<(Self, HugePageStatus), NamErrorCode>
-    where
-        T: Copy,
-    {
+    pub fn new(len: usize, default: T) -> Result<(Self, HugePageStatus), NamErrorCode> {
         let (mut vec, status) = Self::with_capacity(len)?;
-        // SAFETY: Inner safety guarantees are upheld by caller invariants.
+        // SAFETY: vec.ptr is non-null with capacity ≥ len (from with_capacity).
+        // `T: Copy` (struct bound) makes each `ptr.write(default)` a bitwise copy
+        // of a valid value; no drop glue is involved.
         unsafe {
             for i in 0..len {
                 vec.ptr.as_ptr().add(i).write(default);
@@ -363,7 +367,7 @@ impl<T> HugePageVec<T> {
     }
 }
 
-impl<T> Deref for HugePageVec<T> {
+impl<T: Copy> Deref for HugePageVec<T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -379,7 +383,7 @@ impl<T> Deref for HugePageVec<T> {
     }
 }
 
-impl<T> DerefMut for HugePageVec<T> {
+impl<T: Copy> DerefMut for HugePageVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.len == 0 {
             &mut []
@@ -391,14 +395,15 @@ impl<T> DerefMut for HugePageVec<T> {
     }
 }
 
-impl<T> Drop for HugePageVec<T> {
+impl<T: Copy> Drop for HugePageVec<T> {
     fn drop(&mut self) {
         if self.len > 0 {
             // SAFETY: self.ptr was allocated via allocate_huge_pages (or the fallback heap
             // path), tracked by self.alloc_info. The deallocation size self.len * size_of::<T>()
             // matches the allocation size modulo page alignment rounding (deallocate_huge uses
             // the stored size_bytes from allocation). Drop consumes self; this is the final
-            // use of the pointer.
+            // use of the pointer. No per-element destructors need to run: `T: Copy` (struct
+            // bound, F-10) guarantees the elements carry no `Drop` glue.
             unsafe {
                 deallocate_huge(
                     self.ptr.as_ptr() as *mut u8,
@@ -413,8 +418,8 @@ impl<T> Drop for HugePageVec<T> {
 // SAFETY: HugePageVec owns its allocation exclusively (mmap/MAP_PRIVATE or heap with no
 // external aliasing). Sending across threads is sound because the underlying memory is not
 // shared with other HugePageVec instances, and T: Send ensures elements are thread-transferable.
-unsafe impl<T: Send> Send for HugePageVec<T> {}
+unsafe impl<T: Copy + Send> Send for HugePageVec<T> {}
 // SAFETY: T: Sync guarantees shared references to elements are sound across threads. The
 // allocation is exclusively owned and accessed through Deref/DerefMut which enforce Rust's
 // aliasing rules.
-unsafe impl<T: Sync> Sync for HugePageVec<T> {}
+unsafe impl<T: Copy + Sync> Sync for HugePageVec<T> {}

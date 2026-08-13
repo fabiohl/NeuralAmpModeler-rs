@@ -23,9 +23,8 @@ use std::cmp::Ordering;
 
 use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
+use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::spsc::RT_STATUS_SLIMMABLE_RESET_FAILED;
-
-const CROSSFADE_DURATION_MS: f32 = 32.0;
 
 /// A bundle of pre-trained submodels selected by a quality threshold.
 ///

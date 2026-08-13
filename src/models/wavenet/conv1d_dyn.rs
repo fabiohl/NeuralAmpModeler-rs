@@ -124,6 +124,12 @@ impl Conv1dDyn {
 
             for k in 0..kernel {
                 let w_start = b * kernel * in_ch * 4 + k * in_ch * 4;
+                // F-16: the interleaved-4 slice covers `in_ch` taps of `[f32; 4]`;
+                // it must lie within the zero-padded weights buffer.
+                debug_assert!(
+                    w_start + 4 * in_ch <= self.weights.len(),
+                    "conv1d_dyn: interleave-4 weight slice exceeds padded weights buffer"
+                );
                 let w_slice: &[[f32; 4]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                     core::slice::from_raw_parts(ptr, in_ch)
@@ -184,6 +190,12 @@ impl Conv1dDyn {
 
             for k in 0..kernel {
                 let w_start = b * kernel * in_ch * 8 + k * in_ch * 8;
+                // F-16: the interleaved-8 slice covers `in_ch` taps of `[f32; 8]`;
+                // it must lie within the zero-padded weights buffer.
+                debug_assert!(
+                    w_start + 8 * in_ch <= self.weights.len(),
+                    "conv1d_dyn: interleave-8 weight slice exceeds padded weights buffer"
+                );
                 let w_slice: &[[f32; 8]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                     core::slice::from_raw_parts(ptr, in_ch)
@@ -237,6 +249,12 @@ impl Conv1dDyn {
 
             for k in 0..kernel {
                 let w_start = b * kernel * in_ch * 16 + k * in_ch * 16;
+                // F-16: the interleaved-16 slice covers `in_ch` taps of `[f32; 16]`;
+                // it must lie within the zero-padded weights buffer.
+                debug_assert!(
+                    w_start + 16 * in_ch <= self.weights.len(),
+                    "conv1d_dyn: interleave-16 weight slice exceeds padded weights buffer"
+                );
                 let w_slice: &[[f32; 16]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                     core::slice::from_raw_parts(ptr, in_ch)

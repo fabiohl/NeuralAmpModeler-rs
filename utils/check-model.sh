@@ -150,10 +150,20 @@ fi
 
 # ── Build the example (incremental — fast on rebuild) ─────────────────────────
 cd "${CRATE_ROOT}"
-cargo build ${RELEASE_FLAG} --example inspect_model --quiet 2>&1 \
-    | grep -v "^$" \
-    | grep -v "Compiling\|Finished\|Checking" \
-    >&2 || true
+
+# F-07: cargo build runs WITHOUT `|| true` — a compilation failure aborts the
+# script immediately (typed BUILD_FAILED diagnostic) so a stale inspect_model
+# binary from a previous build is never executed against the current tree.
+# `--quiet` keeps successful output minimal; warnings/errors flow to stderr.
+set +e
+cargo build ${RELEASE_FLAG} --example inspect_model --quiet >&2
+BUILD_STATUS=$?
+set -e
+if [ "${BUILD_STATUS}" -ne 0 ]; then
+    echo "Error: BUILD_FAILED — cargo build exited with status ${BUILD_STATUS}." >&2
+    echo "The inspector binary was NOT executed; fix the compilation error above and retry." >&2
+    exit "${BUILD_STATUS}"
+fi
 
 # Determine binary path
 if [[ -n "$RELEASE_FLAG" ]]; then

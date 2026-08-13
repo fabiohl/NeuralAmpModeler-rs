@@ -107,6 +107,13 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = mixin[out_c + j];
                         }
                     }
+                    // F-16: the interleaved-16 block must be fully covered by the
+                    // zero-padded weights buffer (padded to
+                    // `num_blocks * 16 * K * IN` f32s by the loader).
+                    debug_assert!(
+                        w_start + 16 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-16 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 16]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                         core::slice::from_raw_parts(ptr, K * IN)
@@ -123,6 +130,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = mixin[out_c + j];
                         }
                     }
+                    // F-16: see interleave-16 note; same boundary proof for width 8.
+                    debug_assert!(
+                        w_start + 8 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-8 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 8]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                         core::slice::from_raw_parts(ptr, K * IN)
@@ -139,6 +151,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = mixin[out_c + j];
                         }
                     }
+                    // F-16: see interleave-16 note; same boundary proof for width 4.
+                    debug_assert!(
+                        w_start + 4 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-4 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 4]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                         core::slice::from_raw_parts(ptr, K * IN)
@@ -220,6 +237,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = self.bias[out_c + j];
                         }
                     }
+                    // F-16: see the mixin kernel; same boundary proof for width 16.
+                    debug_assert!(
+                        w_start + 16 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-16 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 16]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                         core::slice::from_raw_parts(ptr, K * IN)
@@ -234,6 +256,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = self.bias[out_c + j];
                         }
                     }
+                    // F-16: see the mixin kernel; same boundary proof for width 8.
+                    debug_assert!(
+                        w_start + 8 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-8 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 8]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                         core::slice::from_raw_parts(ptr, K * IN)
@@ -248,6 +275,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                             *item = self.bias[out_c + j];
                         }
                     }
+                    // F-16: see the mixin kernel; same boundary proof for width 4.
+                    debug_assert!(
+                        w_start + 4 * K * IN <= self.weights.len(),
+                        "conv1d: interleave-4 weight block exceeds padded weights buffer"
+                    );
                     let w_slice: &[[f32; 4]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                         core::slice::from_raw_parts(ptr, K * IN)

@@ -138,6 +138,7 @@ mkdir -p target/logs/
 # and any other artifacts from independent tools (Sprint S1.3 T1.3.1).
 rm -f target/logs/catalog_preflight.log \
       target/logs/phase1-soak.log \
+      target/logs/phase-libm-exports.log \
       target/logs/phase2-proptests-parity.log \
       target/logs/phase3-heap-audit.log \
       target/logs/phase4-rt-deadline.log \
@@ -599,6 +600,20 @@ run_soak_phase() {
     return $status
 }
 run_phase "Soak Tests (Numerical Stability)" "run_soak_phase" "phase1-soak.log" || true
+
+# --- libm export verification (F-23): post-compilation ELF surface guard ---
+# Placed after Phase 1 because that is the suite's first release build, so
+# target/release/libneural_amp_modeler_rs.rlib exists. Missing artifact →
+# the script prints a yellow notice and exits 0 (graceful skip); a leaked
+# symbol → exit 1 (hard fail). This automates the verification of the build.rs
+# version-script defense documented in docs/postmortem-libm-symbol-interposition.md.
+LIBm_EXPORTS_LOG="target/logs/phase-libm-exports.log"
+if ! bash utils/debug/verify_no_libm_exports.sh target/release > "$LIBm_EXPORTS_LOG" 2>&1; then
+    echo -e "${RED}${BOLD}❌ libm export verification failed — see ${LIBm_EXPORTS_LOG}${NC}"
+    cat "$LIBm_EXPORTS_LOG"
+    exit 1
+fi
+cat "$LIBm_EXPORTS_LOG"
 
 # --- Phase 2: Property-Based, FSM, Parity, Golden Vectors & ISA (release) ---
 # The full, uncapped counterpart of tests-quick.sh Phase 2/3: every proptest

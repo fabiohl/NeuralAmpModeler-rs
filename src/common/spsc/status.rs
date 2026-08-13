@@ -74,6 +74,12 @@ pub const RT_STATUS_GC_TIER3: u64 = 1 << 22;
 /// Flag indicating that the SPSC command queue drain limit was reached (64 events) on the RT thread.
 pub const RT_STATUS_SPSC_DRAIN_TRUNCATED: u64 = 1 << 24;
 
+/// Flag indicating that a CabSim sub-block violated the adapter contract
+/// (`input.len() > partition_size` or `input.len() != output.len()` during host
+/// quantum renegotiation). Set by the RT thread; the adapter clamps defensively
+/// and never panics.
+pub const RT_STATUS_CABSIM_CONTRACT_VIOLATION: u64 = 1 << 25;
+
 /// Atomic status flags for silent RT→Main communication.
 ///
 /// The DSP thread sets atomic flags instead of calling `println!`/`eprintln!`.
@@ -109,6 +115,7 @@ pub const RT_STATUS_SPSC_DRAIN_TRUNCATED: u64 = 1 << 24;
 /// | 22 | `GC_TIER3` | GC cascade reached Tier 3 (overflow buffer) — item parked |
 /// | 23 | `NEEDS_QUANTUM_LOG` | Host quantum (buffer size in frames) changed |
 /// | 24 | `SPSC_DRAIN_TRUNCATED` | SPSC command queue drain limit reached (64 events) |
+/// | 25 | `CABSIM_CONTRACT_VIOLATION` | CabSim sub-block exceeded partition or input/output mismatch |
 #[repr(align(128))]
 pub struct RtStatusFlags {
     /// Effective sample rate active on the DSP thread after resampler rebuild.

@@ -18,6 +18,7 @@ pub use layout::select_interleave_width;
 pub use layout::transpose_conv1d_interleaved_4wide;
 pub use layout::transpose_conv1d_interleaved_8wide;
 pub use layout::transpose_conv1d_interleaved_16wide;
+pub use static_factory::MAX_CONDITION_SIZE;
 
 /// Detects the WaveNet topology and branches to the correct const-generic builder.
 pub(crate) fn build_wavenet(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {

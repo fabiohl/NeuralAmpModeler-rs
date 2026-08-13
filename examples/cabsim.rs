@@ -129,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let in_slice = &input_audio[offset..offset + len];
         let out_slice = &mut output_audio[offset..offset + len];
 
-        adapter.process_variable(in_slice, out_slice);
+        adapter.process_variable(in_slice, out_slice, None);
 
         offset += len;
         block_idx += 1;

@@ -12,7 +12,8 @@
 #   ./utils/quality-dashboard.sh                        Standard dashboard (fidelity + performance)
 #   ./utils/quality-dashboard.sh --fidelity-only        Fidelity tests only
 #   ./utils/quality-dashboard.sh --bench-only           Benchmarks only
-#   ./utils/quality-dashboard.sh --full                 Full long-suite audit (human-only)
+#   ./utils/quality-dashboard.sh --full                 Standard dashboard + delegated long-suite
+#                                                       audit (utils/tests-long.sh, human-only)
 #   ./utils/quality-dashboard.sh --save <filename>      Save plain-text copy alongside display
 #   ./utils/quality-dashboard.sh --check <file>         Verify metrics against quality contract
 
@@ -25,6 +26,14 @@ INVOCATION_PWD="$(pwd)"
 
 PHASE_TOTAL=0
 source "$(dirname "$0")/_lib.sh"
+
+# jq is the mandatory, single JSONL parser for the dashboard (F-27). Fail fast
+# with a friendly message instead of silently falling back to a divergent parser.
+if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${RED}✗ jq is required to run quality-dashboard.sh but was not found in PATH.${NC}" >&2
+    echo -e "${RED}  Install jq (e.g. 'apt install jq' / 'brew install jq') and retry.${NC}" >&2
+    exit 1
+fi
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 
@@ -202,11 +211,29 @@ declare -A ESR_F64_MODEL_MAP=(
     ["Quick ConvNet"]="convnet_test.nam"
 )
 
-# Validate that a string represents a valid scientific or decimal float ESR value.
-# Guards against log corruption or interleaved stdout contaminating metric entries.
-_is_numeric_esr() {
+# Validate that a string is a finite decimal/scientific float (F-01/F-28).
+# Accepts leading/trailing dot forms (".5", "1.") and e-notation; rejects the
+# non-finite sentinels ("inf", "-inf", "nan"), empties, and anything else.
+_is_finite_num() {
     local v="$1"
-    [[ "$v" =~ ^[+-]?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$ ]]
+    [ -n "$v" ] || return 1
+    case "${v,,}" in
+        inf|-inf|+inf|infinity|-infinity|nan|-nan) return 1 ;;
+    esac
+    [[ "$v" =~ ^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]
+}
+
+# Backward-compatible alias used by f64-oracle log parsing: any metric accepted
+# here must be a finite number (see F-28 — canonical regex, rejects non-finite).
+_is_numeric_esr() {
+    _is_finite_num "$1"
+}
+
+# Render an untrusted metric value safely for `echo -e` (F-01 defense-in-depth):
+# strip backslashes and control characters so a corrupt value cannot inject
+# escape sequences into the terminal/report.
+_safe_render() {
+    printf '%s' "$1" | LC_ALL=C tr -d '\\[:cntrl:]'
 }
 
 _lookup_esr_f64() {
@@ -295,12 +322,59 @@ OVERALL_START=$(date +%s%N)
 FIDELITY_DURATION_S=0
 BENCH_DURATION_S=0
 
+# ── Phase 0: freshness & third-party integrity (F-22) ───────────────────────
+# Conservative freshness audit of the golden fixtures and NAMCore reference,
+# per the PO binding directive: goldens are trustworthy by default and only
+# require regeneration when a real change to a model file or the NAMCore
+# reference occurred. check_freshness decides "stale" solely from hash
+# provenance against the committed manifest — never from age. A real,
+# unregenerated change fails with the typed reason STALE_FIXTURES (fail-closed,
+# before any measurement phase runs). Missing third-party mirrors are a
+# graceful, non-noisy SKIP (never an error).
+
+run_phase0_freshness() {
+    local freshness_log="$LOGDIR/freshness.log"
+
+    set +e
+    run_freshness_gate artifacts-hard > "$freshness_log" 2>&1
+    local freshness_rc=$?
+    set -e
+
+    if [ "$freshness_rc" -ne 0 ]; then
+        local reason="${FRESHNESS_REASON:-FRESHNESS_FAILED}"
+        DASHBOARD_PHASE_HAD_FAILURE=1
+        dashboard_phase_receipt "freshness" "FAIL" "$freshness_rc" 0 1 "$reason"
+        echo -e "  ${RED}✗${NC} ${reason} — golden fixtures diverged from the committed manifest."
+        echo -e "  ${RED}  Run './tests/fixtures/golden_gen_build.sh' to regenerate goldens and manifest.${NC}"
+        echo -e "  ${RED}  Freshness gate detail: ${freshness_log}${NC}"
+        return 1
+    fi
+
+    dashboard_phase_receipt "freshness" "PASS" "$freshness_rc" 0 1 ""
+    echo -e "  ${GREEN}ok${NC} freshness gate passed (goldens trustworthy; no false alarms)"
+
+    # NAMCore third-party reference — graceful, non-noisy skip when absent.
+    local tp_log="$LOGDIR/third_party.log"
+    set +e
+    ensure_third_party soft > "$tp_log" 2>&1
+    local tp_rc=$?
+    set -e
+    if [ "$tp_rc" -ne 0 ]; then
+        dashboard_phase_receipt "third_party" "SKIP_CAPABILITY" 0 0 1 "third_party_absent"
+        echo -e "  ${YELLOW}ⓘ NAMCore third-party mirror unavailable — C++ parity stages skip gracefully.${NC}"
+    else
+        dashboard_phase_receipt "third_party" "PASS" 0 1 1 ""
+    fi
+
+    return 0
+}
+
 # ── Run: golden_vectors ─────────────────────────────────────────────────────
 
 run_golden_vectors() {
     local start_t end_t
     start_t=$(date +%s%N)
-    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "golden_vectors" 50 \
+    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "golden_vectors" 50 1 \
         "cargo test --release --features testing --test models golden_vectors -- --test-threads=1 --nocapture > \"$LOGDIR/golden_vectors.log\" 2>&1"
     end_t=$(date +%s%N)
     FIDELITY_DURATION_S=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -363,7 +437,7 @@ run_activation_precision() {
 run_quick_parity() {
     local start_t end_t
     start_t=$(date +%s%N)
-    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "quick_parity" 50 \
+    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "quick_parity" 50 1 \
         "cargo test --release --features testing --test parity quick_parity -- --test-threads=1 --nocapture > \"$LOGDIR/quick_parity.log\" 2>&1"
     end_t=$(date +%s%N)
     local dur
@@ -375,9 +449,17 @@ run_quick_parity() {
 # ── Run: regression_gate benchmarks ────────────────────────────────────────
 # Invokes the performance regression gate (tests-performance-regression.sh --check)
 # which validates fingerprint compatibility before running benchmarks.
-# INCOMPARABLE_ENVIRONMENT failures are decoupled from fidelity gates —
-# the dashboard continues reporting audio fidelity independently.
-BENCH_ENV_INCOMPARABLE=0
+#
+# Single performance-status classifier (F-08 / EP-05): the typed receipt written
+# by the regression script is the sole source of truth. "Performance not
+# verified" (MISSING_BASELINE or INCOMPARABLE_ENVIRONMENT) has exactly ONE
+# semantic — NOT_VERIFIED — displayed unambiguously (never green, never counted
+# as PASS) but not aborting the default-mode run; `--check` against the quality
+# contract fails on it (fail-closed alarm). Only a real regression or benchmark
+# failure is a hard FAIL phase. The performance gate itself lives in
+# tests-performance-regression.sh (per-sprint, human-triggered).
+BENCH_PERF_NOT_VERIFIED=0
+BENCH_NOT_VERIFIED_REASON=""
 
 run_benchmarks() {
     local start_t end_t
@@ -394,26 +476,37 @@ run_benchmarks() {
         set -e
 
         local reg_receipt_file="$PROJECT_DIR/target/logs/regression_phase_receipt.jsonl"
+        local receipt_line=""
         local receipt_run_id=""
         local receipt_status=""
+        local receipt_reason=""
         if [ -f "$reg_receipt_file" ]; then
-            receipt_run_id=$(grep '"phase_id":"regression_check"' "$reg_receipt_file" 2>/dev/null | grep -o '"run_id":"[^"]*"' | cut -d'"' -f4 || echo "")
-            receipt_status=$(grep '"phase_id":"regression_check"' "$reg_receipt_file" 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
+            receipt_line=$(grep '"phase_id":"regression_check"' "$reg_receipt_file" 2>/dev/null | tail -1 || echo "")
+            receipt_run_id=$(echo "$receipt_line" | grep -o '"run_id":"[^"]*"' | cut -d'"' -f4 || echo "")
+            receipt_status=$(echo "$receipt_line" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
+            receipt_reason=$(echo "$receipt_line" | grep -o '"reason":"[^"]*"' | cut -d'"' -f4 || echo "")
         fi
 
-        if grep -qi 'INCOMPARABLE_ENVIRONMENT' "$bench_log" 2>/dev/null; then
-            BENCH_ENV_INCOMPARABLE=1
-            echo -e "  ${YELLOW}⚠ INCOMPARABLE_ENVIRONMENT${NC} benchmark environment diverges from baseline"
-            echo -e "  ${YELLOW}  Fidelity gates proceed independently.${NC}"
-            dashboard_phase_receipt "regression_gate" "SKIP_CAPABILITY" 0 0 10 "INCOMPARABLE_ENVIRONMENT"
-        elif [ "$reg_exit" -ne 0 ]; then
-            DASHBOARD_PHASE_HAD_FAILURE=1
-            dashboard_phase_receipt "regression_gate" "FAIL" "$reg_exit" 0 10 "Performance regression check failed"
-            echo -e "  ${RED}✗${NC} regression_gate check failed (exit=${reg_exit})"
-        else
-            dashboard_phase_receipt "regression_gate" "PASS" 0 10 10 ""
-            echo -e "  ${GREEN}ok${NC} regression_gate passed — no performance regression"
-        fi
+        local perf_status
+        perf_status=$(classify_regression_outcome "$receipt_status" "$receipt_reason")
+        case "$perf_status" in
+            PASS)
+                dashboard_phase_receipt "regression_gate" "PASS" 0 10 10 ""
+                echo -e "  ${GREEN}ok${NC} regression_gate passed — no performance regression"
+                ;;
+            NOT_VERIFIED)
+                BENCH_PERF_NOT_VERIFIED=1
+                BENCH_NOT_VERIFIED_REASON="${receipt_reason:-UNKNOWN}"
+                echo -e "  ${YELLOW}⚠ NOT_VERIFIED${NC} performance not verified (${BENCH_NOT_VERIFIED_REASON})"
+                echo -e "  ${YELLOW}  Performance is not certified in this run; --check against the quality contract fails on this.${NC}"
+                dashboard_phase_receipt "regression_gate" "NOT_VERIFIED" 0 0 10 "$receipt_reason"
+                ;;
+            *)
+                DASHBOARD_PHASE_HAD_FAILURE=1
+                dashboard_phase_receipt "regression_gate" "FAIL" "$reg_exit" 0 10 "Performance regression check failed"
+                echo -e "  ${RED}✗${NC} regression_gate check failed (exit=${reg_exit})"
+                ;;
+        esac
 
         # Copy Criterion benchmark output from the regression script's log
         # strictly when reg_exit == 0 AND receipt_status == PASS AND receipt_run_id == RUN_ID.
@@ -440,47 +533,27 @@ parse_jsonl_fidelity() {
 
     local parsed="$PARSEDIR/jsonl_fidelity.parsed"
 
-    if command -v jq >/dev/null 2>&1; then
-        jq -r '
-            select(.kind == "fidelity" or (.kind | not))
-            | {
-                label: .label,
-                esr: .esr,
-                esr_db: .esr_db,
-                snr_db: .snr_db,
-                mse: .mse,
-                mrstft: .mrstft
-              }
-            | [.label, .esr, .esr_db, .snr_db, .mse, .mrstft]
-            | @tsv' "$jsonl" 2>/dev/null | \
-        LC_ALL=C awk -F'\t' 'NF >= 6 {
-            printf "ESR_NAMCORE\t%s\t%s\n", $1, $2
-            printf "ESR_NAMCORE_DB\t%s\t%s\n", $1, $3
-            printf "SNR_DB\t%s\t%s\n", $1, $4
-            printf "MSE\t%s\t%s\n", $1, $5
-            printf "MRSTFT\t%s\t%s\n", $1, $6
-        }' > "$parsed" 2>/dev/null
-    else
-        # POSIX awk extraction fallback
-        LC_ALL=C awk '{
-            label=""; esr=""; esr_db=""; snr_db=""; mse=""; mrstft=""; kind=""
-            if (index($0, "\"label\"") > 0) { label = $0; sub(/.*"label"[[:space:]]*:[[:space:]]*"/, "", label); sub(/".*/, "", label) }
-            if (index($0, "\"kind\"") > 0) { kind = $0; sub(/.*"kind"[[:space:]]*:[[:space:]]*"/, "", kind); sub(/".*/, "", kind) }
-            if (kind != "" && kind != "fidelity") next
-            if (index($0, "\"esr\"") > 0) { esr = $0; sub(/.*"esr"[[:space:]]*:[[:space:]]*/, "", esr); sub(/[,}].*/, "", esr); gsub(/[[:space:]]/, "", esr) }
-            if (index($0, "\"esr_db\"") > 0) { esr_db = $0; sub(/.*"esr_db"[[:space:]]*:[[:space:]]*/, "", esr_db); sub(/[,}].*/, "", esr_db); gsub(/[[:space:]]/, "", esr_db) }
-            if (index($0, "\"snr_db\"") > 0) { snr_db = $0; sub(/.*"snr_db"[[:space:]]*:[[:space:]]*/, "", snr_db); sub(/[,}].*/, "", snr_db); gsub(/[[:space:]]/, "", snr_db) }
-            if (index($0, "\"mse\"") > 0) { mse = $0; sub(/.*"mse"[[:space:]]*:[[:space:]]*/, "", mse); sub(/[,}].*/, "", mse); gsub(/[[:space:]]/, "", mse) }
-            if (index($0, "\"mrstft\"") > 0) { mrstft = $0; sub(/.*"mrstft"[[:space:]]*:[[:space:]]*/, "", mrstft); sub(/[,}].*/, "", mrstft); gsub(/[[:space:]]/, "", mrstft) }
-            if (label != "" && esr != "") {
-                printf "ESR_NAMCORE\t%s\t%s\n", label, esr
-                printf "ESR_NAMCORE_DB\t%s\t%s\n", label, esr_db
-                printf "SNR_DB\t%s\t%s\n", label, snr_db
-                printf "MSE\t%s\t%s\n", label, mse
-                printf "MRSTFT\t%s\t%s\n", label, mrstft
-            }
-        }' "$jsonl" > "$parsed" 2>/dev/null
-    fi
+    # jq is the mandatory, single JSONL parser (F-27). The availability check at
+    # startup guarantees jq is present; this is the only parse path. Null/empty
+    # metric fields are normalized to the "N/A" sentinel immediately after
+    # extraction, so downstream code never sees an empty string (which would
+    # abort `printf` under `set -e`) and never coerces null to 0.
+    jq -r '
+        def canon:
+            if . == null then "N/A"
+            elif (type == "string" and . == "") then "N/A"
+            else . end;
+        select(.kind == "fidelity" or (.kind | not))
+        | [ .label, (.esr | canon), (.esr_db | canon), (.snr_db | canon),
+            (.mse | canon), (.mrstft | canon) ]
+        | @tsv' "$jsonl" 2>/dev/null | \
+    LC_ALL=C awk -F'\t' 'NF >= 6 && $1 != "" && $1 != "null" {
+        printf "ESR_NAMCORE\t%s\t%s\n", $1, ($2 == "" ? "N/A" : $2)
+        printf "ESR_NAMCORE_DB\t%s\t%s\n", $1, ($3 == "" ? "N/A" : $3)
+        printf "SNR_DB\t%s\t%s\n", $1, ($4 == "" ? "N/A" : $4)
+        printf "MSE\t%s\t%s\n", $1, ($5 == "" ? "N/A" : $5)
+        printf "MRSTFT\t%s\t%s\n", $1, ($6 == "" ? "N/A" : $6)
+    }' > "$parsed" 2>/dev/null
 
     [ -s "$parsed" ] || return 1
 
@@ -1276,7 +1349,7 @@ render_fidelity_details() {
             local snr_val
             set +u; snr_val="${SNR_DB[$key]:-N/A}"; set -u
             local snr_formatted="$snr_val"
-            [ "$snr_val" != "N/A" ] && snr_formatted=$(_nfmt "%.1f" "$snr_val")
+            _is_finite_num "$snr_val" && snr_formatted=$(_nfmt "%.1f" "$snr_val")
             local mrstft
             set +u; mrstft="${MRSTFT[$key]:-N/A}"; set -u
             local mrstft_short
@@ -1338,7 +1411,7 @@ render_fidelity_details() {
             local snr_val
             set +u; snr_val="${SNR_DB[$key]:-N/A}"; set -u
             local snr_formatted="$snr_val"
-            [ "$snr_val" != "N/A" ] && snr_formatted=$(_nfmt "%.1f" "$snr_val")
+            _is_finite_num "$snr_val" && snr_formatted=$(_nfmt "%.1f" "$snr_val")
             local mrstft
             set +u; mrstft="${MRSTFT[$key]:-N/A}"; set -u
             local mrstft_short
@@ -1406,10 +1479,9 @@ render_performance() {
     local total_benches=0
     set +u; total_benches="${#ALL_BENCH_NAMES[@]}"; set -u
 
-    if [ "${BENCH_ENV_INCOMPARABLE:-0}" = "1" ]; then
-        echo -e "  ${YELLOW}⚠ INCOMPARABLE_ENVIRONMENT${NC} — benchmark environment diverges from baseline."
-        echo -e "  ${YELLOW}  Performance comparison against baseline is not valid.${NC}"
-        echo -e "  ${YELLOW}  Fidelity gates (below) were validated independently.${NC}"
+    if [ "${BENCH_PERF_NOT_VERIFIED:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠ NOT_VERIFIED${NC} — performance not verified against baseline (${BENCH_NOT_VERIFIED_REASON:-no baseline})."
+        echo -e "  ${YELLOW}  Performance is not certified in this run; --check against the quality contract fails on this.${NC}"
         if [ "$total_benches" -gt 0 ]; then
             echo ""
             echo -e "  ${YELLOW}  Raw measurements for reference (not comparable to baseline):${NC}"
@@ -1790,9 +1862,11 @@ compute_coverage() {
     fi
 }
 
-# ── Test count extraction from phase receipt ────────────────────────────────
-# Extracts aggregated test counts (passed/failed/ignored/filtered/skip_capability)
-# from the phase receipt JSONL for governance tracking.
+# ── Phase count extraction from phase receipt ────────────────────────────────
+# Extracts aggregated PHASE counts (passed/failed/ignored/filtered/skip_capability)
+# from the phase receipt JSONL for governance tracking. These are phase-status
+# tallies, NOT individual test tallies (F-25); real executed test counts are
+# asserted per-phase by _lib.sh::assert_ran_tests against each phase log.
 declare -A TEST_COUNTS=(
     ["passed"]="0"
     ["failed"]="0"
@@ -1878,7 +1952,7 @@ render_coverage_matrix() {
     echo "  Coverage: ${covered_axes}/${total_axes} axes covered"
     echo ""
 
-    echo "  Contagens de testes no receipt:"
+    echo "  Fases no receipt:"
     echo -e "    passed:          ${GREEN}${TEST_COUNTS[passed]}${NC}"
     echo -e "    failed:          ${RED}${TEST_COUNTS[failed]}${NC}"
     echo -e "    skip_capability: ${YELLOW}${TEST_COUNTS[skip_capability]}${NC}"
@@ -1901,8 +1975,8 @@ render_footer() {
     local bench_count="${#ALL_BENCH_NAMES[@]}"
     local phase_failures="${DASHBOARD_PHASE_HAD_FAILURE:-0}"
 
-    if [ "${BENCH_ENV_INCOMPARABLE:-0}" = "1" ]; then
-        echo -e "  ${YELLOW}⚠ Benchmark environment INCOMPARABLE — fidelity gates validated independently.${NC}"
+    if [ "${BENCH_PERF_NOT_VERIFIED:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}⚠ Performance NOT_VERIFIED (${BENCH_NOT_VERIFIED_REASON:-no baseline}) — fidelity gates validated independently.${NC}"
         echo ""
     fi
 
@@ -2151,35 +2225,45 @@ verify_contract() {
                 local esr_cur="${ESR_NAMCORE[$dash_key]:-N/A}"
                 local esr_ctr="${CONTRACT_ESR[$contract_label]}"
 
-                if [ "$esr_cur" != "N/A" ] && [ "$esr_ctr" != "N/A" ] && [ -n "$esr_ctr" ]; then
-                    local esr_cur_fmt
-                    esr_cur_fmt=$(_fmt_metric "$esr_cur")
-                    local noise_limit safety_limit
-                    noise_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
-                        lim = c * 3.0;
-                        if (lim < c + 5.0e-14) lim = c + 5.0e-14;
-                        printf "%.2e", lim
-                    }')
-                    safety_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
-                        lim = c * 10.0;
-                        if (lim < 1.0e-12) lim = 1.0e-12;
-                        printf "%.2e", lim
-                    }')
-
-                    local esr_noise_fail esr_safety_fail
-                    esr_noise_fail=$(LC_ALL=C awk -v cur="$esr_cur" -v lim="$noise_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
-                    esr_safety_fail=$(LC_ALL=C awk -v cur="$esr_cur" -v lim="$safety_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
-
-                    if [ "$esr_safety_fail" = "1" ]; then
-                        echo -e "    ${RED}✗ SAFETY CEILING${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > safety ${safety_limit} (baseline: ${esr_ctr})"
+                if _is_finite_num "$esr_ctr"; then
+                    if [ -z "$esr_cur" ] || [ "$esr_cur" = "N/A" ]; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: ESR NAMCore missing/empty in current run (contract baseline: ${esr_ctr})"
                         fidelity_violations=$((fidelity_violations + 1))
                         namcore_ok=0
-                    elif [ "$esr_noise_fail" = "1" ]; then
-                        echo -e "    ${YELLOW}⚠ NOISE ENVELOPE${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > noise ${noise_limit} (baseline: ${esr_ctr})"
+                    elif ! _is_finite_num "$esr_cur"; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: ESR NAMCore non-finite ($(_safe_render "$esr_cur")) (contract baseline: ${esr_ctr})"
                         fidelity_violations=$((fidelity_violations + 1))
                         namcore_ok=0
                     else
-                        echo -e "    ${GREEN}ok${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} (baseline: ${esr_ctr})"
+                        local esr_cur_fmt
+                        esr_cur_fmt=$(_fmt_metric "$esr_cur")
+                        local noise_limit safety_limit
+                        noise_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
+                            lim = c * 3.0;
+                            if (lim < c + 5.0e-14) lim = c + 5.0e-14;
+                            printf "%.2e", lim
+                        }')
+                        safety_limit=$(LC_ALL=C awk -v c="$esr_ctr" 'BEGIN {
+                            lim = c * 10.0;
+                            if (lim < 1.0e-12) lim = 1.0e-12;
+                            printf "%.2e", lim
+                        }')
+
+                        local esr_noise_fail esr_safety_fail
+                        esr_noise_fail=$(LC_ALL=C awk -v cur="$esr_cur" -v lim="$noise_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
+                        esr_safety_fail=$(LC_ALL=C awk -v cur="$esr_cur" -v lim="$safety_limit" 'BEGIN { if (cur+0 > lim) print "1"; else print "0" }')
+
+                        if [ "$esr_safety_fail" = "1" ]; then
+                            echo -e "    ${RED}✗ SAFETY CEILING${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > safety ${safety_limit} (baseline: ${esr_ctr})"
+                            fidelity_violations=$((fidelity_violations + 1))
+                            namcore_ok=0
+                        elif [ "$esr_noise_fail" = "1" ]; then
+                            echo -e "    ${YELLOW}⚠ NOISE ENVELOPE${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} > noise ${noise_limit} (baseline: ${esr_ctr})"
+                            fidelity_violations=$((fidelity_violations + 1))
+                            namcore_ok=0
+                        else
+                            echo -e "    ${GREEN}ok${NC} ${contract_label}: ESR NAMCore ${esr_cur_fmt} (baseline: ${esr_ctr})"
+                        fi
                     fi
                 fi
 
@@ -2247,29 +2331,45 @@ verify_contract() {
 
                 local snr_cur="${SNR_DB[$dash_key]:-N/A}"
                 local snr_ctr="${CONTRACT_SNR[$contract_label]:-N/A}"
-                if [ "$snr_cur" != "N/A" ] && [ "$snr_ctr" != "N/A" ] && [ -n "$snr_ctr" ]; then
-                    local snr_cur_fmt="$snr_cur"
-                    [ "$snr_cur" != "N/A" ] && snr_cur_fmt=$(_nfmt "%.1f" "$snr_cur")
-                    local snr_fail
-                    snr_fail=$(LC_ALL=C awk -v cur="$snr_cur" -v ctr="$snr_ctr" \
-                        'BEGIN { if (cur+0 < ctr-6.0) print "1"; else print "0" }')
-                    if [ "$snr_fail" = "1" ]; then
-                        echo -e "    ${RED}✗${NC} ${contract_label}: SNR regressed ${snr_cur_fmt} dB (contract: ${snr_ctr} dB, limite: $(LC_ALL=C awk -v c="$snr_ctr" 'BEGIN { printf "%.1f", c-6.0 }') dB)"
+                if _is_finite_num "$snr_ctr"; then
+                    if [ -z "$snr_cur" ] || [ "$snr_cur" = "N/A" ]; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: SNR missing/empty in current run (contract baseline: ${snr_ctr} dB)"
                         fidelity_violations=$((fidelity_violations + 1))
+                    elif ! _is_finite_num "$snr_cur"; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: SNR non-finite ($(_safe_render "$snr_cur")) (contract baseline: ${snr_ctr} dB)"
+                        fidelity_violations=$((fidelity_violations + 1))
+                    else
+                        local snr_cur_fmt
+                        snr_cur_fmt=$(_nfmt "%.1f" "$snr_cur")
+                        local snr_fail
+                        snr_fail=$(LC_ALL=C awk -v cur="$snr_cur" -v ctr="$snr_ctr" \
+                            'BEGIN { if (cur+0 < ctr-6.0) print "1"; else print "0" }')
+                        if [ "$snr_fail" = "1" ]; then
+                            echo -e "    ${RED}✗${NC} ${contract_label}: SNR regressed ${snr_cur_fmt} dB (contract: ${snr_ctr} dB, limite: $(LC_ALL=C awk -v c="$snr_ctr" 'BEGIN { printf "%.1f", c-6.0 }') dB)"
+                            fidelity_violations=$((fidelity_violations + 1))
+                        fi
                     fi
                 fi
 
                 local mrstft_cur="${MRSTFT[$dash_key]:-N/A}"
                 local mrstft_ctr="${CONTRACT_MRSTFT[$contract_label]:-N/A}"
-                if [ "$mrstft_cur" != "N/A" ] && [ "$mrstft_ctr" != "N/A" ] && [ -n "$mrstft_ctr" ]; then
-                    local mrstft_cur_fmt
-                    mrstft_cur_fmt=$(_fmt_metric "$mrstft_cur")
-                    local mrstft_fail
-                    mrstft_fail=$(LC_ALL=C awk -v cur="$mrstft_cur" -v ctr="$mrstft_ctr" \
-                        'BEGIN { if (cur+0 > ctr*10.0) print "1"; else print "0" }')
-                    if [ "$mrstft_fail" = "1" ]; then
-                        echo -e "    ${RED}✗${NC} ${contract_label}: MR-STFT regressed ${mrstft_cur_fmt} (contract: ${mrstft_ctr}, limite: $(LC_ALL=C awk -v c="$mrstft_ctr" 'BEGIN { printf "%.4f", c*10.0 }'))"
+                if _is_finite_num "$mrstft_ctr"; then
+                    if [ -z "$mrstft_cur" ] || [ "$mrstft_cur" = "N/A" ]; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: MR-STFT missing/empty in current run (contract baseline: ${mrstft_ctr})"
                         fidelity_violations=$((fidelity_violations + 1))
+                    elif ! _is_finite_num "$mrstft_cur"; then
+                        echo -e "    ${RED}MALFORMED_METRIC${NC} ${contract_label}: MR-STFT non-finite ($(_safe_render "$mrstft_cur")) (contract baseline: ${mrstft_ctr})"
+                        fidelity_violations=$((fidelity_violations + 1))
+                    else
+                        local mrstft_cur_fmt
+                        mrstft_cur_fmt=$(_fmt_metric "$mrstft_cur")
+                        local mrstft_fail
+                        mrstft_fail=$(LC_ALL=C awk -v cur="$mrstft_cur" -v ctr="$mrstft_ctr" \
+                            'BEGIN { if (cur+0 > ctr*10.0) print "1"; else print "0" }')
+                        if [ "$mrstft_fail" = "1" ]; then
+                            echo -e "    ${RED}✗${NC} ${contract_label}: MR-STFT regressed ${mrstft_cur_fmt} (contract: ${mrstft_ctr}, limite: $(LC_ALL=C awk -v c="$mrstft_ctr" 'BEGIN { printf "%.4f", c*10.0 }'))"
+                            fidelity_violations=$((fidelity_violations + 1))
+                        fi
                     fi
                 fi
             else
@@ -2387,6 +2487,39 @@ verify_contract() {
     return 0
 }
 
+# ── Extended long-suite audit (--full mode) ──────────────────────────────────
+# F-06 / EP-05: --full must have a real, auditable effect. It delegates to
+# utils/tests-long.sh — the canonical nightly/pre-release audit suite — after
+# the standard dashboard phases complete. Human-only by design (long runtime,
+# hard third-party requirements). The delegated suite's exit status gates the
+# dashboard: a failed extended audit is a typed receipt FAIL (blocks --save and
+# fails --check). NAM_LONG_SUITE_SCRIPT overrides the delegated script path
+# (used by utils/tests/test_scripts.sh sandbox tests).
+run_extended_audit() {
+    local long_script="${NAM_LONG_SUITE_SCRIPT:-$PROJECT_DIR/utils/tests-long.sh}"
+    if [ ! -x "$long_script" ] && [ ! -f "$long_script" ]; then
+        echo -e "  ${RED}✗${NC} extended audit script not found at $long_script"
+        dashboard_phase_receipt "long_suite" "FAIL" 127 0 0 "long_suite_script_missing"
+        return 0
+    fi
+
+    echo -e "${BLUE}${BOLD}-> Delegating extended long-suite audit to $long_script...${NC}"
+    local long_exit
+    set +e
+    bash "$long_script" 2>&1 | tee "$LOGDIR/long_suite.log"
+    long_exit=${PIPESTATUS[0]}
+    set -e
+
+    if [ "$long_exit" -ne 0 ]; then
+        echo -e "  ${RED}✗${NC} extended long-suite audit failed (exit=${long_exit}, log: ${LOGDIR}/long_suite.log)"
+        dashboard_phase_receipt "long_suite" "FAIL" "$long_exit" 0 0 "delegated tests-long.sh failed"
+    else
+        echo -e "  ${GREEN}ok${NC} extended long-suite audit passed"
+        dashboard_phase_receipt "long_suite" "PASS" 0 0 0 ""
+    fi
+    return 0
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 main() {
@@ -2395,9 +2528,12 @@ main() {
 
     local run_phases=0
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "fidelity" ]; then
-        run_phases=$((run_phases + 6))
+        run_phases=$((run_phases + 7))
     fi
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "bench" ]; then
+        run_phases=$((run_phases + 1))
+    fi
+    if [ "$MODE" = "full" ]; then
         run_phases=$((run_phases + 1))
     fi
     PHASE_TOTAL=$((run_phases + 2))
@@ -2408,6 +2544,11 @@ main() {
     echo -e "${BLUE}${BOLD}===============================================================${NC}"
 
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "fidelity" ]; then
+        phase "freshness (Fase 0) — golden & NAMCore integrity"
+        if ! run_phase0_freshness; then
+            exit 1
+        fi
+
         phase "golden_vectors"
         run_golden_vectors
 
@@ -2445,13 +2586,18 @@ main() {
     extract_test_counts
     render_dashboard
 
+    if [ "$MODE" = "full" ]; then
+        phase "extended long-suite audit (delegated)"
+        run_extended_audit
+    fi
+
     local final_exit=0
     if [ "${DASHBOARD_PHASE_HAD_FAILURE:-0}" -ne 0 ]; then
         final_exit=1
     fi
 
     # --save: transactional atomic write — only promoted to the final
-    # file after all phases succeed (INCOMPARABLE benchmarks do not
+    # file after all phases succeed (NOT_VERIFIED performance does not
     # block saving; fidelity gates are validated independently).
     # Automated/CI agents are strictly prohibited from invoking --save.
     if [ -n "$SAVE_FILE" ]; then

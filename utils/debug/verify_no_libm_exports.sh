@@ -21,12 +21,17 @@ set -euo pipefail
 
 TARGET_ARG="${1:-target/release}"
 
+RUSTLIB_PATH=""
 if [ -f "$TARGET_ARG" ]; then
     RUSTLIB_PATH="$TARGET_ARG"
 elif [ -f "$TARGET_ARG/libneural_amp_modeler_rs.rlib" ]; then
     RUSTLIB_PATH="$TARGET_ARG/libneural_amp_modeler_rs.rlib"
 else
-    RUSTLIB_PATH="$TARGET_ARG/libneural_amp_modeler_rs.rlib"
+    # Fallback: the most recent hashed rlib under target/<profile>/deps.
+    # `cargo test --release` (tests-long.sh Phase 1) produces only hashed
+    # artifacts there; a direct `cargo build` also emits the unhashed
+    # top-level copy checked above. Either one is a valid scan target.
+    RUSTLIB_PATH="$(ls -t "$TARGET_ARG"/deps/libneural_amp_modeler_rs-*.rlib 2>/dev/null | head -1 || echo "")"
 fi
 
 RED='\033[0;31m'

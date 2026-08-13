@@ -3,6 +3,7 @@
 
 //! Routing helpers — stereo/mono dispatch, oversampled model processing, and passthrough.
 
+use crate::common::spsc::RtStatusFlags;
 use crate::dsp::oversample::OversampleEngine;
 use crate::models::{NamModel, StaticModel};
 
@@ -73,6 +74,7 @@ pub(crate) fn model_process_stereo_with_os(
     native_out_l: &mut [f32],
     native_out_r: &mut [f32],
     process_mono: bool,
+    rt_status: Option<&RtStatusFlags>,
 ) {
     // L channel
     if os_l.is_bypass() {
@@ -82,13 +84,13 @@ pub(crate) fn model_process_stereo_with_os(
             passthru(model_in_l, native_out_l);
         }
     } else {
-        let n_os = os_l.upsample(model_in_l, os_buf_l);
+        let n_os = os_l.upsample(model_in_l, os_buf_l, rt_status);
         if let Some(m) = active_model_l {
             m.process(&os_buf_l[..n_os], &mut os_model_l[..n_os]);
         } else {
             passthru(&os_buf_l[..n_os], &mut os_model_l[..n_os]);
         }
-        os_l.downsample(&os_model_l[..n_os], native_out_l);
+        os_l.downsample(&os_model_l[..n_os], native_out_l, rt_status);
     }
 
     // R channel (or mono copy)
@@ -101,13 +103,13 @@ pub(crate) fn model_process_stereo_with_os(
             passthru(model_in_r, native_out_r);
         }
     } else {
-        let n_os = os_r.upsample(model_in_r, os_buf_r);
+        let n_os = os_r.upsample(model_in_r, os_buf_r, rt_status);
         if let Some(m) = active_model_r {
             m.process(&os_buf_r[..n_os], &mut os_model_r[..n_os]);
         } else {
             passthru(&os_buf_r[..n_os], &mut os_model_r[..n_os]);
         }
-        os_r.downsample(&os_model_r[..n_os], native_out_r);
+        os_r.downsample(&os_model_r[..n_os], native_out_r, rt_status);
     }
 }
 

@@ -16,8 +16,9 @@
 //! - `AdaptiveComputeMode` is the sole user-facing configuration type driving the
 //!   FSM behavior; it has zero consumers outside the adaptive degradation pipeline.
 //! - All threshold constants (`THRESHOLD_*`, `DEGRADE_CONSECUTIVE`,
-//!   `RECOVER_CONSECUTIVE`, `CROSSFADE_DURATION_MS`) are private and tightly
-//!   coupled to `AdaptiveCompute::update()`.
+//!   `RECOVER_CONSECUTIVE`) are private and tightly
+//!   coupled to `AdaptiveCompute::update()`. `CROSSFADE_DURATION_MS` is the
+//!   shared crate-wide tuning constant (`crate::common`), imported here.
 //! - The entire module forms a single algorithmic unit (hysteresis FSM +
 //!   crossfade + layer reduction) with no independent consumers for any
 //!   sub-component.
@@ -36,6 +37,7 @@
 //!
 //! 32 ms linear ramp between states to avoid audible artifacts.
 
+use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::spsc::RtStatusFlags;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
@@ -159,10 +161,6 @@ const THRESHOLD_FULL_TO_REDUCED_CONSERVATIVE: f32 = 0.70;
 const THRESHOLD_REDUCED_TO_MINIMAL_CONSERVATIVE: f32 = 0.85;
 const THRESHOLD_FULL_TO_REDUCED_AGGRESSIVE: f32 = 0.55;
 const THRESHOLD_REDUCED_TO_MINIMAL_AGGRESSIVE: f32 = 0.70;
-
-/// Crossfade duration in samples at 48 kHz = 32 ms.
-/// At other sample rates, this is scaled proportionally.
-const CROSSFADE_DURATION_MS: f32 = 32.0;
 
 impl AdaptiveCompute {
     /// Creates a new `AdaptiveCompute` instance with the given mode.

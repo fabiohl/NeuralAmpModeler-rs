@@ -98,6 +98,30 @@ impl Drop for MetricKindGuard {
     }
 }
 
+/// Serializes a metric value to a canonical JSON value that never emits `null`.
+///
+/// `serde_json` serializes non-finite floats (`f64::INFINITY`, `-inf`, `NaN`)
+/// as JSON `null`, because JSON has no native representation for them. A
+/// *perfect-parity* result (SNR = ∞) or a silent/identical signal (ESR = ∞ or
+/// ESR dB = −∞) would therefore corrupt the JSONL metric stream with `null`,
+/// which the downstream `quality-dashboard.sh` would treat as missing data and
+/// coerce to `0.0` (fail-open).
+///
+/// To keep the stream canonical, non-finite values are mapped to explicit
+/// string sentinels `"inf"`, `"-inf"`, and `"nan"` — recognized downstream as
+/// typed non-finite states rather than absent metrics.
+fn json_metric(v: f64) -> serde_json::Value {
+    if v.is_finite() {
+        serde_json::json!(v)
+    } else if v.is_nan() {
+        serde_json::json!("nan")
+    } else if v.is_sign_positive() {
+        serde_json::json!("inf")
+    } else {
+        serde_json::json!("-inf")
+    }
+}
+
 /// Plausible LUFS range for golden reference output (sanity gate — BS.1770-4 2-pass).
 ///
 /// Guitar/amp model output at typical stress-signal levels falls between −35 and 0 LUFS.
@@ -499,11 +523,11 @@ fn report_dsp_fidelity_impl(
         let obj = serde_json::json!({
             "label": json_label,
             "kind": json_kind,
-            "esr": esr_linear,
-            "esr_db": esr_db,
-            "snr_db": snr,
-            "mrstft": mr_stft,
-            "mse": mse,
+            "esr": json_metric(esr_linear),
+            "esr_db": json_metric(esr_db),
+            "snr_db": json_metric(snr),
+            "mrstft": json_metric(mr_stft),
+            "mse": json_metric(mse),
         });
         let _lock = REPORT_LOCK.lock().unwrap();
         if let Ok(mut file) = std::fs::OpenOptions::new()

@@ -290,6 +290,11 @@ The contract is enforced by [utils/quality-dashboard.sh](../utils/quality-dashbo
 | **Save (baseline)** | `./utils/quality-dashboard.sh --save <arquivo>`  | Saves plain-text dashboard results as the official baseline.                         |
 | **Check (verify)**  | `./utils/quality-dashboard.sh --check <arquivo>` | Executes phases and compares current results against baseline, reporting violations. |
 
+The dashboard's defense functions (metric sanitization, toolchain fingerprint,
+JSONL parsing, test-execution assertion, and the golden-freshness gate) are covered by
+a stable Bash unit-test suite: [utils/tests/test_scripts.sh](../utils/tests/test_scripts.sh).
+Run it with `bash utils/tests/test_scripts.sh`; it exits 0 only when every assertion passes.
+
 The official baseline resides in [docs/quality-contract.txt](quality-contract.txt).
 
 ### 9.2. Tolerance Margins

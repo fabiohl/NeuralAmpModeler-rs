@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::spsc::{RT_STATUS_HOST_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::dsp::stage::HalfBandFilter;
 
 #[test]
@@ -11,12 +12,12 @@ fn test_oversample_off_bypass() {
 
     let input: Vec<f32> = (0..64).map(|i| i as f32 * 0.01).collect();
     let mut up = vec![0.0f32; 64];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert_eq!(n_up, 64);
     assert_eq!(&up[..64], &input[..64]);
 
     let mut down = vec![0.0f32; 64];
-    let n_down = engine.downsample(&up, &mut down);
+    let n_down = engine.downsample(&up, &mut down, None);
     assert_eq!(n_down, 64);
     assert_eq!(&down[..64], &input[..64]);
 }
@@ -29,7 +30,7 @@ fn test_x2_upsample_dc() {
 
     let input = vec![1.0f32; 64];
     let mut up = vec![0.0f32; 128];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert_eq!(n_up, 128);
 
     // DC gain should be ~1.0 (half-band has flat passband at DC)
@@ -49,11 +50,11 @@ fn test_x2_roundtrip_dc() {
     let mut up = vec![0.0f32; 512];
     let mut down = vec![0.0f32; 256];
 
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert_eq!(n_up, 512);
     let mut model_out = vec![0.0f32; 512];
     model_out[..n_up].copy_from_slice(&up[..n_up]);
-    let n_down = engine.downsample(&model_out[..n_up], &mut down);
+    let n_down = engine.downsample(&model_out[..n_up], &mut down, None);
     // Filter delay: (512 - 24) / 2 = 244
     assert!(
         (240..=256).contains(&n_down),
@@ -82,12 +83,12 @@ fn test_x2_aliasing_rejection() {
     let mut up = vec![0.0f32; n * 2];
     let mut down = vec![0.0f32; n];
 
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     // Pass-through model
     let mut model_out = vec![0.0f32; n * 2];
     model_out[..n_up].copy_from_slice(&up[..n_up]);
 
-    let n_down = engine.downsample(&model_out[..n_up], &mut down);
+    let n_down = engine.downsample(&model_out[..n_up], &mut down, None);
 
     // Energy in the decimated output (steady state) should be near zero
     // because the half-band attenuates >100 dB in stopband.
@@ -141,7 +142,7 @@ fn test_x4_upsample_dc() {
 
     let input = vec![1.0f32; 64];
     let mut up = vec![0.0f32; 256];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert_eq!(n_up, 256);
 
     let mid: Vec<f32> = up[120..136].to_vec();
@@ -159,13 +160,13 @@ fn test_x4_roundtrip_dc() {
     let mut up = vec![0.0f32; 2048];
     let mut down = vec![0.0f32; 512];
 
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert_eq!(n_up, 2048);
 
     let mut model_out = vec![0.0f32; 2048];
     model_out[..n_up].copy_from_slice(&up[..n_up]);
 
-    let n_down = engine.downsample(&model_out[..n_up], &mut down);
+    let n_down = engine.downsample(&model_out[..n_up], &mut down, None);
     assert!(
         n_down >= 400,
         "Expected at least 400 output samples, got {n_down}"
@@ -227,16 +228,16 @@ fn test_back_to_back_roundtrips_x2() {
     let mut down2 = vec![0.0f32; 128];
 
     // First round-trip
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     let mut model_out1 = vec![0.0f32; 256];
     model_out1[..n_up].copy_from_slice(&up[..n_up]);
-    let n1 = engine.downsample(&model_out1[..n_up], &mut down1);
+    let n1 = engine.downsample(&model_out1[..n_up], &mut down1, None);
 
     // Second round-trip
-    let n_up2 = engine.upsample(&down1[..n1], &mut up);
+    let n_up2 = engine.upsample(&down1[..n1], &mut up, None);
     let mut model_out2 = vec![0.0f32; 256];
     model_out2[..n_up2].copy_from_slice(&up[..n_up2]);
-    let n2 = engine.downsample(&model_out2[..n_up2], &mut down2);
+    let n2 = engine.downsample(&model_out2[..n_up2], &mut down2, None);
 
     assert!(n1 >= 100);
     assert!(n2 >= 100);
@@ -290,11 +291,11 @@ fn test_oversized_input_clamped_off() {
     let mut engine = OversampleEngine::new(OversampleFactor::Off, 64).unwrap();
     let input = vec![1.0f32; 96];
     let mut up = vec![0.0f32; 96];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert!(n_up <= 64);
 
     let mut down = vec![0.0f32; 96];
-    let n_down = engine.downsample(&input, &mut down);
+    let n_down = engine.downsample(&input, &mut down, None);
     assert!(n_down <= 64);
 }
 
@@ -303,7 +304,7 @@ fn test_oversized_input_clamped_x2() {
     let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
     let input = vec![0.5f32; 96];
     let mut up = vec![0.0f32; 192];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert!(n_up <= 128, "expected n_up <= 128, got {n_up}");
 }
 
@@ -312,7 +313,7 @@ fn test_oversized_input_clamped_x4() {
     let mut engine = OversampleEngine::new(OversampleFactor::X4, 64).unwrap();
     let input = vec![0.5f32; 96];
     let mut up = vec![0.0f32; 384];
-    let n_up = engine.upsample(&input, &mut up);
+    let n_up = engine.upsample(&input, &mut up, None);
     assert!(n_up <= 256, "expected n_up <= 256, got {n_up}");
 }
 
@@ -321,6 +322,54 @@ fn test_oversized_downsample_clamped_x2() {
     let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
     let input = vec![0.25f32; 96];
     let mut down = vec![0.0f32; 48];
-    let n_down = engine.downsample(&input, &mut down);
+    let n_down = engine.downsample(&input, &mut down, None);
     assert!(n_down <= 64, "expected n_down <= 64, got {n_down}");
+}
+
+#[test]
+fn truncation_raises_host_contract_flag_upsample() {
+    // F-12 / T2.4: input blocks larger than `max_samples` are clamped — the
+    // truncation must raise RT_STATUS_HOST_CONTRACT_VIOLATION (no more silent
+    // truncation).
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.5f32; 128];
+    let mut up = vec![0.0f32; 256];
+    let n_up = engine.upsample(&input, &mut up, Some(&rt));
+
+    assert_eq!(n_up, 128, "clamped to max_samples=64 × 2");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+#[test]
+fn truncation_raises_host_contract_flag_downsample() {
+    // F-12 / T2.4: input blocks larger than max_samples × multiplier are
+    // clamped — the truncation must raise RT_STATUS_HOST_CONTRACT_VIOLATION.
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.25f32; 256];
+    let mut down = vec![0.0f32; 128];
+    let n_down = engine.downsample(&input, &mut down, Some(&rt));
+
+    // The half-band stage holds back HB_DELAY samples (group delay), so the
+    // exact return count is stage-dependent; the contract is the clamp bound.
+    assert!(n_down <= 64, "clamped to max_os=128 → ≤64 native samples");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+#[test]
+fn contract_compliant_blocks_do_not_raise_flag() {
+    // F-12 / T2.4: blocks within the negotiated maxima must not raise the flag.
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.5f32; 64];
+    let mut up = vec![0.0f32; 128];
+    let _n_up = engine.upsample(&input, &mut up, Some(&rt));
+    let mut down = vec![0.0f32; 64];
+    let _n_down = engine.downsample(&up, &mut down, Some(&rt));
+
+    assert!(!rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
 }

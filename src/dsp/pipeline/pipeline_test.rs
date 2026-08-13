@@ -24,8 +24,32 @@ mod tests {
         force_hold_zero: bool,
     ) -> (Vec<f32>, Vec<f32>) {
         let n = input_l.len();
-        let mut resampler = NamResampler::new(host_rate, nam_rate, n).unwrap();
         let rt_status = RtStatusFlags::default();
+        run_pipeline_test_with_status(
+            host_rate,
+            nam_rate,
+            input_l,
+            input_r,
+            n,
+            force_hold_zero,
+            &rt_status,
+        )
+    }
+
+    /// Same as [`run_pipeline_test`], but with an explicit `n_samples` and a
+    /// caller-provided [`RtStatusFlags`] handle — used by the host-contract
+    /// fault-injection tests (F-12 / T2.4).
+    pub(super) fn run_pipeline_test_with_status(
+        host_rate: u32,
+        nam_rate: u32,
+        input_l: &[f32],
+        input_r: &[f32],
+        n_samples: usize,
+        force_hold_zero: bool,
+        rt_status: &RtStatusFlags,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let n = n_samples;
+        let mut resampler = NamResampler::new(host_rate, nam_rate, n).unwrap();
 
         let mut bridge = Box::new(DspBridge {
             buffers: [
@@ -84,7 +108,7 @@ mod tests {
             threshold_open_sq: 0.0,
             threshold_close_sq: 0.0,
             process_mono: &mut process_mono,
-            rt_status: &rt_status,
+            rt_status,
             adaptive: &mut adaptive,
             bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
             conv: None,
@@ -135,6 +159,117 @@ mod tests {
             out_buf.buf_l[..n_out].to_vec(),
             out_buf.buf_r[..n_out].to_vec(),
         )
+    }
+
+    /// F-12 / T2.4: a host passing `n_samples` beyond the slice lengths must
+    /// be clamped defensively — no slice OOB panic on the pipeline entry — and
+    /// the `RT_STATUS_HOST_CONTRACT_VIOLATION` flag must be raised.
+    #[test]
+    fn divergent_n_samples_clamps_and_raises_flag() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        let input_l = vec![0.01f32; 64];
+        let input_r = vec![0.01f32; 64];
+        let rt_status = RtStatusFlags::default();
+
+        let (out_l, out_r) = run_pipeline_test_with_status(
+            48000, 48000, &input_l, &input_r, 128, // 2× the slice length
+            false, &rt_status,
+        );
+
+        assert!(
+            rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION),
+            "divergent n_samples must raise HOST_CONTRACT_VIOLATION"
+        );
+        assert_eq!(out_l.len(), 64, "pipeline clamps to the slice length");
+        assert_eq!(out_r.len(), 64, "pipeline clamps to the slice length");
+    }
+
+    /// F-12 / T2.4: `n_samples` beyond `MAX_RESAMP_BUF` (with longer slices)
+    /// must be clamped and raise `RT_STATUS_HOST_CONTRACT_VIOLATION`.
+    #[test]
+    fn over_max_resamp_buf_clamps_and_raises_flag() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        let input_l = vec![0.01f32; MAX_RESAMP_BUF + 512];
+        let input_r = vec![0.01f32; MAX_RESAMP_BUF + 512];
+        let rt_status = RtStatusFlags::default();
+
+        let (out_l, _out_r) = run_pipeline_test_with_status(
+            48000,
+            48000,
+            &input_l,
+            &input_r,
+            MAX_RESAMP_BUF + 512,
+            false,
+            &rt_status,
+        );
+
+        assert!(
+            rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION),
+            "n_samples > MAX_RESAMP_BUF must raise HOST_CONTRACT_VIOLATION"
+        );
+        assert!(
+            out_l.len() <= MAX_RESAMP_BUF,
+            "pipeline clamps to MAX_RESAMP_BUF, got {}",
+            out_l.len()
+        );
+    }
+
+    /// F-12 / T2.4: compliant `n_samples` must not raise the flag.
+    #[test]
+    fn contract_compliant_n_samples_does_not_raise_flag() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        let input_l = vec![0.01f32; 256];
+        let input_r = vec![0.01f32; 256];
+        let rt_status = RtStatusFlags::default();
+
+        let (_out_l, _out_r) =
+            run_pipeline_test_with_status(48000, 48000, &input_l, &input_r, 256, false, &rt_status);
+
+        assert!(!rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+    }
+
+    /// F-04 / T3.2: the pipeline entry point must reassert FTZ (MXCSR bit 15)
+    /// and DAZ (MXCSR bit 6) on the audio thread. The test clears both bits
+    /// first, runs a full `capture_dsp_pipeline` call, then asserts the bits
+    /// are active again — proving the entry point configures the per-thread
+    /// MXCSR register, not just the helper function in isolation.
+    #[test]
+    fn pipeline_entry_reasserts_ftz_daz() {
+        const DAZ_FTZ_MASK: u32 = 0x8040;
+
+        // SAFETY: stmxcsr/ldmxcsr manipulate only the MXCSR register of the
+        // current test thread; the operands are properly aligned `u32` locals
+        // and `DAZ_FTZ_MASK` contains valid MXCSR control-flag bits.
+        unsafe {
+            let mut original: u32 = 0;
+            core::arch::asm!("stmxcsr [{0}]", in(reg) &mut original);
+            core::arch::asm!(
+                "ldmxcsr [{0}]",
+                in(reg) &(original & !DAZ_FTZ_MASK)
+            );
+        }
+
+        let input_l = vec![0.01f32; 64];
+        let input_r = vec![0.01f32; 64];
+        let _ = run_pipeline_test(48000, 48000, &input_l, &input_r, false);
+
+        // SAFETY: stmxcsr reads the current thread's MXCSR into a properly
+        // aligned `u32` local; no memory is accessed.
+        let after = unsafe {
+            let mut mxcsr: u32 = 0;
+            core::arch::asm!("stmxcsr [{0}]", in(reg) &mut mxcsr);
+            mxcsr
+        };
+
+        assert_eq!(
+            after & DAZ_FTZ_MASK,
+            DAZ_FTZ_MASK,
+            "pipeline entry must reassert FTZ+DAZ: MXCSR=0x{:08X}",
+            after
+        );
     }
 }
 

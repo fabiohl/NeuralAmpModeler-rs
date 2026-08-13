@@ -3,8 +3,10 @@
 
 //! Full capture DSP pipeline — aggregates all stages.
 
+use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
 use crate::dsp::gate::GateState;
 use crate::math::common::SimdMath;
+use crate::math::common::set_daz_ftz;
 
 use super::context::{DspBuffers, DspPipelineContext};
 use super::stages::{
@@ -17,6 +19,23 @@ use super::stages::{
 /// v-table overhead from all inner SIMD operations.
 ///
 /// Returns the number of output samples processed (`n_pw`). Returns 0 if `bridge_writer` is None or gate is closed.
+///
+/// # Host Contract Guard (F-12 / T2.4)
+///
+/// `n_samples` is defensively clamped to
+/// `min(n_samples, samples_l.len(), samples_r.len(), MAX_RESAMP_BUF)` before
+/// entering the pipeline. If the host supplied a divergent count, the
+/// `RT_STATUS_HOST_CONTRACT_VIOLATION` flag is raised (lock-free, zero-alloc,
+/// no RT logging) — the audio thread never panics on slice out-of-bounds.
+///
+/// # Denormal Protection (FTZ + DAZ) (F-04 / T3.2)
+///
+/// MXCSR is a per-thread register: a host that never configures it leaves the
+/// audio thread exposed to denormal stalls (up to 100× per instruction). This
+/// entry point therefore reasserts **Flush-To-Zero** and **Denormals-Are-Zero**
+/// at the start of every processing call via
+/// [`crate::math::common::set_daz_ftz`] — a fixed `stmxcsr`/`ldmxcsr` pair,
+/// outside any sample loop, with no allocation, no lock, and no blocking I/O.
 #[inline(always)]
 pub fn capture_dsp_pipeline(
     samples_l: &mut [f32],
@@ -29,6 +48,25 @@ pub fn capture_dsp_pipeline(
     use crate::math::common::{
         Avx2Math, Avx512Math, Avx512VnniBf16Math, InstructionSet, effective_instruction_set,
     };
+
+    // F-04 / T3.2: reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
+    // before any DSP runs. This is a fixed stmxcsr/ldmxcsr pair — zero-alloc,
+    // lock-free, no RT logging — reasserted on every audio callback.
+    // SAFETY: `set_daz_ftz` only manipulates the MXCSR register of the current
+    // thread; SSE2 is implicit on x86-64 and the `asm!` uses properly aligned
+    // locals with valid control-flag bits (0x8040).
+    unsafe {
+        set_daz_ftz();
+    }
+
+    let n = n_samples
+        .min(samples_l.len())
+        .min(samples_r.len())
+        .min(super::bridge::MAX_RESAMP_BUF);
+    if n != n_samples {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+    }
+
     match effective_instruction_set() {
         InstructionSet::Avx512VnniBf16 => {
             // SAFETY: inner invariants upheld by caller.
@@ -36,7 +74,7 @@ pub fn capture_dsp_pipeline(
                 capture_dsp_pipeline_inner::<Avx512VnniBf16Math>(
                     samples_l,
                     samples_r,
-                    n_samples,
+                    n,
                     ctx,
                     bufs,
                     sample_rate,
@@ -49,7 +87,7 @@ pub fn capture_dsp_pipeline(
                 capture_dsp_pipeline_inner::<Avx512Math>(
                     samples_l,
                     samples_r,
-                    n_samples,
+                    n,
                     ctx,
                     bufs,
                     sample_rate,
@@ -62,7 +100,7 @@ pub fn capture_dsp_pipeline(
                 capture_dsp_pipeline_inner::<Avx2Math>(
                     samples_l,
                     samples_r,
-                    n_samples,
+                    n,
                     ctx,
                     bufs,
                     sample_rate,
@@ -130,7 +168,11 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 
     // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
     if let Some(ref mut conv) = ctx.conv {
-        conv.process_variable(&bufs.resamp_out_l[..n_pw], &mut bufs.model_out_l[..n_pw]);
+        conv.process_variable(
+            &bufs.resamp_out_l[..n_pw],
+            &mut bufs.model_out_l[..n_pw],
+            Some(ctx.rt_status),
+        );
         unsafe {
             core::ptr::copy_nonoverlapping(
                 bufs.model_out_l.as_ptr(),
@@ -139,7 +181,11 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
             );
         }
         if !*ctx.process_mono {
-            conv.process_variable(&bufs.resamp_out_r[..n_pw], &mut bufs.model_out_r[..n_pw]);
+            conv.process_variable(
+                &bufs.resamp_out_r[..n_pw],
+                &mut bufs.model_out_r[..n_pw],
+                Some(ctx.rt_status),
+            );
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     bufs.model_out_r.as_ptr(),

@@ -21,6 +21,16 @@ use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 use anyhow::bail;
 use log::info;
 
+/// Semantic cap on `condition_size` accepted from `.nam` JSON files.
+///
+/// Real conditioning sizes are ≤ 64 channels. This cap bounds the
+/// `cond_scratch` allocation (proportional to `condition_size`) so a hostile
+/// or corrupted file cannot trigger OOM-class allocations on the loader path.
+///
+/// Re-exported at [`crate::loader::dispatcher::wavenet::MAX_CONDITION_SIZE`]
+/// for integration-test adversarial fuzzing.
+pub const MAX_CONDITION_SIZE: usize = 4096;
+
 // =============================================================================
 // Validation
 // =============================================================================
@@ -231,6 +241,28 @@ fn reject_wavenet_a2_max_class(data: &NamModelData) -> anyhow::Result<()> {
 // A2 dynamic / cascade builder
 // =============================================================================
 
+/// Parses a `groups`-style unsigned field from a layer's raw JSON value.
+///
+/// Enforces the `u32` range (no silent truncation of hostile `> u32::MAX`
+/// values) and rejects zero (a zero group count would produce
+/// division-by-zero panics on the processing path).
+fn parse_groups_field(
+    value: Option<&serde_json::Value>,
+    key: &str,
+    ai: usize,
+) -> anyhow::Result<u32> {
+    let raw = value.and_then(|v| v.as_u64()).unwrap_or(1);
+    let groups = u32::try_from(raw).map_err(|_| {
+        anyhow::anyhow!(
+            "A2-Dynamic array[{ai}] {key} ({raw}) exceeds u32::MAX (hostile JSON rejection)"
+        )
+    })?;
+    if groups == 0 {
+        bail!("A2-Dynamic array[{ai}] {key} must be >= 1, got 0 (hostile JSON rejection)");
+    }
+    Ok(groups)
+}
+
 fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     reject_wavenet_a2_max_class(data)?;
     use crate::loader::nam_json::validation::{MAX_A2_DYN_BOTTLENECK, MAX_A2_DYN_CHANNELS};
@@ -257,6 +289,15 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 ai,
                 bn,
                 MAX_A2_DYN_BOTTLENECK
+            );
+        }
+        let cond = layer_cfg.condition_size.unwrap_or(1);
+        if cond > MAX_CONDITION_SIZE {
+            bail!(
+                "A2-Dynamic array[{}] condition_size ({}) exceeds maximum {} (OOM/DoS protection)",
+                ai,
+                cond,
+                MAX_CONDITION_SIZE
             );
         }
     }
@@ -330,13 +371,15 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         } else {
             bottleneck
         };
-        let h1_groups = layer_cfg
-            .layer_raw
-            .as_ref()
-            .and_then(|raw| raw.get("head1x1"))
-            .and_then(|h| h.get("groups"))
-            .and_then(|g| g.as_u64())
-            .unwrap_or(1) as usize;
+        let h1_groups = parse_groups_field(
+            layer_cfg
+                .layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("head1x1"))
+                .and_then(|h| h.get("groups")),
+            "head1x1.groups",
+            ai,
+        )? as usize;
         let h1_in_size = if head1x1_active {
             bottleneck / h1_groups
         } else {
@@ -371,24 +414,32 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         model.head1x1_h1_in = h1_in_size;
 
         // Group configs (per-array, uniform across layers inside the array).
-        model.mixin_groups = layer_cfg
-            .layer_raw
-            .as_ref()
-            .and_then(|raw| raw.get("groups_input_mixin"))
-            .and_then(|g| g.as_u64())
-            .unwrap_or(1) as u32;
-        model.l1x1_groups = layer_cfg
-            .layer_raw
-            .as_ref()
-            .and_then(|raw| raw.get("layer1x1"))
-            .and_then(|l| l.get("groups"))
-            .and_then(|g| g.as_u64())
-            .unwrap_or(1) as u32;
+        model.mixin_groups = parse_groups_field(
+            layer_cfg
+                .layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("groups_input_mixin")),
+            "groups_input_mixin",
+            ai,
+        )?;
+        model.l1x1_groups = parse_groups_field(
+            layer_cfg
+                .layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("layer1x1"))
+                .and_then(|l| l.get("groups")),
+            "layer1x1.groups",
+            ai,
+        )?;
 
         model.set_layer_raw(layer_cfg.layer_raw.clone());
         model.condition_size = condition_size;
-        model.cond_scratch = AlignedVec::new(condition_size, 0.0f32)
-            .expect("cond_scratch allocation should succeed for test-sized condition size");
+        model.cond_scratch = AlignedVec::new(condition_size, 0.0f32).map_err(|e| {
+            anyhow::anyhow!(
+                "A2-Dynamic array[{ai}] cond_scratch allocation failed \
+                 (condition_size={condition_size}): {e}"
+            )
+        })?;
 
         model
             .load_weights_inner(&data.weights, &mut weight_pos, total_weights)

@@ -164,6 +164,7 @@ fn process_model_core(
                 m_out_l,
                 m_out_r,
                 *ctx.process_mono,
+                Some(ctx.rt_status),
             );
         }
     } else {
@@ -181,6 +182,7 @@ fn process_model_core(
             m_out_l,
             m_out_r,
             *ctx.process_mono,
+            Some(ctx.rt_status),
         );
     }
 }

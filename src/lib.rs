@@ -35,13 +35,13 @@
 //! **Pure Core DSP & Model Inference:**
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "0.3.0"
+//! NeuralAmpModeler-rs = "x.y.z"
 //! ```
 //!
 //! **Adding Off-RT Testing & Audio Signal Generators:**
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "0.1.0", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 //! ```
 //!
 //! ### Feature Flags Summary Table
@@ -154,10 +154,17 @@
 //!
 //! ### 3. Denormal Protection (FTZ + DAZ)
 //! Subnormal (denormal) floating-point numbers cause severe performance
-//! degradation (up to 100× slowdown). NeuralAmpModeler-rs configures
-//! **Flush-To-Zero (FTZ)** and **Denormals-Are-Zero (DAZ)** at
-//! initialization and periodically reasserts them on the hot path
-//! ([`math::common::set_daz_ftz`]).
+//! degradation (up to 100× slowdown). The audio processing entry point
+//! ([`dsp::pipeline::capture_dsp_pipeline`]) reasserts **Flush-To-Zero (FTZ)**
+//! and **Denormals-Are-Zero (DAZ)** in the MXCSR register at the start of
+//! every processing call ([`math::common::set_daz_ftz`]) — a fixed
+//! `stmxcsr`/`ldmxcsr` pair outside any sample loop, with no measurable
+//! performance cost.
+//!
+//! Because MXCSR is **per-thread**, integrators that bypass the pipeline
+//! (for example, calling [`models::NamModel::process`] directly) or that run
+//! additional DSP on their own audio threads must call
+//! [`math::common::set_daz_ftz`] once at the start of each audio thread.
 //!
 //! ### 4. Panic-Free Hot Path
 //! Stack unwinding (panics) breaks hard real-time determinism. Processing

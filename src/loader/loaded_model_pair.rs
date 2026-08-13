@@ -14,6 +14,60 @@ pub(crate) const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
 /// Maximum allowed model file size (256 MiB).
 pub(crate) const MAX_MODEL_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Maximum absolute plausible value (dBu) for level/loudness metadata.
+///
+/// Anything beyond ±60 dBu is outside the physically meaningful range for
+/// audio equipment and is treated as hostile/saturated metadata.
+pub(crate) const MAX_PLAUSIBLE_DBU: f32 = 60.0;
+/// Maximum plausible `head_scale` linear multiplier.
+///
+/// `head_scale` scales the model head output; production models use values
+/// around 0.02–6.0. Anything above 100.0 (≈40 dB) is treated as hostile.
+pub(crate) const MAX_PLAUSIBLE_HEAD_SCALE: f32 = 100.0;
+
+/// Typed error for hostile metadata floats rejected by post-parse validation.
+///
+/// [`load_and_build_model`](crate::loader::load_and_build_model) validates
+/// `input_level_dbu`, `output_level_dbu`, `loudness`, and `head_scale` after
+/// parsing — for both `.nam` (JSON) and `.namb` (binary) paths. Non-finite or
+/// implausible values are rejected so they can never contaminate gain staging
+/// (`db_to_linear`) with NaN/Inf or zero gain (F-14).
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum MetadataError {
+    /// A metadata float is non-finite (NaN, +Inf, or -Inf).
+    #[error("metadata field '{field}' is not finite (value: {value:e})")]
+    NonFinite {
+        /// Metadata field name.
+        field: &'static str,
+        /// The non-finite value.
+        value: f32,
+    },
+    /// A dBu metadata float is outside the plausible range (±60 dBu).
+    #[error(
+        "metadata field '{field}' is outside the plausible range: \
+         {value:e} dBu (allowed: ±{max} dBu)"
+    )]
+    DbOutOfRange {
+        /// Metadata field name.
+        field: &'static str,
+        /// The implausible value.
+        value: f32,
+        /// Maximum absolute plausible value in dBu.
+        max: f32,
+    },
+    /// `head_scale` (linear multiplier) is outside the plausible range.
+    #[error(
+        "metadata field 'head_scale' is outside the plausible range: \
+         {value:e} (allowed: 0.0 < x <= {max})"
+    )]
+    HeadScaleOutOfRange {
+        /// The implausible value.
+        value: f32,
+        /// Maximum plausible linear multiplier.
+        max: f32,
+    },
+}
+
 /// Pair of loaded models with calibration metadata.
 pub struct LoadedModelPair {
     /// Model for the left channel.

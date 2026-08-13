@@ -88,11 +88,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     }
 
     if version == 1 && crc32_header == 0 {
-        return Err(NambError::CrcMismatch {
-            got: 0,
-            expected: 0,
-        }
-        .into());
+        return Err(NambError::CrcMissingV1.into());
     }
 
     check_crc(data, version, weights_offset, crc32_header)?;

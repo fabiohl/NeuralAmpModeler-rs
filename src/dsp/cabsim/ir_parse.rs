@@ -35,6 +35,14 @@ pub(crate) const MIN_IR_SAMPLE_RATE: u32 = 4_000;
 /// Maximum IR sample rate for stability and reasonable mem usage (384 kHz).
 pub(crate) const MAX_IR_SAMPLE_RATE: u32 = 384_000;
 
+/// Safety cap on the number of RIFF chunks scanned by [`find_chunk`] (F-20).
+///
+/// Zero-sized junk chunks advance the scan by only 8 bytes each, so a hostile
+/// file (up to [`MAX_IR_FILE_SIZE`]) could otherwise force ~134 M scan
+/// iterations (DoS). Beyond this cap the scan aborts with `None`, bounding
+/// parse time even for malformed streams with thousands of junk chunks.
+pub(crate) const MAX_CHUNKS_SCANNED: usize = 1024;
+
 /// Reads and validates the file, guarding against oversized inputs.
 ///
 /// Uses a single file-open to avoid TOCTOU races between metadata check and read.
@@ -228,14 +236,20 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
 /// Locates a RIFF chunk by its 4-byte ID, starting search at `start_offset`.
 ///
 /// Returns `Some((data_offset, data_size))` where `data_offset` points to the
-/// chunk's payload, or `None` if not found.
+/// chunk's payload, or `None` if not found or if the scan exceeded
+/// [`MAX_CHUNKS_SCANNED`] iterations (junk-chunk DoS guard — F-20).
 pub(crate) fn find_chunk(
     data: &[u8],
     chunk_id: &[u8; 4],
     start_offset: usize,
 ) -> Option<(usize, u32)> {
     let mut pos = start_offset;
+    let mut scanned = 0usize;
     while pos + 8 <= data.len() {
+        if scanned >= MAX_CHUNKS_SCANNED {
+            return None;
+        }
+        scanned += 1;
         let id = &data[pos..pos + 4];
         let size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
         if id == chunk_id {
@@ -356,3 +370,7 @@ pub(crate) fn read_float32(data: &[u8], data_size: u32) -> Vec<f32> {
     }
     samples
 }
+
+#[cfg(test)]
+#[path = "ir_parse_test.rs"]
+mod ir_parse_test;

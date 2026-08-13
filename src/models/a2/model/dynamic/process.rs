@@ -483,6 +483,11 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     {
         let mut cond_is_modulated = false;
         if let Some(ref mut film) = layer.input_mixin_pre_film {
+            debug_assert!(
+                cond_size <= cond_scratch.len(),
+                "cond_size ({cond_size}) exceeds cond_scratch capacity ({})",
+                cond_scratch.len()
+            );
             cond_scratch[..cond_size].copy_from_slice(cond_slice);
             unsafe {
                 film.process(&mut cond_scratch[..cond_size], cond_slice);

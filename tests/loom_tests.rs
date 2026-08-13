@@ -277,3 +277,328 @@ fn test_dsp_bridge_concurrency() {
         t2.join().unwrap();
     });
 }
+
+// =============================================================================
+// Composite Engine Swap via SPSC → GC Cascade (T6.4)
+// =============================================================================
+//
+// Models the composite hot-swap protocol used for `CabSimAdapter` and
+// `OversampleEngine` (cabsim/os SPSC channels + `gc_cascade`):
+//
+//   1. Main thread builds a new engine payload and publishes its id through
+//      the SPSC channel with Release ordering.
+//   2. RT thread acquires the id (Acquire), verifies the payload, swaps out
+//      the active engine, and routes the obsolete one through the GC cascade
+//      (ring → parking lot → overflow buffer).
+//   3. Main thread drains the cascade; every delivered engine must appear
+//      exactly once (no leak, no double-drop) with intact payload data.
+
+/// An engine payload cell — loom instruments access to detect data races.
+struct LoomEngineSlot {
+    data: UnsafeCell<u64>,
+}
+
+/// Tiered GC cascade and SPSC publish channel, modeled with loom atomics.
+struct LoomSwapMesh {
+    /// Main → RT SPSC channel slots (sweep-published / sweep-drained).
+    spsc: Vec<AtomicUsize>,
+    /// GC Tier 1: SPSC drop-delegation slot (RT-only producer).
+    gc_ring: Vec<AtomicUsize>,
+    /// GC Tier 2: parking lot slot (RT-only producer).
+    parking: Vec<AtomicUsize>,
+    /// GC Tier 3: overflow slot (RT-only producer, overwrite would lose items).
+    overflow: Vec<AtomicUsize>,
+}
+
+impl LoomSwapMesh {
+    fn new() -> Self {
+        Self {
+            spsc: (0..2).map(|_| AtomicUsize::new(0)).collect(),
+            gc_ring: (0..1).map(|_| AtomicUsize::new(0)).collect(),
+            parking: (0..1).map(|_| AtomicUsize::new(0)).collect(),
+            overflow: (0..1).map(|_| AtomicUsize::new(0)).collect(),
+        }
+    }
+
+    /// Publishes an engine id into a free SPSC slot (Release on success).
+    /// Returns `true` if the item was enqueued (channel full → `false`).
+    fn publish(&self, id: usize) -> bool {
+        for slot in &self.spsc {
+            if slot.load(Ordering::Relaxed) == 0 && slot.swap(id, Ordering::AcqRel) == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// RT-side poll: sweeps the SPSC channel and returns one pending id.
+    fn poll_spsc(&self) -> Option<usize> {
+        for slot in &self.spsc {
+            let id = slot.swap(0, Ordering::AcqRel);
+            if id != 0 {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// RT-side GC cascade push (Tier 1 → Tier 2 → Tier 3), mirroring
+    /// `gc_cascade` in `src/common/spsc/gc.rs`. Each tier is a single slot;
+    /// the slot sweep by the control thread is the drain counterpart.
+    fn cascade_push(&self, id: usize) {
+        if self.gc_ring[0].load(Ordering::Relaxed) == 0
+            && self.gc_ring[0].swap(id, Ordering::AcqRel) == 0
+        {
+            return;
+        }
+        if self.parking[0].load(Ordering::Relaxed) == 0
+            && self.parking[0].swap(id, Ordering::AcqRel) == 0
+        {
+            return;
+        }
+        self.overflow[0].swap(id, Ordering::AcqRel);
+    }
+
+    /// Drains all GC tiers. Returns the drained engine ids.
+    fn drain_gc(&self) -> Vec<usize> {
+        let mut items = Vec::new();
+        for slot in self
+            .gc_ring
+            .iter()
+            .chain(self.parking.iter())
+            .chain(self.overflow.iter())
+        {
+            let id = slot.swap(0, Ordering::AcqRel);
+            if id != 0 {
+                items.push(id);
+            }
+        }
+        items
+    }
+
+    /// Drains any ids still queued in the SPSC channel (never delivered).
+    fn drain_spsc(&self) -> Vec<usize> {
+        let mut items = Vec::new();
+        for slot in &self.spsc {
+            let id = slot.swap(0, Ordering::AcqRel);
+            if id != 0 {
+                items.push(id);
+            }
+        }
+        items
+    }
+}
+
+#[test]
+fn test_composite_engine_swap_spsc_gc_cascade() {
+    // Bounded preemption exploration: the composite protocol has a large
+    // atomic-op count; a 3-preemption bound keeps the state space tractable
+    // while still exercising the publish/acquire and cascade handoffs under
+    // every bounded scheduling.
+    let mut builder = loom::model::Builder::new();
+    builder.preemption_bound = Some(3);
+    builder.check(|| {
+        let mesh = Arc::new(LoomSwapMesh::new());
+        let pool: Arc<Vec<LoomEngineSlot>> = Arc::new(
+            (0..4)
+                .map(|_| LoomEngineSlot {
+                    data: UnsafeCell::new(0),
+                })
+                .collect(),
+        );
+
+        let mesh_main = mesh.clone();
+        let pool_main = pool.clone();
+        let t_main = thread::spawn(move || {
+            let mut published_ids = Vec::new();
+            let mut drained = Vec::new();
+            for id in 1..=3usize {
+                pool_main[id].data.with_mut(|ptr| unsafe {
+                    *ptr = id as u64 * 100;
+                });
+                if mesh_main.publish(id) {
+                    published_ids.push(id);
+                }
+                // Control-plane housekeeping: drain GC concurrently with
+                // RT swaps (mirrors `drain_gc_channels`).
+                drained.extend(mesh_main.drain_gc());
+            }
+            (published_ids, drained)
+        });
+
+        let mesh_rt = mesh.clone();
+        let pool_rt = pool.clone();
+        let t_rt = thread::spawn(move || {
+            let mut active = 0usize;
+            for _ in 0..3 {
+                if let Some(id) = mesh_rt.poll_spsc() {
+                    let val = pool_rt[id].data.with(|ptr| unsafe { *ptr });
+                    assert_eq!(
+                        val,
+                        id as u64 * 100,
+                        "payload integrity violated on RT swap"
+                    );
+                    if active != 0 {
+                        mesh_rt.cascade_push(active);
+                    }
+                    active = id;
+                }
+            }
+            if active != 0 {
+                mesh_rt.cascade_push(active);
+            }
+        });
+
+        let (published, mut drained) = t_main.join().unwrap();
+        t_rt.join().unwrap();
+
+        // Final drain after both threads stopped.
+        drained.extend(mesh.drain_gc());
+        let leftover = mesh.drain_spsc();
+
+        // Every engine published is either still queued (never delivered) or
+        // cascaded and drained exactly once.
+        let mut delivered: Vec<usize> = published
+            .iter()
+            .copied()
+            .filter(|id| !leftover.contains(id))
+            .collect();
+        let mut drained_sorted = drained.clone();
+        drained_sorted.sort_unstable();
+        delivered.sort_unstable();
+        assert_eq!(
+            drained_sorted, delivered,
+            "every delivered engine must be cascaded and drained exactly once \
+             (no leak, no double-drop) — leftover: {leftover:?}, drained: {drained:?}"
+        );
+
+        for id in &drained {
+            let val = pool[*id].data.with(|ptr| unsafe { *ptr });
+            assert_eq!(val, (*id as u64) * 100, "drained payload corrupted");
+        }
+    });
+}
+
+// =============================================================================
+// Multi-Field RtStatusFlags Synchronization (T6.4)
+// =============================================================================
+//
+// Models the RT→Main handshake used by `RtStatusFlags`: the RT thread writes
+// a data field (`requested_host_rate`) and then publishes the associated
+// status flag with Release; the control thread reads the flag with Acquire
+// and must observe the matching data value (happens-before edge).
+
+const RT_FLAG_NEEDS_RESAMPLER_REBUILD: u64 = 1 << 0;
+
+/// Simplified multi-field status block: one data cell + one flag word.
+struct LoomRtStatus {
+    requested_host_rate: UnsafeCell<u32>,
+    status_bits: AtomicU64,
+}
+
+impl LoomRtStatus {
+    fn new() -> Self {
+        Self {
+            requested_host_rate: UnsafeCell::new(0),
+            status_bits: AtomicU64::new(0),
+        }
+    }
+
+    /// RT-side: publishes data + flag with Release ordering.
+    fn publish_request(&self, rate: u32) {
+        self.requested_host_rate.with_mut(|ptr| unsafe {
+            *ptr = rate;
+        });
+        self.status_bits
+            .fetch_or(RT_FLAG_NEEDS_RESAMPLER_REBUILD, Ordering::Release);
+    }
+
+    /// Main-side: acquires the flag and reads the gated data.
+    fn poll_request(&self) -> Option<u32> {
+        if (self.status_bits.load(Ordering::Acquire) & RT_FLAG_NEEDS_RESAMPLER_REBUILD) != 0 {
+            let rate = self.requested_host_rate.with(|ptr| unsafe { *ptr });
+            self.status_bits
+                .fetch_and(!RT_FLAG_NEEDS_RESAMPLER_REBUILD, Ordering::Relaxed);
+            Some(rate)
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+fn test_rt_status_multifield_handshake() {
+    loom::model(|| {
+        let status = Arc::new(LoomRtStatus::new());
+        let status_rt = status.clone();
+        let status_main = status.clone();
+
+        let t_rt = thread::spawn(move || {
+            status_rt.publish_request(48_000);
+        });
+
+        let t_main = thread::spawn(move || {
+            let mut observed = Vec::new();
+            for _ in 0..4 {
+                if let Some(rate) = status_main.poll_request() {
+                    observed.push(rate);
+                }
+            }
+            for rate in observed {
+                assert_eq!(
+                    rate, 48_000,
+                    "multi-field handshake violated: flag observed without matching data"
+                );
+            }
+        });
+
+        t_rt.join().unwrap();
+        t_main.join().unwrap();
+    });
+}
+
+#[test]
+fn test_rt_status_multifield_relaxed_fails() {
+    let result = std::panic::catch_unwind(|| {
+        loom::model(|| {
+            let status = Arc::new(LoomRtStatus::new());
+            let status_rt = status.clone();
+            let status_main = status.clone();
+
+            let t_rt = thread::spawn(move || {
+                status_rt.requested_host_rate.with_mut(|ptr| unsafe {
+                    *ptr = 48_000;
+                });
+                // Missing Release: the flag does not order the data write.
+                status_rt
+                    .status_bits
+                    .fetch_or(RT_FLAG_NEEDS_RESAMPLER_REBUILD, Ordering::Relaxed);
+            });
+
+            let t_main = thread::spawn(move || {
+                let mut observed = Vec::new();
+                for _ in 0..4 {
+                    if (status_main.status_bits.load(Ordering::Acquire)
+                        & RT_FLAG_NEEDS_RESAMPLER_REBUILD)
+                        != 0
+                    {
+                        observed.push(status_main.requested_host_rate.with(|ptr| unsafe { *ptr }));
+                        status_main
+                            .status_bits
+                            .fetch_and(!RT_FLAG_NEEDS_RESAMPLER_REBUILD, Ordering::Relaxed);
+                    }
+                }
+                for rate in observed {
+                    assert_eq!(rate, 48_000);
+                }
+            });
+
+            t_rt.join().unwrap();
+            t_main.join().unwrap();
+        });
+    });
+    assert!(
+        result.is_err(),
+        "Expected loom to catch a data race in the multi-field handshake without Release ordering"
+    );
+}

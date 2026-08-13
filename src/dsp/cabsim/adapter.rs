@@ -30,6 +30,7 @@
 
 use super::conv::ConvEngine;
 use crate::common::diagnostics::NamErrorCode;
+use crate::common::spsc::{RT_STATUS_CABSIM_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::math::common::AlignedVec;
 
 /// RT-safe adapter that bridges fixed-partition [`ConvEngine`] to
@@ -129,21 +130,42 @@ impl CabSimAdapter {
     /// *   `input.len() == output.len() <= partition_size`
     /// *   `input.len() > 0` (use empty slice for flush passes)
     ///
+    /// # Host Contract Violations (F-03)
+    ///
+    /// During host quantum renegotiation a sub-block may exceed `partition_size`
+    /// (or `input`/`output` lengths may disagree) before the new adapter arrives
+    /// via the SPSC swap. Instead of panicking on the audio thread, the adapter
+    /// clamps processing to `min(input.len(), partition, output.len())` and
+    /// raises [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`] on `rt_status` (lock-free,
+    /// zero-alloc, no RT logging) so the control thread can log/remediate.
+    /// The main thread observes the flag together with
+    /// [`crate::common::spsc::RT_STATUS_NEEDS_CABSIM_REBUILD`].
+    ///
     /// # RT-Safety
     ///
-    /// Zero-alloc, lock-free, never panics (beyond the debug asserts).
-    pub fn process_variable(&mut self, input: &[f32], output: &mut [f32]) {
-        let sub_n = input.len();
-        assert!(sub_n <= self.partition, "sub-block exceeds partition_size");
-        assert_eq!(output.len(), sub_n);
+    /// Zero-alloc, lock-free, never panics.
+    pub fn process_variable(
+        &mut self,
+        input: &[f32],
+        output: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        let sub_n = input.len().min(self.partition).min(output.len());
+        debug_assert_eq!(output.len(), input.len());
+        let contract_violation = input.len() > self.partition || output.len() != input.len();
+        if contract_violation && let Some(rt) = rt_status {
+            rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);
+        }
 
         if self.engine.is_passthrough() {
-            output.copy_from_slice(input);
+            output[..sub_n].copy_from_slice(&input[..sub_n]);
+            output[sub_n..].fill(0.0);
             return;
         }
 
         if sub_n > 0 {
-            self.input_buf[self.input_count..self.input_count + sub_n].copy_from_slice(input);
+            self.input_buf[self.input_count..self.input_count + sub_n]
+                .copy_from_slice(&input[..sub_n]);
             self.input_count += sub_n;
         }
 

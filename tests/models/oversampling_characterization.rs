@@ -70,9 +70,9 @@ fn process_with_os(
             model.process(block, &mut native_out[..block_len]);
             output.extend_from_slice(&native_out[..block_len]);
         } else {
-            let n_os = os_engine.upsample(block, &mut up_buf[..block_len * mult]);
+            let n_os = os_engine.upsample(block, &mut up_buf[..block_len * mult], None);
             model.process(&up_buf[..n_os], &mut os_model_out[..n_os]);
-            let n_out = os_engine.downsample(&os_model_out[..n_os], &mut native_out);
+            let n_out = os_engine.downsample(&os_model_out[..n_os], &mut native_out, None);
             output.extend_from_slice(&native_out[..n_out]);
         }
         pos = end;

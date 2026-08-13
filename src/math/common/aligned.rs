@@ -101,14 +101,20 @@ impl<T: Default> Default for Aligned64<T> {
 ///
 /// Layout (24 bytes): pointer + length + capacity. Zero overhead for standard allocations.
 /// For huge-page-backed variants, use `huge_alloc::HugePageVec` instead.
+///
+/// `T: Copy` is a design invariant (F-10): this container allocates raw
+/// contiguous memory and deallocates it in `Drop` **without** running
+/// per-element destructors (`drop_in_place`). Restricting `T` to `Copy` makes
+/// it impossible to store types with non-trivial `Drop` glue, so no element
+/// destructor can ever be silently skipped.
 #[derive(Debug)]
-pub struct AlignedVec<T> {
+pub struct AlignedVec<T: Copy> {
     ptr: NonNull<T>,
     len: usize,
     cap: usize,
 }
 
-impl<T> AlignedVec<T> {
+impl<T: Copy> AlignedVec<T> {
     /// The default guaranteed alignment (64 bytes).
     pub const ALIGN: usize = 64;
 
@@ -150,7 +156,7 @@ impl<T> AlignedVec<T> {
     /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
     pub fn new(len: usize, default: T) -> Result<Self, NamErrorCode>
     where
-        T: Copy + Zeroable,
+        T: Zeroable,
     {
         let mut vec = Self::with_capacity(len)?;
         // SAFETY: ptr is non-null with cap ≥ len (from with_capacity).
@@ -211,7 +217,7 @@ impl<T> AlignedVec<T> {
     /// Returns `NamErrorCode::OutOfMemory` if allocation for the new capacity fails.
     pub fn resize(&mut self, new_len: usize, default: T) -> Result<(), NamErrorCode>
     where
-        T: Copy + Zeroable,
+        T: Zeroable,
     {
         if new_len <= self.len {
             return Ok(());
@@ -251,10 +257,7 @@ impl<T> AlignedVec<T> {
     ///
     /// # Errors
     /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
-    pub fn from_vec(v: Vec<T>) -> Result<Self, NamErrorCode>
-    where
-        T: Copy,
-    {
+    pub fn from_vec(v: Vec<T>) -> Result<Self, NamErrorCode> {
         if v.is_empty() {
             return Self::with_capacity(0);
         }
@@ -274,7 +277,7 @@ impl<T> AlignedVec<T> {
 ///
 /// This simplifies usage, as you can use functions that expect a normal slice
 /// without needing complicated conversions.
-impl<T> Deref for AlignedVec<T> {
+impl<T: Copy> Deref for AlignedVec<T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -291,7 +294,7 @@ impl<T> Deref for AlignedVec<T> {
 /// Allows accessing and modifying buffer data as a regular list.
 ///
 /// Ensures freedom to read and write content in a simple and direct way.
-impl<T> DerefMut for AlignedVec<T> {
+impl<T: Copy> DerefMut for AlignedVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.len == 0 {
             &mut []
@@ -307,7 +310,7 @@ impl<T> DerefMut for AlignedVec<T> {
 ///
 /// It's the "cleaner" that frees the reserved space as soon as you finish using
 /// the buffer, preventing memory waste (so-called "memory leaks").
-impl<T> Drop for AlignedVec<T> {
+impl<T: Copy> Drop for AlignedVec<T> {
     fn drop(&mut self) {
         if self.cap > 0 {
             // Layout construction cannot fail here: self.cap was validated during allocation
@@ -317,8 +320,9 @@ impl<T> Drop for AlignedVec<T> {
             {
                 // SAFETY: self.ptr was allocated by alloc_slot using an identical layout
                 // (size=cap*size_of::<T>(), align=64). The layout is recalculated identically
-                // here. Drop runs exactly once (Rust ownership semantics); all elements have
-                // been properly dropped via DerefMut or leakage.
+                // here. Drop runs exactly once (Rust ownership semantics). No per-element
+                // destructors need to run: `T: Copy` (struct bound, F-10) guarantees the
+                // elements carry no `Drop` glue, so deallocating the raw block is complete.
                 unsafe {
                     dealloc(self.ptr.as_ptr() as *mut u8, layout);
                 }
@@ -361,10 +365,10 @@ impl<T: Copy> Clone for AlignedVec<T> {
 /// multiple processor cores with full safety.
 // SAFETY: AlignedVec owns its heap allocation exclusively. When T: Send, all elements can be
 // safely transferred across thread boundaries. Destructors run on the receiving thread only.
-unsafe impl<T: Send> Send for AlignedVec<T> {}
+unsafe impl<T: Copy + Send> Send for AlignedVec<T> {}
 // SAFETY: AlignedVec's heap allocation is never mutated through shared references
 // (Deref provides &[T]). When T: Sync, shared reads of elements across threads are safe.
-unsafe impl<T: Sync> Sync for AlignedVec<T> {}
+unsafe impl<T: Copy + Sync> Sync for AlignedVec<T> {}
 
 #[cfg(test)]
 #[path = "aligned_test.rs"]

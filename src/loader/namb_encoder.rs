@@ -71,12 +71,14 @@ pub fn encode_namb(
         },
         reserved2: 0,
         version_str: [0; 32],
-        sample_rate: data.sample_rate.unwrap_or(48000.0),
+        sample_rate: data
+            .sample_rate
+            .unwrap_or(super::loaded_model_pair::DEFAULT_SAMPLE_RATE),
         input_level_dbu: data
             .metadata
             .as_ref()
             .and_then(|m| m.input_level_dbu)
-            .unwrap_or(12.0),
+            .unwrap_or(super::loaded_model_pair::DEFAULT_INPUT_LEVEL_DBU),
         output_level_dbu: data
             .metadata
             .as_ref()

@@ -61,6 +61,19 @@ pub enum NambError {
         version: u16,
     },
 
+    /// NAMB v1 file carries the `crc32 == 0` sentinel (no CRC32 recorded).
+    ///
+    /// The integrity policy requires a CRC32 for every NAMB file, including
+    /// v1 — files written without a CRC32 are rejected rather than silently
+    /// accepted. A genuine CRC32 equal to zero (probability 2⁻³²) would be
+    /// indistinguishable from the sentinel; v1 producers must always record
+    /// the real checksum.
+    #[error(
+        "NAMB v1 file has no CRC32 (crc32 == 0 sentinel) — \
+         NAMB v1 files without CRC32 are not accepted by the integrity policy"
+    )]
+    CrcMissingV1,
+
     /// Number of floats in the weight section exceeds the maximum (defense-in-depth).
     #[error("weight section too large: {got} floats, maximum {max}")]
     WeightsTooLarge {

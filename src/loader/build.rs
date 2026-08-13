@@ -12,8 +12,59 @@ use std::path::Path;
 
 use super::loaded_model_pair::{
     DEFAULT_INPUT_LEVEL_DBU, DEFAULT_LOUDNESS_DB, DEFAULT_SAMPLE_RATE, LoadedModelPair,
-    MAX_MODEL_BYTES,
+    MAX_MODEL_BYTES, MAX_PLAUSIBLE_DBU, MAX_PLAUSIBLE_HEAD_SCALE, MetadataError,
 };
+
+/// Validates metadata floats (`input_level_dbu`, `output_level_dbu`, `loudness`,
+/// `head_scale`) for finiteness and plausible range (F-14).
+///
+/// Weights already reject NaN/Inf element-by-element; metadata does not go
+/// through that path. A JSON value like `1e39` silently saturates to
+/// `+Inf` when deserialized into `f32`, which would poison gain staging
+/// (`db_to_linear`) with NaN/Inf/zero multipliers. This post-parse gate
+/// applies uniformly to `.nam` and `.namb` loads.
+fn validate_metadata_floats(
+    meta: &crate::loader::nam_json::NamMetadata,
+    head_scale: Option<f32>,
+) -> anyhow::Result<()> {
+    let db_fields: [(&'static str, Option<f32>); 3] = [
+        ("input_level_dbu", meta.input_level_dbu),
+        ("output_level_dbu", meta.output_level_dbu),
+        ("loudness", meta.loudness),
+    ];
+    for (field, value) in db_fields {
+        if let Some(v) = value {
+            if !v.is_finite() {
+                return Err(MetadataError::NonFinite { field, value: v }.into());
+            }
+            if v.abs() > MAX_PLAUSIBLE_DBU {
+                return Err(MetadataError::DbOutOfRange {
+                    field,
+                    value: v,
+                    max: MAX_PLAUSIBLE_DBU,
+                }
+                .into());
+            }
+        }
+    }
+    if let Some(v) = head_scale {
+        if !v.is_finite() {
+            return Err(MetadataError::NonFinite {
+                field: "head_scale",
+                value: v,
+            }
+            .into());
+        }
+        if v <= 0.0 || v > MAX_PLAUSIBLE_HEAD_SCALE {
+            return Err(MetadataError::HeadScaleOutOfRange {
+                value: v,
+                max: MAX_PLAUSIBLE_HEAD_SCALE,
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
 
 /// Reads a model file into a byte buffer after validating its size.
 ///
@@ -98,7 +149,9 @@ pub fn load_and_build_model(
                 Some(namb::NambError::WeightsOffsetOutOfBounds { .. })
                 | Some(namb::NambError::InvalidWeightsOffset { .. }) => NamErrorCode::NambTruncated,
                 Some(namb::NambError::CrcMismatch { .. }) => NamErrorCode::NambCrc32Mismatch,
-                Some(namb::NambError::CrcMissing { .. }) => NamErrorCode::NambCrc32Missing,
+                Some(namb::NambError::CrcMissing { .. }) | Some(namb::NambError::CrcMissingV1) => {
+                    NamErrorCode::NambCrc32Missing
+                }
                 Some(namb::NambError::WeightsTooLarge { .. }) => NamErrorCode::ModelTooLarge,
                 Some(namb::NambError::NonFiniteWeight { .. }) => NamErrorCode::NambNonFiniteWeight,
                 Some(namb::NambError::InvalidHeaderField { .. }) => {
@@ -178,6 +231,12 @@ pub fn load_and_build_model(
 
     // 2. Metadata and Calibration Extraction
     let meta = model_data.metadata.clone().unwrap_or_default();
+    validate_metadata_floats(&meta, model_data.config.head_scale).inspect_err(|e| {
+        NamDiagnostic::new(NamErrorCode::InvalidMetadata, sys)
+            .message(format!("Invalid model metadata in \"{}\"", path_str))
+            .param("detail", e.to_string())
+            .emit();
+    })?;
     let in_level = meta.input_level_dbu.unwrap_or(DEFAULT_INPUT_LEVEL_DBU);
     let loudness = meta.loudness.unwrap_or(DEFAULT_LOUDNESS_DB);
 

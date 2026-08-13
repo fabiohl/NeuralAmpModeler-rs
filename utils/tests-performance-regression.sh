@@ -21,6 +21,10 @@
 #   --check (default)    Compare the current build against the saved baseline.
 #                        Strictly read-only: fails with MISSING_BASELINE if
 #                        no baseline exists. Never auto-creates a baseline.
+#                        Fail-closed coverage: any executed benchmark without
+#                        a saved baseline series fails with
+#                        BASELINE_COVERAGE_GAP (F-24b); the verified benchmark
+#                        set is recorded in the receipt (F-24c).
 #   --bootstrap-baseline Create a new baseline and environment fingerprint.
 #                        Must be executed by a human operator. Prohibited in
 #                        automated/CI/agent-driven workflows.
@@ -137,7 +141,6 @@ compare_fingerprint() {
     build_profile_now="release"
     freq_gov_now=$(detect_freq_governor)
     bench_core_now="${BENCH_CORE}"
-
     local stored_cpu_model stored_cpu_microarch stored_build_profile \
           stored_rustc stored_target stored_rustflags stored_freq_gov stored_bench_core
     stored_cpu_model=$(sed -n 's/.*"cpu_model": *"\([^"]*\)".*/\1/p' "$FINGERPRINT_FILE")
@@ -210,6 +213,20 @@ compare_fingerprint() {
         incomparable=1
     fi
 
+    # F-24a: physical core count was recorded but never compared. Machines with
+    # the same CPU model but different core counts (VMs / cgroups / host
+    # reconfiguration) change DEFAULT_CORE — only indirectly caught via
+    # bench_core when NAM_BENCH_CORE is unset. Compare it explicitly.
+    local phys_cores_now stored_phys_cores
+    phys_cores_now=$(detect_physical_cores)
+    stored_phys_cores=$(sed -n 's/.*"physical_cores": *\([0-9][0-9]*\).*/\1/p' "$FINGERPRINT_FILE")
+    if [ -n "$stored_phys_cores" ] && [ -n "$phys_cores_now" ] && [ "$phys_cores_now" != "$stored_phys_cores" ]; then
+        echo -e "  ${RED}${BOLD}INCOMPARABLE_ENVIRONMENT${NC} physical core count mismatch"
+        echo -e "    Baseline: ${YELLOW}$stored_phys_cores${NC}"
+        echo -e "    Current:  ${YELLOW}$phys_cores_now${NC}"
+        incomparable=1
+    fi
+
     return $incomparable
 }
 
@@ -230,6 +247,41 @@ list_top_level_baselines() {
         return 0
     fi
     find "$root" -mindepth 2 -maxdepth 2 -type d -name "$BASELINE_NAME" 2>/dev/null | sort
+}
+
+# ── Baseline coverage cross-check (F-24b / EP-05) ───────────────────────────
+# Criterion silently skips baseline comparison for benchmarks without a saved
+# baseline series ("no baseline found"). A new or renamed benchmark would pass
+# the gate unverified. These helpers cross the benchmarks actually executed in
+# a run against the restored baseline series so the gate can fail closed.
+
+# Prints the benchmark IDs executed in a Criterion log (deduplicated, sorted).
+# Criterion prints "Benchmarking <id>: ..." lines for every executed bench.
+executed_bench_ids() {
+    local log_file="$1"
+    grep -oE '^Benchmarking [A-Za-z0-9_.]+' "$log_file" 2>/dev/null \
+        | awk '{print $2}' | sort -u || true
+}
+
+# Prints the executed benchmark IDs that have NO baseline series under
+# <criterion_root>/<id>/<baseline_name>. Empty output = full coverage.
+# Exit codes: 0 = parsed fine (with or without gaps); 1 = parse failure
+# (no executed benchmark found — the coverage check would be blind).
+missing_baseline_coverage() {
+    local log_file="$1" criterion_root="$2" baseline_name="${3:-ci-baseline}"
+    local ids
+    ids=$(executed_bench_ids "$log_file")
+    if [ -z "$ids" ]; then
+        return 1
+    fi
+    local id missing=""
+    for id in $ids; do
+        if [ ! -d "$criterion_root/$id/$baseline_name" ]; then
+            missing="${missing}${missing:+ }$id"
+        fi
+    done
+    echo "$missing"
+    return 0
 }
 
 # Drop nested baseline dirs (depth >= 3) left by historical cp nesting.
@@ -389,6 +441,39 @@ check_regression() {
         dashboard_phase_receipt "regression_check" "FAIL" "$BENCH_STATUS" 0 0 "Benchmark run failed"
         exit 1
     fi
+
+    # ── Baseline coverage cross-check (F-24b) ────────────────────────────────
+    # Every executed benchmark MUST have been compared against a baseline
+    # series. A benchmark without one (new/renamed, or a restore that silently
+    # lost a series) passes unverified otherwise — fail closed instead.
+    local missing_series
+    if ! missing_series=$(missing_baseline_coverage "$LOG_FILE" "$CRITERION_BASELINE_TARGET" "$BASELINE_NAME"); then
+        echo -e "\n${RED}${BOLD}❌ BASELINE_COVERAGE_GAP${NC} — no executed benchmark could be parsed from $LOG_FILE"
+        echo -e "  The coverage cross-check is blind: the Criterion log format changed or the run is empty."
+        echo -e "  Fail-closed: nothing passes unverified. Investigate the log before re-running."
+        dashboard_phase_receipt "regression_check" "FAIL" 1 0 0 "BASELINE_COVERAGE_GAP"
+        exit 1
+    fi
+    if [ -n "$missing_series" ]; then
+        echo -e "\n${RED}${BOLD}❌ BASELINE_COVERAGE_GAP${NC} — executed benchmark(s) without a saved baseline series:"
+        for bench_id in $missing_series; do
+            echo -e "    ${RED}${bench_id}${NC}"
+        done
+        echo -e "  A new or renamed benchmark must never pass unverified (fail-closed)."
+        echo -e "  A human operator must re-bootstrap the baseline:"
+        echo -e "    ${YELLOW}utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
+        dashboard_phase_receipt "regression_check" "FAIL" 1 0 0 "BASELINE_COVERAGE_GAP"
+        exit 1
+    fi
+
+    # (F-24c) Audit trail: record the verified benchmark set in the receipt so
+    # coverage can be audited without re-reading Criterion's log.
+    local executed_count coverage_list
+    executed_count=$(executed_bench_ids "$LOG_FILE" | wc -l)
+    coverage_list=$(executed_bench_ids "$LOG_FILE" | paste -sd ',' -)
+    printf '{"kind":"baseline_coverage","phase_id":"regression_baseline_coverage","verified_benchmarks":"%s","count":%s,"run_id":"%s"}\n' \
+        "$coverage_list" "$executed_count" "${NAM_RUN_ID:-}" >> "$REGRESSION_RECEIPT"
+    echo -e "  ${GREEN}✓ Coverage cross-check: all ${executed_count} executed benchmark(s) have baseline series.${NC}"
 
     echo -e "${GREEN}✓ No performance regression detected.${NC}"
     dashboard_phase_receipt "regression_check" "PASS" 0 1 1 ""

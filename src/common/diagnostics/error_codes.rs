@@ -9,6 +9,17 @@
 //! - **E3xxx**: SPSC / inter-thread communication
 //! - **E4xxx**: Runtime / CLI (parsing, commands)
 //! - **E5xxx**: System / hardware (CPU features, memory)
+//!
+//! ### Range reservation (F-19)
+//!
+//! The **E2xxx–E4xxx** ranges are **reserved for downstream integrations**
+//! (`NAM-Plug`, `NAM-Audio-Pipe`). They are declared here so the range
+//! allocation is a single source of truth, but this host-agnostic core crate
+//! never constructs them: the core library does not own an audio backend, an
+//! SPSC host loop, or a CLI, and must not assume one. Downstream crates emit
+//! these codes through the same diagnostic engine when wiring the core into
+//! their own host surfaces. Changes to this reservation must be synchronized
+//! with `docs/architecture.md` (§7).
 
 use std::fmt;
 
@@ -21,6 +32,10 @@ use std::fmt;
 /// - **E3xxx**: SPSC / inter-thread communication
 /// - **E4xxx**: Runtime / CLI (parsing, commands)
 /// - **E5xxx**: System / hardware (CPU features, memory)
+///
+/// The **E2xxx–E4xxx** ranges are reserved for downstream integrations
+/// (NAM-Plug / NAM-Audio-Pipe) and are never constructed by this
+/// host-agnostic core crate (F-19). See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamErrorCode {
     // E1xxx — Model Loading
@@ -54,13 +69,16 @@ pub enum NamErrorCode {
     NamJsonUnsupportedVersion,
     /// LSTM model has multi-channel I/O (NAM-rs supports mono only).
     NamJsonUnsupportedMultiChannel,
+    /// Model metadata float is non-finite or outside the plausible range
+    /// (`input_level_dbu`, `output_level_dbu`, `loudness`, `head_scale`).
+    InvalidMetadata,
     /// NAMB non-finite weight detected in binary weight section.
     NambNonFiniteWeight,
     /// NAMB header field contains an invalid value (non-finite, <= 0, etc.).
     NambInvalidHeaderField,
     /// .namb CRC32 checksum does not match expected value.
     NambCrc32Mismatch,
-    /// CRC32 flag missing in .namb v2+ file (mandatory).
+    /// CRC32 integrity metadata missing (.namb v2+ flag absent, or v1 `crc32 == 0` sentinel).
     NambCrc32Missing,
     /// Invalid .namb magic signature.
     NambInvalidMagic,
@@ -82,6 +100,8 @@ pub enum NamErrorCode {
     InvalidModelTopology,
 
     // E2xxx — Audio Backend / Processing
+    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
+    // this host-agnostic core crate never constructs these variants (F-19).
     /// Failed to initialize the audio backend (context/core).
     AudioInitFailed,
     /// Failed to connect the audio stream.
@@ -98,10 +118,14 @@ pub enum NamErrorCode {
     ProcessingOverload,
 
     // E3xxx — SPSC / Communication
+    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
+    // this host-agnostic core crate never constructs these variants (F-19).
     /// CLI→DSP parameter SPSC channel full.
     ParamChannelFull,
 
     // E4xxx — Runtime / CLI
+    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
+    // this host-agnostic core crate never constructs these variants (F-19).
     /// Invalid gain value (not a valid f32 number).
     InvalidGainValue,
     /// Unknown CLI command.
@@ -137,6 +161,7 @@ impl NamErrorCode {
             Self::NamJsonInvalidVersionFormat => "E1216",
             Self::NamJsonUnsupportedVersion => "E1217",
             Self::NamJsonUnsupportedMultiChannel => "E1218",
+            Self::InvalidMetadata => "E1219",
             Self::NambNonFiniteWeight => "E1212",
             Self::NambInvalidHeaderField => "E1213",
             Self::NambCrc32Mismatch => "E1201",
@@ -194,10 +219,13 @@ impl NamErrorCode {
             Self::NamJsonUnsupportedMultiChannel => {
                 "LSTM model has multi-channel I/O (only mono supported)"
             }
+            Self::InvalidMetadata => {
+                "Model metadata float is non-finite or outside the plausible range"
+            }
             Self::NambNonFiniteWeight => "NAMB weight is non-finite (NaN/Inf)",
             Self::NambInvalidHeaderField => "NAMB header field is invalid",
             Self::NambCrc32Mismatch => "CRC32 checksum mismatch",
-            Self::NambCrc32Missing => "CRC32 integrity flag missing (v2+)",
+            Self::NambCrc32Missing => "CRC32 integrity metadata missing",
             Self::NambInvalidMagic => "Invalid signature",
             Self::NambUnsupportedVersion => "Unsupported version",
             Self::NambTruncated => "Corrupted/truncated file",
@@ -243,6 +271,7 @@ impl NamErrorCode {
             Self::NamJsonInvalidVersionFormat => "NAM_JSON_INVALID_VERSION_FORMAT",
             Self::NamJsonUnsupportedVersion => "NAM_JSON_UNSUPPORTED_VERSION",
             Self::NamJsonUnsupportedMultiChannel => "NAM_JSON_UNSUPPORTED_MULTI_CHANNEL",
+            Self::InvalidMetadata => "INVALID_METADATA",
             Self::NambNonFiniteWeight => "NAMB_NON_FINITE_WEIGHT",
             Self::NambInvalidHeaderField => "NAMB_INVALID_HEADER_FIELD",
             Self::NambCrc32Mismatch => "NAMB_CRC32_MISMATCH",

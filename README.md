@@ -109,6 +109,7 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 ```rust
 use std::path::Path;
 use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+use neural_amp_modeler_rs::models::NamModel; // trait providing `process()`
 use neural_amp_modeler_rs::SystemSnapshot;
 
 fn main() {
@@ -116,7 +117,7 @@ fn main() {
     let sys = SystemSnapshot::capture();
 
     // 2. Load a .nam or .namb neural model file
-    let model_pair = load_and_build_model(
+    let mut model_pair = load_and_build_model(
         Path::new("models/BossWN-standard.nam"),
         &sys,
         false, // mono processing
@@ -137,31 +138,43 @@ fn main() {
 
 ```rust
 use std::path::Path;
-use neural_amp_modeler_rs::dsp::{DspPipeline, OversampleMode};
+use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
 use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+use neural_amp_modeler_rs::models::NamModel; // trait providing `process()`
 use neural_amp_modeler_rs::SystemSnapshot;
+
+const BLOCK_SIZE: usize = 128;
 
 fn main() {
     let sys = SystemSnapshot::capture();
 
     // Load neural model
-    let model_pair = load_and_build_model(
+    let mut model_pair = load_and_build_model(
         Path::new("models/BossWN-standard.nam"),
         &sys,
         false,
         LoadOptions::default(),
     ).unwrap();
+    let model = model_pair
+        .model_l
+        .as_mut()
+        .expect("mono load (stereo=false) always yields model_l");
 
-    // Create DSP pipeline with 4x oversampling
-    let mut pipeline = DspPipeline::new(
-        model_pair.model_l,
-        OversampleMode::FourTimes,
-    );
+    // Create a 4x half-band polyphase oversampling engine (HQ mode)
+    let os_factor = OversampleFactor::X4;
+    let mut os_engine = OversampleEngine::new(os_factor, BLOCK_SIZE)
+        .expect("Failed to create oversampling engine");
+    let multiplier = os_factor.multiplier();
 
-    // Process real-time audio block
-    let input = vec![0.1_f32; 128];
-    let mut output = vec![0.0_f32; 128];
-    pipeline.process(&input, &mut output);
+    // Process a real-time audio block through the oversampled pipeline
+    let input = vec![0.1_f32; BLOCK_SIZE];
+    let mut output = vec![0.0_f32; BLOCK_SIZE];
+    let mut os_up_buf = vec![0.0_f32; BLOCK_SIZE * multiplier];
+    let mut os_model_buf = vec![0.0_f32; BLOCK_SIZE * multiplier];
+
+    let n_os = os_engine.upsample(&input, &mut os_up_buf, None);
+    model.process(&os_up_buf[..n_os], &mut os_model_buf[..n_os]);
+    os_engine.downsample(&os_model_buf[..n_os], &mut output, None);
 }
 ```
 
@@ -228,7 +241,7 @@ NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models ./utils/setup-third-party.sh
 ```
 
 | Path | Role |
-|:----- |:----- |
+| :----- | :----- |
 | `third-party/NeuralAmpModelerCore/` | Pinned C++ NAMCore mirror (render / parity) |
 | `third-party/NeuralAmpModelerPlugin/` | Pinned C++ plugin mirror (IR / cabsim xref) |
 | `third-party/community_models/` | Optional symlink to local community models (not redistributable) |

@@ -4,9 +4,135 @@
 #[cfg(test)]
 mod tests {
     use crate::common::diagnostics::SystemSnapshot;
-    use crate::loader::{LoadOptions, load_and_build_model};
+    use crate::loader::{LoadOptions, MetadataError, load_and_build_model};
     use crate::testing::fixtures::model_path;
     use std::path::Path;
+    use std::path::PathBuf;
+
+    /// Writes a hostile-metadata variant of `wavenet.nam` to a unique temp file
+    /// and returns its path. `tag` must be unique per test (parallel-safe);
+    /// `replace` maps the original JSON snippet to the hostile one
+    /// (e.g. `"input_level_dbu": 18.3` → `"input_level_dbu": 1e999`).
+    fn write_hostile_metadata_variant(tag: &str, replace: (&str, &str)) -> PathBuf {
+        let src = model_path("wavenet.nam");
+        let content = std::fs::read_to_string(&src).expect("fixture must be readable");
+        assert!(
+            content.contains(replace.0),
+            "fixture does not contain expected snippet: {}",
+            replace.0
+        );
+        let hostile = content.replace(replace.0, replace.1);
+
+        let path = std::env::temp_dir().join(format!(
+            "nam_metadata_hostile_{}_{}.nam",
+            std::process::id(),
+            tag
+        ));
+        std::fs::write(&path, hostile).expect("temp file must be writable");
+        path
+    }
+
+    /// Acceptance (T6.2): JSON with `input_level_dbu: 1e999` returns a typed `Err`.
+    ///
+    /// serde_json rejects `1e999` as "number out of range" at parse time
+    /// (`JsonError::Serde`). Defense-in-depth: if a future serde version
+    /// saturates instead, the post-parse gate (`MetadataError`) also rejects.
+    #[test]
+    fn test_metadata_input_level_1e999_returns_typed_err() {
+        let sys = SystemSnapshot::capture();
+        let path = write_hostile_metadata_variant(
+            "in_1e999",
+            ("\"input_level_dbu\": 18.3", "\"input_level_dbu\": 1e999"),
+        );
+        let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+        assert!(
+            res.is_err(),
+            "metadata with input_level_dbu=1e999 must be rejected"
+        );
+    }
+
+    /// The real saturation vector (F-14): `1e39` is finite in f64 but saturates
+    /// to `+Inf` when serde deserializes into `f32`. The post-parse gate must
+    /// reject it with the typed `MetadataError::NonFinite`.
+    #[test]
+    fn test_metadata_input_level_f32_saturation_rejected_typed() {
+        let sys = SystemSnapshot::capture();
+        let path = write_hostile_metadata_variant(
+            "in_1e39",
+            ("\"input_level_dbu\": 18.3", "\"input_level_dbu\": 1e39"),
+        );
+        let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+
+        let err = res.expect_err("metadata with input_level_dbu=1e39 must be rejected");
+        let meta_err = err
+            .downcast_ref::<MetadataError>()
+            .expect("error must be the typed MetadataError");
+        assert!(
+            matches!(
+                meta_err,
+                MetadataError::NonFinite {
+                    field: "input_level_dbu",
+                    ..
+                }
+            ),
+            "expected MetadataError::NonFinite for input_level_dbu, got: {:?}",
+            meta_err
+        );
+    }
+
+    /// Out-of-range dBu metadata (beyond ±60 dBu) is rejected with the typed
+    /// `MetadataError::DbOutOfRange`.
+    #[test]
+    fn test_metadata_db_out_of_range_rejected_typed() {
+        let sys = SystemSnapshot::capture();
+        let path = write_hostile_metadata_variant(
+            "loudness_5000",
+            ("\"loudness\": -20.020729064941406", "\"loudness\": -5000.0"),
+        );
+        let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+
+        let err = res.expect_err("loudness beyond ±60 dBu must be rejected");
+        let meta_err = err
+            .downcast_ref::<MetadataError>()
+            .expect("error must be the typed MetadataError");
+        assert!(
+            matches!(
+                meta_err,
+                MetadataError::DbOutOfRange {
+                    field: "loudness",
+                    ..
+                }
+            ),
+            "expected MetadataError::DbOutOfRange for loudness, got: {:?}",
+            meta_err
+        );
+    }
+
+    /// Hostile `head_scale` (negative or beyond the plausible linear range)
+    /// is rejected with the typed `MetadataError::HeadScaleOutOfRange`.
+    #[test]
+    fn test_metadata_head_scale_out_of_range_rejected_typed() {
+        let sys = SystemSnapshot::capture();
+        let path = write_hostile_metadata_variant(
+            "head_scale_neg",
+            ("\"head_scale\": 0.02", "\"head_scale\": -0.02"),
+        );
+        let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+
+        let err = res.expect_err("head_scale=-0.02 must be rejected");
+        let meta_err = err
+            .downcast_ref::<MetadataError>()
+            .expect("error must be the typed MetadataError");
+        assert!(
+            matches!(meta_err, MetadataError::HeadScaleOutOfRange { .. }),
+            "expected MetadataError::HeadScaleOutOfRange, got: {:?}",
+            meta_err
+        );
+    }
 
     #[test]
     fn test_load_valid_model_mono() {

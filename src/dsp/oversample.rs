@@ -27,6 +27,7 @@
 
 use super::stage::X2Stage;
 use crate::common::diagnostics::NamErrorCode;
+use crate::common::spsc::{RT_STATUS_HOST_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::math::common::AlignedVec;
 
 /// Half-band FIR filter length (≡ 1 mod 4 so D=HB_TAPS/2 is even).
@@ -184,8 +185,22 @@ impl OversampleEngine {
     ///
     /// `output` must have room for `input.len() * factor.multiplier()` samples.
     /// Returns number of oversampled samples written.
-    pub fn upsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+    ///
+    /// Input blocks larger than `max_samples` are truncated defensively (F-12 /
+    /// T2.4): when `rt_status` is provided the truncation raises
+    /// `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
+    pub fn upsample(
+        &mut self,
+        input: &[f32],
+        output: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) -> usize {
         let n_in = input.len().min(self.max_samples);
+        if n_in != input.len()
+            && let Some(rt) = rt_status
+        {
+            rt.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        }
         let input = &input[..n_in];
         debug_assert!(input.len() <= self.max_samples);
         debug_assert!(
@@ -218,9 +233,23 @@ impl OversampleEngine {
     ///
     /// `output` must have room for `input.len() / factor.multiplier()` samples.
     /// Returns number of native-rate samples written.
-    pub fn downsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+    ///
+    /// Input blocks larger than `max_samples × multiplier` are truncated
+    /// defensively (F-12 / T2.4): when `rt_status` is provided the truncation
+    /// raises `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
+    pub fn downsample(
+        &mut self,
+        input: &[f32],
+        output: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) -> usize {
         let max_os = self.max_samples * self.factor.multiplier();
         let n_in = input.len().min(max_os);
+        if n_in != input.len()
+            && let Some(rt) = rt_status
+        {
+            rt.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        }
         let input = &input[..n_in];
         debug_assert!(
             output.len() >= input.len() / self.factor.multiplier(),

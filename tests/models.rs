@@ -59,6 +59,8 @@ mod lstm_activation_precision;
 mod lstm_model_dyn_validation;
 #[path = "models/meta_coherence.rs"]
 mod meta_coherence;
+#[path = "models/metrics_jsonl_test.rs"]
+mod metrics_jsonl_test;
 #[path = "models/mirror_buf_fault_injection.rs"]
 mod mirror_buf_fault_injection;
 #[path = "models/nam_infer_test.rs"]

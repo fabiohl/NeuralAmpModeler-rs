@@ -211,7 +211,7 @@ The helper `set_daz_ftz()` in [`src/math/common/ops.rs`](../src/math/common/ops.
 - **FTZ (Flush-To-Zero):** Output subnormals flush to positive zero.
 - **DAZ (Denormals-Are-Zero):** Input subnormals are read as zero.
 
-Applied on the first audio block of `process()` and refreshed every 1024 blocks to guard against host thread state resets. Active unconditionally with zero audible impact.
+Reasserted at the start of every audio processing call ([`capture_dsp_pipeline`](../src/dsp/pipeline/capture.rs)) to guard against host threads that reset or never configure MXCSR. Active unconditionally with zero audible impact.
 
 ---
 

@@ -132,13 +132,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n_in = in_chunk.len();
 
         // Stage A: Upsample native input to 4× rate
-        let n_os = os_engine.upsample(in_chunk, &mut os_up_buf[..n_in * os_multiplier]);
+        let n_os = os_engine.upsample(in_chunk, &mut os_up_buf[..n_in * os_multiplier], None);
 
         // Stage B: Process neural model at 4× oversampled rate
         model.process(&os_up_buf[..n_os], &mut os_model_buf[..n_os]);
 
         // Stage C: Downsample back to native rate
-        let n_out = os_engine.downsample(&os_model_buf[..n_os], out_chunk);
+        let n_out = os_engine.downsample(&os_model_buf[..n_os], out_chunk, None);
 
         processed_samples += n_out;
     }

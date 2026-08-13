@@ -29,16 +29,17 @@ cargo fmt --all
 # ---------------------------------------------------------------------------
 # [2/6] Compilation checks (cargo check) — broad feature matrix
 # ---------------------------------------------------------------------------
+# --locked (F-26): Cargo.lock must not drift silently during lint runs.
 phase "Executing compilation checks (cargo check)..."
 
 echo -e "  ${YELLOW}${BOLD}Checking: All Targets + All Features (broad catch-all)...${NC}"
-cargo check --all-targets --all-features
+cargo check --locked --all-targets --all-features
 
 echo -e "  ${YELLOW}${BOLD}Checking: Pure Core (lib, no features)...${NC}"
-cargo check --lib --no-default-features
+cargo check --locked --lib --no-default-features
 
 echo -e "  ${YELLOW}${BOLD}Checking: All Targets (no default features)...${NC}"
-cargo check --all-targets --no-default-features
+cargo check --locked --all-targets --no-default-features
 
 # ---------------------------------------------------------------------------
 # [3/6] Static analysis (cargo clippy) — strict, broad feature matrix
@@ -46,13 +47,13 @@ cargo check --all-targets --no-default-features
 phase "Executing strict static analysis (cargo clippy)..."
 
 echo -e "  ${YELLOW}${BOLD}Clippy: All Targets + All Features (broad catch-all)...${NC}"
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
 
 echo -e "  ${YELLOW}${BOLD}Clippy: Pure Core (lib, no features)...${NC}"
-cargo clippy --lib --no-default-features -- -D warnings
+cargo clippy --locked --lib --no-default-features -- -D warnings
 
 echo -e "  ${YELLOW}${BOLD}Clippy: All Targets (no default features)...${NC}"
-cargo clippy --all-targets --no-default-features -- -D warnings
+cargo clippy --locked --all-targets --no-default-features -- -D warnings
 
 # ---------------------------------------------------------------------------
 # [4/6] Documentation validation (cargo doc + cargo test --doc)
@@ -69,9 +70,12 @@ cargo test --doc --all-features
 # [5/6] SPDX license header validation (deterministic, no external tooling)
 # ---------------------------------------------------------------------------
 phase "Validating SPDX license headers..."
+# F-26: scope covers src/benches/tests, shell scripts, examples/*.rs and
+# fixture generator scripts (*.py) — plus build.rs and Cargo.toml.
 spdx_scope=$(
     {
-        find src benches tests -type f -name '*.rs'
+        find src benches tests examples -type f -name '*.rs'
+        find tests/fixtures -type f -name '*.py'
         find utils tests -type f -name '*.sh'
         echo "build.rs"
         echo "Cargo.toml"

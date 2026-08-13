@@ -53,13 +53,97 @@ dashboard_phase_receipt() {
     fi
 }
 
+# ── Single performance-status classifier (F-08 / EP-05) ──────────────────────
+# The ONE place where the performance verification outcome is classified.
+# Inputs: <receipt_status> <receipt_reason> — the typed receipt written by
+# utils/tests-performance-regression.sh (phase_id "regression_check").
+# Output (stdout): PASS | NOT_VERIFIED | FAIL
+#   * PASS         — the gate ran and no regression was detected.
+#   * NOT_VERIFIED — performance could not be verified against a baseline
+#                    (MISSING_BASELINE / INCOMPARABLE_ENVIRONMENT). Exactly one
+#                    semantic; never counts as PASS and never renders green.
+#   * FAIL         — a real regression was detected or the benchmark run failed.
+# "Performance not verified" must never abort a default-mode dashboard run
+# (it is reported, not gated); the canonical alarm is `quality-dashboard.sh
+# --check` against docs/quality-contract.txt, which fails on it.
+classify_regression_outcome() {
+    local status="${1:-}"
+    local reason="${2:-}"
+    case "${status}:${reason}" in
+        PASS:*)
+            echo "PASS"
+            ;;
+        *:MISSING_BASELINE|*:INCOMPARABLE_ENVIRONMENT)
+            echo "NOT_VERIFIED"
+            ;;
+        *)
+            echo "FAIL"
+            ;;
+    esac
+}
+
+# Count the number of JSONL metric records currently in a metrics file.
+# Returns 0 when the file is absent/empty. Used to prove that a measurement
+# phase actually emitted ≥1 metric record (F-21: a green command is not proof
+# when tests/fixtures were skipped).
+count_jsonl_records() {
+    local jsonl="${1:-}"
+    [ -n "$jsonl" ] && [ -f "$jsonl" ] || { echo 0; return 0; }
+    wc -l < "$jsonl" 2>/dev/null || echo 0
+}
+
+# assert_ran_tests <log_file> [min_count]
+# Ported from tests-long.sh. Verifies that a test/benchmark log proves real
+# execution: counts "test result: ok. N passed" lines and Criterion "N measured"
+# lines, falling back to counting benchmark "time: [ ... ]" lines. Returns 1
+# when fewer than <min_count> tests/benchmarks actually ran (empty selection,
+# filter mismatch, or 100% skip via early return). This closes the F-21 case
+# where a phase with a non-empty log but zero executed tests still received PASS.
+assert_ran_tests() {
+    local log_file="$1"
+    local min_count="${2:-1}"
+
+    local total_passed=0
+
+    local passed
+    if passed=$(grep -oP 'test result: ok\.\s+\K\d+(?=\s+passed)' "$log_file" 2>/dev/null); then
+        for p in $passed; do
+            total_passed=$((total_passed + p))
+        done
+    fi
+
+    local measured
+    if measured=$(grep -oP '\K\d+(?=\s+measured)' "$log_file" 2>/dev/null); then
+        for m in $measured; do
+            total_passed=$((total_passed + m))
+        done
+    fi
+
+    if [ "$total_passed" -eq 0 ]; then
+        local bench_count
+        bench_count=$(grep -cP '^\S.*time:\s+\[' "$log_file" 2>/dev/null || true)
+        bench_count="${bench_count:-0}"
+        total_passed=$bench_count
+    fi
+
+    if [ "$total_passed" -lt "$min_count" ]; then
+        echo -e "${RED}${BOLD}❌ Gate failed: phase executed 0 tests/benchmarks (empty selection or filter mismatch).${NC}"
+        return 1
+    fi
+    echo -e "  Gate: ${total_passed} test(s)/benchmark(s) executed ≥ ${min_count}  ✓"
+    return 0
+}
+
 # Run a dashboard phase with strict exit code capture.
 #
-# Usage: run_dashboard_phase <phase_id> <min_expected_records> [command...]
+# Usage: run_dashboard_phase <phase_id> <min_expected_records> [min_jsonl_records] [command...]
 #
 # Executes the command, captures its exit code, counts output lines in the
 # expected log file (derived from LOGDIR/<phase_id>.log convention used by
-# quality-dashboard.sh), and writes a typed receipt entry.
+# quality-dashboard.sh), asserts real test execution (assert_ran_tests), and —
+# when <min_jsonl_records> > 0 — asserts the phase emitted at least that many
+# NEW JSONL metric records (snapshot delta of $NAM_METRICS_JSONL). Then writes a
+# typed receipt entry.
 #
 # The command MUST include shell redirection to its log file (e.g. `> "$LOGDIR/xy.log" 2>&1`).
 # The wrapper does NOT suppress failures with || true — the exit code is captured and
@@ -67,14 +151,29 @@ dashboard_phase_receipt() {
 # final exit code.
 #
 # Returns: 0 always (to keep the dashboard collecting), but sets DASHBOARD_PHASE_HAD_FAILURE=1
-#          when exit_code != 0 or observed_records < min_expected_records.
+#          when exit_code != 0, observed_records < min_expected_records, zero executed
+#          tests/benchmarks, or insufficient JSONL metric records.
 run_dashboard_phase() {
     local phase_id="$1" min_records="$2"
     shift 2
 
+    # Optional third argument: minimum NEW JSONL metric records this phase must
+    # emit (0 disables the check). Used by mandatory measurement phases so an
+    # early-return 100%-skip cannot count as PASS (F-21).
+    local min_jsonl=0
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        min_jsonl="$1"
+        shift
+    fi
+
     local log_path="$LOGDIR/${phase_id}.log"
 
     echo -e "${BLUE}${BOLD}-> Running ${phase_id}...${NC}"
+
+    local jsonl_before=0
+    if [ "$min_jsonl" -gt 0 ]; then
+        jsonl_before=$(count_jsonl_records "${NAM_METRICS_JSONL:-}")
+    fi
 
     local start_t end_t exit_code
     start_t=$(date +%s%N)
@@ -102,6 +201,21 @@ run_dashboard_phase() {
         status="FAIL"
         reason="min_records=${min_records} not met (observed=${observed})"
         echo -e "  ${RED}✗${NC} ${phase_id} insufficient records: ${observed}/${min_records} (${dur_s}s)"
+    elif ! assert_ran_tests "$log_path" 1; then
+        status="FAIL"
+        reason="no tests/benchmarks actually executed (empty selection or 100% skip)"
+        echo -e "  ${RED}✗${NC} ${phase_id} asserted 0 executed tests/benchmarks (${dur_s}s)"
+    elif [ "$min_jsonl" -gt 0 ]; then
+        local jsonl_after jsonl_delta
+        jsonl_after=$(count_jsonl_records "${NAM_METRICS_JSONL:-}")
+        jsonl_delta=$((jsonl_after - jsonl_before))
+        if [ "$jsonl_delta" -lt "$min_jsonl" ]; then
+            status="FAIL"
+            reason="jsonl_records=${jsonl_delta} below minimum ${min_jsonl} (phase emitted no measurement)"
+            echo -e "  ${RED}✗${NC} ${phase_id} emitted ${jsonl_delta} JSONL metric record(s), minimum ${min_jsonl} (${dur_s}s)"
+        else
+            echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_s}s, ${observed} lines, ${jsonl_delta} metric record(s))"
+        fi
     else
         echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_s}s, ${observed} lines)"
     fi
@@ -204,12 +318,13 @@ check_toolchain_fingerprint() {
     OS_NOW=$(uname -r 2>/dev/null || echo "unknown")
 
     local mismatch=0
+    local F_CXX="" F_GLIBC="" F_CMAKE="" F_OS="" F_FLAGS=""
     while IFS= read -r line; do
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx:\ (.*)$ ]]      && local F_CXX="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cmake:\ (.*)$ ]]     && local F_CMAKE="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ glibc:\ (.*)$ ]]     && local F_GLIBC="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ os:\ (.*)$ ]]        && local F_OS="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx-flags:\ (.*)$ ]] && local F_FLAGS="${BASH_REMATCH[1]}"
+        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx:\ (.*)$ ]]      && F_CXX="${BASH_REMATCH[1]}"
+        [[ "$line" =~ ^#\ TOOLCHAIN:\ cmake:\ (.*)$ ]]     && F_CMAKE="${BASH_REMATCH[1]}"
+        [[ "$line" =~ ^#\ TOOLCHAIN:\ glibc:\ (.*)$ ]]     && F_GLIBC="${BASH_REMATCH[1]}"
+        [[ "$line" =~ ^#\ TOOLCHAIN:\ os:\ (.*)$ ]]        && F_OS="${BASH_REMATCH[1]}"
+        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx-flags:\ (.*)$ ]] && F_FLAGS="${BASH_REMATCH[1]}"
     done < "$MANIFEST"
 
     if [ -n "$F_CXX" ] && [ "$F_CXX" != "$CXX_NOW" ]; then
@@ -249,6 +364,12 @@ check_toolchain_fingerprint() {
 #                            (quick suite — daily first line)
 #   mode = warn-only       → all issues YELLOW; always returns 0
 # Bypass: NAM_BYPASS_FRESHNESS=1 skips the entire check (returns 0).
+#
+# Audit (F-22): freshness is decided SOLELY by hash provenance against the
+# committed manifest (model .nam / fixture files + generator scripts + NAMCore
+# reference), never by file age/mtime. Goldens are trustworthy by default and
+# regeneration is required only when a real change to a model or reference
+# occurred. This satisfies the PO binding directive.
 # Validates:
 #   1. Manifest existence                         (artifact)
 #   2. EXPECTED golden files missing from disk    (artifact)
@@ -455,5 +576,39 @@ check_freshness() {
     fi
     echo -e "  ${GREEN}✓ ${summary} (${details}).${NC}"
     return 0
+}
+
+# ── Typed freshness gate (F-22) ─────────────────────────────────────────────
+# Conservative wrapper around check_freshness that reports a machine-readable
+# outcome via the global FRESHNESS_REASON variable, so callers (quality
+# dashboard Fase 0, tests-long) do not grep human-readable output.
+#
+#   FRESHNESS_REASON = OK | STALE_FIXTURES | MISSING_FIXTURES | ORPHAN_FIXTURE
+#                      | FRESHNESS_FAILED
+#
+# "STALE_FIXTURES" is raised only on a real, unregenerated change to a model
+# or fixture (hash drift vs. the committed manifest) — never on age. Returns 0
+# on pass; on failure, echoes the check_freshness diagnostics and returns 1.
+run_freshness_gate() {
+    local mode="${1:-artifacts-hard}"
+    local log
+    log="$(mktemp "${TMPDIR:-/tmp}/nam-freshness-XXXXXX")"
+    FRESHNESS_REASON="OK"
+    check_freshness "$mode" > "$log" 2>&1
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then
+        if grep -q 'STALE' "$log"; then
+            FRESHNESS_REASON="STALE_FIXTURES"
+        elif grep -q 'MISSING' "$log"; then
+            FRESHNESS_REASON="MISSING_FIXTURES"
+        elif grep -q 'ORPHAN' "$log"; then
+            FRESHNESS_REASON="ORPHAN_FIXTURE"
+        else
+            FRESHNESS_REASON="FRESHNESS_FAILED"
+        fi
+        cat "$log"
+    fi
+    rm -f "$log"
+    return "$rc"
 }
 

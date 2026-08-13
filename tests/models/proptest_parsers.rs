@@ -1779,3 +1779,232 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// T2.2 (Sprint 2) — Adversarial A2-Dynamic loader defenses (F-05):
+//         extreme condition_size, groups and channels must be rejected
+//         gracefully through the public safe API (Err), never panic/abort.
+// ---------------------------------------------------------------------------
+
+/// Strategy: A2-Dynamic WaveNet JSONs targeting the Sprint-2 loader defenses —
+/// the `MAX_CONDITION_SIZE` semantic cap, `u32` range checks on group counts,
+/// and zero-group rejection. Returns `(json, expect_reject)`.
+fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, bool)> {
+    use neural_amp_modeler_rs::loader::dispatcher::wavenet::MAX_CONDITION_SIZE;
+
+    let a2_kernel_sizes: [usize; 23] = [
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 15, 15, 6, 6, 6, 6, 6, 6, 6,
+    ];
+    let a2_dilations: [usize; 23] = [
+        1, 3, 7, 17, 41, 101, 239, 1, 3, 7, 17, 41, 101, 239, 1, 13, 1, 3, 7, 17, 41, 101, 239,
+    ];
+
+    (any::<usize>(), any::<usize>()).prop_map(move |(raw, pattern)| {
+        let acts: Vec<serde_json::Value> = (0..23)
+            .map(|_| serde_json::json!({"type": "LeakyReLU", "negative_slope": 0.01}))
+            .collect();
+
+        // 0: condition_size above MAX_CONDITION_SIZE        → must reject
+        // 1: condition_size exactly at the cap (benign edge) → may build
+        // 2: groups_input_mixin = 0                         → must reject
+        // 3: groups_input_mixin > u32::MAX                  → must reject
+        // 4: layer1x1.groups = 0                            → must reject
+        // 5: layer1x1.groups > u32::MAX                     → must reject
+        // 6: head1x1.groups = 0 (head1x1 active)            → must reject
+        // 7: channels > MAX_A2_DYN_CHANNELS                 → must reject
+        // 8: benign valid-but-unusual values                → may build
+        let (
+            condition_size,
+            mixin_groups,
+            l1x1_groups,
+            h1x1_active,
+            h1x1_groups,
+            channels,
+            expect_reject,
+        ) = match pattern % 9 {
+            0 => (
+                MAX_CONDITION_SIZE + 1 + (raw % 10_000),
+                1u64,
+                1u64,
+                false,
+                1u64,
+                12usize,
+                true,
+            ),
+            1 => (MAX_CONDITION_SIZE, 1, 1, false, 1, 12, false),
+            2 => (1, 0, 1, false, 1, 12, true),
+            3 => (
+                1,
+                u32::MAX as u64 + 1 + (raw as u64 % 10_000),
+                1,
+                false,
+                1,
+                12,
+                true,
+            ),
+            4 => (1, 1, 0, false, 1, 12, true),
+            5 => (
+                1,
+                1,
+                u32::MAX as u64 + 1 + (raw as u64 % 10_000),
+                false,
+                1,
+                12,
+                true,
+            ),
+            6 => (1, 1, 1, true, 0, 12, true),
+            7 => (
+                1,
+                1,
+                1,
+                false,
+                1,
+                MAX_A2_DYN_CHANNELS + 1 + (raw % 10_000),
+                true,
+            ),
+            _ => (2, 2, 2, false, 1, 12, false),
+        };
+
+        let json = serde_json::json!({
+            "version": "0.7.0",
+            "architecture": "WaveNet",
+            "config": {
+                "in_channels": 1,
+                "head_scale": 0.02,
+                "layers": [{
+                    "input_size": 1,
+                    "condition_size": condition_size,
+                    "channels": channels,
+                    "bottleneck": channels,
+                    "kernel_sizes": a2_kernel_sizes,
+                    "dilations": a2_dilations,
+                    "head_size": 1,
+                    "head_bias": true,
+                    "activation": acts,
+                    "layer1x1": {"active": true, "groups": l1x1_groups},
+                    "head1x1": {
+                        "active": h1x1_active,
+                        "out_channels": 12,
+                        "groups": h1x1_groups
+                    },
+                    "groups_input_mixin": mixin_groups,
+                    "head": {"out_channels": 1, "kernel_size": 16, "bias": true}
+                }]
+            },
+            "weights": vec![0.0f32; 65536],
+            "sample_rate": 48000
+        });
+
+        (serde_json::to_string(&json).unwrap(), expect_reject)
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Off)),
+        .. ProptestConfig::with_cases(10_000)
+    })]
+
+    /// T2.2 (Sprint 2) — Adversarial A2-Dynamic loader defenses: extreme
+    /// condition_size, groups and channels must be rejected gracefully through
+    /// the public safe API (`Err`), never panic/abort (F-05).
+    #[test]
+    #[ignore]
+    fn prop_fuzz_adversarial_a2_loader_defenses(
+        (json_str, expect_reject) in adversarial_a2_condition_groups_strategy()
+    ) {
+        let parsed = match parse_nam_json(&json_str) {
+            Ok(d) => d,
+            // Parse-time rejection is also graceful — the builder defense is
+            // not exercised in this case.
+            Err(_) => return Ok(()),
+        };
+        let built = neural_amp_modeler_rs::loader::dispatcher::build_model(&parsed);
+        if expect_reject {
+            assert!(
+                built.is_err(),
+                "adversarial A2 JSON was accepted instead of rejected: {json_str}"
+            );
+        }
+        // An `Ok` result for benign cases is acceptable; any panic inside
+        // build_model fails this test automatically.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T6.2 (Sprint 6) — Hostile metadata floats: `input_level_dbu`,
+// `output_level_dbu`, `loudness`, `head_scale` must never corrupt gain
+// staging. If the load succeeds, all multipliers must be finite; hostile
+// values (saturation-prone literals, out-of-range dBu) must be rejected.
+// ---------------------------------------------------------------------------
+
+/// Strategy: injects an adversarial numeric literal into one of the four
+/// metadata float fields of an otherwise-valid fixture (`wavenet.nam`).
+fn hostile_metadata_json_strategy() -> impl Strategy<Value = String> {
+    const SNIPPETS: [(&str, &str); 4] = [
+        ("\"input_level_dbu\": 18.3", "input_level_dbu"),
+        ("\"output_level_dbu\": 12.3", "output_level_dbu"),
+        ("\"loudness\": -20.020729064941406", "loudness"),
+        ("\"head_scale\": 0.02", "head_scale"),
+    ];
+    const LITERALS: [&str; 12] = [
+        "1e39",
+        "-1e39",
+        "1e999",
+        "-1e999",
+        "1e38",
+        "3.4028235e38",
+        "5000.0",
+        "-5000.0",
+        "0.0",
+        "-0.0",
+        "-1.0",
+        "12.0",
+    ];
+
+    (0..SNIPPETS.len(), 0..LITERALS.len()).prop_map(|(field_idx, literal_idx)| {
+        let content = fs::read_to_string("tests/fixtures/models/wavenet.nam")
+            .expect("wavenet.nam fixture must be readable");
+        let (snippet, field) = SNIPPETS[field_idx];
+        assert!(
+            content.contains(snippet),
+            "fixture must contain metadata snippet: {snippet}"
+        );
+        content.replace(snippet, &format!("\"{field}\": {}", LITERALS[literal_idx]))
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Off)),
+        .. ProptestConfig::with_cases(500)
+    })]
+    #[test]
+    #[ignore]
+    fn prop_hostile_metadata_never_corrupts_gain(json in hostile_metadata_json_strategy()) {
+        use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
+        use neural_amp_modeler_rs::SystemSnapshot;
+        use std::sync::OnceLock;
+
+        static SYS: OnceLock<SystemSnapshot> = OnceLock::new();
+        let sys = SYS.get_or_init(SystemSnapshot::capture);
+
+        let path = std::env::temp_dir().join("nam_prop_hostile_metadata.nam");
+        std::fs::write(&path, &json).expect("temp file must be writable");
+        let result = load_and_build_model(&path, sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+
+        // Invariant (F-14): malformed metadata must never corrupt gain
+        // staging with NaN/Inf — if the model loads, multipliers are finite.
+        if let Ok(pair) = result {
+            prop_assert!(
+                pair.input_mult_adj.is_finite(),
+                "input_mult_adj must be finite for JSON: {json}"
+            );
+            prop_assert!(
+                pair.output_mult_adj.is_finite(),
+                "output_mult_adj must be finite for JSON: {json}"
+            );
+        }
+    }
+}

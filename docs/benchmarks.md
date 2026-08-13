@@ -195,6 +195,38 @@ even with **no code change**. This is environmental, not a fidelity bug.
 `--check` never auto-creates a baseline after `cargo clean` or a fresh clone:
 missing `.performance-baselines/` → `MISSING_BASELINE`, exit 1.
 
+### Pre-Flight Checklist (Performance Gate)
+
+Performance measurement is only meaningful under a controlled environment.
+Run this checklist **before** `--check` or `--bootstrap-baseline` (F-29, EP-05):
+
+- [ ] **Baseline present.** `.performance-baselines/baseline-fingerprint.json` exists
+      (and the `ci-baseline` series under `.performance-baselines/`).
+      Absent → the standalone gate fails `MISSING_BASELINE`; the dashboard
+      displays performance as `NOT_VERIFIED`.
+- [ ] **CPU governor = `performance`.** Verify with
+      `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`.
+      A different governor (`powersave`, `schedutil`, amd_pstate default) makes
+      measurements incomparable → `INCOMPARABLE_ENVIRONMENT`.
+- [ ] **Low background load.** Close browsers/heavy services; thermals and
+      co-resident load dominate the micro-bench noise floor (see the flaky
+      `--check` note above).
+- [ ] **Core pinning available.** `taskset` present (defaults to `nproc / 2`;
+      override with `NAM_BENCH_CORE`). Same physical core count as the
+      bootstrap machine — it is part of the environment fingerprint.
+- [ ] **Fresh benchmark set.** Every `regression_gate` benchmark must have a
+      saved baseline series: a new/renamed benchmark fails `--check` with
+      `BASELINE_COVERAGE_GAP` until a human re-bootstraps the baseline.
+
+> [!IMPORTANT]
+> **`NOT_VERIFIED` has exactly one semantic.** `MISSING_BASELINE` and
+> `INCOMPARABLE_ENVIRONMENT` both mean "performance could not be verified
+> against the saved baseline". The standalone gate fails typed on both;
+> `quality-dashboard.sh` renders a single unambiguous `NOT_VERIFIED` state
+> (never green, never counted as PASS) and its `--check` mode fails on it.
+> **Baseline bootstrap is always a human operation** — agents and CI are
+> prohibited from `--bootstrap-baseline` and `quality-dashboard.sh --save`.
+
 ### Script Modes
 
 | Mode                | Command                                                      | Purpose                                                                                                                                |

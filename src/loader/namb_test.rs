@@ -158,10 +158,10 @@ mod tests {
         let err = parse_namb(&data).unwrap_err();
         let namb_err = err
             .downcast_ref::<NambError>()
-            .expect("Error should be NambError::CrcMismatch");
+            .expect("Error should be NambError::CrcMissingV1");
         assert!(
-            matches!(namb_err, NambError::CrcMismatch { .. }),
-            "Expected CrcMismatch, got: {:?}",
+            matches!(namb_err, NambError::CrcMissingV1),
+            "Expected CrcMissingV1, got: {:?}",
             namb_err
         );
     }
@@ -184,10 +184,10 @@ mod tests {
         let err = parse_namb(&data).unwrap_err();
         let namb_err = err
             .downcast_ref::<NambError>()
-            .expect("Error should be NambError::CrcMismatch");
+            .expect("Error should be NambError::CrcMissingV1");
         assert!(
-            matches!(namb_err, NambError::CrcMismatch { .. }),
-            "Expected CrcMismatch, got: {:?}",
+            matches!(namb_err, NambError::CrcMissingV1),
+            "Expected CrcMissingV1, got: {:?}",
             namb_err
         );
     }

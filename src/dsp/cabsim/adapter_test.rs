@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
 
 fn direct_convolve(ir: &[f32], input: &[f32]) -> Vec<f32> {
     let out_len = input.len() + ir.len() - 1;
@@ -100,7 +101,7 @@ fn process_full_with_prefix(
             break;
         }
         let mut buf_out = vec![0.0f32; sub];
-        adapter.process_variable(&signal[pos..pos + sub], &mut buf_out);
+        adapter.process_variable(&signal[pos..pos + sub], &mut buf_out, None);
         if !first_partition_done {
             if buf_out.iter().any(|&s| s.abs() > 1e-8) {
                 first_partition_done = true;
@@ -117,7 +118,7 @@ fn process_full_with_prefix(
     let max_flush = adapter.num_partitions() + 3;
     for _ in 0..max_flush {
         let mut buf_out = vec![0.0f32; p];
-        adapter.process_variable(&z[..], &mut buf_out);
+        adapter.process_variable(&z[..], &mut buf_out, None);
         output.extend_from_slice(&buf_out);
     }
 
@@ -149,7 +150,7 @@ fn passthrough_on_empty_ir() {
                 .min(adapter2.partition_size())
                 .min(signal.len() - pos);
             let mut buf = vec![0.0f32; n];
-            adapter2.process_variable(&signal[pos..pos + n], &mut buf);
+            adapter2.process_variable(&signal[pos..pos + n], &mut buf, None);
             for (i, &s) in buf.iter().enumerate() {
                 assert!(
                     (s - signal[pos + i]).abs() < 1e-10,
@@ -298,7 +299,7 @@ fn first_partition_produces_silence_during_accumulation() {
     let mut pos = 0;
     for &sub in &[17, 17, 17, 13] {
         let mut buf = vec![0.0f32; sub];
-        adapter.process_variable(&signal[pos..pos + sub], &mut buf);
+        adapter.process_variable(&signal[pos..pos + sub], &mut buf, None);
         output.extend_from_slice(&buf);
         pos += sub;
     }
@@ -400,7 +401,7 @@ fn process_zero_length_input_no_panic() {
     let mut adapter = adapter_from_ir(&ir, 64);
 
     let mut empty_out = vec![];
-    adapter.process_variable(&[], &mut empty_out);
+    adapter.process_variable(&[], &mut empty_out, None);
 }
 
 #[test]
@@ -472,7 +473,7 @@ fn needs_flush_after_partial_input() {
 
     let signal: Vec<f32> = (0..32).map(|i| (i as f32 * 0.01).sin()).collect();
     let mut out = vec![0.0f32; 32];
-    adapter.process_variable(&signal, &mut out);
+    adapter.process_variable(&signal, &mut out, None);
     assert!(adapter.needs_flush());
 }
 
@@ -483,11 +484,11 @@ fn needs_flush_cleared_when_drained() {
 
     let signal: Vec<f32> = (0..64).map(|i| (i as f32 * 0.01).sin()).collect();
     let mut out = vec![0.0f32; 32];
-    adapter.process_variable(&signal[..32], &mut out);
+    adapter.process_variable(&signal[..32], &mut out, None);
     assert!(!adapter.needs_flush());
 
     let mut out2 = vec![0.0f32; 32];
-    adapter.process_variable(&signal[32..], &mut out2);
+    adapter.process_variable(&signal[32..], &mut out2, None);
     assert!(!adapter.needs_flush());
 }
 
@@ -507,4 +508,74 @@ fn tail_samples_single_partition() {
     let adapter = adapter_from_ir(&ir, partition);
     assert_eq!(adapter.tail_samples(), 128);
     assert_eq!(adapter.num_partitions(), 1);
+}
+
+#[test]
+fn oversize_sub_block_clamps_and_raises_flag() {
+    // F-03 / T2.3: a sub-block 2× the partition (host quantum renegotiation
+    // window) must not panic — the adapter clamps defensively and raises the
+    // CABSIM_CONTRACT_VIOLATION status flag.
+    let ir = synth_ir(60, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    let rt = RtStatusFlags::new();
+    let signal: Vec<f32> = (0..(2 * partition))
+        .map(|i| (i as f32 * 0.01).sin())
+        .collect();
+    let mut out = vec![0.0f32; 2 * partition];
+
+    adapter.process_variable(&signal, &mut out, Some(&rt));
+
+    assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+    assert!(!rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+#[test]
+fn mismatched_output_len_clamps_and_raises_flag() {
+    // F-03 / T2.3: input/output length disagreement must never panic in
+    // release — the adapter clamps to the shortest slice and raises the
+    // contract flag. Debug builds keep `debug_assert_eq!` (loud during
+    // development), so the two modes are asserted separately.
+    let ir = synth_ir(60, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    let signal: Vec<f32> = (0..32).map(|i| (i as f32 * 0.01).sin()).collect();
+
+    let rt = RtStatusFlags::new();
+    let mut short_out = vec![0.0f32; 16];
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        adapter.process_variable(&signal, &mut short_out, Some(&rt));
+    }));
+
+    #[cfg(debug_assertions)]
+    {
+        assert!(
+            result.is_err(),
+            "debug build must assert on input/output length mismatch"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        assert!(
+            result.is_ok(),
+            "release build must never panic on input/output length mismatch"
+        );
+        assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+    }
+}
+
+#[test]
+fn contract_compliant_sub_blocks_do_not_raise_flag() {
+    let ir = synth_ir(60, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    let rt = RtStatusFlags::new();
+    let signal: Vec<f32> = (0..64).map(|i| (i as f32 * 0.01).sin()).collect();
+    let mut out = vec![0.0f32; 64];
+    adapter.process_variable(&signal, &mut out, Some(&rt));
+    assert!(!rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
 }

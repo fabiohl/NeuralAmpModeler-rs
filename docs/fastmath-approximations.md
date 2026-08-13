@@ -153,10 +153,10 @@ To prevent CPU soft-emulation penalties when processing near-zero values during 
 
 ### 4.3 DAZ / FTZ Enforcement
 
-Denormals-Are-Zero (DAZ) and Flush-To-Zero (FTZ) flags are active at all hot-path entry points:
+Denormals-Are-Zero (DAZ) and Flush-To-Zero (FTZ) flags are active at the audio processing entry point:
 
 - Helper function `set_daz_ftz()` in [`src/math/common/ops.rs`](../src/math/common/ops.rs).
-- Reasserted periodically on the audio processing thread via `set_daz_ftz()`.
+- Reasserted at the start of every audio processing call (`capture_dsp_pipeline` in [`src/dsp/pipeline/capture.rs`](../src/dsp/pipeline/capture.rs)) via `set_daz_ftz()` — a fixed `stmxcsr`/`ldmxcsr` pair outside any sample loop.
 
 ---
 

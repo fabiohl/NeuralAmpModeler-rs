@@ -233,7 +233,7 @@
 
   Coverage: 3/5 axes covered
 
-  Contagens de testes no receipt:
+  Fases no receipt:
     passed:          7
     failed:          0
     skip_capability: 0

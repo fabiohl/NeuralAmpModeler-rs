@@ -67,10 +67,11 @@ fn build_convnet_flat_cpp(
         )
         .map_err(|e| anyhow::anyhow!("ConvNet block {i}: failed to create: {e}"))?;
 
-        let total_conv = out_ch * in_ch * kernel;
+        let total_conv = checked_arith::checked_mul3(out_ch, in_ch, kernel)?;
         let raw_conv = cursor.read_slice(total_conv)?;
 
-        let padded_total = (out_ch.div_ceil(4)) * kernel * in_ch * 4;
+        let padded_total =
+            checked_arith::checked_conv_padded_total(out_ch.div_ceil(4), 4, in_ch, kernel)?;
         let mut interleaved = AlignedVec::new(padded_total, 0.0f32)
             .map_err(|e| anyhow::anyhow!("ConvNet block {i}: {e}"))?;
 

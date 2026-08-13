@@ -74,11 +74,18 @@ pub struct BridgeRef(*mut DspBridge);
 
 impl BridgeRef {
     /// Creates a new BridgeRef.
+    ///
     /// # Safety
-    /// The pointer must be valid and non-null.
+    ///
+    /// The pointer must be valid and non-null. This is an initialization-path
+    /// constructor; the null check is a `debug_assert!` (loud in dev builds,
+    /// compiled out in release) because the lifetime is heap-immortal
+    /// (`Box::leak`ed at startup, never freed) — a null pointer here is a
+    /// programming error caught by debug tooling, not a runtime-recoverable
+    /// condition. Release builds rely on the caller contract documented here.
     #[inline(always)]
     pub unsafe fn new(ptr: *mut DspBridge) -> Self {
-        assert!(!ptr.is_null());
+        debug_assert!(!ptr.is_null(), "BridgeRef requires a non-null pointer");
         Self(ptr)
     }
 
@@ -120,11 +127,21 @@ unsafe impl Sync for DspBridgeWriter {}
 
 impl DspBridgeWriter {
     /// Creates a `DspBridgeWriter` from a raw pointer to `DspBridge`.
+    ///
     /// # Safety
-    /// The pointer must be valid and non-null.
+    ///
+    /// The pointer must be valid and non-null, and must reference heap-immortal
+    /// memory (leaked `Box`, or host/plugin lifecycle memory that outlives the
+    /// writer) — see the `Send`/`Sync` SAFETY comments. The null check is a
+    /// `debug_assert!` (loud in dev builds, compiled out in release): a null
+    /// pointer here is a programming error on the initialization path, not a
+    /// runtime-recoverable condition.
     #[inline(always)]
     pub unsafe fn new(ptr: *mut DspBridge) -> Self {
-        assert!(!ptr.is_null());
+        debug_assert!(
+            !ptr.is_null(),
+            "DspBridgeWriter requires a non-null pointer"
+        );
         Self(unsafe { std::ptr::NonNull::new_unchecked(ptr) })
     }
 
@@ -245,11 +262,21 @@ unsafe impl Sync for DspBridgeReader {}
 
 impl DspBridgeReader {
     /// Creates a `DspBridgeReader` from a raw pointer to `DspBridge`.
+    ///
     /// # Safety
-    /// The pointer must be valid and non-null.
+    ///
+    /// The pointer must be valid and non-null, and must reference heap-immortal
+    /// memory (leaked `Box`, or host/plugin lifecycle memory that outlives the
+    /// reader) — see the `Send`/`Sync` SAFETY comments. The null check is a
+    /// `debug_assert!` (loud in dev builds, compiled out in release): a null
+    /// pointer here is a programming error on the initialization path, not a
+    /// runtime-recoverable condition.
     #[inline(always)]
     pub unsafe fn new(ptr: *mut DspBridge) -> Self {
-        assert!(!ptr.is_null());
+        debug_assert!(
+            !ptr.is_null(),
+            "DspBridgeReader requires a non-null pointer"
+        );
         Self(unsafe { std::ptr::NonNull::new_unchecked(ptr) })
     }
 
