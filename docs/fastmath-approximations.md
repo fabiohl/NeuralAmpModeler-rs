@@ -148,7 +148,7 @@ Under silent input, WaveNet models produce a residual output of $\approx 3.58 \t
 
 To prevent CPU soft-emulation penalties when processing near-zero values during quiet signals:
 
-- Constant `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is added during `apply_input_stage` and subtracted during `apply_output_stage`.
+- Constant `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is added during input processing ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs)) and subtracted during output processing ([`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)).
 - Completely inaudible ($76\text{ dB}$ below 24-bit DAC floor) with zero runtime performance cost.
 
 ### 4.3 DAZ / FTZ Enforcement

@@ -59,10 +59,10 @@ class of bug.
 
 **Verification:** confirmed by reading the *actual runtime value* written
 into the GOT slot from a live, attached process (not just the relocation
-*type*, which is not sufficient — see §3). Confirmed clean in all three
-production link targets: the test harness (`--lib`), the standalone binary
-(`--features standalone`), and the CLAP plugin (`cdylib`,
-`--features clap-plugin,stereo`).
+*type*, which is not sufficient — see §3). Confirmed clean across all
+production link targets: the engine test suite (`--lib`), integration suites
+(`--features testing,stereo`), and downstream targets (`NAM-Plug` CLAP cdylib
+and `NAM-Audio-Pipe` standalone host).
 
 ## 2. Why this was hard to find
 
@@ -181,7 +181,7 @@ interposition is confirmed.
   had actually hung), and an automatic post-run residual-process check.
   Reuse this wrapper — don't write a new one — for any future hang
   investigation.
-- **The reactivated test** ([`test_x2_aliasing_rejection`](../src/dsp/oversample_test.rs#L73),
+- **The reactivated test** ([`test_x2_aliasing_rejection`](../src/dsp/oversample_test.rs#L74),
   [`src/dsp/oversample_test.rs`](../src/dsp/oversample_test.rs)) now runs unignored, in both debug and
   release, as part of the normal `--lib` unit-test pass exercised by both
   `utils/tests-quick.sh` and `utils/tests-long.sh`. It exercises exactly

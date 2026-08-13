@@ -122,19 +122,20 @@ Three core mechanisms maintain high recurrent precision in LSTMs:
 
 **Implementation.** [`src/models/lstm/layer_kernels.rs`](../src/models/lstm/layer_kernels.rs).
 
-### 3.3 WaveNet Dynamic Path & Container Interop Parity (Sprint 8)
+### 3.3 WaveNet Dynamic Path & Container Interop Parity
 
-The following models were promoted to permanent regression fixtures in Sprint 8 (T8.2). All measurements taken in canonical live mode with 24,000-sample prewarm at 48 kHz:
+The following dynamic models and container architectures are established as permanent regression fixtures. All measurements taken in canonical live mode with 24,000-sample prewarm at 48 kHz:
 
-| Model                           | Topology                                    | ESR vs NAMCore (Standard) | SNR vs NAMCore | ESR vs Ideal (f64 Oracle) | Status                          |
-|:------------------------------- |:------------------------------------------- |:-------------------------:|:--------------:|:-------------------------:|:-------------------------------:|
-| **wavenet_official**            | WaveNetDyn (CH=3, free geom, 2 arrays)      | **9.03e-14**              | 130.4 dB       | **1.82e-12**              | ✅ Permanent clone-protection   |
-| **wavenet_condition_dsp**       | WaveNetDyn (CH=3, cond=3, FiLM, post-FiLM)  | **1.11e-14**              | 139.6 dB       | —                         | ✅ Permanent clone-protection   |
-| **slimmable_container**         | SlimmableContainer (LSTM+WaveNetDyn+Nano)   | **7.28e-14**              | 131.4 dB       | **1.82e-14**              | ✅ Permanent container regress. |
+| Model                     | Topology                                   | ESR vs NAMCore (Standard) | SNR vs NAMCore | ESR vs Ideal (f64 Oracle) | Status                          |
+|:------------------------- |:------------------------------------------ |:-------------------------:|:--------------:|:-------------------------:|:-------------------------------:|
+| **wavenet_official**      | WaveNetDyn (CH=3, free geom, 2 arrays)     | **9.03e-14**              | 130.4 dB       | **1.82e-12**              | ✅ Permanent clone-protection   |
+| **wavenet_condition_dsp** | WaveNetDyn (CH=3, cond=3, FiLM, post-FiLM) | **1.11e-14**              | 139.6 dB       | —                         | ✅ Permanent clone-protection   |
+| **slimmable_container**   | SlimmableContainer (LSTM+WaveNetDyn+Nano)  | **7.28e-14**              | 131.4 dB       | **1.82e-14**              | ✅ Permanent container regress. |
 
 *Note: `mock_a2.nam` is a permanent negative fixture (zero weights, ReLU config) — validates `Err` rejection in the loader but has no fidelity measurements.*
 
 These models are protected by:
+
 - **Clone exact regression** (`wavenet_clone_exact_test.rs`) — `test_clone_exact_wavenet_official`, `test_clone_exact_wavenet_condition_dsp`
 - **Loader gap regression** (`golden_vectors.rs`) — `test_loader_gap_slimmable_container` (validates ReLU support)
 - **Golden vectors** (`golden_vectors.rs`) — v1 golden tests for `wavenet_official` and `wavenet_condition_dsp`

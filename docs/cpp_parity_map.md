@@ -21,19 +21,19 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 
 ## 0. Audit Status
 
-> **Last hygiene pass:** 2026-08-10 — Compliance & Parity Auditor. **KB-A2-MAX remains frozen**
-> (fail-closed TR1.1; do not reopen without §4.4.3). Doc corrections in this pass: §3.5
-> condition_dsp wording, §4.7 (stale “Guard removed Sprint 8”), §7 ledger expansion. No
-> production code change for Max.
+> **Audit status:** Strict fail-closed policy maintained. **KB-A2-MAX remains frozen**
+> (fail-closed TR1.1; do not reopen without §4.4.3). Verified against current canonical source:
+> §3.5 condition_dsp canonical RF summation, §3.6 fail-closed A1/A2 guards, §7 known-broken ledger.
+> No production code change for Max.
 
-| Architecture                | Status                                                                                                                                               | Section                                   |
-|:--------------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------------------- |
-| **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                                | [§2](#2-lstm-architecture)                |
-| **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)            | [§3](#3-wavenet-a1-architecture)          |
-| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3)          | [§4](#4-wavenet-a2-architecture)          |
-| **ConvNet**                 | ✅ IDÊNTICO — Paridade Total de Inicialização e Aritmética (prewarm fix elimina transiente de 2.54e-5)                                               | [§6](#6-other-architectures-out-of-scope) |
-| Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                                       | [§6](#6-other-architectures-out-of-scope) |
-| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; sem claim de paridade multi-size NAMCore (§6 / §7.4)                                                       | [§6](#6-other-architectures-out-of-scope) |
+| Architecture                | Status                                                                                                                                      | Section                                   |
+|:--------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------------------- |
+| **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)                |
+| **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)    | [§3](#3-wavenet-a1-architecture)          |
+| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture)          |
+| **ConvNet**                 | ✅ IDÊNTICO — Paridade Total de Inicialização e Aritmética (prewarm fix elimina transiente de 2.54e-5)                                      | [§6](#6-other-architectures-out-of-scope) |
+| Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures-out-of-scope) |
+| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; sem claim de paridade multi-size NAMCore (§6 / §7.4)                                              | [§6](#6-other-architectures-out-of-scope) |
 
 ## 1. Methodology
 
@@ -57,10 +57,10 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 NAM-rs uses two oracles with complementary roles and **equal authority** — neither has
 automatic prevalence over the other.
 
-| Oracle     | Question Answered                                                  | Authority |
-|:---------- |:------------------------------------------------------------------ |:--------- |
-| **NAMcore** | Does NAM-rs produce audio compatible with the existing model ecosystem? (market interop) | Sole arbiter of interop parity |
-| **f64**    | What is the mathematical ideal, and how far is NAM-rs from it? (precision floor)       | Sole arbiter of ideal-math fidelity |
+| Oracle      | Question Answered                                                                        | Authority                           |
+|:----------- |:---------------------------------------------------------------------------------------- |:----------------------------------- |
+| **NAMcore** | Does NAM-rs produce audio compatible with the existing model ecosystem? (market interop) | Sole arbiter of interop parity      |
+| **f64**     | What is the mathematical ideal, and how far is NAM-rs from it? (precision floor)         | Sole arbiter of ideal-math fidelity |
 
 **Disagreement protocol:**
 
@@ -127,15 +127,15 @@ and the corresponding Rust modules (`src/models/lstm/`, `src/loader/dispatcher/l
 
 ### 2.0 Supported sample rates
 
-| Model              | Golden Vectors (v1) | Golden Vectors (v2)                                      | Live C++ Parity (v2)    |
-|:------------------ |:-------------------:|:--------------------------------------------------------:|:-----------------------:|
-| BossLSTM-1×16      | 48 kHz              | 44100, 48000, 88200, 96000                               | 44100, 48000, 88200, 96000 |
-| BossLSTM-2×8       | 48 kHz              | 44100, 48000, 88200, 96000                               | 44100, 48000, 88200, 96000 |
-| LSTM Official      | 48 kHz              | 48000                                                    | 48000                   |
-| LSTM 1×10 (synt.)  | 48 kHz              | 48000                                                    | 44100, 48000, 88200, 96000 |
-| LSTM 2×24 (synt.)  | 48 kHz              | 48000                                                    | 44100, 48000, 88200, 96000 |
-| LSTM 3×8 (synt.)   | 48 kHz              | 48000                                                    | 44100, 48000, 88200, 96000 |
-| lstm_dyn_test.nam   | 48 kHz              | —                                                        | 48000                   |
+| Model             | Golden Vectors (v1) | Golden Vectors (v2)        | Live C++ Parity (v2)       |
+|:----------------- |:-------------------:|:--------------------------:|:--------------------------:|
+| BossLSTM-1×16     | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
+| BossLSTM-2×8      | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
+| LSTM Official     | 48 kHz              | 48000                      | 48000                      |
+| LSTM 1×10 (synt.) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
+| LSTM 2×24 (synt.) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
+| LSTM 3×8 (synt.)  | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
+| lstm_dyn_test.nam | 48 kHz              | —                          | 48000                      |
 
 **192 kHz is excluded from all LSTM testing** — both golden vectors and live cross-validation.
 See [§2.9](#29-192-khz-limitation-lstm) for the formal limitation and root cause.
@@ -304,7 +304,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   dynamic LSTM path currently has **no real-model coverage**, since no known community LSTM
   export uses a non-catalog hidden size).
 
-### 2.9 192 kHz Limitation — LSTM
+### 2.9 192 kHz Limitation: LSTM
 
 **Status:** FUNDAMENTAL UPSTREAM LIMITATION — not a NAM-rs bug.
 
@@ -352,12 +352,12 @@ Eigen computation graph.
 
 **Affected code locations:**
 
-| Layer                 | File                                                   | Mechanism                                            |
-|:--------------------- |:------------------------------------------------------ |:---------------------------------------------------- |
-| Golden generator      | `tests/fixtures/golden_gen_build.sh` CATALOG           | `skip_srs=192000` for LSTM entries                   |
-| Golden vector tests   | `tests/models/golden_vectors.rs` V2_CATALOG            | `SrScope::MultiSrEx192k` → `MULTI_SR_EX_192K_RATES`  |
-| Live C++ parity       | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates` | `V2MultiSRScope::Exclude192k` for all LSTM filenames |
-| Long suite preflight  | `utils/tests-long.sh` `V2_CATALOG_SCOPE`               | `scope=ex192k` for LSTM golden_name prefixes         |
+| Layer                | File                                                      | Mechanism                                            |
+|:-------------------- |:--------------------------------------------------------- |:---------------------------------------------------- |
+| Golden generator     | `tests/fixtures/golden_gen_build.sh` CATALOG              | `skip_srs=192000` for LSTM entries                   |
+| Golden vector tests  | `tests/models/golden_vectors.rs` V2_CATALOG               | `SrScope::MultiSrEx192k` → `MULTI_SR_EX_192K_RATES`  |
+| Live C++ parity      | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates` | `V2MultiSRScope::Exclude192k` for all LSTM filenames |
+| Long suite preflight | `utils/tests-long.sh` `V2_CATALOG_SCOPE`                  | `scope=ex192k` for LSTM golden_name prefixes         |
 
 ---
 
@@ -847,7 +847,7 @@ All dynamic path variants achieve near-bit-exact parity or expected approximatio
 
 ### 4.4 🔴 Known bug KB-A2-MAX: `wavenet_a2_max.nam` (Official Flagship)
 
-**Status: PERMANENT KNOWN BUG** until reopening criteria in **§4.4.3**. Not scheduled for residual sprints R3.bis/R4.
+**Status: PERMANENT KNOWN BUG** until reopening criteria in **§4.4.3**. Not scheduled for speculative iterations.
 
 The fail-closed dispatch guard (`reject_wavenet_a2_max_class`, TR1.1) rejects `build_model` with `Err` citing **KB-A2-MAX**. No production f32 instance of this topology enters the public hot path.
 
@@ -862,11 +862,11 @@ The fail-closed dispatch guard (`reject_wavenet_a2_max_class`, TR1.1) rejects `b
 
 Historical: pre-R3 baseline 1.35 dB; H1-only peak 2.31 dB; H1+H2 tree **0.23 dB**. Weight budget **818 + 1052** exact. Neighbors green (A2-Full ~128 dB, condition_dsp ~139 dB, A2 matrix 103–140 dB).
 
-**Investigation closed as residual work:** H1–H4 exhausted as dominant (§4.4.1); H6 FiLM slots excluded; H0 Case D; H5 nested cascade **candidate only** — R3.bis “pre→post rechannel” was **rejected as next step** because production cascade already seeds post-rechannel (`cascade_head_finalize` → `cascade_seed_head_from_output`). Further work requires intermediate C++ dumps (§4.4.3), not residual hypothesis PRs.
+**Investigation closed as residual work:** H1–H4 exhausted as dominant (§4.4.1); H6 FiLM slots excluded; H0 Case D; H5 nested cascade **candidate only** — secondary investigation “pre→post rechannel” was **rejected as next step** because production cascade already seeds post-rechannel (`cascade_head_finalize` → `cascade_seed_head_from_output`). Further work requires intermediate C++ dumps (§4.4.3), not residual hypothesis PRs.
 
 **Discipline (binding):** C++ golden adjudicates market interop; f64 oracle adjudicates mathematical fidelity (per [§1.2](#12-two-oracle-governance-policy)); never remove guard while SNR < 90 dB; never regenerate golden to accommodate divergence.
 
-#### 4.4.1 Investigation Log — Hypothesis Matrix (TR2.4, Sprint R2)
+#### 4.4.1 Investigation Log — Hypothesis Matrix (TR2.4)
 
 The hypotheses below are ordered by likelihood × isolation cost — H1 must be cleared
 before H2, etc. **Proibido** aplicar correções empilhadas sem isolar H1 primeiro.
@@ -1008,7 +1008,7 @@ H4 (softsign) is specifically gated behind H1–H3 because activation substituti
 are historically rare in this codebase, and the softsign field in A2 Max JSON has been
 confirmed as a training artifact in prior audits.
 
-#### 4.4.2 Post-R3 re-audit & Sprint R2.bis hypotheses (2026-08-09)
+#### 4.4.2 Post-R3 re-audit & Secondary Hypotheses (2026-08-09)
 
 **Facts (do not restate the superseded TR3.4 “f64≈prod” claim):**
 
@@ -1021,7 +1021,7 @@ confirmed as a training artifact in prior audits.
 H1–H4 are exhausted as **dominant** causes (§4.4.1). Broadcast fix H2 does not run on A2 Max
 if nested `condition_dsp` reports `dsp_ch == condition_size == 8`.
 
-**New hypothesis matrix (Sprint R2.bis — see `.agents/TODO-sprints.md`):**
+**Secondary hypothesis matrix:**
 
 **H0 triple decomposition results (TR2b.1, 2026-08-09):**
 
@@ -1097,9 +1097,9 @@ All 4 hypotheses investigated. Ranking by evidence strength:
 | 2    | **H0**    | Confirms H5/H7 dominance                                          | Case D: all 3 pairs diverge. f64×C++ (ESR≈1.00) proves the oracle itself diverges from C++ — the bug is not f32 approximation, it's a structural difference in the computation graph. The condition_dsp cascade is the only sub-component complex enough to explain this. |
 | 3    | **H6**    | **Excluded**                                                      | All 16 FiLM slots (8 per layer × 2 layers) verified against `weights_layout.rs` formulas. Budget = 818 exact. Zero slot overlap. H2 +72 bias fix did NOT cause cursor misalignment.                                                                                       |
 
-**Veredict (instrumentation only):** Nested cond is the strongest **remaining candidate** area, but the planned R3.bis “fix cascade seed to post-rechannel” is **not validated** — code already finalizes then seeds. H0 Case D means f64 cannot adjudicate. **Decision (2026-08-09):** stop residual A2 Max correction sprints; capitalize gains; formalize **KB-A2-MAX** (§4.4.3).
+**Verdict (instrumentation only):** Nested cond is the strongest **remaining candidate** area, but the planned secondary hypothesis “fix cascade seed to post-rechannel” is **not validated** — code already finalizes then seeds. H0 Case D means f64 cannot adjudicate. **Decision (2026-08-09):** stop speculative A2 Max correction attempts; capitalize gains; formalize **KB-A2-MAX** (§4.4.3).
 
-H1–H4 remain excluded. H6 is excluded. R2.bis closed without a C++-adjudicated root cause.
+H1–H4 remain excluded. H6 is excluded. Secondary investigation closed without a C++-adjudicated root cause.
 
 #### 4.4.3 Known bug KB-A2-MAX — freeze, capital gains, reopening criteria
 
@@ -1364,7 +1364,7 @@ Severity tiers are ordered by how much they should worry a release decision, not
 
 ### 7.1 🔴 Known bug KB-A2-MAX — guard permanent until §4.4.3
 
-Fail-closed TR1.1 remains **active**. T8.1 / R3 / R2.bis do **not** constitute closure. Residual correction sprints **cancelled** in favor of known-bug freeze.
+Fail-closed TR1.1 remains **active**. T8.1 / R3 / secondary investigations do **not** constitute closure. Residual speculative correction attempts **cancelled** in favor of known-bug freeze.
 
 | Model                | Symptom                                                                                                        | Status                                               |
 |:-------------------- |:-------------------------------------------------------------------------------------------------------------- |:---------------------------------------------------- |
@@ -1437,18 +1437,17 @@ These do not produce wrong audio, but they can make the *evidence* for parity ev
 ### 7.4 🟡 Policy rejects, defensive gaps, and open coverage (not KB-A2-MAX)
 
 Items below are **not** the Max freeze. They are intentional product policy, low-severity
-defensive holes, or incomplete evidence. Implementation backlog lives outside this doc
-(`.agents/TODO-sprints.md` tracks B/C workstreams); this table is the parity-map ledger only.
+defensive holes, or incomplete evidence. This table is the parity-map ledger only.
 
-| ID  | Item                                                                                                                | Class                        | Status / contract                                                                                                                                                                                                                      |
-|:--- |:------------------------------------------------------------------------------------------------------------------- |:---------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                               | **Policy reject**            | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
-| P2  | A1 free/dynamic path silently ignores `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` when not routed to A2 | **Fail-closed implementado** | Fail-closed implementado — ver §3.6 FIXED.                                                                                                                                                                                             |
-| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                              | **Fail-closed implementado** | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                              |
-| P4  | WaveNet `prewarm_samples()` under-reports multi-array RF                                                            | **Corrigido**                | Corrigido — soma canônica; prewarm analítico inalterado. §3.5.                                                                                                                                                                         |
-| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                              | **Intentional Rust-only**    | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
-| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                            | **Disclaimer (S4-T1)**       | Inference-only; sem claim de paridade multi-size NAMCore. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                           |
-| P7  | A2 fast-path fixtures synthetic-only                                                                                | **Caveat documentado (S4-T2)** | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). Nenhum A2-Full/Lite treinado público incorporado em 2026-08-10; fixtures full/lite permanecem sintéticos calibrados. |
+| ID  | Item                                                                                                                | Class                          | Status / contract                                                                                                                                                                                                                      |
+|:--- |:------------------------------------------------------------------------------------------------------------------- |:------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                               | **Policy reject**              | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
+| P2  | A1 free/dynamic path silently ignores `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` when not routed to A2 | **Fail-closed implementado**   | Fail-closed implementado — ver §3.6 FIXED.                                                                                                                                                                                             |
+| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                              | **Fail-closed implementado**   | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
+| P4  | WaveNet `prewarm_samples()` under-reports multi-array RF                                                            | **Corrigido**                  | Corrigido — soma canônica; prewarm analítico inalterado. §3.5.                                                                                                                                                                         |
+| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                              | **Intentional Rust-only**      | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
+| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                            | **Disclaimer (S4-T1)**         | Inference-only; sem claim de paridade multi-size NAMCore. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                         |
+| P7  | A2 fast-path fixtures synthetic-only                                                                                | **Caveat documentado (S4-T2)** | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). Nenhum A2-Full/Lite treinado público incorporado em 2026-08-10; fixtures full/lite permanecem sintéticos calibrados.               |
 
 **Non-goals of this ledger row:** reopening KB-A2-MAX, regenerating Max goldens to force a pass, or using f64 oracle as adjudicator (H0 Case D — §4.4.2).
 
@@ -1462,4 +1461,3 @@ defensive holes, or incomplete evidence. Implementation backlog lives outside th
 - §7.4 — policy rejects and defensive/coverage backlog (non-Max)
 - `tests/parity/cpp_parity.rs` — live cross-validation against the C++ `render` tool
 - `tests/parity/reference_oracle_f64.rs` — f64 oracle and independent NumPy anchor (decomposition tools, §1.2)
-- Workspace backlog: `.agents/TODO-sprints.md` (fail-closed hardening + evidence strengthening)

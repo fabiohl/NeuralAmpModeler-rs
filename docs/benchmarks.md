@@ -198,23 +198,23 @@ missing `.performance-baselines/` → `MISSING_BASELINE`, exit 1.
 ### Pre-Flight Checklist (Performance Gate)
 
 Performance measurement is only meaningful under a controlled environment.
-Run this checklist **before** `--check` or `--bootstrap-baseline` (F-29, EP-05):
+Run this checklist **before** `--check` or `--bootstrap-baseline`:
 
-- [ ] **Baseline present.** `.performance-baselines/baseline-fingerprint.json` exists
+* [ ] **Baseline present.** `.performance-baselines/baseline-fingerprint.json` exists
       (and the `ci-baseline` series under `.performance-baselines/`).
       Absent → the standalone gate fails `MISSING_BASELINE`; the dashboard
       displays performance as `NOT_VERIFIED`.
-- [ ] **CPU governor = `performance`.** Verify with
+* [ ] **CPU governor = `performance`.** Verify with
       `cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`.
       A different governor (`powersave`, `schedutil`, amd_pstate default) makes
       measurements incomparable → `INCOMPARABLE_ENVIRONMENT`.
-- [ ] **Low background load.** Close browsers/heavy services; thermals and
+* [ ] **Low background load.** Close browsers/heavy services; thermals and
       co-resident load dominate the micro-bench noise floor (see the flaky
       `--check` note above).
-- [ ] **Core pinning available.** `taskset` present (defaults to `nproc / 2`;
+* [ ] **Core pinning available.** `taskset` present (defaults to `nproc / 2`;
       override with `NAM_BENCH_CORE`). Same physical core count as the
       bootstrap machine — it is part of the environment fingerprint.
-- [ ] **Fresh benchmark set.** Every `regression_gate` benchmark must have a
+* [ ] **Fresh benchmark set.** Every `regression_gate` benchmark must have a
       saved baseline series: a new/renamed benchmark fails `--check` with
       `BASELINE_COVERAGE_GAP` until a human re-bootstraps the baseline.
 
@@ -243,12 +243,12 @@ Run this checklist **before** `--check` or `--bootstrap-baseline` (F-29, EP-05):
 
 ### Relationship to Other QA Tools
 
-| Tool                                                                                | Role                                                                                                                                                                                                                                                                   |
-|:----------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                                                                                         |
-| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse).                                                                      |
-| [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                                                                                                   |
-| [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (~3 min) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks.                                                                                                             |
+| Tool                                                                                | Role                                                                                                                                                                                              |
+|:----------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                    |
+| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse). |
+| [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                              |
+| [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (~3 min) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks.                                        |
 
 > [!IMPORTANT]
 > **Always run `--check` before pushing.** A passing `utils/tests-quick.sh` and `utils/tests-long.sh` does
@@ -307,10 +307,10 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 >
 > **Two independent artifacts (both human-renewed when perf intentionally changes):**
 >
-> | Artifact | Path | Role |
-> | --- | --- | --- |
-> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (t-test, p&lt;0.05) |
-> | Quality contract | `docs/quality-contract.txt` | Frozen fidelity + median latency snapshot for `--check` |
+> | Artifact           | Path                                           | Role                                                    |
+> | ------------------ | ---------------------------------------------- | ------------------------------------------------------- |
+> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (t-test, p&lt;0.05)           |
+> | Quality contract   | `docs/quality-contract.txt`                    | Frozen fidelity + median latency snapshot for `--check` |
 >
 > Updating one does **not** update the other. Order is always:
 > bootstrap Criterion → standalone `--check` green → dashboard `--save` → dashboard `--check`.
@@ -320,7 +320,7 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 The official performance baseline lives in [`quality-contract.txt`](quality-contract.txt) alongside
 fidelity metrics. The **full renewal procedure** — including prerequisites, the
 `--bootstrap-baseline` / `--check` cycle, and the mandatory commit-message justification — is
-documented in [`testing.md`](testing.md#94-procedimento-de-renovação-deliberada-do-baseline).
+documented in [`testing.md`](testing.md#95-baseline-renewal-procedure-human-only).
 
 > [!CAUTION]
 > The Criterion baseline (`.performance-baselines/`, managed by
@@ -526,41 +526,41 @@ Assembly comparison and stride analysis revealed that fixed setup overhead (prol
 
 ---
 
-## Sprint 4 — A2 Dynamic AVX2+FMA Vectorization (PERF-007)
+## WaveNet A2 Dynamic AVX2+FMA Vectorization
 
-### Context
+### Context (WaveNet A2 Dynamic AVX2+FMA Vectorization)
 
-The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallback engine for non-catalog A2 geometries (gating, blending, head1x1, heterogeneous activations, FiLM). Prior to Sprint 4, its hot-path was predominantly scalar with LLVM auto-vectorization failing on the double-nested GEMV loops (mixin, head1x1, L1x1 residual). Assembly profiling (T4.1) confirmed:
+The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallback engine for non-catalog A2 geometries (gating, blending, head1x1, heterogeneous activations, FiLM). In earlier baseline implementations, its hot-path was predominantly scalar with compiler auto-vectorization failing on the double-nested GEMV loops (mixin, head1x1, L1x1 residual). Assembly profiling confirmed:
 
 * **Dilated Conv**: Unrolled scalar (optimal for depthwise), with `prefetcht0` L1 prefetch
-* **Mixin GEMV**: Fully scalar with register spills to stack — primary target
-* **Head 1×1 Projection**: Fully scalar — secondary target
-* **L1×1 Residual**: Fully scalar — tertiary target
-* **Activation/Gating**: Already vectorized via `SimdMath` trait
+* **Mixin GEMV**: Fully scalar with register spills to stack — primary optimization target
+* **Head 1×1 Projection**: Fully scalar — secondary optimization target
+* **L1×1 Residual**: Fully scalar — tertiary optimization target
+* **Activation/Gating**: Vectorized via `SimdMath` trait
 
-### Implemented Optimizations (T4.2 + T4.3)
+### Implemented Vectorization Architecture
 
-**T4.2 — Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process.rs`](../src/models/a2/model/dynamic/process.rs)):
+**Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process.rs`](../src/models/a2/model/dynamic/process.rs)):
 
 * **Head 1×1**: 8-wide `_mm256_fmadd_ps` over the `h1_in` dimension per output channel. Lane extraction preserves exact left-to-right accumulation order for bit-identical golden vector output.
 * **L1×1 Dense**: 8-wide `_mm256_set1_ps` (broadcast) + `_mm256_fmadd_ps` over contiguous col-major weight rows (`bottleneck × channels`).
 * **L1×1 Grouped**: 8-wide SIMD dot product for `in_pg ≥ 8`, scalar fallback otherwise.
 * **Accumulation loops** (`head_accum += scratch`, `layer_in += scratch`): `_mm256_add_ps` with scalar tail.
 
-**T4.3 — Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`process.rs`](../src/models/a2/model/dynamic/process.rs)):
+**Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`process.rs`](../src/models/a2/model/dynamic/process.rs)):
 
 * **Builder**: One-time per-group transposition from row-major `[out_per_g][in_pg]` to col-major `[in_pg][out_per_g]` during `set_weights`. No transposition in the hot path.
 * **Hot Path**: `_mm256_set1_ps` (broadcast condition) + `_mm256_loadu_ps` (8 contiguous weights) + `_mm256_fmadd_ps` per input channel. Unified flat (groups=1) and grouped (groups>1) paths.
 
 ### Performance Results (Regression Gate, `--baseline ci-baseline`)
 
-| Benchmark | Pre-Sprint 4 | Post-Sprint 4 (contract 2026-08-12) | Change | Notes |
-| ----------- | ------------- | ------------------------------------- | -------- | ------- |
-| `RT_A2_Dyn_Gated_CH8` | ~259 µs | **170.9 µs** (~12.8% of 1.33 ms budget) | **≈ −34%** | Primary win; CH=8 fully uses 8-wide FMA paths |
-| `RT_A2_Dyn_Blended_CH3` | ~133 µs | **135.9 µs** (~10.2% of budget) | ≈ +2–3% | CH=3 stays on scalar fallbacks; accepted trade-off |
-| `RT_LSTM_Dyn_1x7` | (pre-T3.3 scalar tail) | **~7.9 µs** | **≈ −50%** vs pre-vectorization tail | Sprint 3 AVX2 H&lt;8 gates |
+| Benchmark               | Scalar Baseline | Vectorized (AVX2+FMA)                   | Change                               | Notes                                              |
+| ----------------------- | --------------- | --------------------------------------- | ------------------------------------ | -------------------------------------------------- |
+| `RT_A2_Dyn_Gated_CH8`   | ~259 µs         | **170.9 µs** (~12.8% of 1.33 ms budget) | **≈ −34%**                           | Primary win; CH=8 fully uses 8-wide FMA paths      |
+| `RT_A2_Dyn_Blended_CH3` | ~133 µs         | **135.9 µs** (~10.2% of budget)         | ≈ +2–3%                              | CH=3 stays on scalar fallbacks; accepted trade-off |
+| `RT_LSTM_Dyn_1x7`       | ~15.8 µs        | **~7.9 µs**                             | **≈ −50%** vs pre-vectorization tail | Dedicated AVX2 H&lt;8 gates                        |
 
-The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. After Sprint 3/4 the Criterion baseline and `docs/quality-contract.txt` were human-renewed so subsequent `--check` runs compare against these post-optimization medians, not the Sprint 2 snapshot.
+The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. The Criterion baseline and `docs/quality-contract.txt` reflect these post-optimization medians.
 
 ### Fidelity & Invariants
 

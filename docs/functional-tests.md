@@ -27,7 +27,7 @@ This document defines manual functional verification procedures for the DSP engi
 - [ ] **T1.2 Static Dispatch Coverage:** Load one model from each architecture family (WaveNet A1, WaveNet A2, LSTM, ConvNet, Linear). Run a single block of inference. *Expected:* all five load and process successfully.
 - [ ] **T1.3 Dynamic Model Fallback:** Load a model whose geometry does not match static profiles (e.g., LSTM 3×5, WaveNet CH=7). *Expected:* dispatches to the appropriate `Dyn` variant and produces output.
 - [ ] **T1.4 Invalid Model Rejection:** Attempt to load a corrupted, missing, or 0-byte `.nam`/`.namb` file. *Expected:* returns a descriptive error (`Err(...)`) containing a valid `NamErrorCode`; does not panic.
-- [ ] **T1.5 Sample Rate Adaptation:** Load a model with `sample_rate = 44100` in `LoadOptions`. Process a block. Change to `sample_rate = 96000`, call `reset()`, process again. *Expected:* no panics; sample rate metadata in diagnostics reflects the change.
+- [ ] **T1.5 Sample Rate Adaptation:** Load a model (e.g., 48 kHz native). Call `model.reset(44100, 64)` and process a block. Call `model.reset(96000, 64)` and process again. *Expected:* returns without panic; sample rate changes are handled cleanly and reflected in model state.
 
 ---
 
@@ -51,8 +51,8 @@ This document defines manual functional verification procedures for the DSP engi
 
 ### Domain 2C: RT-Safety & Allocation
 
-- [ ] **2C.1 Zero-Allocation Hot Path:** Enable `heap-audit` feature. Process 10,000 blocks without a single allocation on the audio thread. *Expected:* `CountingAllocator` reports zero allocations in `process()`.
-- [ ] **2C.2 Denormal Protection (FTZ/DAZ):** Process a long stretch of silence with `--features heap-audit`. *Expected:* no denormal-related slowdown; `set_daz_ftz()` assertion passes.
+- [ ] **2C.1 Zero-Allocation Hot Path:** Build with `--features heap-audit`. Process 10,000 blocks without a single allocation on the audio thread. *Expected:* `CountingAllocator` reports zero allocations in `process()`.
+- [ ] **2C.2 Denormal Protection (FTZ/DAZ):** Process a long stretch of silence with FTZ/DAZ enabled. *Expected:* no denormal-related slowdown; FTZ/DAZ state assertion passes.
 - [ ] **2C.3 Panic-Free Inference:** Feed out-of-range, NaN, or Inf values as input. *Expected:* clips to valid range; no unwrap/expect panics on hot path.
 - [ ] **2C.4 Memory Footprint Stability:** Load and unload models 100× in a loop. *Expected:* RSS remains stable (< 2 MB growth after initial warmup); no leaked file descriptors.
 

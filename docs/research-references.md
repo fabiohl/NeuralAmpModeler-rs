@@ -60,10 +60,10 @@ guidelines for oversampling around nonlinear stages. The half-band Kaiser-window
 adopted (β=12, 25 taps, >100 dB stopband) follows the design methodology established in this
 paper. Also referenced in the resampler redesign for the HQ polyphase bank.
 
-| Traceability | Reference                                                                       |
-|:------------ |:------------------------------------------------------------------------------- |
-| Finding      | P-1 (filtros de oversampling)                                                   |
-| Files        | `src/dsp/oversample.rs`, `src/dsp/sinc_kernel.rs`, `docs/architecture.md` §5.0O |
+| Traceability | Reference                                                                          |
+|:------------ |:---------------------------------------------------------------------------------- |
+| Finding      | P-1 (filtros de oversampling)                                                      |
+| Files        | `src/dsp/oversample.rs`, `src/dsp/sinc_kernel.rs`, `docs/audio_fidelity_map.md` §5 |
 
 ---
 
@@ -78,12 +78,12 @@ low-cost alternative to oversampling for memoryless nonlinearities. Relevant as 
 baseline against which the oversampling approach was evaluated. ADAA was considered but
 ultimately **not adopted** because it would require per-model modification of the activation dispatch
 (polymorphic dispatch conflict); the decision and rationale are documented in
-`docs/architecture.md` §5.0O.
+`docs/audio_fidelity_map.md` §5 and `docs/architecture.md` §3.3.
 
-| Traceability | Reference                             |
-|:------------ |:------------------------------------- |
-| Finding      | P-1 (ADAA alternativa de baixo custo) |
-| Files        | `docs/architecture.md` §5.0O          |
+| Traceability | Reference                                                    |
+|:------------ |:------------------------------------------------------------ |
+| Finding      | P-1 (ADAA alternativa de baixo custo)                        |
+| Files        | `docs/audio_fidelity_map.md` §5, `docs/architecture.md` §3.3 |
 
 ---
 
@@ -233,10 +233,10 @@ regression-detection gate in `src/testing/perceptual/mod.rs`, with per-model cal
 [256, 1024, 4096] in nam-rs) captures both narrow-band spectral artifacts and broadband transient
 errors that single-window ESR cannot detect.
 
-| Traceability | Reference                                                                                      |
-|:------------ |:---------------------------------------------------------------------------------------------- |
-| Finding      | F-2 (MR-STFT como gate espectral); P-5 (complemento a ESR)                                     |
-| Files        | `src/testing/perceptual/mod.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
+| Traceability | Reference                                                                                                                       |
+|:------------ |:------------------------------------------------------------------------------------------------------------------------------- |
+| Finding      | F-2 (MR-STFT como gate espectral); P-5 (complemento a ESR)                                                                      |
+| Files        | `src/testing/perceptual/esr.rs`, `src/testing/perceptual/mod.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
 
 ---
 
@@ -255,10 +255,10 @@ that measures THD, THD+N, IMD, and frequency response per model SKU. Enables ver
 spectral fingerprinting — the mechanism that converts "does it sound right?" into automated,
 reproducible CI gates.
 
-| Traceability | Reference                                                                  |
-|:------------ |:-------------------------------------------------------------------------- |
-| Finding      | P-3 (suíte de fidelidade espectral — FR, THD por ordem)                    |
-| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/`, `src/math/dsp/fft.rs` |
+| Traceability | Reference                                                                                                    |
+|:------------ |:------------------------------------------------------------------------------------------------------------ |
+| Finding      | P-3 (suíte de fidelidade espectral — FR, THD por ordem)                                                      |
+| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/farina.rs`, `src/testing/`, `src/math/dsp/fft.rs` |
 
 ---
 
@@ -274,10 +274,10 @@ standard provides the normative reference for nam-rs's THD+N reporting (P-3), en
 spectral quality metrics are comparable with published amplifier and audio interface
 specifications.
 
-| Traceability | Reference                                           |
-|:------------ |:--------------------------------------------------- |
-| Finding      | P-3 (THD+N padronizado)                             |
-| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/` |
+| Traceability | Reference                                                                          |
+|:------------ |:---------------------------------------------------------------------------------- |
+| Finding      | P-3 (THD+N padronizado)                                                            |
+| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/thd.rs`, `src/testing/` |
 
 ---
 
@@ -297,19 +297,20 @@ European Broadcasting Union, 2016.
 
 **Why relevant to nam-rs.** The normative trilogy for loudness and true-peak measurement:
 
-- **ITU-R BS.1770-4 Annex 2** defines **true-peak (dBTP)** via 4× oversampled peak detection,
-  the basis for nam-rs's intersample-peak clipping detection (P-3) — replacing the current
-  sample-peak-only flag (`RT_STATUS_HAS_CLIPPED` in `output.rs`).
-- **BS.1770-4 main body + EBU R128** define the two-pass LUFS algorithm (absolute gate −70 LUFS
-  → relative gate −10 LU) — the target upgrade from nam-rs's current single-pass simplified LUFS
-  (`src/testing/perceptual/mod.rs`).
-- **EBU Tech 3342** defines **LRA (Loudness Range)** — a supplemental diagnostic that completes
-  the loudness measurement framework (P-6).
+- **ITU-R BS.1770-4 Annex 2** defines **true-peak (dBTP)** via 4× oversampled polyphase FIR peak detection.
+  In accordance with real-time safety constraints, sample-peak detection is maintained in the RT hot-path
+  (`RT_STATUS_HAS_CLIPPED` in `src/dsp/pipeline/stages/output.rs`, `src/common/spsc/status.rs`), while true-peak
+  is exposed off-RT for telemetry and QA in `src/testing/perceptual/true_peak.rs`.
+- **BS.1770-4 main body + EBU R128** define the full two-pass integrated **LUFS** algorithm (absolute gate −70 LUFS
+  → relative gate −10 LU), implemented in `src/testing/perceptual/lufs.rs` and validated against EBU compliance test vectors
+  in `tests/models/ebu_lufs_compliance.rs`.
+- **EBU Tech 3342** defines **LRA (Loudness Range)** — implemented in `src/testing/perceptual/lra.rs` to complete
+  the perceptual loudness measurement framework (P-6).
 
-| Traceability | Reference                                                                                             |
-|:------------ |:----------------------------------------------------------------------------------------------------- |
-| Finding      | P-6 (LUFS BS.1770-4 pleno, LRA); P-3 (true-peak dBTP)                                                 |
-| Files        | `src/testing/perceptual/mod.rs`, `src/dsp/pipeline/stages/output.rs`, `docs/perceptual_validation.md` |
+| Traceability | Reference                                                                                                                                                                      |
+|:------------ |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Finding      | P-6 (LUFS BS.1770-4 pleno, LRA); P-3 (true-peak dBTP)                                                                                                                          |
+| Files        | `src/testing/perceptual/lufs.rs`, `src/testing/perceptual/true_peak.rs`, `src/testing/perceptual/lra.rs`, `src/dsp/pipeline/stages/output.rs`, `docs/perceptual_validation.md` |
 
 ---
 
