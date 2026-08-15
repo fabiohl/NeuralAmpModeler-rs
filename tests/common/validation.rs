@@ -22,6 +22,16 @@ thread_local! {
     static METRIC_MODEL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static METRIC_MODE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static METRIC_KIND: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    // Per-thread override for the JSONL metric sink. When set, the current
+    // thread's `report_dsp_fidelity*` appends to this path instead of reading
+    // the process-global `NAM_METRICS_JSONL` env var. This is what makes the
+    // JSONL regression tests deterministic under `--test-threads > 1`: tests
+    // isolate their sink to a thread-local unique file without mutating shared
+    // process state (mutating `NAM_METRICS_JSONL` while other test threads
+    // read it is a data race, and any other reporter would append to the same
+    // file, corrupting line-count assertions).
+    static METRIC_JSONL_PATH: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 pub fn set_metric_model(model: String) {
@@ -94,6 +104,33 @@ impl Drop for MetricKindGuard {
     fn drop(&mut self) {
         METRIC_KIND.with(|c| {
             *c.borrow_mut() = None;
+        });
+    }
+}
+
+/// RAII guard that redirects the current thread's JSONL metric sink to `path`
+/// and restores the previous sink (env var fallback) on drop.
+///
+/// The override is thread-local, so concurrent reporters on other threads keep
+/// writing to their own (or the env var's) sink — the guarded file receives
+/// exactly the lines this thread emits. The owning test is responsible for
+/// removing the file; pair with a `Drop` cleanup guard for fail-safe
+/// post-panic hygiene.
+pub struct MetricJsonlGuard {
+    prev: Option<std::path::PathBuf>,
+}
+
+impl MetricJsonlGuard {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        let prev = METRIC_JSONL_PATH.with(|c| c.borrow_mut().replace(path));
+        MetricJsonlGuard { prev }
+    }
+}
+
+impl Drop for MetricJsonlGuard {
+    fn drop(&mut self) {
+        METRIC_JSONL_PATH.with(|c| {
+            *c.borrow_mut() = self.prev.take();
         });
     }
 }
@@ -513,7 +550,14 @@ fn report_dsp_fidelity_impl(
         }
     }
 
-    if let Ok(jsonl_path) = std::env::var("NAM_METRICS_JSONL") {
+    // JSONL sink resolution: per-thread override first (deterministic,
+    // concurrency-immune), process env var as fallback for dashboard runs.
+    let jsonl_path = METRIC_JSONL_PATH.with(|c| c.borrow().clone()).or_else(|| {
+        std::env::var("NAM_METRICS_JSONL")
+            .ok()
+            .map(std::path::PathBuf::from)
+    });
+    if let Some(jsonl_path) = jsonl_path {
         let json_label = METRIC_MODEL
             .with(|c| c.borrow().clone())
             .unwrap_or_else(|| format!("{label} @{sample_rate}"));

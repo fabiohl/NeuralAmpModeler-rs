@@ -611,3 +611,44 @@ fn test_equivalence_ir_512_extended_tail() {
         "max diff = {max_diff} across 16 blocks"
     );
 }
+
+/// S3.T2 acceptance: with `prewarm_on_reset = false`, `NamModel::reset` must
+/// still zero the FIR history and FFT tail. After feeding energy, resetting and
+/// processing silence must yield only the bias — no residual FIR energy.
+#[test]
+fn test_reset_cleans_state_with_prewarm_disabled() {
+    for implementation in [
+        LinearImplementation::Direct,
+        LinearImplementation::Fft,
+        LinearImplementation::Auto,
+    ] {
+        let ir: Vec<f32> = (0..512).map(|i| (i as f32 * 0.01).sin() + 0.1).collect();
+        let bias = 0.05f32;
+        let mut model = LinearModel::new(ir, bias, implementation).unwrap();
+        model.prewarm(0);
+
+        // Feed DC/energy so the FIR history and (for FFT) the tail are dirty.
+        for i in 0..2048 {
+            let x = 1.0f32 - (i as f32 * 0.01);
+            unsafe {
+                model.process_sample(x);
+            }
+        }
+
+        model.set_prewarm_on_reset(false);
+        NamModel::reset(&mut model, 48000, 512).unwrap();
+
+        // Processing silence after reset must produce exactly the bias:
+        // any residual FIR energy would show up as deviation.
+        let zeros = [0.0f32; 256];
+        let mut out = [0.0f32; 256];
+        NamModel::process(&mut model, &zeros, &mut out);
+        for (i, &s) in out.iter().enumerate() {
+            assert!(
+                (s - bias).abs() < 1e-4,
+                "residual energy after reset with prewarm disabled: \
+                 sample {i} = {s}, expected bias {bias} (mode {implementation:?})"
+            );
+        }
+    }
+}

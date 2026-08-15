@@ -4,15 +4,24 @@
 //  Meta-tests that enforce catalog↔test coherence.
 //
 //  Ensures every `.nam` model referenced by an `#[ignore]` test
-//  (golden-missing reason) is registered in the canonical CATALOG
-//  array in `golden_gen_build.sh`. Prevents silent drift where a
-//  model is added to tests but forgotten in the golden generator.
+//  (golden-missing reason) is registered in the canonical golden registry
+//  `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`. Prevents silent drift where
+//  a model is added to tests but forgotten in the golden generator.
+//
+//  Since Sprint S3-T02 the golden registry is Rust-only (single source of
+//  truth): `tests/fixtures/golden_gen_build.sh` sources its catalog from the
+//  `nam_golden_catalog` binary instead of defining a bash array. These tests
+//  therefore validate against the Rust registry, and `test_generator_sources_
+//  catalog_from_rust` guards the script against reintroducing a static
+//  CATALOG array.
 //
 //  Part of the bidirectional coherence check suite.
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+
+use neural_amp_modeler_rs::testing::catalog::golden_gen_entries;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -22,49 +31,37 @@ fn golden_gen_build_path() -> PathBuf {
     fixture_dir().join("golden_gen_build.sh")
 }
 
-/// Parses the CATALOG array from golden_gen_build.sh.
-///
-/// Returns the set of `.nam` filenames registered in the canonical
-/// catalog. The CATALOG format is:
-///   "nam_file:golden_name:label:v2_scope[:skip_srs]"
-fn parse_catalog() -> HashSet<String> {
-    let script = golden_gen_build_path();
-    let content = fs::read_to_string(&script).expect("Failed to read golden_gen_build.sh");
-
-    let mut in_catalog = false;
-    let mut nam_files = HashSet::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "CATALOG=(" {
-            in_catalog = true;
-            continue;
-        }
-        if in_catalog {
-            if trimmed == ")" {
-                break;
-            }
-            if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-                && let Some(nam_file) = inner.split(':').next()
-                && nam_file.ends_with(".nam")
-            {
-                nam_files.insert(nam_file.to_string());
-            }
-        }
-    }
+/// Returns the set of `.nam` filenames registered in the canonical golden
+/// registry (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`).
+fn rust_catalog_models() -> HashSet<String> {
+    let nam_files: HashSet<String> = golden_gen_entries()
+        .iter()
+        .map(|e| e.nam_file.to_string())
+        .collect();
 
     assert!(
         !nam_files.is_empty(),
-        "CATALOG array in golden_gen_build.sh is empty or could not be parsed. \
-         Check the format and ensure the array contains valid entries."
+        "GOLDEN_GEN_CATALOG in src/testing/catalog.rs is empty. \
+         Check the registry and ensure it contains valid entries."
     );
     assert!(
         nam_files.len() >= 15,
-        "Expected ≥ 15 models in CATALOG, found {}. \
+        "Expected ≥ 15 models in GOLDEN_GEN_CATALOG, found {}. \
          Regression — fewer models than documented 20 entries.",
         nam_files.len(),
     );
     nam_files
+}
+
+/// Returns the set of models that have a non-empty `skip_reason` field in the
+/// golden registry. These models are intentionally excluded from golden
+/// generation and freshness gates.
+fn rust_skip_reason_models() -> HashSet<String> {
+    golden_gen_entries()
+        .iter()
+        .filter(|e| e.skip_reason.is_some())
+        .map(|e| e.nam_file.to_string())
+        .collect()
 }
 
 /// Extracts `.nam` string literals from a block of text.
@@ -145,42 +142,6 @@ fn scan_ignored_test_models(
     result
 }
 
-/// Parses the CATALOG array and returns the set of models that have
-/// a non-empty `skip_reason` field (6th colon-separated field).
-/// These models are intentionally excluded from golden generation
-/// and freshness gates.
-fn parse_skip_reason_models() -> HashSet<String> {
-    let script = golden_gen_build_path();
-    let content = fs::read_to_string(&script).expect("Failed to read golden_gen_build.sh");
-
-    let mut in_catalog = false;
-    let mut skipped = HashSet::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "CATALOG=(" {
-            in_catalog = true;
-            continue;
-        }
-        if in_catalog {
-            if trimmed == ")" {
-                break;
-            }
-            if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                let fields: Vec<&str> = inner.split(':').collect();
-                if fields.len() >= 6
-                    && !fields[5].is_empty()
-                    && let Some(nam_file) = fields.first()
-                    && nam_file.ends_with(".nam")
-                {
-                    skipped.insert(nam_file.to_string());
-                }
-            }
-        }
-    }
-    skipped
-}
-
 /// Scans a file for all `.nam` string literals, regardless of context.
 fn scan_all_nam_strings_in_file(file_path: &PathBuf) -> HashSet<String> {
     let content = match fs::read_to_string(file_path) {
@@ -194,29 +155,30 @@ fn tests_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
 }
 
-/// Every model in the CATALOG (except those with `skip_reason`) MUST have
-/// at least one test consumer that references it by `.nam` filename.
+/// Every model in the golden registry (except those with `skip_reason`) MUST
+/// have at least one test consumer that references it by `.nam` filename.
 ///
 /// This is the **inverse** direction of `test_ignored_models_are_in_catalog`:
-/// that test ensures models in test files are registered in the CATALOG;
-/// THIS test ensures models in the CATALOG are exercised by test files.
+/// that test ensures models in test files are registered in the registry;
+/// THIS test ensures models in the registry are exercised by test files.
 ///
-/// Together they form a bidirectional coherence gate (CATALOG ↔ Testes).
+/// Together they form a bidirectional coherence gate (Registry ↔ Testes).
 ///
 /// ## Implementation
 ///
 /// Scans all `.rs` files under `tests/` for `.nam` filename string literals,
-/// then checks that every CATALOG model (minus `skip_reason` models) appears
+/// then checks that every registry model (minus `skip_reason` models) appears
 /// in the resulting set.
 ///
 /// ## Known exemptions
 ///
-/// Models with `skip_reason` in the CATALOG are exempt — they are shown to
-/// have known incompatibilities (separately documented in golden_gen_build.sh).
+/// Models with `skip_reason` in the registry are exempt — they are shown to
+/// have known incompatibilities (separately documented in
+/// `src/testing/catalog.rs`).
 #[test]
 fn test_catalog_models_have_consumers() {
-    let catalog = parse_catalog();
-    let skip_models = parse_skip_reason_models();
+    let catalog = rust_catalog_models();
+    let skip_models = rust_skip_reason_models();
 
     // Collect all .nam filenames referenced across every test source file
     let mut consumers: HashSet<String> = HashSet::new();
@@ -262,12 +224,12 @@ fn test_catalog_models_have_consumers() {
 
     if !missing.is_empty() {
         panic!(
-            "{} model(s) in CATALOG have NO test consumer:\n  {}\n\
+            "{} model(s) in GOLDEN_GEN_CATALOG have NO test consumer:\n  {}\n\
              \n\
              Add at least one test that references each model by `.nam` filename \
              (e.g., model_path(\"{}\") or run_v1(\"{}\", ...)).\n\
              If a model is intentionally untested, add its skip_reason field \
-             to the CATALOG entry in golden_gen_build.sh.",
+             to the registry entry in src/testing/catalog.rs.",
             missing.len(),
             missing.join("\n  "),
             missing.first().unwrap(),
@@ -283,10 +245,59 @@ fn test_catalog_models_have_consumers() {
          ({skipped_count} skipped via skip_reason).",
     );
 }
+
+/// Structural guard (Sprint S3-T02): `golden_gen_build.sh` must source its
+/// catalog from the Rust registry (`nam_golden_catalog emit-catalog`) and must
+/// NOT define a static `CATALOG=(...)` bash array. This prevents the catalog
+/// duplication the sprint eliminated from silently coming back.
+#[test]
+fn test_generator_sources_catalog_from_rust() {
+    let script = golden_gen_build_path();
+    let content = fs::read_to_string(&script).expect("Failed to read golden_gen_build.sh");
+
+    assert!(
+        content.contains("nam_golden_catalog"),
+        "golden_gen_build.sh must source its catalog from the Rust registry \
+         via `nam_golden_catalog emit-catalog` (Sprint S3-T02).\n\
+         The single source of truth is src/testing/catalog.rs::GOLDEN_GEN_CATALOG."
+    );
+    assert!(
+        !content.contains("CATALOG=("),
+        "golden_gen_build.sh must NOT define a static CATALOG=(...) array.\n\
+         Model lists live exclusively in src/testing/catalog.rs::GOLDEN_GEN_CATALOG \
+         (Sprint S3-T02) — the generator consumes them through `nam_golden_catalog emit-catalog`."
+    );
+}
+
+/// Structural guard (Sprint S3-T04): `utils/tests-long.sh` must emit the
+/// long-audit receipt exclusively through the Rust emitter
+/// (`nam_long_receipt append|summary` → `target/logs/long-audit-receipt.jsonl`)
+/// and must NOT hand-serialize the receipt as inline bash JSON — the fragile
+/// quoting this sprint eliminated.
+#[test]
+fn test_long_suite_receipt_emitted_from_rust_bin() {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("utils/tests-long.sh");
+    let content = fs::read_to_string(&script).expect("Failed to read utils/tests-long.sh");
+
+    assert!(
+        content.contains("nam_long_receipt"),
+        "utils/tests-long.sh must emit the long-audit receipt through the Rust \
+         emitter `nam_long_receipt append` / `nam_long_receipt summary` \
+         (Sprint S3-T04).\n\
+         The single generator is src/testing/receipt.rs + src/bin/nam_long_receipt.rs."
+    );
+    assert!(
+        !content.contains("\"phase_id\""),
+        "utils/tests-long.sh must NOT hand-serialize long-audit receipt JSON \
+         via bash printf — the structured emitter (src/testing/receipt.rs + \
+         src/bin/nam_long_receipt.rs) is the single generator (Sprint S3-T04)."
+    );
+}
+
 /// Ensures every `.nam` model referenced by an `#[ignore]` test
-/// (golden-missing reason) is registered in the canonical CATALOG
-/// array in `golden_gen_build.sh`. This prevents silent drift where a
-/// model is added to test files but forgotten in the golden generator.
+/// (golden-missing reason) is registered in the canonical golden registry
+/// `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`. This prevents silent drift
+/// where a model is added to test files but forgotten in the golden generator.
 ///
 /// ## Scope
 ///
@@ -295,7 +306,7 @@ fn test_catalog_models_have_consumers() {
 /// C++ toolchain dependency, not missing goldens.
 #[test]
 fn test_ignored_models_are_in_catalog() {
-    let catalog = parse_catalog();
+    let catalog = rust_catalog_models();
 
     let test_files: &[(&str, &str)] = &[
         ("tests/models/golden_vectors.rs", "golden_vectors.rs"),
@@ -316,13 +327,13 @@ fn test_ignored_models_are_in_catalog() {
             assert!(
                 catalog.contains(nam_file.as_str()),
                 "Model '{nam_file}' is referenced by an #[ignore] test in {source_name} \
-                 (fn: {fn_sig}) but is NOT in the CATALOG array of golden_gen_build.sh.\n\
+                 (fn: {fn_sig}) but is NOT in GOLDEN_GEN_CATALOG.\n\
                  \n\
-                 Add '{nam_file}' to CATALOG in tests/fixtures/golden_gen_build.sh.\n\
+                 Add '{nam_file}' to src/testing/catalog.rs::GOLDEN_GEN_CATALOG.\n\
                  \n\
                  This is the guard against coherence bugs: models that silently enter \
                  the test suite but never have their goldens generated because the \
-                 generator script was never updated.",
+                 generator registry was never updated.",
             );
             checked += 1;
         }

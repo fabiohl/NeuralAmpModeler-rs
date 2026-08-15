@@ -173,6 +173,16 @@ interposition is confirmed.
   `.cargo/config.toml` — that also applies to every dependency's own
   build-script helper binaries, which resolve the version script's
   relative path from a different working directory and fail to find it.
+- **[`tests/libm_export_guard.rs`](../tests/libm_export_guard.rs)** — the canonical,
+  fail-closed ELF surface gate: it runs `nm`/`llvm-nm` over the *linked*
+  test binary (`current_exe`) and fails on any GLOBAL/WEAK export of the
+  libm symbol surface (or panics if no `nm` is available — never a silent
+  skip). It is wired into `utils/tests-quick.sh` Phase 1 and
+  `utils/tests-long.sh` Defense phase. The former standalone wrapper
+  `utils/debug/verify_no_libm_exports.sh` was removed (S4-T03): it scanned
+  `.rlib` archives — the wrong surface, since object archives still carry
+  `T` exports before the version script applies — and exited 0 when the
+  artifact was missing.
 - **[`utils/debug/repro_oversample_hang.sh`](../utils/debug/repro_oversample_hang.sh)** — a general-purpose safety
   wrapper for reproducing any suspected hang: cgroup-scoped
   `RuntimeMaxSec` (kills the whole process tree, not just a direct

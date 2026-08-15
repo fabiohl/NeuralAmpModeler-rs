@@ -100,6 +100,7 @@ fn test_gc_stress_no_leak() {
     let rt_status = RtStatusFlags::new();
     let overflow = GcOverflowBuffer::new(32);
     let counter = Arc::new(AtomicU32::new(0));
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
 
     // Stress: 1000 "resource" swaps
     for _ in 0..1000 {
@@ -110,7 +111,7 @@ fn test_gc_stress_no_leak() {
         }
 
         // Drain periodically to avoid unbounded accumulation
-        super::drain_gc_channels(&mut gc_cons, &overflow, &rt_status);
+        super::drain_gc_channels(&mut gc_cons, &overflow, &mut parking_lot, &rt_status);
     }
 
     // Validate that the final counter is correct after dropping everything
@@ -254,6 +255,90 @@ fn test_drain_gc_empty_is_noop() {
     let (_, mut consumer) = RingBuffer::<GcItem>::new(16);
     let overflow = GcOverflowBuffer::new(16);
     let rt_status = RtStatusFlags::new();
-    let drained = drain_gc_channels(&mut consumer, &overflow, &rt_status);
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+    let drained = drain_gc_channels(&mut consumer, &overflow, &mut parking_lot, &rt_status);
     assert_eq!(drained, 0);
+}
+
+/// R-04: the canonical off-RT drain must also empty the RT parking lot.
+///
+/// Fills the SPSC (capacity 1) and parks 15 additional items in the parking
+/// lot via `gc_cascade`, then verifies a single `drain_gc_channels` releases
+/// all 16 items off-RT — no live `Arc` remains and no drop happened on the
+/// producer side.
+#[test]
+fn test_gc_parking_lot_drain_off_rt() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
+
+    let (mut gc_prod, mut gc_cons) = RingBuffer::<GcItem>::new(1);
+    let rt_status = RtStatusFlags::new();
+    let overflow = GcOverflowBuffer::new(16);
+    let counter = Arc::new(AtomicU32::new(0));
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+
+    // 16 items: 1 lands in the SPSC (capacity 1), the remaining 15 park.
+    for _ in 0..16 {
+        gc_cascade(
+            Some(GcItem::Test(Box::new(counter.clone()))),
+            &mut gc_prod,
+            &mut parking_lot,
+            &overflow,
+            &rt_status,
+        );
+    }
+
+    // None of the items were dropped on the producer (RT) side: all 16 clones
+    // are still alive before the drain.
+    assert_eq!(Arc::strong_count(&counter), 17);
+
+    let drained = drain_gc_channels(&mut gc_cons, &overflow, &mut parking_lot, &rt_status);
+    assert_eq!(drained, 16);
+
+    // Every clone was released off-RT: only the original `counter` remains.
+    assert_eq!(Arc::strong_count(&counter), 1);
+    assert!(parking_lot.iter().all(|slot| slot.is_none()));
+    assert!(!rt_status.check_flag(RT_STATUS_GC_TIER3));
+    assert!(!rt_status.check_flag(RT_STATUS_GC_OVERFLOW));
+}
+
+/// R-04: `gc_cascade` flushes parked items back to the SPSC channel at the
+/// start of each cycle when capacity becomes available.
+#[test]
+fn test_gc_cascade_flushes_parking_lot_to_spsc() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
+
+    let (mut gc_prod, mut gc_cons) = RingBuffer::<GcItem>::new(4);
+    let rt_status = RtStatusFlags::new();
+    let overflow = GcOverflowBuffer::new(4);
+    let counter = Arc::new(AtomicU32::new(0));
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+
+    // Fill the SPSC completely.
+    for _ in 0..4 {
+        gc_prod
+            .push(GcItem::Test(Box::new(counter.clone())))
+            .expect("SPSC fill should succeed");
+    }
+
+    // One more item: SPSC full → parks in the parking lot.
+    gc_cascade(
+        Some(GcItem::Test(Box::new(counter.clone()))),
+        &mut gc_prod,
+        &mut parking_lot,
+        &overflow,
+        &rt_status,
+    );
+    assert!(parking_lot[0].is_some());
+
+    // Drain the SPSC off-RT, freeing capacity.
+    for _ in 0..4 {
+        gc_cons.pop().expect("SPSC drain should succeed");
+    }
+
+    // Next cascade flushes the parked item back to the SPSC.
+    gc_cascade(None, &mut gc_prod, &mut parking_lot, &overflow, &rt_status);
+    assert!(parking_lot.iter().all(|slot| slot.is_none()));
+    assert!(gc_cons.pop().is_ok(), "parked item was not flushed to SPSC");
 }

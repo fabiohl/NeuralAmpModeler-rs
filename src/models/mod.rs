@@ -79,6 +79,14 @@ mod sealed {
 pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Invoked by the DSP audio thread to process an acoustic sample block.
     ///
+    /// # Length Contract
+    /// `output.len()` may be smaller than `input.len()`; every implementation
+    /// clamps to `n = input.len().min(output.len())` and never indexes beyond
+    /// `output[..n]`. Samples past `n` in `output` are left untouched and the
+    /// excess input is not consumed, so `process` never panics on asymmetric
+    /// buffer lengths. Hosts are expected to use equal-length buffers, but the
+    /// engine degrades gracefully when they do not.
+    ///
     /// # Real-Time Safety
     /// This method MUST NOT allocate on the heap, acquire locks, or perform blocking I/O.
     fn process(&mut self, input: &[f32], output: &mut [f32]);

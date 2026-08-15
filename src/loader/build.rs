@@ -272,6 +272,11 @@ pub fn load_and_build_model(
             .emit();
     })?;
 
+    // Size the model for the pipeline's documented maximum block size
+    // (`MAX_RESAMP_BUF`), so containers/crossfade scratch and ring buffers
+    // are pre-allocated for 8192-sample blocks before processing starts.
+    model_l.set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)?;
+
     if options.prewarm == Some(false) {
         model_l.set_prewarm_on_reset(false);
     } else {
@@ -290,6 +295,7 @@ pub fn load_and_build_model(
                 .param("detail", e.to_string())
                 .emit();
         })?;
+        model.set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)?;
         if options.prewarm == Some(false) {
             model.set_prewarm_on_reset(false);
         } else {

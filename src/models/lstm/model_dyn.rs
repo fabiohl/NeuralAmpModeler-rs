@@ -141,6 +141,11 @@ impl LstmModelDyn {
     /// Dispatches to the highest available SIMD kernel based on the global
     /// configuration validated at startup.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // Length contract: clamp to the shorter buffer; never index past
+        // `output.len()` even with asymmetric caller buffers.
+        let n = input.len().min(output.len());
+        let input = &input[..n];
+        let output = &mut output[..n];
         unsafe {
             crate::math::common::dispatch_simd!(
                 @self,
@@ -161,11 +166,12 @@ impl LstmModelDyn {
             return;
         }
         let n_layers = self.layers.len();
+        let n = input.len().min(output.len());
 
         debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
         let layers_ptr = self.layers.as_mut_ptr();
 
-        for s in 0..input.len() {
+        for s in 0..n {
             unsafe {
                 (*layers_ptr).process_sample_scalar(&[input[s]]);
 

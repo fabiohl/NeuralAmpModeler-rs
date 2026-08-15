@@ -247,8 +247,13 @@ NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models ./utils/setup-third-party.sh
 | `third-party/community_models/` | Optional symlink to local community models (not redistributable) |
 | `variables.env` | Version-controlled pin file (tags/commits/URLs) |
 
-Tests and scripts **skip gracefully** when these artifacts are missing. Override locations with
-`NAM_THIRD_PARTY_DIR`, `NAM_CORE_DIR`, `NAM_PLUGIN_DIR`, or `NAM_MODELS_DIR` if needed.
+Tests and scripts **skip gracefully with a declared gap** when these artifacts are missing:
+the quick suite records `GAP:` lines in `target/logs/quick-receipt.txt`, prints
+`FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS` (exit 0), and **never emits a green
+fidelity seal for skipped oracles** — `NAM_QUICK_STRICT=1` promotes those gaps to FAIL
+(exit 1). The long suite requires the NAMcore mirror outright (hard abort if absent).
+Override locations with `NAM_THIRD_PARTY_DIR`, `NAM_CORE_DIR`, `NAM_PLUGIN_DIR`, or
+`NAM_MODELS_DIR` if needed.
 See [`tests/fixtures/README.md`](tests/fixtures/README.md) for the full model search order.
 
 Rust dependency supply-chain updates remain separate: `./utils/mod-update.sh`.
@@ -264,10 +269,34 @@ The `./utils/` directory contains maintainer tools and standard scripts for code
 | [`utils/setup-third-party.sh`](utils/setup-third-party.sh)       | **Local env bootstrap:** Clones/syncs pinned NAMCore + Plugin mirrors into `third-party/` and optionally links `community_models`. Required for full parity/golden work; not needed by crate consumers.                                                                            |
 | [`utils/mod-update.sh`](utils/mod-update.sh)                     | **Rust supply chain:** Updates rustup toolchain, `cargo upgrade`, and `Cargo.lock` (does **not** manage vendor mirrors).                                                                                                                                                           |
 | [`utils/lints.sh`](utils/lints.sh)                               | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                               |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)                   | **Agile 1st Line QA:** Runs structural unit and integration tests (`cargo test`) in both debug and release modes with low CPU/IO priority.                                                                                                                                         |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)       | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.txt`.                                                                                                                                                      |
-| [`utils/check-model.sh`](utils/check-model.sh)                   | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                   |
-| [`utils/tests-long.sh`](utils/tests-long.sh)                     | **Nightly / Pre-Release Suite:** Executes heavy soak tests, full proptest/fuzz sweeps, full C++ parity audits, cross-ISA tests, real-time safety, and heap-allocation audits. *(AI agents must not run this script directly due to runtime length; ask human operator if needed).* |
+| [`utils/tests-quick.sh`](utils/tests-quick.sh)                   | **Agile 1st Line QA:** 3 phases — structural tests (debug), measurement oracles + C++ parity `quick_parity` (release), capped parser fuzzing (`NAM_QUICK_PROPTEST_CASES`). Oracle skips are fail-closed: missing fixtures/toolchain print `FIDELITY: INCOMPLETE` + `OVERALL: PASSED_WITH_GAPS` (exit 0) and write the receipt `target/logs/quick-receipt.txt`; `NAM_QUICK_STRICT=1` promotes gaps to FAIL (exit 1). Re-executes itself at low CPU/IO priority unless `NAM_NO_LOW_PRIORITY=1`.                                                                                                                               |
+| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)       | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.txt`.                                                                                                                                                                                                                |
+| [`utils/check-model.sh`](utils/check-model.sh)                   | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                                                                               |
+| [`utils/tests-long.sh`](utils/tests-long.sh)                     | **Nightly / Pre-Release Suite:** Rust-gated pre-flight (`catalog_preflight` V1/V2 golden catalogs fail-closed + `check_freshness` manifest; no bash golden lists), soak, full proptest/fuzz, full C++ parity matrix, cross-ISA, RT-safety and heap-audits. Exits `OVERALL: FAILED` (1) / `COMPLETED_WITH_GAPS` (0) / `PASSED` (0); `--strict-pre-release` turns declared gaps into failure. *(AI agents must not run this script directly due to runtime length; ask the human operator.)* |
+
+Exact QA commands:
+
+```bash
+# 1. Static analysis (fmt, SPDX, check, clippy)
+./utils/lints.sh
+
+# 2. Agile first line (AI tasks: at most once, as final validation)
+./utils/tests-quick.sh
+
+#    Release-gate mode: skipped oracles (missing fixtures/C++ toolchain) become FAIL
+NAM_QUICK_STRICT=1 ./utils/tests-quick.sh
+
+#    Receipt + per-phase logs of the last run
+cat target/logs/quick-receipt.txt   # plus target/logs/quick-phase{1,2,3}.log
+# 3. Nightly / pre-release audit — HUMAN OPERATOR ONLY (AI agents must never run it)
+
+./utils/tests-long.sh
+./utils/tests-long.sh --strict-pre-release
+
+#    Human certification protocol (checklist + evidence record for both runners)
+
+#    docs/runners-human-certification.md
+```
 
 ---
 
@@ -287,6 +316,7 @@ The following technical documents are maintained in the source repository. The p
 | [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates       |
 | [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research       |
 | [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Engine functional test checklist and verification matrices                                   |
+| [`docs/runners-human-certification.md`](docs/runners-human-certification.md)                   | Human-only certification protocol for `tests-quick.sh` / `tests-long.sh` (checklist + evidence record) |
 | [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers        |
 | [`docs/quality-contract.txt`](docs/quality-contract.txt)                                       | Quality contract: benchmark and audio fidelity regression baseline thresholds                |
 | [`tests/fixtures/README.md`](tests/fixtures/README.md)                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures   |

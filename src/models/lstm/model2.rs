@@ -91,6 +91,11 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
     );
     /// Processes an audio block through the model (SIMD dispatch).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // Length contract: clamp to the shorter buffer; never index past
+        // `output.len()` even with asymmetric caller buffers.
+        let n = input.len().min(output.len());
+        let input = &input[..n];
+        let output = &mut output[..n];
         unsafe {
             crate::math::common::dispatch_simd!(
                 @self,
@@ -107,7 +112,8 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
     /// # Note
     /// Exclusively for parity tests. Extremely slow.
     pub fn process_scalar(&mut self, input: &[f32], output: &mut [f32]) {
-        for i in 0..input.len() {
+        let n = input.len().min(output.len());
+        for i in 0..n {
             self.layer1.process_sample_scalar(&[input[i]]);
             self.layer2
                 .process_sample_scalar(self.layer1.get_hidden_state());

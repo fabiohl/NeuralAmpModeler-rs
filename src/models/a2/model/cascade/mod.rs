@@ -104,7 +104,10 @@ impl WaveNetA2Cascade {
 
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total = input.len();
+        // Each frame writes `last.head_size` output samples; clamp the frame
+        // count so the output is never indexed beyond its actual length.
+        let out_per_frame = self.arrays.last().map_or(1, |a| a.head_size.max(1));
+        let total = input.len().min(output.len() / out_per_frame);
         if total == 0 {
             return;
         }

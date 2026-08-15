@@ -155,11 +155,12 @@ fn test_reset_without_prewarm_no_panic() {
     }
 }
 
-/// Verify that reset() with prewarm_on_reset=false does NOT clear state,
-/// while reset() with prewarm_on_reset=true DOES clear it.
+/// Verify that `reset()` clears internal state regardless of
+/// `prewarm_on_reset` (S3.T2): with the flag disabled, the FIR history and
+/// FFT tail must still be silenced — the flag only gates the priming pass.
 /// Process audio first (fill internal state), then compare reset outcomes.
 #[test]
-fn test_reset_outcome_differs_prewarm_vs_noprewarm() {
+fn test_reset_outcome_same_prewarm_vs_noprewarm() {
     let path = model_path("linear_test.nam");
     let json = std::fs::read_to_string(&path).expect("Failed to read linear_test.nam");
     let data = parse_nam_json(&json).expect("Failed to parse linear_test.nam");
@@ -182,7 +183,8 @@ fn test_reset_outcome_differs_prewarm_vs_noprewarm() {
     let mut out_a = vec![0.0f32; input.len()];
     process_in_blocks(&mut model_a, &input, &mut out_a, BLOCK_SIZE);
 
-    // Build separate model, process audio, reset without prewarm → keeps state
+    // Build separate model, process audio, reset without prewarm → state
+    // must STILL be cleared (deterministic cleanup, no residual FIR energy).
     let mut model_b = build_model(&data).expect("Failed to build");
     process_in_blocks(&mut model_b, &input, &mut dummy_out, BLOCK_SIZE);
     model_b.set_prewarm_on_reset(false);
@@ -190,18 +192,15 @@ fn test_reset_outcome_differs_prewarm_vs_noprewarm() {
     let mut out_b = vec![0.0f32; input.len()];
     process_in_blocks(&mut model_b, &input, &mut out_b, BLOCK_SIZE);
 
-    let mut any_differ = false;
-    for (&a, &b) in out_a.iter().zip(out_b.iter()) {
-        if (a - b).abs() > 1e-6 {
-            any_differ = true;
-        }
+    for (i, (&a, &b)) in out_a.iter().zip(out_b.iter()).enumerate() {
         assert!(a.is_finite());
         assert!(b.is_finite());
+        assert!(
+            (a - b).abs() < 1e-6,
+            "Outputs should match after identical reset (state cleared in both cases): \
+             index {i}: prewarm={a} no-prewarm={b}"
+        );
     }
-    assert!(
-        any_differ,
-        "Outputs should differ: prewarm clears state, no-prewarm retains previous state"
-    );
 }
 
 // =============================================================================

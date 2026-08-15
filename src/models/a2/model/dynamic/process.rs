@@ -71,7 +71,7 @@ impl WaveNetA2Dyn {
     /// Monomorphized inner loop — see [`process`](Self::process) for contract.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total = input.len();
+        let total = input.len().min(output.len());
         if total == 0 {
             return;
         }

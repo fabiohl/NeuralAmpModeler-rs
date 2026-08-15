@@ -22,6 +22,7 @@ use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::a2::GatingMode;
 use neural_amp_modeler_rs::models::slimmable::SlimmableModel;
 use neural_amp_modeler_rs::models::{NamModel, StaticModel};
+use neural_amp_modeler_rs::testing::catalog::v2_sample_rates_for;
 use std::fs;
 use std::path::PathBuf;
 
@@ -151,217 +152,21 @@ fn run_v2_golden_test(
 }
 
 // =============================================================================
-// V2 Multi-SR Catalog — Single Source of Truth for Sample Rates per Model
+// V2 Multi-SR Catalog — Single Source of Truth (Sprint S3-T02)
 // =============================================================================
 //
-// This catalog mirrors the canonical CATALOG array in
-// tests/fixtures/golden_gen_build.sh. It is the single point of truth for
-// which sample rates each model/SKU supports in v2 golden vector tests.
-// No parallel lists (ALL_SR / SR_EX_192K / V2_EX_192K_MODELS) exist
-// elsewhere — every test consumer looks up its model here.
+// The canonical V2 golden catalog (models, sample rates, expected fixtures,
+// distribution policy) lives in `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`
+// and is consumed here through `v2_sample_rates_for` (imported above). The
+// former local `V2_CATALOG` table and the bash `V2_CATALOG_SCOPE` array in
+// `utils/tests-long.sh` were removed — Rust is the only definition, validated
+// on disk by `catalog_preflight` via `validate_v2_catalog`.
 //
-// Entry format: (nam_filename, golden_name_prefix, label, scope)
-//   scope ∈ { MultiSr, MultiSrEx192k, Sr48kOnly }
-//     MultiSr        — all 5 sample rates (44100, 48000, 88200, 96000, 192000)
-//     MultiSrEx192k  — all except 192k (LSTM recurrent drift over 5s stress)
-//     Sr48kOnly      — only 48000 Hz (model declares expected_sample_rate=48000
-//                       or C++ render tool rejects other SRs)
-
-/// Sample-rate scope for v2 multi-SR golden vector tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SrScope {
-    MultiSr,
-    MultiSrEx192k,
-    Sr48kOnly,
-}
-
-/// Single catalog entry mapping a model file to its supported sample rates.
-#[expect(dead_code)]
-struct CatalogEntry {
-    nam_file: &'static str,
-    golden_name: &'static str,
-    label: &'static str,
-    scope: SrScope,
-}
-
-/// Backing sample-rate slices referenced by the catalog entries.
-const MULTI_SR_RATES: &[u32] = &[44100, 48000, 88200, 96000, 192000];
-const MULTI_SR_EX_192K_RATES: &[u32] = &[44100, 48000, 88200, 96000];
-const SR_48K_RATES: &[u32] = &[48000];
-
-/// Canonical v2 multi-SR catalog — single source of truth.
-///
-/// Kept in sync with the CATALOG array in `golden_gen_build.sh`.
-/// Models with `v2_scope=none` or `skip_reason` in the shell script are
-/// intentionally absent — their golden vectors are not generated.
-///
-/// When adding a new model here, also add it to the shell CATALOG.
-const V2_CATALOG: &[CatalogEntry] = &[
-    CatalogEntry {
-        nam_file: "BossWN-standard.nam",
-        golden_name: "golden_wavenet_standard",
-        label: "WaveNet Standard (CH=16)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "EVH-5150-Lite.nam",
-        golden_name: "golden_wavenet_lite",
-        label: "WaveNet Lite (CH=12)",
-        scope: SrScope::MultiSr,
-    },
-    CatalogEntry {
-        nam_file: "BossWN-feather.nam",
-        golden_name: "golden_wavenet_feather",
-        label: "WaveNet Feather (CH=8)",
-        scope: SrScope::MultiSr,
-    },
-    CatalogEntry {
-        nam_file: "BossWN-nano.nam",
-        golden_name: "golden_wavenet_nano",
-        label: "WaveNet Nano (CH=4)",
-        scope: SrScope::MultiSr,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_a1_standard.nam",
-        golden_name: "golden_wavenet_a1_standard",
-        label: "WaveNet A1 Standard (Official)",
-        scope: SrScope::MultiSr,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_official.nam",
-        golden_name: "golden_wavenet_official",
-        label: "WaveNet Official (CH=3, dynamic)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "BossLSTM-1x16.nam",
-        golden_name: "golden_lstm_1x16",
-        label: "LSTM 1×16",
-        scope: SrScope::MultiSrEx192k,
-    },
-    CatalogEntry {
-        nam_file: "BossLSTM-2x8.nam",
-        golden_name: "golden_lstm_2x8",
-        label: "LSTM 2×8",
-        scope: SrScope::MultiSrEx192k,
-    },
-    CatalogEntry {
-        nam_file: "lstm.nam",
-        golden_name: "golden_lstm_official",
-        label: "LSTM Official",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_a2_full.nam",
-        golden_name: "golden_wavenet_a2_full",
-        label: "WaveNet A2-Full (CH=8)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_a2_lite.nam",
-        golden_name: "golden_wavenet_a2_lite",
-        label: "WaveNet A2-Lite (CH=3)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_condition_dsp.nam",
-        golden_name: "golden_wavenet_condition_dsp",
-        label: "WaveNet Condition DSP (CH=3, cond=3, dynamic)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "wavenet_condition_lstm.nam",
-        golden_name: "golden_wavenet_condition_lstm",
-        label: "WaveNet Condition DSP LSTM (CH=3, cond=3, LSTM)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "a2_example.nam",
-        golden_name: "golden_a2_example",
-        label: "SlimmableContainer A2 Example (CH=3→6)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "APP-EVH-Stealth100-Dialled-xSTD.nam",
-        golden_name: "golden_wavenet_app_evh",
-        label: "APP EVH Stealth 100",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
-        golden_name: "golden_wavenet_boss_bd2",
-        label: "Boss BD-2 H2O Mod",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
-        golden_name: "golden_wavenet_slammin_marshall",
-        label: "SLAMMIN MARSHALL JTM 45",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "lstm_1x10.nam",
-        golden_name: "golden_lstm_1x10",
-        label: "LSTM 1×10 (uncat.)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "lstm_2x24.nam",
-        golden_name: "golden_lstm_2x24",
-        label: "LSTM 2×24 (uncat.)",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "lstm_3x8.nam",
-        golden_name: "golden_lstm_3x8",
-        label: "LSTM 3×8",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "convnet_nobn.nam",
-        golden_name: "golden_convnet_nobn",
-        label: "ConvNet No BatchNorm",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "convnet_relu.nam",
-        golden_name: "golden_convnet_relu",
-        label: "ConvNet ReLU",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "convnet_silu.nam",
-        golden_name: "golden_convnet_silu",
-        label: "ConvNet SiLU",
-        scope: SrScope::Sr48kOnly,
-    },
-    CatalogEntry {
-        nam_file: "linear_nobias.nam",
-        golden_name: "golden_linear_nobias",
-        label: "Linear No Bias",
-        scope: SrScope::Sr48kOnly,
-    },
-];
-
-/// Looks up the sample-rate slice for a model from the canonical V2_CATALOG.
-///
-/// Falls back to 48 kHz only with a warning if the model is not in the catalog.
-fn v2_sample_rates_for(nam_file: &str) -> &[u32] {
-    match V2_CATALOG.iter().find(|e| e.nam_file == nam_file) {
-        Some(entry) => match entry.scope {
-            SrScope::MultiSr => MULTI_SR_RATES,
-            SrScope::MultiSrEx192k => MULTI_SR_EX_192K_RATES,
-            SrScope::Sr48kOnly => SR_48K_RATES,
-        },
-        None => {
-            eprintln!(
-                "WARNING: {nam_file} not in V2_CATALOG — defaulting to 48 kHz only. \
-                 Add the model to the V2_CATALOG table in golden_vectors.rs."
-            );
-            SR_48K_RATES
-        }
-    }
-}
+// Scope ∈ { AllRates (5 SRs), Exclude192k (4 SRs), Sr48kOnly (1 SR) }.
+//   AllRates     — all 5 sample rates (44100, 48000, 88200, 96000, 192000)
+//   Exclude192k  — all except 192k (LSTM recurrent drift over 5s stress)
+//   Sr48kOnly    — only 48000 Hz (model declares expected_sample_rate=48000
+//                  or C++ render tool rejects other SRs)
 
 // =============================================================================
 // Golden Vector Tests (Cross-Reference C++ ↔ Rust)
@@ -1413,6 +1218,7 @@ fn test_a2_max_weight_budget_818_1052() {
 /// ```sh
 /// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_a2_max_film_slot_budget -- --ignored --exact --nocapture
 /// ```
+// on-demand: KB-A2-MAX FiLM slot budget diagnostic (TR2b.3/H6); unlock-only, not a nightly gate
 #[test]
 #[ignore = "TR2b.3 (H6): FiLM budget check — not a CI gate; run manually"]
 fn test_a2_max_film_slot_budget() {
@@ -3387,6 +3193,7 @@ fn test_golden_vectors_convnet_test() {
 /// **What the test validates when un-ignored:** Compares Rust DSP against
 /// `golden_wavenet_a2_max.bin` (NAMCore C++). Do not un-ignore without
 /// meeting §4.4.3 (SNR≥90 dB + intermediate C++ dumps).
+// on-demand: KB-A2-MAX golden compare; known bug until §4.4.3 reopen; not a nightly gate
 #[test]
 #[ignore = "KB-A2-MAX known bug: prod×C++ ~0.23 dB; guard TR1.1 — not a CI parity gate"]
 fn test_golden_vectors_wavenet_a2_max() {
@@ -3466,6 +3273,7 @@ fn test_golden_vectors_wavenet_a2_max() {
 /// - H1+H2 tree (re-audit 2026-08-09): SNR ≈ **0.23 dB**, ESR ≈ 9.49e-1  ← current HEAD
 ///
 /// Fail-closed guard remains active; unlock via `NAM_A2_MAX_UNLOCK=1` inside the test.
+// on-demand: KB-A2-MAX SNR/ESR meter vs C++ golden; diagnostic only, not a nightly gate
 #[test]
 #[ignore = "KB-A2-MAX meter only: prod×C++ ~0.23 dB; unlock diagnostics — not a CI gate"]
 fn test_measure_a2_max_snr_vs_golden() {
@@ -3541,6 +3349,7 @@ fn test_measure_a2_max_snr_vs_golden() {
 /// - One `#[ignore]`'d command reproduces the full table.
 /// - Numbers annotated with `// Measured:` for machine-readable consumption.
 /// - No production code change; only measurement + documentation.
+// on-demand: KB-A2-MAX H0 triple-decomposition harness (TR2b.1); not a nightly gate
 #[test]
 #[ignore = "TR2b.1 (H0): diagnostic harness — not a CI gate; run manually"]
 fn test_h0_triple_decomposition() {
@@ -3759,6 +3568,7 @@ fn test_h0_triple_decomposition() {
 /// ```sh
 /// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_tr2b2_condition_dsp_contract -- --ignored --exact --nocapture
 /// ```
+// on-demand: KB-A2-MAX condition_dsp contract harness (TR2b.2/H5+H7); not a nightly gate
 #[test]
 #[ignore = "TR2b.2 (H5+H7): diagnostic harness — not a CI gate; run manually"]
 fn test_tr2b2_condition_dsp_contract() {
@@ -4479,18 +4289,37 @@ fn test_golden_vectors_linear_nobias() {
 
 /// Prints the unified fixture catalog capability receipt to stdout.
 ///
-/// Iterates every entry in `FIXTURE_CATALOG`, resolves its path via the
-/// unified path resolution (env vars → local checkout), checks disk presence,
-/// and emits a typed capability report.
+/// Three gates run here:
 ///
-/// Invoked by `utils/tests-long.sh` before running the long suite.  The
+/// 1. **Fixture catalog receipt** — iterates every entry in `FIXTURE_CATALOG`,
+///    resolves its path via the unified path resolution (env vars → local
+///    checkout), checks disk presence, and emits a typed capability report.
+///
+/// 2. **V1 golden catalog validation (Sprint S6-T01)** — runs
+///    `catalog::validate_v1_goldens()` against the Rust single source of truth
+///    (`src/testing/catalog.rs::V1_GOLDEN_CATALOG`), checking every 48 kHz v1
+///    golden binary on disk: DistributedCore model goldens and the CabSim
+///    convolution goldens (RequiredLocal, hard-fail) plus the
+///    LocalNonDistributable WaveNet Lite golden (OptionalExternal, graceful).
+///    The former bash arrays `REQUIRED_GOLDEN_MODELS` / `NONDIST_GOLDEN_MODELS`
+///    / `REQUIRED_CABSIM_GOLDENS` in `utils/tests-long.sh` were removed; this
+///    Rust gate is the only v1 presence check.
+///
+/// 3. **V2 golden catalog validation (Sprint S3-T02)** — runs
+///    `catalog::validate_v2_catalog()` against the Rust single source of truth
+///    (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`), checking every model
+///    fixture and every expected `*_v2_{sr}.bin` golden per the model's
+///    sample-rate scope. The former bash `V2_CATALOG_SCOPE` preflight in
+///    `utils/tests-long.sh` was removed; this Rust gate is the only V2 check.
+///
+/// Invoked by `utils/tests-long.sh` before running the long suite. The
 /// receipt serves as an auditable preflight artifact: it proves that the
 /// runner verified fixture availability against the catalog declaratively,
 /// rather than proceeding blindly and crashing late with a panic.
 ///
-/// Missing `RequiredLocal` fixtures are reported but this test does NOT fail —
-/// the shell-level preflight in `tests-long.sh` Phase 0 handles hard-fail
-/// gating independently.  This function is a receipt emitter, not a gate.
+/// Missing `RequiredLocal` fixtures fail this test (exit 1 with a descriptive
+/// message). Integrity of present goldens is additionally enforced by the
+/// freshness gate (`check_freshness`, nam_freshness) in the runners.
 #[test]
 fn catalog_preflight() {
     println!("{}", FIXTURE_CATALOG.capability_receipt());
@@ -4516,6 +4345,20 @@ fn catalog_preflight() {
         }
     }
 
+    // V1 golden catalog validation — Rust single source of truth (S6-T01).
+    let v1_status = neural_amp_modeler_rs::testing::catalog::validate_v1_goldens()
+        .unwrap_or_else(|e| panic!("catalog_preflight: V1 golden catalog validation failed: {e}"));
+    println!("\n{}", v1_status.receipt_v1());
+    missing_required.extend(v1_status.missing_required.iter().map(String::as_str));
+    missing_optional.extend(v1_status.missing_optional.iter().map(String::as_str));
+
+    // V2 golden catalog validation — Rust single source of truth (S3-T02).
+    let v2_status = neural_amp_modeler_rs::testing::catalog::validate_v2_catalog()
+        .unwrap_or_else(|e| panic!("catalog_preflight: V2 catalog validation failed: {e}"));
+    println!("\n{}", v2_status.receipt());
+    missing_required.extend(v2_status.missing_required.iter().map(String::as_str));
+    missing_optional.extend(v2_status.missing_optional.iter().map(String::as_str));
+
     if !missing_optional.is_empty() {
         println!();
         println!(
@@ -4540,4 +4383,10 @@ fn catalog_preflight() {
         println!();
         println!("=== All RequiredLocal fixtures present ✓ ===");
     }
+
+    assert!(
+        missing_required.is_empty(),
+        "catalog_preflight: {} RequiredLocal fixture(s) absent: {missing_required:?}",
+        missing_required.len()
+    );
 }

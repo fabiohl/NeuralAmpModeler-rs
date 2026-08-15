@@ -161,6 +161,10 @@ fn test_conv1d_ch12_scalar_vs_simd() {
     );
 }
 
+// on-demand: WaveNet Lite CH=12 kernel telemetry profiler; needs
+// tests/fixtures/models/BossWN-lite.nam (obsolete synthetic, not a
+// nightly/CI gate). Run manually:
+//   cargo test --lib --features testing profile_wavenet_lite_kernels -- --ignored --nocapture
 #[test]
 #[ignore]
 fn profile_wavenet_lite_kernels() {

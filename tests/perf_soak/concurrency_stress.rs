@@ -197,9 +197,10 @@ fn test_gc_cascade_concurrent_drain() {
     let drainer = thread::spawn(move || {
         let mut total = 0usize;
         let mut gc_cons = gc_consumer;
+        let mut parking_lot: [Option<GcItem>; 16] = Default::default();
         let mut empty_streak: u32 = 0;
         loop {
-            let drained = drain_gc_channels(&mut gc_cons, &ov_drain, &rs_drain);
+            let drained = drain_gc_channels(&mut gc_cons, &ov_drain, &mut parking_lot, &rs_drain);
             total += drained;
             if drained == 0 {
                 empty_streak += 1;
@@ -457,7 +458,7 @@ fn test_cabsim_swap_during_process() {
 
             // Process if we have an engine
             if let Some(ref mut engine) = active_engine {
-                engine.process(&input, &mut output);
+                engine.process(&input, &mut output, None);
                 for s in &output {
                     assert!(s.is_finite(), "Non-finite sample from cabsim processing");
                 }

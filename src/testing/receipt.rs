@@ -18,9 +18,12 @@
 //! - `SKIPPED_ENVIRONMENTAL`: Stage skipped due to missing optional third-party fixtures or hardware environment constraints.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+
+use crate::common::diagnostics::format::timestamp as iso_timestamp;
 
 use crate::loader::dispatcher::build_model;
 use crate::loader::nam_json::parse_nam_json;
@@ -428,5 +431,724 @@ pub fn generate_capability_receipt() -> CapabilityReceipt {
         unsupported_count,
         summary,
         entries,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Long-duration audit suite receipt (Sprint S3-T04)
+// ═══════════════════════════════════════════════════════════════════════════
+// Structured JSONL emission for `utils/tests-long.sh` (nightly audit runner).
+// Each completed phase appends ONE line to `target/logs/long-audit-receipt.jsonl`
+// with schema: phase_id, name, status, duration_ms, tests_executed, gaps,
+// timestamp — ingestible by IAs and dashboards without fragile regexes over
+// text logs. All JSON generation lives here (serde) and in the
+// `nam_long_receipt` CLI binary; shell scripts never hand-serialize it.
+
+/// Current UTC time formatted as ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`).
+///
+/// Public wrapper around the crate-internal diagnostics formatter so CLI
+/// binaries (separate crates) can stamp receipt lines.
+pub fn now_iso8601() -> String {
+    iso_timestamp()
+}
+
+/// Typed status vocabulary of the long-duration audit suite phases.
+///
+/// Mirrors the statuses produced by `utils/tests-long.sh::run_phase`
+/// (PASSED / FAILED / SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY / NOT_RUN).
+/// `CompletedWithGaps` is only used by the suite-level `overall` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LongPhaseStatus {
+    /// Phase completed with zero failures and no declared gaps.
+    Passed,
+    /// Phase failed (test failure, gate promotion, or non-zero exit).
+    Failed,
+    /// Phase was skipped by the runner (exit code 77).
+    Skipped,
+    /// Phase ran but could not certify its assertion (environment telemetry).
+    Inconclusive,
+    /// Phase bypassed itself due to a missing capability (typed log marker).
+    SkipCapability,
+    /// Phase was never executed.
+    NotRun,
+    /// Suite verdict: audit completed, but with declared gaps.
+    CompletedWithGaps,
+}
+
+impl LongPhaseStatus {
+    /// Canonical serialized name (e.g. `SKIP_CAPABILITY`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LongPhaseStatus::Passed => "PASSED",
+            LongPhaseStatus::Failed => "FAILED",
+            LongPhaseStatus::Skipped => "SKIPPED",
+            LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
+            LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
+            LongPhaseStatus::NotRun => "NOT_RUN",
+            LongPhaseStatus::CompletedWithGaps => "COMPLETED_WITH_GAPS",
+        }
+    }
+
+    /// Returns `true` when this status declares a gap for the audit verdict
+    /// (the long suite's `HAS_GAPS` semantics: skipped / inconclusive /
+    /// capability-skipped / not-run phases).
+    pub fn is_gap(self) -> bool {
+        matches!(
+            self,
+            LongPhaseStatus::Skipped
+                | LongPhaseStatus::Inconclusive
+                | LongPhaseStatus::SkipCapability
+                | LongPhaseStatus::NotRun
+        )
+    }
+
+    /// Canonical gap identifier for gap-declaring statuses (`None` otherwise).
+    pub fn gap_id(self) -> Option<&'static str> {
+        match self {
+            LongPhaseStatus::Skipped => Some("skipped"),
+            LongPhaseStatus::Inconclusive => Some("inconclusive"),
+            LongPhaseStatus::SkipCapability => Some("skip_capability"),
+            LongPhaseStatus::NotRun => Some("not_run"),
+            _ => None,
+        }
+    }
+}
+
+impl FromStr for LongPhaseStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "PASSED" => Ok(LongPhaseStatus::Passed),
+            "FAILED" => Ok(LongPhaseStatus::Failed),
+            "SKIPPED" => Ok(LongPhaseStatus::Skipped),
+            "INCONCLUSIVE" => Ok(LongPhaseStatus::Inconclusive),
+            "SKIP_CAPABILITY" => Ok(LongPhaseStatus::SkipCapability),
+            "NOT_RUN" => Ok(LongPhaseStatus::NotRun),
+            "COMPLETED_WITH_GAPS" => Ok(LongPhaseStatus::CompletedWithGaps),
+            other => Err(format!(
+                "invalid long-suite status '{other}' (expected one of: \
+                 PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN, COMPLETED_WITH_GAPS)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for LongPhaseStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Single JSONL line: structured audit receipt entry for one long-suite phase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LongPhaseReceipt {
+    /// Stable phase identifier (e.g. `phase1`..`phase7`, `overall`).
+    pub phase_id: String,
+    /// Human-readable phase name (mirrors `tests-long.sh` run_phase labels).
+    pub name: String,
+    /// Typed phase status.
+    pub status: LongPhaseStatus,
+    /// Wall-clock duration of the phase in milliseconds.
+    pub duration_ms: u64,
+    /// Number of tests/benchmarks actually executed by the phase
+    /// (parsed from `test result:` lines of the phase log).
+    pub tests_executed: u64,
+    /// Declared gap markers for this phase (typed log markers + explicit gaps
+    /// + the phase status itself when it is a gap status).
+    pub gaps: Vec<String>,
+    /// ISO-8601 emission timestamp (UTC).
+    pub timestamp: String,
+}
+
+impl LongPhaseReceipt {
+    /// Serializes this entry as a single JSONL line (no trailing newline).
+    pub fn render_jsonl_line(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Parses one JSONL line back into a receipt entry.
+    pub fn parse_jsonl_line(line: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(line)
+    }
+}
+
+/// Canonical preflight step identifiers emitted by `utils/tests-long.sh`
+/// ahead of Phase 1 (S6-T03 / RES-08): render binary, fixture/V1/V2 catalog,
+/// package exclusion, freshness, catalog↔test coherence. An abort in any of
+/// them exits the suite before a single timed phase, so each step must still
+/// leave a machine-readable `preflight-*` line (plus the `overall` verdict).
+pub const PREFLIGHT_PHASE_IDS: [&str; 5] = [
+    "preflight-render",
+    "preflight-catalog",
+    "preflight-package",
+    "preflight-freshness",
+    "preflight-meta",
+];
+
+/// `true` when `phase_id` belongs to the preflight namespace (`preflight-*`).
+pub fn is_preflight_id(phase_id: &str) -> bool {
+    phase_id.starts_with("preflight-")
+}
+
+/// Typed error for long-audit receipt I/O and JSONL validation.
+#[derive(Debug, thiserror::Error)]
+pub enum LongReceiptError {
+    /// A line of the JSONL stream is not valid JSON (line numbers are 1-based).
+    #[error("invalid JSONL line {line}: {source}")]
+    InvalidJsonLine {
+        /// 1-based line number of the offending entry.
+        line: usize,
+        /// Underlying JSON parse error.
+        #[source]
+        source: serde_json::Error,
+    },
+    /// Filesystem error while reading or writing the receipt.
+    #[error("receipt I/O error: {source}")]
+    Io {
+        /// Underlying filesystem error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A `preflight-*` line uses an identifier outside [`PREFLIGHT_PHASE_IDS`]
+    /// (typoed preflight ids would silently drop the abort trace).
+    #[error("unknown preflight identifier '{id}' (canonical: {canonical})")]
+    UnknownPreflightId {
+        /// The offending `phase_id`.
+        id: String,
+        /// Comma-joined canonical preflight identifiers.
+        canonical: String,
+    },
+}
+
+impl From<std::io::Error> for LongReceiptError {
+    fn from(source: std::io::Error) -> Self {
+        LongReceiptError::Io { source }
+    }
+}
+
+/// Ordered container for the long-suite audit receipt — one entry per emitted
+/// JSONL line, in emission order.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LongAuditReceipt {
+    /// Phase entries in emission order (terminated by the `overall` line).
+    pub phases: Vec<LongPhaseReceipt>,
+}
+
+impl LongAuditReceipt {
+    /// Parses a JSONL stream; every non-empty line must be valid JSON with the
+    /// `LongPhaseReceipt` schema (fail-closed validation). Preflight lines
+    /// (`preflight-*`) must additionally use a canonical identifier from
+    /// [`PREFLIGHT_PHASE_IDS`].
+    pub fn parse_jsonl(input: &str) -> Result<Self, LongReceiptError> {
+        let mut phases = Vec::new();
+        for (idx, line) in input.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry = LongPhaseReceipt::parse_jsonl_line(line).map_err(|source| {
+                LongReceiptError::InvalidJsonLine {
+                    line: idx + 1,
+                    source,
+                }
+            })?;
+            if is_preflight_id(&entry.phase_id)
+                && !PREFLIGHT_PHASE_IDS.contains(&entry.phase_id.as_str())
+            {
+                return Err(LongReceiptError::UnknownPreflightId {
+                    id: entry.phase_id,
+                    canonical: PREFLIGHT_PHASE_IDS.join(", "),
+                });
+            }
+            phases.push(entry);
+        }
+        Ok(LongAuditReceipt { phases })
+    }
+
+    /// Parses the receipt file at `path` (fail-closed on missing/invalid lines).
+    pub fn parse_jsonl_file(path: &Path) -> Result<Self, LongReceiptError> {
+        let content = fs::read_to_string(path)?;
+        Self::parse_jsonl(&content)
+    }
+
+    /// Renders the whole receipt as JSONL (one line per entry, trailing newline).
+    pub fn render_jsonl(&self) -> String {
+        let mut out = String::new();
+        for phase in &self.phases {
+            out.push_str(&phase.render_jsonl_line());
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Phase entries excluding the suite-level `overall` line (aggregations
+    /// must never double-count the summary entry).
+    pub fn phase_entries(&self) -> impl Iterator<Item = &LongPhaseReceipt> {
+        self.phases.iter().filter(|p| p.phase_id != "overall")
+    }
+
+    /// Preflight entries (`preflight-*`), in emission order — the steps that
+    /// run ahead of Phase 1 and abort the suite on failure (S6-T03 / RES-08).
+    pub fn preflight_entries(&self) -> impl Iterator<Item = &LongPhaseReceipt> {
+        self.phases.iter().filter(|p| is_preflight_id(&p.phase_id))
+    }
+
+    /// Total executed tests/benchmarks across all phases (excluding `overall`).
+    pub fn tests_executed_total(&self) -> u64 {
+        self.phase_entries().map(|p| p.tests_executed).sum()
+    }
+
+    /// Total wall-clock duration across all phases, in milliseconds
+    /// (excluding `overall`).
+    pub fn duration_ms_total(&self) -> u64 {
+        self.phase_entries().map(|p| p.duration_ms).sum()
+    }
+
+    /// Derives the suite-level `overall` receipt line.
+    ///
+    /// Verdict semantics mirror the runner's final summary:
+    /// - any `FAILED` phase or preflight ⇒ `FAILED`;
+    /// - otherwise any gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
+    ///   NOT_RUN) ⇒ `COMPLETED_WITH_GAPS`;
+    /// - otherwise ⇒ `PASSED`.
+    ///
+    /// Preflight entries (`preflight-*`, S6-T03) participate in the verdict
+    /// like any other phase: an aborted preflight leaves its `FAILED` line and
+    /// the derived `overall FAILED` — a trace that survives the abort because
+    /// `utils/tests-long.sh` emits it before exiting. `gaps` lists the
+    /// declared-gap entries as `phase_id:STATUS`.
+    pub fn summary_receipt(&self) -> LongPhaseReceipt {
+        let status = if self
+            .phase_entries()
+            .any(|p| p.status == LongPhaseStatus::Failed)
+        {
+            LongPhaseStatus::Failed
+        } else if self.phase_entries().any(|p| p.status.is_gap()) {
+            LongPhaseStatus::CompletedWithGaps
+        } else {
+            LongPhaseStatus::Passed
+        };
+
+        let gaps = self
+            .phase_entries()
+            .filter(|p| p.status.is_gap())
+            .map(|p| format!("{}:{}", p.phase_id, p.status.as_str()))
+            .collect();
+
+        LongPhaseReceipt {
+            phase_id: "overall".to_string(),
+            name: "Long Audit Suite".to_string(),
+            status,
+            duration_ms: self.duration_ms_total(),
+            tests_executed: self.tests_executed_total(),
+            gaps,
+            timestamp: now_iso8601(),
+        }
+    }
+
+    /// Appends the suite-level `overall` line, replacing any previous one.
+    pub fn push_summary(&mut self) {
+        self.phases.retain(|p| p.phase_id != "overall");
+        let summary = self.summary_receipt();
+        self.phases.push(summary);
+    }
+}
+
+/// Canonical typed markers the long suite uses to annotate/override phase
+/// outcomes, mapped to stable gap identifiers for dashboards.
+const LONG_GAP_MARKERS: &[(&str, &str)] = &[
+    ("INCONCLUSIVE_ENVIRONMENT", "inconclusive_environment"),
+    ("[STATUS] SKIP_CAPABILITY", "skip_capability"),
+    ("[STATUS] INCONCLUSIVE", "inconclusive"),
+    ("MISSING-REQUIRED:", "missing_required"),
+];
+
+/// Scans a phase log for canonical typed gap markers, returning the stable
+/// gap identifiers in canonical order (deduplicated).
+pub fn detect_gap_markers(path: &Path) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    LONG_GAP_MARKERS
+        .iter()
+        .filter(|(needle, _)| content.contains(needle))
+        .map(|(_, id)| (*id).to_string())
+        .collect()
+}
+
+/// Extracts the integer immediately preceding `needle` in `line` (the libtest
+/// `test result: ok. 123 passed; 0 failed; ...` counter format).
+fn count_before(line: &str, needle: &str) -> u64 {
+    let Some(pos) = line.find(needle) else {
+        return 0;
+    };
+    let bytes = line.as_bytes();
+    let mut start = pos;
+    while start > 0 && bytes[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    if start == pos {
+        return 0;
+    }
+    line[start..pos].parse::<u64>().unwrap_or(0)
+}
+
+/// `true` when `line` matches the criterion-style benchmark signature that
+/// `_lib.sh::assert_ran_tests` greps as `^\S.*time:\s+\[` (e.g.
+/// `soak_test/bench1  time:   [1.1 ms 1.2 ms 1.3 ms]`).
+fn is_benchmark_time_line(line: &str) -> bool {
+    let Some(pos) = line.find("time:") else {
+        return false;
+    };
+    let rest = &line[pos + "time:".len()..];
+    let trimmed = rest.trim_start();
+    trimmed.starts_with('[')
+}
+
+/// Counts tests/benchmarks actually executed by a phase from its log.
+///
+/// Sums the `passed`, `failed`, and `measured` counters of every
+/// `test result:` line (`ignored`/`filtered out` tests did NOT execute).
+/// Falls back to counting criterion-style `time: [...]` benchmark lines when
+/// no `test result:` line exists, mirroring `_lib.sh::assert_ran_tests`.
+pub fn count_tests_executed_from_log(path: &Path) -> u64 {
+    let Ok(content) = fs::read_to_string(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for line in content.lines() {
+        if line.contains("test result:") {
+            total += count_before(line, " passed")
+                + count_before(line, " failed")
+                + count_before(line, " measured");
+        }
+    }
+    if total == 0 {
+        total = content
+            .lines()
+            .filter(|l| is_benchmark_time_line(l))
+            .count() as u64;
+    }
+    total
+}
+
+#[cfg(test)]
+mod long_receipt_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_path() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("nam-long-receipt-{}-{n}", std::process::id()))
+    }
+
+    fn write_temp(content: &str) -> PathBuf {
+        let path = temp_path();
+        let mut f = fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn status_parses_all_canonical_values() {
+        for s in [
+            "PASSED",
+            "FAILED",
+            "SKIPPED",
+            "INCONCLUSIVE",
+            "SKIP_CAPABILITY",
+            "NOT_RUN",
+            "COMPLETED_WITH_GAPS",
+        ] {
+            let parsed = LongPhaseStatus::from_str(s).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(parsed.as_str(), s);
+        }
+        assert!(LongPhaseStatus::from_str("nope").is_err());
+        assert!(LongPhaseStatus::from_str("").is_err());
+    }
+
+    #[test]
+    fn gap_classification_matches_runner_semantics() {
+        assert!(!LongPhaseStatus::Passed.is_gap());
+        assert!(!LongPhaseStatus::Failed.is_gap());
+        assert!(!LongPhaseStatus::CompletedWithGaps.is_gap());
+        assert!(LongPhaseStatus::Skipped.is_gap());
+        assert!(LongPhaseStatus::Inconclusive.is_gap());
+        assert!(LongPhaseStatus::SkipCapability.is_gap());
+        assert!(LongPhaseStatus::NotRun.is_gap());
+        assert_eq!(LongPhaseStatus::Inconclusive.gap_id(), Some("inconclusive"));
+        assert_eq!(LongPhaseStatus::Passed.gap_id(), None);
+    }
+
+    #[test]
+    fn receipt_line_roundtrips_with_schema() {
+        let entry = LongPhaseReceipt {
+            phase_id: "phase4".to_string(),
+            name: "RT Deadline Gate (deterministic)".to_string(),
+            status: LongPhaseStatus::Inconclusive,
+            duration_ms: 42_000,
+            tests_executed: 3,
+            gaps: vec!["inconclusive_environment".to_string()],
+            timestamp: "2026-08-14T00:00:00Z".to_string(),
+        };
+        let line = entry.render_jsonl_line();
+        let parsed = LongPhaseReceipt::parse_jsonl_line(&line).unwrap();
+        assert_eq!(parsed, entry);
+        assert!(line.contains("\"phase_id\":\"phase4\""));
+        assert!(line.contains("\"status\":\"INCONCLUSIVE\""));
+        assert!(line.contains("\"duration_ms\":42000"));
+        assert!(line.contains("\"tests_executed\":3"));
+        assert!(line.contains("\"gaps\":[\"inconclusive_environment\"]"));
+        assert!(line.contains("\"timestamp\":\"2026-08-14T00:00:00Z\""));
+    }
+
+    #[test]
+    fn jsonl_parser_accepts_stream_and_rejects_bad_lines() {
+        let a = LongPhaseReceipt {
+            phase_id: "phase1".to_string(),
+            name: "Soak".to_string(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 100,
+            tests_executed: 5,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+        let b = LongPhaseReceipt {
+            phase_id: "phase2".to_string(),
+            name: "Defense".to_string(),
+            status: LongPhaseStatus::Skipped,
+            duration_ms: 200,
+            tests_executed: 0,
+            gaps: vec!["skipped".to_string()],
+            timestamp: "t".to_string(),
+        };
+        let input = format!("{}\n{}\n", a.render_jsonl_line(), b.render_jsonl_line());
+        let parsed = LongAuditReceipt::parse_jsonl(&input).unwrap();
+        assert_eq!(parsed.phases, vec![a.clone(), b.clone()]);
+        assert_eq!(parsed.tests_executed_total(), 5);
+        assert_eq!(parsed.duration_ms_total(), 300);
+
+        let bad = format!("{}\n{{not json}}\n", a.render_jsonl_line());
+        let err = LongAuditReceipt::parse_jsonl(&bad).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid JSONL line 2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn jsonl_parser_skips_empty_lines() {
+        let a = LongPhaseReceipt {
+            phase_id: "phase1".to_string(),
+            name: "Soak".to_string(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 1,
+            tests_executed: 1,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+        let input = format!("\n{}\n\n", a.render_jsonl_line());
+        let parsed = LongAuditReceipt::parse_jsonl(&input).unwrap();
+        assert_eq!(parsed.phases.len(), 1);
+    }
+
+    #[test]
+    fn tests_executed_counts_pass_fail_and_measured_only() {
+        let log = write_temp(
+            "test result: ok. 123 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.2s\n\
+             test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.5s\n\
+             test result: ok. 0 passed; 0 failed; 0 ignored; 10 measured; 0 filtered out; finished in 3.0s\n\
+             running 200 tests (not a result line)\n",
+        );
+        assert_eq!(count_tests_executed_from_log(&log), 123 + 2 + 1 + 10);
+    }
+
+    #[test]
+    fn tests_executed_falls_back_to_benchmark_lines() {
+        let log = write_temp(
+            "soak_test/bench1  time:   [1.1 ms 1.2 ms 1.3 ms]\n\
+             soak_test/bench2  time:   [2.1 ms 2.2 ms 2.3 ms]\n",
+        );
+        assert_eq!(count_tests_executed_from_log(&log), 2);
+        let empty = write_temp("nothing to see here\n");
+        assert_eq!(count_tests_executed_from_log(&empty), 0);
+        let missing = temp_path();
+        assert_eq!(count_tests_executed_from_log(&missing), 0);
+    }
+
+    #[test]
+    fn gap_markers_are_detected_in_canonical_order() {
+        let log = write_temp(
+            "preflight: INCONCLUSIVE_ENVIRONMENT\n\
+             [STATUS] INCONCLUSIVE\n\
+             [STATUS] SKIP_CAPABILITY\n\
+             MISSING-REQUIRED: wavenet_lite\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec![
+                "inconclusive_environment",
+                "skip_capability",
+                "inconclusive",
+                "missing_required",
+            ]
+        );
+        let clean = write_temp("all good\n");
+        assert!(detect_gap_markers(&clean).is_empty());
+    }
+
+    #[test]
+    fn summary_derives_verdict_and_gaps() {
+        let mk = |phase_id: &str, status: LongPhaseStatus| LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status,
+            duration_ms: 1000,
+            tests_executed: 2,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+        let all_pass = LongAuditReceipt {
+            phases: vec![
+                mk("phase1", LongPhaseStatus::Passed),
+                mk("phase2", LongPhaseStatus::Passed),
+            ],
+        };
+        let s = all_pass.summary_receipt();
+        assert_eq!(s.phase_id, "overall");
+        assert_eq!(s.status, LongPhaseStatus::Passed);
+        assert_eq!(s.duration_ms, 2000);
+        assert_eq!(s.tests_executed, 4);
+        assert!(s.gaps.is_empty());
+
+        let with_fail = LongAuditReceipt {
+            phases: vec![
+                mk("phase1", LongPhaseStatus::Passed),
+                mk("phase2", LongPhaseStatus::Failed),
+            ],
+        };
+        assert_eq!(with_fail.summary_receipt().status, LongPhaseStatus::Failed);
+
+        let with_gaps = LongAuditReceipt {
+            phases: vec![
+                mk("phase4", LongPhaseStatus::Inconclusive),
+                mk("phase5", LongPhaseStatus::SkipCapability),
+            ],
+        };
+        let s = with_gaps.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(
+            s.gaps,
+            vec!["phase4:INCONCLUSIVE", "phase5:SKIP_CAPABILITY"]
+        );
+
+        let mut push = with_gaps.clone();
+        push.push_summary();
+        assert_eq!(push.phases.len(), 3);
+        assert_eq!(push.phases[2].status, LongPhaseStatus::CompletedWithGaps);
+        push.push_summary();
+        assert_eq!(
+            push.phases.len(),
+            3,
+            "push_summary must replace the overall line"
+        );
+    }
+
+    #[test]
+    fn preflight_ids_are_canonical_and_roundtrip() {
+        for id in PREFLIGHT_PHASE_IDS {
+            assert!(is_preflight_id(id), "{id} must be a preflight id");
+            let entry = LongPhaseReceipt {
+                phase_id: id.to_string(),
+                name: id.to_string(),
+                status: LongPhaseStatus::Passed,
+                duration_ms: 0,
+                tests_executed: 0,
+                gaps: vec![],
+                timestamp: "t".to_string(),
+            };
+            let line = entry.render_jsonl_line();
+            assert_eq!(LongPhaseReceipt::parse_jsonl_line(&line).unwrap(), entry);
+        }
+        assert!(is_preflight_id("preflight-future-step"));
+        assert!(!is_preflight_id("phase1"));
+        assert!(!is_preflight_id("overall"));
+        assert!(!is_preflight_id("preflight")); // bare prefix without id
+    }
+
+    #[test]
+    fn jsonl_parser_accepts_canonical_preflight_ids_and_rejects_unknown() {
+        let mk = |phase_id: &str| LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 1,
+            tests_executed: 0,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+        let canonical = format!(
+            "{}\n{}\n",
+            mk("preflight-render").render_jsonl_line(),
+            mk("preflight-catalog").render_jsonl_line()
+        );
+        let parsed = LongAuditReceipt::parse_jsonl(&canonical).unwrap();
+        assert_eq!(parsed.preflight_entries().count(), 2);
+        assert_eq!(parsed.phases.len(), 2);
+
+        // Typo (preflight-catlog) must be rejected fail-closed.
+        let typo = mk("preflight-catlog").render_jsonl_line();
+        let err = LongAuditReceipt::parse_jsonl(&typo).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown preflight identifier 'preflight-catlog'"),
+            "unexpected error: {err}"
+        );
+        // A non-preflight id is unaffected by the canonical preflight set.
+        let phase = mk("phase1").render_jsonl_line();
+        assert_eq!(
+            LongAuditReceipt::parse_jsonl(&phase).unwrap().phases.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn preflight_failure_drives_overall_failed_verdict() {
+        let mk = |phase_id: &str, status: LongPhaseStatus| LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status,
+            duration_ms: 1000,
+            tests_executed: 1,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+        // S6-T03 acceptance: an aborted preflight leaves its FAILED line and
+        // the summary derives `overall FAILED` — even with all timed phases
+        // green, because the suite never reached them.
+        let aborted = LongAuditReceipt {
+            phases: vec![
+                mk("preflight-catalog", LongPhaseStatus::Failed),
+                mk("preflight-render", LongPhaseStatus::Passed),
+            ],
+        };
+        assert_eq!(aborted.preflight_entries().count(), 2);
+        let s = aborted.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::Failed);
+        assert_eq!(s.duration_ms, 2000);
+        assert_eq!(s.tests_executed, 2);
+        assert!(s.gaps.is_empty());
+
+        let all_pass = LongAuditReceipt {
+            phases: vec![
+                mk("preflight-catalog", LongPhaseStatus::Passed),
+                mk("preflight-meta", LongPhaseStatus::Passed),
+            ],
+        };
+        assert_eq!(all_pass.summary_receipt().status, LongPhaseStatus::Passed);
     }
 }

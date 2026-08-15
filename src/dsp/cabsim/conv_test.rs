@@ -58,7 +58,7 @@ fn process_full_signal(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32> {
         if chunk < b {
             buf_in[chunk..].fill(0.0);
         }
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..chunk.min(b)]);
         pos += chunk;
     }
@@ -67,7 +67,7 @@ fn process_full_signal(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32> {
     let flush_blocks = engine.num_partitions();
     for _ in 0..flush_blocks {
         buf_in.fill(0.0);
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..b]);
     }
 
@@ -97,10 +97,52 @@ fn passthrough_on_empty_ir() {
     let mut output = vec![0.0f32; 64];
     let mut engine2 =
         ConvEngine::new(&[], 64).expect("construction should succeed for test-sized buffers");
-    engine2.process(&input[..64], &mut output);
+    engine2.process(&input[..64], &mut output, None);
     for i in 0..64 {
         assert!((output[i] - input[i]).abs() < 1e-10);
     }
+}
+
+#[test]
+fn short_slices_zero_output_and_raise_flag_without_panic() {
+    // R-01: in debug and release, `ConvEngine::process` must never read or
+    // write beyond the caller's slices. Short input/output must zero the
+    // output, raise the contract-violation flag, and return without
+    // panicking (and without corrupting internal UPOLS state).
+    let ir = synth_ir(64, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut engine = ConvEngine::new(&ir, partition)
+        .expect("construction should succeed for test-sized buffers");
+
+    // Short input (32 < 64), full output.
+    let rt = RtStatusFlags::new();
+    let input = vec![0.5f32; 32];
+    let mut output = vec![1.0f32; 64];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.process(&input, &mut output, Some(&rt));
+    }));
+    assert!(result.is_ok(), "short input must not panic");
+    assert!(output.iter().all(|&s| s == 0.0), "output must be zeroed");
+    assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+
+    // Full input, short output (32 < 64).
+    let rt2 = RtStatusFlags::new();
+    let input = vec![0.5f32; 64];
+    let mut output = vec![1.0f32; 32];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.process(&input, &mut output, Some(&rt2));
+    }));
+    assert!(result.is_ok(), "short output must not panic");
+    assert!(output.iter().all(|&s| s == 0.0), "output must be zeroed");
+    assert!(rt2.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+
+    // Contract-compliant block must not raise the flag and must still
+    // process correctly after the violations (state was not corrupted).
+    let rt3 = RtStatusFlags::new();
+    let input = vec![0.1f32; 64];
+    let mut output = vec![0.0f32; 64];
+    engine.process(&input, &mut output, Some(&rt3));
+    assert!(!rt3.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
 }
 
 #[test]

@@ -9,6 +9,9 @@
 # lessons learned) — kept as a general reusable tool for any future hang
 # investigation, not specific to that one bug.
 #
+# Diagnostic Tool: not intended for automated CI gates. Use for manual
+# debugging of thread hangs under resource limits.
+#
 # This is a *debug/investigation* tool, deliberately NOT part of the official
 # `utils/tests-*.sh` suite. It never runs unattended CI/nightly checks; it
 # exists solely so a human operator (or an AI) can run a single reproduction

@@ -254,7 +254,13 @@ impl WaveNetModelDyn {
     /// `layer_inputs` for the first array. This mirrors C++ `model.cpp:737-825`.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total_frames = input.len();
+        // Each frame writes `out_per_frame` output samples; clamp the frame
+        // count so the output is never indexed beyond its actual length.
+        let out_per_frame = match self.post_stack_head {
+            Some(ref h) => h.out_channels().max(1),
+            None => self.arrays.last().map_or(1, |a| a.head.max(1)),
+        };
+        let total_frames = input.len().min(output.len() / out_per_frame);
         if total_frames == 0 {
             return;
         }

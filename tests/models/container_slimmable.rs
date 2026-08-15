@@ -516,10 +516,11 @@ fn test_container_reset_only_active_submodel() {
     }
 
     // Call reset — only active submodel (Full) should be fully reset.
-    // Use 4096 (matching the ContainerModel::new default_buf) so
-    // set_max_buffer_size triggers the equal-size zero-fill path.
+    // Use 8192 (matching the ContainerModel::new default scratch, which is
+    // max(4096, MAX_RESAMP_BUF)) so set_max_buffer_size triggers the
+    // equal-size zero-fill path.
     container
-        .reset(sample_rate, 4096)
+        .reset(sample_rate, 8192)
         .expect("Container reset failed");
 
     // Verify active submodel (Full): must have non-zero head_accum (prewarmed),

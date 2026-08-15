@@ -3,16 +3,18 @@
 
 //! ## Final drain policy
 //!
-//! The `GcOverflowBuffer` and the GC consumer must be drained by a non-real-time
-//! control thread before the processing pipeline is destroyed. Destruction of
-//! real-time shared state cannot perform that drain because the consumer belongs
-//! to the control-plane lifecycle.
+//! The `GcOverflowBuffer`, the GC consumer, and the RT parking lot must be
+//! drained by a non-real-time control thread before the processing pipeline is
+//! destroyed. Destruction of real-time shared state cannot perform that drain
+//! because the consumer belongs to the control-plane lifecycle.
 //!
-//! [`drain_gc_channels`] is the canonical drain path. A host integration must
-//! call it periodically during control-plane housekeeping and once more during
-//! orderly teardown, after real-time producers have stopped. Any residual item
-//! at abrupt process termination is an integration-level shutdown concern, not
-//! permission to drop heap-owned values on the audio thread.
+//! [`drain_gc_channels`] is the canonical drain path: it drains the SPSC
+//! channel, the overflow buffer, and the RT parking lot. A host integration
+//! must call it periodically during control-plane housekeeping and once more
+//! during orderly teardown, after real-time producers have stopped. Any
+//! residual item at abrupt process termination is an integration-level
+//! shutdown concern, not permission to drop heap-owned values on the audio
+//! thread.
 
 use rtrb::Consumer;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -273,6 +275,13 @@ impl Default for GcOverflowBuffer {
 /// - `RT_STATUS_GC_OVERFLOW` is **only** set on an actual overwrite/leak
 ///   (i.e. the slot was already occupied), not on every Tier 3 entry.
 ///
+/// Before parking a new item, the cascade opportunistically flushes any item
+/// already parked in `parking_lot` back to the SPSC channel while there is
+/// free capacity. This keeps the parking lot empty across successive audio
+/// cycles so parked items reach the off-RT [`drain_gc_channels`] instead of
+/// lingering in real-time state. On exhaustion, the item cascades into the
+/// overflow buffer — it is **never** dropped on the audio thread.
+///
 /// # Parameters
 /// - `item`: The `GcItem` to dispose of outside the RT thread.
 /// - `gc_producer`: SPSC GC channel.
@@ -288,6 +297,20 @@ pub fn gc_cascade(
     gc_overflow: &GcOverflowBuffer,
     rt_status: &super::RtStatusFlags,
 ) {
+    // 0. Opportunistically flush items parked in a previous cycle back to the
+    //    SPSC channel while it has free capacity, so the parking lot tends to
+    //    empty every cycle and items reach the off-RT drain.
+    for slot in parking_lot.iter_mut() {
+        let Some(parked) = slot.take() else { continue };
+        match gc_producer.push(parked) {
+            Ok(()) => {}
+            Err(rtrb::PushError::Full(returned)) => {
+                *slot = Some(returned);
+                break;
+            }
+        }
+    }
+
     if let Some(i) = item.take() {
         if let Err(rtrb::PushError::Full(returned)) = gc_producer.push(i) {
             item = Some(returned);
@@ -315,16 +338,41 @@ pub fn gc_cascade(
     }
 }
 
+/// Drains the RT parking lot, dropping every parked item on the calling
+/// (non-real-time) thread.
+///
+/// The parking lot is a 16-slot fixed-size contingency array owned by the
+/// real-time producer. It is drained off-RT only after the producer has
+/// stopped, so no heap object is ever dropped on the audio thread.
+///
+/// Returns the number of items dropped.
+pub fn drain_parking_lot(parking_lot: &mut [Option<GcItem>; 16]) -> usize {
+    let mut count = 0;
+    for slot in parking_lot.iter_mut() {
+        if let Some(item) = slot.take() {
+            drop(item);
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Aggressively drains the Garbage Collection channels to free memory.
 ///
 /// This function should be called periodically by the main thread (CLI/UI)
 /// or by the host event loop. It executes `drop()`
 /// on obsolete objects (models, resamplers) outside the RT thread.
 ///
+/// It drains, in order: the SPSC channel, the overflow buffer, and the RT
+/// parking lot. The `parking_lot` must be handed over by the real-time side
+/// after its producers have stopped (single-owner handoff), so that parked
+/// items are also released off-RT.
+///
 /// Returns the total number of GC items dropped during this call.
 pub fn drain_gc_channels(
     gc_consumer: &mut Consumer<GcItem>,
     gc_overflow: &GcOverflowBuffer,
+    parking_lot: &mut [Option<GcItem>; 16],
     rt_status: &super::RtStatusFlags,
 ) -> usize {
     let mut count = 0;
@@ -339,5 +387,8 @@ pub fn drain_gc_channels(
         drop(item);
         count += 1;
     }
+
+    // 3. Drain the RT parking lot (16 slots of last-resort contingency)
+    count += drain_parking_lot(parking_lot);
     count
 }

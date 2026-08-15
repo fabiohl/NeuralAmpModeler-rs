@@ -387,140 +387,100 @@ fn test_oracle_gates_below_placebo_threshold() {
     }
 }
 
-/// Eixo B isolation guard-rail.
+/// Axis B isolation guard-rail.
 ///
-/// Ensures that no structural test (Phase 1, debug, `STRUCTURAL_TESTS`)
-/// references golden `.bin` files or `golden_vectors` test functions.
-/// Structural tests run with debug assertions ON, where float codegen
-/// is a "phantom" (no `-O`, no FMA contraction, no auto-vectorization).
-/// Any test that compares floats against a reference `.bin` or
-/// `golden_vectors` must run in Phase 2 (release) — the Eixo B principle
-/// from `docs/testing.md` §2.
+/// Scans structural integration modules that `tests-quick.sh` Phase 1
+/// actually runs (debug). Measurement-oracle modules belong in Phase 2
+/// (`--release`) and are listed in `AXIS_B_ORACLE_MODULES`.
 ///
-/// This meta-test reads `utils/tests-quick.sh`, extracts the
-/// `STRUCTURAL_TESTS` array, and checks each corresponding `tests/*.rs`
-/// source file for forbidden patterns. It acts as an automated gate
-/// that prevents the class of regression where a measurement oracle
-/// is accidentally placed in the debug phase.
-///
-/// ## Exclusions
-///
-/// - `threshold_calibration`: meta-test that validates the golden catalog
-///   metadata — references `.bin` filenames for catalog integrity, not
-///   float comparison.
-/// - `parity_primitives`: references `.bin` for PRNG bit-parity
-///   (Mulberry32 vs TypeScript) and MR-STFT algorithm verification
-///   (vs Python) — structural parity, not production float measurement.
-/// - `lstm_activation_precision` (TODO Eixo B): pre-existing violation —
-///   measures SNR of LSTM models against C++ golden `.bin` files. Runs
-///   non-ignored in Phase 1 debug. Should be moved to Phase 2 release.
+/// Exclusions:
+/// - `threshold_calibration`: catalog integrity, not float comparison.
+/// - `parity_primitives`: PRNG / MR-STFT algorithm checks, not production floats.
+/// - `lstm_activation_precision`: mixed module (Axis-B split) — structural
+///   loading/geometry checks run in Phase 1 (debug); its SNR oracles are
+///   filtered via `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
+///   and measured under `--release` (Phase 2), so the `.bin` references below
+///   are never executed by Phase 1.
 #[test]
 fn test_structural_tests_contain_no_bin_references() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let quick_script = project_root.join("utils").join("tests-quick.sh");
 
-    let script = fs::read_to_string(&quick_script).expect("Failed to read utils/tests-quick.sh");
-
-    let start_marker = "STRUCT_TESTS=(";
-    let start = script
-        .find(start_marker)
-        .expect("STRUCT_TESTS=() array not found in utils/tests-quick.sh");
-    let content_start = start + start_marker.len();
-    let rest = &script[content_start..];
-
-    let end = rest
-        .find("\n)")
-        .expect("Could not find closing ')' of STRUCTURAL_TESTS array in utils/tests-quick.sh");
-    let array_content = &rest[..end];
-
-    let test_names: Vec<&str> = array_content.split_whitespace().collect();
-
-    assert!(
-        !test_names.is_empty(),
-        "STRUCTURAL_TESTS array is empty — check parsing of utils/tests-quick.sh"
-    );
-
-    const EXCLUDED: &[&str] = &[
-        "threshold_calibration", // meta-test — catalog integrity, not float comparison
-        "parity_primitives",     // PRNG bit-parity + MR-STFT algorithm verification
-        "lstm_activation_precision", // TODO: pre-existing violation — measures SNR vs C++ golden
+    const AXIS_B_ORACLE_MODULES: &[&str] = &[
+        "golden_vectors.rs",
+        "linear_fft_test.rs",
+        "spectral_fidelity.rs",
+        "reference_oracle_f64.rs",
+        "cpp_parity.rs",
+        "isa_parity.rs",
+        "cabsim_cpp_parity.rs",
+        "lstm_gate_bf16_parity.rs",
+        "lstm_scalar_bf16_parity.rs",
     ];
+    const EXCLUDED: &[&str] = &[
+        "threshold_calibration.rs",
+        "parity_primitives.rs",
+        "lstm_activation_precision.rs",
+        "meta_coherence.rs",
+    ];
+    const STRUCTURAL_DIRS: &[&str] = &["models", "perf_soak", "parity", "dsp_core"];
 
+    let mut scanned = 0usize;
     let mut violations: Vec<String> = Vec::new();
 
-    for &test_name in &test_names {
-        if EXCLUDED.contains(&test_name) {
-            continue;
-        }
-
-        const ENTRY_POINTS: &[&str] = &["models", "perf_soak", "parity", "clap", "rt_constraints"];
-        let mut test_file = None;
-        for entry in ENTRY_POINTS {
-            let candidate = project_root
-                .join("tests")
-                .join(entry)
-                .join(format!("{test_name}.rs"));
-            if candidate.exists() {
-                test_file = Some(candidate);
-                break;
-            }
-        }
-        // Legacy flat layout fallback
-        if test_file.is_none() {
-            let legacy = project_root.join("tests").join(format!("{test_name}.rs"));
-            if legacy.exists() {
-                test_file = Some(legacy);
-            }
-        }
-        let Some(test_file) = test_file else {
-            continue;
-        };
-
-        let source = fs::read_to_string(&test_file).unwrap_or_else(|e| {
-            panic!(
-                "Failed to read {test_path}: {e}",
-                test_path = test_file.display()
-            )
+    for dir_name in STRUCTURAL_DIRS {
+        let dir = project_root.join("tests").join(dir_name);
+        let entries = fs::read_dir(&dir).unwrap_or_else(|e| {
+            panic!("Failed to read {}: {e}", dir.display());
         });
-
-        // Filter out comment lines to avoid false positives from
-        // doc-comments that mention `.bin` without actually loading them
-        // (e.g., "No golden .bin files or C++" in linear_golden.rs).
-        let non_comment: String = source
-            .lines()
-            .filter(|line| {
-                let trimmed = line.trim_start();
-                !trimmed.starts_with("//") && !trimmed.starts_with("///")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        if non_comment.contains(".bin") {
-            violations.push(format!(
-                "{test_name}.rs references .bin files (forbidden in Phase 1 structural tests)"
-            ));
-        }
-
-        if non_comment.contains("golden_vectors") {
-            violations.push(format!(
-                "{test_name}.rs references golden_vectors (forbidden in Phase 1 structural tests)"
-            ));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if AXIS_B_ORACLE_MODULES.contains(&file_name) || EXCLUDED.contains(&file_name) {
+                continue;
+            }
+            scanned += 1;
+            let source = fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!("Failed to read {}: {e}", path.display());
+            });
+            let non_comment: String = source
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim_start();
+                    !trimmed.starts_with("//") && !trimmed.starts_with("///")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if non_comment.contains(".bin") {
+                violations.push(format!(
+                    "{dir_name}/{file_name} references .bin files (forbidden in Phase 1)"
+                ));
+            }
+            if non_comment.contains("golden_vectors") {
+                violations.push(format!(
+                    "{dir_name}/{file_name} references golden_vectors (forbidden in Phase 1)"
+                ));
+            }
         }
     }
 
+    assert!(
+        scanned > 0,
+        "Axis B guard scanned 0 structural modules under tests/{{models,perf_soak,parity,dsp_core}}"
+    );
+
     if !violations.is_empty() {
         panic!(
-            "Eixo B isolation guard-rail FAILED:\n\
-             \n\
-             The following structural tests (Phase 1, debug) contain references\n\
-             to .bin files or golden_vectors — they MUST run in Phase 2 (release),\n\
-             per the Eixo B principle in docs/testing.md §2:\n\
-             \n{}\n\n\
-             Resolution: remove these tests from STRUCTURAL_TESTS in\n\
-             utils/tests-quick.sh and add them to the Phase 2 release invocation.\n",
+            "Axis B isolation FAILED — structural (debug) modules must not load golden .bin \
+             or call golden_vectors. Move them to Phase 2 release:\n{}",
             violations
                 .iter()
-                .map(|v| format!("  ✗ {v}"))
+                .map(|v| format!("  FAIL {v}"))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
@@ -776,8 +736,9 @@ fn skip_reason_has_date(reason: &str) -> bool {
 /// in `get_calibrated_threshold()`. Returns `None` for entries that only
 /// need date-check validation (skip_reason).
 ///
-/// Covers ALL entries in `golden_gen_build.sh` CATALOG, including models
-/// that don't have committed `.bin` fixtures (e.g. A2-FiLM, dynamic engines).
+/// Covers ALL entries in `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`,
+/// including models that don't have committed `.bin` fixtures
+/// (e.g. A2-FiLM, dynamic engines).
 fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Option<&'a str> {
     let base = golden_name.strip_prefix("golden_").unwrap_or(golden_name);
     match base {
@@ -827,11 +788,11 @@ fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Opt
     }
 }
 
-/// Auditoria Anti-Placebo Estendida ao CATALOG.
+/// Auditoria Anti-Placebo Estendida ao Registro de Golden (S3-T02).
 ///
 /// Extends `test_all_thresholds_anti_placebo` beyond `.bin` fixtures to
-/// cover ALL entries in the `golden_gen_build.sh` CATALOG, including models
-/// without golden binaries (e.g. FiLM, dynamic engines).
+/// cover ALL entries in `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`,
+/// including models without golden binaries (e.g. FiLM, dynamic engines).
 ///
 /// # Rules enforced:
 ///
@@ -842,55 +803,28 @@ fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Opt
 ///    `get_calibrated_threshold()` that passes the anti-placebo Rules 1–4:
 ///    SNR > 0, ESR < 1.0, MSE-None compensation, MR-STFT < 0.5.
 ///
-/// # Catalog parsing (from golden_gen_build.sh):
+/// # Registry source:
 ///
-/// Format: `.nam_file:golden_name:label:v2_scope[:skip_srs[:skip_reason]]`
+/// The golden registry is Rust-only (Sprint S3-T02): it lives in
+/// `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` and the shell generator
+/// consumes it through `nam_golden_catalog emit-catalog` — no bash array
+/// defines the catalog anymore.
 ///
 /// Part of the anti-placebo audit: close the gap where models without `.bin` fixtures
 /// (condition_lstm) escaped anti-placebo audit entirely.
 #[test]
 fn test_catalog_anti_placebo_audit() {
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let catalog_script = project_root
-        .join("tests")
-        .join("fixtures")
-        .join("golden_gen_build.sh");
-
-    let script = fs::read_to_string(&catalog_script).expect("Failed to read golden_gen_build.sh");
-
-    let cat_start = script
-        .find("CATALOG=(")
-        .expect("Could not find CATALOG=() in golden_gen_build.sh");
-
-    let rest = &script[cat_start..];
-    let cat_end = rest
-        .find("\n)")
-        .expect("Could not find closing ')' of CATALOG array");
-
-    let cat_body = &rest[..=cat_end];
-    let mut lines = cat_body.lines();
+    use neural_amp_modeler_rs::testing::catalog::golden_gen_entries;
 
     let mut tested_skip = 0usize;
     let mut tested_calibrated = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    for line in lines.by_ref() {
-        let trimmed = line.trim();
-        if trimmed == "CATALOG=(" || trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed == ")" {
-            break;
-        }
-
-        let inner = trimmed.trim_matches('"').trim();
-        let mut parts = inner.splitn(6, ':');
-        let nam_file = parts.next().unwrap_or("");
-        let golden_name = parts.next().unwrap_or("");
-        let label = parts.next().unwrap_or("");
-        let _v2_scope = parts.next().unwrap_or("");
-        let _skip_srs = parts.next().unwrap_or("");
-        let skip_reason = parts.next().unwrap_or("");
+    for entry in golden_gen_entries() {
+        let nam_file = entry.nam_file;
+        let golden_name = entry.golden_name;
+        let label = entry.label;
+        let skip_reason = entry.skip_reason.unwrap_or("");
 
         if !skip_reason.is_empty() {
             tested_skip += 1;
@@ -964,12 +898,12 @@ fn test_catalog_anti_placebo_audit() {
 
     assert!(
         tested_skip + tested_calibrated > 0,
-        "No CATALOG entries parsed — check golden_gen_build.sh format"
+        "No golden registry entries parsed — check GOLDEN_GEN_CATALOG in src/testing/catalog.rs"
     );
 
     if !failures.is_empty() {
         panic!(
-            "CATALOG anti-placebo audit FAILED ({} failure(s)):\n\n{}\n\n\
+            "Golden registry anti-placebo audit FAILED ({} failure(s)):\n\n{}\n\n\
              {} entries checked ({} with skip_reason, {} calibrated).\n\
              \n\
              Fixes needed:\n\

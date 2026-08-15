@@ -20,18 +20,21 @@
 //! on the audio thread. Instead, it is packed into a `GcItem::Model(…)` and
 //! routed through the **SPSC GC pipeline**:
 //!
-//! - **RT thread (producer)**: `gc_cascade(item, &mut producer, &mut parking_lot)`
+//! - **RT thread (producer)**: `gc_cascade(item, &mut producer, &mut parking_lot, &overflow, &rt_status)`
 //!   attempts to push the `GcItem` into a lock-free `rtrb` SPSC ring buffer.
-//!   If full, the item cascades into a small fixed-size `parking_lot` overflow
-//!   array (16 slots, also lock-free). If the parking lot is exhausted, the
-//!   item is safely dropped on the RT thread as a last-resort fallback (this
-//!   should never occur under normal operation).
+//!   Before parking anything, it flushes items already parked in the `parking_lot`
+//!   back to the SPSC channel whenever there is free capacity, so the lot tends
+//!   to empty every cycle. If the SPSC is full, the item cascades into a small
+//!   fixed-size `parking_lot` overflow array (16 slots, also lock-free). If the
+//!   parking lot is exhausted, the item cascades into the `GcOverflowBuffer`
+//!   (an overwrite ring buffer) — it is **never** dropped on the RT thread.
 //!
-//! - **Main thread (consumer)**: Pumps the GC channel periodically via
-//!   `drain_gc_channels(&mut consumer, &overflow, &rt_status)`, pulling all
-//!   pending `GcItem`s and dropping them outside the real-time callback —
-//!   typically during host housekeeping cycles or plugin idle
-//!   callbacks.
+//! - **Main thread (consumer)**: Pumps the GC pipeline periodically via
+//!   `drain_gc_channels(&mut consumer, &overflow, &mut parking_lot, &rt_status)`,
+//!   draining the SPSC channel, the overflow buffer, and the parking lot, and
+//!   dropping every `GcItem` outside the real-time callback — typically during
+//!   host housekeeping cycles or plugin idle callbacks, and once more during
+//!   orderly teardown after the real-time producers have stopped.
 //!
 //! This architecture removes all `std::sync::atomic`, `std::shared_ptr`,
 //! and reference-counting contention from the audio path. The only

@@ -206,8 +206,12 @@ impl NamModel for LinearModel {
     }
 
     fn reset(&mut self, sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
+        // State cleanup is unconditional: the FIR history and the FFT tail must
+        // always be silenced, regardless of `prewarm_on_reset`. The flag only
+        // gates the optional priming pass afterwards.
+        self.reset(sample_rate, max_buffer_size);
         if self.prewarm_on_reset {
-            self.reset(sample_rate, max_buffer_size);
+            self.prewarm(max_buffer_size);
         }
         Ok(())
     }

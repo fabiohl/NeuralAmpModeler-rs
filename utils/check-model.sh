@@ -4,9 +4,9 @@
 #
 # check-model.sh — NAM Model Inspector
 #
-# Replaces check-model.py as the canonical model inspection tool.
-# Delegates all format detection, classification, and metadata extraction
-# to the official NeuralAmpModeler-rs loader via `inspect_model`.
+# Canonical model inspection tool for NeuralAmpModeler-rs.
+# Delegates format detection, topology analysis, DSP profile, and metadata
+# extraction to the official loader via the `inspect_model` example.
 #
 # Supports .nam (JSON) and .namb (binary) files natively.
 #
@@ -17,7 +17,7 @@
 #   -d, --dir <DIR>  Recursively scan directory for compatible model files (.nam, .namb)
 #   --json           Emit machine-readable JSON instead of human-readable text
 #   --manifest       Batch mode: emit a JSON array with one entry per file
-#   --release        Build in release mode (faster inference, recommended for large .namb)
+#   --release        Build/run with release optimizations (recommended for large .namb files)
 #   --help, -h       Show this help message
 #
 # Examples:
@@ -37,7 +37,7 @@ CRATE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # ── Help message ──────────────────────────────────────────────────────────────
 show_help() {
     cat >&2 <<HELP
-NAM Model Inspector — powered by NeuralAmpModeler-rs (inspect_model example)
+NAM Model Inspector — powered by NeuralAmpModeler-rs (inspect_model)
 
 USAGE:
   utils/check-model.sh [OPTIONS] <file.nam|.namb|directory> [...]
@@ -46,7 +46,7 @@ OPTIONS:
   -d, --dir <DIR>  Recursively scan directory for compatible model files (.nam, .namb)
   --json           Emit machine-readable JSON instead of human-readable text
   --manifest       Batch mode: emit a JSON array with one entry per file
-  --release        Build with optimizations (recommended for large .namb files)
+  --release        Build/run with optimizations (recommended for large .namb files)
   --help, -h       Show this help message
 
 EXAMPLES:
@@ -60,10 +60,8 @@ EXAMPLES:
 
 NOTES:
   Supports both .nam (JSON) and .namb (binary) formats natively.
-  When a directory is specified (via -d/--dir or positional argument),
-  it is searched recursively for compatible .nam and .namb model files.
+  When a directory is specified, it is searched recursively for compatible models.
   All format detection and classification is performed by the official loader.
-  Errors are reported via NamDiagnostic error codes — no silent failures.
 HELP
 }
 
@@ -148,35 +146,9 @@ if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
     exit 1
 fi
 
-# ── Build the example (incremental — fast on rebuild) ─────────────────────────
+# ── Execute the inspector via cargo run --locked ─────────────────────────────
 cd "${CRATE_ROOT}"
 
-# F-07: cargo build runs WITHOUT `|| true` — a compilation failure aborts the
-# script immediately (typed BUILD_FAILED diagnostic) so a stale inspect_model
-# binary from a previous build is never executed against the current tree.
-# `--quiet` keeps successful output minimal; warnings/errors flow to stderr.
-set +e
-cargo build ${RELEASE_FLAG} --example inspect_model --quiet >&2
-BUILD_STATUS=$?
-set -e
-if [ "${BUILD_STATUS}" -ne 0 ]; then
-    echo "Error: BUILD_FAILED — cargo build exited with status ${BUILD_STATUS}." >&2
-    echo "The inspector binary was NOT executed; fix the compilation error above and retry." >&2
-    exit "${BUILD_STATUS}"
-fi
-
-# Determine binary path
-if [[ -n "$RELEASE_FLAG" ]]; then
-    BINARY="${CRATE_ROOT}/target/release/examples/inspect_model"
-else
-    BINARY="${CRATE_ROOT}/target/debug/examples/inspect_model"
-fi
-
-if [[ ! -x "$BINARY" ]]; then
-    echo "Error: inspect_model binary not found at $BINARY" >&2
-    echo "Try running: cargo build --example inspect_model" >&2
-    exit 2
-fi
-
-# ── Execute the inspector ─────────────────────────────────────────────────────
-exec "$BINARY" "${INSPECT_FLAGS[@]}" "${TARGET_FILES[@]}"
+# Direct, fast execution with cargo run --locked: handles incremental build
+# and execution atomically without manual target path resolution.
+exec cargo run --locked ${RELEASE_FLAG} --example inspect_model --quiet -- "${INSPECT_FLAGS[@]}" "${TARGET_FILES[@]}"

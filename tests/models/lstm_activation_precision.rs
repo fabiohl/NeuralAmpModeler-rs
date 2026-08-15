@@ -6,6 +6,17 @@
 //  Measures the SNR gain from using exact `f32::tanh` (libm) vs the production
 //  Padé [5,4] rational approximant in LSTM fused gates.  Runs the same golden
 //  vector input through both paths and reports the SNR delta.
+//
+//  ## Axis-B split (contract [S2-T01])
+//
+//  - **Structural** (Phase 1, debug): model loading, geometry dispatch and
+//    buffer allocation — cheap, deterministic, codegen-agnostic.
+//  - **SNR oracles** (Phase 2, `--release` only): float measurements against
+//    golden `.bin` vectors / the f64 reference oracle.  `tests-quick.sh`
+//    Phase 1 filters them via
+//    `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
+//    (substring skip also covers `..._gain_stress_v2`); Phase 2 runs the
+//    whole module under release.
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
@@ -21,6 +32,99 @@ use super::common;
 use common::*;
 
 const GOLDEN_BLOCK_SIZE: usize = 64;
+
+// ── Structural (Phase 1 — debug, Axis-B) ─────────────────────────────────────
+
+/// Maps a dispatched [`StaticModel`] back to its compile-time LSTM profile name.
+///
+/// The static profiles encode the model geometry as const generics, so the
+/// variant itself is the dimension validation.
+fn lstm_variant_name(model: &neural_amp_modeler_rs::models::StaticModel) -> &'static str {
+    match model {
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x3(_) => "Lstm1x3",
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x8(_) => "Lstm1x8",
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x12(_) => "Lstm1x12",
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x16(_) => "Lstm1x16",
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x24(_) => "Lstm1x24",
+        neural_amp_modeler_rs::models::StaticModel::Lstm1x40(_) => "Lstm1x40",
+        neural_amp_modeler_rs::models::StaticModel::Lstm2x8(_) => "Lstm2x8",
+        neural_amp_modeler_rs::models::StaticModel::Lstm2x12(_) => "Lstm2x12",
+        neural_amp_modeler_rs::models::StaticModel::Lstm2x16(_) => "Lstm2x16",
+        neural_amp_modeler_rs::models::StaticModel::Lstm2x24(_) => "Lstm2x24",
+        _ => "LstmDyn",
+    }
+}
+
+/// [S2-T01] Axis-B structural LSTM checks (Phase 1 — debug).
+///
+/// Loads the three distributed LSTM fixtures (RequiredLocal), validates their
+/// declared geometry (`architecture` / `num_layers` / `hidden_size`) against
+/// the dispatcher's static profile table, and exercises prewarm + block
+/// processing on zeroed input (allocation / buffer-integrity checks).
+///
+/// No float comparisons or SNR gates: codegen-agnostic by construction.
+#[test]
+fn test_lstm_activation_precision_structural() {
+    const PROFILES: &[(&str, usize, usize, &str)] = &[
+        ("BossLSTM-1x16.nam", 1, 16, "Lstm1x16"),
+        ("BossLSTM-2x8.nam", 2, 8, "Lstm2x8"),
+        ("lstm.nam", 1, 3, "Lstm1x3"),
+    ];
+
+    for &(filename, layers, hidden, profile) in PROFILES {
+        let nam_path = model_path(filename);
+        assert!(
+            nam_path.exists(),
+            "Structural LSTM check requires {filename} (RequiredLocal fixture) at {nam_path:?}"
+        );
+
+        let json_data = fs::read_to_string(&nam_path).expect("Failed to read model");
+        let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+
+        // Dimension validation: JSON topology must match the expected profile.
+        assert_eq!(model_data.architecture, "LSTM", "{filename} must be LSTM");
+        assert_eq!(
+            model_data.config.num_layers,
+            Some(layers),
+            "{filename} must declare {layers} LSTM layer(s)"
+        );
+        assert_eq!(
+            model_data.config.hidden_size,
+            Some(hidden),
+            "{filename} must declare hidden size {hidden}"
+        );
+
+        let mut model = build_model(&model_data)
+            .unwrap_or_else(|e| panic!("Dispatcher failed for {filename}: {e}"));
+        assert_eq!(
+            lstm_variant_name(&model),
+            profile,
+            "{filename} must dispatch to static profile {profile}"
+        );
+
+        // Allocation / buffer-integrity: prewarm + process zeroed blocks.
+        model.prewarm(2048);
+        for block_size in [1usize, 64, 1024] {
+            let input = vec![0.0f32; block_size];
+            let mut output = vec![f32::NAN; block_size];
+            process_in_blocks(&mut model, &input, &mut output, GOLDEN_BLOCK_SIZE);
+            assert_eq!(
+                output.len(),
+                block_size,
+                "{filename}: output length mismatch"
+            );
+            assert!(
+                output.iter().all(|s| s.is_finite()),
+                "{filename}: zero-input block of {block_size} produced non-finite samples"
+            );
+        }
+    }
+}
+
+// ── SNR oracles (Phase 2 — --release, Axis-B) ────────────────────────────────
+// These float measurements are filtered from Phase 1 via
+// `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
+// in `utils/tests-quick.sh` and run exclusively under `--release`.
 
 #[derive(Debug)]
 struct SnrResult {
@@ -108,6 +212,9 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
 /// Runs the 3 LSTM golden vectors through both SIMD (FastMath) and scalar
 /// (exact `f32::tanh`) paths, computing SNR against the C++ reference.
 /// Reports per-model SNR gain and overall verdict.
+///
+/// Phase-2 oracle (Axis-B): float measurement against golden `.bin` — runs
+/// exclusively under `--release`; filtered from Phase 1 via `--skip`.
 #[test]
 fn test_lstm_activation_precision_gain() {
     eprintln!();
@@ -199,6 +306,10 @@ fn test_lstm_activation_precision_gain() {
 ///
 /// Runs the 3 LSTM models through both SIMD (`Fast`) and SIMD (`Standard`)
 /// paths, computing SNR against the f64 exact reference oracle on the stress v2 signal.
+///
+/// Phase-2 oracle (Axis-B): float measurement against the f64 reference
+/// oracle — runs exclusively under `--release`; filtered from Phase 1 via
+/// `--skip` (substring skip of `test_lstm_activation_precision_gain`).
 #[test]
 fn test_lstm_activation_precision_gain_stress_v2() {
     eprintln!();

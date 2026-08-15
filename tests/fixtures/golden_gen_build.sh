@@ -243,97 +243,32 @@ echo "  Synthetic .nam fixtures regenerated in $MODELS_DIR/"
 # =============================================================================
 # Build render tool (single unified binary at v0.5.4 with A2-fast)
 # =============================================================================
+# Delegates to the single entry point _lib.sh::ensure_namcore_render (S3-T01),
+# shared with tests-quick.sh / tests-long.sh / tests/parity/cpp_parity.rs.
+# Idempotent: skips cmake entirely when the binary is up-to-date. The vendor
+# tree is never patched (read-only boundary); `-w` in the unified flags keeps
+# the pinned NAMCore v0.5.4 compiling under GCC >= 15 without touching it.
 phase "Building render tool..."
 BUILD_TYPE="${BUILD_TYPE:-Release}"
-RENDER_BIN="$BUILD_DIR/$BUILD_TYPE/render"
-BUILD_CONFIG_FILE="$BUILD_DIR/.build_config"
-
-# Invalidate render cache if BUILD_TYPE or CXX changed since last build.
-# Prevents silent reuse of a Debug (or clang++) binary when the caller
-# asks for Release (or g++).
-if [ -f "$RENDER_BIN" ] && [ -f "$BUILD_CONFIG_FILE" ]; then
-    STORED_CONFIG=$(cat "$BUILD_CONFIG_FILE")
-    CURRENT_CONFIG="$CXX:$BUILD_TYPE:ieee-strict"
-    if [ "$STORED_CONFIG" != "$CURRENT_CONFIG" ]; then
-        echo "  Build config changed ($STORED_CONFIG → $CURRENT_CONFIG) — forcing rebuild"
-        rm -f "$RENDER_BIN"
-    fi
-fi
-
-if [ -f "$RENDER_BIN" ]; then
-    echo "  Render binary already exists: $RENDER_BIN"
+export NAM_RENDER_BUILD_TYPE="$BUILD_TYPE"
+if RENDER_BIN="$(ensure_namcore_render)"; then
+    :
 else
-    echo "  Building render tool ($NAM_CORE_TAG + A2-fast, IEEE-strict)..."
-    mkdir -p "$BUILD_DIR"
-
-    # F-X1 / Task 3.1: Force IEEE-strict compilation by neutralizing -Ofast in the
-    # vendorized CMakeLists.txt.  -Ofast (≡ -O3 -ffast-math) relaxes IEEE 754,
-    # producing non-deterministic floating-point results across compilers/OSes.
-    # Step (a): replace -Ofast with -O3 in the generator expressions so the target
-    #   no longer pulls in -ffast-math.
-    # Step (b): inject -fno-fast-math -ffp-contract=off via CMAKE_CXX_FLAGS, which
-    #   are appended before target_compile_options and therefore remain effective
-    #   since -O3 alone does not contradict them.
-    RENDER_CMAKE="$NAM_CORE_DIR/tools/CMakeLists.txt"
-    AUDIO_DSP_CMAKE="$NAM_CORE_DIR/Dependencies/AudioDSPTools/tools/CMakeLists.txt"
-    if ! grep -q '\-Ofast\b' "$RENDER_CMAKE"; then
-        echo "  IEEE-strict patch already applied (no -Ofast found in $RENDER_CMAKE)"
-    else
-        echo "  Patching: replacing -Ofast with -O3 in vendorized CMakeLists.txt..."
-        for f in "$RENDER_CMAKE" "$AUDIO_DSP_CMAKE"; do
-            if [ -f "$f" ] && grep -q '\-Ofast\b' "$f"; then
-                sed -i 's/\$<\$<CONFIG:RELEASE>:-Ofast>/\$<\$<CONFIG:RELEASE>:-O3>/g' "$f"
-                echo "    Patched $f"
-            fi
-        done
-    fi
-
-    if grep -q '\-Werror\b' "$RENDER_CMAKE"; then
-        echo "  Patching: disabling -Werror and -Weffc++ for GCC 15 compatibility..."
-        sed -i 's/\-Werror\b/-Wno-error/g' "$RENDER_CMAKE"
-        sed -i 's/\-Weffc++\b/-Wno-effc++/g' "$RENDER_CMAKE"
-    fi
-
-    CMAKE_LOG="$LOGS_DIR/render_cmake.log"
-    cmake -S "$NAM_CORE_DIR" -B "$BUILD_DIR" \
-        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-        -DCMAKE_CXX_COMPILER="$CXX" \
-        -DCMAKE_CXX_STANDARD=20 \
-        -DCMAKE_CXX_FLAGS="-w -fno-fast-math -ffp-contract=off" \
-        -DNAM_ENABLE_A2_FAST=ON \
-        > "$CMAKE_LOG" 2>&1 || {
-        cmake_status=$?
-        tail -5 "$CMAKE_LOG"
-        echo "ERROR: cmake configure failed (exit=$cmake_status). Full log: $CMAKE_LOG"
-        exit 1
-    }
-    tail -5 "$CMAKE_LOG"
-    cmake --build "$BUILD_DIR" --target render -j"$(nproc)" >> "$CMAKE_LOG" 2>&1 || {
-        build_status=$?
-        tail -5 "$CMAKE_LOG"
-        echo "ERROR: cmake build failed (exit=$build_status). Full log: $CMAKE_LOG"
-        exit 1
-    }
-    tail -5 "$CMAKE_LOG"
-
-    if [ ! -f "$RENDER_BIN" ]; then
-        RENDER_BIN=$(find "$BUILD_DIR" -name render -type f -executable | head -1)
-        if [ -z "$RENDER_BIN" ]; then
-            echo "ERROR: Failed to build standard render tool."
-            exit 1
-        fi
-    fi
-    echo "$CXX:$BUILD_TYPE:ieee-strict" > "$BUILD_CONFIG_FILE"
+    RC_RENDER=$?
+    echo "ERROR: ensure_namcore_render failed (exit=$RC_RENDER)."
+    echo "  Diagnostics: $PROJECT_ROOT/target/logs/cmake-configure.log, $PROJECT_ROOT/target/logs/cmake-build.log"
+    exit 1
 fi
 echo "  Render: $RENDER_BIN"
 
 # =============================================================================
-# Build Rust tools (gen_stress + wav_to_golden)
+# Build Rust tools (gen_stress + wav_to_golden + nam_golden_catalog)
 # =============================================================================
-phase "Building Rust tools (gen_stress + wav_to_golden)..."
+phase "Building Rust tools (gen_stress + wav_to_golden + nam_golden_catalog)..."
 
 RUST_LOG="$LOGS_DIR/rust_build.log"
-cargo build --release --features testing --bin gen_stress --bin wav_to_golden > "$RUST_LOG" 2>&1 || {
+cargo build --release --features testing --bin gen_stress --bin wav_to_golden \
+    --bin nam_golden_catalog > "$RUST_LOG" 2>&1 || {
     rust_status=$?
     tail -5 "$RUST_LOG"
     echo "ERROR: cargo build failed (exit=$rust_status). Full log: $RUST_LOG"
@@ -342,6 +277,7 @@ cargo build --release --features testing --bin gen_stress --bin wav_to_golden > 
 tail -3 "$RUST_LOG"
 GEN_STRESS="$PROJECT_ROOT/target/release/gen_stress"
 WAV_TO_GOLDEN="$PROJECT_ROOT/target/release/wav_to_golden"
+GOLDEN_CATALOG_BIN="$PROJECT_ROOT/target/release/nam_golden_catalog"
 
 if [ ! -f "$GEN_STRESS" ]; then
     echo "ERROR: Failed to build gen_stress binary."
@@ -349,6 +285,56 @@ if [ ! -f "$GEN_STRESS" ]; then
 fi
 echo "  gen_stress: $GEN_STRESS"
 echo "  wav_to_golden: $WAV_TO_GOLDEN"
+
+# =============================================================================
+# Golden registry — loaded from Rust (single source of truth, Sprint S3-T02)
+# =============================================================================
+# The canonical model↔golden registry (39 entries) lives in
+# src/testing/catalog.rs::GOLDEN_GEN_CATALOG — the former static bash catalog
+# array was removed so model lists are never duplicated in shell scripts.
+# `nam_golden_catalog emit-catalog` serializes it in the same line format the
+# loops below already parse:
+#
+#   nam_file : golden_name : label : v2_scope[:skip_srs[:skip_reason]]
+#     v2_scope ∈ {all, 48k_only, none}
+#       all      — v2 multi-SR for all 5 sample rates (respecting skip_srs)
+#       48k_only — v2 only at 48000 Hz (model declares expected_sample_rate=48000)
+#       none     — no v2 golden generation for this model
+#     skip_srs (optional) — sample rates NOT to generate in v2 (e.g. 192000)
+#     skip_reason (optional) — if non-empty, skip model entirely in both v1 and v2
+#     loops with an explanatory message. Also suppresses # EXPECTED: lines in the
+#     freshness manifest (F-C9, Tarefa T3.2).
+#
+# Rationale for v2_scope=none (A2 dynamic/FiLM models):
+#   The 4 dynamic/FiLM models (a2_dynamic_gated_ch8, a2_dynamic_blended_ch3,
+#   wavenet_a2_film_lite, wavenet_a2_film_full) are intentionally v2_scope=none
+#   for two independent technical reasons:
+#
+#   1. C++ upstream limitation: the a2_fast.cpp render path rejects FiLM-conditioned
+#      models and falls back to the Eigen-based generic WaveNet engine. The generic
+#      engine does not consistently support multi-sample-rate rendering for FiLM
+#      architectures — attempting v2 multi-SR renders for these models would produce
+#      unreliable (or rejected) C++ reference outputs.
+#
+#   2. Dynamic engine coverage is a superset: these models are routed through
+#      WaveNetA2Dyn (the dynamic engine with native FiLM support) at test time.
+#      The dynamic engine handles arbitrary free geometries — geometry variance
+#      subsumes sample-rate variance in practice. Live multi-SR cross-validation
+#      is exercised via cpp_parity (live C++ toolchain) for dynamic engines, and
+#      the v1 golden at 48 kHz provides the essential committed cross-reference.
+#      Generating v2 multi-SR goldens here would produce ~28 MB of binary files
+#      without any Rust test consumer (golden_vectors v2 skips tests whose
+#      corresponding catalog entry has v2_scope=none).
+#
+#   This rationale is the single source of truth — docs/testing.md and
+#   tests/fixtures/README.md reference this comment rather than duplicating it.
+echo "  Loading golden registry from Rust (src/testing/catalog.rs)..."
+mapfile -t CATALOG < <("$GOLDEN_CATALOG_BIN" emit-catalog)
+if [ ${#CATALOG[@]} -lt 15 ]; then
+    echo "ERROR: nam_golden_catalog emit-catalog returned ${#CATALOG[@]} entries (< 15 expected)."
+    exit 1
+fi
+echo "  Golden registry: ${#CATALOG[@]} entries loaded from Rust."
 
 # =============================================================================
 # Generate stress WAV signals
@@ -373,89 +359,9 @@ done
 # =============================================================================
 phase "Running render for each model (v1)..."
 
-# Canonical model↔golden catalog — single source of truth for both v1 and v2 loops.
-#
-# Entry format: nam_file : golden_name : label : v2_scope[:skip_srs[:skip_reason]]
-#   v2_scope ∈ {all, 48k_only, none}
-#     all      — v2 multi-SR for all 5 sample rates (respecting skip_srs)
-#     48k_only — v2 only at 48000 Hz (model declares expected_sample_rate=48000)
-#     none     — no v2 golden generation for this model
-#   skip_srs (optional, comma-separated) — sample rates NOT to generate in v2,
-#   kept in sync with test SR sets in tests/golden_vectors.rs
-#   skip_reason (optional) — if non-empty, skip model entirely in both v1 and v2
-#   loops with an explanatory message. Also suppresses # EXPECTED: lines in the
-#   freshness manifest (F-C9, Tarefa T3.2).
-#
-# Rationale for v2_scope=none (A2 dynamic/FiLM models):
-#   The 4 dynamic/FiLM models (a2_dynamic_gated_ch8, a2_dynamic_blended_ch3,
-#   wavenet_a2_film_lite, wavenet_a2_film_full) are intentionally v2_scope=none
-#   for two independent technical reasons:
-#
-#   1. C++ upstream limitation: the a2_fast.cpp render path rejects FiLM-conditioned
-#      models and falls back to the Eigen-based generic WaveNet engine. The generic
-#      engine does not consistently support multi-sample-rate rendering for FiLM
-#      architectures — attempting v2 multi-SR renders for these models would produce
-#      unreliable (or rejected) C++ reference outputs.
-#
-#   2. Dynamic engine coverage is a superset: these models are routed through
-#      WaveNetA2Dyn (the dynamic engine with native FiLM support) at test time.
-#      The dynamic engine handles arbitrary free geometries — geometry variance
-#      subsumes sample-rate variance in practice. Live multi-SR cross-validation
-#      is exercised via cpp_parity (live C++ toolchain) for dynamic engines, and
-#      the v1 golden at 48 kHz provides the essential committed cross-reference.
-#      Generating v2 multi-SR goldens here would produce ~28 MB of binary files
-#      without any Rust test consumer (golden_vectors v2 skips tests whose
-#      corresponding CATALOG entry has v2_scope=none).
-#
-#   This rationale is the single source of truth — docs/testing.md and
-#   tests/fixtures/README.md reference this comment rather than duplicating it.
-CATALOG=(
-    "BossWN-standard.nam:golden_wavenet_standard:WaveNet Standard (CH=16):48k_only"
-    "EVH-5150-Lite.nam:golden_wavenet_lite:WaveNet Lite (CH=12):all"
-    "BossWN-feather.nam:golden_wavenet_feather:WaveNet Feather (CH=8):all"
-    "BossWN-nano.nam:golden_wavenet_nano:WaveNet Nano (CH=4):all"
-    "wavenet_a1_standard.nam:golden_wavenet_a1_standard:WaveNet A1 Standard (Official):all"
-    "wavenet_official.nam:golden_wavenet_official:WaveNet Official (CH=3 free geom):48k_only"
-    "BossLSTM-1x16.nam:golden_lstm_1x16:LSTM 1×16:all:192000"
-    "BossLSTM-2x8.nam:golden_lstm_2x8:LSTM 2×8:all:192000"
-    "lstm.nam:golden_lstm_official:LSTM Official:48k_only"
-    "wavenet_a2_full.nam:golden_wavenet_a2_full:A2-Full (CH=8):48k_only"
-    "wavenet_a2_lite.nam:golden_wavenet_a2_lite:A2-Lite (CH=3):48k_only"
-    "wavenet_condition_dsp.nam:golden_wavenet_condition_dsp:Condition DSP (CH=3, cond=3):48k_only"
-    "wavenet_condition_lstm.nam:golden_wavenet_condition_lstm:Condition DSP LSTM (CH=3, cond=3, LSTM):48k_only::C++ upstream limitation: LSTM condition_dsp sub-model channel mismatch (uses input_size=1 instead of hidden_size=3) — golden binary cannot be generated (2026-07-11)"
-    "a2_example.nam:golden_a2_example:SlimmableContainer A2 Example (CH=3→6):48k_only"
-    "APP-EVH-Stealth100-Dialled-xSTD.nam:golden_wavenet_app_evh:APP EVH Stealth 100:48k_only"
-    "Boss BD-2 H2O Mod T-12_00 G-12_00.nam:golden_wavenet_boss_bd2:Boss BD-2 H2O Mod:48k_only"
-    "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam:golden_wavenet_slammin_marshall:SLAMMIN MARSHALL J45:48k_only"
-    "wavenet_dyn_free.nam:golden_wavenet_dyn_free:WaveNetDyn Free-Shape (CH=7/4):48k_only"
-    "lstm_dyn_test.nam:golden_lstm_dyn_test:LSTM-Dyn 1×7:48k_only"
-    "convnet_test.nam:golden_convnet_test:ConvNet Test (CH=8, 6 blocks):48k_only"
-    "wavenet_a2_max.nam:golden_wavenet_a2_max:WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1):48k_only"
-    "a2_dynamic_gated_ch8.nam:golden_a2_dynamic_gated_ch8:A2 Dynamic Gated (CH=8):none"
-    "a2_dynamic_blended_ch3.nam:golden_a2_dynamic_blended_ch3:A2 Dynamic Blended (CH=3):none"
-    "wavenet_a2_film_lite.nam:golden_wavenet_a2_film_lite:A2-FiLM Lite (CH=3):none"
-    "wavenet_a2_film_full.nam:golden_wavenet_a2_film_full:A2-FiLM Full (CH=8):none"
-    "wavenet_a2_film_chaos_stress.nam:golden_wavenet_a2_film_chaos_stress:A2-FiLM Chaos Stress (CH=3):none"
-    "wavenet_a2_film_input_mixin_pre.nam:golden_wavenet_a2_film_input_mixin_pre:A2-FiLM InputMixinPre (CH=3):none"
-    "linear_fft_rf320.nam:golden_linear_fft_rf320:Linear FFT RF=320:none"
-    "linear_fft_rf2048.nam:golden_linear_fft_rf2048:Linear FFT RF=2048:none"
-    "linear_fft_rf4096.nam:golden_linear_fft_rf4096:Linear FFT RF=4096:none"
-    "linear_fft_rf8192.nam:golden_linear_fft_rf8192:Linear FFT RF=8192:none"
-    # LSTM uncatalogued hidden sizes and 3-layer topology
-    "lstm_1x10.nam:golden_lstm_1x10:LSTM 1×10 (uncat.):48k_only"
-    "lstm_2x24.nam:golden_lstm_2x24:LSTM 2×24 (uncat.):48k_only"
-    "lstm_3x8.nam:golden_lstm_3x8:LSTM 3×8:48k_only"
-    # ConvNet variants (nobn, ReLU, SiLU)
-    "convnet_nobn.nam:golden_convnet_nobn:ConvNet No BatchNorm:48k_only"
-    "convnet_relu.nam:golden_convnet_relu:ConvNet ReLU:48k_only"
-    "convnet_silu.nam:golden_convnet_silu:ConvNet SiLU:48k_only"
-    # Linear without bias
-    "linear_nobias.nam:golden_linear_nobias:Linear No Bias:48k_only"
-    # Rejection test fixture
-    "wavenet_a1_secondary_act.nam:golden_wavenet_a1_secondary_act:WaveNet A1 Secondary Activation Rejection:none::Rejection fixture for non-null secondary_activation (2026-08-03)"
-)
-# ↑ See skip_reason field above — models with skip_reason set are skipped cleanly
-#   in both v1 and v2 loops (F-C9, Tarefa T3.2).
+# $CATALOG is loaded above from src/testing/catalog.rs (Rust single source of
+# truth, S3-T02). Models with skip_reason set are skipped cleanly in both v1
+# and v2 loops (F-C9, Tarefa T3.2).
 
 TEMP_DIR="$FIXTURES_DIR/.temp_golden"
 mkdir -p "$TEMP_DIR"
@@ -502,7 +408,7 @@ done
 # =============================================================================
 phase "Generating v2 multi-SR golden vectors..."
 
-# v2 uses the same canonical CATALOG defined in §7.
+# v2 iterates the same Rust-sourced $CATALOG (src/testing/catalog.rs).
 # Models with v2_scope="none" are skipped entirely;
 # v2_scope="48k_only" only produces the 48 kHz golden;
 # v2_scope="all" generates all 5 sample rates respecting skip_srs.

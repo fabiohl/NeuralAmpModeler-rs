@@ -95,8 +95,11 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Fast, generic routine that implements the neural network (WaveNet).
     /// The `<M: SimdMath>` constraint forces the compiler to generate assembly focused on
     /// large registers (256-bit or 512-bit) without branches (branchless).
+    ///
+    /// The frame count is clamped to `min(input.len(), output.len())` so the
+    /// output is never indexed beyond its actual length.
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total_frames = input.len();
+        let total_frames = input.len().min(output.len());
         if total_frames == 0 {
             return;
         }

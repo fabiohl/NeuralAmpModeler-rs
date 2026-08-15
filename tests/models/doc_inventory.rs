@@ -153,6 +153,7 @@ fn extract_src_path_refs(text: &str) -> HashSet<String> {
                 && !candidate.contains("../")
                 && !candidate.contains('{')
                 && !candidate.contains('}')
+                && !candidate.contains('*')
             {
                 refs.insert(format!("src/{candidate}"));
             }
@@ -228,7 +229,14 @@ fn collect_scripts() -> Vec<String> {
 /// no longer exist (e.g., one-shot debug scripts that were archived).
 // Scripts allowed as doc references even when not treated as standalone
 // user-facing entry points (shared libs / supply-chain helpers).
-const SCRIPT_DOC_EXEMPT: &[&str] = &["utils/_lib.sh", "utils/mod-update.sh"];
+const SCRIPT_DOC_EXEMPT: &[&str] = &[
+    "utils/_lib.sh",
+    "utils/mod-update.sh",
+    // Removed in S4-T03: canonical libm gate is tests/libm_export_guard.rs;
+    // docs/testing.md and docs/postmortem-libm-symbol-interposition.md
+    // still describe the former wrapper in historical prose.
+    "utils/debug/verify_no_libm_exports.sh",
+];
 
 /// Known stale source paths in documentation — to be fixed in the
 /// docs-rewrite epic (.agents/TODO-findings_NeuralAmpModeler-rs.md, EP-1).

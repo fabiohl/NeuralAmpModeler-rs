@@ -176,51 +176,36 @@ fn ensure_render_compiled() -> bool {
         }
     }
 
-    let build_dir = project_root.join(BUILD_DIR);
-    fs::create_dir_all(&build_dir).ok();
-
-    eprintln!("Compiling render tool (v0.5.4 + A2-fast)...");
-
-    let cmake_args = vec![
-        "-S",
-        nam_core.to_str().unwrap(),
-        "-B",
-        build_dir.to_str().unwrap(),
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_CXX_STANDARD=20",
-        "-DCMAKE_CXX_FLAGS=-w",
-        "-DNAM_ENABLE_A2_FAST=ON",
-    ];
-
-    let cmake_status = Command::new("cmake").args(&cmake_args).status();
-
-    match cmake_status {
-        Ok(s) if s.success() => {}
-        _ => {
-            return skip_or_abort(
-                "CMake failed — C++ build dependencies missing.\n\
-                 Install cmake and a C++20 compiler (g++ or clang++), then re-run.",
-            );
-        }
+    // Single unified build entry point (S3-T01): all C++ render builds in the
+    // repo (quick/long runners, golden generation, this fallback) delegate to
+    // utils/ensure_namcore_render.sh, which is idempotent and logs to
+    // target/logs/cmake-{configure,build}.log.
+    let helper = project_root.join("utils/ensure_namcore_render.sh");
+    if !helper.exists() {
+        return skip_or_abort(&format!(
+            "unified render build helper not found: {helper:?}"
+        ));
     }
 
-    let build_status = Command::new("cmake")
-        .args([
-            "--build",
-            build_dir.to_str().unwrap(),
-            "--target",
-            "render",
-            "-j",
-            "2",
-        ])
-        .status();
+    eprintln!("Compiling render tool (utils/ensure_namcore_render.sh)...");
 
-    match build_status {
-        Ok(s) if s.success() => {}
-        _ => {
+    let output = Command::new("bash")
+        .arg(&helper)
+        .current_dir(&project_root)
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
             return skip_or_abort(&format!(
-                "Render build failed — check build logs in {build_dir:?}."
+                "utils/ensure_namcore_render.sh failed (exit {:?}): {}",
+                o.status.code(),
+                stderr.trim()
             ));
+        }
+        Err(e) => {
+            return skip_or_abort(&format!("failed to run {}: {e}", helper.display()));
         }
     }
 

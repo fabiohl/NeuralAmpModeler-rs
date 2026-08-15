@@ -45,7 +45,7 @@ mod audit_tests {
             for (j, v) in input.iter_mut().enumerate() {
                 *v = ((i * partition_size + j) as f32 * 0.001).sin();
             }
-            engine.process(&input, &mut output);
+            engine.process(&input, &mut output, None);
         }
 
         let count = {
@@ -57,6 +57,7 @@ mod audit_tests {
                 engine.process(
                     std::hint::black_box(&input),
                     std::hint::black_box(&mut output),
+                    None,
                 );
             }
             get_alloc_count()
@@ -96,7 +97,7 @@ mod audit_tests {
         for (j, v) in input.iter_mut().enumerate() {
             *v = (j as f32 * 0.01).sin();
         }
-        engine.process(&input, &mut output);
+        engine.process(&input, &mut output, None);
 
         let count = {
             let _guard = TrackingGuard::new();
@@ -107,6 +108,7 @@ mod audit_tests {
                 engine.process(
                     std::hint::black_box(&input),
                     std::hint::black_box(&mut output),
+                    None,
                 );
             }
             get_alloc_count()

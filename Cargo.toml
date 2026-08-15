@@ -142,6 +142,21 @@ name = "wav_to_golden"
 path = "src/bin/wav_to_golden.rs"
 required-features = ["testing"]
 
+[[bin]]
+name = "nam_golden_catalog"
+path = "src/bin/nam_golden_catalog.rs"
+required-features = ["testing"]
+
+[[bin]]
+name = "nam_freshness"
+path = "src/bin/nam_freshness.rs"
+required-features = ["testing"]
+
+[[bin]]
+name = "nam_long_receipt"
+path = "src/bin/nam_long_receipt.rs"
+required-features = ["testing"]
+
 [[example]]
 name = "load_model"
 path = "examples/load_model.rs"

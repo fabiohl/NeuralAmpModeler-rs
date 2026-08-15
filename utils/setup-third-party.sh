@@ -30,6 +30,10 @@ echo -e "${BLUE}${BOLD}=========================================================
 echo -e "${BLUE}${BOLD}   NeuralAmpModeler-rs — third-party environment setup          ${NC}"
 echo -e "${BLUE}${BOLD}================================================================${NC}"
 
+if ! command -v git >/dev/null 2>&1; then
+    die "git binary is required but not found in PATH."
+fi
+
 if [ ! -f "$VARIABLES_ENV" ]; then
     echo -e "${RED}${BOLD}❌ variables.env not found at $VARIABLES_ENV.${NC}"
     echo -e "${YELLOW}Expected at the NeuralAmpModeler-rs repository root (override via NAM_VARIABLES_ENV).${NC}"
@@ -51,11 +55,14 @@ sync_git_pin() {
         echo -e "  Found $name at $dir — updating to pin..."
         (
             cd "$dir"
-            git fetch --depth 1 origin tag "$tag"
-            git checkout "$commit"
+            git fetch --depth 1 origin tag "$tag" 2>/dev/null || git fetch origin "$tag" 2>/dev/null || git fetch origin
+            if ! git checkout "$commit" 2>/dev/null; then
+                git fetch --depth 1 origin "$commit" 2>/dev/null || git fetch origin "$commit" 2>/dev/null || git fetch origin
+                git checkout "$commit"
+            fi
             git clean -df
         )
-        echo -e "  ${GREEN}✓${NC} $name synced ($tag @ $commit)."
+        ok "$name synced ($tag @ $commit)."
     elif [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
         echo -e "${RED}${BOLD}❌ $dir exists but is not a git checkout.${NC}"
         echo -e "${YELLOW}Remove it and re-run, or point NAM_CORE_DIR / NAM_PLUGIN_DIR elsewhere.${NC}"
@@ -64,8 +71,14 @@ sync_git_pin() {
         echo -e "  Cloning $name for the first time..."
         rm -rf "$dir"
         git clone --depth 1 --branch "$tag" "$repo" "$dir"
-        (cd "$dir" && git checkout "$commit")
-        echo -e "  ${GREEN}✓${NC} $name cloned ($tag @ $commit)."
+        (
+            cd "$dir"
+            if ! git checkout "$commit" 2>/dev/null; then
+                git fetch --depth 1 origin "$commit" 2>/dev/null || git fetch origin "$commit" 2>/dev/null || git fetch origin
+                git checkout "$commit"
+            fi
+        )
+        ok "$name cloned ($tag @ $commit)."
     fi
 }
 
@@ -81,19 +94,20 @@ for sub in eigen AudioDSPTools; do
         (cd "$NAM_CORE_DIR" && git submodule update --init "Dependencies/$sub")
     fi
 done
-echo -e "  ${GREEN}✓${NC} NeuralAmpModelerCore submodules ready."
+ok "NeuralAmpModelerCore submodules ready."
 
 # 2. NeuralAmpModelerPlugin
 phase "Syncing NeuralAmpModelerPlugin mirror..."
 sync_git_pin "NeuralAmpModelerPlugin" "$NAM_PLUGIN_DIR" \
     "$NAM_PLUGIN_REPO" "$NAM_PLUGIN_TAG" "$NAM_PLUGIN_COMMIT"
 
-if [ "$(cd "$NAM_PLUGIN_DIR" && git submodule status AudioDSPTools | head -c1)" = "-" ]; then
+sub_plugin_path="$NAM_PLUGIN_DIR/Dependencies/AudioDSPTools"
+if [ ! -d "$sub_plugin_path" ] || [ -z "$(ls -A "$sub_plugin_path" 2>/dev/null || true)" ]; then
     echo -e "  Initializing submodules for NeuralAmpModelerPlugin..."
-    (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive AudioDSPTools)
-    echo -e "  ${GREEN}✓${NC} NeuralAmpModelerPlugin submodules initialized."
+    (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive Dependencies/AudioDSPTools 2>/dev/null || (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive))
+    ok "NeuralAmpModelerPlugin submodules initialized."
 else
-    echo -e "  ${GREEN}✓${NC} NeuralAmpModelerPlugin submodules already present."
+    ok "NeuralAmpModelerPlugin submodules already present."
 fi
 
 # 3. community_models (optional local symlink — never fetched from git)
@@ -102,19 +116,18 @@ COMMUNITY_LINK="$THIRD_PARTY_DIR/community_models"
 if [ -e "$COMMUNITY_LINK" ] || [ -L "$COMMUNITY_LINK" ]; then
     if [ -L "$COMMUNITY_LINK" ]; then
         target="$(readlink -f "$COMMUNITY_LINK" 2>/dev/null || readlink "$COMMUNITY_LINK")"
-        echo -e "  ${GREEN}✓${NC} community_models → $target"
+        ok "community_models → $target"
     else
-        echo -e "  ${GREEN}✓${NC} community_models present at $COMMUNITY_LINK"
+        ok "community_models present at $COMMUNITY_LINK"
     fi
 elif [ -n "${NAM_COMMUNITY_MODELS_SRC:-}" ]; then
     if [ ! -d "$NAM_COMMUNITY_MODELS_SRC" ]; then
-        echo -e "${RED}${BOLD}❌ NAM_COMMUNITY_MODELS_SRC is not a directory: $NAM_COMMUNITY_MODELS_SRC${NC}"
-        exit 1
+        die "NAM_COMMUNITY_MODELS_SRC is not a directory: $NAM_COMMUNITY_MODELS_SRC"
     fi
     ln -s "$NAM_COMMUNITY_MODELS_SRC" "$COMMUNITY_LINK"
-    echo -e "  ${GREEN}✓${NC} Linked community_models → $NAM_COMMUNITY_MODELS_SRC"
+    ok "Linked community_models → $NAM_COMMUNITY_MODELS_SRC"
 else
-    echo -e "  ${YELLOW}ⓘ community_models not configured (optional).${NC}"
+    warn "community_models not configured (optional)."
     echo -e "  ${YELLOW}  For local non-distributable test models, create a symlink:${NC}"
     echo -e "  ${YELLOW}    ln -s /path/to/your/nam_models $COMMUNITY_LINK${NC}"
     echo -e "  ${YELLOW}  Or re-run with NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models${NC}"

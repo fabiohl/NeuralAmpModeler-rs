@@ -29,6 +29,8 @@ mod deterministic_energy_test;
 mod diagnostic_bundle;
 #[path = "models/doc_inventory.rs"]
 mod doc_inventory;
+#[path = "models/ebu_lufs_compliance.rs"]
+mod ebu_lufs_compliance;
 #[path = "models/receipt_test.rs"]
 mod receipt_test;
 #[path = "models/wavenet_clone_exact_test.rs"]
@@ -75,6 +77,8 @@ mod nondist_validation;
 mod oversampling_characterization;
 #[path = "models/prewarm_test.rs"]
 mod prewarm_test;
+#[path = "models/process_contract_test.rs"]
+mod process_contract_test;
 #[path = "models/proptest_math.rs"]
 mod proptest_math;
 #[path = "models/proptest_parsers.rs"]

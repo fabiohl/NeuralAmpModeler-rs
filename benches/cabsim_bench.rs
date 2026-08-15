@@ -36,7 +36,7 @@ fn bench_cabsim_process_block(
     }
 
     for _ in 0..engine.num_partitions().max(1) {
-        engine.process(&input, &mut output);
+        engine.process(&input, &mut output, None);
     }
 
     c.bench_function(label, |b| {
@@ -47,6 +47,7 @@ fn bench_cabsim_process_block(
             engine.process(
                 std::hint::black_box(&input),
                 std::hint::black_box(&mut output),
+                None,
             );
         });
     });

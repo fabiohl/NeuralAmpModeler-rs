@@ -2494,7 +2494,7 @@ verify_contract() {
 # hard third-party requirements). The delegated suite's exit status gates the
 # dashboard: a failed extended audit is a typed receipt FAIL (blocks --save and
 # fails --check). NAM_LONG_SUITE_SCRIPT overrides the delegated script path
-# (used by utils/tests/test_scripts.sh sandbox tests).
+# (used by the run_bash_scripts_unit_tests sandbox tests in utils/tests-long.sh).
 run_extended_audit() {
     local long_script="${NAM_LONG_SUITE_SCRIPT:-$PROJECT_DIR/utils/tests-long.sh}"
     if [ ! -x "$long_script" ] && [ ! -f "$long_script" ]; then

@@ -98,14 +98,14 @@ noted per-model. Regenerate goldens with `tests/fixtures/golden_gen_build.sh` wh
 [`tests/fixtures/README.md`](../tests/fixtures/README.md) is the canonical operational
 supply-chain contract. Every parity claim in this document is operationalized through it.
 
-| Layer                               | Mechanism                                                                                                                          | Hard-fail gate                |
-|:----------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------- |:----------------------------- |
-| **Layer 0 — Generation pipeline**   | `tests/fixtures/golden_gen_build.sh` + `CATALOG` array — regenerates every `.bin` golden from the pinned NAMcore C++ `render` tool | —                             |
-| **Layer 1 — Pre-committed goldens** | `tests/models/golden_vectors.rs` — compares Rust output against committed `.bin` files; no C++ toolchain required                  | `utils/tests-quick.sh` Fase 2 |
-| **Layer 2 — Live cross-validation** | `tests/parity/cpp_parity.rs` (`#[ignore]`, run via `utils/tests-long.sh`) — builds C++ `render` tool and compares fresh output     | `utils/tests-long.sh`         |
+| Layer                               | Mechanism                                                                                                                                                                                    | Hard-fail gate                                                      |
+|:----------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------- |
+| **Layer 0 — Generation pipeline**   | `tests/fixtures/golden_gen_build.sh` consumes the Rust golden registry `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (via `nam_golden_catalog emit-catalog`) — regenerates every `.bin` golden from the pinned NAMcore C++ `render` tool (no bash catalog array, S3-T02) | —                                                                   |
+| **Layer 1 — Pre-committed goldens** | `tests/models/golden_vectors.rs` — compares Rust output against committed `.bin` files; no C++ toolchain required                                                                            | `utils/tests-quick.sh` Phase 2                                      |
+| **Layer 2 — Live cross-validation** | `tests/parity/cpp_parity.rs` — builds C++ `render` tool and compares fresh output: `quick_parity` subset in `utils/tests-quick.sh` Phase 2; full `#[ignore]`d v1/v2 multi-SR matrix via `utils/tests-long.sh` | `utils/tests-quick.sh` Phase 2 (`quick_parity`) + `utils/tests-long.sh` |
 
 **Freshness manifest:** `tests/fixtures/.golden_manifest.sha256` contains `sha256` of every
-model *and* its golden. Verified as a **hard gate** in both `utils/tests-quick.sh` Fase 2
+model *and* its golden. Verified as a **hard gate** in both `utils/tests-quick.sh` Phase 2
 and `utils/tests-long.sh` (a stale `.nam` or `.bin` fails the suite).
 
 **NAMcore mirror pinning:** `variables.env` pins the vendored C++ reference at
@@ -116,6 +116,79 @@ via `utils/setup-third-party.sh`. See `tests/fixtures/README.md` for the full re
 `tests/models/threshold_calibration.rs` (anti-placebo meta-tests, `// Measured:` provenance
 comments). A claim not traceable to a catalog entry + manifest hash + calibrated threshold
 is unverified.
+
+#### 1.4.1 Runner execution and fidelity seals
+
+**Quick suite (`utils/tests-quick.sh`)** — three phases; the parity gates live in
+Phase 2 (`--release`, production float gate):
+
+- **Layer 1 (`golden_vectors` v1 + `isa_parity` v2):** runs only when the committed
+  `.bin` fixtures are present (`tests/fixtures/golden_wavenet_standard.bin` and
+  `..._v2_48000.bin`). Missing fixtures record the gap
+  `GAP: golden_vectors+isa_parity:missing_fixtures` and the oracle batch shrinks to
+  the fixture-independent oracles (`reference_oracle_f64`, `spectral_fidelity`,
+  `linear_fft_test`, `lstm_activation_precision`). Diagnostic:
+  `tests/fixtures/golden_gen_build.sh`.
+- **Layer 2 (`cpp_parity quick_parity`):** requires the NAMcore mirror
+  (`ensure_third_party soft`) and a C++ compiler (`$CXX`, else `g++`/`clang++`).
+  The `render` binary is ensured via the **single unified build entry point**
+  `utils/ensure_namcore_render.sh` (`_lib.sh::ensure_namcore_render`, S3-T01):
+  idempotent (skips cmake when `build/namcore_render/.build_config` matches the
+  `$CXX:$BUILD_TYPE:$FLAGS` fingerprint; the binary is probed at
+  `tools/render` → `Release/render` → `Debug/render`, matching
+  `src/testing/fixtures.rs::render_bin_path`), builds Release with
+  `-DNAM_ENABLE_A2_FAST=ON`, and logs `target/logs/cmake-configure.log` /
+  `cmake-build.log`. The same helper is used by `tests-long.sh` Phase 0,
+  `tests/fixtures/golden_gen_build.sh` and the Rust fallback in
+  `tests/parity/cpp_parity.rs`. Missing mirror, missing compiler, missing
+  cmake, or a failed CMake build each record a gap: `cpp_parity:no_namcore` /
+  `cpp_parity:no_cxx` / `cpp_parity:no_cmake` / `cpp_parity:cmake_failed`.
+- **Fail-closed status — a green seal is never emitted for skipped oracles.** Any
+  recorded gap prints `FIDELITY: INCOMPLETE` and `OVERALL: PASSED_WITH_GAPS` (exit 0).
+  `FIDELITY: OK` + `OVERALL: PASSED` is emitted **only** when every oracle actually
+  executed (each phase is also post-checked by `assert_ran_tests`, so an empty test
+  selection fails the suite). Freshness failures are `FIDELITY: FAIL` (exit 1).
+  Therefore the absence of fixtures, of the NAMcore mirror, or of the C++ compiler
+  **never** yields a green fidelity stamp.
+
+| Status emitted                                             | Meaning                                                                             | Exit |
+|:---------------------------------------------------------- |:----------------------------------------------------------------------------------- |:----:|
+| `FIDELITY: OK` / `OVERALL: PASSED`                         | All three phases executed; zero gaps                                                | 0    |
+| `FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS`       | At least one oracle skipped (fixture/NAMcore/compiler gap); `GAP:` lines in receipt | 0    |
+| `FIDELITY: FAIL` / `OVERALL: FAIL`                         | Freshness gate failed, a test failed, or an unexpected error                        | 1    |
+| `OVERALL: FAIL reason=strict_gaps`                         | Gaps present **and** `NAM_QUICK_STRICT=1` — gaps promoted to failure                | 1    |
+
+- **`NAM_QUICK_STRICT=1`:** promotes every recorded gap to a hard failure
+  (`OVERALL: FAIL reason=strict_gaps`, exit 1). Use for release gates where a skipped
+  oracle is unacceptable. The `STRICT:` line in the receipt records the value used.
+- **Receipt:** every run appends a machine-readable receipt to
+  `target/logs/quick-receipt.txt` (`SUITE: tests-quick`, `STRICT: <0|1>`,
+  `PHASE1/2/3: PASS <...>`, one `GAP: <id>` per skipped oracle, `OVERALL: <verdict>`),
+  alongside the per-phase logs `target/logs/quick-phase{1,2,3}.log`. The script
+  re-executes itself at low CPU/IO priority (`nice`/`ionice`) unless
+  `NAM_NO_LOW_PRIORITY=1`.
+
+**Long suite (`utils/tests-long.sh`)** — human-operated nightly/pre-release audit
+(AI agents must never execute it; binding project rule):
+
+- **Pre-flight gates:** requires the NAMcore mirror (`ensure_third_party hard` — a
+  missing mirror aborts the suite). Golden/fixture presence is validated
+  exclusively by the Rust gates: `catalog_preflight` (fixture catalog + V1
+  golden matrix via `validate_v1_goldens` + V2 multi-SR matrix via
+  `validate_v2_catalog`, both in `src/testing/catalog.rs`) and
+  `check_freshness` (nam_freshness manifest gate) — missing required goldens
+  fail the preflight (the former bash golden lists and the auto-rebuild were
+  removed, S6-T01; regenerate with `tests/fixtures/golden_gen_build.sh`).
+  It then ensures the C++ `render` binary via the unified `ensure_namcore_render`
+  (S3-T01) — a render build failure aborts the suite with
+  `target/logs/cmake-configure.log` / `cmake-build.log` diagnostics.
+- **Layer 2 full matrix:** the `#[ignore]`d `live_cross_validation_*` v1/v2 multi-SR
+  tests and the full `cpp_parity` matrix run in the release parity phase.
+- **Summary:** `FIDELITY: FAIL` (exit 1) when any fidelity-class phase failed;
+  otherwise `FIDELITY: OK` with `OVERALL: FAILED` (exit 1, non-fidelity failure),
+  `OVERALL: COMPLETED_WITH_GAPS` (exit 0 — skipped/inconclusive phases, e.g. RT jitter
+  without capability; `--strict-pre-release` turns this into exit 1), or
+  `OVERALL: PASSED` (exit 0, zero gaps). All phase logs land in `target/logs/`.
 
 ---
 
@@ -320,14 +393,16 @@ Eigen computation graph.
 
 - The C++ `render` tool crashes or emits NaN for all LSTM models at 192 kHz
   (`BossLSTM-1x16`, `BossLSTM-2x8`, and every synthetic LSTM fixture).
-- No committed `golden_lstm_*_v2_192000.bin` files exist — the golden generator
-  script (`golden_gen_build.sh` CATALOG `skip_srs=192000` for
-  `BossLSTM-1x16`/`BossLSTM-2x8`) intentionally skips 192 kHz.
+- No committed `golden_lstm_*_v2_192000.bin` files exist — the golden registry
+  (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`, `Exclude192k` scope for
+  `BossLSTM-1x16`/`BossLSTM-2x8`) intentionally skips 192 kHz; the generator
+  consumes that scope as `skip_srs=192000`.
 - Live cross-validation (`tests/parity/cpp_parity.rs`) excludes 192 kHz via
   `v2_multi_sr_expected_rates()` → `V2MultiSRScope::Exclude192k`
   (`tests/common/io_helpers.rs:137-139`).
 - Golden vector tests (`tests/models/golden_vectors.rs`) exclude 192 kHz via
-  `V2_CATALOG` → `SrScope::MultiSrEx192k` → `MULTI_SR_EX_192K_RATES`.
+  `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES`
+  (`src/testing/catalog.rs`).
 
 **Governance (binding):**
 
@@ -354,10 +429,10 @@ Eigen computation graph.
 
 | Layer                | File                                                      | Mechanism                                            |
 |:-------------------- |:--------------------------------------------------------- |:---------------------------------------------------- |
-| Golden generator     | `tests/fixtures/golden_gen_build.sh` CATALOG              | `skip_srs=192000` for LSTM entries                   |
-| Golden vector tests  | `tests/models/golden_vectors.rs` V2_CATALOG               | `SrScope::MultiSrEx192k` → `MULTI_SR_EX_192K_RATES`  |
+| Golden registry      | `src/testing/catalog.rs` `GOLDEN_GEN_CATALOG`             | `V2GenScope::Exclude192k` for LSTM entries (emitted as `skip_srs=192000`) |
+| Golden vector tests  | `tests/models/golden_vectors.rs` via `src/testing/catalog.rs` | `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES` |
 | Live C++ parity      | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates` | `V2MultiSRScope::Exclude192k` for all LSTM filenames |
-| Long suite preflight | `utils/tests-long.sh` `V2_CATALOG_SCOPE`                  | `scope=ex192k` for LSTM golden_name prefixes         |
+| Long suite preflight | `catalog_preflight` (`cargo test --test models`, S3-T02)  | `validate_v2_catalog()` — Rust V2 gate (bash V2_CATALOG_SCOPE removed) |
 
 ---
 
@@ -815,7 +890,7 @@ rechannel → per-layer (dilated conv → bias → input mixin → LeakyReLU(0.0
 weight-stream read order (`_load_weights`, `a2_fast.cpp:198-273`) matching
 `src/models/a2/model/set_weights.rs` field-for-field.
 
-Re-measured 2026-07-11 (`utils/tests-quick.sh` Fase 2, release): A2-Full ESR = 1.12e-13
+Re-measured 2026-07-11 (`utils/tests-quick.sh` Phase 2, release): A2-Full ESR = 1.12e-13
 (SNR 129.5 dB), A2-Lite ESR = 6.43e-14 (SNR 131.9 dB) against the committed NAMcore
 goldens — both pass their calibrated gates (3.0e-11 / 3.5e-11, SNR ≥ 105 dB) with
 2+ orders of magnitude of margin.
@@ -1397,11 +1472,11 @@ show up as nonzero numbers in the tables throughout this document, but they are 
 
 These do not produce wrong audio, but they can make the *evidence* for parity evaporate without failing CI:
 
-- **Silent SKIP in v1 live cross-validation — Fase 2 `quick_parity_*` already fail-closed.** The
+- **Silent SKIP in v1 live cross-validation — Phase 2 `quick_parity_*` already fail-closed.** The
   `#[ignore]`d live tests (`run_v1` / `run_v1_hf`) in `tests/parity/cpp_parity.rs` still discard
   `ParityOutcome` via `let _ = run_render_comparison(...)`, allowing SKIP conditions (toolchain
   absent, model missing, render crash) to print `SKIP:` while the test reports `ok`. This is
-  **not** the case for the non-ignored `quick_parity_*` tests in Fase 2
+  **not** the case for the non-ignored `quick_parity_*` tests in Phase 2
   (`utils/tests-quick.sh`): every `quick_parity_*` calls `require_completed`
   (`tests/parity/cpp_parity.rs:72`), which **panics** on any outcome except `Completed` —
   `SkippedModelNotFound`, `SkippedGarbageOutput`, `SkippedCppToolchainAbsent`, and all other

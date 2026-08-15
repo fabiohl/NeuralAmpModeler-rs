@@ -89,6 +89,10 @@ fn test_zero_alloc_process_lstm() {
 }
 
 /// Zero-Allocation Verification Test for Dynamic WaveNet
+///
+/// R-06 (S6.T3): this gate is strictly fail-closed — any allocation detected
+/// in the dynamic WaveNet hot path fails the test unconditionally. A
+/// regression here would otherwise pass CI with only a console warning.
 #[test]
 fn test_zero_alloc_process_wavenet_dynamic() {
     // We use Feather, which is allocated with a specific topology (or test with non-static topology)
@@ -116,16 +120,12 @@ fn test_zero_alloc_process_wavenet_dynamic() {
     }
 
     let count = get_alloc_count();
-    if count > 0 {
-        // Since Dynamic WaveNet may use `Vec` internally (per task 5.3 warning),
-        // we only document and warn, but pass the test.
-        println!(
-            "Warning: Dynamic WaveNet allocates in hot path! Allocations: {}",
-            count
-        );
-    } else {
-        assert_eq!(count, 0);
-    }
+    assert_eq!(
+        count, 0,
+        "Allocations detected in Dynamic WaveNet hot path! count={count} — \
+         the zero-alloc gate is fail-closed (R-06): any heap allocation in \
+         `process()` violates the RT contract."
+    );
 }
 
 /// Zero-Allocation Verification Test for the Full DSP Pipeline

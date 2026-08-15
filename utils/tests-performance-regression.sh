@@ -8,26 +8,17 @@
 #
 # Canonical home of benchmark-based performance defense for NeuralAmpModeler-rs:
 # runs the `regression_gate` Criterion suite (sample_size=100, measurement_time=5s),
-# optionally pinned to a specific CPU core, and compares current timings against
-# a persisted statistical baseline. A regressing commit exits non-zero — the audio
-# engine has a strict real-time deadline (1.33 ms / 64 samples at 48 kHz), and this
-# gate prevents performance regressions from silently consuming that budget.
-#
-# Full rationale, daily workflow, and troubleshooting live in docs/benchmarks.md
-# ("Regression Gate" section).
+# pinned to a designated CPU core, and compares current timings against a persisted
+# statistical baseline. A regressing commit exits non-zero — protecting real-time
+# DSP budgets with strict fail-closed safety.
 #
 # Modes
 # -----
-#   --check (default)    Compare the current build against the saved baseline.
-#                        Strictly read-only: fails with MISSING_BASELINE if
-#                        no baseline exists. Never auto-creates a baseline.
-#                        Fail-closed coverage: any executed benchmark without
-#                        a saved baseline series fails with
-#                        BASELINE_COVERAGE_GAP (F-24b); the verified benchmark
-#                        set is recorded in the receipt (F-24c).
+#   --check (default)    Compare current build against saved baseline (read-only).
+#                        Fails with MISSING_BASELINE if no baseline exists.
+#                        Fails with BASELINE_COVERAGE_GAP if any bench lacks baseline.
 #   --bootstrap-baseline Create a new baseline and environment fingerprint.
-#                        Must be executed by a human operator. Prohibited in
-#                        automated/CI/agent-driven workflows.
+#                        Must be executed by a human operator.
 #
 # Environment variables
 # ----------------------
@@ -37,7 +28,6 @@
 # Usage
 # ------
 #   utils/tests-performance-regression.sh [--check|--bootstrap-baseline]
-#
 # =============================================================================
 
 set -euo pipefail
@@ -58,7 +48,6 @@ detect_cpu_microarch() {
     flags=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null || true)
     if echo "$flags" | grep -q -w 'avx512f'; then
         echo "AVX-512"
-    # Linux /proc/cpuinfo exposes LZCNT as "lzcnt" and/or "abm" (AMD ABM).
     elif echo "$flags" | grep -q -w 'avx' && \
          echo "$flags" | grep -q -w 'avx2' && \
          echo "$flags" | grep -q -w 'bmi1' && \
@@ -76,7 +65,7 @@ detect_cpu_microarch() {
 }
 
 detect_physical_cores() {
-    grep -m1 '^cpu cores' /proc/cpuinfo 2>/dev/null | awk '{print $4}' || echo "$NUM_CORES"
+    grep -m1 '^cpu cores' /proc/cpuinfo 2>/dev/null | awk '{print $4}' || echo "${NUM_CORES:-1}"
 }
 
 detect_freq_governor() {
@@ -122,7 +111,6 @@ FINGERPRINT
 }
 
 # ── Fingerprint comparison ─────────────────────────────────────────────────
-# Returns 0 if compatible, 1 if INCOMPARABLE.
 
 compare_fingerprint() {
     if [ ! -f "$FINGERPRINT_FILE" ]; then
@@ -213,10 +201,6 @@ compare_fingerprint() {
         incomparable=1
     fi
 
-    # F-24a: physical core count was recorded but never compared. Machines with
-    # the same CPU model but different core counts (VMs / cgroups / host
-    # reconfiguration) change DEFAULT_CORE — only indirectly caught via
-    # bench_core when NAM_BENCH_CORE is unset. Compare it explicitly.
     local phys_cores_now stored_phys_cores
     phys_cores_now=$(detect_physical_cores)
     stored_phys_cores=$(sed -n 's/.*"physical_cores": *\([0-9][0-9]*\).*/\1/p' "$FINGERPRINT_FILE")
@@ -231,16 +215,7 @@ compare_fingerprint() {
 }
 
 # ── Baseline persistence ───────────────────────────────────────────────────
-# Copies Criterion baselines from target/criterion to the persistent
-# .performance-baselines/ directory so they survive cargo clean.
-#
-# IMPORTANT: only top-level baseline dirs are considered:
-#   target/criterion/<bench>/$BASELINE_NAME
-# Nested paths like .../ci-baseline/ci-baseline are corruption from older
-# `cp -a src dest` when dest already existed (cp copies *into* dest). They
-# must never be re-persisted or re-restored.
 
-# List only depth-2 baseline directories: <root>/<bench>/$BASELINE_NAME
 list_top_level_baselines() {
     local root="$1"
     if [ ! -d "$root" ]; then
@@ -250,23 +225,12 @@ list_top_level_baselines() {
 }
 
 # ── Baseline coverage cross-check (F-24b / EP-05) ───────────────────────────
-# Criterion silently skips baseline comparison for benchmarks without a saved
-# baseline series ("no baseline found"). A new or renamed benchmark would pass
-# the gate unverified. These helpers cross the benchmarks actually executed in
-# a run against the restored baseline series so the gate can fail closed.
 
-# Prints the benchmark IDs executed in a Criterion log (deduplicated, sorted).
-# Criterion prints "Benchmarking <id>: ..." lines for every executed bench.
 executed_bench_ids() {
     local log_file="$1"
-    grep -oE '^Benchmarking [A-Za-z0-9_.]+' "$log_file" 2>/dev/null \
-        | awk '{print $2}' | sort -u || true
+    sed -n 's/^Benchmarking \([^:]*\):.*/\1/p' "$log_file" 2>/dev/null | sort -u || true
 }
 
-# Prints the executed benchmark IDs that have NO baseline series under
-# <criterion_root>/<id>/<baseline_name>. Empty output = full coverage.
-# Exit codes: 0 = parsed fine (with or without gaps); 1 = parse failure
-# (no executed benchmark found — the coverage check would be blind).
 missing_baseline_coverage() {
     local log_file="$1" criterion_root="$2" baseline_name="${3:-ci-baseline}"
     local ids
@@ -284,13 +248,11 @@ missing_baseline_coverage() {
     return 0
 }
 
-# Drop nested baseline dirs (depth >= 3) left by historical cp nesting.
 sanitize_nested_baselines() {
     local root="$1"
     if [ ! -d "$root" ]; then
         return 0
     fi
-    # Delete deepest first so parents can be removed cleanly.
     local nested
     nested=$(find "$root" -mindepth 3 -type d -name "$BASELINE_NAME" 2>/dev/null | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2- || true)
     if [ -z "$nested" ]; then
@@ -303,18 +265,16 @@ sanitize_nested_baselines() {
         n=$((n + 1))
     done <<< "$nested"
     if [ "$n" -gt 0 ]; then
-        echo -e "  ${YELLOW}⚠${NC} Removed ${n} nested '${BASELINE_NAME}/' dir(s) under ${root}"
+        warn "Removed ${n} nested '${BASELINE_NAME}/' dir(s) under ${root}"
     fi
 }
 
-# Replace-copy one directory tree: never nest into an existing dest.
 replace_copy_dir() {
     local src="$1"
     local dest="$2"
     rm -rf "$dest"
     mkdir -p "$(dirname "$dest")"
     cp -a "$src" "$dest"
-    # Defensive: strip any nested baseline that may have been inside src.
     find "$dest" -mindepth 1 -type d -name "$BASELINE_NAME" -exec rm -rf {} + 2>/dev/null || true
 }
 
@@ -331,19 +291,15 @@ persist_baseline() {
             count=$((count + 1))
         done < <(list_top_level_baselines "$CRITERION_BASELINE_TARGET")
         sanitize_nested_baselines "$BASELINE_DIR"
-        echo -e "  ${GREEN}✓${NC} Baseline persisted to ${BASELINE_DIR} (${count} series)"
+        ok "Baseline persisted to ${BASELINE_DIR} (${count} series)"
     fi
 }
 
-# Restores baselines from the persistent directory back into target/criterion
-# so Criterion can find them for --baseline comparisons.
 restore_baseline() {
     if [ ! -d "$BASELINE_DIR" ]; then
         return 0
     fi
     sanitize_nested_baselines "$BASELINE_DIR"
-    # Wipe prior Criterion state so leftover new/change/nested dirs cannot
-    # pollute comparison or the next persist cycle.
     rm -rf "$CRITERION_BASELINE_TARGET"
     mkdir -p "$CRITERION_BASELINE_TARGET"
     local count=0
@@ -355,9 +311,9 @@ restore_baseline() {
         count=$((count + 1))
     done < <(list_top_level_baselines "$BASELINE_DIR")
     if [ "$count" -eq 0 ]; then
-        echo -e "  ${YELLOW}⚠${NC} No top-level '${BASELINE_NAME}' series found under ${BASELINE_DIR}"
+        warn "No top-level '${BASELINE_NAME}' series found under ${BASELINE_DIR}"
     else
-        echo -e "  ${GREEN}✓${NC} Restored ${count} baseline series into ${CRITERION_BASELINE_TARGET}"
+        ok "Restored ${count} baseline series into ${CRITERION_BASELINE_TARGET}"
     fi
 }
 
@@ -366,15 +322,14 @@ restore_baseline() {
 bootstrap_baseline() {
     echo -e "\n${GREEN}${BOLD}[BOOTSTRAP] Creating new performance baseline...${NC}"
     echo -e "  ${YELLOW}⚠ This operation must be performed by a human operator.${NC}"
-    echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}"
-    echo ""
+    echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}\n"
 
     "${TASKSET[@]}" cargo bench --bench regression_gate --features testing -- --save-baseline "$BASELINE_NAME"
 
     persist_baseline
     generate_fingerprint
 
-    echo -e "${GREEN}✓ Baseline '${BASELINE_NAME}' created and persisted.${NC}"
+    ok "Baseline '${BASELINE_NAME}' created and persisted."
     echo -e "  Fingerprint saved to ${YELLOW}${FINGERPRINT_FILE}${NC}"
     echo -e "  Baseline data persisted under ${YELLOW}${BASELINE_DIR}${NC}"
     dashboard_phase_receipt "regression_baseline_created" "PASS" 0 1 1 ""
@@ -385,7 +340,6 @@ bootstrap_baseline() {
 check_regression() {
     echo -e "\n${BLUE}${BOLD}[CHECK] Comparing against CI baseline...${NC}"
 
-    # Unconditionally clear any previous benchmark log prior to environment checks
     mkdir -p "$PROJECT_DIR/target/logs"
     LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"
     : > "$LOG_FILE"
@@ -395,9 +349,9 @@ check_regression() {
         echo ""
         echo -e "  The performance baseline has not been bootstrapped."
         echo -e "  A human operator must run:"
-        echo -e ""
+        echo ""
         echo -e "    ${YELLOW}utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
-        echo -e ""
+        echo ""
         echo -e "  Automated/CI/agent-driven bootstrap is prohibited to prevent"
         echo -e "  a regressing branch from becoming the new reference."
         dashboard_phase_receipt "regression_check" "FAIL" 1 0 0 "MISSING_BASELINE"
@@ -408,7 +362,7 @@ check_regression() {
         echo ""
         echo -e "  ${RED}Performance comparison aborted: environment incompatible with baseline.${NC}"
         echo -e "  A human operator must re-bootstrap the baseline with:"
-        echo -e ""
+        echo ""
         echo -e "    ${YELLOW}utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
         echo ""
         echo -e "  accompanied by a formal justification for the environmental change."
@@ -443,9 +397,6 @@ check_regression() {
     fi
 
     # ── Baseline coverage cross-check (F-24b) ────────────────────────────────
-    # Every executed benchmark MUST have been compared against a baseline
-    # series. A benchmark without one (new/renamed, or a restore that silently
-    # lost a series) passes unverified otherwise — fail closed instead.
     local missing_series
     if ! missing_series=$(missing_baseline_coverage "$LOG_FILE" "$CRITERION_BASELINE_TARGET" "$BASELINE_NAME"); then
         echo -e "\n${RED}${BOLD}❌ BASELINE_COVERAGE_GAP${NC} — no executed benchmark could be parsed from $LOG_FILE"
@@ -466,22 +417,19 @@ check_regression() {
         exit 1
     fi
 
-    # (F-24c) Audit trail: record the verified benchmark set in the receipt so
-    # coverage can be audited without re-reading Criterion's log.
+    # (F-24c) Audit trail: record verified benchmark set
     local executed_count coverage_list
-    executed_count=$(executed_bench_ids "$LOG_FILE" | wc -l)
+    executed_count=$(executed_bench_ids "$LOG_FILE" | grep -c . || true)
     coverage_list=$(executed_bench_ids "$LOG_FILE" | paste -sd ',' -)
     printf '{"kind":"baseline_coverage","phase_id":"regression_baseline_coverage","verified_benchmarks":"%s","count":%s,"run_id":"%s"}\n' \
         "$coverage_list" "$executed_count" "${NAM_RUN_ID:-}" >> "$REGRESSION_RECEIPT"
-    echo -e "  ${GREEN}✓ Coverage cross-check: all ${executed_count} executed benchmark(s) have baseline series.${NC}"
+    ok "Coverage cross-check: all ${executed_count} executed benchmark(s) have baseline series."
 
-    echo -e "${GREEN}✓ No performance regression detected.${NC}"
+    ok "No performance regression detected."
     dashboard_phase_receipt "regression_check" "PASS" 0 1 1 ""
 }
 
 # ── Main entry point ───────────────────────────────────────────────────────
-# All top-level logic is encapsulated here so that every helper function is
-# defined before its first invocation (hoisting), respecting set -euo pipefail.
 main() {
     NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
     DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
@@ -497,14 +445,13 @@ main() {
     if command -v taskset >/dev/null 2>&1; then
         TASKSET=(taskset -c "${BENCH_CORE}")
     else
-        echo -e "  ${YELLOW}⚠ taskset not found — running without core pinning.${NC}"
+        warn "taskset not found — running without core pinning."
     fi
 
     echo -e "${BLUE}${BOLD}  Performance Regression Gate${NC}"
     echo -e "  Core: ${YELLOW}${BENCH_CORE}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}"
     echo -e "${BLUE}${BOLD}  Estimated time: ± 2.0 minutes${NC}"
 
-    # ── JSONL receipt infrastructure (T-E4.6-2) ────────────────────────────
     REGRESSION_RECEIPT_DIR="$PROJECT_DIR/target/logs"
     REGRESSION_RECEIPT="${REGRESSION_RECEIPT_DIR}/regression_phase_receipt.jsonl"
     mkdir -p "$REGRESSION_RECEIPT_DIR"

@@ -63,7 +63,7 @@ fn process_full_signal_fixed(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32
         if chunk < b {
             buf_in[chunk..].fill(0.0);
         }
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..chunk.min(b)]);
         pos += chunk;
     }
@@ -71,7 +71,7 @@ fn process_full_signal_fixed(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32
     let flush_blocks = engine.num_partitions();
     for _ in 0..flush_blocks {
         buf_in.fill(0.0);
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..b]);
     }
 

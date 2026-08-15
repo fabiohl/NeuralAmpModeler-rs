@@ -15,6 +15,7 @@ pub mod aliasing;
 pub mod catalog;
 pub mod diagnostics;
 pub mod fixtures;
+pub mod freshness;
 pub mod isa_guard;
 pub mod mushra;
 pub mod perceptual;

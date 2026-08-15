@@ -25,6 +25,7 @@ use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
 use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::spsc::RT_STATUS_SLIMMABLE_RESET_FAILED;
+use crate::dsp::pipeline::MAX_RESAMP_BUF;
 
 /// A bundle of pre-trained submodels selected by a quality threshold.
 ///
@@ -92,7 +93,9 @@ impl ContainerModel {
         let active_index = submodels.len() - 1;
         let crossfade_duration =
             (CROSSFADE_DURATION_MS / 1000.0 * sample_rate as f32).round() as usize;
-        let default_buf = 4096usize;
+        // The scratch must accommodate the largest pipeline block (`MAX_RESAMP_BUF`),
+        // even when no explicit `set_max_buffer_size` call precedes processing.
+        let default_buf = 4096usize.max(MAX_RESAMP_BUF);
 
         let mut container = Self {
             submodels,
@@ -161,20 +164,39 @@ impl ContainerModel {
 impl NamModel for ContainerModel {
     #[inline(always)]
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        let n = input.len();
+        let n = input.len().min(output.len());
 
         if let Some(pending_idx) = self.pending_index {
+            // Scratch capacity guard: never slice the scratch beyond its length.
+            // If the block is larger than the scratch, abort the crossfade for
+            // this block (process only the active submodel) without panicking;
+            // the crossfade resumes on a subsequent fitting block.
+            if n > self.scratch_buffer.len() {
+                self.submodels[self.active_index]
+                    .1
+                    .process(&input[..n], &mut output[..n]);
+                return;
+            }
+
             let active_idx = self.active_index;
 
             self.submodels[pending_idx]
                 .1
-                .process(input, &mut self.scratch_buffer[..n]);
-            self.submodels[active_idx].1.process(input, output);
+                .process(&input[..n], &mut self.scratch_buffer[..n]);
+            self.submodels[active_idx]
+                .1
+                .process(&input[..n], &mut output[..n]);
 
             let t = (self.crossfade_elapsed as f32 / self.crossfade_duration as f32).min(1.0);
-            // SAFETY: scratch_buffer has the same length as output (both sized to n).
+            // SAFETY: both slices are exactly `n` samples; the guard above
+            // ensures `n <= scratch_buffer.len()`, and `n` is already
+            // `input.len().min(output.len())`.
             unsafe {
-                crate::math::dsp::gain::crossfade_blend_mono(output, &self.scratch_buffer[..n], t);
+                crate::math::dsp::gain::crossfade_blend_mono(
+                    &mut output[..n],
+                    &self.scratch_buffer[..n],
+                    t,
+                );
             }
 
             self.crossfade_elapsed += n;

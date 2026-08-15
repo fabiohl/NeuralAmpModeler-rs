@@ -11,18 +11,23 @@ use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
 /// Naive direct convolution: y[n] = Σ_m h[m] * x[n-m].
 ///
 /// Used as the ground-truth reference for ESR validation.
+///
+/// Accumulates in `f64` and rounds to `f32` once per output sample so the
+/// reference stays more accurate than the `f32` UPOLS engine under test.
+/// A `f32` accumulator would drift ~1e-3 for multi-thousand-tap IRs (its own
+/// rounding exceeds the engine's FFT noise), invalidating the golden baseline.
 pub fn direct_convolve(ir: &[f32], input: &[f32]) -> Vec<f32> {
     let out_len = input.len() + ir.len() - 1;
     let mut output = vec![0.0f32; out_len];
     for (n, out) in output.iter_mut().enumerate() {
-        let mut acc = 0.0f32;
+        let mut acc = 0.0f64;
         for (m, &ir_val) in ir.iter().enumerate() {
             let x_idx = n as isize - m as isize;
             if x_idx >= 0 && x_idx < input.len() as isize {
-                acc += ir_val * input[x_idx as usize];
+                acc += ir_val as f64 * input[x_idx as usize] as f64;
             }
         }
-        *out = acc;
+        *out = acc as f32;
     }
     output
 }
@@ -43,7 +48,7 @@ pub fn process_full_signal(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32> 
         if chunk < b {
             buf_in[chunk..].fill(0.0);
         }
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..chunk.min(b)]);
         pos += chunk;
     }
@@ -51,7 +56,7 @@ pub fn process_full_signal(engine: &mut ConvEngine, signal: &[f32]) -> Vec<f32> 
     let flush_blocks = engine.num_partitions();
     for _ in 0..flush_blocks {
         buf_in.fill(0.0);
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
         output.extend_from_slice(&buf_out[..b]);
     }
 

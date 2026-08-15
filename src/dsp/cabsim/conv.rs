@@ -24,6 +24,7 @@
 //! JAES Vol. 43, No. 3, 1995 March.
 
 use crate::common::diagnostics::NamErrorCode;
+use crate::common::spsc::{RT_STATUS_CABSIM_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::math::common::AlignedVec;
 use crate::math::common::Avx2Math;
 use crate::math::common::Avx512Math;
@@ -237,24 +238,45 @@ impl ConvEngine {
     /// It only mutates pre-allocated internal buffers.
     ///
     /// ## Parameters
-    /// - `input`: slice of exactly `partition_size` samples.
-    /// - `output`: slice of exactly `partition_size` samples where the
+    /// - `input`: slice of at least `partition_size` samples. Only the
+    ///   first `partition_size` samples are read.
+    /// - `output`: slice of at least `partition_size` samples where the
     ///   convolved result is written.
+    /// - `rt_status`: optional lock-free status flags. On a contract
+    ///   violation (a slice shorter than `partition_size`), the engine
+    ///   raises [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`].
     ///
-    /// ## Panic Safety
+    /// ## Buffer Contract (release-safe)
     ///
-    /// This function uses unchecked indexing internally for performance,
-    /// but all bounds are guaranteed by construction (pre-allocated sizes).
+    /// UPOLS transforms whole blocks, so a partial block cannot be
+    /// convolved. If `input.len() < partition_size` or
+    /// `output.len() < partition_size`, this function **zeros the entire
+    /// output**, raises the contract-violation flag (when `rt_status` is
+    /// provided), skips the transform, and returns — it never reads or
+    /// writes beyond the caller's slices and never panics. Copies are
+    /// limited strictly to `min(input.len(), output.len(), partition_size)`.
     #[inline]
-    pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        debug_assert_eq!(input.len(), self.partition_size);
-        debug_assert_eq!(output.len(), self.partition_size);
+    pub fn process(
+        &mut self,
+        input: &[f32],
+        output: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        let n = input.len().min(output.len()).min(self.partition_size);
+        if n < self.partition_size {
+            output.fill(0.0);
+            if let Some(rt) = rt_status {
+                rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);
+            }
+            return;
+        }
 
         if self.num_partitions == 0 {
-            // SAFETY: debug_assert_eq! on L233-234 guarantees input and
-            // output each have exactly `self.partition_size` elements.
-            // The regions are distinct (output is a caller-provided
-            // mutable buffer, input is caller-provided immutable data).
+            // SAFETY: the buffer contract guard above guarantees `input`
+            // and `output` each have at least `self.partition_size`
+            // elements. The regions are distinct (output is a
+            // caller-provided mutable buffer, input is caller-provided
+            // immutable data).
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     input.as_ptr(),
@@ -282,10 +304,11 @@ impl ConvEngine {
             );
         }
 
-        // SAFETY: debug_assert_eq! on L233-234 guarantees `input`
-        // has `self.partition_size` samples. `out_start + partition_size
-        // == fft_size`, so the destination range is within `input_buf`.
-        // Source and destination do not overlap (input is caller data).
+        // SAFETY: the buffer contract guard at the top guarantees `input`
+        // has at least `self.partition_size` samples. `out_start +
+        // partition_size == fft_size`, so the destination range is within
+        // `input_buf`. Source and destination do not overlap (input is
+        // caller data).
         unsafe {
             core::ptr::copy_nonoverlapping(
                 input.as_ptr(),
@@ -393,10 +416,10 @@ impl ConvEngine {
             .process_inverse(&mut self.acc_re, &mut self.acc_im, &mut self.output_buf);
 
         // ── Step 6: Extract valid output (overlap-save discard) ──
-        // SAFETY: debug_assert_eq! on L233-234 guarantees `output`
-        // has `self.partition_size` elements. `out_start + partition_size
-        // == fft_size`, so the source range is within `output_buf`.
-        // Source and destination do not overlap (output is a
+        // SAFETY: the buffer contract guard at the top guarantees `output`
+        // has at least `self.partition_size` elements. `out_start +
+        // partition_size == fft_size`, so the source range is within
+        // `output_buf`. Source and destination do not overlap (output is a
         // caller-provided mutable buffer, output_buf is internal).
         unsafe {
             core::ptr::copy_nonoverlapping(

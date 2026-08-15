@@ -85,13 +85,15 @@ impl ConvNetModel {
     /// scaled by `head_scale`.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total_frames = input.len();
+        // Each frame writes `out_ch` interleaved output samples; clamp the frame
+        // count so the output is never indexed beyond its actual length.
+        let out_ch = self.out_channels().max(1);
+        let total_frames = input.len().min(output.len() / out_ch);
         if total_frames == 0 || self.blocks.is_empty() {
             output[..total_frames].fill(0.0);
             return;
         }
 
-        let out_ch = self.out_channels();
         let mut pos = 0;
 
         while pos < total_frames {

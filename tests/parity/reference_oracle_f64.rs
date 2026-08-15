@@ -1182,6 +1182,7 @@ fn test_combined_simulation_a2_film() {
 
 use common::A2_GENERIC_ESR_LIMIT;
 
+// on-demand: KB-A2-MAX paired prod×f64 vs NumPy anchor; not a nightly gate (H0 Case D)
 #[test]
 #[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_oracle_vs_python_anchor_a2_generic() {
@@ -1205,6 +1206,7 @@ fn test_oracle_vs_python_anchor_a2_generic() {
     );
 }
 
+// on-demand: KB-A2-MAX paired prod×f64 ESR; not a nightly gate (H0 Case D)
 #[test]
 #[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_oracle_a2_generic() {
@@ -1217,6 +1219,7 @@ fn test_oracle_a2_generic() {
     );
 }
 
+// on-demand: KB-A2-MAX paired decomposition; not a nightly gate (H0 Case D)
 #[test]
 #[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_decomposition_a2_generic() {
@@ -1244,6 +1247,7 @@ fn test_decomposition_a2_generic() {
     );
 }
 
+// on-demand: KB-A2-MAX combined paired simulation; not a nightly gate (H0 Case D)
 #[test]
 #[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_combined_simulation_a2_generic() {

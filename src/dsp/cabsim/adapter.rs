@@ -173,6 +173,7 @@ impl CabSimAdapter {
             self.engine.process(
                 &self.input_buf[..self.partition],
                 &mut self.output_scratch[..self.partition],
+                rt_status,
             );
 
             if self.output_read > 0 {

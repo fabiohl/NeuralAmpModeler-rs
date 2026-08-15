@@ -12,10 +12,67 @@
 //!
 //! The generator maps non-finite values to canonical string sentinels `"inf"`,
 //! `"-inf"`, and `"nan"` instead.
+//!
+//! # Concurrency (S6-T02 / RES-07)
+//!
+//! The sink is isolated per test thread via [`MetricJsonlGuard`] over a unique
+//! temp path, and the process-global `NAM_METRICS_JSONL` env var is never
+//! touched. Under `--test-threads > 1` the `--test models` binary runs many
+//! reporters (`golden_vectors`, …) on parallel threads; mutating the shared env
+//! var would race with their reads and make them append to this test's file,
+//! corrupting the exact-two-lines assertion. The guard keeps the file
+//! thread-exclusive and removes it on drop — fail-safe even on panic.
+
+use std::path::PathBuf;
 
 use super::common;
 
-use common::validation::{MetricKindGuard, SuppressReportGuard, report_dsp_fidelity_no_lufs};
+use common::validation::{
+    MetricJsonlGuard, MetricKindGuard, SuppressReportGuard, report_dsp_fidelity_no_lufs,
+};
+
+/// Unique, process-scoped temp path for the JSONL sink. The timestamp suffix
+/// keeps it distinct across repeated runs; the PID keeps it distinct across
+/// concurrent `cargo test` processes.
+fn unique_jsonl_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "nam_metrics_jsonl_{}_{nanos}.jsonl",
+        std::process::id()
+    ))
+}
+
+/// RAII guard that scopes the JSONL sink to a fresh unique file and removes it
+/// on drop. Drop runs during unwind, so a panic anywhere in the test body
+/// cannot leak the temp file or leave a stale sink behind.
+struct JsonlFileGuard {
+    path: PathBuf,
+    _sink: MetricJsonlGuard,
+}
+
+impl JsonlFileGuard {
+    fn new() -> Self {
+        let path = unique_jsonl_path();
+        let _ = std::fs::remove_file(&path);
+        JsonlFileGuard {
+            _sink: MetricJsonlGuard::new(path.clone()),
+            path,
+        }
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for JsonlFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 #[test]
 fn metrics_jsonl_never_emits_null() {
@@ -30,11 +87,8 @@ fn metrics_jsonl_never_emits_null() {
         .map(|(i, &r)| r + (i as f32 * 0.0013).cos() * 1e-4)
         .collect();
 
-    let tmp = std::env::temp_dir().join(format!("nam_metrics_jsonl_{}.jsonl", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
-    unsafe {
-        std::env::set_var("NAM_METRICS_JSONL", &tmp);
-    }
+    let jsonl = JsonlFileGuard::new();
+    let tmp = jsonl.path().clone();
 
     // Perfect parity (identity): snr_db = ∞, esr = 0, esr_db = −∞.
     report_dsp_fidelity_no_lufs(
@@ -59,12 +113,9 @@ fn metrics_jsonl_never_emits_null() {
         48000,
     );
 
-    unsafe {
-        std::env::remove_var("NAM_METRICS_JSONL");
-    }
-
+    // The guard is still alive here: the file is read while the sink is
+    // thread-exclusive, then removed by `JsonlFileGuard::drop`.
     let content = std::fs::read_to_string(&tmp).expect("JSONL output file must exist");
-    let _ = std::fs::remove_file(&tmp);
 
     let lines: Vec<&str> = content.lines().collect();
     assert_eq!(lines.len(), 2, "expected two JSONL lines, got:\n{content}");

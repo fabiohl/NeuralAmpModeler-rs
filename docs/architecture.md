@@ -142,6 +142,18 @@ For multi-array WaveNet models, the head accumulator of the second layer array (
 - **High-Precision Telemetry (RDTSC):** Replacement of `Instant::now()` (vDSO syscall) with direct reading of the calibrated TSC in the RT callback. Guarantees ~1ns precision with ~1 CPU cycle overhead, eliminating kernel-induced jitter in DSP load measurement.
 - **SPSC Channels (rtrb):** Lock-free communication between host control thread and DSP (RT). Payload aligned (128B) to prevent False Sharing.
 
+### 2.1 Garbage Collection Cascade (GC Pipeline)
+
+Heap-allocated objects (obsolete models, resamplers, cabsim adapters, oversampling engines) must never be dropped on the audio thread — dropping a `Box`/`Arc` of hundreds of KB to MB inside the real-time callback causes unbounded deallocation latency. The GC pipeline in [`src/common/spsc/gc.rs`](../src/common/spsc/gc.rs) routes every disposed object off-RT through three tiers:
+
+1. **Tier 1 — SPSC channel:** `gc_cascade` pushes the `GcItem` into the lock-free `rtrb` ring. This is the fast path.
+2. **Tier 2 — parking lot:** if the channel is full, the item parks in a fixed-size 16-slot `[Option<GcItem>; 16]` contingency array owned by the RT producer.
+3. **Tier 3 — overflow buffer:** if the parking lot is also full, the item cascades into the `GcOverflowBuffer` (an overwrite ring of packed `type_id`+pointer atomic words), setting `RT_STATUS_GC_TIER3` (and `RT_STATUS_GC_OVERFLOW` on an actual overwrite).
+
+`gc_cascade` **flushes the parking lot back to the SPSC channel at the start of every cascade** whenever the channel has free capacity, so parked items reach the off-RT drain instead of lingering in real-time state. The parking lot and overflow buffer are the only fallbacks; the cascade never drops a heap object on the audio thread.
+
+The canonical off-RT drain is [`drain_gc_channels`](../src/common/spsc/gc.rs) (`gc_consumer`, `gc_overflow`, `parking_lot`, `rt_status`), which empties all three tiers in order and drops each `GcItem` on the control thread. Hosts must call it periodically during housekeeping and once more during orderly teardown, after real-time producers have stopped and the parking lot has been handed over (single-owner). The standalone [`drain_parking_lot`](../src/common/spsc/gc.rs) helper drains only the parking lot.
+
 ## 3. Module Structure
 
 NeuralAmpModeler-rs adopts a clean layered architecture isolating the host-agnostic DSP core:
@@ -275,6 +287,16 @@ The convolution engine (`src/dsp/cabsim/conv.rs`) implements UPOLS in the freque
 - **Latency** is exactly `partition_size` samples.
 
 `ConvEngine::process()` performs zero heap allocations — all working buffers are allocated once at construction; the bypass path (no IR loaded) is a single branch check. Test coverage (unit, golden parity, heap-audit) is tracked in [docs/testing.md](testing.md).
+
+### Engine Block Contract (release-safe)
+
+`ConvEngine::process(input, output, rt_status)` requires both slices to provide at least `partition_size` samples — UPOLS transforms whole blocks, so a partial block cannot be convolved. The contract is validated on every call in **both debug and release builds** (not via `debug_assert!`):
+
+- Copies are limited strictly to `min(input.len(), output.len(), partition_size)` samples; the engine never reads or writes beyond the caller's slices.
+- If either slice is shorter than `partition_size`, the engine zeroes the entire output, raises `RT_STATUS_CABSIM_CONTRACT_VIOLATION` on the optional `rt_status` lock-free flags, skips the transform (internal FDL state is left untouched), and returns — it never panics on the audio thread.
+- `CabSimAdapter` upholds this contract in the variable-block path: it buffers sub-blocks into exact partitions before calling the engine, and additionally clamps sub-blocks during host quantum renegotiation windows, raising the same flag.
+
+The happy path (exact-partition blocks, as produced by the adapter) is bit-identical to the previous behavior.
 
 ### Pipeline Integration
 

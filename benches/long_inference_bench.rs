@@ -137,7 +137,7 @@ fn bench_cabsim_long_run(c: &mut Criterion) {
     for _ in 0..engine.num_partitions().max(1) {
         let buf_in = vec![0.0f32; 64];
         let mut buf_out = vec![0.0f32; 64];
-        engine.process(&buf_in, &mut buf_out);
+        engine.process(&buf_in, &mut buf_out, None);
     }
 
     let mut input = vec![0.0f32; 4096];
@@ -156,6 +156,7 @@ fn bench_cabsim_long_run(c: &mut Criterion) {
                 engine.process(
                     std::hint::black_box(&input[start..start + 64]),
                     std::hint::black_box(&mut output[start..start + 64]),
+                    None,
                 );
             }
             std::hint::black_box(&output);

@@ -455,6 +455,9 @@ fn asr_aggregate_across_pitches() {
 /// ```bash
 /// cargo test --test models spectral_fidelity::generate_spectral_fidelity_baseline -- --ignored --nocapture
 /// ```
+// on-demand: regenerates committed spectral_fidelity_baseline.json
+// (fixture mutation). Not a CI/nightly gate; tests-long Phase 2
+// explicitly `--skip generate_spectral_fidelity_baseline`.
 #[test]
 #[ignore = "generates baseline fixture — run manually when models change"]
 fn generate_spectral_fidelity_baseline() {
