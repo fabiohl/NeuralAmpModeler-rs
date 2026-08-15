@@ -98,11 +98,11 @@ noted per-model. Regenerate goldens with `tests/fixtures/golden_gen_build.sh` wh
 [`tests/fixtures/README.md`](../tests/fixtures/README.md) is the canonical operational
 supply-chain contract. Every parity claim in this document is operationalized through it.
 
-| Layer                               | Mechanism                                                                                                                                                                                    | Hard-fail gate                                                      |
-|:----------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------- |
-| **Layer 0 — Generation pipeline**   | `tests/fixtures/golden_gen_build.sh` consumes the Rust golden registry `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (via `nam_golden_catalog emit-catalog`) — regenerates every `.bin` golden from the pinned NAMcore C++ `render` tool (no bash catalog array, S3-T02) | —                                                                   |
-| **Layer 1 — Pre-committed goldens** | `tests/models/golden_vectors.rs` — compares Rust output against committed `.bin` files; no C++ toolchain required                                                                            | `utils/tests-quick.sh` Phase 2                                      |
-| **Layer 2 — Live cross-validation** | `tests/parity/cpp_parity.rs` — builds C++ `render` tool and compares fresh output: `quick_parity` subset in `utils/tests-quick.sh` Phase 2; full `#[ignore]`d v1/v2 multi-SR matrix via `utils/tests-long.sh` | `utils/tests-quick.sh` Phase 2 (`quick_parity`) + `utils/tests-long.sh` |
+| Layer                               | Mechanism                                                                                                                                                                                                                                                       | Hard-fail gate                                                          |
+|:----------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------- |
+| **Layer 0 — Generation pipeline**   | `tests/fixtures/golden_gen_build.sh` consumes the Rust golden registry `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (via `nam_golden_catalog emit-catalog`) — regenerates every `.bin` golden from the pinned NAMcore C++ `render` tool (no bash catalog array) | —                                                                       |
+| **Layer 1 — Pre-committed goldens** | `tests/models/golden_vectors.rs` — compares Rust output against committed `.bin` files; no C++ toolchain required                                                                                                                                               | `utils/tests-quick.sh` Phase 2                                          |
+| **Layer 2 — Live cross-validation** | `tests/parity/cpp_parity.rs` — builds C++ `render` tool and compares fresh output: `quick_parity` subset in `utils/tests-quick.sh` Phase 2; full `#[ignore]`d v1/v2 multi-SR matrix via `utils/tests-long.sh`                                                   | `utils/tests-quick.sh` Phase 2 (`quick_parity`) + `utils/tests-long.sh` |
 
 **Freshness manifest:** `tests/fixtures/.golden_manifest.sha256` contains `sha256` of every
 model *and* its golden. Verified as a **hard gate** in both `utils/tests-quick.sh` Phase 2
@@ -132,7 +132,7 @@ Phase 2 (`--release`, production float gate):
 - **Layer 2 (`cpp_parity quick_parity`):** requires the NAMcore mirror
   (`ensure_third_party soft`) and a C++ compiler (`$CXX`, else `g++`/`clang++`).
   The `render` binary is ensured via the **single unified build entry point**
-  `utils/ensure_namcore_render.sh` (`_lib.sh::ensure_namcore_render`, S3-T01):
+  `utils/ensure_namcore_render.sh` (`_lib.sh::ensure_namcore_render`):
   idempotent (skips cmake when `build/namcore_render/.build_config` matches the
   `$CXX:$BUILD_TYPE:$FLAGS` fingerprint; the binary is probed at
   `tools/render` → `Release/render` → `Debug/render`, matching
@@ -151,12 +151,12 @@ Phase 2 (`--release`, production float gate):
   Therefore the absence of fixtures, of the NAMcore mirror, or of the C++ compiler
   **never** yields a green fidelity stamp.
 
-| Status emitted                                             | Meaning                                                                             | Exit |
-|:---------------------------------------------------------- |:----------------------------------------------------------------------------------- |:----:|
-| `FIDELITY: OK` / `OVERALL: PASSED`                         | All three phases executed; zero gaps                                                | 0    |
-| `FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS`       | At least one oracle skipped (fixture/NAMcore/compiler gap); `GAP:` lines in receipt | 0    |
-| `FIDELITY: FAIL` / `OVERALL: FAIL`                         | Freshness gate failed, a test failed, or an unexpected error                        | 1    |
-| `OVERALL: FAIL reason=strict_gaps`                         | Gaps present **and** `NAM_QUICK_STRICT=1` — gaps promoted to failure                | 1    |
+| Status emitted                                       | Meaning                                                                             | Exit |
+|:---------------------------------------------------- |:----------------------------------------------------------------------------------- |:----:|
+| `FIDELITY: OK` / `OVERALL: PASSED`                   | All three phases executed; zero gaps                                                | 0    |
+| `FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS` | At least one oracle skipped (fixture/NAMcore/compiler gap); `GAP:` lines in receipt | 0    |
+| `FIDELITY: FAIL` / `OVERALL: FAIL`                   | Freshness gate failed, a test failed, or an unexpected error                        | 1    |
+| `OVERALL: FAIL reason=strict_gaps`                   | Gaps present **and** `NAM_QUICK_STRICT=1` — gaps promoted to failure                | 1    |
 
 - **`NAM_QUICK_STRICT=1`:** promotes every recorded gap to a hard failure
   (`OVERALL: FAIL reason=strict_gaps`, exit 1). Use for release gates where a skipped
@@ -178,9 +178,9 @@ Phase 2 (`--release`, production float gate):
   `validate_v2_catalog`, both in `src/testing/catalog.rs`) and
   `check_freshness` (nam_freshness manifest gate) — missing required goldens
   fail the preflight (the former bash golden lists and the auto-rebuild were
-  removed, S6-T01; regenerate with `tests/fixtures/golden_gen_build.sh`).
+  removed; regenerate with `tests/fixtures/golden_gen_build.sh`).
   It then ensures the C++ `render` binary via the unified `ensure_namcore_render`
-  (S3-T01) — a render build failure aborts the suite with
+  — a render build failure aborts the suite with
   `target/logs/cmake-configure.log` / `cmake-build.log` diagnostics.
 - **Layer 2 full matrix:** the `#[ignore]`d `live_cross_validation_*` v1/v2 multi-SR
   tests and the full `cpp_parity` matrix run in the release parity phase.
@@ -309,7 +309,7 @@ topologies at detection time via `get_lstm_topology` (`src/loader/nam_json/topol
 
 - **`num_layers == 0`** → `Err(JsonError::UnsupportedTopology { architecture: "LSTM",
   issue: "num_layers=0 (no valid model can have zero layers)", limit: 0 })`. Fail-closed and
-  observable on the public loader API (S3-T1). No `LstmModelDyn` process path is entered.
+  observable on the public loader API. No `LstmModelDyn` process path is entered.
 
 - **`num_layers > MAX_LSTM_LAYERS` (16)** and **`hidden_size > MAX_LSTM_HIDDEN_SIZE` (1024)**
   → `Err(JsonError::UnsupportedTopology { … })` with the exceeded limit. DoS/OOM guard,
@@ -427,12 +427,12 @@ Eigen computation graph.
 
 **Affected code locations:**
 
-| Layer                | File                                                      | Mechanism                                            |
-|:-------------------- |:--------------------------------------------------------- |:---------------------------------------------------- |
-| Golden registry      | `src/testing/catalog.rs` `GOLDEN_GEN_CATALOG`             | `V2GenScope::Exclude192k` for LSTM entries (emitted as `skip_srs=192000`) |
-| Golden vector tests  | `tests/models/golden_vectors.rs` via `src/testing/catalog.rs` | `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES` |
-| Live C++ parity      | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates` | `V2MultiSRScope::Exclude192k` for all LSTM filenames |
-| Long suite preflight | `catalog_preflight` (`cargo test --test models`, S3-T02)  | `validate_v2_catalog()` — Rust V2 gate (bash V2_CATALOG_SCOPE removed) |
+| Layer                | File                                                          | Mechanism                                                                 |
+|:-------------------- |:------------------------------------------------------------- |:------------------------------------------------------------------------- |
+| Golden registry      | `src/testing/catalog.rs` `GOLDEN_GEN_CATALOG`                 | `V2GenScope::Exclude192k` for LSTM entries (emitted as `skip_srs=192000`) |
+| Golden vector tests  | `tests/models/golden_vectors.rs` via `src/testing/catalog.rs` | `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES`                       |
+| Live C++ parity      | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates`     | `V2MultiSRScope::Exclude192k` for all LSTM filenames                      |
+| Long suite preflight | `catalog_preflight` (`cargo test --test models`)              | `validate_v2_catalog()` — Rust V2 gate (bash V2_CATALOG_SCOPE removed)    |
 
 ---
 
@@ -1314,8 +1314,8 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   `a2_example.nam`. That makes A2 the weakest architecture on *genuine trained-model* coverage —
   by freeze policy, not by unnoticed silence.
 
-- **S4-T2 community-trained A2 search (2026-08-10):** Nenhum A2-Full/Lite treinado público
-  incorporado em 2026-08-10; fixtures full/lite permanecem sintéticos calibrados. A2 foi lançado
+- **Community-trained A2 search:** Nenhum A2-Full/Lite treinado público
+  incorporado; fixtures full/lite permanecem sintéticos calibrados. A2 foi lançado
   em 2026-06-02 e todos os modelos treinados conhecidos residem no TONE3000 sob a licença T3K
   ("may not upload, republish, or distribute the data file without the author's permission") —
   incompatível com redistribuição em fixtures Apache-2.0. Esta é uma limitação de ecossistema
@@ -1418,7 +1418,7 @@ ConvNet, Linear, `SlimmableContainer`, and the IR Cabsim convolution stage compl
   - **Gates de qualidade recalibrados:** SNR ≥ `120 dB`, ESR ≤ `1.0e-12`, MR-STFT ≤ `1.0e-4`
     (`TASK-CONVNET-05`).
   - **Teste de invariante:** `test_convnet_prewarm_fixed_point_invariant()` confirma que o
-    estado pós-prewarm é um ponto fixo estacionário idêntico à convergência explícita (`TASK-CONVNET-03`).
+    estado pós-prewarm é um ponto fixo estacionário idêntico à convergência explícita.
   - CPU latency = `10.3 µs` (0.8% of RT budget) — inalterada (prewarm opera em caminho frio).
 
 - **Linear (RF=2048 / 4096 / 8192).** Affine linear model. Baseline ESR vs NAMcore = `1.70e-14` (SNR `137.7 dB`), CPU latency = `0.3 µs` (0.0% of RT budget).
@@ -1427,7 +1427,7 @@ ConvNet, Linear, `SlimmableContainer`, and the IR Cabsim convolution stage compl
 
 - **IR Cabsim.** Impulse response convolution stage, cross-validated via `tests/parity/cabsim_cpp_parity.rs`.
 
-- **`SlimmableWavenet`.** Channel-sliceable single-network WaveNet for adaptive compute quality scaling (`src/models/slimmable.rs`). Skeleton is **implemented and loads**: `clone_wavenet_for_slimmable_storage` + `slice_wavenet_model`, breakpoints from `allowed_channels`, and inference checks via `test_loader_gap_slimmable_wavenet` / `test_slimmable_wavenet_inference_and_breakpoints`. The fixture `slimmable_wavenet.nam` is **not** a negative reject mock — it builds successfully. **Inference-only; sem claim de paridade multi-size NAMCore** — NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API; multi-size golden/live C++-adjudicated parity is architecturally infeasible (S4-T1 §7.4).
+- **`SlimmableWavenet`.** Channel-sliceable single-network WaveNet for adaptive compute quality scaling (`src/models/slimmable.rs`). Skeleton is **implemented and loads**: `clone_wavenet_for_slimmable_storage` + `slice_wavenet_model`, breakpoints from `allowed_channels`, and inference checks via `test_loader_gap_slimmable_wavenet` / `test_slimmable_wavenet_inference_and_breakpoints`. The fixture `slimmable_wavenet.nam` is **not** a negative reject mock — it builds successfully. **Inference-only; sem claim de paridade multi-size NAMCore** — NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API; multi-size golden/live C++-adjudicated parity is architecturally infeasible (§7.4).
 
 ---
 
@@ -1495,14 +1495,14 @@ These do not produce wrong audio, but they can make the *evidence* for parity ev
   `third-party/community_models/`, `tests/fixtures/models`). Community captures used in live tests
   (e.g. `EVH-5150-Lite.nam`, APP-EVH, Boss BD-2, SLAMMIN) are resolved transparently from
   `third-party/community_models/` when placed there. The stale "not found at … models-nondist" skip
-  from before S2-T1 is eliminated — if a `.nam` file exists at any path, the gen script
+  is eliminated — if a `.nam` file exists at any path, the gen script
   will find and render it. Freshness manifest still gates *present* artifacts; it does not
   prove every catalog entry was regenerated in the last run.
 - **Synthetic goldens still pending offline build** (as of 2026-07-31 skip reasons): e.g.
   `lstm_1x10`, `lstm_2x24`, `lstm_3x8`, `convnet_{nobn,relu,silu}`, `linear_nobias` — structural
   fixtures without committed C++ goldens in the gen catalog path.
 - **`quick_parity_convnet`** previously always skipped (§6 — architecture incompatibility), but
-  after the prewarm fix (TASK-CONVNET-01, 2026-07-28) it now passes with ESR=4.20e-15 (SNR 143.8 dB),
+  after the prewarm initialization fix it now passes with ESR=4.20e-15 (SNR 143.8 dB),
   completing the 4-model quick-parity matrix at full coverage.
 - **`wavenet_a2_film_input_mixin_pre.nam`** has been fully validated with committed C++ goldens and live cross-validation (`live_cross_validation_wavenet_a2_film_input_mixin_pre`), achieving ESR `3.44e-14` (SNR `134.6 dB`, MR-STFT `6.92e-06`) against NAMcore with calibrated gates (SNR ≥ `120.0 dB`, ESR ≤ `1.0e-11`, MR-STFT ≤ `1.0e-4`).
 - **Performance quality-contract noise (not parity).** Dashboard runs may report RT latency
@@ -1514,15 +1514,15 @@ These do not produce wrong audio, but they can make the *evidence* for parity ev
 Items below are **not** the Max freeze. They are intentional product policy, low-severity
 defensive holes, or incomplete evidence. This table is the parity-map ledger only.
 
-| ID  | Item                                                                                                                | Class                          | Status / contract                                                                                                                                                                                                                      |
-|:--- |:------------------------------------------------------------------------------------------------------------------- |:------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                               | **Policy reject**              | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
-| P2  | A1 free/dynamic path silently ignores `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` when not routed to A2 | **Fail-closed implementado**   | Fail-closed implementado — ver §3.6 FIXED.                                                                                                                                                                                             |
-| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                              | **Fail-closed implementado**   | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
-| P4  | WaveNet `prewarm_samples()` under-reports multi-array RF                                                            | **Corrigido**                  | Corrigido — soma canônica; prewarm analítico inalterado. §3.5.                                                                                                                                                                         |
-| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                              | **Intentional Rust-only**      | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
-| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                            | **Disclaimer (S4-T1)**         | Inference-only; sem claim de paridade multi-size NAMCore. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                         |
-| P7  | A2 fast-path fixtures synthetic-only                                                                                | **Caveat documentado (S4-T2)** | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). Nenhum A2-Full/Lite treinado público incorporado em 2026-08-10; fixtures full/lite permanecem sintéticos calibrados.               |
+| ID  | Item                                                                                                                | Class                        | Status / contract                                                                                                                                                                                                                      |
+|:--- |:------------------------------------------------------------------------------------------------------------------- |:---------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                               | **Policy reject**            | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
+| P2  | A1 free/dynamic path silently ignores `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` when not routed to A2 | **Fail-closed implementado** | Fail-closed implementado — ver §3.6 FIXED.                                                                                                                                                                                             |
+| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                              | **Fail-closed implementado** | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
+| P4  | WaveNet `prewarm_samples()` under-reports multi-array RF                                                            | **Corrigido**                | Corrigido — soma canônica; prewarm analítico inalterado. §3.5.                                                                                                                                                                         |
+| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                              | **Intentional Rust-only**    | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
+| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                            | **Disclaimer**               | Inference-only; sem claim de paridade multi-size NAMCore. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                         |
+| P7  | A2 fast-path fixtures synthetic-only                                                                                | **Caveat documentado**       | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). Nenhum A2-Full/Lite treinado público incorporado em 2026-08-10; fixtures full/lite permanecem sintéticos calibrados.               |
 
 **Non-goals of this ledger row:** reopening KB-A2-MAX, regenerating Max goldens to force a pass, or using f64 oracle as adjudicator (H0 Case D — §4.4.2).
 

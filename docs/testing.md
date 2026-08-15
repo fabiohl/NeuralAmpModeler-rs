@@ -80,7 +80,7 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through `resolve_nam_model()`, matching `src/testing/fixtures.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `third-party/community_models/` (via `NAM_THIRD_PARTY_DIR`), (3) `tests/fixtures/models-nondist`, (4) `tests/fixtures/models`. See [tests/fixtures/README.md](../tests/fixtures/README.md) for skip semantics and non-distributable golden handling.
 
-- **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is the canonical, fail-closed ELF surface gate over the *linked* binary, run automatically in `tests-quick.sh` Phase 1 and `tests-long.sh` Defense phase (see [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)). The former standalone wrapper `utils/debug/verify_no_libm_exports.sh` was removed (S4-T03): it scanned `.rlib` archives — the wrong surface, since object archives still carry `T` exports before the version script applies — and silently skipped when the artifact was missing.
+- **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is the canonical, fail-closed ELF surface gate over the *linked* binary, run automatically in `tests-quick.sh` Phase 1 and `tests-long.sh` Defense phase (see [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)). The former standalone wrapper `utils/debug/verify_no_libm_exports.sh` was removed: it scanned `.rlib` archives — the wrong surface, since object archives still carry `T` exports before the version script applies — and silently skipped when the artifact was missing.
 
 ---
 
@@ -88,12 +88,12 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 Entry points: [tests/models.rs](../tests/models.rs), [tests/parity.rs](../tests/parity.rs), [tests/perf_soak.rs](../tests/perf_soak.rs), [tests/rt_constraints.rs](../tests/rt_constraints.rs), [tests/dsp_core.rs](../tests/dsp_core.rs), plus standalones `target_features_compliance_test`, `libm_export_guard`, `loom_tests`.
 
-| Axis | Rule | Runner |
-| :---- | :---- | :------ |
-| Structural / logic / loaders / FSM / bitwise | non-ignored, **debug** | `tests-quick.sh` Phase 1 (`--lib` + all entry points; skip oracle modules) |
-| Production-float oracles | non-ignored, **`--release`** | `tests-quick.sh` Phase 2 (`golden_vectors` v1, `cpp_parity quick_parity`, f64, spectral, linear FFT, ISA AVX2) |
-| Capped parser fuzz | `#[ignore]`, release, `PROPTEST_CASES=1000` | `tests-quick.sh` Phase 3 |
-| Full matrix / soak / heap-audit / RT / loom / defense scripts | `#[ignore]` or feature-gated | `tests-long.sh` |
+| Axis                                                          | Rule                                        | Runner                                                                                                         |
+|:------------------------------------------------------------- |:------------------------------------------- |:-------------------------------------------------------------------------------------------------------------- |
+| Structural / logic / loaders / FSM / bitwise                  | non-ignored, **debug**                      | `tests-quick.sh` Phase 1 (`--lib` + all entry points; skip oracle modules)                                     |
+| Production-float oracles                                      | non-ignored, **`--release`**                | `tests-quick.sh` Phase 2 (`golden_vectors` v1, `cpp_parity quick_parity`, f64, spectral, linear FFT, ISA AVX2) |
+| Capped parser fuzz                                            | `#[ignore]`, release, `PROPTEST_CASES=1000` | `tests-quick.sh` Phase 3                                                                                       |
+| Full matrix / soak / heap-audit / RT / loom / defense scripts | `#[ignore]` or feature-gated                | `tests-long.sh`                                                                                                |
 
 A module not listed in a runner is an orphan. `#[ignore]` without a long-suite hook is an orphan. Gaps must print `WARN`/`FIDELITY: INCOMPLETE`, never `FIDELITY: OK`.
 
@@ -116,7 +116,7 @@ Before any timed phase, two **blocking pre-flight gates** run:
 [tests/models/meta_coherence.rs](../tests/models/meta_coherence.rs) (catalog↔test
 coherence against the Rust golden registry
 [src/testing/catalog.rs](../src/testing/catalog.rs) — the single source of
-truth since S3-T02; the generator consumes it via `nam_golden_catalog
+truth; the generator consumes it via `nam_golden_catalog
 emit-catalog`, so no bash catalog array exists) and `catalog_preflight`
 (`cargo test --features testing --release --test models catalog_preflight`),
 which validates every fixture, every v1 golden binary (DistributedCore model
@@ -124,7 +124,7 @@ goldens + LocalNonDistributable WaveNet Lite + CabSim convolution goldens)
 through `validate_v1_goldens()`, and every expected V2 golden binary on disk
 through `validate_v2_catalog()`. The former bash golden lists
 (`REQUIRED_GOLDEN_MODELS` / `NONDIST_GOLDEN_MODELS` / `REQUIRED_CABSIM_GOLDENS`)
-and the Phase-0 auto-rebuild in `tests-long.sh` were removed (Sprint S6-T01):
+and the Phase-0 auto-rebuild in `tests-long.sh` were removed:
 regenerate missing goldens with `tests/fixtures/golden_gen_build.sh`.
 
 The battery itself runs in sequential phases (see `utils/tests-long.sh`):
@@ -137,7 +137,7 @@ The battery itself runs in sequential phases (see `utils/tests-long.sh`):
 6. **RT jitter** (`#[ignore]`, telemetry; may be `INCONCLUSIVE`).
 7. **Loom** (`--cfg loom`).
 
-**Structured audit receipt (Sprint S3-T04):** as each phase completes, its
+**Structured audit receipt:** as each phase completes, its
 outcome is appended as one JSONL line to `target/logs/long-audit-receipt.jsonl`
 by the Rust emitter `nam_long_receipt append` (built from
 [src/bin/nam_long_receipt.rs](../src/bin/nam_long_receipt.rs); all JSON is
@@ -155,7 +155,7 @@ the shell never hand-serializes). Line schema:
 - `gaps`: canonical typed markers detected in the phase log (`inconclusive_environment`, `skip_capability`, `inconclusive`, `missing_required`) plus the phase's own gap status; the suite line lists gap phases as `phase_id:STATUS`.
 - `timestamp`: ISO-8601 UTC emission time.
 
-**Preflight trace (Sprint S6-T03 / RES-08):** every preflight step that runs
+**Preflight trace:** every preflight step that runs
 ahead of Phase 1 also appends its own line (`preflight-render`,
 `preflight-catalog`, `preflight-package`, `preflight-freshness`,
 `preflight-meta`) with the same schema. When a preflight aborts, the suite
@@ -377,10 +377,10 @@ See [benchmarks.md — First-Time Setup and Post-Optimization Renewal](benchmark
 
 The `utils/` directory houses defense tools, build aids, and inspection utilities adhering to strict deterministic standards:
 
-| Script | Responsibility | Key Engineering Guarantees |
-| :------- | :--------------- | :--------------------------- |
-| **[utils/_lib.sh](../utils/_lib.sh)** | Shared Bash library | Dynamic `$PROJECT_DIR` resolution at initialization; standard `ok`, `warn`, `die` helpers; `NAM_LIB_NO_CD=1` support; typed receipt emission; 100% unit-tested via the `run_bash_scripts_unit_tests` suite embedded in `tests-long.sh`. |
-| **[utils/lints.sh](../utils/lints.sh)** | Static analysis & quality defense | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`). |
-| **[utils/check-model.sh](../utils/check-model.sh)** | Official model inspector CLI | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction. |
-| **[utils/setup-third-party.sh](../utils/setup-third-party.sh)** | Upstream git mirror provisioner | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`). |
-| **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection. |
+| Script                                                                                | Responsibility                             | Key Engineering Guarantees                                                                                                                                                                                                                                                                                                                                                                               |
+|:------------------------------------------------------------------------------------- |:------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[utils/_lib.sh](../utils/_lib.sh)**                                                 | Shared Bash library                        | Dynamic `$PROJECT_DIR` resolution at initialization; standard `ok`, `warn`, `die` helpers; `NAM_LIB_NO_CD=1` support; typed receipt emission; 100% unit-tested via the `run_bash_scripts_unit_tests` suite embedded in `tests-long.sh`.                                                                                                                                                                  |
+| **[utils/lints.sh](../utils/lints.sh)**                                               | Static analysis & quality defense          | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`). |
+| **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                       |
+| **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                        |
+| **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                           |

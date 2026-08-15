@@ -61,8 +61,8 @@ class of bug.
 into the GOT slot from a live, attached process (not just the relocation
 *type*, which is not sufficient — see §3). Confirmed clean across all
 production link targets: the engine test suite (`--lib`), integration suites
-(`--features testing,stereo`), and downstream targets (`NAM-Plug` CLAP cdylib
-and `NAM-Audio-Pipe` standalone host).
+(`--features testing,stereo`), and downstream targets (CLAP cdylib plugins
+and standalone hosts).
 
 ## 2. Why this was hard to find
 
@@ -179,7 +179,7 @@ interposition is confirmed.
   libm symbol surface (or panics if no `nm` is available — never a silent
   skip). It is wired into `utils/tests-quick.sh` Phase 1 and
   `utils/tests-long.sh` Defense phase. The former standalone wrapper
-  `utils/debug/verify_no_libm_exports.sh` was removed (S4-T03): it scanned
+  `utils/debug/verify_no_libm_exports.sh` was removed: it scanned
   `.rlib` archives — the wrong surface, since object archives still carry
   `T` exports before the version script applies — and exited 0 when the
   artifact was missing.

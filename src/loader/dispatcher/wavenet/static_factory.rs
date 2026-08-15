@@ -565,53 +565,5 @@ pub(crate) fn build_wavenet_a1(data: &NamModelData) -> anyhow::Result<Box<Static
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::loader::dispatcher::build_model;
-    use crate::loader::nam_json::parse_nam_json;
-    use std::fs;
-
-    const A2_MAX_FIXTURE: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/models/wavenet_a2_max.nam"
-    );
-
-    #[test]
-    fn test_a2_max_flag_controlled() {
-        let json =
-            fs::read_to_string(A2_MAX_FIXTURE).expect("Fixture wavenet_a2_max.nam not found");
-        let data = parse_nam_json(&json).expect("Failed to parse fixture");
-
-        unsafe {
-            std::env::remove_var("NAM_A2_MAX_UNLOCK");
-        }
-        let result = build_model(&data);
-        match result {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
-                    "Error must cite KB-A2-MAX / parity gap, got: {msg}"
-                );
-                assert!(
-                    msg.contains("fail-closed"),
-                    "Error must cite fail-closed, got: {msg}"
-                );
-            }
-            Ok(_) => panic!("A2 Max must be rejected by default (no unlock flag set)"),
-        }
-
-        unsafe {
-            std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-        }
-        let model = build_model(&data).expect("A2 Max must build under NAM_A2_MAX_UNLOCK=1");
-        assert!(
-            matches!(*model, StaticModel::WavenetA2Dyn(_)),
-            "Expected WavenetA2Dyn variant under unlock"
-        );
-
-        unsafe {
-            std::env::remove_var("NAM_A2_MAX_UNLOCK");
-        }
-    }
-}
+#[path = "static_factory_test.rs"]
+mod tests;

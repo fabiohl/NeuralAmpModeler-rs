@@ -48,10 +48,10 @@ Values of `version` other than `1` and `2` are rejected with `NambError::Invalid
 | Bit | Name                       | Value  | Description                                                                                        |
 |:--- |:-------------------------- |:------ |:-------------------------------------------------------------------------------------------------- |
 | 0   | `FLAG_HAS_CRC32`           | `0x01` | Indicates that the `crc32` field contains a valid CRC that **must** be verified (mandatory in v2+) |
-| 1   | `FLAG_HAS_QUANT_INT8`      | `0x02` | Reserved: SmoothQuant INT8 Quantization (S15.T01)                                                  |
-| 2   | `FLAG_HAS_QUANT_INT4`      | `0x04` | Reserved: INT4 Quantization (S15.T02)                                                              |
-| 3   | `FLAG_HAS_AMX_TILE_LAYOUT` | `0x08` | Reserved: AMX tile layout (S23.T02)                                                                |
-| 4   | `FLAG_HAS_SVE2_LAYOUT`     | `0x10` | Reserved: SVE2 layout (S24.T02)                                                                    |
+| 1   | `FLAG_HAS_QUANT_INT8`      | `0x02` | Reserved: SmoothQuant INT8 Quantization                                                            |
+| 2   | `FLAG_HAS_QUANT_INT4`      | `0x04` | Reserved: INT4 Quantization                                                                        |
+| 3   | `FLAG_HAS_AMX_TILE_LAYOUT` | `0x08` | Reserved: AMX tile layout                                                                          |
+| 4   | `FLAG_HAS_SVE2_LAYOUT`     | `0x10` | Reserved: SVE2 layout                                                                              |
 | 5-7 | —                          | —      | Reserved for future use. **Must be 0.**                                                            |
 
 ## 3. Weight Layouts
@@ -120,7 +120,7 @@ Where:
 
 Optimized layout for LSTM with transposition `[Gate][Hidden][IH]` → `[Gate][IH][Hidden]`. Allows the decoder to read weights directly without load-time transposition.
 
-**Encoder** (S3.T03): weights for each layer are interleaved in the correct order — after writing `W_l, bias_l`, the states `hidden_init_l, cell_init_l` are written immediately, ensuring the decoder reads the complete sequence per layer.
+**Encoder**: weights for each layer are interleaved in the correct order — after writing `W_l, bias_l`, the states `hidden_init_l, cell_init_l` are written immediately, ensuring the decoder reads the complete sequence per layer.
 
 ```text
 For each layer l (0..num_layers-1):
@@ -182,7 +182,7 @@ For block b in 0..num_blocks-1:
           value = 0.0  (zero-padding)
 ```
 
-**Implicit Padding** (S3.T04): when `CO % 4 != 0`, the encoder pads the remaining slots with `0.0` to keep the interleaved format uniform. The decoder always reads the padded size (`num_blocks * 4 * IN * K`) but only accesses `CO` logical channels. This ensures that future geometries with `CO % 4 != 0` work correctly without conditional code in the decoder.
+**Implicit Padding**: when `CO % 4 != 0`, the encoder pads the remaining slots with `0.0` to keep the interleaved format uniform. The decoder always reads the padded size (`num_blocks * 4 * IN * K`) but only accesses `CO` logical channels. This ensures that future geometries with `CO % 4 != 0` work correctly without conditional code in the decoder.
 
 ## 4. Post-Header Sections
 
@@ -336,7 +336,7 @@ Interleaved4WaveNet (Layout=2): [BLOCK][K][IN][LANE] = 48 f32
 
 ## 8. Typed Errors (`NambError`)
 
-NAMB parsing uses typed errors via `thiserror` (S5.T02) for precise diagnostics. The `loader` module performs downcasting via `downcast_ref` to map each variant to the corresponding `NamErrorCode`.
+NAMB parsing uses typed errors via `thiserror` for precise diagnostics. The `loader` module performs downcasting via `downcast_ref` to map each variant to the corresponding `NamErrorCode`.
 
 | Variant                                         | Code  | Mnemonic                    | Condition                                                                |
 |:----------------------------------------------- |:----- |:--------------------------- |:------------------------------------------------------------------------ |
@@ -360,7 +360,7 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 
 - **v1**: maintained for reading legacy files. Optional CRC via sentinel `crc32 == 0` (deprecated). In v1 headers, the byte at offset `0x07` is treated as reserved (part of `reserved_v2`) and must not be interpreted as feature flags (e.g. even if it is non-zero, it does not enable feature flags). This ensures forward-compatibility and prevents false interpretation of flags in legacy files.
 - **v2**: `FLAG_HAS_CRC32` mandatory. `layout_type` active.
-- **Interleaved-4 zero padding** (S3.T04): transparent change. NAMB v2 models produced before the fix remain valid (only affects geometries where `CO % 4 != 0`, which do not exist in the current catalog). Documented as an implicit bump without a version change.
+- **Interleaved-4 zero padding**: transparent change. NAMB v2 models produced before the fix remain valid (only affects geometries where `CO % 4 != 0`, which do not exist in the current catalog). Documented as an implicit bump without a version change.
 
 ### 9.2 Future Expansion
 

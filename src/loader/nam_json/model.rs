@@ -219,10 +219,6 @@ impl std::str::FromStr for LinearImplementation {
     }
 }
 
-#[cfg(test)]
-#[path = "model_test.rs"]
-mod tests;
-
 /// Weight layout options supported in the `.namb` format.
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -397,3 +393,7 @@ impl NamModelData {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "model_test.rs"]
+mod tests;

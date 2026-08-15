@@ -100,7 +100,7 @@ stress signal. Source measurements are documented in code comments.
 | WaveNet A2 Dyn Gated CH=8            | 85     | 1.0e-9  | 0.05        | Gating+LeakyReLU                                            |
 | WaveNet A2 Dyn Blended CH=3          | 110    | 1.0e-12 | 0.05        | Blend+Tanh gate                                             |
 | A2 Example (Slimmable)               | 120    | 3.5e-12 | 0.08        | SlimmableContainer                                          |
-| ConvNet Test                         | 120    | 1.0e-12 | 1.0e-4      | C++ flat format render parity (prewarm fix TASK-CONVNET-01) |
+| ConvNet Test                         | 120    | 1.0e-12 | 1.0e-4      | C++ flat format render parity (prewarm initialization fix)  |
 | ConvNet Variants (nobn, relu, silu)  | 115    | 1.0e-11 | 5.0e-4      | ConvNet activation & batch-norm variants                    |
 | LSTM 1×16                            | 93     | 1.5e-9  | 0.20        | Standard precision default (exact polynomial activations)   |
 | LSTM 2×8                             | 93     | 1.7e-9  | 0.12        | Standard precision default                                  |

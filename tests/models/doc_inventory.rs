@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! S8-E8-T03 — Meta-Testes de Inventário de Documentação e Scripts
+//! Meta-Testes de Inventário de Documentação e Scripts
 //!
 //! Garante que a documentação (`docs/`) e os scripts (`utils/`) estejam
 //! mutuamente sincronizados e que comandos, features e paths referenciados
@@ -232,14 +232,13 @@ fn collect_scripts() -> Vec<String> {
 const SCRIPT_DOC_EXEMPT: &[&str] = &[
     "utils/_lib.sh",
     "utils/mod-update.sh",
-    // Removed in S4-T03: canonical libm gate is tests/libm_export_guard.rs;
+    // Removed: canonical libm gate is tests/libm_export_guard.rs;
     // docs/testing.md and docs/postmortem-libm-symbol-interposition.md
     // still describe the former wrapper in historical prose.
     "utils/debug/verify_no_libm_exports.sh",
 ];
 
-/// Known stale source paths in documentation — to be fixed in the
-/// docs-rewrite epic (.agents/TODO-findings_NeuralAmpModeler-rs.md, EP-1).
+/// Known stale source paths in documentation.
 const STALE_SRC_PATH_EXEMPT: &[&str] = &[];
 
 #[test]

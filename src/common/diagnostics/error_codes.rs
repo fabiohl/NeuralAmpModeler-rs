@@ -10,10 +10,10 @@
 //! - **E4xxx**: Runtime / CLI (parsing, commands)
 //! - **E5xxx**: System / hardware (CPU features, memory)
 //!
-//! ### Range reservation (F-19)
+//! ### Range reservation
 //!
 //! The **E2xxx–E4xxx** ranges are **reserved for downstream integrations**
-//! (`NAM-Plug`, `NAM-Audio-Pipe`). They are declared here so the range
+//! (e.g., plugin wrappers, standalone hosts, offline renderers). They are declared here so the range
 //! allocation is a single source of truth, but this host-agnostic core crate
 //! never constructs them: the core library does not own an audio backend, an
 //! SPSC host loop, or a CLI, and must not assume one. Downstream crates emit
@@ -34,8 +34,8 @@ use std::fmt;
 /// - **E5xxx**: System / hardware (CPU features, memory)
 ///
 /// The **E2xxx–E4xxx** ranges are reserved for downstream integrations
-/// (NAM-Plug / NAM-Audio-Pipe) and are never constructed by this
-/// host-agnostic core crate (F-19). See the module documentation.
+/// (e.g., plugin wrappers, standalone hosts, offline renderers) and are never constructed by this
+/// host-agnostic core crate. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamErrorCode {
     // E1xxx — Model Loading
@@ -100,8 +100,8 @@ pub enum NamErrorCode {
     InvalidModelTopology,
 
     // E2xxx — Audio Backend / Processing
-    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
-    // this host-agnostic core crate never constructs these variants (F-19).
+    // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts):
+    // this host-agnostic core crate never constructs these variants.
     /// Failed to initialize the audio backend (context/core).
     AudioInitFailed,
     /// Failed to connect the audio stream.
@@ -118,14 +118,14 @@ pub enum NamErrorCode {
     ProcessingOverload,
 
     // E3xxx — SPSC / Communication
-    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
-    // this host-agnostic core crate never constructs these variants (F-19).
+    // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts):
+    // this host-agnostic core crate never constructs these variants.
     /// CLI→DSP parameter SPSC channel full.
     ParamChannelFull,
 
     // E4xxx — Runtime / CLI
-    // Reserved for downstream integrations (NAM-Plug / NAM-Audio-Pipe):
-    // this host-agnostic core crate never constructs these variants (F-19).
+    // Reserved for downstream integrations (e.g., CLI tools, plugin wrappers):
+    // this host-agnostic core crate never constructs these variants.
     /// Invalid gain value (not a valid f32 number).
     InvalidGainValue,
     /// Unknown CLI command.
