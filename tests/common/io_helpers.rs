@@ -113,10 +113,9 @@ pub struct FixtureCatalog {
 /// cross-validation (`cpp_parity::run_v2_multi_sr`).
 ///
 /// The golden fixture catalog (committed `*_v2_{sr}.bin` files) is defined in
-/// `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (single source of truth,
-/// Sprint S3-T02) — this list governs *live* C++↔Rust parity only, where the
-/// render tool is invoked at runtime and the model set can exceed the golden
-/// fixture matrix.
+/// `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (single source of truth) — this
+/// list governs *live* C++↔Rust parity only, where the render tool is invoked at
+/// runtime and the model set can exceed the golden fixture matrix.
 ///
 /// The default (`AllRates`) means the model is validated at 44.1k, 48k,
 /// 88.2k, 96k, and 192k. Restricted scopes must be declared here with a

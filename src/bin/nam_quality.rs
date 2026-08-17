@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! `nam_quality` — the JSON-only quality gate engine (Sprint S2, R-08 / A-05).
+//! `nam_quality` — the JSON-only quality gate engine.
 //!
 //! The dashboard bash wrapper only orchestrates phases and delegates all
 //! contract interpretation to this binary; there is **no** ASCII-contract
 //! loader and no `jq` anywhere in the pipeline. The contract authority is
-//! `docs/quality-contract.json` (Sprint S1).
+//! `docs/quality-contract.json`.
 //!
 //! Subcommands:
 //! - `ingest`: merge the dashboard artifacts (phase receipt, fidelity metrics
@@ -102,7 +102,7 @@ fn main() {
 }
 
 fn print_help() {
-    println!("NeuralAmpModeler-rs Quality Gate (Sprint S2, R-08 / A-05)");
+    println!("NeuralAmpModeler-rs Quality Gate");
     println!();
     println!("The JSON-only verify engine: contracts come from");
     println!("docs/quality-contract.json; reports are JSONL. No ASCII loader, no jq.");

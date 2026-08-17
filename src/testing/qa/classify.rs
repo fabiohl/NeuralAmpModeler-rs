@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Single performance-status classifier — literal port of the bash
-//! `classify_regression_outcome` (F-08 / EP-05; the bash copy was removed in
-//! Sprint S4, `utils/_lib.sh` now delegates nothing here — the dashboard
-//! inlines the same 3-way case over the Rust-written receipt until S6).
+//! `classify_regression_outcome` (F-08 / EP-05; the bash copy was removed,
+//! `utils/_lib.sh` now delegates nothing here — the dashboard
+//! inlines the same 3-way case over the Rust-written receipt).
 //!
 //! One classifier: the dashboard and the perf-gate consume the same enum.
 //! The perf gate records `FAIL` with a typed reason; only `MISSING_BASELINE`

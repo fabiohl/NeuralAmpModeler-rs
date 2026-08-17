@@ -450,7 +450,7 @@ fn asr_aggregate_across_pitches() {
 
 /// Generates the spectral fidelity baseline fixture.
 ///
-/// Run this test when models change or Sprint S5 begins:
+/// Run this test when models change:
 ///
 /// ```bash
 /// cargo test --test models spectral_fidelity::generate_spectral_fidelity_baseline -- --ignored --nocapture

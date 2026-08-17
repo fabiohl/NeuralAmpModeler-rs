@@ -14,9 +14,10 @@ for cross-validating `nam-rs` inference quality against precision references (C+
 `nam-rs` validates inference quality through two independent references:
 
 1. **Parity Reference** — C++ `NeuralAmpModelerCore` (f32): Measures implementation agreement against
-   the upstream reference. Since both share the same numerical approximations (f32 +
-   Padé tanh + minimax sigmoid + FMA accumulation), ESR targets are orders of magnitude
-   lower (1e-5 to 3e-7) than modeling error baselines. See [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs) and
+   the upstream reference. Both engines use f32 arithmetic and exact-grade activations in their
+   respective default modes (`Standard` in NAM-rs; `using_fast_tanh = false` / libm `tanhf` in
+   NAMcore), so ESR targets are orders of magnitude lower (1e-5 to 3e-7) than modeling error
+   baselines. See [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs) and
    [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs).
 
 2. **Absolute Correction** — f64 Oracle: Measures the absolute error floor of the

@@ -26,7 +26,7 @@ informing the activation precision analysis (P-5) and the trade-off between Pad�
 
 | Traceability | Reference                                                                                |
 |:------------ |:---------------------------------------------------------------------------------------- |
-| Finding      | P-1 (non-linear activation aliasing)                                                    |
+| Finding      | P-1 (non-linear activation aliasing)                                                     |
 | Files        | `src/math/activations/`, `src/dsp/pipeline/stages/inference.rs`, `src/dsp/oversample.rs` |
 
 ---
@@ -42,10 +42,10 @@ offering an alternative (or complementary) path to reducing aliasing. Motivates 
 approach: oversampling as the primary mechanism (user-controllable), with fine-tuning left as a
 potential future enhancement for shipped `.nam` models.
 
-| Traceability | Reference                                |
-|:------------ |:---------------------------------------- |
+| Traceability | Reference                            |
+|:------------ |:------------------------------------ |
 | Finding      | P-1 (non-linear activation aliasing) |
-| Files        | `src/dsp/oversample.rs`                  |
+| Files        | `src/dsp/oversample.rs`              |
 
 ---
 
@@ -318,7 +318,7 @@ European Broadcasting Union, 2016.
 
 | Finding                                      | References                                             |
 |:-------------------------------------------- |:------------------------------------------------------ |
-| P-1 (non-linear activation aliasing)     | R1, R2, R3, R4, R5, R6, R7b                            |
+| P-1 (non-linear activation aliasing)         | R1, R2, R3, R4, R5, R6, R7b                            |
 | P-2 (fidelidade do resampler)                | R3                                                     |
 | P-3 (suíte espectral — THD/IMD/FR/true-peak) | R10, R11, R12                                          |
 | P-4 (oráculo f64)                            | — (norma computacional, não referenciada externamente) |

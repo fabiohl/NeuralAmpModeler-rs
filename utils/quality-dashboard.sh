@@ -17,13 +17,13 @@
 #   ./utils/quality-dashboard.sh --save <json>          Promote the validated JSON contract after
 #                                                       all fidelity phases pass (nam_quality save)
 #   ./utils/quality-dashboard.sh --check <json>         Verify metrics against the JSON contract
-#                                                       (nam_quality ingest + verify, S2.T7)
+#                                                       (nam_quality ingest + verify)
 #
-# Since Sprint S2 the contract authority is Rust + JSON: the wrapper only
-# orchestrates phases; every contract interpretation is delegated to the
-# `nam_quality` binary (ingest/verify/save). ASCII `.txt` contracts are
-# rejected with ERROR + exit 2. The human render keeps reading the phase logs
-# until Sprint S6 removes it — `--check`/`--save` never use the logs.
+# Contract authority is Rust + JSON: the wrapper only orchestrates phases;
+# every contract interpretation is delegated to the `nam_quality` binary
+# (ingest/verify/save). ASCII `.txt` contracts are rejected with ERROR + exit 2.
+# The human render keeps reading the phase logs — `--check`/`--save` never use
+# the logs.
 
 set -euo pipefail
 
@@ -94,10 +94,10 @@ if [ -n "$SAVE_FILE" ] && [[ "$SAVE_FILE" != /* ]]; then
     SAVE_FILE="$INVOCATION_PWD/$SAVE_FILE"
 fi
 
-# S2.T7: JSON-only contract authority — fail fast before any phase runs.
+# JSON-only contract authority — fail fast before any phase runs.
 if [ -n "$CHECK_FILE" ] && [[ "$CHECK_FILE" != *.json ]]; then
     echo -e "${RED}✗ ERROR: --check requires a JSON contract (*.json, e.g. docs/quality-contract.json).${NC}" >&2
-    echo -e "${RED}  ASCII .txt contracts are no longer supported since Sprint S2.${NC}" >&2
+    echo -e "${RED}  ASCII .txt contracts are not supported; use JSON contract.${NC}" >&2
     exit 2
 fi
 if [ -n "$SAVE_FILE" ] && [[ "$SAVE_FILE" != *.json ]]; then
@@ -374,7 +374,7 @@ run_quick_parity() {
 # as PASS) but not aborting the default-mode run; `--check` against the quality
 # contract fails on it (fail-closed alarm). Only a real regression or benchmark
 # failure is a hard FAIL phase. The performance gate itself lives in
-# tests-performance-regression.sh (per-sprint, human-triggered).
+# tests-performance-regression.sh (human-triggered).
 BENCH_PERF_NOT_VERIFIED=0
 BENCH_NOT_VERIFIED_REASON=""
 
@@ -404,7 +404,7 @@ run_benchmarks() {
             receipt_reason=$(echo "$receipt_line" | grep -o '"reason":"[^"]*"' | cut -d'"' -f4 || echo "")
         fi
 
-        # S6.T2: the single performance-status classifier lives in
+        # The single performance-status classifier lives in
         # `qa::classify` (F-08) — delegated via `nam_quality classify`; no
         # second 3-way copy here anymore.
         local perf_status
@@ -471,9 +471,9 @@ run_benchmarks() {
 parse_golden_vectors() {
     local log="$LOGDIR/golden_vectors.log"
 
-    # S2.T7: the JSONL metric stream is consumed exclusively by the
+    # The JSONL metric stream is consumed exclusively by the
     # `nam_quality` binary (ingest/verify) — no jq anywhere in this script.
-    # The human render (transitory until Sprint S6) reads the phase log.
+    # The human render reads the phase log.
     [ -f "$log" ] || return 0
 
     local parsed="$PARSEDIR/golden_vectors.parsed"
@@ -806,7 +806,7 @@ extract_test_counts() {
 
 
 
-# ── Contract verification (S2.T7: Rust+JSON authority) ──────────────────────
+# ── Contract verification (Rust+JSON authority) ─────────────────────────────
 # The wrapper no longer interprets contracts. Every --check/--save decision
 # is delegated to the `nam_quality` binary (ingest/verify/save) built from
 # this crate with the `testing` feature. No ASCII loader, no jq. The
@@ -993,9 +993,9 @@ main() {
         final_exit=1
     fi
 
-    # ── S2.T7: Rust+JSON report ingestion ────────────────────────────────────
+    # ── Rust+JSON report ingestion ───────────────────────────────────────────
     # The report (phase receipt + fidelity metrics + latency stream) is the
-    # single input of --check; the human render below (S6) pipes the same
+    # single input of --check; the human render below pipes the same
     # report and never feeds the verdict.
     local report_file="$LOGDIR/report.jsonl"
     local latency_stream="$PARSEDIR/latency.jsonl"
@@ -1009,7 +1009,7 @@ main() {
         echo -e "  ${YELLOW}⚠${NC} Phase receipt missing — report JSONL not generated."
     fi
 
-    # ── S6.T2: the human render pipes the typed report (report.jsonl) ───────
+    # ── The human render pipes the typed report (report.jsonl) ───────────────
     phase "Renderizando dashboard (nam_quality render)"
     if [ -f "$report_file" ]; then
         "$NAM_QUALITY_BIN" render --report "$report_file" --ansi || true
@@ -1018,7 +1018,7 @@ main() {
     # --save: transactional atomic write of the JSON contract — only promoted
     # when every fidelity phase PASSed (NOT_VERIFIED performance never blocks
     # saving; PERF-006). Automated/CI agents are strictly prohibited from
-    # invoking --save (S7.T3 keeps it human-only).
+    # invoking --save (keeps it human-only).
     if [ -n "$SAVE_FILE" ]; then
         if ! "$NAM_QUALITY_BIN" save --contract "$SAVE_FILE" --receipt "$DASHBOARD_PHASE_RECEIPT"; then
             echo -e "  ${RED}✗${NC} Contract NOT saved (nam_quality save refused — see stderr above)."

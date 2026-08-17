@@ -1781,12 +1781,12 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// T2.2 (Sprint 2) — Adversarial A2-Dynamic loader defenses (F-05):
-//         extreme condition_size, groups and channels must be rejected
-//         gracefully through the public safe API (Err), never panic/abort.
+// Adversarial A2-Dynamic loader defenses (F-05):
+// extreme condition_size, groups and channels must be rejected
+// gracefully through the public safe API (Err), never panic/abort.
 // ---------------------------------------------------------------------------
 
-/// Strategy: A2-Dynamic WaveNet JSONs targeting the Sprint-2 loader defenses —
+/// Strategy: A2-Dynamic WaveNet JSONs targeting the loader defenses —
 /// the `MAX_CONDITION_SIZE` semantic cap, `u32` range checks on group counts,
 /// and zero-group rejection. Returns `(json, expect_reject)`.
 fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, bool)> {
@@ -1905,7 +1905,7 @@ proptest! {
         .. ProptestConfig::with_cases(10_000)
     })]
 
-    /// T2.2 (Sprint 2) — Adversarial A2-Dynamic loader defenses: extreme
+    /// Adversarial A2-Dynamic loader defenses: extreme
     /// condition_size, groups and channels must be rejected gracefully through
     /// the public safe API (`Err`), never panic/abort (F-05).
     #[test]
@@ -1932,7 +1932,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// T6.2 (Sprint 6) — Hostile metadata floats: `input_level_dbu`,
+// Hostile metadata floats: `input_level_dbu`,
 // `output_level_dbu`, `loudness`, `head_scale` must never corrupt gain
 // staging. If the load succeeds, all multipliers must be finite; hostile
 // values (saturation-prone literals, out-of-range dBu) must be rejected.

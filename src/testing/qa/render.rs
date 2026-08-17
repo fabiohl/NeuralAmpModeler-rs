@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Human-facing dashboard renderer (Sprint S6.T1, finding R-07).
+//! Human-facing dashboard renderer.
 //!
 //! Pure `QualityReport → String`: no I/O, no cargo, no environment access —
 //! the renderer only formats a typed report. The dashboard bash wrapper and
 //! the `nam_quality render` binary both pipe this output; the long/perf
-//! suites never call it (they stay WARNING/ERROR + forensic JSONL only, PO
-//! note).
+//! suites never call it (they stay WARNING/ERROR + forensic JSONL only).
 //!
 //! The `QualityReport` is the typed superset of the verify report: on top of
 //! the `verify.rs` phase/fidelity/latency streams it carries the extra
-//! oracle/ISA/activation/coverage kinds that the S2.T6 sink writes
+//! oracle/ISA/activation/coverage kinds that the verification sink writes
 //! (`f64_table`, `f64_decomp`, `activation`, `isa`, `coverage_matrix`,
 //! `test_counts`) plus the `build_metadata` provenance record.
 //!

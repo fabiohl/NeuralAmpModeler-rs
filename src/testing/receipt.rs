@@ -435,7 +435,7 @@ pub fn generate_capability_receipt() -> CapabilityReceipt {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Long-duration audit suite receipt (Sprint S3-T04)
+// Long-duration audit suite receipt
 // ═══════════════════════════════════════════════════════════════════════════
 // Structured JSONL emission for `utils/tests-long.sh` (nightly audit runner).
 // Each completed phase appends ONE line to `target/logs/long-audit-receipt.jsonl`

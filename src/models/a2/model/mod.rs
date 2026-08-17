@@ -20,9 +20,11 @@
 //!
 //! ## Accepted divergences
 //!
-//! - Rechannel weights are stored as u16 (f16/bf16) and dequantized at runtime.
-//!   C++ uses native f32. The quantization error (< 1e-3 relative) is below the
-//!   output SNR tolerance for A2 models.
+//! - None at this time. Rechannel and all other A2 weights are stored as native
+//!   `f32` (`AlignedVec<f32>`), matching C++ NAMcore's `Eigen::MatrixXf`
+//!   representation. Weight compression (f16c/bf16) was evaluated and retired
+//!   to eliminate L1 decompression overhead and interop drift — see
+//!   `docs/audio_fidelity_map.md` §1 for the full rationale.
 
 use crate::dsp::mirror_buf::MirroredBuffer;
 use crate::models::a2::params::{

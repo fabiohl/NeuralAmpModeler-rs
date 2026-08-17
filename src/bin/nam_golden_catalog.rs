@@ -4,7 +4,7 @@
 //! Binary CLI utility that emits the golden generation catalog from Rust.
 //!
 //! The golden registry lives in `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`
-//! (single source of truth since Sprint S3-T02). This binary serializes it in
+//! (single source of truth). This binary serializes it in
 //! the shell line format consumed by `tests/fixtures/golden_gen_build.sh`,
 //! which previously carried the same data as a static bash `CATALOG=(...)`
 //! array. Model lists are therefore never duplicated in shell scripts.

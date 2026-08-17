@@ -3,14 +3,13 @@
 
 //! Smoke tests for the typed quality-contract schema.
 //!
-//! The primary fixture is the illustrative example of
-//! `.agents/TODO-refatora.md` §R-01, kept verbatim (including the abbreviated
-//! commit and the placeholder run id) so the round trip proves the schema
-//! matches the agreed contract.
+//! The primary fixture is the illustrative example payload, kept verbatim
+//! (including the abbreviated commit and the placeholder run id) so the
+//! round trip proves the schema matches the agreed contract.
 
 use super::*;
 
-/// Example payload of `.agents/TODO-refatora.md` §R-01, verbatim.
+/// Example quality-contract payload, verbatim.
 const R01_EXAMPLE: &str = r#"{
   "schema_version": 1,
   "generated_at": "2026-08-12T12:20:03-03:00",

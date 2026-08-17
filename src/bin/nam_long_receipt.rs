@@ -15,7 +15,7 @@
 //! - `validate`: fail-closed check that every line is valid JSON with the
 //!   receipt schema.
 //! - `count-log`: print how many tests/benchmarks a phase log proves executed
-//!   (F-21 counter behind `_lib.sh::assert_ran_tests`, S4.T2).
+//!   (F-21 counter behind `_lib.sh::assert_ran_tests`).
 //!
 //! Exit codes:
 //! - 0: success.
@@ -61,9 +61,7 @@ fn main() {
 }
 
 fn print_help() {
-    println!(
-        "NeuralAmpModeler-rs Long-Audit Receipt Emitter (Sprint S3-T04; preflight trace S6-T03)"
-    );
+    println!("NeuralAmpModeler-rs Long-Audit Receipt Emitter");
     println!("Usage:");
     println!("  nam_long_receipt append --phase-id <id> --name <name> --status <STATUS>");
     println!("                        --duration-ms <ms> [--tests-executed <n>] [--log <path>]");

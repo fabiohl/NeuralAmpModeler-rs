@@ -16,13 +16,12 @@
 #   warn  "Warning message"
 #   die   "Fatal error message"
 #
-# ── Contract (Sprint S4, EP-04 / R-04) ──────────────────────────────────────
+# ── Contract ────────────────────────────────────────────────────────────────
 # This library is a SHELL HUSK: it keeps only the glue that has no Rust home
 # yet and delegates every interpretation to the QA binaries. No `eval`, no
 # hand-serialized JSON (the old brace-printf is gone), no PCRE (grep -oP).
 #
-# Consumers (9 `source`s; the S4 plan said 8 — S3.T4 added
-# tests-performance-regression.sh to the list):
+# Consumers (9 `source`s):
 #   1. utils/tests-quick.sh
 #   2. utils/lints.sh
 #   3. utils/mod-update.sh
@@ -37,16 +36,15 @@
 #   * ANSI colors + phase/ok/warn/die
 #   * PROJECT_DIR + third-party paths
 #   * ensure_third_party (mirror provisioning)
-#   * ensure_namcore_render (C++ render build — explicitly NOT moved, S3-T01)
+#   * ensure_namcore_render (C++ render build)
 #   * Thin wrappers over the QA binaries:
 #     - assert_ran_tests        → nam_long_receipt count-log
 #     - dashboard_phase_receipt → nam_quality receipt append
 #     - check_freshness / run_freshness_gate → nam_freshness
 #
-# Delegated to Rust in S4 (no bash copy left):
-#   * classify_regression_outcome → src/testing/qa/classify.rs (S2.T3);
-#     quality-dashboard.sh inlines the 3-way case locally (transitory until S6)
-#   * check_toolchain_fingerprint → freshness.rs ToolchainFingerprint (F-02)
+# Delegated to Rust:
+#   * classify_regression_outcome → src/testing/qa/classify.rs
+#   * check_toolchain_fingerprint → freshness.rs ToolchainFingerprint
 
 # ---------------------------------------------------------------------------
 # Resolve project root dynamically relative to this helper script

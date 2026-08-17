@@ -33,7 +33,7 @@ The `NeuralAmpModeler-rs` crate defines several features in [Cargo.toml](../Carg
 
 Test placement is governed by **two orthogonal axes**, not by a single "fast vs. slow" heuristic:
 
-- **Axis A — Rigor (encoded via `#[ignore]`):** non-ignored = first line of defense (runs every sprint, several times a day); `#[ignore]` = long/rigorous (runs ~1×/day via `--ignored`). This is the *rigor* axis.
+- **Axis A — Rigor (encoded via `#[ignore]`):** non-ignored = first line of defense (runs in local development, several times a day); `#[ignore]` = long/rigorous (runs ~1×/day via `--ignored`). This is the *rigor* axis.
 - **Axis B — Codegen Path (encoded via debug vs. `--release`):** structural tests (logic, parsers, FSM, bitwise determinism) run in **debug** (cheap, with `debug-assertions` ON, where float codegen is irrelevant); measurement oracles (anything comparing floats against a reference) run in **`--release`** (the codegen path users actually execute). Measuring in debug guards a "phantom" — codegen without `-O3`, without FMA contraction, without auto-vectorization.
 
 The quick suite ([utils/tests-quick.sh](../utils/tests-quick.sh)) has three phases that respect both axes:
@@ -279,10 +279,10 @@ The contract is enforced by [utils/quality-dashboard.sh](../utils/quality-dashbo
 The dashboard's defense functions (metric sanitization, toolchain fingerprint,
 JSONL parsing, test-execution assertion, and the golden-freshness gate) are
 covered by the Rust defense harness [tests/qa_defense.rs](../tests/qa_defense.rs),
-run by the long suite's defense phase (Sprint S5 — the former inline Bash
+run by the long suite's defense phase (the former inline Bash
 unit-test suite `run_bash_scripts_unit_tests` was removed).
 
-The canonical contract is [docs/quality-contract.json](quality-contract.json) — **JSON-only** authority since Sprint S2 (finding R-01): serde types in `src/testing/qa/` define the schema and the wrapper never interprets contracts. The legacy ASCII snapshot (`quality-contract.txt`, formerly the baseline) was retired with S7; do **not** teach `--check`/`--save` against it.
+The canonical contract is [docs/quality-contract.json](quality-contract.json) — **JSON-only** authority: serde types in `src/testing/qa/` define the schema and the wrapper never interprets contracts. The legacy ASCII snapshot (`quality-contract.txt`, formerly the baseline) was retired; do **not** teach `--check`/`--save` against it.
 
 ### 9.2. Tolerance Margins
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Oversampling Characterization for LSTM Models — Sprint β3, Task β3.1.
+//  Oversampling Characterization for LSTM Models.
 //
 //  Measures the empirical effect of external `OversampleEngine` (Off vs 2× vs 4×)
 //  on LSTM models:
@@ -246,7 +246,7 @@ const LSTM_MODELS: &[(&str, &str)] = &[
 #[ignore = "requires .nam model files; run with --ignored --nocapture"]
 fn characterize_lstm_oversampling() {
     eprintln!("\n╔══════════════════════════════════════════════════════════════════╗");
-    eprintln!("║  Sprint β3 — LSTM Oversampling Characterization (Task β3.1)     ║");
+    eprintln!("║  LSTM Oversampling Characterization                              ║");
     eprintln!("╚══════════════════════════════════════════════════════════════════╝\n");
 
     // ── ASR Measurements ──

@@ -812,7 +812,7 @@ fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Opt
 ///
 /// # Registry source:
 ///
-/// The golden registry is Rust-only (Sprint S3-T02): it lives in
+/// The golden registry is Rust-only: it lives in
 /// `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` and the shell generator
 /// consumes it through `nam_golden_catalog emit-catalog` — no bash array
 /// defines the catalog anymore.

@@ -13,7 +13,7 @@
 //! `validate_v2_catalog` powers the `catalog_preflight` gate; the shell
 //! generator (`tests/fixtures/golden_gen_build.sh`) consumes the same registry
 //! through `golden_gen_catalog_lines` (via the `nam_golden_catalog` binary), so
-//! no bash array defines the catalog anymore (Sprint S3-T02).
+//! no bash array defines the catalog anymore.
 //!
 //! Also hosts the **V1 golden catalog** (`V1_GOLDEN_CATALOG`) — the single
 //! source of truth for the 48 kHz v1 golden vectors (DistributedCore model
@@ -21,7 +21,7 @@
 //! convolution goldens). `validate_v1_goldens` powers the same
 //! `catalog_preflight` gate; the former bash lists `REQUIRED_GOLDEN_MODELS`,
 //! `NONDIST_GOLDEN_MODELS` and `REQUIRED_CABSIM_GOLDENS` in
-//! `utils/tests-long.sh` were removed (Sprint S6-T01).
+//! `utils/tests-long.sh` were removed.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -569,7 +569,7 @@ pub fn known_gap_count() -> usize {
 }
 
 // =============================================================================
-// V2 Golden Catalog — single source of truth (Sprint S3-T02)
+// V2 Golden Catalog — single source of truth
 // =============================================================================
 //
 // This registry defines the canonical V2 multi-SR golden matrix: which models
@@ -1160,7 +1160,7 @@ impl CatalogStatus {
         )
     }
 
-    /// Emits a typed capability receipt for the V1 golden catalog (Sprint S6-T01).
+    /// Emits a typed capability receipt for the V1 golden catalog.
     ///
     /// Same marker contract as [`CatalogStatus::receipt`]: the shell preflight
     /// counts `MISSING-REQUIRED:` lines from the `catalog_preflight` log, so
@@ -1318,7 +1318,7 @@ pub fn validate_v2_catalog() -> Result<CatalogStatus, CatalogError> {
 }
 
 // =============================================================================
-// V1 Golden Catalog — single source of truth (Sprint S6-T01)
+// V1 Golden Catalog — single source of truth
 // =============================================================================
 //
 // The former bash lists in `utils/tests-long.sh` (REQUIRED_GOLDEN_MODELS,

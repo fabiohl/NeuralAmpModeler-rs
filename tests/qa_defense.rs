@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Defense harness (EP-05 / R-05, Sprint S5) — the Rust home of the long
+//! Defense harness (EP-05 / R-05) — the Rust home of the long
 //! suite's "Defense scripts + libm + oversample" phase.
 //!
 //! `utils/tests-long.sh` used to run an inline bash unit suite
-//! (`run_bash_scripts_unit_tests`, removed in S5.T2) that extracted
+//! (`run_bash_scripts_unit_tests`) that extracted
 //! functions from `utils/quality-dashboard.sh` / `utils/_lib.sh` with
 //! `sed`+`eval` (`extract_define`) and asserted their failure modes. This
 //! harness replaces that block with one `cargo test --features testing
@@ -23,7 +23,7 @@
 //! - F-24 — baseline coverage cross-check (`src/testing/qa/coverage.rs` +
 //!   `nam_perf_gate coverage`).
 //! - F-27 — canonical JSONL fidelity parse (`src/testing/qa/metrics.rs`).
-//! - S3-T01 — `utils/ensure_namcore_render.sh` exit-code contract and
+//! - `utils/ensure_namcore_render.sh` exit-code contract and
 //!   idempotency flows via subprocess (the function deliberately stays in
 //!   bash; these tests never `extract_define` it).
 //!

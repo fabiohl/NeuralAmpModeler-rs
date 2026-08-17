@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Process-level tests of the `nam_quality` CLI (Sprint S2.T5, R-08 / A-05).
+//! Process-level tests of the `nam_quality` CLI.
 //!
 //! Exercises the fail-closed CLI contract through `env!("CARGO_BIN_EXE_…")`
 //! subprocesses — the same pattern as `receipt_test.rs`:
@@ -9,7 +9,7 @@
 //! - exit 1: run-time failure (gate violated, unreadable input, refused save);
 //! - exit 2: usage error (unknown subcommand/flag, missing required flag).
 //!
-//! The `verify` fixtures are the S2.T2 acceptance scenarios, built from the
+//! The `verify` fixtures are the acceptance scenarios, built from the
 //! real `docs/quality-contract.json` (51 fidelity + 19 performance entries).
 
 use std::fs;
@@ -69,7 +69,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
-// ── Report builders (mirror of the S2.T2 acceptance fixtures) ───────────────
+// ── Report builders (mirror of the acceptance fixtures) ───────────────────────
 
 fn phase_line(phase_id: &str, status: &str) -> String {
     format!(r#"{{"phase_id":"{phase_id}","status":"{status}"}}"#)
@@ -168,7 +168,7 @@ fn missing_required_flags_exit_2() {
     assert_eq!(run(&["save"]).status.code(), Some(2));
 }
 
-// ── verify: S2.T2 acceptance fixtures ───────────────────────────────────────
+// ── verify: acceptance fixtures ─────────────────────────────────────────────
 
 #[test]
 fn verify_report_equals_contract_verdict_ok() {

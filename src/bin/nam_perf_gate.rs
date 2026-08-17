@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Performance-gate binary (Sprint S3, R-03 / R-09 / F-24) — the Rust engine
+//! Performance-gate binary (R-03 / R-09 / F-24) — the Rust engine
 //! behind `utils/tests-performance-regression.sh`.
 //!
 //! All performance-governance JSON lives here and in the `qa` modules
@@ -96,7 +96,7 @@ fn main() {
 }
 
 fn print_help() {
-    println!("NeuralAmpModeler-rs Performance Gate (Sprint S3, R-03 / R-09 / F-24)");
+    println!("NeuralAmpModeler-rs Performance Gate");
     println!();
     println!("Rust engine of the performance regression gate: fingerprint, coverage");
     println!("and baseline persistence are serde JSON — the shell wrapper only");

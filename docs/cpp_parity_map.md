@@ -33,7 +33,7 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 | **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture)          |
 | **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (prewarm fix eliminates 2.54e-5 transient)                                           | [§6](#6-other-architectures-out-of-scope) |
 | Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures-out-of-scope) |
-| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                     | [§6](#6-other-architectures-out-of-scope) |
+| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                    | [§6](#6-other-architectures-out-of-scope) |
 
 ## 1. Methodology
 

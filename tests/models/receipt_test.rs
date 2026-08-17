@@ -8,7 +8,7 @@
 //! - Zero unexpected FAILED stages (`receipt.has_unexpected_failures() == false`).
 //! - JSON serialization roundtrip and schema validity.
 //! - ASCII/Markdown audit table rendering.
-//! - Long-suite JSONL audit receipt (Sprint S3-T04): schema roundtrip, log
+//! - Long-suite JSONL audit receipt: schema roundtrip, log
 //!   test counting, summary verdict derivation, and the `nam_long_receipt`
 //!   CLI end-to-end (append → summary → validate).
 
@@ -88,7 +88,7 @@ fn test_capability_receipt_generation_and_invariants() {
     eprintln!("Successfully validated capability receipt for all 51 canonical model identities.");
 }
 
-// ── Long-duration audit suite receipt (Sprint S3-T04) ──────────────────────
+// ── Long-duration audit suite receipt ───────────────────────────────────────
 
 #[test]
 fn test_long_phase_receipt_jsonl_schema_and_roundtrip() {

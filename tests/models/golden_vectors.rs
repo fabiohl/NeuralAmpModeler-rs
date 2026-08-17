@@ -152,7 +152,7 @@ fn run_v2_golden_test(
 }
 
 // =============================================================================
-// V2 Multi-SR Catalog — Single Source of Truth (Sprint S3-T02)
+// V2 Multi-SR Catalog — Single Source of Truth
 // =============================================================================
 //
 // The canonical V2 golden catalog (models, sample rates, expected fixtures,
@@ -1208,7 +1208,7 @@ fn test_a2_max_weight_budget_818_1052() {
     );
 }
 
-/// Checkpoints FiLM por slot (H6 — Sprint R2.bis, TR2b.3).
+/// Checkpoints FiLM por slot (H6).
 ///
 /// Under unlock, builds A2 Max and registers per-layer, per-FiLM-slot:
 /// (groups, shift, w_count, b_count, stream offset). Verifies the total
@@ -3330,7 +3330,7 @@ fn test_measure_a2_max_snr_vs_golden() {
     println!("// Measured: max_abs_error = {max_abs:.4e} | same run");
 }
 
-/// Triple decomposition harness (H0 — Sprint R2.bis, TR2b.1).
+/// Triple decomposition harness (H0).
 ///
 /// Processes the same deterministic golden input (n=2048) three ways:
 ///   1. prod f32 (unlock) — with diagnostic dumps of condition_dsp, head_accum, output
@@ -3556,7 +3556,7 @@ fn test_h0_triple_decomposition() {
     );
 }
 
-/// Runtime contract condition_dsp (H5+H7 — Sprint R2.bis, TR2b.2).
+/// Runtime contract condition_dsp (H5+H7).
 ///
 /// Under unlock, builds A2 Max and inspects the nested condition_dsp sub-model:
 ///   1. Asserts `condition_dsp.num_output_channels()` value and documents.
@@ -4295,7 +4295,7 @@ fn test_golden_vectors_linear_nobias() {
 ///    resolves its path via the unified path resolution (env vars → local
 ///    checkout), checks disk presence, and emits a typed capability report.
 ///
-/// 2. **V1 golden catalog validation (Sprint S6-T01)** — runs
+/// 2. **V1 golden catalog validation** — runs
 ///    `catalog::validate_v1_goldens()` against the Rust single source of truth
 ///    (`src/testing/catalog.rs::V1_GOLDEN_CATALOG`), checking every 48 kHz v1
 ///    golden binary on disk: DistributedCore model goldens and the CabSim
@@ -4305,7 +4305,7 @@ fn test_golden_vectors_linear_nobias() {
 ///    / `REQUIRED_CABSIM_GOLDENS` in `utils/tests-long.sh` were removed; this
 ///    Rust gate is the only v1 presence check.
 ///
-/// 3. **V2 golden catalog validation (Sprint S3-T02)** — runs
+/// 3. **V2 golden catalog validation** — runs
 ///    `catalog::validate_v2_catalog()` against the Rust single source of truth
 ///    (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`), checking every model
 ///    fixture and every expected `*_v2_{sr}.bin` golden per the model's

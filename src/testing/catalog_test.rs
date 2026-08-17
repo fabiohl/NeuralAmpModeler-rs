@@ -130,7 +130,7 @@ fn test_validate_v2_catalog_ok_on_committed_fixtures() {
 
 /// The 13 v1 golden files (single source of truth snapshot) — mirrors the
 /// former bash lists REQUIRED_GOLDEN_MODELS / NONDIST_GOLDEN_MODELS /
-/// REQUIRED_CABSIM_GOLDENS in utils/tests-long.sh (removed, Sprint S6-T01).
+/// REQUIRED_CABSIM_GOLDENS in utils/tests-long.sh.
 const EXPECTED_V1_GOLDEN_FILES: &[&str] = &[
     "golden_wavenet_standard.bin",
     "golden_wavenet_feather.bin",

@@ -8,7 +8,7 @@
 //  `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`. Prevents silent drift where
 //  a model is added to tests but forgotten in the golden generator.
 //
-//  Since Sprint S3-T02 the golden registry is Rust-only (single source of
+//  The golden registry is Rust-only (single source of
 //  truth): `tests/fixtures/golden_gen_build.sh` sources its catalog from the
 //  `nam_golden_catalog` binary instead of defining a bash array. These tests
 //  therefore validate against the Rust registry, and `test_generator_sources_
@@ -247,10 +247,10 @@ fn test_catalog_models_have_consumers() {
     );
 }
 
-/// Structural guard (Sprint S3-T02): `golden_gen_build.sh` must source its
+/// Structural guard: `golden_gen_build.sh` must source its
 /// catalog from the Rust registry (`nam_golden_catalog emit-catalog`) and must
 /// NOT define a static `CATALOG=(...)` bash array. This prevents the catalog
-/// duplication the sprint eliminated from silently coming back.
+/// duplication from silently coming back.
 #[test]
 fn test_generator_sources_catalog_from_rust() {
     let script = golden_gen_build_path();
@@ -259,22 +259,22 @@ fn test_generator_sources_catalog_from_rust() {
     assert!(
         content.contains("nam_golden_catalog"),
         "golden_gen_build.sh must source its catalog from the Rust registry \
-         via `nam_golden_catalog emit-catalog` (Sprint S3-T02).\n\
+         via `nam_golden_catalog emit-catalog`.\n\
          The single source of truth is src/testing/catalog.rs::GOLDEN_GEN_CATALOG."
     );
     assert!(
         !content.contains("CATALOG=("),
         "golden_gen_build.sh must NOT define a static CATALOG=(...) array.\n\
          Model lists live exclusively in src/testing/catalog.rs::GOLDEN_GEN_CATALOG \
-         (Sprint S3-T02) — the generator consumes them through `nam_golden_catalog emit-catalog`."
+         — the generator consumes them through `nam_golden_catalog emit-catalog`."
     );
 }
 
-/// Structural guard (Sprint S3-T04): `utils/tests-long.sh` must emit the
+/// Structural guard: `utils/tests-long.sh` must emit the
 /// long-audit receipt exclusively through the Rust emitter
 /// (`nam_long_receipt append|summary` → `target/logs/long-audit-receipt.jsonl`)
 /// and must NOT hand-serialize the receipt as inline bash JSON — the fragile
-/// quoting this sprint eliminated.
+/// quoting this eliminated.
 #[test]
 fn test_long_suite_receipt_emitted_from_rust_bin() {
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("utils/tests-long.sh");
@@ -283,15 +283,14 @@ fn test_long_suite_receipt_emitted_from_rust_bin() {
     assert!(
         content.contains("nam_long_receipt"),
         "utils/tests-long.sh must emit the long-audit receipt through the Rust \
-         emitter `nam_long_receipt append` / `nam_long_receipt summary` \
-         (Sprint S3-T04).\n\
+         emitter `nam_long_receipt append` / `nam_long_receipt summary`.\n\
          The single generator is src/testing/receipt.rs + src/bin/nam_long_receipt.rs."
     );
     assert!(
         !content.contains("\"phase_id\""),
         "utils/tests-long.sh must NOT hand-serialize long-audit receipt JSON \
          via bash printf — the structured emitter (src/testing/receipt.rs + \
-         src/bin/nam_long_receipt.rs) is the single generator (Sprint S3-T04)."
+         src/bin/nam_long_receipt.rs) is the single generator."
     );
 }
 

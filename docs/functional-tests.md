@@ -17,13 +17,13 @@ Automated test architecture, gate taxonomy, and mathematical oracle hierarchies 
 
 ### Verification Hierarchy & Cadence
 
-| Tier / Runner          | Scope & Purpose                                                                                            | Target Duration | When to Run                                        |
-|:---------------------- |:---------------------------------------------------------------------------------------------------------- |:--------------- |:-------------------------------------------------- |
-| **Tier 1 (Manual)**    | ⚡ **Smoke Test:** High-yield sanity checks on loading, fallback, and basic inference                      | ~2 min          | After code changes to core DSP/loader modules      |
-| **Tier 2 (Manual)**    | 🎯 **Feature Verification:** Determinism, block-invariance, stage transitions, RT-safety                   | ~10–15 min      | Sprint completion or major feature integration     |
-| **Tier 3 (Manual)**    | 🛡️ **Robustness & Stress:** Extended endurance, rapid SPSC storms, rate modulation                         | ~20–30 min      | Pre-release audits or major refactorings           |
-| **Agile Quick Runner** | 🚀 **Agile 1st Line QA:** Structural debug tests, float/C++ parity oracles, parser fuzzing                 | Approximately 2 min (hardware-dependent)          | Pre-commit check or local iterative validation     |
-| **Long Audit Runner**  | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT deadline, jitter, Loom | Approximately 10 min (hardware-dependent)         | Nightly builds and pre-release human certification |
+| Tier / Runner          | Scope & Purpose                                                                                            | Target Duration                           | When to Run                                        |
+|:---------------------- |:---------------------------------------------------------------------------------------------------------- |:----------------------------------------- |:-------------------------------------------------- |
+| **Tier 1 (Manual)**    | ⚡ **Smoke Test:** High-yield sanity checks on loading, fallback, and basic inference                      | ~2 min                                    | After code changes to core DSP/loader modules      |
+| **Tier 2 (Manual)**    | 🎯 **Feature Verification:** Determinism, block-invariance, stage transitions, RT-safety                   | ~10–15 min                                | Milestone completion or major feature integration  |
+| **Tier 3 (Manual)**    | 🛡️ **Robustness & Stress:** Extended endurance, rapid SPSC storms, rate modulation                         | ~20–30 min                                | Pre-release audits or major refactorings           |
+| **Agile Quick Runner** | 🚀 **Agile 1st Line QA:** Structural debug tests, float/C++ parity oracles, parser fuzzing                 | Approximately 2 min (hardware-dependent)  | Pre-commit check or local iterative validation     |
+| **Long Audit Runner**  | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT deadline, jitter, Loom | Approximately 10 min (hardware-dependent) | Nightly builds and pre-release human certification |
 
 ---
 

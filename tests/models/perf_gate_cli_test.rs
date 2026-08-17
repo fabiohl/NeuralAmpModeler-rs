@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Process-level tests of the `nam_perf_gate` CLI (Sprint S3.T3).
+//! Process-level tests of the `nam_perf_gate` CLI.
 //!
 //! Exercises the fail-closed CLI contract through `env!("CARGO_BIN_EXE_…")`
 //! subprocesses — the same pattern as `quality_cli_test.rs`:
@@ -57,7 +57,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
-/// Acceptance (S3.T3): `compare` without a stored fingerprint fails with
+/// Acceptance: `compare` without a stored fingerprint fails with
 /// exit 1 and the `MISSING_BASELINE` token.
 #[test]
 fn compare_without_fingerprint_exits_1_with_missing_baseline() {

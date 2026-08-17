@@ -1334,7 +1334,7 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
     );
 }
 
-// SKIP_CAPABILITY (2026-08-03): Sprint 3 synthetic LSTM 1×10 produces
+// SKIP_CAPABILITY: Synthetic LSTM 1×10 produces
 // borderline-recurrent LUFS (−50.2) at 96 kHz on the v2 stress signal.
 // The longer sequence accumulates minor LSTM state deviations in the C++
 // render, marginally reducing output energy at the tail. All other fidelity
@@ -1346,7 +1346,7 @@ fn live_cross_validation_v2_lstm_1x10() {
     run_v2_multi_sr("lstm_1x10.nam", "lstm_1x10", "Live LSTM 1×10 (v2)", false);
 }
 
-// SKIP_CAPABILITY (2026-08-03): Sprint 3 synthetic LSTM 2×24 produces LUFS
+// SKIP_CAPABILITY: Synthetic LSTM 2×24 produces LUFS
 // between −51 and −54 across all SRs on the v2 stress signal. The very large
 // hidden size (24) causes recurrent state to dampen output energy over the
 // long stress sequence — a known architecture characteristic, not a defect.

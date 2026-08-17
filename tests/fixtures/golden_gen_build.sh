@@ -287,7 +287,7 @@ echo "  gen_stress: $GEN_STRESS"
 echo "  wav_to_golden: $WAV_TO_GOLDEN"
 
 # =============================================================================
-# Golden registry — loaded from Rust (single source of truth, Sprint S3-T02)
+# Golden registry — loaded from Rust (single source of truth)
 # =============================================================================
 # The canonical model↔golden registry (39 entries) lives in
 # src/testing/catalog.rs::GOLDEN_GEN_CATALOG — the former static bash catalog
@@ -303,7 +303,7 @@ echo "  wav_to_golden: $WAV_TO_GOLDEN"
 #     skip_srs (optional) — sample rates NOT to generate in v2 (e.g. 192000)
 #     skip_reason (optional) — if non-empty, skip model entirely in both v1 and v2
 #     loops with an explanatory message. Also suppresses # EXPECTED: lines in the
-#     freshness manifest (F-C9, Tarefa T3.2).
+#     freshness manifest.
 #
 # Rationale for v2_scope=none (A2 dynamic/FiLM models):
 #   The 4 dynamic/FiLM models (a2_dynamic_gated_ch8, a2_dynamic_blended_ch3,

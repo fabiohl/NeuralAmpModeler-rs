@@ -5,14 +5,11 @@
 //!
 //! Defines the canonical machine-readable contract types that replace the
 //! ASCII snapshot at `docs/quality-contract.txt` as the single source of
-//! truth (finding R-01, sprint S1). Shell scripts never hand-serialize this
-//! schema: serde does.
+//! truth. Shell scripts never hand-serialize this schema: serde does.
 //!
-//! The types mirror the illustrative schema of `.agents/TODO-refatora.md`
-//! §R-01 and are consumed by the one-shot transcription (S1.T3) and by the
-//! future `nam_quality` engine (S2). They are intentionally **not**
-//! re-exported from the crate root: the public crate API stays free of
-//! QA-contract types.
+//! The types are consumed by contract transcription and by the `nam_quality`
+//! engine. They are intentionally **not** re-exported from the crate root:
+//! the public crate API stays free of QA-contract types.
 //!
 //! Available only with the `testing` feature (the whole `testing` module is
 //! feature-gated at `lib.rs`).
@@ -198,7 +195,7 @@ pub enum QualityContractError {
 /// JSONL fidelity metrics ingest (F-27) — `FidelityRecord` + canonical parser.
 pub mod metrics;
 
-/// Performance-baseline persistence (S3.T3) — replace-copy of top-level
+/// Performance-baseline persistence — replace-copy of top-level
 /// Criterion series with nested sanitize (scenario 4 semantics).
 pub mod baseline_store;
 
@@ -206,7 +203,7 @@ pub mod baseline_store;
 /// `FAIL` semantics shared by the dashboard and the perf-gate.
 pub mod classify;
 
-/// Baseline coverage cross-check (F-24, S3.T2) — `executed_bench_ids` /
+/// Baseline coverage cross-check (F-24) — `executed_bench_ids` /
 /// `missing_baseline_coverage` ported from the perf-gate bash.
 pub mod coverage;
 
@@ -214,7 +211,7 @@ pub mod coverage;
 /// toolchain / governor / git state for receipts and fingerprints.
 pub mod env;
 
-/// Performance-baseline environment fingerprint (S3.T1) — serde JSON
+/// Performance-baseline environment fingerprint — serde JSON
 /// persisted under `.performance-baselines/` plus the field-by-field
 /// `MISSING_BASELINE` / `INCOMPARABLE_ENVIRONMENT` comparison.
 pub mod fingerprint;
@@ -226,7 +223,7 @@ pub mod ids;
 /// Contract verify engine — literal port of the bash `verify_contract`.
 pub mod verify;
 
-/// Human-facing dashboard renderer (S6.T1) — pure `QualityReport → String`
+/// Human-facing dashboard renderer — pure `QualityReport → String`
 /// (ANSI/plain), consumed by `nam_quality render` and the dashboard wrapper.
 pub mod render;
 
