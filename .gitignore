@@ -72,5 +72,19 @@ tests/fixtures/f64_anchors/*.backup
 __pycache__/
 *.pyc
 
+# IDE / editor local settings
+.vscode/
+.idea/
+*.code-workspace
+
+# LLVM coverage artifacts (operator-optional — see docs/testing.md §11)
+*.profraw
+*.profdata
+coverage/
+
+# direnv local environment
+.direnv/
+.envrc
+
 # Local IDE tooling
 /.kilo/

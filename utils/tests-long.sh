@@ -370,7 +370,7 @@ emit_preflight_receipt "preflight-freshness" "Fixture/golden freshness preflight
 # goldens needed — it only parses golden_gen_build.sh + tests/*.rs). It has no
 # home in tests-quick.sh (not a correctness or structural test) and would be
 # silently orphaned ("on demand" only) without this hook. Runs here, before
-# the ± 50 min battery, so a drifted catalog fails fast instead of burning a
+# the approximately 10-minute battery, so a drifted catalog fails fast instead of burning a
 # full nightly window before being noticed.
 echo -e "\n${BLUE}${BOLD}→ Checking catalog↔test coherence (preflight-meta)...${NC}"
 PF_META_START=$(date +%s%N)

@@ -31,9 +31,9 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 | **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)                |
 | **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)    | [§3](#3-wavenet-a1-architecture)          |
 | **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture)          |
-| **ConvNet**                 | ✅ IDÊNTICO — Paridade Total de Inicialização e Aritmética (prewarm fix elimina transiente de 2.54e-5)                                      | [§6](#6-other-architectures-out-of-scope) |
+| **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (prewarm fix eliminates 2.54e-5 transient)                                           | [§6](#6-other-architectures-out-of-scope) |
 | Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures-out-of-scope) |
-| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; sem claim de paridade multi-size NAMCore (§6 / §7.4)                                              | [§6](#6-other-architectures-out-of-scope) |
+| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                     | [§6](#6-other-architectures-out-of-scope) |
 
 ## 1. Methodology
 
@@ -944,7 +944,7 @@ Historical: pre-R3 baseline 1.35 dB; H1-only peak 2.31 dB; H1+H2 tree **0.23 dB*
 #### 4.4.1 Investigation Log — Hypothesis Matrix (TR2.4)
 
 The hypotheses below are ordered by likelihood × isolation cost — H1 must be cleared
-before H2, etc. **Proibido** aplicar correções empilhadas sem isolar H1 primeiro.
+before H2, etc. **Forbidden** to apply stacked fixes without isolating H1 first.
 One dominant hypothesis per correction PR when possible.
 
 | ID  | Hypothesis                                                | Experiment                                                                                                                                                                                                                                          | Confirmation Criterion                           | Status                                                                                                                                                                                    |
@@ -1314,13 +1314,13 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   `a2_example.nam`. That makes A2 the weakest architecture on *genuine trained-model* coverage —
   by freeze policy, not by unnoticed silence.
 
-- **Community-trained A2 search:** Nenhum A2-Full/Lite treinado público
-  incorporado; fixtures full/lite permanecem sintéticos calibrados. A2 foi lançado
-  em 2026-06-02 e todos os modelos treinados conhecidos residem no TONE3000 sob a licença T3K
+- **Community-trained A2 search:** No publicly trained A2-Full/Lite
+  model is incorporated; full/lite fixtures remain calibrated synthetic. A2 was released
+  on 2026-06-02 and all known trained models reside on TONE3000 under the T3K license
   ("may not upload, republish, or distribute the data file without the author's permission") —
-  incompatível com redistribuição em fixtures Apache-2.0. Esta é uma limitação de ecossistema
-  (A2 é novo demais para existir um corpus treinado fora do TONE3000), não uma lacuna de
-  implementação.
+  incompatible with redistribution in Apache-2.0 fixtures. This is an ecosystem limitation
+  (A2 is too new for a trained corpus to exist outside TONE3000), not an implementation
+  gap.
 
 ---
 

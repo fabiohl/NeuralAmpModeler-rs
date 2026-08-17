@@ -89,11 +89,45 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     ///
     /// # Real-Time Safety
     /// This method MUST NOT allocate on the heap, acquire locks, or perform blocking I/O.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+    /// use neural_amp_modeler_rs::models::NamModel;
+    /// use neural_amp_modeler_rs::SystemSnapshot;
+    ///
+    /// let sys = SystemSnapshot::capture();
+    /// let mut pair = load_and_build_model(
+    ///     Path::new("path/to/model.nam"),
+    ///     &sys,
+    ///     false,
+    ///     LoadOptions::default(),
+    /// )
+    /// .expect("Failed to load model");
+    /// let model = pair.model_l.as_mut().expect("mono load yields model_l");
+    ///
+    /// // Process a block of audio samples
+    /// let input = [0.0_f32; 64];
+    /// let mut output = [0.0_f32; 64];
+    /// model.process(&input, &mut output);
+    /// ```
     fn process(&mut self, input: &[f32], output: &mut [f32]);
 
-    /// Primes internal state buffers by processing `num_samples` of zeroed input off-RT.
+    /// Primes internal state buffers by processing zeroed input off-RT.
     ///
-    /// Stabilizes receptive fields in WaveNet or recurrent states in LSTM before live audio processing.
+    /// Stabilizes receptive fields in WaveNet/ConvNet or recurrent states in LSTM before live audio
+    /// processing.
+    ///
+    /// # Per-family semantics of `num_samples`
+    ///
+    /// - **LSTM, Linear, and Container:** honor `num_samples` — the recurrent/FIR state is primed by
+    ///   processing exactly `num_samples` zeroed samples. Use [`prewarm_samples`](NamModel::prewarm_samples)
+    ///   for the recommended count (LSTM returns half the expected sample rate).
+    /// - **WaveNet A1/A2 and ConvNet:** ignore `num_samples`; the implementation performs a fixed
+    ///   one-shot prewarm (inherent method) that fills the full receptive field regardless of the
+    ///   argument. The value passed is irrelevant to the outcome.
     fn prewarm(&mut self, num_samples: usize);
 
     /// Returns whether prewarm should be executed on [`reset`](NamModel::reset).

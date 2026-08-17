@@ -126,6 +126,29 @@ fn read_and_validate_model_bytes(
 ///
 /// If file reading, format parsing, metadata validation, or architecture dispatching/construction
 /// fails for any requested channel, an error (`Err`) is returned.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+/// use neural_amp_modeler_rs::SystemSnapshot;
+///
+/// // Capture system capabilities (SIMD feature set, CPU topology)
+/// let sys = SystemSnapshot::capture();
+///
+/// // Load a model file (.nam or .namb)
+/// let pair = load_and_build_model(
+///     Path::new("path/to/model.nam"),
+///     &sys,
+///     false, // mono execution (set true for stereo)
+///     LoadOptions::default(),
+/// )
+/// .expect("Failed to load model");
+///
+/// assert!(pair.model_l.is_some());
+/// assert!(pair.model_r.is_none()); // Mono load: right channel is None
+/// ```
 pub fn load_and_build_model(
     path: &Path,
     sys: &SystemSnapshot,

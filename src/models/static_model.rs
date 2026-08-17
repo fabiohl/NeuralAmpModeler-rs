@@ -35,6 +35,7 @@ impl StaticModel {
     /// Only available under `#[cfg(test)]` or `#[cfg(feature = "testing")]`.
     /// For non-LSTM models, delegates to `process()`.
     #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn process_scalar(&mut self, input: &[f32], output: &mut [f32]) {
         match self {
             Self::Lstm1x3(m) => m.process_scalar(input, output),

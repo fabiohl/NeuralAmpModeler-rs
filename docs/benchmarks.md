@@ -248,7 +248,7 @@ Run this checklist **before** `--check` or `--bootstrap-baseline`:
 | `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                    |
 | [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse). |
 | [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                              |
-| [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (~3 min) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks.                                        |
+| [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (approximately 2 minutes, depending on the hardware) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks.                                        |
 
 > [!IMPORTANT]
 > **Always run `--check` before pushing.** A passing `utils/tests-quick.sh` and `utils/tests-long.sh` does

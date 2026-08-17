@@ -25,6 +25,9 @@ fn main() {
         return;
     }
 
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+    println!("cargo:rerun-if-changed=.cargo/hide-libm-shadow.map");
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
@@ -61,6 +64,5 @@ fn main() {
         println!(
             "cargo:rustc-link-arg=-Wl,--version-script={manifest_dir}/.cargo/hide-libm-shadow.map"
         );
-        println!("cargo:rerun-if-changed=.cargo/hide-libm-shadow.map");
     }
 }

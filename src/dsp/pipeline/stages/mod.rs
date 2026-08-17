@@ -22,6 +22,7 @@ pub use inference::run_inference;
 /// Denormal dither offset constant for FTZ/DAZ maintenance on the audio hot path.
 pub use input::DENORMAL_DITHER_OFFSET;
 #[cfg(feature = "testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use input::DISABLE_GATE;
 /// Applies input DSP stage: gate, denormal dither, and silence detection.
 pub use input::apply_input_stage;

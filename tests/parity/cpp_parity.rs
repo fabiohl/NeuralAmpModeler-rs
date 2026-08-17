@@ -909,7 +909,7 @@ fn live_cross_validation_wavenet_standard() {
         "Live WaveNet Standard",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-standard.nam");
 }
 
 #[test]
@@ -921,14 +921,14 @@ fn live_cross_validation_wavenet_feather() {
         "Live WaveNet Feather",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-feather.nam");
 }
 
 #[test]
 #[ignore]
 fn live_cross_validation_wavenet_nano() {
     let outcome = run_v1("BossWN-nano.nam", "wavenet_nano", "Live WaveNet Nano", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-nano.nam");
 }
 
 #[test]
@@ -958,14 +958,14 @@ fn live_cross_validation_wavenet_a1_standard() {
         "Live WaveNet A1 Standard (Official)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a1_standard.nam");
 }
 
 #[test]
 #[ignore]
 fn live_cross_validation_lstm_official() {
     let outcome = run_v1("lstm.nam", "lstm_official", "Live LSTM Official", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "lstm.nam");
 }
 
 #[test]
@@ -977,7 +977,7 @@ fn live_cross_validation_wavenet_a2_full() {
         "Live WaveNet A2-Full",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a2_full.nam");
 }
 
 #[test]
@@ -989,7 +989,7 @@ fn live_cross_validation_wavenet_a2_lite() {
         "Live WaveNet A2-Lite",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a2_lite.nam");
 }
 
 #[test]
@@ -1001,7 +1001,7 @@ fn live_cross_validation_convnet() {
         "Live ConvNet Test",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "convnet_test.nam");
 }
 
 // ── Synthetic and exotic topologies (v1) ──────────────────────────────
@@ -1010,21 +1010,21 @@ fn live_cross_validation_convnet() {
 #[ignore]
 fn live_cross_validation_lstm_1x10() {
     let outcome = run_v1("lstm_1x10.nam", "lstm_1x10", "Live LSTM 1×10", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "lstm_1x10.nam");
 }
 
 #[test]
 #[ignore]
 fn live_cross_validation_lstm_2x24() {
     let outcome = run_v1("lstm_2x24.nam", "lstm_2x24", "Live LSTM 2×24", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "lstm_2x24.nam");
 }
 
 #[test]
 #[ignore]
 fn live_cross_validation_lstm_3x8() {
     let outcome = run_v1("lstm_3x8.nam", "lstm_3x8", "Live LSTM 3×8", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "lstm_3x8.nam");
 }
 
 #[test]
@@ -1036,7 +1036,7 @@ fn live_cross_validation_convnet_nobn() {
         "Live ConvNet No BatchNorm",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "convnet_nobn.nam");
 }
 
 #[test]
@@ -1048,7 +1048,7 @@ fn live_cross_validation_convnet_relu() {
         "Live ConvNet ReLU",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "convnet_relu.nam");
 }
 
 #[test]
@@ -1060,7 +1060,7 @@ fn live_cross_validation_convnet_silu() {
         "Live ConvNet SiLU",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "convnet_silu.nam");
 }
 
 #[test]
@@ -1072,7 +1072,7 @@ fn live_cross_validation_linear_nobias() {
         "Live Linear No Bias",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "linear_nobias.nam");
 }
 
 #[test]
@@ -1084,7 +1084,11 @@ fn live_cross_validation_wavenet_condition_dsp() {
         "Live WaveNet Condition DSP",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "wavenet_condition_dsp.nam"
+    );
 }
 
 #[test]
@@ -1116,7 +1120,7 @@ fn live_cross_validation_a2_example_slimmable() {
         "Live SlimmableContainer A2 Example (CH=3→6)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "a2_example.nam");
 }
 
 // --- v2 (multi-SR, comprehensive) ---
@@ -1419,7 +1423,7 @@ fn live_cross_validation_wavenet_dyn() {
         "Live WaveNetDyn Free-Shape",
         false,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_dyn_free.nam");
 }
 
 #[test]
@@ -1431,7 +1435,7 @@ fn live_cross_validation_lstm_dyn() {
         "Live LSTM-Dyn 1×7",
         false,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "lstm_dyn_test.nam");
 }
 
 #[test]
@@ -1472,7 +1476,11 @@ fn live_cross_validation_a2_dynamic_gated() {
         "Live A2 Dynamic Gated (CH=8)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "a2_dynamic_gated_ch8.nam"
+    );
 }
 
 #[test]
@@ -1484,7 +1492,11 @@ fn live_cross_validation_a2_dynamic_blended() {
         "Live A2 Dynamic Blended (CH=3)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "a2_dynamic_blended_ch3.nam"
+    );
 }
 
 #[test]
@@ -1496,7 +1508,11 @@ fn live_cross_validation_wavenet_a2_film_lite() {
         "Live WaveNet A2-FiLM-Lite (CH=3)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "wavenet_a2_film_lite.nam"
+    );
 }
 
 #[test]
@@ -1508,7 +1524,11 @@ fn live_cross_validation_wavenet_a2_film_full() {
         "Live WaveNet A2-FiLM-Full (CH=8)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "wavenet_a2_film_full.nam"
+    );
 }
 
 #[test]
@@ -1520,7 +1540,11 @@ fn live_cross_validation_wavenet_a2_film_input_mixin_pre() {
         "Live WaveNet A2-FiLM-InputMixinPre (CH=3)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "wavenet_a2_film_input_mixin_pre.nam"
+    );
 }
 
 #[test]
@@ -1532,7 +1556,11 @@ fn live_cross_validation_wavenet_a2_film_chaos_stress() {
         "Live WaveNet A2-FiLM Chaos Stress (CH=3)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(
+        outcome,
+        ParityOutcome::Completed,
+        "wavenet_a2_film_chaos_stress.nam"
+    );
 }
 
 // wavenet_a2_max — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
@@ -1635,7 +1663,7 @@ fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
 #[ignore]
 fn live_cross_validation_linear() {
     let outcome = run_v1("linear_test.nam", "linear_test", "Live Linear RF=4", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "linear_test.nam");
 }
 
 #[test]
@@ -1678,14 +1706,14 @@ fn live_cross_validation_hf_lstm_1x16() {
         "Live LSTM 1×16 (HF)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossLSTM-1x16.nam");
 }
 
 #[test]
 #[ignore]
 fn live_cross_validation_hf_lstm_2x8() {
     let outcome = run_v1("BossLSTM-2x8.nam", "lstm_2x8", "Live LSTM 2×8 (HF)", true);
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossLSTM-2x8.nam");
 }
 
 #[test]
@@ -1697,7 +1725,7 @@ fn live_cross_validation_hf_wavenet_standard() {
         "Live WaveNet Standard (HF)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed);
+    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-standard.nam");
 }
 
 // --- v2 (multi-SR) HF tests, ignored ---
@@ -1798,7 +1826,7 @@ fn live_cross_validation_nondist_models() {
         }
 
         match result {
-            Ok(outcome) => assert_eq!(outcome, ParityOutcome::Completed),
+            Ok(outcome) => assert_eq!(outcome, ParityOutcome::Completed, "{filename}"),
             Err(e) => std::panic::resume_unwind(e),
         }
     }

@@ -28,9 +28,11 @@ use crate::testing::diagnostics::{DiagnosticConfig, DiagnosticDump};
 #[derive(Default)]
 pub struct DiagnosticState {
     #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     /// Diagnostic capture config (off-RT only).
     pub config: DiagnosticConfig,
     #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     /// Accumulated diagnostic dump for the current `process()` call.
     pub dump: Option<DiagnosticDump>,
 }
@@ -390,6 +392,7 @@ impl WaveNetA2Dyn {
     ///
     /// Allocates a new `DiagnosticDump`. Not compiled in release builds.
     #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn enable_diagnostics(&mut self, config: DiagnosticConfig) {
         self.diag.config = config;
         self.diag.dump = Some(DiagnosticDump::new(0));
@@ -397,6 +400,7 @@ impl WaveNetA2Dyn {
 
     /// Takes the accumulated diagnostic dump, resetting internal state.
     #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
     pub fn take_diagnostics(&mut self) -> Option<DiagnosticDump> {
         self.diag.dump.take()
     }

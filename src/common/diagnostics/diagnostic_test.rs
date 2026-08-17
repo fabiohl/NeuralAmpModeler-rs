@@ -14,7 +14,10 @@ fn test_error_code_display() {
     let code = NamErrorCode::NambCrc32Mismatch;
     assert_eq!(code.code(), "E1201");
     assert_eq!(code.mnemonic(), "NAMB_CRC32_MISMATCH");
-    assert_eq!(format!("{}", code), "E1201 | NAMB_CRC32_MISMATCH");
+    assert_eq!(
+        format!("{}", code),
+        "[E1201 NAMB_CRC32_MISMATCH] CRC32 checksum mismatch"
+    );
 }
 
 /// Ensures the integrity of the error registry, preventing duplicate numeric codes (E####).

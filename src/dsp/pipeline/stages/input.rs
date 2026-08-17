@@ -14,6 +14,7 @@ use super::super::bridge::DspBridgeWriter;
 use super::super::context::DspPipelineContext;
 
 #[cfg(feature = "testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 /// Global control to disable the noise gate/silence bypass during profiling/benchmarks.
 /// Only available in testing builds — production host plugin builds must not share
 /// this state across instances.

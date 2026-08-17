@@ -59,6 +59,7 @@ use super::fft::FftFloat;
 
 /// Pre-computed Radix-4 DIT FFT plan.
 #[cfg(any(test, feature = "long_bench"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "long_bench")))]
 pub struct FftPlannerRadix4<T: FftFloat> {
     n: usize,
     bit_reverse: Vec<usize>,
@@ -72,6 +73,7 @@ pub struct FftPlannerRadix4<T: FftFloat> {
 }
 
 #[cfg(any(test, feature = "long_bench"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "long_bench")))]
 impl<T: FftFloat> FftPlannerRadix4<T> {
     /// Creates a new Radix-4 FFT plan for size `n`.
     ///

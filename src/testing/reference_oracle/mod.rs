@@ -21,6 +21,12 @@
 //! [`PrecisionConfig`] controls the weight precision (f32/f64/bf16),
 //! activation approximation mode, and accumulation strategy used by
 //! the oracles, enabling targeted decomposition comparisons.
+//!
+//! # Documentation scope
+//! This subtree is intentionally undocumented item-by-item (see the
+//! `#![allow(missing_docs)]` below): the oracles mirror the production
+//! forward passes formula-by-formula, and the authoritative spec is
+//! `docs/cpp_parity_map.md` rather than per-function prose.
 
 #![allow(missing_docs)]
 

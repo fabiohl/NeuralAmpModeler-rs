@@ -43,6 +43,17 @@ impl CabSimIr {
     /// # Errors
     /// Returns `io::Error` on I/O failures, invalid headers, unsupported formats,
     /// or resampling errors. Never panics.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// use neural_amp_modeler_rs::dsp::cabsim::loader::CabSimIr;
+    ///
+    /// let ir = CabSimIr::load(Path::new("path/to/ir.wav"), 48000, true)
+    ///     .expect("Failed to load impulse response");
+    /// assert_eq!(ir.sample_rate, 48000);
+    /// ```
     #[cold]
     pub fn load(path: &Path, target_rate: u32, normalize: bool) -> io::Result<Box<Self>> {
         info!(

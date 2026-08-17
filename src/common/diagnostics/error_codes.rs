@@ -308,6 +308,12 @@ impl std::error::Error for NamErrorCode {}
 
 impl fmt::Display for NamErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} | {}", self.code(), self.mnemonic())
+        write!(
+            f,
+            "[{} {}] {}",
+            self.code(),
+            self.mnemonic(),
+            self.message()
+        )
     }
 }

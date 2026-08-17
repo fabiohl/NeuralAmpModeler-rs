@@ -158,6 +158,15 @@ impl NamResampler {
         Self::new_inner(host_rate, nam_rate, PhaseType::Minimum)
     }
 
+    /// Creates the pair of resamplers (input+output) without the unused chunk-size parameter.
+    ///
+    /// Equivalent to [`new`](NamResampler::new)`(host_rate, nam_rate, 0)`.
+    /// See [`new`](NamResampler::new) for the full parameter documentation.
+    #[cold]
+    pub fn new_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
+        Self::new(host_rate, nam_rate, 0)
+    }
+
     /// Creates the pair of resamplers using **linear-phase** polyphase banks.
     ///
     /// Linear-phase preserves perfect phase linearity at the cost of pre-ringing —
@@ -168,6 +177,15 @@ impl NamResampler {
     #[cold]
     pub fn new_linear(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
         Self::new_inner(host_rate, nam_rate, PhaseType::Linear)
+    }
+
+    /// Creates the linear-phase pair of resamplers without the unused chunk-size parameter.
+    ///
+    /// Equivalent to [`new_linear`](NamResampler::new_linear)`(host_rate, nam_rate, 0)`.
+    /// See [`new_linear`](NamResampler::new_linear) for the full parameter documentation.
+    #[cold]
+    pub fn new_linear_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
+        Self::new_linear(host_rate, nam_rate, 0)
     }
 
     /// Returns `true` when `host_rate == nam_rate` (bypass).

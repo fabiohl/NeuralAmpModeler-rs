@@ -30,6 +30,15 @@ pub struct GateParams {
 
 impl GateParams {
     /// Creates new gate parameters by computing `inv_fade_frames = 1.0 / fade_frames`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::dsp::gate::GateParams;
+    ///
+    /// let params = GateParams::new(-70.0, -80.0, 2048, 256, 1e-4);
+    /// assert_eq!(params.inv_fade_frames, 1.0 / 256.0);
+    /// ```
     pub fn new(
         threshold_open_db: f32,
         threshold_close_db: f32,

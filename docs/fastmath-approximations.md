@@ -39,15 +39,9 @@ Designed for ultra-low latency or CPU-constrained setups:
 > [!WARNING]
 > **Calibration Limits under Fast Mode:** `Fast` mode approximations are optimized over compact domains: `tanh` on $[-4, 4]$ (max absolute error $\approx 2.32 \times 10^{-3}$) and `sigmoid` on $[-8, 8]$ (max absolute error $\approx 4.09 \times 10^{-4}$). In recurrent architectures (LSTM) with large hidden states where gate inputs $|g| > 4$, approximation errors accumulate over time, creating recurrent state drift. Standard mode avoids this drift and is recommended for recurrent models.
 
-#### Activation Precision Impact Across Topologies (Measured in `quality-contract.json`)
+#### Activation Precision Impact Across Topologies
 
-| Model Topology          | Fast Mode SNR (Padé) | Standard Mode SNR (Exact) | Δ SNR Gain  |
-|:----------------------- |:-------------------- |:------------------------- |:----------- |
-| **LSTM 1×16**           | 15.9 dB              | 103.2 dB                  | **+87.3 dB**|
-| **LSTM 2×8**            | 24.1 dB              | 114.0 dB                  | **+89.9 dB**|
-| **Official lstm (H=3)** | 29.3 dB              | 120.5 dB                  | **+91.2 dB**|
-
-*Average SNR gain with `Standard` (exact-grade): **+89.5 dB** across tested LSTM architectures.*
+The measured SNR impact of `Fast` vs `Standard` activation precision across LSTM topologies is canonical in [audio_fidelity_map.md §2.1](audio_fidelity_map.md#21-fast-mode--opt-in-for-cpu-constrained-setups) and is not duplicated here.
 
 ### 1.3 Interaction with Oversampling & Full Topology Coverage
 

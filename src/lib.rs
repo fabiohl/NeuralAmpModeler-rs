@@ -134,6 +134,23 @@
 //!
 //! ---
 //!
+//! ## 📦 Published API vs Maintainer Tooling
+//!
+//! The host-facing inference surface is:
+//!
+//! - **[`loader`]** — `.nam`/`.namb` parsing and model construction;
+//! - **[`models::NamModel`]** — the processing trait every model implements;
+//! - **[`dsp`]** — oversampling, gating, resampling, cab-sim, and pipelines.
+//!
+//! Everything needed to render audio in a host application lives in those
+//! modules. The **`testing`** module and the `nam_*` / `gen_stress` binaries
+//! shipped with the crate require `--features testing` and are **maintainer
+//! tooling**, not host API: they validate the engine (fixtures, golden
+//! vectors, quality receipts) and are intentionally outside the inference
+//! contract. Do not depend on them from host code.
+//!
+//! ---
+//!
 //! ## 🛡 Real-Time Safety & Performance Guarantees
 //!
 //! NeuralAmpModeler-rs is engineered for **absolute real-time safety** on
@@ -232,7 +249,28 @@ pub mod math;
 /// Neural network architectures (WaveNet A1/A2, LSTM, ConvNet, Linear) and runtime dispatch.
 pub mod models;
 
+/// Convenience re-exports for the common inference pipeline.
+///
+/// Host applications can `use neural_amp_modeler_rs::prelude::*;` to bring the
+/// core inference types into scope without deep paths: [`crate::SystemSnapshot`],
+/// [`crate::loader::load_and_build_model`], [`crate::loader::LoadOptions`],
+/// [`crate::models::NamModel`], [`crate::models::StaticModel`],
+/// [`crate::dsp::oversample::OversampleEngine`],
+/// [`crate::dsp::oversample::OversampleFactor`],
+/// [`crate::dsp::resampler::NamResampler`], and
+/// [`crate::dsp::cabsim::loader::CabSimIr`]. The deep module paths remain
+/// available and unchanged; this module is purely additive.
+pub mod prelude {
+    pub use crate::common::diagnostics::SystemSnapshot;
+    pub use crate::dsp::cabsim::loader::CabSimIr;
+    pub use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
+    pub use crate::dsp::resampler::NamResampler;
+    pub use crate::loader::{LoadOptions, load_and_build_model};
+    pub use crate::models::{NamModel, StaticModel};
+}
+
 #[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 /// Off-RT test utilities, perceptual metrics, and signal generators. Requires `testing` feature.
 pub mod testing;
 

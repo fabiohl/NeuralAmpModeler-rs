@@ -131,6 +131,24 @@ impl OversampleEngine {
     ///
     /// `max_input_samples`: max block size at native model rate
     /// (e.g., `MAX_RESAMP_BUF = 8192`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
+    ///
+    /// const BLOCK_SIZE: usize = 128;
+    /// let mut engine = OversampleEngine::new(OversampleFactor::X4, BLOCK_SIZE)
+    ///     .expect("Failed to create oversampling engine");
+    ///
+    /// // Upsample → model processes at 4× rate → downsample back
+    /// let multiplier = OversampleFactor::X4.multiplier();
+    /// let input = [0.1_f32; BLOCK_SIZE];
+    /// let mut os_buf = [0.0_f32; BLOCK_SIZE * 4];
+    /// let mut output = [0.0_f32; BLOCK_SIZE];
+    /// let n_os = engine.upsample(&input, &mut os_buf, None);
+    /// engine.downsample(&os_buf[..n_os], &mut output, None);
+    /// ```
     pub fn new(factor: OversampleFactor, max_input_samples: usize) -> Result<Self, NamErrorCode> {
         let inter_size = if factor.stage_count() >= 2 {
             max_input_samples * 2

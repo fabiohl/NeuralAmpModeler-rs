@@ -58,6 +58,69 @@ pub struct DspPipelineContext<'a> {
     pub conv: Option<&'a mut CabSimAdapter>,
 }
 
+impl<'a> DspPipelineContext<'a> {
+    /// Creates the pipeline context from its fifteen mandatory components.
+    ///
+    /// The optional [`bridge_writer`](DspPipelineContext::bridge_writer) and
+    /// [`conv`](DspPipelineContext::conv) pointers default to `None` (no
+    /// listener / cab-sim bypass); attach them with the chainable
+    /// [`with_bridge_writer`](Self::with_bridge_writer) and
+    /// [`with_conv`](Self::with_conv) methods.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "DspPipelineContext mirrors the public struct literal; all non-optional components are mandatory"
+    )]
+    pub fn from_parts(
+        resampler: &'a mut NamResampler,
+        os_l: &'a mut OversampleEngine,
+        os_r: &'a mut OversampleEngine,
+        active_model_l: &'a mut Option<Box<StaticModel>>,
+        active_model_r: &'a mut Option<Box<StaticModel>>,
+        input_gain_mult: f32,
+        output_gain_mult: f32,
+        gate_params: &'a GateParams,
+        silence_hysteresis: &'a mut DynamicHysteresis,
+        mono_hysteresis: &'a mut DynamicHysteresis,
+        threshold_open_sq: f32,
+        threshold_close_sq: f32,
+        process_mono: &'a mut bool,
+        rt_status: &'a RtStatusFlags,
+        adaptive: &'a mut AdaptiveCompute,
+    ) -> Self {
+        Self {
+            resampler,
+            os_l,
+            os_r,
+            active_model_l,
+            active_model_r,
+            input_gain_mult,
+            output_gain_mult,
+            gate_params,
+            silence_hysteresis,
+            mono_hysteresis,
+            threshold_open_sq,
+            threshold_close_sq,
+            process_mono,
+            rt_status,
+            adaptive,
+            bridge_writer: None,
+            conv: None,
+        }
+    }
+
+    /// Attaches the audio monitoring bridge writer (chainable).
+    pub fn with_bridge_writer(mut self, bridge_writer: DspBridgeWriter) -> Self {
+        self.bridge_writer = Some(bridge_writer);
+        self
+    }
+
+    /// Attaches the active cab-sim convolution adapter (chainable).
+    pub fn with_conv(mut self, conv: &'a mut CabSimAdapter) -> Self {
+        self.conv = Some(conv);
+        self
+    }
+}
+
 /// Intermediate working buffers for the DSP pipeline stages.
 ///
 /// Pre-allocated 64-byte aligned slices passed to pipeline processing stages to hold
@@ -88,4 +151,110 @@ pub struct DspBuffers<'a> {
     pub crossfade_scratch_l: &'a mut [f32],
     /// Scratch buffer for WaveNet crossfade second-pass output (right channel).
     pub crossfade_scratch_r: &'a mut [f32],
+}
+
+impl<'a> DspBuffers<'a> {
+    /// Creates the buffer set from all twelve working slices (mirrors the struct literal).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let mut a = [0.0f32; 8]; let mut b = [0.0f32; 8];
+    /// # let mut c = [0.0f32; 8]; let mut d = [0.0f32; 8];
+    /// # let mut e = [0.0f32; 8]; let mut f = [0.0f32; 8];
+    /// # let mut g = [0.0f32; 8]; let mut h = [0.0f32; 8];
+    /// # let mut i = [0.0f32; 8]; let mut j = [0.0f32; 8];
+    /// # let mut k = [0.0f32; 8]; let mut l = [0.0f32; 8];
+    /// use neural_amp_modeler_rs::dsp::pipeline::DspBuffers;
+    ///
+    /// let bufs = DspBuffers::from_parts(
+    ///     &mut a, &mut b, &mut c, &mut d,
+    ///     &mut e, &mut f, &mut g, &mut h,
+    ///     &mut i, &mut j, &mut k, &mut l,
+    /// );
+    /// assert!(bufs.resamp_mid_l.len() == 8);
+    /// ```
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "DspBuffers mirrors the public struct literal; all working slices are mandatory"
+    )]
+    pub fn from_parts(
+        resamp_mid_l: &'a mut [f32],
+        resamp_mid_r: &'a mut [f32],
+        resamp_out_l: &'a mut [f32],
+        resamp_out_r: &'a mut [f32],
+        model_out_l: &'a mut [f32],
+        model_out_r: &'a mut [f32],
+        os_in_l: &'a mut [f32],
+        os_in_r: &'a mut [f32],
+        os_model_l: &'a mut [f32],
+        os_model_r: &'a mut [f32],
+        crossfade_scratch_l: &'a mut [f32],
+        crossfade_scratch_r: &'a mut [f32],
+    ) -> Self {
+        Self {
+            resamp_mid_l,
+            resamp_mid_r,
+            resamp_out_l,
+            resamp_out_r,
+            model_out_l,
+            model_out_r,
+            os_in_l,
+            os_in_r,
+            os_model_l,
+            os_model_r,
+            crossfade_scratch_l,
+            crossfade_scratch_r,
+        }
+    }
+
+    /// Creates the buffer set from the ten stage slices, leaving both crossfade
+    /// scratches empty (`&mut []`).
+    ///
+    /// Attach scratch slices with [`with_crossfade_scratch_l`](Self::with_crossfade_scratch_l) /
+    /// [`with_crossfade_scratch_r`](Self::with_crossfade_scratch_r) when chunked
+    /// WaveNet crossfade processing is used.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "DspBuffers mirrors the public struct literal; all stage slices are mandatory"
+    )]
+    pub fn new(
+        resamp_mid_l: &'a mut [f32],
+        resamp_mid_r: &'a mut [f32],
+        resamp_out_l: &'a mut [f32],
+        resamp_out_r: &'a mut [f32],
+        model_out_l: &'a mut [f32],
+        model_out_r: &'a mut [f32],
+        os_in_l: &'a mut [f32],
+        os_in_r: &'a mut [f32],
+        os_model_l: &'a mut [f32],
+        os_model_r: &'a mut [f32],
+    ) -> Self {
+        Self::from_parts(
+            resamp_mid_l,
+            resamp_mid_r,
+            resamp_out_l,
+            resamp_out_r,
+            model_out_l,
+            model_out_r,
+            os_in_l,
+            os_in_r,
+            os_model_l,
+            os_model_r,
+            &mut [],
+            &mut [],
+        )
+    }
+
+    /// Attaches the left-channel crossfade scratch slice (chainable).
+    pub fn with_crossfade_scratch_l(mut self, crossfade_scratch_l: &'a mut [f32]) -> Self {
+        self.crossfade_scratch_l = crossfade_scratch_l;
+        self
+    }
+
+    /// Attaches the right-channel crossfade scratch slice (chainable).
+    pub fn with_crossfade_scratch_r(mut self, crossfade_scratch_r: &'a mut [f32]) -> Self {
+        self.crossfade_scratch_r = crossfade_scratch_r;
+        self
+    }
 }

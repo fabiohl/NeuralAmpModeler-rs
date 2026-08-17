@@ -324,7 +324,7 @@ IR `.wav` files (mono, PCM16/24/float32) are loaded and resampled to the active 
 
 ## 5. Testing & Validation
 
-Testing methodology, the three-oracle model (NAMCore f32 parity / f64 reference oracle / ISA parity), gate calibration policy, and the full test coverage matrix are documented in [docs/testing.md](testing.md) and [docs/perceptual_validation.md](perceptual_validation.md) — not duplicated here. The README's [Tests & Validation](../README.md#-tests--validation) section gives the top-level summary.
+Testing methodology, the three-oracle model (NAMCore f32 parity / f64 reference oracle / ISA parity), gate calibration policy, and the full test coverage matrix are documented in [docs/testing.md](testing.md) and [docs/perceptual_validation.md](perceptual_validation.md) — not duplicated here. The README's [Quality & Performance](../README.md#-quality--performance) section gives the top-level summary.
 
 ## 6. A2 Architecture: Current State (Beta)
 

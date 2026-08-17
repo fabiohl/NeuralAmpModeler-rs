@@ -22,8 +22,8 @@ Automated test architecture, gate taxonomy, and mathematical oracle hierarchies 
 | **Tier 1 (Manual)**    | ⚡ **Smoke Test:** High-yield sanity checks on loading, fallback, and basic inference                      | ~2 min          | After code changes to core DSP/loader modules      |
 | **Tier 2 (Manual)**    | 🎯 **Feature Verification:** Determinism, block-invariance, stage transitions, RT-safety                   | ~10–15 min      | Sprint completion or major feature integration     |
 | **Tier 3 (Manual)**    | 🛡️ **Robustness & Stress:** Extended endurance, rapid SPSC storms, rate modulation                         | ~20–30 min      | Pre-release audits or major refactorings           |
-| **Agile Quick Runner** | 🚀 **Agile 1st Line QA:** Structural debug tests, float/C++ parity oracles, parser fuzzing                 | ~2–3 min        | Pre-commit check or local iterative validation     |
-| **Long Audit Runner**  | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT deadline, jitter, Loom | ~45–60 min      | Nightly builds and pre-release human certification |
+| **Agile Quick Runner** | 🚀 **Agile 1st Line QA:** Structural debug tests, float/C++ parity oracles, parser fuzzing                 | Approximately 2 min (hardware-dependent)          | Pre-commit check or local iterative validation     |
+| **Long Audit Runner**  | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT deadline, jitter, Loom | Approximately 10 min (hardware-dependent)         | Nightly builds and pre-release human certification |
 
 ---
 
@@ -153,7 +153,7 @@ assert!(max_diff < 1e-7, "Block-size invariance violation: max diff = {max_diff}
 
 ### 4.1 Agile Quick Suite Protocol (`utils/tests-quick.sh`)
 
-The quick suite serves as the fast, agile first line of defense (~2–3 minutes runtime).
+The quick suite serves as the fast, agile first line of defense (approximately 2 minutes, depending on the hardware).
 
 #### Execution Modes
 
@@ -187,7 +187,7 @@ Every execution produces structured logs and a summary receipt in `target/logs/`
 
 ### 4.2 Long Audit Suite Protocol (`utils/tests-long.sh`)
 
-The long audit suite provides exhaustive, multi-phase pre-release validation (~45–60 minutes unattended).
+The long audit suite provides exhaustive, multi-phase pre-release validation (approximately 10 minutes, depending on the hardware).
 
 #### Preflight Defense Gates
 

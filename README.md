@@ -7,6 +7,8 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20%7C%20AVX--512-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg)
 
+> **Series note:** the current release series is `0.x`; the `3.x` versions on crates.io/docs.rs are yanked leftovers of an earlier monolithic packaging.
+
 **NeuralAmpModeler-rs** is a high-performance, real-time neural inference DSP engine written in pure Rust. It provides the core DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — as well as impulse response (.wav) cabinet convolution.
 
 Designed for embedding in audio hosts, CLAP plugins, standalone audio hosts, offline renderers, and embedded DSP pipelines, it guarantees **zero heap allocations**, **zero locks**, and **zero blocking system calls** on the real-time audio processing thread.
@@ -98,7 +100,7 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 | `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics |
 | `heap-audit`     | Enables heap-allocation auditing infrastructure                          |
 | `long_bench`     | Enables long-form inference benchmarks                                   |
-| `dynamic-engine` | Enables scalar fallback for non-standard A2 convolution geometries       |
+| `dynamic-engine` | Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies |
 
 ---
 
@@ -134,49 +136,11 @@ fn main() {
 }
 ```
 
-#### 2. Full DSP Engine Pipeline (Model + Cabinet IR + Polyphase Oversampling)
+#### 2. Full DSP Engine Pipeline (Model + Cab IR + Polyphase Oversampling)
 
-```rust
-use std::path::Path;
-use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
-use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
-use neural_amp_modeler_rs::models::NamModel; // trait providing `process()`
-use neural_amp_modeler_rs::SystemSnapshot;
-
-const BLOCK_SIZE: usize = 128;
-
-fn main() {
-    let sys = SystemSnapshot::capture();
-
-    // Load neural model
-    let mut model_pair = load_and_build_model(
-        Path::new("models/BossWN-standard.nam"),
-        &sys,
-        false,
-        LoadOptions::default(),
-    ).unwrap();
-    let model = model_pair
-        .model_l
-        .as_mut()
-        .expect("mono load (stereo=false) always yields model_l");
-
-    // Create a 4x half-band polyphase oversampling engine (HQ mode)
-    let os_factor = OversampleFactor::X4;
-    let mut os_engine = OversampleEngine::new(os_factor, BLOCK_SIZE)
-        .expect("Failed to create oversampling engine");
-    let multiplier = os_factor.multiplier();
-
-    // Process a real-time audio block through the oversampled pipeline
-    let input = vec![0.1_f32; BLOCK_SIZE];
-    let mut output = vec![0.0_f32; BLOCK_SIZE];
-    let mut os_up_buf = vec![0.0_f32; BLOCK_SIZE * multiplier];
-    let mut os_model_buf = vec![0.0_f32; BLOCK_SIZE * multiplier];
-
-    let n_os = os_engine.upsample(&input, &mut os_up_buf, None);
-    model.process(&os_up_buf[..n_os], &mut os_model_buf[..n_os]);
-    os_engine.downsample(&os_model_buf[..n_os], &mut output, None);
-}
-```
+For the complete pipeline — model, cabinet IR, and 4× polyphase oversampling — see the
+[`offline_render`](examples/offline_render.rs) example (`cargo run --example offline_render -- <path/to/model.nam>`).
+The API surface used there is documented in the [crate docs](https://docs.rs/NeuralAmpModeler-rs).
 
 #### 3. Executable Examples
 
@@ -195,14 +159,14 @@ fn main() {
 
 ### Rustdoc Module Map
 
-| Module     | Purpose                                                      |
-|:---------- |:------------------------------------------------------------ |
-| [`loader`] | Model deserialization & construction (`.nam`, `.namb`)       |
-| [`math`]   | SIMD math primitives, activation approximations, DSP kernels |
-| [`models`] | Neural network architectures & `StaticModel` dispatch        |
-| [`dsp`]    | DSP engine: resampling, gating, oversampling, pipeline       |
-| [`common`] | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
-| `testing`  | Off-RT test utilities & perceptual metrics (feature-gated)   |
+| Module                                                | Purpose                                                      |
+|:----------------------------------------------------- |:------------------------------------------------------------ |
+| [`loader`](src/loader/)                               | Model deserialization & construction (`.nam`, `.namb`)       |
+| [`math`](src/math/)                                   | SIMD math primitives, activation approximations, DSP kernels |
+| [`models`](src/models/)                               | Neural network architectures & `StaticModel` dispatch        |
+| [`dsp`](src/dsp/)                                     | DSP engine: resampling, gating, oversampling, pipeline       |
+| [`common`](src/common/)                               | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
+| `testing`                                             | Off-RT test utilities & perceptual metrics (feature-gated)   |
 
 Full API documentation:
 

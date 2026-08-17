@@ -66,7 +66,7 @@ graph TD
 ### Phase 3 — Parser Fuzzing (release, `--ignored`, capped)
 
 - **Goal:** Tier 1 parser robustness and security verification.
-- **Scope:** `proptest_parsers` with `PROPTEST_CASES=1000` (configurable via `NAM_QUICK_PROPTEST_CASES`). The long suite runs the full case counts (up to 100,000 cases).
+- **Scope:** `proptest_parsers` with `PROPTEST_CASES=1000` (configurable via `NAM_QUICK_PROPTEST_CASES`). The long suite runs the full case counts (up to 100,000 cases). Outside the wrapper, `PROPTEST_CASES=N cargo test <test>` also works natively via proptest for any proptest-backed test.
 
 ### Heap Audits — delegated to the long suite
 
@@ -110,7 +110,7 @@ rg -n '#\[test\]|#\[ignore\]' tests src --glob '*test*.rs'
 
 ## 4. Summary of Decoupled Audits (Long QA Suite)
 
-Certain tests are marked as `#[ignore]` in the standard suite to keep execution times fast (~2 minutes). The core C++ parity, parser fuzzing, and SIMD precision gates run in Phase 2/3 of the quick QA suite. The remaining ignored tests are deferred to the nightly/pre-release auditing script ([utils/tests-long.sh](../utils/tests-long.sh)).
+Certain tests are marked as `#[ignore]` in the standard suite to keep execution times fast (approximately 2 minutes, depending on the hardware). The core C++ parity, parser fuzzing, and SIMD precision gates run in Phase 2/3 of the quick QA suite. The remaining ignored tests are deferred to the nightly/pre-release auditing script ([utils/tests-long.sh](../utils/tests-long.sh)).
 
 Before any timed phase, two **blocking pre-flight gates** run:
 [tests/models/meta_coherence.rs](../tests/models/meta_coherence.rs) (catalog↔test
@@ -385,3 +385,9 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                       |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                        |
 | **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                           |
+
+---
+
+## 11. Coverage Measurement (Operator-Optional)
+
+Code coverage is **not an official gate**: no `utils/*` script invokes a coverage tool, no CI stage enforces a coverage threshold, and no coverage dependency is declared. An operator who wants coverage numbers may install `cargo llvm-cov` locally (`cargo install cargo-llvm-cov`) and run `cargo llvm-cov --features testing` on demand — the results are a development aid only, never part of `utils/lints.sh`, `utils/tests-quick.sh`, `utils/quality-dashboard.sh --check`, or `utils/tests-long.sh`.

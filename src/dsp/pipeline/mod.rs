@@ -5,6 +5,16 @@
 //!
 //! This module isolates the audio processing logic from host orchestration.
 //! It contains the hot-path executed every audio cycle on the real-time thread.
+//!
+//! # Construction policy
+//!
+//! [`DspBuffers`](crate::dsp::pipeline::DspBuffers) and
+//! [`DspPipelineContext`](crate::dsp::pipeline::DspPipelineContext) are **not**
+//! marked `#[non_exhaustive]` (that would break existing host literals); field
+//! additions remain SemVer-breaking for literal construction. Prefer
+//! `DspBuffers::from_parts` / `DspBuffers::new` and
+//! `DspPipelineContext::from_parts`, which survive future field additions.
+//! New public types in this module must be born with a constructor.
 
 #[cfg(test)]
 use crate::models::NamModel;
@@ -28,6 +38,7 @@ pub use context::{DspBuffers, DspPipelineContext};
 /// Denormal dither offset value for FTZ/DAZ protection on the hot path.
 pub use stages::DENORMAL_DITHER_OFFSET;
 #[cfg(feature = "testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use stages::DISABLE_GATE;
 /// Input stage: gate processing, denormal dither, and silence bypass detection.
 pub use stages::apply_input_stage;
@@ -44,6 +55,7 @@ pub use stages::write_bridge;
 pub use capture::capture_dsp_pipeline;
 
 #[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 /// Test utilities for pipeline benchmarks and tests, exposed for plugin integration testing.
 pub mod test_util {
     /// Shared test infrastructure (allocators, guards) for pipeline tests.

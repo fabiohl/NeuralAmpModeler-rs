@@ -220,6 +220,7 @@ fn format_panic_report_to_buf(
 /// Public entry point for heap-audit tests to exercise `format_panic_report_to_buf`
 /// with the pre-captured `SystemSnapshot` without triggering a real panic.
 #[cfg(feature = "heap-audit")]
+#[cfg_attr(docsrs, doc(cfg(feature = "heap-audit")))]
 pub fn format_panic_report_for_audit_test(
     buf: &mut [u8],
     component: &str,

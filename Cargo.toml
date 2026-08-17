@@ -2,11 +2,12 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.94.0"
 license = "Apache-2.0"
 repository = "https://github.com/fabiohl/NeuralAmpModeler-rs"
+documentation = "https://docs.rs/NeuralAmpModeler-rs"
 description = "High-performance Neural Amp Modeler DSP core: WaveNet/LSTM/ConvNet inference, SIMD math (x86-64-v3), .nam/.namb loader, cabinet IR, resampling and noise gate."
 readme = "README.md"
 authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]

@@ -420,12 +420,32 @@ run_benchmarks() {
                 BENCH_NOT_VERIFIED_REASON="${receipt_reason:-UNKNOWN}"
                 echo -e "  ${YELLOW}⚠ NOT_VERIFIED${NC} performance not verified (${BENCH_NOT_VERIFIED_REASON})"
                 echo -e "  ${YELLOW}  Performance is not certified in this run; --check against the quality contract fails on this.${NC}"
+                case "$BENCH_NOT_VERIFIED_REASON" in
+                    MISSING_BASELINE)
+                        echo -e "  ${YELLOW}  DIAGNOSTIC: No statistical baseline found in .performance-baselines/.${NC}"
+                        echo -e "  ${YELLOW}  To bootstrap baseline (human operator only), run:${NC}"
+                        echo -e "  ${YELLOW}    utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
+                        ;;
+                    INCOMPARABLE_ENVIRONMENT)
+                        echo -e "  ${YELLOW}  DIAGNOSTIC: CPU/environment fingerprint differs from saved baseline.${NC}"
+                        echo -e "  ${YELLOW}  To re-calibrate baseline (human operator only), run:${NC}"
+                        echo -e "  ${YELLOW}    utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
+                        ;;
+                    BASELINE_COVERAGE_GAP)
+                        echo -e "  ${YELLOW}  DIAGNOSTIC: Benchmark suite has new benches without baseline series.${NC}"
+                        echo -e "  ${YELLOW}  To update baseline series (human operator only), run:${NC}"
+                        echo -e "  ${YELLOW}    utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
+                        ;;
+                esac
                 dashboard_phase_receipt "regression_gate" "NOT_VERIFIED" 0 0 10 "$receipt_reason"
                 ;;
             *)
                 DASHBOARD_PHASE_HAD_FAILURE=1
                 dashboard_phase_receipt "regression_gate" "FAIL" "$reg_exit" 0 10 "Performance regression check failed"
                 echo -e "  ${RED}✗${NC} regression_gate check failed (exit=${reg_exit})"
+                echo -e "  ${YELLOW}  DIAGNOSTIC: Review target/logs/regression-check.log for details.${NC}"
+                echo -e "  ${YELLOW}  If performance variation is due to background/thermal noise, re-bootstrap with:${NC}"
+                echo -e "  ${YELLOW}    utils/tests-performance-regression.sh --bootstrap-baseline${NC}"
                 ;;
         esac
 
@@ -516,7 +536,9 @@ parse_golden_vectors() {
     ' "$log" > "$parsed"
 
     while IFS=$'\t' read -r metric key value; do
-        [ "$metric" = "ESR_NAMCORE" ] && ESR_NAMCORE["$key"]="$value"
+        if [ "$metric" = "ESR_NAMCORE" ]; then
+            ESR_NAMCORE["$key"]="$value"
+        fi
     done < "$parsed"
 }
 
@@ -621,7 +643,9 @@ parse_isa_parity() {
     ' "$log" > "$parsed"
 
     while IFS=$'\t' read -r key val; do
-        [ -n "$key" ] && ISA_RESULTS["$key"]="$val"
+        if [ -n "$key" ]; then
+            ISA_RESULTS["$key"]="$val"
+        fi
     done < "$parsed"
 }
 
@@ -677,8 +701,9 @@ parse_benchmarks() {
     ' "$log" > "$parsed"
 
     while IFS=$'\t' read -r metric bench latency; do
-        [[ "$metric" == "LATENCY" ]] || continue
-        LATENCY_US["$bench"]="$latency"
+        if [[ "$metric" == "LATENCY" ]]; then
+            LATENCY_US["$bench"]="$latency"
+        fi
     done < "$parsed"
 
     MODEL_BENCH_NAMES=(
