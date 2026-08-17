@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: Feature Request / Architecture Proposal
+description: Propose a new neural network topology, SIMD optimization, FastMath kernel, or public DSP API enhancement.
+title: "[FEATURE]: "
+labels: ["enhancement", "proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for proposing an enhancement to **NeuralAmpModeler-rs**!
+
+        Before submitting, please ensure the proposal adheres to the core architectural principles:
+        1. **Absolute Real-Time Safety**: Zero dynamic heap allocations in audio processing callbacks.
+        2. **SIMD-First Design**: Native `x86-64-v3` vectorization with minimal register spills.
+        3. **Host-Agnostic Crate**: The core crate is an independent DSP library, not tied to a single application or format.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      description: What area of the project does this proposal improve?
+      options:
+        - "Neural Model Architecture / Topology"
+        - "SIMD / Microarchitecture Kernel Optimization"
+        - "FastMath Activation Function / Approximation"
+        - "CabSim / Resampling DSP Algorithm"
+        - "File Format (.nam / .namb) & Loader Evolution"
+        - "Public DSP API / Developer Experience"
+        - "Diagnostics, Telemetry & Quality Gates"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem_statement
+    attributes:
+      label: Problem Statement & Motivation
+      description: Is your feature request related to a problem or a new capability?
+      placeholder: "A clear and concise description of the motivation and why this is valuable..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_design
+    attributes:
+      label: Proposed Solution & Technical Design
+      description: Describe your proposed solution, data structures, and how it preserves RT safety and zero-allocation determinism.
+      placeholder: |
+        - Proposed API / data structure:
+        - Real-Time Safety & Allocation strategy:
+        - Static enum dispatch (`StaticModel`) integration:
+        - SIMD vectorization & memory alignment (`AlignedVec`):
+    validations:
+      required: true
+
+  - type: textarea
+    id: parity_impact
+    attributes:
+      label: Numerical Fidelity & Oracle Impact
+      description: How does this proposal interact with C++ NAMCore parity and the f64 numerical oracle?
+      placeholder: "Describe whether this introduces new oracles, changes thresholds in `docs/quality-contract.json`, or maintains bit-exact parity..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or workarounds you have evaluated.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Proposal Checklist
+      options:
+        - label: I have reviewed `docs/architecture.md` and `docs/audio_fidelity_map.md`.
+          required: true
+        - label: The proposed design preserves zero heap allocations on the audio thread.
+          required: true
+        - label: The proposal maintains the host-agnostic nature of the crate.
+          required: true

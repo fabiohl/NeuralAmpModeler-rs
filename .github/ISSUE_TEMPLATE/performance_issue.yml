@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: Performance / Real-Time Latency Issue
+description: Report throughput regressions, SIMD vectorization degradation, or real-time safety violations (heap allocations/xruns).
+title: "[PERF]: "
+labels: ["performance", "real-time", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to report CPU bottlenecks, SIMD vectorization regressions, or real-time determinism issues (such as heap allocations detected on the audio thread).
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Performance / RT Category
+      description: What aspect of performance is affected?
+      options:
+        - "WaveNet Inference Throughput Regression"
+        - "LSTM Inference Throughput Regression"
+        - "ConvNet / Linear Inference Throughput Regression"
+        - "CabSim IR Convolver Latency / CPU Spike"
+        - "Resampling / Oversampling Overhead"
+        - "Heap Allocation on Audio Hot-Path (RT Violation)"
+        - "Lock Contention / SPSC GC Ring Buffer Bottleneck"
+        - "Compiler Codegen / SIMD Vectorization Failure"
+        - "Other Performance Anomaly"
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware_cpu
+    attributes:
+      label: CPU Microarchitecture & System Specs
+      description: Detail your CPU, cache hierarchy, OS, and CPU governor.
+      placeholder: |
+        - CPU Model: AMD Ryzen 9 7950X (16C/32T) / Intel Core i9-13900K
+        - CPU Architecture / Instruction Sets: x86_64 (AVX2, FMA, AVX-512, BMI2)
+        - Operating System & Kernel: Linux 6.8.0-lowlatency / Arch Linux
+        - CPU Governor: performance
+        - Memory & Cache: 32 GB DDR5, 64MB L3 cache
+    validations:
+      required: true
+
+  - type: dropdown
+    id: active_simd
+    attributes:
+      label: Active SIMD Backend
+      description: The SIMD instruction set utilized during compilation.
+      options:
+        - "x86-64-v3 (AVX2 + FMA + BMI2 baseline)"
+        - "AVX-512 (AVX512F + AVX512VL + AVX512BW)"
+        - "AVX-512 VNNI BF16 (_mm512_dpbf16_ps)"
+        - "ARM NEON (aarch64)"
+        - "Scalar Ref (Fallbacks)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: benchmark_data
+    attributes:
+      label: Benchmark / Profiling Data
+      description: Provide benchmark measurements, `cargo bench` output, `nam_perf_gate` logs, or `perf stat` cycle counters.
+      placeholder: |
+        - Baseline Throughput / Time: e.g. WaveNet Standard: 12.4 us / 64 samples
+        - Measured Throughput / Time: e.g. WaveNet Standard: 28.1 us / 64 samples (2.26x slower)
+        - Regression Gate output: `cargo bench --bench regression_gate`
+        - Cycles per Sample / IPC: ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: rt_safety_context
+    attributes:
+      label: Real-Time Audio Context (If Applicable)
+      description: If this issue resulted in audio xruns or buffer underruns, describe the buffer size, audio backend, and heap audit findings.
+      placeholder: |
+        - Buffer Size & Sample Rate: 64 samples @ 48000 Hz (1.33 ms deadline)
+        - Allocation Audit (`cargo test --features heap-audit`): (Did an unexpected malloc occur in the hot-path?)
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce the Benchmark / Regression
+      description: Exact commands to reproduce the benchmark or profiling run.
+      placeholder: |
+        1. RUSTFLAGS="-C target-cpu=native" cargo bench --bench inference_bench
+        2. Observe regression on benchmark group `wavenet_standard`
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Verification
+      options:
+        - label: I verified that the benchmark was compiled in release mode (`--release`).
+          required: true
+        - label: I ensured the system was idle and CPU frequency throttling was minimized.
+          required: true
+        - label: I confirmed the baseline configuration in `.cargo/config.toml` (target `x86-64-v3`).
+          required: true

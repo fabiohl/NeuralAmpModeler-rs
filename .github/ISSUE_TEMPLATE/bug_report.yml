@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: Bug Report (DSP / Fidelity / Panic)
+description: Report audio artifacts, DSP numerical divergence, parser panics, or real-time determinism issues in the engine core.
+title: "[BUG]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve **NeuralAmpModeler-rs**!
+
+        Please make sure your report is self-contained within the DSP engine core crate.
+        For general architecture details, review [docs/architecture.md](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md) and [docs/audio_fidelity_map.md](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/audio_fidelity_map.md).
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Engine Subsystem
+      description: Select the DSP or architecture subsystem where the issue occurs.
+      options:
+        - "WaveNet Engine (A1 / A2 / Dyn / Cascade)"
+        - "LSTM Engine (Static 1x3..2x24 / Dyn)"
+        - "ConvNet Engine"
+        - "Linear / FIR Engine"
+        - "CabSim IR Convolver (Partitioned FFT / Direct FIR)"
+        - "Resampling / Oversampling (Polyphase / IIR / Sinc)"
+        - "Noise Gate & Input/Output Pipeline Stages"
+        - "FastMath & SIMD Kernels (AVX2 / AVX-512 / FMA)"
+        - "Model Loader / Deserializer (.nam JSON / .namb Binary)"
+        - "SPSC Concurrency & Telemetry Ring Buffers"
+        - "Diagnostic Bundle & Logging Subsystem"
+        - "Other / Core Architecture"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model_architecture
+    attributes:
+      label: Model Architecture
+      description: Select the neural model topology involved (if applicable).
+      options:
+        - "WaveNet Standard (ch=16)"
+        - "WaveNet Lite (ch=12)"
+        - "WaveNet Feather (ch=8)"
+        - "WaveNet Nano (ch=4)"
+        - "WaveNet A2-Full (ch=8)"
+        - "WaveNet A2-Lite (ch=3)"
+        - "WaveNet A2 Dynamic / Cascade"
+        - "WaveNet Dynamic (Free shape)"
+        - "LSTM 1x16 (Standard)"
+        - "LSTM 2x24 (High Quality)"
+        - "LSTM Static (Other: 1x3, 1x8, 1x12, 2x8, 2x12, 1x40)"
+        - "LSTM Dynamic (Arbitrary hidden/layers)"
+        - "ConvNet"
+        - "Linear"
+        - "Container (Nested submodels)"
+        - "N/A — Not Model Specific"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model_format
+    attributes:
+      label: Model / Asset Format
+      description: Specify the file format of the model or impulse response.
+      options:
+        - ".nam (JSON model format)"
+        - ".namb v1 (Native Audio Model Binary)"
+        - ".namb v2 (Layout-optimized binary format)"
+        - "CabSim WAV IR (Impulse Response)"
+        - "Synthetic / Test Signal (Internal)"
+        - "N/A"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment & Hardware
+      description: Provide details about your CPU microarchitecture, OS, and Rust toolchain.
+      placeholder: |
+        - NeuralAmpModeler-rs version: 0.6.0 (or commit hash)
+        - Rustc version: rustc 1.94.0 (or output of `rustc --version`)
+        - Target triple: x86_64-unknown-linux-gnu
+        - CPU Model: AMD Ryzen 9 7950X / Intel Core i7-13700K (AVX2, AVX-512)
+        - Active Crate Features: --features "dynamic-engine,stereo,testing"
+        - Host / Embedding Context: Standalone host / CLAP wrapper / Offline renderer / Benchmark CLI
+    validations:
+      required: true
+
+  - type: textarea
+    id: dsp_configuration
+    attributes:
+      label: DSP & Audio Configuration
+      description: Specify audio sampling rate, block size, oversampling mode, and precision.
+      placeholder: |
+        - Sample Rate: 48000 Hz (or 44100 / 96000 / 192000 Hz)
+        - Block / Buffer Size: 64 samples (or 32 / 128 / 256 / 512)
+        - Oversampling Mode: Off / 2x / 4x
+        - Activation Precision: Standard (Exact) / Fast (Padé approximation)
+        - Quality Mode: Live (zero-latency) / Offline (HQ deterministic)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description & Observed Behavior
+      description: A clear and concise description of what the bug is, what happened, and what you expected to happen.
+      placeholder: "Describe the unexpected behavior (e.g., audio distortion, phase divergence, panic during parsing, NaN output during silence, memory allocation detected on audio thread)..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: Steps to Reproduce
+      description: Provide minimal steps or code to reproduce the issue.
+      placeholder: |
+        1. Load model `example.nam` with `NamModel::from_file(...)`
+        2. Configure DSP pipeline with block size 64 at 48000 Hz
+        3. Call `process(...)` with input audio buffer
+        4. Observe output behavior / panic
+    validations:
+      required: true
+
+  - type: textarea
+    id: audio_metrics
+    attributes:
+      label: Objective Audio Metrics & Parity (If Applicable)
+      description: If this is an audio quality, fidelity, or parity issue, provide measured metrics (SNR, ESR, MSE, MR-STFT, true-peak dBTP, LUFS).
+      placeholder: |
+        - SNR (Signal-to-Noise Ratio): e.g. 85.2 dB (expected >= 105.0 dB)
+        - ESR (Error-to-Signal Ratio): e.g. 1.2e-9
+        - MSE (Mean Squared Error): e.g. 4.5e-14
+        - MR-STFT (Multi-Resolution STFT): e.g. 1.2e-4
+        - C++ NAMCore Parity Comparison: (Did C++ NAMCore output differ?)
+    validations:
+      required: false
+
+  - type: textarea
+    id: model_attachment
+    attributes:
+      label: Model / Audio Asset Attachment
+      description: |
+        Attach the model (.nam / .namb) or audio sample (.wav / .flac) by dragging and dropping it into this box, or provide a public URL (Tonehunt link, GitHub Release, etc.).
+      placeholder: "Drag and drop .nam / .namb / .wav / .zip file here, or paste download URL..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic Bundle / Logs / Backtrace
+      description: Paste any relevant output from `DiagnosticBundle::render()`, `NamLogger` trace, `RUST_LOG=trace`, or panic backtrace (`RUST_BACKTRACE=1`).
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate.
+          required: true
+        - label: I have verified this issue on the latest `main` branch or latest release.
+          required: true
+        - label: I have tested the build in release mode (`cargo build --release`).
+          required: true
+        - label: This issue pertains directly to the `NeuralAmpModeler-rs` engine core (and not downstream application-specific wrappers).
+          required: true

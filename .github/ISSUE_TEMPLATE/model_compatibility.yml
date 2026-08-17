@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: Model Compatibility / Loader Issue
+description: Report issues parsing, loading, deserializing, or executing specific .nam or .namb neural model files.
+title: "[MODEL]: "
+labels: ["loader", "compatibility", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template if a specific `.nam` (JSON) or `.namb` (binary) model fails to parse, load, or produces unexpected silence/NaNs.
+        Before reporting, try inspecting the model metadata with `cargo run --example inspect_model -- /path/to/model.nam` or `utils/check-model.sh /path/to/model.nam`.
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Model Format
+      description: What is the format of the model causing the issue?
+      options:
+        - ".nam (Standard JSON format)"
+        - ".namb v1 (Native Audio Model Binary)"
+        - ".namb v2 (Layout-optimized binary format)"
+        - "CabSim WAV IR (Impulse Response)"
+    validations:
+      required: true
+
+  - type: input
+    id: model_source
+    attributes:
+      label: Model Source / Origin
+      description: Where was this model obtained or how was it trained?
+      placeholder: "e.g. Tonehunt link, official NAM Trainer (PyTorch v0.5.x), custom export script"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reported_architecture
+    attributes:
+      label: Expected Neural Architecture
+      description: The internal architecture declared in the model metadata.
+      options:
+        - "WaveNet (Standard / Lite / Feather / Nano)"
+        - "WaveNet A2 (Full / Lite / Dyn / Cascade)"
+        - "LSTM (1x16, 2x24, or other dimensions)"
+        - "ConvNet"
+        - "Linear"
+        - "Container"
+        - "Unknown / Failed to determine"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error_details
+    attributes:
+      label: Error Message & Typed Error Code (NamErrorCode)
+      description: Provide the exact error message or `NamErrorCode` (e.g., E1004 NamJsonParseError, E1005 NamJsonWeightsExceedLimit, E1018 NambCrcMismatch, etc.).
+      placeholder: |
+        Error: NamErrorCode::NamJsonParseError (E1004): Failed to parse JSON weight array at line 142.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: inspect_output
+    attributes:
+      label: Model Inspection Output (inspect_model or check-model.sh)
+      description: Paste the output of running `cargo run --example inspect_model -- <model-path>` or `utils/check-model.sh <model-path>`.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: model_attachment
+    attributes:
+      label: Model File Attachment / Download Link
+      description: |
+        Attach the problematic model file by dragging and dropping it into this box (GitHub accepts `.zip`, `.nam`, `.namb`), or provide a public URL (Tonehunt link, GitHub Release, Google Drive, etc.).
+      placeholder: "Drag and drop .nam / .namb / .zip file here, or paste download URL..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Any other information regarding custom sample rates, training scripts, or quantization.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have verified that the file is not corrupted (e.g. valid file size, valid JSON if .nam).
+          required: true
+        - label: I tested with the latest release / `main` branch of `NeuralAmpModeler-rs`.
+          required: true
