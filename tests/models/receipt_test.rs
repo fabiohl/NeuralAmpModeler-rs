@@ -254,6 +254,26 @@ fn test_long_receipt_cli_end_to_end() {
     let sum_run = run(&["summary", "--out", out.to_str().unwrap()]);
     assert!(sum_run.status.success(), "summary failed: {:?}", sum_run);
 
+    // S5: the summary also prints the human one-liners (WARNING/ERROR +
+    // verdicts) that utils/tests-long.sh echoes verbatim.
+    let human = String::from_utf8_lossy(&sum_run.stdout);
+    assert!(
+        human.contains("OVERALL: COMPLETED_WITH_GAPS"),
+        "missing OVERALL line: {human}"
+    );
+    assert!(
+        human.contains("WARNING: phase5"),
+        "missing WARNING line: {human}"
+    );
+    assert!(
+        human.contains("FIDELITY: OK"),
+        "missing FIDELITY line: {human}"
+    );
+    assert!(
+        human.contains("PERF_REGRESSION: NOT_RUN"),
+        "missing PERF_REGRESSION line: {human}"
+    );
+
     // Validate: every line is valid JSON with the receipt schema.
     let val_run = run(&["validate", "--out", out.to_str().unwrap()]);
     assert!(val_run.status.success(), "validate failed: {:?}", val_run);
@@ -289,4 +309,56 @@ fn test_long_receipt_cli_end_to_end() {
         "1",
     ]);
     assert_eq!(bad_run.status.code(), Some(2), "bad status must exit 2");
+}
+
+// S4.T2: `count-log` is the F-21 counter behind `_lib.sh::assert_ran_tests`.
+#[test]
+fn test_long_receipt_count_log_mirrors_f21_cases() {
+    let bin = env!("CARGO_BIN_EXE_nam_long_receipt");
+    let run = |path: &std::path::Path| {
+        let out = Command::new(bin)
+            .args(["count-log", "--log", path.to_str().unwrap()])
+            .output()
+            .expect("nam_long_receipt count-log must run");
+        assert!(
+            out.status.success(),
+            "count-log failed: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    let pass = temp_path("pass.log");
+    write_file(&pass, "test result: ok. 50 passed. 2 failed.\n");
+    assert_eq!(run(&pass), "52");
+
+    let zero = temp_path("zero.log");
+    write_file(&zero, "test result: ok. 0 passed. 0 failed.\n");
+    assert_eq!(run(&zero), "0");
+
+    let skip = temp_path("skip.log");
+    write_file(&skip, "running tests...\nall filtered out (early return)\n");
+    assert_eq!(run(&skip), "0");
+
+    let absent = temp_path("absent.log");
+    assert_eq!(run(&absent), "0");
+
+    let bench = temp_path("bench.log");
+    write_file(&bench, "bench time: [1.2 ms]\nbench time: [3.4 ms]\n");
+    assert_eq!(run(&bench), "2");
+
+    let measured = temp_path("meas.log");
+    write_file(&measured, "x 5 measured\n");
+    assert_eq!(run(&measured), "5");
+
+    // Usage error: missing --log exits 2.
+    let bad = Command::new(bin)
+        .args(["count-log"])
+        .output()
+        .expect("nam_long_receipt count-log must run");
+    assert_eq!(
+        bad.status.code(),
+        Some(2),
+        "count-log without --log must exit 2"
+    );
 }

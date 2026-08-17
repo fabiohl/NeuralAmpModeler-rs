@@ -67,39 +67,75 @@ if ! echo "$SCENARIO1_OUT" | grep -q "MISSING_BASELINE"; then
 fi
 echo -e "  ${GREEN}✓ Scenario 1 passed: exit code 1 and MISSING_BASELINE confirmed.${NC}"
 
-# ── Scenario 2: Stale log + missing/incompatible baseline fails closed ────────
-echo -e "\n${BLUE}[2/${TOTAL_SCENARIOS}] Testing Scenario 2: Stale log fail-closed protection in dashboard${NC}"
+# ── Scenario 2: JSON-only --check (S2.T7); NOT_VERIFIED verdicts via fixture ─
+echo -e "\n${BLUE}[2/${TOTAL_SCENARIOS}] Testing Scenario 2: JSON-only --check (S2.T7)${NC}"
 
-mkdir -p "$PROJECT_DIR/target/logs"
-STALE_LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"
-echo "WaveNet_Standard_CH16_64samp_48kHz time: [36.9 us 37.0 us 37.1 us]" > "$STALE_LOG_FILE"
-
+# 2a: ASCII .txt contracts are rejected fail-closed (ERROR + exit 2) BEFORE
+# any phase runs — the dashboard is not invoked for oracle execution.
 set +e
 SCENARIO2_OUT=$("$PROJECT_DIR/utils/quality-dashboard.sh" --check "$PROJECT_DIR/docs/quality-contract.txt" 2>&1)
 SCENARIO2_EXIT=$?
 set -e
 
+if [ "$SCENARIO2_EXIT" -ne 2 ]; then
+    echo -e "  ${RED}❌ Scenario 2a failed: expected exit 2 for .txt contract, got ${SCENARIO2_EXIT}${NC}"
+    echo "$SCENARIO2_OUT"
+    exit 1
+fi
+
+if ! echo "$SCENARIO2_OUT" | grep -q "ERROR"; then
+    echo -e "  ${RED}❌ Scenario 2a failed: output does not contain ERROR for .txt contract${NC}"
+    echo "$SCENARIO2_OUT"
+    exit 1
+fi
+echo -e "  ${GREEN}✓ Scenario 2a passed: .txt contract rejected with ERROR + exit 2.${NC}"
+
+# 2b: the verdict strings stay in English and are produced by the binary
+# against the committed fixture (no oracle runs — the fixture freezes the
+# S2 acceptance scenario: all phases PASS except regression_gate=NOT_VERIFIED,
+# so PERFORMANCE: NOT_VERIFIED + CONTRACT VIOLATED with FIDELITY: OK,
+# PERF-006 domain separation).
+FIXTURE_REPORT="$PROJECT_DIR/tests/fixtures/qa/report_gate_not_verified.jsonl"
+NAM_QUALITY_BIN="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
+if [ ! -x "$NAM_QUALITY_BIN" ]; then
+    ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_quality )
+fi
+
+set +e
+SCENARIO2_OUT=$("$NAM_QUALITY_BIN" verify --contract "$PROJECT_DIR/docs/quality-contract.json" --report "$FIXTURE_REPORT" 2>&1)
+SCENARIO2_EXIT=$?
+set -e
+
 if [ "$SCENARIO2_EXIT" -ne 1 ]; then
-    echo -e "  ${RED}❌ Scenario 2 failed: expected exit code 1, got ${SCENARIO2_EXIT}${NC}"
+    echo -e "  ${RED}❌ Scenario 2b failed: expected exit code 1, got ${SCENARIO2_EXIT}${NC}"
+    echo "$SCENARIO2_OUT"
+    exit 1
+fi
+
+if ! echo "$SCENARIO2_OUT" | grep -q "FIDELITY: OK"; then
+    echo -e "  ${RED}❌ Scenario 2b failed: output does not contain FIDELITY: OK (PERF-006)${NC}"
+    echo "$SCENARIO2_OUT"
     exit 1
 fi
 
 if ! echo "$SCENARIO2_OUT" | grep -q "PERFORMANCE: NOT_VERIFIED"; then
-    echo -e "  ${RED}❌ Scenario 2 failed: output does not contain PERFORMANCE: NOT_VERIFIED${NC}"
+    echo -e "  ${RED}❌ Scenario 2b failed: output does not contain PERFORMANCE: NOT_VERIFIED${NC}"
     echo "$SCENARIO2_OUT"
     exit 1
 fi
 
 if ! echo "$SCENARIO2_OUT" | grep -q "CONTRACT VIOLATED"; then
-    echo -e "  ${RED}❌ Scenario 2 failed: output does not contain CONTRACT VIOLATED${NC}"
+    echo -e "  ${RED}❌ Scenario 2b failed: output does not contain CONTRACT VIOLATED${NC}"
     echo "$SCENARIO2_OUT"
     exit 1
 fi
-echo -e "  ${GREEN}✓ Scenario 2 passed: stale log ignored, PERFORMANCE: NOT_VERIFIED & CONTRACT VIOLATED confirmed.${NC}"
+echo -e "  ${GREEN}✓ Scenario 2b passed: FIDELITY: OK, PERFORMANCE: NOT_VERIFIED & CONTRACT VIOLATED confirmed via fixture.${NC}"
 
 # ── Scenario 3: Truncation of previous log at start of execution ─────────────
 echo -e "\n${BLUE}[3/${TOTAL_SCENARIOS}] Testing Scenario 3: Log truncation at start of check_regression()${NC}"
 
+STALE_LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"
+mkdir -p "$PROJECT_DIR/target/logs"
 DUMMY_MARKER="STALE_DUMMY_BENCHMARK_DATA_$(date +%s%N)"
 echo "$DUMMY_MARKER" > "$STALE_LOG_FILE"
 
@@ -117,17 +153,12 @@ echo -e "  ${GREEN}✓ Scenario 3 passed: stale log truncated at invocation star
 restore_real_baseline
 
 # ── Scenario 4: Nested ci-baseline dirs are sanitized; replace-copy never nests ─
-echo -e "\n${BLUE}[4/${TOTAL_SCENARIOS}] Testing Scenario 4: Nested baseline sanitize + replace-copy${NC}"
+echo -e "\n${BLUE}[4/${TOTAL_SCENARIOS}] Testing Scenario 4: Nested baseline sanitize + replace-copy via nam_perf_gate${NC}"
 
-# Load helpers without executing main "$@". Rewrite SCRIPT_DIR so _lib.sh
-# resolves against the real utils/ tree, not the temp copy.
-HELPERS_SRC="$TMP_DIR/regression_helpers.sh"
-sed \
-  -e '/^main "\$@"$/d' \
-  -e "s|^SCRIPT_DIR=.*|SCRIPT_DIR=\"$PROJECT_DIR/utils\"|" \
-  "$PROJECT_DIR/utils/tests-performance-regression.sh" > "$HELPERS_SRC"
-# shellcheck disable=SC1090
-source "$HELPERS_SRC"
+NAM_PERF_GATE="${NAM_PERF_GATE:-$PROJECT_DIR/target/debug/nam_perf_gate}"
+if [ ! -x "$NAM_PERF_GATE" ]; then
+    ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_perf_gate )
+fi
 
 BASELINE_NAME="ci-baseline"
 BASELINE_DIR="$TMP_DIR/fake-baselines"
@@ -139,7 +170,12 @@ mkdir -p "$CRITERION_BASELINE_TARGET/RT_Dummy/$BASELINE_NAME/$BASELINE_NAME"
 echo stale-dest > "$CRITERION_BASELINE_TARGET/RT_Dummy/$BASELINE_NAME/marker.txt"
 echo already-nested > "$CRITERION_BASELINE_TARGET/RT_Dummy/$BASELINE_NAME/$BASELINE_NAME/marker.txt"
 
-sanitize_nested_baselines "$BASELINE_DIR"
+# restore-baseline sanitizes the store and replace-copies into the criterion root
+"$NAM_PERF_GATE" restore-baseline \
+    --baseline-dir "$BASELINE_DIR" \
+    --criterion-root "$CRITERION_BASELINE_TARGET" \
+    --baseline "$BASELINE_NAME" >/dev/null
+
 if find "$BASELINE_DIR" -mindepth 3 -type d -name "$BASELINE_NAME" 2>/dev/null | grep -q .; then
     echo -e "  ${RED}❌ Scenario 4 failed: nested baseline dirs remain after sanitize${NC}"
     find "$BASELINE_DIR" -type d -name "$BASELINE_NAME"
@@ -155,7 +191,6 @@ if ! grep -qx 'top-level' "$BASELINE_DIR/RT_Dummy/$BASELINE_NAME/marker.txt"; th
     exit 1
 fi
 
-restore_baseline
 if find "$CRITERION_BASELINE_TARGET" -mindepth 3 -type d -name "$BASELINE_NAME" 2>/dev/null | grep -q .; then
     echo -e "  ${RED}❌ Scenario 4 failed: restore re-introduced nested baseline dirs${NC}"
     find "$CRITERION_BASELINE_TARGET" -type d -name "$BASELINE_NAME"
@@ -171,16 +206,19 @@ if ! grep -qx 'top-level' "$CRITERION_BASELINE_TARGET/RT_Dummy/$BASELINE_NAME/ma
     exit 1
 fi
 # Second restore must still not nest
-restore_baseline
+"$NAM_PERF_GATE" restore-baseline \
+    --baseline-dir "$BASELINE_DIR" \
+    --criterion-root "$CRITERION_BASELINE_TARGET" \
+    --baseline "$BASELINE_NAME" >/dev/null
 nested_count=$(find "$CRITERION_BASELINE_TARGET" -mindepth 3 -type d -name "$BASELINE_NAME" 2>/dev/null | wc -l)
 if [ "$nested_count" -ne 0 ]; then
     echo -e "  ${RED}❌ Scenario 4 failed: second restore nested baselines (count=${nested_count})${NC}"
     exit 1
 fi
-top_count=$(list_top_level_baselines "$CRITERION_BASELINE_TARGET" | wc -l)
+top_count=$(find "$CRITERION_BASELINE_TARGET" -mindepth 2 -maxdepth 2 -type d -name "$BASELINE_NAME" 2>/dev/null | wc -l)
 if [ "$top_count" -ne 1 ]; then
     echo -e "  ${RED}❌ Scenario 4 failed: expected exactly 1 top-level baseline, got ${top_count}${NC}"
-    list_top_level_baselines "$CRITERION_BASELINE_TARGET"
+    find "$CRITERION_BASELINE_TARGET" -mindepth 2 -maxdepth 2 -type d -name "$BASELINE_NAME"
     exit 1
 fi
 echo -e "  ${GREEN}✓ Scenario 4 passed: sanitize + replace-copy keep a single flat baseline layer.${NC}"

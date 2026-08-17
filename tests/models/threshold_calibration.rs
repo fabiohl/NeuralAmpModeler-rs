@@ -401,6 +401,12 @@ fn test_oracle_gates_below_placebo_threshold() {
 ///   filtered via `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
 ///   and measured under `--release` (Phase 2), so the `.bin` references below
 ///   are never executed by Phase 1.
+/// - `meta_coherence`: catalog/contract coherence meta-tests — the
+///   `golden_vectors` token appears only as a fixture file-path string, never
+///   as an oracle call.
+/// - `quality_cli_test`: process-level `nam_quality` CLI contract tests —
+///   `golden_vectors` appears only as a canonical phase-id string in report/
+///   receipt fixtures, never as a module call or `.bin` load.
 #[test]
 fn test_structural_tests_contain_no_bin_references() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -421,6 +427,7 @@ fn test_structural_tests_contain_no_bin_references() {
         "parity_primitives.rs",
         "lstm_activation_precision.rs",
         "meta_coherence.rs",
+        "quality_cli_test.rs",
     ];
     const STRUCTURAL_DIRS: &[&str] = &["models", "perf_soak", "parity", "dsp_core"];
 
@@ -923,32 +930,42 @@ fn test_catalog_anti_placebo_audit() {
     }
 }
 
-/// Meta-teste: qualidade-contract.txt não pode conter rótulos sintéticos.
+/// Meta-test: quality-contract.json cannot contain synthetic labels.
 ///
-/// Self-tests que degradam o sinal para validar gates de regressão (ex:
-/// `test_mrstft_hard_gate_catches_regression`) emitem labels com `(synthetic)`.
-/// Essas labels contaminavam o `--save` do dashboard e eram carregadas pelo
-/// `--check` como parte do contrato de qualidade — uma violação da integridade
-/// da baseline.
+/// Self-tests that degrade the signal to validate regression gates (e.g.
+/// `test_mrstft_hard_gate_catches_regression`) emit labels with `(synthetic)`.
+/// Such labels used to contaminate the dashboard `--save` and were loaded by
+/// `--check` as part of the quality baseline — a violation of baseline
+/// integrity.
 ///
-/// Este meta-teste audita `docs/quality-contract.txt` e falha se QUALQUER linha
-/// contiver `(synthetic)`, garantindo que o contrato só contém medições reais
-/// de fidelidade.
+/// This meta-test audits `docs/quality-contract.json` and fails if ANY entry
+/// declares `"synthetic": true`, guaranteeing the contract only carries real
+/// fidelity measurements.
 ///
-/// Parte da trava de segurança permanente para completar o expurgo.
+/// Part of the permanent safety lock for the expurgation.
 #[test]
 fn test_quality_contract_no_synthetic_labels() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let contract_file = project_root.join("docs").join("quality-contract.txt");
+    let contract_file = project_root.join("docs").join("quality-contract.json");
 
     let content =
-        fs::read_to_string(&contract_file).expect("Failed to read docs/quality-contract.txt");
+        fs::read_to_string(&contract_file).expect("Failed to read docs/quality-contract.json");
+    let root: serde_json::Value =
+        serde_json::from_str(&content).expect("docs/quality-contract.json must be valid JSON");
 
-    assert!(
-        !content.contains("(synthetic)"),
-        "docs/quality-contract.txt contains labels with '(synthetic)' — \
-         self-test degradation entries have contaminated the quality baseline.\n\
-         Remove all lines containing '(synthetic)' from the contract file.\n\
-         (The source was fixed; this meta-test is the permanent guard.)"
-    );
+    for section in ["fidelity", "performance"] {
+        let entries = root
+            .get(section)
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("contract section '{section}' must be an array"));
+        for entry in entries {
+            assert!(
+                entry.get("synthetic") != Some(&serde_json::Value::Bool(true)),
+                "docs/quality-contract.json contains an entry with \"synthetic\": true — \
+                 self-test degradation entries have contaminated the quality baseline.\n\
+                 Remove all entries declaring 'synthetic' from the contract file.\n\
+                 (The source was fixed; this meta-test is the permanent guard.)"
+            );
+        }
+    }
 }

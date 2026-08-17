@@ -1,0 +1,88 @@
+{"kind":"build_metadata","cargo_profile":"release","target_triple":"x86_64-unknown-linux-gnu","rustflags":"","rustc_version":"rustc 1.97.1 (8bab26f4f 2026-07-14)","git_commit":"0e22ea4ec247","git_dirty_state":true,"run_id":"1786537203076204151-15755","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)"}
+{"phase_id":"golden_vectors","status":"PASS"}
+{"phase_id":"reference_oracle_f64","status":"PASS"}
+{"phase_id":"isa_parity","status":"PASS"}
+{"phase_id":"spectral_fidelity","status":"PASS"}
+{"phase_id":"lstm_activation_precision","status":"PASS"}
+{"phase_id":"quick_parity","status":"PASS"}
+{"phase_id":"regression_gate","status":"PASS"}
+{"esr":8.5e-12,"esr_f64":8.9e-13,"kind":"fidelity","label":"BossLSTM-1x16 @48000 Live","mrstft":0.000028,"snr_db":110.7}
+{"esr":1e-11,"esr_f64":5.68e-13,"kind":"fidelity","label":"BossLSTM-2x8 @48000 Live","mrstft":0.0000157,"snr_db":110.0}
+{"esr":4.74e-14,"esr_f64":2e-14,"kind":"fidelity","label":"BossWN-feather @48000 Live","mrstft":8.86e-6,"snr_db":133.2}
+{"esr":6.43e-14,"esr_f64":3.05e-14,"kind":"fidelity","label":"BossWN-nano @48000 Live","mrstft":7.67e-6,"snr_db":131.9}
+{"esr":2.31e-14,"esr_f64":9.05e-15,"kind":"fidelity","label":"BossWN-standard @48000 Live","mrstft":6.46e-6,"snr_db":136.4}
+{"esr":4.23e-15,"esr_f64":3.57e-15,"kind":"fidelity","label":"ConvNet Test @48000 Live","mrstft":1.17e-6,"snr_db":143.7}
+{"esr":7.87e-13,"esr_f64":2.64e-13,"kind":"fidelity","label":"EVH-5150-Lite @48000 Live","mrstft":4.31e-6,"snr_db":121.0}
+{"esr":3.7e-15,"esr_f64":2.86e-15,"kind":"fidelity","label":"LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live","mrstft":1.45e-6,"snr_db":144.3}
+{"esr":1.7e-14,"kind":"fidelity","label":"Linear FFT RF=2048 (C++ golden) @48000","mrstft":2.17e-6,"snr_db":137.7}
+{"esr":1.62e-14,"kind":"fidelity","label":"Linear FFT RF=4096 (C++ golden) @48000","mrstft":4.09e-6,"snr_db":137.9}
+{"esr":1.69e-14,"kind":"fidelity","label":"Linear FFT RF=8192 (C++ golden) @48000","mrstft":5.2e-6,"snr_db":137.7}
+{"esr":7.28e-14,"esr_f64":1.82e-14,"kind":"fidelity","label":"SlimmableContainer A2 Example (CH=3→6) C++ cross-reference @48000 Live","mrstft":0.0000173,"snr_db":131.4}
+{"esr":5.35e-14,"esr_f64":2.65e-14,"kind":"fidelity","label":"WaveNet A2 Dynamic Blended (CH=3, blended layers 2/23) C++ cross-reference @48000 Live","mrstft":9.97e-6,"snr_db":132.7}
+{"esr":5.03e-11,"esr_f64":1e-10,"kind":"fidelity","label":"WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live","mrstft":0.0000664,"snr_db":103.0}
+{"esr":1.26e-14,"esr_f64":1.03e-14,"kind":"fidelity","label":"WaveNet A2-FiLM Chaos Stress (CH=3, FiLM active) C++ cross-reference @48000 Live","mrstft":7e-6,"snr_db":139.0}
+{"esr":1.16e-14,"esr_f64":6.42e-15,"kind":"fidelity","label":"WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference @48000 Live","mrstft":7.85e-6,"snr_db":139.4}
+{"esr":3.44e-14,"esr_f64":2.21e-14,"kind":"fidelity","label":"WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference @48000 Live","mrstft":6.92e-6,"snr_db":134.6}
+{"esr":3.82e-13,"esr_f64":1.61e-13,"kind":"fidelity","label":"WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference @48000 Live","mrstft":0.0000169,"snr_db":124.2}
+{"esr":1.46e-13,"esr_f64":7.83e-14,"kind":"fidelity","label":"WaveNet A2-Full (CH=8) C++ cross-reference @48000 Live","mrstft":0.0000168,"snr_db":128.3}
+{"esr":1.46e-13,"kind":"fidelity","label":"WaveNet A2-Full polynomial SIMD (regression gate) @48000 Live","mrstft":0.0000168,"snr_db":128.3}
+{"esr":8.36e-14,"esr_f64":1.82e-14,"kind":"fidelity","label":"WaveNet A2-Lite (CH=3) C++ cross-reference @48000 Live","mrstft":9.54e-6,"snr_db":130.8}
+{"esr":1.11e-14,"esr_f64":6.33e-15,"kind":"fidelity","label":"WaveNet Condition DSP (CH=3, cond=3, dynamic path) C++ cross-reference @48000 Live","mrstft":3.59e-6,"snr_db":139.6}
+{"esr":9.03e-14,"esr_f64":6.13e-14,"kind":"fidelity","label":"WaveNet Official (CH=3, dynamic path) C++ cross-reference @48000 Live","mrstft":0.0000166,"snr_db":130.4}
+{"esr":2.31e-14,"kind":"fidelity","label":"WaveNet Standard polynomial SIMD (regression gate) @48000 Live","mrstft":6.46e-6,"snr_db":136.4}
+{"esr":4.1e-13,"esr_f64":1.06e-12,"kind":"fidelity","label":"WaveNetDyn Free-Shape (CH=7→4, dynamic path) C++ cross-reference @48000 Live","mrstft":0.0000258,"snr_db":123.9}
+{"esr":3.23e-14,"kind":"fidelity","label":"convnet_nobn @48000 Live","mrstft":5.62e-6,"snr_db":134.9}
+{"esr":6.84e-15,"kind":"fidelity","label":"convnet_relu @48000 Live","mrstft":2.27e-6,"snr_db":141.6}
+{"esr":2.58e-13,"kind":"fidelity","label":"convnet_silu @48000 Live","mrstft":8.67e-6}
+{"esr":3.89e-15,"kind":"fidelity","label":"linear_nobias @48000 Live","mrstft":1.64e-6,"snr_db":144.1}
+{"esr":7.86e-13,"esr_f64":2.71e-12,"kind":"fidelity","label":"lstm (Official) @48000 Live","mrstft":0.0000308,"snr_db":121.0}
+{"esr":4.01e-15,"kind":"fidelity","label":"lstm_1x10 @48000 Live","mrstft":1.25e-6,"snr_db":144.0}
+{"esr":2.71e-14,"kind":"fidelity","label":"lstm_2x24 @48000 Live","mrstft":3.5e-6,"snr_db":135.7}
+{"esr":3.66e-15,"kind":"fidelity","label":"lstm_3x8 @48000 Live","mrstft":5.55e-7,"snr_db":144.4}
+{"esr":1.2e-13,"esr_f64":1.05e-13,"kind":"fidelity","label":"wavenet_a1_standard (Official) @48000 Live","mrstft":2.26e-6,"snr_db":129.2}
+{"esr":1.46e-13,"esr_f64":7.83e-14,"kind":"fidelity","label":"Container A2-Full (CH=8) C++ cross-reference @48000 Live","mrstft":0.0000168,"snr_db":128.3}
+{"esr":8.36e-14,"esr_f64":1.82e-14,"kind":"fidelity","label":"Container A2-Lite (CH=3) C++ cross-reference @48000 Live","mrstft":9.54e-6,"snr_db":130.8}
+{"esr":1.46e-13,"esr_f64":7.83e-14,"kind":"fidelity","label":"Container File A2-Full (CH=8) C++ cross-reference @48000 Live","mrstft":0.0000168,"snr_db":128.3}
+{"esr":8.36e-14,"esr_f64":1.82e-14,"kind":"fidelity","label":"Container File A2-Lite (CH=3) C++ cross-reference @48000 Live","mrstft":9.54e-6,"snr_db":130.8}
+{"esr":1.12e-13,"esr_f64":7.83e-14,"kind":"fidelity","label":"Quick A2-Full @48000 Live","mrstft":0.0000149,"snr_db":129.5}
+{"esr":1.2e-13,"kind":"fidelity","label":"Quick A2-Full v2 @48000 Live","mrstft":0.000024,"snr_db":129.2}
+{"esr":3.14e-14,"kind":"fidelity","label":"Quick ConvNet No BatchNorm @48000 Live","mrstft":5.54e-6,"snr_db":135.0}
+{"esr":6.76e-15,"kind":"fidelity","label":"Quick ConvNet ReLU @48000 Live","mrstft":2.25e-6,"snr_db":141.7}
+{"esr":5.26e-13,"kind":"fidelity","label":"Quick ConvNet SiLU @48000 Live","mrstft":0.0000142,"snr_db":122.8}
+{"esr":4.08e-15,"kind":"fidelity","label":"Quick LSTM 1×10 @48000 Live","mrstft":1.35e-6,"snr_db":143.9}
+{"esr":1.45e-11,"esr_f64":8.9e-13,"kind":"fidelity","label":"Quick LSTM 1×16 @48000 Live","mrstft":0.000032,"snr_db":108.4}
+{"esr":2.78e-14,"kind":"fidelity","label":"Quick LSTM 2×24 @48000 Live","mrstft":3.73e-6,"snr_db":135.6}
+{"esr":3.61e-15,"kind":"fidelity","label":"Quick LSTM 3×8 @48000 Live","mrstft":6.22e-7,"snr_db":144.4}
+{"esr":3.89e-15,"kind":"fidelity","label":"Quick Linear No Bias @48000 Live","mrstft":1.64e-6,"snr_db":144.1}
+{"esr":4.08e-14,"kind":"fidelity","label":"Quick SlimmableContainer A2 Example v2 @48000 Live","mrstft":0.0000917,"snr_db":133.9}
+{"esr":2.46e-14,"esr_f64":9.05e-15,"kind":"fidelity","label":"Quick WaveNet CH16 @48000 Live","mrstft":6.89e-6,"snr_db":136.1}
+{"esr":9.96e-14,"kind":"fidelity","label":"Quick WaveNet Standard v2 @48000 Live","mrstft":0.0000429,"snr_db":130.0}
+{"kind":"latency","label":"RT_WaveNet_Std_CH16","median_latency_us":36.9}
+{"kind":"latency","label":"RT_WaveNet_Feather_CH8","median_latency_us":19.4}
+{"kind":"latency","label":"RT_WaveNet_Lite_CH12","median_latency_us":52.6}
+{"kind":"latency","label":"RT_WaveNet_Nano_CH4","median_latency_us":17.4}
+{"kind":"latency","label":"RT_A2_Full_CH8","median_latency_us":27.6}
+{"kind":"latency","label":"RT_A2_Lite_CH3","median_latency_us":18.4}
+{"kind":"latency","label":"RT_LSTM_1x16","median_latency_us":7.5}
+{"kind":"latency","label":"RT_LSTM_2x8","median_latency_us":7.6}
+{"kind":"latency","label":"RT_Linear","median_latency_us":0.3}
+{"kind":"latency","label":"RT_ConvNet","median_latency_us":10.2}
+{"kind":"latency","label":"RT_WaveNet_Dyn_Free","median_latency_us":22.5}
+{"kind":"latency","label":"RT_LSTM_Dyn_1x7","median_latency_us":8.2}
+{"kind":"latency","label":"RT_A2_Dyn_Gated_CH8","median_latency_us":170.8}
+{"kind":"latency","label":"RT_A2_Dyn_Blended_CH3","median_latency_us":136.2}
+{"kind":"latency","label":"RT_DSP_Resampler_44k1_to_48k","median_latency_us":1.3}
+{"kind":"latency","label":"RT_DSP_Resampler_96k_to_48k","median_latency_us":0.7}
+{"kind":"latency","label":"RT_DSP_CabSim_IR_Medium","median_latency_us":1.3}
+{"kind":"latency","label":"RT_DSP_Pipeline_Base_NoOS","median_latency_us":37.2}
+{"kind":"latency","label":"RT_DSP_Pipeline_HQ_4xOS","median_latency_us":150.6}
+{"kind":"f64_table","filename":"BossWN-standard.nam","family":"BossWN-standard","esr":9.05e-15,"esr_db":-140.4}
+{"kind":"f64_table","filename":"BossLSTM-1x16.nam","family":"BossLSTM-1x16","esr":8.9e-13,"esr_db":-120.5}
+{"kind":"f64_decomp","label":"BossLSTM-1x16 @48000 Live","architecture":"LSTM","esr_f32_vs_f64":1.02e-14,"esr_quant_f16c":8.5e-15,"esr_activation":1.2e-16,"esr_combined":1.05e-14}
+{"kind":"f64_decomp","label":"BossWN-standard @48000 Live","architecture":"WaveNet","esr_f32_vs_f64":9.05e-15,"esr_quant_f16c":6.0e-15,"esr_combined":8.5e-15}
+{"kind":"activation","model":"LSTM 1×16","snr_fast_db":92.5,"snr_exact_db":96.1,"gain_db":3.6}
+{"kind":"activation","model":"LSTM 2×8","snr_fast_db":91.0,"snr_exact_db":94.0,"gain_db":3.0}
+{"kind":"isa","label":"BossWN-standard @ 48000 Hz","ref_isa":"AVX2","test_isa":"AVX-512","esr":1.4e-15,"mse":9.9e-10,"max_abs_err":2.1e-5,"budget":1e-13}
+{"kind":"isa","label":"BossWN-standard @ 48000 Hz","ref_isa":"AVX2","test_isa":"AVX2","mse":0.0}
+{"kind":"coverage_matrix","namcore_parity":51,"f64_oracle":29,"isa_optimizations":1,"spectral_baselines":51,"rt_performance":19}
+{"kind":"test_counts","passed":7,"failed":0,"ignored":0,"filtered":0,"skip_capability":0}

@@ -204,6 +204,12 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
         gain = snr_exact - snr_fast,
     );
 
+    // S2.T6: forensic JSONL sink (kind `activation`) — human log unchanged.
+    // Only finite pairs are reported; skips stay human-log-only.
+    if snr_fast.is_finite() && snr_exact.is_finite() {
+        common::report_activation(label, snr_fast, snr_exact);
+    }
+
     (snr_fast, snr_exact)
 }
 
@@ -458,6 +464,11 @@ fn measure_lstm_snr_stress_v2(model_filename: &str, label: &str) -> (f64, f64) {
         "{label:>22}  Fast(Padé): {snr_fast:6.1} dB  |  Standard(exact): {snr_exact:6.1} dB  |  Δ={gain:+.1} dB",
         gain = snr_exact - snr_fast,
     );
+
+    // S2.T6: forensic JSONL sink (kind `activation`) — human log unchanged.
+    if snr_fast.is_finite() && snr_exact.is_finite() {
+        common::report_activation(label, snr_fast, snr_exact);
+    }
 
     (snr_fast, snr_exact)
 }

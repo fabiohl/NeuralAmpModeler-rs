@@ -160,9 +160,6 @@ rm -f target/logs/catalog_preflight.log \
       target/logs/phase6-loom.log \
       target/logs/long-audit-receipt.jsonl
 
-TIMED_TRACKER=$(mktemp)
-trap 'rm -f "$TIMED_TRACKER"' EXIT
-
 # Cleanup accumulated live-test artifacts from previous runs (41+ MB WAVs)
 rm -rf tests/fixtures/.temp_live/
 
@@ -389,57 +386,25 @@ emit_preflight_receipt "preflight-meta" "Catalog↔test coherence preflight" "PA
 # ── Phase classification for fidelity/performance split ──────────────────────
 # run_phase indices: 0 soak, 1 defense, 2 proptests, 3 heap,
 #                    4 deadline, 5 jitter, 6 loom
-declare -A PHASE_CLASS=(
-    [0]="fidelity"
-    [1]="fidelity"
-    [2]="fidelity"
-    [3]="fidelity"
-    [4]="performance"
-    [5]="performance"
-    [6]="fidelity"
-)
+# The fidelity/performance split itself moved to Rust in S5:
+# src/testing/receipt.rs::PERFORMANCE_PHASE_IDS (phase5 = RT Deadline,
+# phase6 = RT Jitter) — the human summary derives FIDELITY from the receipt.
 
 # Trackers for the final summary
 declare -a PHASE_NAMES
-declare -a PHASE_COMMANDS
 declare -a PHASE_STATUS
 declare -a PHASE_DURATIONS
-declare -a PHASE_SUB_TIMINGS
-declare -a PHASE_CLASSES
 PHASE_COUNT=0
-N_TOP_SLOWEST=5
 
-# timed_cargo_test — runs a cargo test invocation, captures timing.
+# timed_cargo_test — runs a cargo test invocation, propagates its status.
 # Usage: timed_cargo_test <label> <cargo_test_args...>
-# Appends per-invocation "TIMED: <seconds> <label>" lines to a temp tracker.
 timed_cargo_test() {
     local label="$1"
     shift
-    local start_t
-    start_t=$(date +%s%N)
     cargo test --features testing "$@"
     local status=$?
-    local end_t
-    end_t=$(date +%s%N)
-    local duration_ns=$((end_t - start_t))
-    local duration_s
-    duration_s=$(LC_NUMERIC=C awk -v ns="$duration_ns" 'BEGIN { printf "%.3f", ns / 1000000000 }')
-    echo "TIMED: $duration_s $label" >> "$TIMED_TRACKER"
     return $status
 }
-
-# extract_sub_timings: reads the timed tracker, returns top-N slowest entries.
-extract_sub_timings() {
-    if [ ! -f "$TIMED_TRACKER" ] || [ ! -s "$TIMED_TRACKER" ]; then
-        return
-    fi
-    grep '^TIMED:' "$TIMED_TRACKER" | \
-        sed 's/^TIMED: //' | \
-        sort -rn | \
-        head -n "$N_TOP_SLOWEST"
-}
-
-
 
 assert_phase_ran() {
     assert_ran_tests "target/logs/$1" "${2:-1}"
@@ -456,9 +421,6 @@ run_phase() {
 
     local start_time=$(date +%s)
 
-    # Reset timed tracker for this phase
-    : > "$TIMED_TRACKER"
-
     # Run command and capture output/status
     eval "$cmd" > "target/logs/$log_file" 2>&1
     local status=$?
@@ -467,12 +429,7 @@ run_phase() {
     local duration=$((end_time - start_time))
 
     PHASE_NAMES[$PHASE_COUNT]="$name"
-    PHASE_COMMANDS[$PHASE_COUNT]="$cmd"
     PHASE_DURATIONS[$PHASE_COUNT]="$duration"
-    PHASE_CLASSES[$PHASE_COUNT]="${PHASE_CLASS[$PHASE_COUNT]:-fidelity}"
-
-    # Capture sub-timings for this phase
-    PHASE_SUB_TIMINGS[$PHASE_COUNT]="$(extract_sub_timings)"
 
     if [ $status -eq 77 ]; then
         echo -e "${YELLOW}⚠ SKIPPED (${duration}s)${NC}"
@@ -501,10 +458,12 @@ run_phase() {
 # are defined at the top (preflight steps emit before Phase 1 — S6-T03).
 
 # emit_long_phase_receipt <phase_idx> <log_file>
-# Appends the just-completed phase's structured receipt line. Emission must
-# run AFTER any post-phase status override (phases 4/5) so the line carries
-# the authoritative status. A failure flags LONG_RECEIPT_FAILED (fail-closed
-# at the final verdict) but never rewrites the phase's own outcome.
+# Appends the just-completed phase's structured receipt line; `--log` makes
+# `nam_long_receipt append` detect typed gap markers in the phase log
+# (detect_gap_markers — the S5 carrier of measurement bypasses; the old
+# post-phase PHASE_STATUS overrides for phases 4/5 are gone). A failure
+# flags LONG_RECEIPT_FAILED (fail-closed at the final verdict) but never
+# rewrites the phase's own outcome.
 emit_long_phase_receipt() {
     local idx="$1" log_file="$2"
     if ! ensure_long_receipt_bin; then
@@ -549,485 +508,22 @@ emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase1-soak.log" || true
 
 # --- Defense scripts + ELF surface (absorbed from utils/tests + utils/debug) ---
 
-# run_bash_scripts_unit_tests — inline Bash unit-test suite for the defense
-# scripts (formerly the standalone utils/tests/test_scripts.sh, removed in
-# S4-T06). Exercises utils/_lib.sh and isolated functions of
-# utils/quality-dashboard.sh and utils/tests-performance-regression.sh against
-# their own failure modes (F-01, F-02, F-08, F-21, F-22, F-24, F-27, S3-T01):
-#   * metric sanitization (null/empty/non-finite sentinels)   (F-01, F-28)
-#   * toolchain fingerprint without TOOLCHAIN manifest lines   (F-02)
-#   * single performance-status classifier (NOT_VERIFIED)      (F-08)
-#   * real test-execution assertion & JSONL record counting    (F-21)
-#   * conservative freshness gate (STALE/MISSING/ORPHAN/OK)    (F-22)
-#   * baseline coverage cross-check helpers                     (F-24)
-#   * extended long-suite delegation (--full)                   (F-06)
-#   * single jq JSONL parser with canonical edge cases         (F-27)
-#   * unified C++ render build (ensure_namcore_render)         (S3-T01)
-#
-# The suite runs in a subshell with `set +euo pipefail` (the original was a
-# standalone `bash` process, so assertions inspect the rc of commands that are
-# expected to fail); the subshell also isolates every sandbox directory and
-# global variable change from this suite. Exit status: 0 when every test
-# passes (or skips), 1 on any failure.
-run_bash_scripts_unit_tests() {
-    (
-        set +euo pipefail
-
-UTILS_DIR="$LIB_DIR"
-LIB_SH="$UTILS_DIR/_lib.sh"
-DASHBOARD_SH="$UTILS_DIR/quality-dashboard.sh"
-PERF_REGRESSION_SH="$UTILS_DIR/tests-performance-regression.sh"
-
-# ── Load shared library ──────────────────────────────────────────────────────
-PHASE_TOTAL=1
-# shellcheck disable=SC1091
-source "$LIB_SH"
-
-# ── Isolated functions extracted from quality-dashboard.sh / ─────────────────
-# ── tests-performance-regression.sh. Each is a self-contained definition      ──
-# ── pulled by its `^name() {` … `^}` block, so the test suite never executes  ──
-# ── the scripts' own `main "$@"` or load-time side effects. Extraction        ──
-# ── failure is fatal: it means the script was refactored and this suite       ──
-# ── must follow.                                                              ──
-extract_define() {
-    local file="$1" name="$2" body
-    body="$(sed -n "/^${name}() {/,/^}/p" "$file")"
-    if [ -z "$body" ]; then
-        echo "ERROR: cannot extract function '${name}' from ${file}" >&2
-        return 1
-    fi
-    eval "$body"
-}
-extract_define "$DASHBOARD_SH" _nfmt                || exit 1
-extract_define "$DASHBOARD_SH" _fmt_metric          || exit 1
-extract_define "$DASHBOARD_SH" _is_finite_num       || exit 1
-extract_define "$DASHBOARD_SH" _is_numeric_esr      || exit 1
-extract_define "$DASHBOARD_SH" _safe_render         || exit 1
-extract_define "$DASHBOARD_SH" detect_isa           || exit 1
-extract_define "$DASHBOARD_SH" detect_cpu_model     || exit 1
-extract_define "$DASHBOARD_SH" parse_jsonl_fidelity || exit 1
-extract_define "$DASHBOARD_SH" run_phase0_freshness || exit 1
-extract_define "$DASHBOARD_SH" run_extended_audit   || exit 1
-extract_define "$PERF_REGRESSION_SH" executed_bench_ids      || exit 1
-extract_define "$PERF_REGRESSION_SH" missing_baseline_coverage || exit 1
-
-# Globals consumed by parse_jsonl_fidelity (declared at dashboard load time).
-declare -A ESR_NAMCORE ESR_NAMCORE_DB SNR_DB MSE_VAL MRSTFT
-declare -a MODEL_ORDER
-
-# ── Test harness ──────────────────────────────────────────────────────────────
-TOTAL=0 PASSED=0 FAILED=0 SKIPPED=0
-FAILED_NAMES=()
-
-pass() { TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1)); printf '  %sok%s   %s\n' "$GREEN" "$NC" "$1"; }
-fail() { TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1)); FAILED_NAMES+=("$1"); printf '  %sFAIL%s %s\n' "$RED" "$NC" "$1"; }
-skip() { SKIPPED=$((SKIPPED + 1)); printf '  %sSKIP%s  %s\n' "$YELLOW" "$NC" "$1"; }
-
-expect_rc()       { local name="$1" want="$2" got="$3"; if [ "$want" -eq "$got" ]; then pass "$name"; else fail "$name (expected rc=$want, got rc=$got)"; fi; }
-expect_str()      { local name="$1" want="$2" got="$3"; if [ "$want" = "$got" ]; then pass "$name"; else fail "$name (expected [$want], got [$got])"; fi; }
-expect_nonempty() { local name="$1" got="$2"; if [ -n "$got" ]; then pass "$name"; else fail "$name (expected non-empty output)"; fi; }
-
-# Assert a phase receipt line holds a given status and optional reason substring.
-receipt_has() {
-    local phase_id="$1" status="$2" reason="${3:-}" line
-    line="$(grep "\"phase_id\":\"${phase_id}\"" "${DASHBOARD_PHASE_RECEIPT:-}" 2>/dev/null | tail -1)"
-    [ -n "$line" ] || return 1
-    case "$line" in *"\"status\":\"${status}\""*) ;; *) return 1 ;; esac
-    [ -z "$reason" ] || case "$line" in *"${reason}"*) return 0 ;; *) return 1 ;; esac
-    return 0
-}
-
-# Capture run_phase0_freshness's exit status from a sandbox without letting its
-# internal `set -e` (plus a non-zero return) terminate the capture subshell.
-capture_phase0_rc() {  # $1 = sandbox dir; prints the exit code
-    ( set -u; cd "$1" || exit 9; if run_phase0_freshness >/dev/null 2>&1; then echo 0; else echo 1; fi )
-}
-
-# Freshness sandbox: a minimal self-consistent golden manifest + one model, so
-# check_freshness/run_freshness_gate resolve their relative paths against it.
-make_freshness_sandbox() {
-    local sb="$1" sha
-    mkdir -p "$sb/tests/fixtures/models"
-    printf 'model-a\n' > "$sb/tests/fixtures/models/model_a.nam"
-    sha="$(sha256sum "$sb/tests/fixtures/models/model_a.nam" | cut -d' ' -f1)"
-    {
-        echo "# Golden freshness manifest — test fixture"
-        echo "${sha} 0000000000000000000000000000000000000000000000000000000000000000 model_a.nam golden_a.bin"
-        echo "# MODEL-REGISTRY: model_a.nam"
-    } > "$sb/tests/fixtures/.golden_manifest.sha256"
-}
-
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-
-echo ""
-echo "${BOLD}=== _is_finite_num / _is_numeric_esr (F-01, F-28) ===${NC}"
-
-for v in 0 0.0 0.5 .5 1. 1.5e-3 -1.5E3 +3.14 3.14e2 42 12345678901234567890; do
-    _is_finite_num "$v"; rc=$?
-    expect_rc "_is_finite_num accepts '${v}'" 0 "$rc"
-done
-for v in "" " " inf -inf +inf Infinity -infinity nan -nan NaN null N/A abc 1.2.3 0x10 1e e5 .; do
-    _is_finite_num "$v"; rc=$?
-    expect_rc "_is_finite_num rejects '${v}'" 1 "$rc"
-done
-_is_numeric_esr ".5"; rc=$?; expect_rc "_is_numeric_esr accepts '.5'" 0 "$rc"
-_is_numeric_esr "inf"; rc=$?; expect_rc "_is_numeric_esr rejects 'inf'" 1 "$rc"
-
-echo ""
-echo "${BOLD}=== _safe_render / _fmt_metric / _nfmt (F-01 defense-in-depth) ===${NC}"
-
-expect_str    "_safe_render strips backslash+control chars" "abc" "$(_safe_render $'a\\b\nc')"
-expect_str    "_safe_render keeps plain text"              "plain-123" "$(_safe_render 'plain-123')"
-expect_str    "_fmt_metric renders N/A"                    "N/A" "$(_fmt_metric N/A)"
-expect_str    "_fmt_metric renders empty as N/A"           "N/A" "$(_fmt_metric '')"
-expect_str    "_fmt_metric renders 0.5"                    "0.5000" "$(_fmt_metric 0.5)"
-expect_str    "_fmt_metric renders 2"                      "2.0000" "$(_fmt_metric 2)"
-expect_str    "_fmt_metric renders scientific notation"    "1.50e-03" "$(_fmt_metric 1.5e-3)"
-expect_str    "_nfmt forces C locale for decimals"         "1.50" "$(_nfmt '%.2f' 1.5)"
-
-echo ""
-echo "${BOLD}=== count_jsonl_records (F-21) ===${NC}"
-
-expect_str "count_jsonl_records absent file -> 0"  "0" "$(count_jsonl_records "$WORK/nope.jsonl")"
-: > "$WORK/empty.jsonl"
-expect_str "count_jsonl_records empty file -> 0"   "0" "$(count_jsonl_records "$WORK/empty.jsonl")"
-printf 'a\nb\nc\n' > "$WORK/three.jsonl"
-expect_str "count_jsonl_records three lines -> 3"  "3" "$(count_jsonl_records "$WORK/three.jsonl")"
-
-echo ""
-echo "${BOLD}=== assert_ran_tests (F-21) ===${NC}"
-
-printf 'test result: ok. 50 passed. 2 failed.\n' > "$WORK/pass.log"
-assert_ran_tests "$WORK/pass.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests counts 50 passed -> 0" 0 "$rc"
-
-printf 'test result: ok. 0 passed. 0 failed.\n' > "$WORK/zero.log"
-assert_ran_tests "$WORK/zero.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests 0 passed (100% skip) -> 1" 1 "$rc"
-
-printf 'running tests...\nall filtered out (early return)\n' > "$WORK/skip.log"
-assert_ran_tests "$WORK/skip.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests skip-only log -> 1" 1 "$rc"
-
-assert_ran_tests "$WORK/absent.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests missing file -> 1" 1 "$rc"
-
-printf 'bench time: [1.2 ms]\nbench time: [3.4 ms]\n' > "$WORK/bench.log"
-assert_ran_tests "$WORK/bench.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests Criterion time fallback -> 0" 0 "$rc"
-
-printf 'x 5 measured\n' > "$WORK/meas.log"
-assert_ran_tests "$WORK/meas.log" 1 >/dev/null 2>&1; rc=$?
-expect_rc "assert_ran_tests 'N measured' -> 0" 0 "$rc"
-
-echo ""
-echo "${BOLD}=== run_dashboard_phase (F-21) ===${NC}"
-
-LOGDIR="$WORK/logdir"; mkdir -p "$LOGDIR"
-NAM_METRICS_JSONL="$WORK/metrics.jsonl"
-DASHBOARD_PHASE_RECEIPT="$WORK/receipt.jsonl"
-
-( run_dashboard_phase "t_pass" 1 'printf "test result: ok. 3 passed.\n" > "$LOGDIR/t_pass.log" 2>&1' >/dev/null 2>&1 )
-receipt_has t_pass PASS && pass "run_dashboard_phase: real execution -> PASS" || fail "run_dashboard_phase: real execution -> PASS"
-
-( run_dashboard_phase "t_zero" 1 'printf "test result: ok. 0 passed.\n" > "$LOGDIR/t_zero.log" 2>&1' >/dev/null 2>&1 )
-receipt_has t_zero FAIL "no tests/benchmarks actually executed" && pass "run_dashboard_phase: 0 passed -> FAIL" || fail "run_dashboard_phase: 0 passed -> FAIL"
-
-( run_dashboard_phase "t_jsonl" 1 1 'printf "test result: ok. 3 passed.\n" > "$LOGDIR/t_jsonl.log" 2>&1' >/dev/null 2>&1 )
-receipt_has t_jsonl FAIL "jsonl_records" && pass "run_dashboard_phase: min_jsonl not met -> FAIL" || fail "run_dashboard_phase: min_jsonl not met -> FAIL"
-
-: > "$NAM_METRICS_JSONL"
-( run_dashboard_phase "t_jsonl2" 1 1 'printf "test result: ok. 3 passed.\n" > "$LOGDIR/t_jsonl2.log" 2>&1; printf "x\n" >> "$NAM_METRICS_JSONL"' >/dev/null 2>&1 )
-receipt_has t_jsonl2 PASS && pass "run_dashboard_phase: min_jsonl met -> PASS" || fail "run_dashboard_phase: min_jsonl met -> PASS"
-
-( run_dashboard_phase "t_exit" 0 'false' >/dev/null 2>&1 )
-receipt_has t_exit FAIL "subprocess exited" && pass "run_dashboard_phase: subprocess failure -> FAIL" || fail "run_dashboard_phase: subprocess failure -> FAIL"
-
-echo ""
-echo "${BOLD}=== check_toolchain_fingerprint (F-02) ===${NC}"
-
-sb="$(mktemp -d "$WORK/tc-absent-XXXXXX")"; mkdir -p "$sb/tests/fixtures"
-( set -u; cd "$sb"; check_toolchain_fingerprint >/dev/null 2>&1 ); rc=$?
-expect_rc "check_toolchain_fingerprint: absent manifest -> 0" 0 "$rc"
-
-sb="$(mktemp -d "$WORK/tc-noline-XXXXXX")"; mkdir -p "$sb/tests/fixtures"
-printf '# just a comment, no TOOLCHAIN lines\n' > "$sb/tests/fixtures/.golden_manifest.sha256"
-( set -u; cd "$sb"; check_toolchain_fingerprint >/dev/null 2>&1 ); rc=$?
-expect_rc "check_toolchain_fingerprint: manifest without TOOLCHAIN -> 0 (F-02)" 0 "$rc"
-
-sb="$(mktemp -d "$WORK/tc-empty-XXXXXX")"; mkdir -p "$sb/tests/fixtures"
-: > "$sb/tests/fixtures/.golden_manifest.sha256"
-( set -u; cd "$sb"; check_toolchain_fingerprint >/dev/null 2>&1 ); rc=$?
-expect_rc "check_toolchain_fingerprint: empty manifest -> 0" 0 "$rc"
-
-sb="$(mktemp -d "$WORK/tc-drift-XXXXXX")"; mkdir -p "$sb/tests/fixtures"
-printf '# TOOLCHAIN: cxx: definitely-not-a-real-compiler XYZ-999\n' > "$sb/tests/fixtures/.golden_manifest.sha256"
-( set -u; cd "$sb"; check_toolchain_fingerprint >/dev/null 2>&1 ); rc=$?
-expect_rc "check_toolchain_fingerprint: mismatched cxx -> 1 (drift detected)" 1 "$rc"
-
-echo ""
-echo "${BOLD}=== run_freshness_gate (F-22) ===${NC}"
-
-sb_ok="$(mktemp -d "$WORK/fr-ok-XXXXXX")"; make_freshness_sandbox "$sb_ok"
-out="$( ( set -u; cd "$sb_ok"; run_freshness_gate artifacts-hard >/dev/null 2>&1; printf '%s|%s' "$?" "${FRESHNESS_REASON:-UNSET}" ) )"
-expect_str "run_freshness_gate: consistent manifest -> rc=0 reason=OK" "0|OK" "$out"
-
-sb_stale="$(mktemp -d "$WORK/fr-stale-XXXXXX")"; make_freshness_sandbox "$sb_stale"
-printf 'tamper\n' >> "$sb_stale/tests/fixtures/models/model_a.nam"
-out="$( ( set -u; cd "$sb_stale"; run_freshness_gate artifacts-hard >/dev/null 2>&1; printf '%s|%s' "$?" "${FRESHNESS_REASON:-UNSET}" ) )"
-expect_str "run_freshness_gate: model hash drift -> rc=1 reason=STALE_FIXTURES" "1|STALE_FIXTURES" "$out"
-
-sb_miss="$(mktemp -d "$WORK/fr-miss-XXXXXX")"; make_freshness_sandbox "$sb_miss"
-printf '# EXPECTED: missing_golden.bin\n' >> "$sb_miss/tests/fixtures/.golden_manifest.sha256"
-out="$( ( set -u; cd "$sb_miss"; run_freshness_gate artifacts-hard >/dev/null 2>&1; printf '%s|%s' "$?" "${FRESHNESS_REASON:-UNSET}" ) )"
-expect_str "run_freshness_gate: missing expected golden -> rc=1 reason=MISSING_FIXTURES" "1|MISSING_FIXTURES" "$out"
-
-sb_orph="$(mktemp -d "$WORK/fr-orph-XXXXXX")"; make_freshness_sandbox "$sb_orph"
-printf 'orphan\n' > "$sb_orph/tests/fixtures/models/orphan.nam"
-out="$( ( set -u; cd "$sb_orph"; run_freshness_gate artifacts-hard >/dev/null 2>&1; printf '%s|%s' "$?" "${FRESHNESS_REASON:-UNSET}" ) )"
-expect_str "run_freshness_gate: unregistered model -> rc=1 reason=ORPHAN_FIXTURE" "1|ORPHAN_FIXTURE" "$out"
-
-echo ""
-echo "${BOLD}=== run_phase0_freshness receipts (F-22) ===${NC}"
-
-sb_p0="$(mktemp -d "$WORK/p0-XXXXXX")"; make_freshness_sandbox "$sb_p0"
-NAM_CORE_DIR="$WORK/namcore"; mkdir -p "$NAM_CORE_DIR/.git"
-rm -f "$DASHBOARD_PHASE_RECEIPT"
-expect_rc "run_phase0_freshness: present core -> rc 0" 0 "$(capture_phase0_rc "$sb_p0")"
-receipt_has freshness PASS && pass "run_phase0_freshness: freshness receipt PASS" || fail "run_phase0_freshness: freshness receipt PASS"
-receipt_has third_party PASS && pass "run_phase0_freshness: third_party receipt PASS" || fail "run_phase0_freshness: third_party receipt PASS"
-
-rm -f "$DASHBOARD_PHASE_RECEIPT"
-NAM_CORE_DIR="$WORK/nonexistent-core"; NAM_SKIP_THIRD_PARTY_SETUP=1
-expect_rc "run_phase0_freshness: absent core -> rc 0 (graceful skip)" 0 "$(capture_phase0_rc "$sb_p0")"
-receipt_has third_party SKIP_CAPABILITY third_party_absent && pass "run_phase0_freshness: third_party receipt SKIP_CAPABILITY/third_party_absent" || fail "run_phase0_freshness: third_party receipt SKIP_CAPABILITY/third_party_absent"
-unset NAM_SKIP_THIRD_PARTY_SETUP
-
-sb_p0_stale="$(mktemp -d "$WORK/p0s-XXXXXX")"; make_freshness_sandbox "$sb_p0_stale"
-printf 'x\n' >> "$sb_p0_stale/tests/fixtures/models/model_a.nam"
-NAM_CORE_DIR="$WORK/namcore"
-rm -f "$DASHBOARD_PHASE_RECEIPT"
-expect_rc "run_phase0_freshness: stale fixtures -> rc 1" 1 "$(capture_phase0_rc "$sb_p0_stale")"
-receipt_has freshness FAIL STALE_FIXTURES && pass "run_phase0_freshness: freshness receipt FAIL/STALE_FIXTURES" || fail "run_phase0_freshness: freshness receipt FAIL/STALE_FIXTURES"
-
-echo ""
-echo "${BOLD}=== ensure_third_party / detect_isa / detect_cpu_model (tool detection) ===${NC}"
-
-NAM_CORE_DIR="$WORK/namcore"
-ensure_third_party soft >/dev/null 2>&1; rc=$?
-expect_rc "ensure_third_party: present core -> 0" 0 "$rc"
-NAM_CORE_DIR="$WORK/nonexistent-core"; NAM_SKIP_THIRD_PARTY_SETUP=1
-ensure_third_party soft >/dev/null 2>&1; rc=$?
-expect_rc "ensure_third_party: absent core + skip flag -> 1" 1 "$rc"
-unset NAM_SKIP_THIRD_PARTY_SETUP
-
-expect_nonempty "detect_isa returns a known ISA string" "$(detect_isa)"
-expect_nonempty "detect_cpu_model returns a model string" "$(detect_cpu_model)"
-
-echo ""
-echo "${BOLD}=== parse_jsonl_fidelity (F-27 canonical JSONL) ===${NC}"
-
-if command -v jq >/dev/null 2>&1; then
-    PARSEDIR="$WORK/parsedir"; mkdir -p "$PARSEDIR"
-    cat > "$WORK/canonical.jsonl" <<'EOF'
-{"kind":"fidelity","label":"Model A @48000 Live","esr":null,"esr_db":"","snr_db":"1.5e2","mse":"1.2e-5","mrstft":"inf"}
-{"kind":"fidelity","label":"Model B","esr":"","esr_db":null,"snr_db":"-inf","mse":null,"mrstft":"nan"}
-{"label":"Model C @44100","esr":"0.0001","esr_db":"-40.0","snr_db":"50.0","mse":"3.0e-7","mrstft":"0.001"}
-{"label":null,"esr":"1","esr_db":"2","snr_db":"3","mse":"4","mrstft":"5"}
-EOF
-    NAM_METRICS_JSONL="$WORK/canonical.jsonl" parse_jsonl_fidelity >/dev/null 2>&1; rc=$?
-    expect_rc "parse_jsonl_fidelity parses canonical JSONL -> 0" 0 "$rc"
-    expect_str "jq normalizes null esr -> N/A"          "N/A"   "${ESR_NAMCORE["Model A @48000 Live"]}"
-    expect_str "jq normalizes empty esr_db -> N/A"      "N/A"   "${ESR_NAMCORE_DB["Model A @48000 Live"]}"
-    expect_str "jq preserves e-notation string"         "1.5e2" "${SNR_DB["Model A @48000 Live"]}"
-    expect_str "jq preserves non-finite sentinel (inf)" "inf"   "${MRSTFT["Model A @48000 Live"]}"
-    expect_str "jq normalizes null esr on Model B"      "N/A"   "${ESR_NAMCORE["Model B"]}"
-    expect_str "jq preserves non-finite sentinel (nan)" "nan"   "${MRSTFT["Model B"]}"
-    expect_str "jq keeps label with spaces/@ as key"    "0.0001" "${ESR_NAMCORE["Model C @44100"]}"
-    _is_finite_num "${MRSTFT["Model A @48000 Live"]}"; rc=$?
-    expect_rc "_is_finite_num rejects 'inf' sentinel from JSONL" 1 "$rc"
-    _is_finite_num "${SNR_DB["Model A @48000 Live"]}"; rc=$?
-    expect_rc "_is_finite_num accepts e-notation from JSONL" 0 "$rc"
-    expect_str "parse_jsonl_fidelity drops null-label records (3 labels)" "3" "${#MODEL_ORDER[@]}"
-else
-    skip "parse_jsonl_fidelity (jq unavailable in PATH)"
-fi
-
-echo ""
-echo "${BOLD}=== classify_regression_outcome (F-08 single NOT_VERIFIED semantics) ===${NC}"
-
-expect_str "classify PASS -> PASS"                       "PASS"          "$(classify_regression_outcome PASS '')"
-expect_str "classify FAIL:MISSING_BASELINE -> NOT_VERIFIED" "NOT_VERIFIED" "$(classify_regression_outcome FAIL MISSING_BASELINE)"
-expect_str "classify FAIL:INCOMPARABLE_ENVIRONMENT -> NOT_VERIFIED" "NOT_VERIFIED" "$(classify_regression_outcome FAIL INCOMPARABLE_ENVIRONMENT)"
-expect_str "classify FAIL:REGRESSION_DETECTED -> FAIL"   "FAIL"          "$(classify_regression_outcome FAIL REGRESSION_DETECTED)"
-expect_str "classify FAIL:Benchmark run failed -> FAIL" "FAIL"          "$(classify_regression_outcome FAIL 'Benchmark run failed')"
-expect_str "classify empty receipt -> FAIL (fail-closed)" "FAIL"        "$(classify_regression_outcome '' '')"
-expect_str "classify SKIP_CAPABILITY never promoted -> FAIL" "FAIL"     "$(classify_regression_outcome SKIP_CAPABILITY whatever)"
-
-echo ""
-echo "${BOLD}=== executed_bench_ids / missing_baseline_coverage (F-24) ===${NC}"
-
-crit="$WORK/crit-root"
-mkdir -p "$crit/RT_A/ci-baseline" "$crit/RT_B/ci-baseline"
-cat > "$WORK/crit.log" <<'EOF'
-Benchmarking RT_A: Warming up for 1.0000 s
-Benchmarking RT_A: Collecting 100 samples
-Benchmarking RT_B: Warming up for 1.0000 s
-Benchmarking RT_C: Warming up for 1.0000 s
-EOF
-
-out="$(missing_baseline_coverage "$WORK/crit.log" "$crit" ci-baseline)"; rc=$?
-expect_rc "missing_baseline_coverage: parse ok -> 0" 0 "$rc"
-expect_str "missing_baseline_coverage: RT_C without series listed" "RT_C" "$out"
-
-executed_bench_ids "$WORK/crit.log" > "$WORK/ids.txt"; rc=$?
-expect_str "executed_bench_ids dedups and sorts" "RT_A
-RT_B
-RT_C" "$(cat "$WORK/ids.txt")"
-
-mkdir -p "$crit/RT_C/ci-baseline"
-out="$(missing_baseline_coverage "$WORK/crit.log" "$crit" ci-baseline)"; rc=$?
-expect_str "missing_baseline_coverage: full coverage -> empty" "" "$out"
-expect_rc "missing_baseline_coverage: full coverage -> 0" 0 "$rc"
-
-printf 'garbage log with no criterion lines\n' > "$WORK/nobench.log"
-out="$(missing_baseline_coverage "$WORK/nobench.log" "$crit" ci-baseline)"; rc=$?
-expect_rc "missing_baseline_coverage: unparseable log -> 1 (blind gate)" 1 "$rc"
-
-out="$(missing_baseline_coverage "$WORK/absent-crit.log" "$crit" ci-baseline)"; rc=$?
-expect_rc "missing_baseline_coverage: absent log -> 1" 1 "$rc"
-
-echo ""
-echo "${BOLD}=== run_extended_audit (F-06 --full delegation) ===${NC}"
-
-LOGDIR="$WORK/logdir2"; mkdir -p "$LOGDIR"
-DASHBOARD_PHASE_RECEIPT="$WORK/receipt2.jsonl"; rm -f "$DASHBOARD_PHASE_RECEIPT"
-DASHBOARD_PHASE_HAD_FAILURE=0
-
-cat > "$WORK/stub-long-ok.sh" <<'EOF'
-#!/bin/bash
-echo "stub long suite ran"
-exit 0
-EOF
-cat > "$WORK/stub-long-fail.sh" <<'EOF'
-#!/bin/bash
-echo "stub long suite failed"
-exit 3
-EOF
-
-NAM_LONG_SUITE_SCRIPT="$WORK/stub-long-ok.sh"
-run_extended_audit >/dev/null 2>&1; rc=$?
-expect_rc "run_extended_audit: stub exit 0 -> rc 0" 0 "$rc"
-receipt_has long_suite PASS && pass "run_extended_audit: receipt long_suite PASS" || fail "run_extended_audit: receipt long_suite PASS"
-
-NAM_LONG_SUITE_SCRIPT="$WORK/stub-long-fail.sh"
-run_extended_audit >/dev/null 2>&1; rc=$?
-expect_rc "run_extended_audit: stub exit 3 -> rc 0 (flag, not abort)" 0 "$rc"
-receipt_has long_suite FAIL "delegated tests-long.sh failed" && pass "run_extended_audit: receipt long_suite FAIL" || fail "run_extended_audit: receipt long_suite FAIL"
-expect_rc "run_extended_audit: FAIL sets DASHBOARD_PHASE_HAD_FAILURE" 1 "${DASHBOARD_PHASE_HAD_FAILURE:-0}"
-
-NAM_LONG_SUITE_SCRIPT="$WORK/definitely-missing-script.sh"
-run_extended_audit >/dev/null 2>&1; rc=$?
-expect_rc "run_extended_audit: missing script -> rc 0 (typed receipt)" 0 "$rc"
-receipt_has long_suite FAIL long_suite_script_missing && pass "run_extended_audit: missing script -> FAIL/long_suite_script_missing" || fail "run_extended_audit: missing script -> FAIL/long_suite_script_missing"
-unset NAM_LONG_SUITE_SCRIPT
-
-echo ""
-echo "${BOLD}=== ensure_namcore_render (S3-T01 unified C++ render build) ===${NC}"
-
-# NOTE: run_extended_audit (above) leaves `set -e` active in this shell, so
-# every non-zero-rc capture below uses an if/else context (never `cmd; rc=$?`).
-
-mkdir -p "$WORK/emptybin"
-if PATH="$WORK/emptybin" ensure_namcore_render >/dev/null 2>&1; then rc=0; else rc=$?; fi
-expect_rc "ensure_namcore_render: cmake missing -> rc 2" 2 "$rc"
-
-if CXX="$WORK/missing-cxx" ensure_namcore_render >/dev/null 2>&1; then rc=0; else rc=$?; fi
-expect_rc "ensure_namcore_render: invalid CXX -> rc 1" 1 "$rc"
-
-CXX_REAL="$(command -v g++ 2>/dev/null || command -v clang++ 2>/dev/null || true)"
-if [ -n "$CXX_REAL" ]; then
-    if CXX="$CXX_REAL" NAM_CORE_DIR="$WORK/nonexistent-core" ensure_namcore_render >/dev/null 2>&1; then rc=0; else rc=$?; fi
-    expect_rc "ensure_namcore_render: missing NAMCore -> rc 3" 3 "$rc"
-else
-    skip "ensure_namcore_render: missing NAMCore (no C++ compiler in PATH)"
-fi
-
-# Fake cmake + fake compiler: exercises configure/build/fingerprint/idempotency
-# without a real C++ build. The fake cmake logs every invocation and fabricates
-# a render binary at `tools/render` (the Makefiles-generator layout).
-mkdir -p "$WORK/bin" "$WORK/namcore-mock" "$WORK/rb"
-FAKE_CMAKE="$WORK/bin/cmake"
-cat > "$FAKE_CMAKE" <<'EOF'
-#!/bin/bash
-echo "invoked: $*" >> "${CMAKE_CALL_LOG:-/dev/null}"
-BUILD_D=""
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -B|--build) shift; BUILD_D="$1" ;;
-    esac
-    shift
-done
-mkdir -p "$BUILD_D/tools"
-printf '#!/bin/bash\nexit 0\n' > "$BUILD_D/tools/render"
-chmod +x "$BUILD_D/tools/render"
-exit 0
-EOF
-chmod +x "$FAKE_CMAKE"
-printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/fake-cxx"
-chmod +x "$WORK/bin/fake-cxx"
-printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/fake-clang"
-chmod +x "$WORK/bin/fake-clang"
-
-CMAKE_CALL_LOG="$WORK/cmake-calls.log"; rm -f "$CMAKE_CALL_LOG"
-
-out="$(PATH="$WORK/bin:$PATH" CXX=fake-cxx NAM_CORE_DIR="$WORK/namcore-mock" NAM_RENDER_BUILD_DIR="$WORK/rb" CMAKE_CALL_LOG="$CMAKE_CALL_LOG" ensure_namcore_render 2>/dev/null)"; rc=$?
-expect_rc "ensure_namcore_render: cold build -> rc 0" 0 "$rc"
-expect_str "ensure_namcore_render: cold build prints binary path" "$WORK/rb/tools/render" "$out"
-expect_str "ensure_namcore_render: cold build writes .build_config" "fake-cxx:Release:-w -fno-fast-math -ffp-contract=off" "$(cat "$WORK/rb/.build_config" 2>/dev/null)"
-CALLS_COLD=$(wc -l < "$CMAKE_CALL_LOG")
-expect_str "ensure_namcore_render: cold build invokes cmake twice" "2" "$CALLS_COLD"
-
-out="$(PATH="$WORK/bin:$PATH" CXX=fake-cxx NAM_CORE_DIR="$WORK/namcore-mock" NAM_RENDER_BUILD_DIR="$WORK/rb" CMAKE_CALL_LOG="$CMAKE_CALL_LOG" ensure_namcore_render 2>/dev/null)"; rc=$?
-expect_rc "ensure_namcore_render: warm run -> rc 0" 0 "$rc"
-CALLS_WARM=$(wc -l < "$CMAKE_CALL_LOG")
-expect_str "ensure_namcore_render: warm run skips cmake entirely (idempotent)" "$CALLS_COLD" "$CALLS_WARM"
-
-out="$(PATH="$WORK/bin:$PATH" CXX=fake-clang NAM_CORE_DIR="$WORK/namcore-mock" NAM_RENDER_BUILD_DIR="$WORK/rb" CMAKE_CALL_LOG="$CMAKE_CALL_LOG" ensure_namcore_render 2>/dev/null)"; rc=$?
-expect_rc "ensure_namcore_render: compiler change -> rc 0 (rebuild)" 0 "$rc"
-CALLS_SWITCH=$(wc -l < "$CMAKE_CALL_LOG")
-expect_str "ensure_namcore_render: compiler change triggers fresh build" "$((CALLS_COLD + 2))" "$CALLS_SWITCH"
-expect_str "ensure_namcore_render: fingerprint follows CXX" "fake-clang:Release:-w -fno-fast-math -ffp-contract=off" "$(cat "$WORK/rb/.build_config" 2>/dev/null)"
-
-if PATH="$WORK/bin:$PATH" CXX=fake-clang NAM_CORE_DIR="$WORK/namcore-mock" NAM_RENDER_BUILD_DIR="$WORK/rb" CMAKE_CALL_LOG="$CMAKE_CALL_LOG" NAM_RENDER_FORCE=1 ensure_namcore_render >/dev/null 2>&1; then rc=0; else rc=$?; fi
-expect_rc "ensure_namcore_render: NAM_RENDER_FORCE=1 -> rc 0" 0 "$rc"
-CALLS_FORCE=$(wc -l < "$CMAKE_CALL_LOG")
-expect_str "ensure_namcore_render: NAM_RENDER_FORCE=1 forces reconfigure+build" "$((CALLS_SWITCH + 2))" "$CALLS_FORCE"
-
-if PATH="$WORK/bin:$PATH" CXX=fake-clang NAM_CORE_DIR="$WORK/namcore-mock" NAM_RENDER_BUILD_DIR="$WORK/rb" CMAKE_CALL_LOG="$CMAKE_CALL_LOG" NAM_RENDER_BUILD_TYPE=Debug ensure_namcore_render >/dev/null 2>&1; then rc=0; else rc=$?; fi
-expect_rc "ensure_namcore_render: build-type change -> rc 0 (rebuild)" 0 "$rc"
-expect_str "ensure_namcore_render: fingerprint follows build type" "fake-clang:Debug:-w -fno-fast-math -ffp-contract=off" "$(cat "$WORK/rb/.build_config" 2>/dev/null)"
-
-# ── Summary ──────────────────────────────────────────────────────────────────
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "  bash defense unit tests — passed=${PASSED} failed=${FAILED} skipped=${SKIPPED} (total=${TOTAL})"
-if [ "$FAILED" -gt 0 ]; then
-    echo "  Failures:"
-    for f in "${FAILED_NAMES[@]}"; do echo "    - ${f}"; done
-    echo "  RESULT: FAIL"
-    exit 1
-fi
-echo "  RESULT: PASS"
-exit 0
-    )
-}
+# Defense phase (EP-05 / R-05, Sprint S5): the inline bash unit-test suite
+# (run_bash_scripts_unit_tests, formerly the standalone
+# utils/tests/test_scripts.sh, removed in S4-T06) was deleted in S5.T2. Its
+# acceptance cases — F-01 metric sanitization, F-08 single NOT_VERIFIED
+# classifier, F-21 executed-tests counter, F-22 freshness gate, F-24 baseline
+# coverage, F-27 canonical JSONL parse, S3-T01 C++ render build — now live in
+# the Rust harness tests/qa_defense.rs (one `--test qa_defense` call replaces
+# ~470 lines of sed/eval extraction). The bash-only orchestration tests
+# (run_dashboard_phase, run_phase0_freshness, run_extended_audit, render
+# helpers) died with their functions; the dashboard conversion (S6/S7) owns
+# their Rust replacements.
 
 run_defense_scripts_phase() {
     local status=0
-    echo "  → run_bash_scripts_unit_tests (bash defense helpers)"
-    run_bash_scripts_unit_tests || status=1
+    echo "  → qa_defense (Rust defense harness: F-01/F-08/F-21/F-22/F-24/F-27/S3-T01)"
+    timed_cargo_test "qa_defense" --no-fail-fast --test qa_defense || status=1
     echo "  → libm_export_guard (Rust ELF surface, release)"
     timed_cargo_test "libm_export_guard" --release --no-fail-fast --test libm_export_guard -- --nocapture || status=1
     echo "  → oversample hang bound (lib unit, 60s execution ceiling)"
@@ -1160,33 +656,22 @@ emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase3-heap-audit.log" || true
 # classified as INCONCLUSIVE_ENVIRONMENT and the gate is not certified.
 run_rt_deadline_gate_phase() {
     local status=0
-    local start_t
-    start_t=$(date +%s%N)
     local flag=$(_test_flag rt_deadline)
     if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
         taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
     else
         cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
     fi
-    local end_t
-    end_t=$(date +%s%N)
-    local duration_ns=$((end_t - start_t))
-    local duration_s
-    duration_s=$(LC_NUMERIC=C awk -v ns="$duration_ns" 'BEGIN { printf "%.3f", ns / 1000000000 }')
-    echo "TIMED: $duration_s rt_deadline" >> "$TIMED_TRACKER"
     return $status
 }
 run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase4-rt-deadline.log" || true
 
-# Post-phase: detect INCONCLUSIVE_ENVIRONMENT from the deadline log.
-# When the Rust preflight reports uncontrolled environment, the test exits 0
-# (no assertion) but the log contains the marker — this is NOT a PASS.
-DEADLINE_LOG="target/logs/phase4-rt-deadline.log"
-if grep -qF "INCONCLUSIVE_ENVIRONMENT" "$DEADLINE_LOG" 2>/dev/null; then
-    DEADLINE_IDX=$((PHASE_COUNT - 1))
-    PHASE_STATUS[$DEADLINE_IDX]="INCONCLUSIVE"
-fi
-# Emit after the status override so the receipt carries the authoritative status.
+# The receipt carries the bypass typed in the log: when the Rust preflight
+# reports an uncontrolled environment the test exits 0 (no assertion) but the
+# log contains the INCONCLUSIVE_ENVIRONMENT marker. `nam_long_receipt append
+# --log` picks it up via detect_gap_markers (S5 — the PHASE_STATUS override
+# is gone; the marker is the only carrier, and the summary derives
+# COMPLETED_WITH_GAPS from it).
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase4-rt-deadline.log" || true
 
 # --- Phase 5: RT Jitter Characterization (environmental telemetry) ---
@@ -1197,37 +682,21 @@ emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase4-rt-deadline.log" || true
 run_rt_jitter_characterization_phase() {
     # Same core pin as Phase 4: jitter preflight requires single-CPU affinity.
     local status=0
-    local start_t
-    start_t=$(date +%s%N)
     local flag=$(_test_flag rt_jitter)
     if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
         taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
     else
         cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
     fi
-    local end_t
-    end_t=$(date +%s%N)
-    local duration_ns=$((end_t - start_t))
-    local duration_s
-    duration_s=$(LC_NUMERIC=C awk -v ns="$duration_ns" 'BEGIN { printf "%.3f", ns / 1000000000 }')
-    echo "TIMED: $duration_s rt_jitter" >> "$TIMED_TRACKER"
     return $status
 }
 run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase5-rt-jitter.log" || true
 
-# Post-phase: detect typed status from log and override phase status.
 # The Rust test returns exit 0 even when internally bypassed (INCONCLUSIVE
-# or SKIP_CAPABILITY) to avoid false FAIL — the log markers are authoritative.
-# Invariant: exit-0 with internal measurement bypass SHALL NOT be promoted to PASS.
-JITTER_LOG="target/logs/phase5-rt-jitter.log"
-if grep -qF "[STATUS] SKIP_CAPABILITY" "$JITTER_LOG" 2>/dev/null; then
-    JITTER_IDX=$((PHASE_COUNT - 1))
-    PHASE_STATUS[$JITTER_IDX]="SKIP_CAPABILITY"
-elif grep -qF "[STATUS] INCONCLUSIVE" "$JITTER_LOG" 2>/dev/null; then
-    JITTER_IDX=$((PHASE_COUNT - 1))
-    PHASE_STATUS[$JITTER_IDX]="INCONCLUSIVE"
-fi
-# Emit after the status override so the receipt carries the authoritative status.
+# or SKIP_CAPABILITY) to avoid false FAIL — the [STATUS] log markers are
+# authoritative and `nam_long_receipt append --log` records them as typed
+# gaps (S5: the PHASE_STATUS override is gone). Invariant: exit-0 with
+# internal measurement bypass SHALL NOT be promoted to PASS.
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase5-rt-jitter.log" || true
 
 # --- Phase 6: Loom Concurrency Model Checking (release) ---
@@ -1246,109 +715,18 @@ run_loom_phase() {
 run_phase "Loom Concurrency Model Checking" "run_loom_phase" "phase6-loom.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase6-loom.log" || true
 
-# --- Print beautifully structured summary ---
-echo -e "\n${BLUE}${BOLD}================================================================${NC}"
-echo -e "${BLUE}${BOLD}                  AUDIT SUMMARY REPORT                          ${NC}"
-echo -e "${BLUE}${BOLD}================================================================${NC}"
-printf " | %-45s | %-10s | %-10s |\n" "Phase Name" "Duration" "Status"
-printf " |-%-45s-|-%-10s-|-%-10s-|\n" "---------------------------------------------" "----------" "----------"
-
-ANY_FAILED=0
-ANY_FIDELITY_FAILED=0
-COUNT_PASSED=0
-COUNT_FAILED=0
-COUNT_INCONCLUSIVE=0
-COUNT_SKIP=0
-COUNT_NOT_RUN=0
-
-RT_DEADLINE_STATUS="PASS"
-RT_JITTER_STATUS="PASS"
-for ((i=0; i<PHASE_COUNT; i++)); do
-    name="${PHASE_NAMES[$i]}"
-    duration="${PHASE_DURATIONS[$i]}s"
-    status="${PHASE_STATUS[$i]}"
-    class="${PHASE_CLASSES[$i]:-fidelity}"
-
-    case "$status" in
-        PASSED)
-            COUNT_PASSED=$((COUNT_PASSED + 1))
-            status_colored="${GREEN}${status}${NC}"
-            ;;
-        SKIPPED|SKIP_CAPABILITY)
-            COUNT_SKIP=$((COUNT_SKIP + 1))
-            status_colored="${YELLOW}${status}${NC}"
-            ;;
-        INCONCLUSIVE)
-            COUNT_INCONCLUSIVE=$((COUNT_INCONCLUSIVE + 1))
-            status_colored="${YELLOW}${status}${NC}"
-            ;;
-        NOT_RUN)
-            COUNT_NOT_RUN=$((COUNT_NOT_RUN + 1))
-            status_colored="${YELLOW}${status}${NC}"
-            ;;
-        *)
-            COUNT_FAILED=$((COUNT_FAILED + 1))
-            status_colored="${RED}${status}${NC}"
-            ANY_FAILED=1
-            if [ "$class" != "performance" ]; then
-                ANY_FIDELITY_FAILED=1
-            fi
-            ;;
-    esac
-
-    # ── Per-phase typed status tracking for disaggregated performance summary ──
-    if [[ "$name" == *"RT Deadline"* ]]; then
-        if [ "$status" = "FAILED" ]; then
-            RT_DEADLINE_STATUS="FAIL"
-        elif [ "$status" = "SKIPPED" ]; then
-            RT_DEADLINE_STATUS="PASS"
-        fi
-    elif [[ "$name" == *"RT Jitter"* ]]; then
-        case "$status" in
-            PASSED)       RT_JITTER_STATUS="PASS" ;;
-            INCONCLUSIVE) RT_JITTER_STATUS="INCONCLUSIVE" ;;
-            SKIP_CAPABILITY) RT_JITTER_STATUS="SKIP_CAPABILITY" ;;
-            FAILED)       RT_JITTER_STATUS="FAIL" ;;
-            SKIPPED)      RT_JITTER_STATUS="INCONCLUSIVE" ;;
-        esac
-    fi
-
-    printf " | %-45s | %-10s | %-19b |\n" "$name" "$duration" "$status_colored"
-done
-
-# --- Top-N slowest sub-timings per heavy phase ---
-echo -e "\n${BLUE}${BOLD}  Top-$N_TOP_SLOWEST Slowest Items per Heavy Phase${NC}"
-echo -e "${BLUE}${BOLD}  $(printf '━%.0s' {1..60})${NC}"
-
-for ((i=0; i<PHASE_COUNT; i++)); do
-    name="${PHASE_NAMES[$i]}"
-    sub_timings="${PHASE_SUB_TIMINGS[$i]}"
-
-    if [ -n "$sub_timings" ]; then
-        echo -e "\n  ${YELLOW}${BOLD}[$name]${NC}"
-        rank=1
-        while IFS= read -r line; do
-            if [ -n "$line" ]; then
-                t="${line%% *}"
-                lbl="${line#* }"
-                printf "    %2d. %8ss  %s\n" "$rank" "$t" "$lbl"
-                rank=$((rank + 1))
-            fi
-        done <<< "$sub_timings"
-    fi
-done
-
-echo -e "\n${BLUE}${BOLD}================================================================${NC}"
-
-# Cleanup timed tracker temp file
-rm -f "$TIMED_TRACKER"
-
-# ── Structured long-audit receipt: suite-level `overall` line (Sprint S3-T04) ──
-# Derives the verdict from the phase lines already emitted (PASSED /
-# FAILED / COMPLETED_WITH_GAPS) and appends it before the final verdict.
-# Failure to produce a valid receipt is fail-closed: the suite exits 1 below.
+# ── Human summary (Sprint S5, EP-05 / R-05) ────────────────────────────────
+# The verdict is derived ONCE, in Rust: `nam_long_receipt summary` appends
+# the suite-level `overall` line to long-audit-receipt.jsonl (PASSED /
+# FAILED / COMPLETED_WITH_GAPS, with declared gaps) and prints the human
+# one-liners — WARNING/ERROR alarms per phase plus OVERALL / FIDELITY /
+# RT_DEADLINE / RT_JITTER / PERF_REGRESSION. Bash only echoes those lines
+# verbatim and maps `OVERALL:` to the exit code; it never reclassifies logs
+# (the giant ASCII table, the top-N slowest block and the per-phase status
+# reclassification are gone — forensics live in the JSONL, per the PO note:
+# humans get alarms, agents get data).
 if [ "$PHASE_COUNT" -gt 0 ] && ensure_long_receipt_bin; then
-    if ! "$LONG_RECEIPT_BIN" summary --out "$LONG_RECEIPT_FILE"; then
+    if ! SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$LONG_RECEIPT_FILE")"; then
         echo -e "  ${YELLOW}${BOLD}⚠ Long-audit receipt summary emission failed${NC}" >&2
         LONG_RECEIPT_FAILED=1
     fi
@@ -1356,63 +734,29 @@ else
     LONG_RECEIPT_FAILED=1
 fi
 
-# Must be defined before first invocation — Bash does not hoist functions.
-render_performance_summary() {
-    case "$RT_DEADLINE_STATUS" in
-        FAIL) echo -e "${RED}RT_DEADLINE: ${RT_DEADLINE_STATUS}${NC}" ;;
-        *)    echo -e "${GREEN}RT_DEADLINE: ${RT_DEADLINE_STATUS}${NC}" ;;
-    esac
-    case "$RT_JITTER_STATUS" in
-        PASS)            echo -e "${GREEN}RT_JITTER: ${RT_JITTER_STATUS}${NC}" ;;
-        INCONCLUSIVE|SKIP_CAPABILITY) echo -e "${YELLOW}RT_JITTER: ${RT_JITTER_STATUS}${NC}" ;;
-        FAIL)            echo -e "${RED}RT_JITTER: ${RT_JITTER_STATUS}${NC}" ;;
-    esac
-    echo -e "${YELLOW}PERF_REGRESSION: NOT_RUN${NC}"
-}
-
-HAS_GAPS=0
-if [ "$COUNT_INCONCLUSIVE" -gt 0 ] || [ "$COUNT_SKIP" -gt 0 ] || [ "$COUNT_NOT_RUN" -gt 0 ] || \
-   [ "$RT_JITTER_STATUS" != "PASS" ] || [ "$RT_DEADLINE_STATUS" != "PASS" ]; then
-    HAS_GAPS=1
-fi
-
-if [ $ANY_FAILED -ne 0 ]; then
-    echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check logs in target/logs/${NC}"
-    if [ $ANY_FIDELITY_FAILED -eq 1 ]; then
-        echo -e "${RED}FIDELITY: FAIL${NC}"
-    else
-        echo -e "${GREEN}FIDELITY: OK${NC}"
-    fi
-    render_performance_summary
-    echo -e "${RED}${BOLD}OVERALL: FAILED${NC}"
+if [ "${LONG_RECEIPT_FAILED:-0}" -eq 1 ]; then
+    echo -e "${RED}${BOLD}❌ Long-audit receipt emission failed — target/logs/long-audit-receipt.jsonl is missing or incomplete.${NC}"
     exit 1
-elif [ $HAS_GAPS -eq 1 ]; then
-    echo -e "${YELLOW}${BOLD}⚠ Audit completed with declared gaps (inconclusive / skipped / unexecuted stages).${NC}"
-    echo -e "${GREEN}FIDELITY: OK${NC}"
-    render_performance_summary
-    echo -e "${YELLOW}${BOLD}OVERALL: COMPLETED_WITH_GAPS${NC}"
-
-    if [ "${LONG_RECEIPT_FAILED:-0}" -eq 1 ]; then
-        echo -e "${RED}${BOLD}❌ Long-audit receipt emission failed — target/logs/long-audit-receipt.jsonl is missing or incomplete.${NC}"
-        exit 1
-    fi
-
-    if [ "${STRICT_PRE_RELEASE:-0}" -eq 1 ]; then
-        echo -e "${RED}${BOLD}❌ --strict-pre-release mode: failing audit due to declared gaps (INCONCLUSIVE/NOT_RUN).${NC}"
-        exit 1
-    else
-        exit 0
-    fi
-else
-    echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
-    echo -e "${GREEN}FIDELITY: OK${NC}"
-    render_performance_summary
-    echo -e "${GREEN}${BOLD}OVERALL: PASSED${NC}"
-
-    if [ "${LONG_RECEIPT_FAILED:-0}" -eq 1 ]; then
-        echo -e "${RED}${BOLD}❌ Long-audit receipt emission failed — target/logs/long-audit-receipt.jsonl is missing or incomplete.${NC}"
-        exit 1
-    fi
-
-    exit 0
 fi
+
+echo -e "\n${BLUE}${BOLD}================ AUDIT SUMMARY ================${NC}"
+printf '%s\n' "$SUMMARY_TEXT"
+
+case "$SUMMARY_TEXT" in
+    *"OVERALL: FAILED"*)
+        echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check target/logs/long-audit-receipt.jsonl${NC}"
+        exit 1
+        ;;
+    *"OVERALL: COMPLETED_WITH_GAPS"*)
+        echo -e "${YELLOW}${BOLD}⚠ Audit completed with declared gaps (inconclusive / skipped / unexecuted stages).${NC}"
+        if [ "${STRICT_PRE_RELEASE:-0}" -eq 1 ]; then
+            echo -e "${RED}${BOLD}❌ --strict-pre-release mode: failing audit due to declared gaps (INCONCLUSIVE/NOT_RUN).${NC}"
+            exit 1
+        fi
+        exit 0
+        ;;
+    *)
+        echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
+        exit 0
+        ;;
+esac

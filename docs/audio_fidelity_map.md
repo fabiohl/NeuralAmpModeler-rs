@@ -92,7 +92,7 @@ Standard mode is most effective when paired with 4× neural stage oversampling (
 | **BossLSTM-2×8**        | **1.00e-11**              | 110.0 dB       | **5.68e-13**              | ✅ Bit-identical interop |
 | **Official lstm (H=3)** | **7.86e-13**              | 121.0 dB       | **2.71e-12**              | ✅ Bit-identical interop |
 
-*Note: All values measured with 24,000-sample warm-up prewarm in canonical live mode ([`docs/quality-contract.txt`](quality-contract.txt)).*
+*Note: All values measured with 24,000-sample warm-up prewarm in canonical live mode ([`docs/quality-contract.json`](quality-contract.json)).*
 
 ### 3.1 Steady-State Prewarm vs Cold-Start Decomposition
 
@@ -101,7 +101,7 @@ A critical distinction must be drawn between steady-state fidelity and cold-star
 1. **Canonical Steady-State (Prewarmed):** Measured after a 24,000-sample warmup period. In steady-state regime, `nam-rs` matches NAMCore to float32 precision limits (ESR ≈ 1e-11 to 1e-13, SNR 110–121 dB) and tracks the mathematical `f64` oracle to ESR ≈ 5.7e-13 to 2.7e-12.
 2. **Cold-Start Decomposition (256 samples without prewarm):** Short-window tests (`test_decomposition_*` in `tests/parity/reference_oracle_f64.rs`) measure initial buffer-filling transients for architectures whose receptive field or recurrent memory exceeds 256 samples. These transient numbers reflect cold state initialization, not the steady-state precision floor. Consult [`docs/perceptual_validation.md`](perceptual_validation.md) §Decomposition Cold-Start for methodological details.
 
-#### Empirical Cold-Start Error Decomposition (`quality-contract.txt`)
+#### Empirical Cold-Start Error Decomposition (`quality-contract.json`)
 
 | Model                | Total ESR (f32 vs f64) | ΔESR F16C Weights  | ΔESR BF16 Weights  | ΔESR Padé Activation | ΔESR F32 Accumulation |
 |:-------------------- |:---------------------- |:------------------ |:------------------ |:-------------------- |:--------------------- |
@@ -236,7 +236,7 @@ Reasserted at the start of every audio processing call ([`capture_dsp_pipeline`]
 
 ## 8. Governance & Quality Contract Verification
 
-All fidelity, SNR, and performance claims in this document are governed by the automated testing supply chain specified in [`tests/fixtures/README.md`](../tests/fixtures/README.md):
+All fidelity, SNR, and performance claims in this document are governed by the automated testing supply chain specified in [`docs/fixtures.md`](fixtures.md):
 
 | Governance Layer                | Verification Mechanism                                                                   | Enforcement Gate                 |
 |:------------------------------- |:---------------------------------------------------------------------------------------- |:-------------------------------- |
@@ -246,7 +246,7 @@ All fidelity, SNR, and performance claims in this document are governed by the a
 
 **Freshness Manifest:** `tests/fixtures/.golden_manifest.sha256` is enforced as a hard gate by `utils/tests-quick.sh`.
 
-Live dashboard measurements are updated via `utils/quality-dashboard.sh` and recorded in [`docs/quality-contract.txt`](quality-contract.txt).
+Live dashboard measurements are updated via `utils/quality-dashboard.sh` and recorded in [`docs/quality-contract.json`](quality-contract.json).
 
 ---
 
@@ -267,5 +267,5 @@ Key technical trade-offs validated during `nam-rs` development:
 - [`docs/perceptual_validation.md`](perceptual_validation.md) — Measurement methodology, ESR thresholds, and cold-start analysis
 - [`docs/architecture.md`](architecture.md) — Architectural overview, pipeline flow, and memory layouts
 - [`docs/research-references.md`](research-references.md) — Scientific references (Kahles 2019, Sato & Smith 2025, etc.)
-- [`docs/quality-contract.txt`](quality-contract.txt) — Automated Quality Dashboard Baseline
-- [`tests/fixtures/README.md`](../tests/fixtures/README.md) — Golden vector test supply chain contract
+- [`docs/quality-contract.json`](quality-contract.json) — Automated Quality Dashboard Baseline (JSON)
+- [`docs/fixtures.md`](fixtures.md) — Golden vector test supply chain contract

@@ -592,6 +592,14 @@ pub fn is_preflight_id(phase_id: &str) -> bool {
     phase_id.starts_with("preflight-")
 }
 
+/// Phase ids of the long suite's performance-class phases (the bash
+/// `PHASE_CLASS` table, moved to the receipt in S5 so the human summary
+/// derives `FIDELITY` without reclassifying logs): RT Deadline = `phase5`,
+/// RT Jitter = `phase6`. The phase matrix itself is an invariant of
+/// `utils/tests-long.sh` (soak → defense → proptests → heap → deadline →
+/// jitter → loom).
+pub const PERFORMANCE_PHASE_IDS: [&str; 2] = ["phase5", "phase6"];
+
 /// Typed error for long-audit receipt I/O and JSONL validation.
 #[derive(Debug, thiserror::Error)]
 pub enum LongReceiptError {
@@ -709,22 +717,31 @@ impl LongAuditReceipt {
     ///
     /// Verdict semantics mirror the runner's final summary:
     /// - any `FAILED` phase or preflight ⇒ `FAILED`;
-    /// - otherwise any gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
-    ///   NOT_RUN) ⇒ `COMPLETED_WITH_GAPS`;
+    /// - otherwise any **declared gap** ⇒ `COMPLETED_WITH_GAPS`. A declared
+    ///   gap is a gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
+    ///   NOT_RUN) **or** a `PASSED` phase whose `gaps` list is non-empty —
+    ///   the S5 contract: the bash post-phase status overrides are gone, so
+    ///   typed log markers (`detect_gap_markers`) are the only carrier of a
+    ///   measurement bypass, and "exit-0 with internal bypass" must never be
+    ///   promoted to a clean `PASSED` verdict;
     /// - otherwise ⇒ `PASSED`.
     ///
     /// Preflight entries (`preflight-*`, S6-T03) participate in the verdict
     /// like any other phase: an aborted preflight leaves its `FAILED` line and
     /// the derived `overall FAILED` — a trace that survives the abort because
-    /// `utils/tests-long.sh` emits it before exiting. `gaps` lists the
-    /// declared-gap entries as `phase_id:STATUS`.
+    /// `utils/tests-long.sh` emits it before exiting. `gaps` lists every
+    /// declared-gap entry as `phase_id:STATUS`.
     pub fn summary_receipt(&self) -> LongPhaseReceipt {
+        let has_declared_gap = |p: &LongPhaseReceipt| {
+            p.status.is_gap() || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+        };
+
         let status = if self
             .phase_entries()
             .any(|p| p.status == LongPhaseStatus::Failed)
         {
             LongPhaseStatus::Failed
-        } else if self.phase_entries().any(|p| p.status.is_gap()) {
+        } else if self.phase_entries().any(has_declared_gap) {
             LongPhaseStatus::CompletedWithGaps
         } else {
             LongPhaseStatus::Passed
@@ -732,7 +749,7 @@ impl LongAuditReceipt {
 
         let gaps = self
             .phase_entries()
-            .filter(|p| p.status.is_gap())
+            .filter(|p| has_declared_gap(p))
             .map(|p| format!("{}:{}", p.phase_id, p.status.as_str()))
             .collect();
 
@@ -752,6 +769,112 @@ impl LongAuditReceipt {
         self.phases.retain(|p| p.phase_id != "overall");
         let summary = self.summary_receipt();
         self.phases.push(summary);
+    }
+
+    /// First phase entry with the given `phase_id` (`overall` excluded).
+    pub fn phase_by_id(&self, phase_id: &str) -> Option<&LongPhaseReceipt> {
+        self.phase_entries().find(|p| p.phase_id == phase_id)
+    }
+
+    /// Human `FIDELITY` verdict: `OK` unless a fidelity-class phase failed.
+    ///
+    /// Fidelity-class = every phase outside [`PERFORMANCE_PHASE_IDS`]
+    /// (preflights included). Declared gaps never downgrade FIDELITY to
+    /// `FAIL` — that is what the `OVERALL: COMPLETED_WITH_GAPS` verdict is
+    /// for (the pre-S5 `ANY_FIDELITY_FAILED` semantics).
+    pub fn fidelity_verdict(&self) -> &'static str {
+        let failed_fidelity = self.phase_entries().any(|p| {
+            p.status == LongPhaseStatus::Failed
+                && !PERFORMANCE_PHASE_IDS.contains(&p.phase_id.as_str())
+        });
+        if failed_fidelity { "FAIL" } else { "OK" }
+    }
+
+    /// Human `RT_DEADLINE` verdict from the `phase5` receipt line.
+    ///
+    /// Mirrors the pre-S5 bash mapping (FAILED → FAIL, SKIPPED → PASS,
+    /// anything else → PASS) plus the typed gap carrier: a `PASSED` phase
+    /// whose log carried the `inconclusive_environment` marker is reported
+    /// `INCONCLUSIVE`. The bash override that used to patch `PHASE_STATUS`
+    /// is gone (S5) — the marker is authoritative, and "exit-0 with
+    /// internal measurement bypass" must not be promoted to PASS.
+    pub fn rt_deadline_verdict(&self) -> &'static str {
+        match self.phase_by_id("phase5") {
+            Some(p) => match p.status {
+                LongPhaseStatus::Failed => "FAIL",
+                LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
+                LongPhaseStatus::Passed
+                    if p.gaps.iter().any(|g| g == "inconclusive_environment") =>
+                {
+                    "INCONCLUSIVE"
+                }
+                _ => "PASS",
+            },
+            None => "PASS",
+        }
+    }
+
+    /// Human `RT_JITTER` verdict from the `phase6` receipt line.
+    ///
+    /// Mirrors the pre-S5 bash mapping (PASSED → PASS, INCONCLUSIVE →
+    /// INCONCLUSIVE, SKIP_CAPABILITY → SKIP_CAPABILITY, FAILED → FAIL,
+    /// SKIPPED → INCONCLUSIVE), with the typed log markers as the carrier
+    /// for bypasses now that the bash `PHASE_STATUS` overrides are gone.
+    pub fn rt_jitter_verdict(&self) -> &'static str {
+        match self.phase_by_id("phase6") {
+            None => "PASS",
+            Some(p) => match p.status {
+                LongPhaseStatus::Failed => "FAIL",
+                LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
+                LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
+                LongPhaseStatus::Skipped => "INCONCLUSIVE",
+                LongPhaseStatus::Passed if p.gaps.iter().any(|g| g == "skip_capability") => {
+                    "SKIP_CAPABILITY"
+                }
+                LongPhaseStatus::Passed if p.gaps.iter().any(|g| g == "inconclusive") => {
+                    "INCONCLUSIVE"
+                }
+                _ => "PASS",
+            },
+        }
+    }
+
+    /// Human one-line summary printed by `nam_long_receipt summary` (S5).
+    ///
+    /// Replaces the giant ASCII table + top-N block of `utils/tests-long.sh`:
+    /// the forensic data lives in the JSONL, and the human gets only alarms
+    /// (WARNING/ERROR) plus the verdict lines. The runner echoes these lines
+    /// verbatim and maps `OVERALL:` to its exit code — it never reclassifies
+    /// logs.
+    pub fn human_summary_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for p in self.phase_entries() {
+            if p.status == LongPhaseStatus::Failed {
+                lines.push(format!("ERROR: {} {} — FAILED", p.phase_id, p.name));
+            } else if p.status.is_gap()
+                || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+            {
+                let gap_suffix = if p.gaps.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (gaps: {})", p.gaps.join(", "))
+                };
+                lines.push(format!(
+                    "WARNING: {} {} — {}{}",
+                    p.phase_id,
+                    p.name,
+                    p.status.as_str(),
+                    gap_suffix
+                ));
+            }
+        }
+        let overall = self.summary_receipt();
+        lines.push(format!("OVERALL: {}", overall.status.as_str()));
+        lines.push(format!("FIDELITY: {}", self.fidelity_verdict()));
+        lines.push(format!("RT_DEADLINE: {}", self.rt_deadline_verdict()));
+        lines.push(format!("RT_JITTER: {}", self.rt_jitter_verdict()));
+        lines.push("PERF_REGRESSION: NOT_RUN".to_string());
+        lines
     }
 }
 
@@ -808,10 +931,15 @@ fn is_benchmark_time_line(line: &str) -> bool {
 
 /// Counts tests/benchmarks actually executed by a phase from its log.
 ///
-/// Sums the `passed`, `failed`, and `measured` counters of every
-/// `test result:` line (`ignored`/`filtered out` tests did NOT execute).
-/// Falls back to counting criterion-style `time: [...]` benchmark lines when
-/// no `test result:` line exists, mirroring `_lib.sh::assert_ran_tests`.
+/// This is the single counter behind `_lib.sh::assert_ran_tests` (S4.T2 — the
+/// shell delegates to `nam_long_receipt count-log`). It mirrors the bash
+/// semantics: `passed`/`failed` are summed from every `test result:` line (a
+/// FAILED result line still proves execution; the bash port only read the
+/// `ok.` lines for `passed`), `measured` is counted on ANY line (the bash
+/// `grep -oP '\K\d+(?=\s+measured)'`), and when no counter was found it falls
+/// back to counting criterion-style `time: [...]` benchmark lines, mirroring
+/// the bash `^\S.*time:\s+\[` fallback. `ignored`/`filtered out` tests did
+/// NOT execute and are never counted.
 pub fn count_tests_executed_from_log(path: &Path) -> u64 {
     let Ok(content) = fs::read_to_string(path) else {
         return 0;
@@ -819,10 +947,9 @@ pub fn count_tests_executed_from_log(path: &Path) -> u64 {
     let mut total = 0u64;
     for line in content.lines() {
         if line.contains("test result:") {
-            total += count_before(line, " passed")
-                + count_before(line, " failed")
-                + count_before(line, " measured");
+            total += count_before(line, " passed") + count_before(line, " failed");
         }
+        total += count_before(line, " measured");
     }
     if total == 0 {
         total = content
@@ -980,6 +1107,24 @@ mod long_receipt_tests {
         assert_eq!(count_tests_executed_from_log(&missing), 0);
     }
 
+    // F-21 acceptance cases ported from `utils/tests-long.sh:700-723` (S4.T2):
+    // `_lib.sh::assert_ran_tests` now delegates to this function, so the shell
+    // asserts exercise the same inputs.
+    #[test]
+    fn f21_cases_from_long_suite() {
+        let pass = write_temp("test result: ok. 50 passed. 2 failed.\n");
+        assert_eq!(count_tests_executed_from_log(&pass), 52);
+        let zero = write_temp("test result: ok. 0 passed. 0 failed.\n");
+        assert_eq!(count_tests_executed_from_log(&zero), 0);
+        let skip = write_temp("running tests...\nall filtered out (early return)\n");
+        assert_eq!(count_tests_executed_from_log(&skip), 0);
+        assert_eq!(count_tests_executed_from_log(&temp_path()), 0);
+        let bench = write_temp("bench time: [1.2 ms]\nbench time: [3.4 ms]\n");
+        assert_eq!(count_tests_executed_from_log(&bench), 2);
+        let measured = write_temp("x 5 measured\n");
+        assert_eq!(count_tests_executed_from_log(&measured), 5);
+    }
+
     #[test]
     fn gap_markers_are_detected_in_canonical_order() {
         let log = write_temp(
@@ -1056,6 +1201,190 @@ mod long_receipt_tests {
             3,
             "push_summary must replace the overall line"
         );
+    }
+
+    #[test]
+    fn passed_phase_with_log_markers_counts_as_declared_gap() {
+        // S5: the bash PHASE_STATUS overrides are gone, so a PASSED phase
+        // whose gaps list carries typed log markers (INCONCLUSIVE_ENVIRONMENT
+        // / [STATUS] *) must still yield COMPLETED_WITH_GAPS — never a clean
+        // PASSED verdict (the runner's "exit-0 with internal bypass SHALL NOT
+        // be promoted to PASS" invariant).
+        let mk = |phase_id: &str, status: LongPhaseStatus, gaps: &[&str]| LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status,
+            duration_ms: 1000,
+            tests_executed: 2,
+            gaps: gaps.iter().map(|s| s.to_string()).collect(),
+            timestamp: "t".to_string(),
+        };
+        let bypassed = LongAuditReceipt {
+            phases: vec![
+                mk(
+                    "phase5",
+                    LongPhaseStatus::Passed,
+                    &["inconclusive_environment"],
+                ),
+                mk("phase6", LongPhaseStatus::Passed, &["inconclusive"]),
+            ],
+        };
+        let s = bypassed.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(s.gaps, vec!["phase5:PASSED", "phase6:PASSED"]);
+
+        let clean = LongAuditReceipt {
+            phases: vec![mk("phase5", LongPhaseStatus::Passed, &[])],
+        };
+        assert_eq!(clean.summary_receipt().status, LongPhaseStatus::Passed);
+    }
+
+    #[test]
+    fn human_summary_lines_flag_only_alarms_and_verdicts() {
+        // S5: the human gets WARNING/ERROR alarms + the verdict lines;
+        // quiet phases stay silent.
+        let mk =
+            |phase_id: &str, name: &str, status: LongPhaseStatus, gaps: &[&str]| LongPhaseReceipt {
+                phase_id: phase_id.to_string(),
+                name: name.to_string(),
+                status,
+                duration_ms: 1000,
+                tests_executed: 2,
+                gaps: gaps.iter().map(|s| s.to_string()).collect(),
+                timestamp: "t".to_string(),
+            };
+        let receipt = LongAuditReceipt {
+            phases: vec![
+                mk("phase1", "Soak Tests", LongPhaseStatus::Passed, &[]),
+                mk("phase2", "Defense", LongPhaseStatus::Failed, &[]),
+                mk(
+                    "phase5",
+                    "RT Deadline Gate (deterministic)",
+                    LongPhaseStatus::Passed,
+                    &["inconclusive_environment"],
+                ),
+                mk(
+                    "phase6",
+                    "RT Jitter Characterization",
+                    LongPhaseStatus::Passed,
+                    &["skip_capability"],
+                ),
+            ],
+        };
+        let lines = receipt.human_summary_lines();
+        assert!(
+            lines.iter().any(|l| l == "ERROR: phase2 Defense — FAILED"),
+            "missing ERROR line: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "WARNING: phase5 RT Deadline Gate (deterministic) — PASSED (gaps: inconclusive_environment)"),
+            "missing deadline WARNING line: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l
+                == "WARNING: phase6 RT Jitter Characterization — PASSED (gaps: skip_capability)"),
+            "missing jitter WARNING line: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("phase1")),
+            "quiet phase must not appear: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "OVERALL: FAILED"),
+            "the FAILED phase dominates the verdict: {lines:?}"
+        );
+        assert!(lines.iter().any(|l| l == "FIDELITY: FAIL"), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "RT_DEADLINE: INCONCLUSIVE"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "RT_JITTER: SKIP_CAPABILITY"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "PERF_REGRESSION: NOT_RUN"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn verdict_lines_preserve_pre_s5_mappings() {
+        let mk = |phase_id: &str, status: LongPhaseStatus| LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status,
+            duration_ms: 1000,
+            tests_executed: 1,
+            gaps: vec![],
+            timestamp: "t".to_string(),
+        };
+
+        // Deadline: FAILED → FAIL; SKIPPED/PASSED → PASS; absent → PASS.
+        let failed = LongAuditReceipt {
+            phases: vec![mk("phase5", LongPhaseStatus::Failed)],
+        };
+        assert_eq!(failed.rt_deadline_verdict(), "FAIL");
+        for status in [
+            LongPhaseStatus::Passed,
+            LongPhaseStatus::Skipped,
+            LongPhaseStatus::NotRun,
+        ] {
+            assert_eq!(
+                LongAuditReceipt {
+                    phases: vec![mk("phase5", status)]
+                }
+                .rt_deadline_verdict(),
+                "PASS",
+                "deadline {status} must map to PASS"
+            );
+        }
+        assert_eq!(
+            LongAuditReceipt { phases: vec![] }.rt_deadline_verdict(),
+            "PASS"
+        );
+
+        // Jitter: PASSED → PASS; FAILED → FAIL; SKIPPED → INCONCLUSIVE.
+        let mk_jitter = |status: LongPhaseStatus| LongAuditReceipt {
+            phases: vec![mk("phase6", status)],
+        };
+        assert_eq!(
+            mk_jitter(LongPhaseStatus::Passed).rt_jitter_verdict(),
+            "PASS"
+        );
+        assert_eq!(
+            mk_jitter(LongPhaseStatus::Failed).rt_jitter_verdict(),
+            "FAIL"
+        );
+        assert_eq!(
+            mk_jitter(LongPhaseStatus::Skipped).rt_jitter_verdict(),
+            "INCONCLUSIVE"
+        );
+        assert_eq!(
+            LongAuditReceipt { phases: vec![] }.rt_jitter_verdict(),
+            "PASS"
+        );
+
+        // Fidelity: FAIL only on a failed non-performance phase; performance
+        // failures keep FIDELITY OK (the PERF-006 split).
+        let perf_failed = LongAuditReceipt {
+            phases: vec![
+                mk("phase5", LongPhaseStatus::Failed),
+                mk("phase6", LongPhaseStatus::Failed),
+                mk("phase1", LongPhaseStatus::Passed),
+            ],
+        };
+        assert_eq!(perf_failed.fidelity_verdict(), "OK");
+        let fidelity_failed = LongAuditReceipt {
+            phases: vec![mk("phase2", LongPhaseStatus::Failed)],
+        };
+        assert_eq!(fidelity_failed.fidelity_verdict(), "FAIL");
+        let preflight_failed = LongAuditReceipt {
+            phases: vec![mk("preflight-catalog", LongPhaseStatus::Failed)],
+        };
+        assert_eq!(preflight_failed.fidelity_verdict(), "FAIL");
     }
 
     #[test]

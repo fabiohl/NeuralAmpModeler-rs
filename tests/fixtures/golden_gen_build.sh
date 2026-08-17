@@ -327,7 +327,7 @@ echo "  wav_to_golden: $WAV_TO_GOLDEN"
 #      corresponding catalog entry has v2_scope=none).
 #
 #   This rationale is the single source of truth — docs/testing.md and
-#   tests/fixtures/README.md reference this comment rather than duplicating it.
+#   docs/fixtures.md reference this comment rather than duplicating it.
 echo "  Loading golden registry from Rust (src/testing/catalog.rs)..."
 mapfile -t CATALOG < <("$GOLDEN_CATALOG_BIN" emit-catalog)
 if [ ${#CATALOG[@]} -lt 15 ]; then

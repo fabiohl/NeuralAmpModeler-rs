@@ -93,9 +93,9 @@ the tag). Some older committed golden vectors were generated at `v0.5.3` (`9c7b1
 patch-level drift is below the interop noise floor for all architectures except where explicitly
 noted per-model. Regenerate goldens with `tests/fixtures/golden_gen_build.sh` when in doubt.
 
-### 1.4 Fixture governance: `tests/fixtures/README.md`
+### 1.4 Fixture governance: `docs/fixtures.md`
 
-[`tests/fixtures/README.md`](../tests/fixtures/README.md) is the canonical operational
+[`docs/fixtures.md`](fixtures.md) is the canonical operational
 supply-chain contract. Every parity claim in this document is operationalized through it.
 
 | Layer                               | Mechanism                                                                                                                                                                                                                                                       | Hard-fail gate                                                          |
@@ -110,7 +110,7 @@ and `utils/tests-long.sh` (a stale `.nam` or `.bin` fails the suite).
 
 **NAMcore mirror pinning:** `variables.env` pins the vendored C++ reference at
 `NAM_CORE_COMMIT=1f42f88535884450104b8711d7595019afa0495b` (tag `v0.5.4`). Update
-via `utils/setup-third-party.sh`. See `tests/fixtures/README.md` for the full regeneration walkthrough.
+via `utils/setup-third-party.sh`. See [`docs/fixtures.md`](fixtures.md) for the full regeneration walkthrough.
 
 **Calibrated thresholds:** per-model SNR/ESR gates cross-checked by
 `tests/models/threshold_calibration.rs` (anti-placebo meta-tests, `// Measured:` provenance
@@ -579,7 +579,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   `test_golden_vectors_wavenet_{standard,feather,nano}` use `BossWN-{standard,feather,nano}.nam`
   (Boss Waza Tube Amp Expander community captures, compatible license). `test_golden_vectors_wavenet_lite`
   uses `EVH-5150-Lite.nam`, a **non-distributable real community capture** (gitignored, lives in
-  `tests/fixtures/models-nondist/`, fetched separately — see `tests/fixtures/README.md`
+  `tests/fixtures/models-nondist/`, fetched separately — see [`docs/fixtures.md`](fixtures.md)
   §Non-Distributable Model Management). Its doc comment (`golden_vectors.rs:495-511`) and the
   test itself confirm the measured result **directly from current source**: SNR = 122.3 dB, ESR
   = 5.84e-13, thresholds SNR ≥ 105 dB / ESR ≤ 3.5e-11 — this specific figure is **independently
@@ -593,7 +593,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   officially-distributed** reference model, not synthetic.
 
 - **Obsolete synthetic fixture, kept for traceability only:** `BossWN-lite.nam` (CH=12,
-  artificially generated) is explicitly marked obsolete in `tests/fixtures/README.md` — "no
+  artificially generated) is explicitly marked obsolete in [`docs/fixtures.md`](fixtures.md) — "no
   longer used in active tests," superseded by `EVH-5150-Lite.nam`. It is the historical source of
   the "SNR ≈ 0.9 dB" figure that `docs/testing.md` still (incorrectly) attributes to the current
   active test.
@@ -618,7 +618,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
 
 ### 3.8 Measured interop drift
 
-Canonical golden-vector interop fidelity measured against NAMcore (`docs/quality-contract.txt` baseline @ 48 kHz):
+Canonical golden-vector interop fidelity measured against NAMcore (`docs/quality-contract.json` baseline @ 48 kHz):
 
 | Model                   | ESR (vs NAMcore) | ESR (vs f64 Ideal) | SNR (dB) | MR-STFT  | Mode |
 |:----------------------- |:----------------:|:------------------:|:--------:|:--------:|:---- |
@@ -850,7 +850,7 @@ engine (itself golden-C++-confirmed at ESR 1.11e-14).
 > Read against `NAM/wavenet/a2_fast.{h,cpp}` (the C++ fast-path, in full) and cross-checked
 > `src/loader/nam_json/topology/a2.rs`, `src/models/a2/model/static/process.rs`,
 > `tests/models/golden_vectors.rs`, `tests/parity/cpp_parity.rs`, `tests/common/validation.rs`, and
-> `tests/fixtures/README.md` against each other and against current git history.
+> [`docs/fixtures.md`](fixtures.md) against each other and against current git history.
 > §4.4–§4.6 (the `wavenet_a2_max.nam` investigation) were already
 > established in the previous pass and are corroborated, not re-derived, here.
 
@@ -897,15 +897,15 @@ goldens — both pass their calibrated gates (3.0e-11 / 3.5e-11, SNR ≥ 105 dB)
 
 **Fixture quality caveat (new finding — see §4.6):** unlike LSTM and WaveNet A1, these figures are
 **not** validated against a real trained community model. `wavenet_a2_full.nam` and
-`wavenet_a2_lite.nam` are explicitly documented as **synthetic, calibrated weights** — `tests/fixtures/README.md:75-76,
-520-527`: "Synthetic, NOT official FiLM models." There is currently no known real-world A2-Full
+`wavenet_a2_lite.nam` are explicitly documented as **synthetic, calibrated weights** — [`docs/fixtures.md`](fixtures.md):
+"Synthetic, NOT official FiLM models." There is currently no known real-world A2-Full
 or A2-Lite `.nam` export in the test suite. The fast-path *code* is well-verified against C++
 structurally; the fast-path *fixtures* only prove self-consistency of calibrated weights, not
 tone-fidelity on a genuine trained model.
 
 ### 4.3 Measured interop drift on dynamic paths (Gating, Blending, FiLM)
 
-Measured interop metrics for WaveNet A2 dynamic paths (`docs/quality-contract.txt` baseline @ 48 kHz):
+Measured interop metrics for WaveNet A2 dynamic paths (`docs/quality-contract.json` baseline @ 48 kHz):
 
 | Model / Variant                     | ESR (vs NAMcore) | ESR (vs f64 Ideal) | SNR (dB) | MR-STFT  | Mode |
 |:----------------------------------- |:----------------:|:------------------:|:--------:|:--------:|:---- |
@@ -1290,7 +1290,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
     §7.1**. Do **not** claim that the guard was removed or that production loads this model.
 
 - **Every other A2 fixture is synthetic**, by explicit design and documentation
-  (`tests/fixtures/README.md`), not by omission:
+  ([`docs/fixtures.md`](fixtures.md)), not by omission:
 
   - `wavenet_a2_full.nam` / `wavenet_a2_lite.nam` (fast-path parity, calibrated weights) — explicitly
     labeled "**NOT official FiLM models**" to prevent future confusion with `wavenet_a2_max.nam`.

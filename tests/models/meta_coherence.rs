@@ -22,6 +22,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use neural_amp_modeler_rs::testing::catalog::golden_gen_entries;
+use neural_amp_modeler_rs::testing::qa::QualityContract;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -348,61 +349,42 @@ fn test_ignored_models_are_in_catalog() {
     );
 }
 
-/// Parses `docs/quality-contract.txt`, extracts all labels from the fidelity
-/// table, and ensures no label is a prefix of another — preventing collisions
-/// like "Quick A2-Full" vs "Quick A2-Full v2".
-///
-
+/// Loads `docs/quality-contract.json` (the canonical machine contract, R-01)
+/// and ensures every fidelity entry has a unique `id` and a unique `label`,
+/// with no label being a prefix of another — preventing collisions like
+/// "Quick A2-Full" vs "Quick A2-Full v2". The future `--check` matches by
+/// `id` (exact); the label prefix defense stays as residual protection.
 #[test]
 fn test_quality_contract_uniqueness() {
     let contract_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("docs")
-        .join("quality-contract.txt");
+        .join("quality-contract.json");
     let content =
-        fs::read_to_string(&contract_path).expect("Failed to read docs/quality-contract.txt");
+        fs::read_to_string(&contract_path).expect("Failed to read docs/quality-contract.json");
+    let contract = QualityContract::from_json_str(&content)
+        .expect("docs/quality-contract.json must validate against the QA schema");
 
-    let mut labels: Vec<String> = Vec::new();
-    let mut in_fidelity = false;
+    assert!(
+        contract.fidelity.len() >= 15,
+        "Expected ≥ 15 fidelity entries, found {}. Contract may be incomplete.",
+        contract.fidelity.len()
+    );
 
-    for line in content.lines() {
-        // Section headers (EN after localization; keep PT fallbacks for older snapshots).
-        if (line.contains("AUDIO FIDELITY") && line.contains("Technical Details"))
-            || (line.contains("FIDELIDADE") && line.contains("SONORA"))
-        {
-            in_fidelity = true;
-            continue;
-        }
-        if in_fidelity
-            && (line.contains("PERFORMANCE")
-                || line.contains("Qualitative legend")
-                || line.contains("Legenda qualitativa"))
-        {
-            break;
-        }
-        if in_fidelity && line.starts_with("  ") {
-            let trimmed = line.trim();
-            if trimmed.contains('│')
-                && !trimmed.starts_with("──")
-                && !trimmed.starts_with("Model")
-                && !trimmed.starts_with("Modelo")
-            {
-                let label = trimmed.split('│').next().unwrap_or("").trim().to_string();
-                if !label.is_empty() {
-                    labels.push(label);
-                }
+    let ids: Vec<&str> = contract.fidelity.iter().map(|f| f.id.as_str()).collect();
+    let labels: Vec<&str> = contract.fidelity.iter().map(|f| f.label.as_str()).collect();
+
+    for (i, a) in ids.iter().enumerate() {
+        for (j, b) in ids.iter().enumerate() {
+            if i == j {
+                continue;
             }
+            assert!(
+                a != b,
+                "Duplicate id: '{}' appears twice. The `--check` matches by id.",
+                b,
+            );
         }
     }
-
-    assert!(
-        !labels.is_empty(),
-        "No fidelity labels found in quality-contract.txt. Parser may be broken."
-    );
-    assert!(
-        labels.len() >= 15,
-        "Expected ≥ 15 fidelity labels, found {}. Contract may be incomplete.",
-        labels.len()
-    );
 
     for (i, a) in labels.iter().enumerate() {
         for (j, b) in labels.iter().enumerate() {
@@ -410,11 +392,10 @@ fn test_quality_contract_uniqueness() {
                 continue;
             }
             assert!(
-                !a.starts_with(b.as_str()),
+                !a.starts_with(*b),
                 "Label collision by prefix: '{}' is a prefix of '{}'.\n\
                  This causes false-green contract verification.\n\
-                 Regenerate quality-contract.txt with \
-                 `./utils/quality-dashboard.sh --save docs/quality-contract.txt`.",
+                 Regenerate docs/quality-contract.json via the S1.T3 transcription test.",
                 b,
                 a,
             );
@@ -422,7 +403,8 @@ fn test_quality_contract_uniqueness() {
     }
 
     eprintln!(
-        "  ✓ quality-contract uniqueness: {} labels, no prefix collisions.",
+        "  ✓ quality-contract uniqueness: {} ids / {} labels, no prefix collisions.",
+        ids.len(),
         labels.len()
     );
 }

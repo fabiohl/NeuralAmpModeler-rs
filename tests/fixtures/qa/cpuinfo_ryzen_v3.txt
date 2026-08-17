@@ -1,0 +1,27 @@
+processor       : 0
+vendor_id       : AuthenticAMD
+cpu family      : 25
+model           : 33
+model name      : AMD Ryzen 9 5900X 12-Core Processor
+stepping        : 0
+microcode       : 0xffffffff
+cpu MHz         : 3699.997
+cache size      : 512 KB
+physical id     : 0
+siblings        : 24
+core id         : 0
+cpu cores       : 12
+apicid          : 0
+initial apicid  : 0
+fpu             : yes
+fpu_exception   : yes
+cpuid level     : 16
+wp              : yes
+flags           : fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmpef pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt nodeid_msr tbm topoext perfctr_core perfctr_nb bpext ptsc cpb hw_pstate ssbd ibpb vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clwb
+bugs            : sysret_ss_attrs spectre_v1 spectre_v2 spec_store_bypass
+bogomips        : 7200.00
+TLB size        : 2560 4K pages
+clflush size    : 64
+cache_alignment : 64
+address sizes   : 48 bits physical, 48 bits virtual
+power management: ts ttp tm hwpstate cpb eff_freq [13] [14]

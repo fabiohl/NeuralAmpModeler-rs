@@ -15,6 +15,38 @@
 #   ok    "Success message"
 #   warn  "Warning message"
 #   die   "Fatal error message"
+#
+# ── Contract (Sprint S4, EP-04 / R-04) ──────────────────────────────────────
+# This library is a SHELL HUSK: it keeps only the glue that has no Rust home
+# yet and delegates every interpretation to the QA binaries. No `eval`, no
+# hand-serialized JSON (the old brace-printf is gone), no PCRE (grep -oP).
+#
+# Consumers (9 `source`s; the S4 plan said 8 — S3.T4 added
+# tests-performance-regression.sh to the list):
+#   1. utils/tests-quick.sh
+#   2. utils/lints.sh
+#   3. utils/mod-update.sh
+#   4. utils/setup-third-party.sh
+#   5. utils/ensure_namcore_render.sh
+#   6. tests/fixtures/golden_gen_build.sh
+#   7. utils/quality-dashboard.sh
+#   8. utils/tests-long.sh
+#   9. utils/tests-performance-regression.sh
+#
+# What remains here:
+#   * ANSI colors + phase/ok/warn/die
+#   * PROJECT_DIR + third-party paths
+#   * ensure_third_party (mirror provisioning)
+#   * ensure_namcore_render (C++ render build — explicitly NOT moved, S3-T01)
+#   * Thin wrappers over the QA binaries:
+#     - assert_ran_tests        → nam_long_receipt count-log
+#     - dashboard_phase_receipt → nam_quality receipt append
+#     - check_freshness / run_freshness_gate → nam_freshness
+#
+# Delegated to Rust in S4 (no bash copy left):
+#   * classify_regression_outcome → src/testing/qa/classify.rs (S2.T3);
+#     quality-dashboard.sh inlines the 3-way case locally (transitory until S6)
+#   * check_toolchain_fingerprint → freshness.rs ToolchainFingerprint (F-02)
 
 # ---------------------------------------------------------------------------
 # Resolve project root dynamically relative to this helper script
@@ -77,50 +109,41 @@ die() {
 
 # ── Phase receipt machinery (fail-closed foundation) ──────────────────────────
 # Each dashboard phase records a typed outcome in JSONL.
-# Schema: phase_id, status (PASS|FAIL|SKIP_CAPABILITY|SKIP_OPTIONAL_FIXTURE|NOT_RUN),
-#         exit_code, observed_records, expected_records, reason
+# Schema: phase_id, status (PASS|FAIL|SKIP_CAPABILITY|SKIP_OPTIONAL_FIXTURE|NOT_RUN|NOT_VERIFIED),
+#         exit_code, observed_records, expected_records, reason, run_id
+# The JSON line is serialized by `nam_quality receipt append` (serde, S2.T5) —
+# the shell never hand-serializes.
 DASHBOARD_PHASE_RECEIPT="${DASHBOARD_PHASE_RECEIPT:-}"
 DASHBOARD_PHASE_HAD_FAILURE=0
 
-# Register a phase receipt entry in the JSONL stream.
+# Register a phase receipt entry in the JSONL stream (delegates to the bin).
 dashboard_phase_receipt() {
-    local phase_id="$1" status="$2" exit_code="$3" \
-          observed_records="$4" expected_records="${5:-0}" reason="${6:-}"
+    local phase_id="$1" status="$2" exit_code="${3:-0}" \
+          observed_records="${4:-0}" expected_records="${5:-0}" reason="${6:-}"
     if [ -z "$DASHBOARD_PHASE_RECEIPT" ]; then
         return 0
     fi
-    local observed="${observed_records:-0}"
-    local expected="${expected_records:-0}"
-    local ecode="${exit_code:-0}"
-    local run_id="${NAM_RUN_ID:-}"
-    printf '{"phase_id":"%s","status":"%s","exit_code":%s,"observed_records":%s,"expected_records":%s,"reason":"%s","run_id":"%s"}\n' \
-        "$phase_id" "$status" "$ecode" "$observed" "$expected" "$reason" "$run_id" >> "$DASHBOARD_PHASE_RECEIPT"
+    local bin="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
+    if [ ! -x "$bin" ]; then
+        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_quality >/dev/null 2>&1 ); then
+            warn "failed to build nam_quality — phase receipt not recorded"
+            return 0
+        fi
+    fi
+    if ! "$bin" receipt append --phase-id "$phase_id" --status "$status" \
+        --exit-code "$exit_code" --observed-records "$observed_records" \
+        --expected-records "$expected_records" --reason "$reason" \
+        --run-id "${NAM_RUN_ID:-}" --out "$DASHBOARD_PHASE_RECEIPT" >/dev/null 2>&1; then
+        warn "nam_quality receipt append failed for ${phase_id} — phase receipt not recorded"
+        return 0
+    fi
     if [ "$status" = "FAIL" ]; then
         DASHBOARD_PHASE_HAD_FAILURE=1
     fi
 }
 
-# ── Single performance-status classifier (F-08 / EP-05) ──────────────────────
-# The ONE place where the performance verification outcome is classified.
-# Inputs: <receipt_status> <receipt_reason>
-# Output (stdout): PASS | NOT_VERIFIED | FAIL
-classify_regression_outcome() {
-    local status="${1:-}"
-    local reason="${2:-}"
-    case "${status}:${reason}" in
-        PASS:*)
-            echo "PASS"
-            ;;
-        *:MISSING_BASELINE|*:INCOMPARABLE_ENVIRONMENT)
-            echo "NOT_VERIFIED"
-            ;;
-        *)
-            echo "FAIL"
-            ;;
-    esac
-}
-
 # Count the number of JSONL metric records currently in a metrics file.
+# POSIX `wc -l` — plain line counting, no PCRE needed (S4.T2).
 count_jsonl_records() {
     local jsonl="${1:-}"
     [ -n "$jsonl" ] && [ -f "$jsonl" ] || { echo 0; return 0; }
@@ -128,43 +151,35 @@ count_jsonl_records() {
 }
 
 # assert_ran_tests <log_file> [min_count]
-# Verifies that a test/benchmark log proves real execution.
+# Verifies that a test/benchmark log proves real execution. The counting
+# (libtest `passed`/`measured` counters + Criterion `time:` fallback, F-21)
+# lives in src/testing/receipt.rs::count_tests_executed_from_log; this is a
+# thin wrapper over `nam_long_receipt count-log` (S4.T2) — no grep -oP.
 assert_ran_tests() {
-    local log_file="$1"
-    local min_count="${2:-1}"
+    local log_file="$1" min_count="${2:-1}"
 
-    local total_passed=0
-
-    local passed
-    if passed=$(grep -oP 'test result: ok\.\s+\K\d+(?=\s+passed)' "$log_file" 2>/dev/null); then
-        for p in $passed; do
-            total_passed=$((total_passed + p))
-        done
+    local bin="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
+    if [ ! -x "$bin" ]; then
+        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
+            warn "failed to build nam_long_receipt — gate fails closed"
+            return 1
+        fi
     fi
 
-    local measured
-    if measured=$(grep -oP '\K\d+(?=\s+measured)' "$log_file" 2>/dev/null); then
-        for m in $measured; do
-            total_passed=$((total_passed + m))
-        done
-    fi
+    local total
+    total=$("$bin" count-log --log "$log_file" 2>/dev/null || echo 0)
 
-    if [ "$total_passed" -eq 0 ]; then
-        local bench_count
-        bench_count=$(grep -cP '^\S.*time:\s+\[' "$log_file" 2>/dev/null || true)
-        bench_count="${bench_count:-0}"
-        total_passed=$bench_count
-    fi
-
-    if [ "$total_passed" -lt "$min_count" ]; then
+    if [ "$total" -lt "$min_count" ]; then
         echo -e "${RED}${BOLD}❌ Gate failed: phase executed 0 tests/benchmarks (empty selection or filter mismatch).${NC}"
         return 1
     fi
-    echo -e "  Gate: ${total_passed} test(s)/benchmark(s) executed ≥ ${min_count}  ✓"
+    echo -e "  Gate: ${total} test(s)/benchmark(s) executed ≥ ${min_count}  ✓"
     return 0
 }
 
 # Run a dashboard phase with strict exit code capture.
+# The command is passed as an ARGUMENT ARRAY (no `eval`, S4.T3); the command's
+# stdout+stderr are redirected internally to $LOGDIR/$phase_id.log.
 run_dashboard_phase() {
     local phase_id="$1" min_records="$2"
     shift 2
@@ -188,7 +203,7 @@ run_dashboard_phase() {
     start_t=$(date +%s%N)
 
     set +e
-    eval "$@"
+    "$@" > "$log_path" 2>&1
     exit_code=$?
     set -e
 
@@ -426,65 +441,11 @@ ensure_namcore_render() {
     return 0
 }
 
-# ── Toolchain fingerprint check (F-I4 / Tarefa 3.2) ──────────────────────────
-# Compares current toolchain against # TOOLCHAIN: lines in manifest.
-check_toolchain_fingerprint() {
-    local MANIFEST="tests/fixtures/.golden_manifest.sha256"
-
-    if [ ! -f "$MANIFEST" ]; then
-        return 0
-    fi
-
-    local CXX_NOW CMAKE_NOW GLIBC_NOW OS_NOW
-    CXX_NOW=$(${CXX:-g++} --version 2>/dev/null | head -1 || echo "unknown")
-    CMAKE_NOW=$(cmake --version 2>/dev/null | head -1 || echo "unknown")
-    if GLIBC_NOW=$(ldd --version 2>/dev/null | head -1); then :; else
-        GLIBC_NOW=$(getconf GNU_LIBC_VERSION 2>/dev/null || echo "unknown")
-    fi
-    OS_NOW=$(uname -r 2>/dev/null || echo "unknown")
-
-    local mismatch=0
-    local F_CXX="" F_GLIBC="" F_CMAKE="" F_OS="" F_FLAGS=""
-    while IFS= read -r line; do
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx:\ (.*)$ ]]      && F_CXX="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cmake:\ (.*)$ ]]     && F_CMAKE="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ glibc:\ (.*)$ ]]     && F_GLIBC="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ os:\ (.*)$ ]]        && F_OS="${BASH_REMATCH[1]}"
-        [[ "$line" =~ ^#\ TOOLCHAIN:\ cxx-flags:\ (.*)$ ]] && F_FLAGS="${BASH_REMATCH[1]}"
-    done < "$MANIFEST"
-
-    if [ -n "$F_CXX" ] && [ "$F_CXX" != "$CXX_NOW" ]; then
-        echo -e "  ${YELLOW}⚠ TOOLCHAIN DRIFT: compiler changed since golden generation${NC}"
-        echo -e "    ${YELLOW}manifest: $F_CXX${NC}"
-        echo -e "    ${YELLOW}now:      $CXX_NOW${NC}"
-        mismatch=1
-    fi
-    if [ -n "$F_GLIBC" ] && [ "$F_GLIBC" != "$GLIBC_NOW" ]; then
-        echo -e "  ${YELLOW}⚠ TOOLCHAIN DRIFT: glibc changed since golden generation${NC}"
-        echo -e "    ${YELLOW}manifest: $F_GLIBC${NC}"
-        echo -e "    ${YELLOW}now:      $GLIBC_NOW${NC}"
-        mismatch=1
-    fi
-    if [ -n "$F_CMAKE" ] && [ "$F_CMAKE" != "$CMAKE_NOW" ]; then
-        echo -e "  ${YELLOW}⚠ TOOLCHAIN DRIFT: cmake changed since golden generation${NC}"
-        echo -e "    ${YELLOW}manifest: $F_CMAKE${NC}"
-        echo -e "    ${YELLOW}now:      $CMAKE_NOW${NC}"
-        mismatch=1
-    fi
-    if [ -n "$F_OS" ] && [ "$F_OS" != "$OS_NOW" ]; then
-        echo -e "  ${YELLOW}⚠ TOOLCHAIN DRIFT: kernel changed since golden generation${NC}"
-        echo -e "    ${YELLOW}manifest: $F_OS${NC}"
-        echo -e "    ${YELLOW}now:      $OS_NOW${NC}"
-        mismatch=1
-    fi
-
-    return "$mismatch"
-}
-
 # ── Centralized freshness gate (F-X4 / S3-T03) ───────────────────────────────
 # Validates golden manifest integrity against models, fixtures and generators.
-# The heavy lifting now lives in Rust (src/testing/freshness.rs) so the shell
-# wrapper is just a thin, portable adapter.
+# The heavy lifting now lives in Rust (src/testing/freshness.rs, incl. the
+# `# TOOLCHAIN:` drift check that replaced the bash check_toolchain_fingerprint,
+# F-02) so the shell wrapper is just a thin, portable adapter.
 check_freshness() {
     local mode="${1:-hard-fail}"
     if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then

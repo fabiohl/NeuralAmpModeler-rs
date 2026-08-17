@@ -1,0 +1,198 @@
+===============================================================
+   NeuralAmpModeler-rs Quality Dashboard
+   ------------------------------
+   Commit: 0e22ea4ec247 (dirty)
+   Run ID: 1786537203076204151-15755
+   ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI)
+   rustc:  rustc 1.97.1 (8bab26f4f 2026-07-14)
+   profile: release · target: x86_64-unknown-linux-gnu
+===============================================================
+
+QUICK SUMMARY (non-specialist)
+═══════════════════════════════════════
+
+  WaveNet Standard (CH16)   vs NAMCore:   2.31e-14 IDENTICAL         |  vs Ideal (f64):   9.05e-15  |  CPU: 2.8% of budget
+  WaveNet A1 Standard       vs NAMCore:   1.20e-13 IDENTICAL         |  vs Ideal (f64):   1.05e-13  |  CPU: 2.8% of budget
+  WaveNet Feather (CH8)     vs NAMCore:   4.74e-14 IDENTICAL         |  vs Ideal (f64):   2.00e-14  |  CPU: 1.5% of budget
+  LSTM 1x16 (BossLSTM)      vs NAMCore:   8.50e-12 IDENTICAL         |  vs Ideal (f64):   8.90e-13  |  CPU: 0.6% of budget
+  LSTM 2x8 (BossLSTM)       vs NAMCore:   1.00e-11 IDENTICAL         |  vs Ideal (f64):   5.68e-13  |  CPU: 0.6% of budget
+  A2 Full (CH8)             vs NAMCore:   1.46e-13 IDENTICAL         |  vs Ideal (f64):   7.83e-14  |  CPU: 2.1% of budget
+  A2 Lite (CH3)             vs NAMCore:   8.36e-14 IDENTICAL         |  vs Ideal (f64):   1.82e-14  |  CPU: 1.4% of budget
+  A2-FiLM Lite (CH3)        vs NAMCore:   3.82e-13 IDENTICAL         |  vs Ideal (f64):   1.61e-13  |  CPU: 1.4% of budget
+  ConvNet                   vs NAMCore:   4.23e-15 IDENTICAL         |  vs Ideal (f64):   3.57e-15  |  CPU: 0.8% of budget
+  Linear (RF=2048)          vs NAMCore:   1.70e-14 IDENTICAL         |  vs Ideal (f64):        N/A  |  CPU: 0.0% of budget
+
+AUDIO FIDELITY — Technical Details
+═════════════════════════════════════════
+
+  ── Canonical Fidelity (golden_vectors) ──
+
+  Model                                  | ESR NAMCore |    ESR f64 |   SNR dB |  MR-STFT | Mode
+  ---------------------------------------+------------+------------+----------+----------+-----
+  BossLSTM-1x16 @48000 Live              |   8.50e-12 |   8.90e-13 |    110.7 |  2.80e-5 | Live
+  BossLSTM-2x8 @48000 Live               |   1.00e-11 |   5.68e-13 |    110.0 |  1.57e-5 | Live
+  BossWN-feather @48000 Live             |   4.74e-14 |   2.00e-14 |    133.2 |  8.86e-6 | Live
+  BossWN-nano @48000 Live                |   6.43e-14 |   3.05e-14 |    131.9 |  7.67e-6 | Live
+  BossWN-standard @48000 Live            |   2.31e-14 |   9.05e-15 |    136.4 |  6.46e-6 | Live
+  ConvNet Test @48000 Live               |   4.23e-15 |   3.57e-15 |    143.7 |  1.17e-6 | Live
+  EVH-5150-Lite @48000 Live              |   7.87e-13 |   2.64e-13 |    121.0 |  4.31e-6 | Live
+  LSTM-Dyn 1×7 (dynamic path) C++ cross- |   3.70e-15 |   2.86e-15 |    144.3 |  1.45e-6 | Live
+  Linear FFT RF=2048 (C++ golden) @48000 |   1.70e-14 |        N/A |    137.7 |  2.17e-6 | Live
+  Linear FFT RF=4096 (C++ golden) @48000 |   1.62e-14 |        N/A |    137.9 |  4.09e-6 | Live
+  Linear FFT RF=8192 (C++ golden) @48000 |   1.69e-14 |        N/A |    137.7 |  5.20e-6 | Live
+  SlimmableContainer A2 Example (CH=3→6) |   7.28e-14 |   1.82e-14 |    131.4 |  1.73e-5 | Live
+  WaveNet A2 Dynamic Blended (CH=3, blen |   5.35e-14 |   2.65e-14 |    132.7 |  9.97e-6 | Live
+  WaveNet A2 Dynamic Gated (CH=8, gated  |   5.03e-11 |   1.00e-10 |    103.0 |  6.64e-5 | Live
+  WaveNet A2-FiLM Chaos Stress (CH=3, Fi |   1.26e-14 |   1.03e-14 |    139.0 |  7.00e-6 | Live
+  WaveNet A2-FiLM-Full (CH=8, FiLM activ |   1.16e-14 |   6.42e-15 |    139.4 |  7.85e-6 | Live
+  WaveNet A2-FiLM-InputMixinPre (CH=3, i |   3.44e-14 |   2.21e-14 |    134.6 |  6.92e-6 | Live
+  WaveNet A2-FiLM-Lite (CH=3, FiLM activ |   3.82e-13 |   1.61e-13 |    124.2 |  1.69e-5 | Live
+  WaveNet A2-Full (CH=8) C++ cross-refer |   1.46e-13 |   7.83e-14 |    128.3 |  1.68e-5 | Live
+  WaveNet A2-Full polynomial SIMD (regre |   1.46e-13 |        N/A |    128.3 |  1.68e-5 | Live
+  WaveNet A2-Lite (CH=3) C++ cross-refer |   8.36e-14 |   1.82e-14 |    130.8 |  9.54e-6 | Live
+  WaveNet Condition DSP (CH=3, cond=3, d |   1.11e-14 |   6.33e-15 |    139.6 |  3.59e-6 | Live
+  WaveNet Official (CH=3, dynamic path)  |   9.03e-14 |   6.13e-14 |    130.4 |  1.66e-5 | Live
+  WaveNet Standard polynomial SIMD (regr |   2.31e-14 |        N/A |    136.4 |  6.46e-6 | Live
+  WaveNetDyn Free-Shape (CH=7→4, dynamic |   4.10e-13 |   1.06e-12 |    123.9 |  2.58e-5 | Live
+  convnet_nobn @48000 Live               |   3.23e-14 |        N/A |    134.9 |  5.62e-6 | Live
+  convnet_relu @48000 Live               |   6.84e-15 |        N/A |    141.6 |  2.27e-6 | Live
+  convnet_silu @48000 Live               |   2.58e-13 |        N/A |      N/A |  8.67e-6 | Live
+  linear_nobias @48000 Live              |   3.89e-15 |        N/A |    144.1 |  1.64e-6 | Live
+  lstm (Official) @48000 Live            |   7.86e-13 |   2.71e-12 |    121.0 |  3.08e-5 | Live
+  lstm_1x10 @48000 Live                  |   4.01e-15 |        N/A |    144.0 |  1.25e-6 | Live
+  lstm_2x24 @48000 Live                  |   2.71e-14 |        N/A |    135.7 |  3.50e-6 | Live
+  lstm_3x8 @48000 Live                   |   3.66e-15 |        N/A |    144.4 |  5.55e-7 | Live
+  wavenet_a1_standard (Official) @48000  |   1.20e-13 |   1.05e-13 |    129.2 |  2.26e-6 | Live
+
+  ── Additional Coverage (quick_parity, containers, regression gates) ──
+  (i) These measurements validate the same models via alternate entry points.
+       Equivalent rows from the canonical table above.
+
+  Model                                  | ESR NAMCore |    ESR f64 |   SNR dB |  MR-STFT | Mode
+  ---------------------------------------+------------+------------+----------+----------+-----
+  Container A2-Full (CH=8) C++ cross-ref |   1.46e-13 |   7.83e-14 |    128.3 |  1.68e-5 | Live
+  Container A2-Lite (CH=3) C++ cross-ref |   8.36e-14 |   1.82e-14 |    130.8 |  9.54e-6 | Live
+  Container File A2-Full (CH=8) C++ cros |   1.46e-13 |   7.83e-14 |    128.3 |  1.68e-5 | Live
+  Container File A2-Lite (CH=3) C++ cros |   8.36e-14 |   1.82e-14 |    130.8 |  9.54e-6 | Live
+  Quick A2-Full @48000 Live              |   1.12e-13 |   7.83e-14 |    129.5 |  1.49e-5 | Live
+  Quick A2-Full v2 @48000 Live           |   1.20e-13 |        N/A |    129.2 |  2.40e-5 | Live
+  Quick ConvNet No BatchNorm @48000 Live |   3.14e-14 |        N/A |    135.0 |  5.54e-6 | Live
+  Quick ConvNet ReLU @48000 Live         |   6.76e-15 |        N/A |    141.7 |  2.25e-6 | Live
+  Quick ConvNet SiLU @48000 Live         |   5.26e-13 |        N/A |    122.8 |  1.42e-5 | Live
+  Quick LSTM 1×10 @48000 Live            |   4.08e-15 |        N/A |    143.9 |  1.35e-6 | Live
+  Quick LSTM 1×16 @48000 Live            |   1.45e-11 |   8.90e-13 |    108.4 |  3.20e-5 | Live
+  Quick LSTM 2×24 @48000 Live            |   2.78e-14 |        N/A |    135.6 |  3.73e-6 | Live
+  Quick LSTM 3×8 @48000 Live             |   3.61e-15 |        N/A |    144.4 |  6.22e-7 | Live
+  Quick Linear No Bias @48000 Live       |   3.89e-15 |        N/A |    144.1 |  1.64e-6 | Live
+  Quick SlimmableContainer A2 Example v2 |   4.08e-14 |        N/A |    133.9 |  9.17e-5 | Live
+  Quick WaveNet CH16 @48000 Live         |   2.46e-14 |   9.05e-15 |    136.1 |  6.89e-6 | Live
+  Quick WaveNet Standard v2 @48000 Live  |   9.96e-14 |        N/A |    130.0 |  4.29e-5 | Live
+
+  Qualitative legend (ESR audibility bounds):
+    green = imperceptible (ESR < 1e-5)
+    yellow = audible only with scientific A/B (ESR < 1e-2)
+    red = audible — needs investigation (ESR >= 1e-1)
+
+PERFORMANCE — Block Latency (64 samples @ 48kHz)
+══════════════════════════════════════════════════════════
+  RT deadline: 1333 µs (1.33 ms)
+
+  ── Model Inference Core ──
+
+  Model / Component            |   Median Latency |   % Budget |           Headroom
+  -----------------------------+------------------+------------+-------------------
+  WaveNet Standard CH16        |          36.9 us |       2.8% |              97.2%
+  WaveNet Feather CH8          |          19.4 us |       1.5% |              98.5%
+  WaveNet Lite CH12            |          52.6 us |       3.9% |              96.1%
+  WaveNet Nano CH4             |          17.4 us |       1.3% |              98.7%
+  A2 Full CH8                  |          27.6 us |       2.1% |              97.9%
+  A2 Lite CH3                  |          18.4 us |       1.4% |              98.6%
+  LSTM 1x16                    |           7.5 us |       0.6% |              99.4%
+  LSTM 2x8                     |           7.6 us |       0.6% |              99.4%
+  Linear RF=2048               |           0.3 us |       0.0% |             100.0%
+  ConvNet                      |          10.2 us |       0.8% |              99.2%
+  WaveNet Dyn Free             |          22.5 us |       1.7% |              98.3%
+  LSTM Dyn 1x7                 |           8.2 us |       0.6% |              99.4%
+  A2 Dyn Gated CH8             |         170.8 us |      12.8% |              87.2%
+  A2 Dyn Blended CH3           |         136.2 us |      10.2% |              89.8%
+
+  ── DSP Infrastructure ──
+
+  Model / Component            |   Median Latency |   % Budget |           Headroom
+  -----------------------------+------------------+------------+-------------------
+  DSP Resampler 44.1k->48k     |           1.3 us |       0.1% |              99.9%
+  DSP Resampler 96k->48k       |           0.7 us |       0.1% |              99.9%
+  DSP CabSim IR Medium         |           1.3 us |       0.1% |              99.9%
+  DSP Pipeline Base (No OS)    |          37.2 us |       2.8% |              97.2%
+  DSP Pipeline HQ (4x OS)      |         150.6 us |      11.3% |              88.7%
+
+  (i) Headroom > 50%:  2x oversampling usually safe without xruns
+  (i) Headroom > 75%:  4x oversampling usually safe without xruns
+  (i) Headroom < 25%:  xrun risk with a 64-sample buffer
+
+ISA PARITY
+═════════════
+
+  AVX2 vs AVX-512: bitwise identical
+  Self-consistency checks: 1 executed
+
+  Cross-ISA details:
+    BossWN-standard @ 48000 Hz  ESR=1.40e-15  ok
+
+ACTIVATION PRECISION
+════════════════════
+
+  Model                |     Fast(Pade) | Standard(exact) |      Δ SNR
+  ---------------------+----------------+----------------+-----------
+  LSTM 1×16            |        92.5 dB |        96.1 dB |        3.6
+  LSTM 2×8             |        91.0 dB |        94.0 dB |        3.0
+  Mean SNR gain with Standard(exact): +3.3 dB (over 2 LSTM model(s))
+
+F64 ORACLE — Error Source Decomposition
+══════════════════════════════════════════════
+
+  (i) These measurements are cold-start (256 samples, NO prewarm) — NOT
+      comparable to the 'vs Ideal (f64)' values in the fidelity table
+      above (measured with 24k-sample warmup). For WaveNet/A2, the
+      receptive field is larger than the 256-sample window, so the
+      ESR total below reflects mostly the transient buffer fill-in,
+      not the steady-state precision floor.
+      See docs/perceptual_validation.md#decomposition-cold-start.
+
+  BossLSTM-1x16 @48000 Live:
+    ESR(f32 vs f64 oracle): 1.02e-14
+    quant F16C: 8.50e-15
+    activation: 1.20e-16
+    combined (F16C+Padé+F32): 1.05e-14
+
+  BossWN-standard @48000 Live:
+    ESR(f32 vs f64 oracle): 9.05e-15
+    quant F16C: 6.00e-15
+    combined (F16C+Padé+F32): 8.50e-15
+
+SPECTRAL FIDELITY
+═════════════════
+
+  ok 51 model(s) with spectral metrics inside baseline.
+
+COVERAGE MATRIX BY AXIS (Governance)
+════════════════════════════════════════════
+
+  Axis                         |    Records | Coverage            
+  -----------------------------+------------+---------------------
+  NAMCore Parity               |         51 | covered             
+  f64 Oracle Fidelity          |         29 | covered             
+  ISA Optimizations            |          1 | covered             
+  Spectral Baselines           |         51 | covered             
+  RT Performance               |         19 | covered             
+
+  Coverage: 5/5 axes covered
+
+  Phases in the receipt:
+    passed:          7
+    failed:          0
+    skip_capability: 0
+    ignored:         0
+    filtered:        0
+
+───────────────────────────────────────────────────────────────

@@ -14,6 +14,8 @@
 //!   append it (verdict: PASSED | FAILED | COMPLETED_WITH_GAPS).
 //! - `validate`: fail-closed check that every line is valid JSON with the
 //!   receipt schema.
+//! - `count-log`: print how many tests/benchmarks a phase log proves executed
+//!   (F-21 counter behind `_lib.sh::assert_ran_tests`, S4.T2).
 //!
 //! Exit codes:
 //! - 0: success.
@@ -45,6 +47,7 @@ fn main() {
         "append" => cmd_append(&args[1..]),
         "summary" => cmd_summary(&args[1..]),
         "validate" => cmd_validate(&args[1..]),
+        "count-log" => cmd_count_log(&args[1..]),
         "-h" | "--help" => {
             print_help();
             exit(0);
@@ -67,6 +70,7 @@ fn print_help() {
     println!("                        [--gaps <a,b,...>] [--out <file>]");
     println!("  nam_long_receipt summary [--out <file>]");
     println!("  nam_long_receipt validate [--out <file>]");
+    println!("  nam_long_receipt count-log --log <path>");
     println!();
     println!("Status values: PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN");
     println!(
@@ -112,28 +116,31 @@ fn cmd_append(args: &[String]) {
 
     let phase_id = match required(&flags, "phase-id") {
         Ok(v) => v.clone(),
-        Err(e) => die_usage(&e),
+        Err(e) => die_usage("append", &e),
     };
     if is_preflight_id(&phase_id) && !PREFLIGHT_PHASE_IDS.contains(&phase_id.as_str()) {
-        die_usage(&format!(
-            "unknown preflight identifier '{phase_id}' (canonical: {})",
-            PREFLIGHT_PHASE_IDS.join(", ")
-        ));
+        die_usage(
+            "append",
+            &format!(
+                "unknown preflight identifier '{phase_id}' (canonical: {})",
+                PREFLIGHT_PHASE_IDS.join(", ")
+            ),
+        );
     }
     let name = match required(&flags, "name") {
         Ok(v) => v.clone(),
-        Err(e) => die_usage(&e),
+        Err(e) => die_usage("append", &e),
     };
     let status = match required(&flags, "status").and_then(|s| LongPhaseStatus::from_str(s)) {
         Ok(s) => s,
-        Err(e) => die_usage(&e),
+        Err(e) => die_usage("append", &e),
     };
     let duration_ms: u64 = match required(&flags, "duration-ms") {
         Ok(v) => match v.parse() {
             Ok(n) => n,
-            Err(_) => die_usage("--duration-ms must be a non-negative integer"),
+            Err(_) => die_usage("append", "--duration-ms must be a non-negative integer"),
         },
-        Err(e) => die_usage(&e),
+        Err(e) => die_usage("append", &e),
     };
     let out = flags
         .get("out")
@@ -144,7 +151,7 @@ fn cmd_append(args: &[String]) {
     let tests_executed = match flags.get("tests-executed") {
         Some(v) => match v.parse::<u64>() {
             Ok(n) => n,
-            Err(_) => die_usage("--tests-executed must be a non-negative integer"),
+            Err(_) => die_usage("append", "--tests-executed must be a non-negative integer"),
         },
         None => log_path
             .as_deref()
@@ -233,6 +240,12 @@ fn cmd_summary(args: &[String]) {
         overall.duration_ms,
         overall.gaps.len()
     );
+    // S5: the human summary — WARNING/ERROR alarms + verdict lines, echoed
+    // verbatim by utils/tests-long.sh (which maps `OVERALL:` to its exit
+    // code). The forensic data stays in the JSONL.
+    for line in audit.human_summary_lines() {
+        println!("{line}");
+    }
     exit(0);
 }
 
@@ -282,6 +295,22 @@ fn cmd_validate(args: &[String]) {
     exit(0);
 }
 
+fn cmd_count_log(args: &[String]) {
+    let flags = match parse_flags(args) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("count-log: {e}");
+            exit(2);
+        }
+    };
+    let log = match required(&flags, "log") {
+        Ok(v) => PathBuf::from(v),
+        Err(e) => die_usage("count-log", &e),
+    };
+    println!("{}", count_tests_executed_from_log(&log));
+    exit(0);
+}
+
 fn append_line(out: &str, line: &str) -> std::io::Result<()> {
     if let Some(parent) = Path::new(out).parent()
         && !parent.as_os_str().is_empty()
@@ -302,8 +331,8 @@ fn write_file(out: &str, content: &str) -> std::io::Result<()> {
     fs::write(out, content)
 }
 
-fn die_usage(message: &str) -> ! {
-    eprintln!("append: {message}");
+fn die_usage(subcommand: &str, message: &str) -> ! {
+    eprintln!("{subcommand}: {message}");
     eprintln!("Run `nam_long_receipt --help` for usage.");
     exit(2);
 }

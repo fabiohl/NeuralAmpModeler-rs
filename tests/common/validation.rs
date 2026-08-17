@@ -159,6 +159,130 @@ fn json_metric(v: f64) -> serde_json::Value {
     }
 }
 
+/// Appends one JSONL line to the metric sink — thread-local override first,
+/// process env `NAM_METRICS_JSONL` fallback, serialized under [`REPORT_LOCK`]
+/// so concurrent reporters never interleave partial lines.
+///
+/// Shared by the fidelity sink of `report_dsp_fidelity*` and by the S2.T6
+/// oracle sinks (`report_f64_table`, `report_f64_decomp`, `report_activation`,
+/// `report_isa`). A missing/closed sink is silently ignored — the JSONL
+/// stream is an enrichment, never a gate.
+fn append_metric_line(obj: serde_json::Value) {
+    let jsonl_path = METRIC_JSONL_PATH.with(|c| c.borrow().clone()).or_else(|| {
+        std::env::var("NAM_METRICS_JSONL")
+            .ok()
+            .map(std::path::PathBuf::from)
+    });
+    if let Some(jsonl_path) = jsonl_path {
+        let _lock = REPORT_LOCK.lock().unwrap();
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&jsonl_path)
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "{obj}");
+        }
+    }
+}
+
+// ── S2.T6 oracle sinks (R-06, slice 1) ───────────────────────────────────────
+// Structured JSONL for the f64 oracle, activation precision, and ISA parity
+// tests that today only print human-readable logs. The dashboard keeps
+// scraping the logs until S2.T7; these records are the forensic JSONL stream
+// for agents (`kind` values are ignored by the S2.T1/T2 parsers by design —
+// they extend without touching the fidelity filter).
+
+/// `f64_table` — one row of the f64-oracle summary table
+/// (`tests/parity/reference_oracle_f64.rs::test_summary_table`), mirroring
+/// the fields the dashboard awk extracts from the human log.
+pub fn report_f64_table(filename: &str, family: &str, esr_linear: f64, esr_db: f64) {
+    append_metric_line(serde_json::json!({
+        "kind": "f64_table",
+        "filename": filename,
+        "family": family,
+        "esr": json_metric(esr_linear),
+        "esr_db": json_metric(esr_db),
+    }));
+}
+
+/// `f64_decomp` — one source-decomposition record of the f64 oracle
+/// (`print_decomposition` in `tests/parity/reference_oracle_f64.rs`).
+/// Unmeasured decomposition terms (absent `Option` fields) are omitted from
+/// the record — never `null`, never a fabricated `0.0`.
+pub fn report_f64_decomp(
+    result: &neural_amp_modeler_rs::testing::reference_oracle::DecompositionResult,
+) {
+    let mut obj = serde_json::Map::new();
+    obj.insert("kind".into(), serde_json::json!("f64_decomp"));
+    obj.insert("label".into(), serde_json::json!(result.label));
+    obj.insert(
+        "architecture".into(),
+        serde_json::json!(result.architecture),
+    );
+    obj.insert("esr_f32_vs_f64".into(), json_metric(result.esr_f32_vs_f64));
+    if let Some(v) = result.esr_quant_f16c {
+        obj.insert("esr_quant_f16c".into(), json_metric(v));
+    }
+    if let Some(v) = result.esr_quant_bf16 {
+        obj.insert("esr_quant_bf16".into(), json_metric(v));
+    }
+    if let Some(v) = result.esr_activation {
+        obj.insert("esr_activation".into(), json_metric(v));
+    }
+    if let Some(v) = result.esr_accumulation {
+        obj.insert("esr_accumulation".into(), json_metric(v));
+    }
+    if let Some(v) = result.esr_combined {
+        obj.insert("esr_combined".into(), json_metric(v));
+    }
+    append_metric_line(serde_json::Value::Object(obj));
+}
+
+/// `activation` — one activation-precision measurement (Fast Padé vs
+/// exact-grade), `tests/models/lstm_activation_precision.rs`. Callers report
+/// only finite pairs — skips are human-log-only, exactly like today.
+pub fn report_activation(model: &str, snr_fast_db: f64, snr_exact_db: f64) {
+    append_metric_line(serde_json::json!({
+        "kind": "activation",
+        "model": model,
+        "snr_fast_db": json_metric(snr_fast_db),
+        "snr_exact_db": json_metric(snr_exact_db),
+        "gain_db": json_metric(snr_exact_db - snr_fast_db),
+    }));
+}
+
+/// `isa` — one ISA-parity comparison (`tests/parity/isa_parity.rs`):
+/// cross-ISA pairs carry `esr`/`max_abs_err`/`budget`; self-consistency
+/// checks (`ref_isa == test_isa`) carry only `mse`. Absent fields are
+/// omitted, never `null`.
+pub fn report_isa(
+    label: &str,
+    ref_isa: &str,
+    test_isa: &str,
+    esr: Option<f64>,
+    mse: f64,
+    max_abs_err: Option<f64>,
+    budget: Option<f64>,
+) {
+    let mut obj = serde_json::Map::new();
+    obj.insert("kind".into(), serde_json::json!("isa"));
+    obj.insert("label".into(), serde_json::json!(label));
+    obj.insert("ref_isa".into(), serde_json::json!(ref_isa));
+    obj.insert("test_isa".into(), serde_json::json!(test_isa));
+    obj.insert("mse".into(), json_metric(mse));
+    if let Some(v) = esr {
+        obj.insert("esr".into(), json_metric(v));
+    }
+    if let Some(v) = max_abs_err {
+        obj.insert("max_abs_err".into(), json_metric(v));
+    }
+    if let Some(v) = budget {
+        obj.insert("budget".into(), json_metric(v));
+    }
+    append_metric_line(serde_json::Value::Object(obj));
+}
+
 /// Plausible LUFS range for golden reference output (sanity gate — BS.1770-4 2-pass).
 ///
 /// Guitar/amp model output at typical stress-signal levels falls between −35 and 0 LUFS.
@@ -552,37 +676,22 @@ fn report_dsp_fidelity_impl(
 
     // JSONL sink resolution: per-thread override first (deterministic,
     // concurrency-immune), process env var as fallback for dashboard runs.
-    let jsonl_path = METRIC_JSONL_PATH.with(|c| c.borrow().clone()).or_else(|| {
-        std::env::var("NAM_METRICS_JSONL")
-            .ok()
-            .map(std::path::PathBuf::from)
+    let json_label = METRIC_MODEL
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(|| format!("{label} @{sample_rate}"));
+    let json_kind = METRIC_KIND
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(|| "fidelity".to_string());
+    let obj = serde_json::json!({
+        "label": json_label,
+        "kind": json_kind,
+        "esr": json_metric(esr_linear),
+        "esr_db": json_metric(esr_db),
+        "snr_db": json_metric(snr),
+        "mrstft": json_metric(mr_stft),
+        "mse": json_metric(mse),
     });
-    if let Some(jsonl_path) = jsonl_path {
-        let json_label = METRIC_MODEL
-            .with(|c| c.borrow().clone())
-            .unwrap_or_else(|| format!("{label} @{sample_rate}"));
-        let json_kind = METRIC_KIND
-            .with(|c| c.borrow().clone())
-            .unwrap_or_else(|| "fidelity".to_string());
-        let obj = serde_json::json!({
-            "label": json_label,
-            "kind": json_kind,
-            "esr": json_metric(esr_linear),
-            "esr_db": json_metric(esr_db),
-            "snr_db": json_metric(snr),
-            "mrstft": json_metric(mr_stft),
-            "mse": json_metric(mse),
-        });
-        let _lock = REPORT_LOCK.lock().unwrap();
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&jsonl_path)
-        {
-            use std::io::Write;
-            let _ = writeln!(file, "{obj}");
-        }
-    }
+    append_metric_line(obj);
 
     if let Some(limit) = mse_limit {
         assert!(

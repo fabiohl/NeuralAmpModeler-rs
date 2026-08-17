@@ -679,7 +679,7 @@ When a tightened gate fails, fix the underlying cause or record a documented lim
 
 **Fixture governance:** every golden `.bin`, model fixture, and per-model threshold used
 by these tests is catalogued and version-pinned in
-[`tests/fixtures/README.md`](../tests/fixtures/README.md).
+[`docs/fixtures.md`](fixtures.md).
 
 ---
 

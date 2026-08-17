@@ -53,7 +53,7 @@ Key fused/tiled kernels built on top of this dispatch:
 
 - **Gated Activation Fusion (WaveNet A2):** `tanh`/`sigmoid` unified into a single native SIMD kernel.
 - **Dot Product ILP:** Multiple independent accumulators (`sum0..sum3` AVX2, `acc0..acc7` AVX-512) to saturate FMA port throughput.
-- **Weight Compression (F16C/BF16):** Weights stored in `f16`/`bf16` to reduce L1/L2 traffic, decompressed on-the-fly (`_mm256_cvtph_ps`/`_mm512_cvtph_ps` or BF16 bit-unpacking) inside the SIMD kernel.
+- **Native f32 Weights (Direct Vector Processing):** Neural models store and process weights natively in single-precision `f32` (matching C++ NAMCore). Weight compression (F16C/BF16) was evaluated and retired to eliminate L1 decompression penalties and recurrent drift (see [docs/audio_fidelity_map.md](audio_fidelity_map.md) §1); half-precision conversion kernels are retained exclusively for benchmarking and error decomposition.
 - **Gate-Major Layout & Fused 4-Gate GEMV (LSTM):** Weights transposed to `[Gate][Input][Hidden]`; all 4 gates computed in one pass over the state vector.
 - **Layer Overlap Pipelining (LSTM 2-Layer):** Layer 2 processes frame `N-1` while Layer 1 processes frame `N`.
 - **Native BF16 (AVX-512 BF16):** `_mm512_dpbf16_ps` (VNNI-BF16) on Sapphire Rapids+, including a Fused 4-Gate GEMV BF16 kernel.
@@ -68,9 +68,9 @@ Activation approximations (Padé tanh, minimax sigmoid, the `Fast`/`Standard` pr
 
 The monolithic math implementation was fragmented into domain-specific modules (`activations/`, `gemm/`, `dsp/`, `lstm/`, `wavenet/`) to reduce cognitive load in 2000+ line files and enable isolated kernel testing. As part of this cleanup, `Avx2VnniMath` was eliminated (aliased to `Avx2Math` — `VPDPBUSD` int8 VNNI offers no gain for float kernels), and the previous dual-dispatch design (loader→model→`SimdMathConfig` v-table) was fully replaced by the static `dispatch_simd!` macro described above. Only `Avx512VnniBf16` remains as an actively used VNNI variant.
 
-### 1.3 Mixed Precision and Numerical Stability
+### 1.3 Precision and Numerical Stability
 
-- **Selective mixed precision:** The WaveNet backbone (Conv1D, `input_mixin`, `one_by_one`) runs on F16/BF16-compressed weights; the final projection (`head_rechannel`, and the equivalent LSTM head) runs a native `f32` GEMV (`process_block_f32_native`) to preserve 24-bit fidelity in the analytically most sensitive stage. Full quality/performance rationale: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §1.
+- **Single-precision f32 processing:** All neural network backbones and projections operate on native `f32` weights and buffers to guarantee bit-exact interop parity with NAMCore. Full quality/performance rationale: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §1.
 - **Kahan summation:** Used in the interleaved 4× scalar-fallback dot products (`scalar_ref/dot.rs`) to bound relative accumulation error at `O(ε)` instead of `O(N·ε)`. Static conv1d paths use plain `+=` (error for K≤3 taps is below −129 dBFS, inaudible).
 - **Deterministic dither:** A fixed `−220 dBFS` DC offset is added at the input stage ([apply_input_stage](../src/dsp/pipeline/stages/input.rs#L41)) and subtracted at the output ([apply_output_stage](../src/dsp/pipeline/stages/output.rs#L19)), keeping activations out of subnormal ranges during silence without any net signal change. Full analysis: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §6.
 

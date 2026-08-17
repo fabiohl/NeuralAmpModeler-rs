@@ -216,6 +216,17 @@ fn assert_isa_parity(
          budget ESR<{max_esr:.1e}"
     );
 
+    // S2.T6: forensic JSONL sink (kind `isa`) — human log unchanged.
+    common::report_isa(
+        label,
+        ref_name,
+        test_name,
+        Some(esr),
+        mse,
+        Some(mae),
+        Some(max_esr),
+    );
+
     assert!(
         esr < max_esr,
         "[{label}] ISA parity FAIL: {ref_name} → {test_name} \
@@ -296,6 +307,10 @@ fn assert_isa_self_consistency(
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
     };
     println!("[ISA Matrix] {label} | {isa_name:>10} self-consistency | MSE={mse:.2e}");
+
+    // S2.T6: self-consistency sinks with `ref_isa == test_isa` (kind `isa`,
+    // only `mse` carried) — human log unchanged.
+    common::report_isa(label, isa_name, isa_name, None, mse, None, None);
 
     assert!(
         mse == 0.0,

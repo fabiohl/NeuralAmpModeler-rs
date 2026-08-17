@@ -167,12 +167,12 @@ utils/tests-performance-regression.sh --check
 # Expected: "No performance regression detected." exit 0
 
 # 3. Only then freeze the integrated fidelity+perf contract
-utils/quality-dashboard.sh --save docs/quality-contract.txt
+utils/quality-dashboard.sh --save docs/quality-contract.json
 # Requires ALL dashboard phases PASS (including regression_gate).
 # Fail-closed: if regression_gate != PASS, the file is NOT written.
 
 # 4. Close the loop on the same revision
-utils/quality-dashboard.sh --check docs/quality-contract.txt
+utils/quality-dashboard.sh --check docs/quality-contract.json
 # Expected: FIDELITY OK + PERFORMANCE OK + contract satisfied
 ```
 
@@ -267,7 +267,7 @@ If the script exits with `❌ PERFORMANCE REGRESSION DETECTED`:
 
 ## Quality Contract — Performance Lens
 
-The **Quality Contract** ([`quality-contract.txt`](quality-contract.txt)) extends the
+The **Quality Contract** ([`quality-contract.json`](quality-contract.json)) extends the
 regression defense with a dashboard-integrated second line of defense that freezes
 both fidelity and performance metrics into a versioned, machine-readable baseline.
 
@@ -310,14 +310,14 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 > | Artifact           | Path                                           | Role                                                    |
 > | ------------------ | ---------------------------------------------- | ------------------------------------------------------- |
 > | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (t-test, p&lt;0.05)           |
-> | Quality contract   | `docs/quality-contract.txt`                    | Frozen fidelity + median latency snapshot for `--check` |
+> | Quality contract   | `docs/quality-contract.json`                   | Frozen fidelity + median latency snapshot for `--check` |
 >
 > Updating one does **not** update the other. Order is always:
 > bootstrap Criterion → standalone `--check` green → dashboard `--save` → dashboard `--check`.
 
 ### Baselines and Renewal
 
-The official performance baseline lives in [`quality-contract.txt`](quality-contract.txt) alongside
+The official performance baseline lives in [`quality-contract.json`](quality-contract.json) alongside
 fidelity metrics. The **full renewal procedure** — including prerequisites, the
 `--bootstrap-baseline` / `--check` cycle, and the mandatory commit-message justification — is
 documented in [`testing.md`](testing.md#95-baseline-renewal-procedure-human-only).
@@ -325,7 +325,7 @@ documented in [`testing.md`](testing.md#95-baseline-renewal-procedure-human-only
 > [!CAUTION]
 > The Criterion baseline (`.performance-baselines/`, managed by
 > `utils/tests-performance-regression.sh --bootstrap-baseline`) and the Quality
-> Contract (`docs/quality-contract.txt`) are **independent**. Updating one does
+> Contract (`docs/quality-contract.json`) are **independent**. Updating one does
 > not update the other. Criterion data is local/gitignored; the contract file is
 > committed. Both must be renewed (human-only) when latency or fidelity
 > characteristics intentionally change — always Criterion first, then `--save`.
@@ -560,7 +560,7 @@ The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallbac
 | `RT_A2_Dyn_Blended_CH3` | ~133 µs         | **135.9 µs** (~10.2% of budget)         | ≈ +2–3%                              | CH=3 stays on scalar fallbacks; accepted trade-off |
 | `RT_LSTM_Dyn_1x7`       | ~15.8 µs        | **~7.9 µs**                             | **≈ −50%** vs pre-vectorization tail | Dedicated AVX2 H&lt;8 gates                        |
 
-The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. The Criterion baseline and `docs/quality-contract.txt` reflect these post-optimization medians.
+The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. The Criterion baseline and `docs/quality-contract.json` reflect these post-optimization medians.
 
 ### Fidelity & Invariants
 

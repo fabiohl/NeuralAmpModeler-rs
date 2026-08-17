@@ -143,6 +143,8 @@ fn print_decomposition(
             10.0 * v.log10()
         }
     };
+    // S2.T6: forensic JSONL sink (kind `f64_decomp`) — human log unchanged.
+    common::report_f64_decomp(result);
     println!(
         "{} Decomposition:\n\
            ESR(f32 vs f64 oracle):  {:.2e} ({:.1} dB)\n\
@@ -1442,6 +1444,8 @@ fn test_summary_table() {
             continue;
         }
         let esr = run_oracle_esr_paired(filename, family);
+        // S2.T6: forensic JSONL sink (kind `f64_table`) — human log unchanged.
+        common::report_f64_table(filename, family, esr, esr_to_db_f64(esr));
         println!(
             "{:<40} {:<20} {:<15.6e} {:<15.1}",
             filename,

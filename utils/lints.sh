@@ -14,8 +14,26 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+
 PHASE_TOTAL=7
-source "$(dirname "$0")/_lib.sh"
+source "$SCRIPT_DIR/_lib.sh"
+
+if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]; then
+    export NAM_LOW_PRIORITY=1
+    CMD_PREFIX=""
+    if command -v nice >/dev/null 2>&1; then
+        CMD_PREFIX="nice -n 19"
+    fi
+    if command -v ionice >/dev/null 2>&1; then
+        CMD_PREFIX="$CMD_PREFIX ionice -c 3"
+    fi
+    if [ -n "$CMD_PREFIX" ]; then
+        echo -e "${YELLOW}WARN: restarting with low CPU/IO priority (NAM_NO_LOW_PRIORITY=1 to skip)${NC}"
+        exec $CMD_PREFIX "$SCRIPT_PATH" "$@"
+    fi
+fi
 
 echo -e "${BLUE}${BOLD}================================================================${NC}"
 echo -e "${BLUE}${BOLD}                 NeuralAmpModeler-rs Linting & Quality Suite                 ${NC}"

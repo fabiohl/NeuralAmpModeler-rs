@@ -78,7 +78,7 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector.
 
-- **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through `resolve_nam_model()`, matching `src/testing/fixtures.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `third-party/community_models/` (via `NAM_THIRD_PARTY_DIR`), (3) `tests/fixtures/models-nondist`, (4) `tests/fixtures/models`. See [tests/fixtures/README.md](../tests/fixtures/README.md) for skip semantics and non-distributable golden handling.
+- **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through `resolve_nam_model()`, matching `src/testing/fixtures.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `third-party/community_models/` (via `NAM_THIRD_PARTY_DIR`), (3) `tests/fixtures/models-nondist`, (4) `tests/fixtures/models`. See [fixtures.md](fixtures.md) for skip semantics and non-distributable golden handling.
 
 - **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is the canonical, fail-closed ELF surface gate over the *linked* binary, run automatically in `tests-quick.sh` Phase 1 and `tests-long.sh` Defense phase (see [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)). The former standalone wrapper `utils/debug/verify_no_libm_exports.sh` was removed: it scanned `.rlib` archives — the wrong surface, since object archives still carry `T` exports before the version script applies — and silently skipped when the artifact was missing.
 
@@ -130,7 +130,7 @@ regenerate missing goldens with `tests/fixtures/golden_gen_build.sh`.
 The battery itself runs in sequential phases (see `utils/tests-long.sh`):
 
 1. **Soak / concurrency** (`#[ignore]`): 10M+ frame endurance plus heavy `concurrency_stress` ([tests/perf_soak/](../tests/perf_soak/)).
-2. **Defense scripts**: inline Bash unit tests (`run_bash_scripts_unit_tests`), Rust `libm_export_guard`, bounded oversample unit tests.
+2. **Defense**: Rust harness `tests/qa_defense.rs` (F-01/F-08/F-21/F-22/F-24/F-27/S3-T01), Rust `libm_export_guard`, bounded oversample unit tests.
 3. **Full proptest / parity / golden v2 / ISA / spectral baselines**.
 4. **Heap-audit** (`heap-audit` feature).
 5. **RT deadline** (release, non-ignored).
@@ -198,7 +198,7 @@ To align test execution with developer workflows and integration schedules, the 
 - **Goal**: Provide a complete, comprehensive report of all test, parity, and performance outcomes for nightlies or release gates.
 - **Behavior**: Execution continues across all phases even if individual targets fail. Logs are collected and a final status summary table is generated.
 - **Configuration**: Phase wrappers use error isolation (`|| true`) and cargo invocations pass `--no-fail-fast`. Script exits with status `1` at the end if any phase logged an error.
-- **Human certification**: AI agents must never execute this script. The operator checklist (execution, defense log verification, `OVERALL:` evidence, and the certification record) is in [runners-human-certification.md](runners-human-certification.md).
+- **Human certification**: AI agents must never execute this script. The operator checklist (execution, defense log verification, `OVERALL:` evidence, and the certification record) is in [functional-tests.md](functional-tests.md).
 
 ---
 
@@ -270,18 +270,19 @@ The **Quality Contract** establishes an immutable baseline freezing quality and 
 
 The contract is enforced by [utils/quality-dashboard.sh](../utils/quality-dashboard.sh):
 
-| Mode                | Command                                          | Function                                                                             |
-|:------------------- |:------------------------------------------------ |:------------------------------------------------------------------------------------ |
-| **Dashboard**       | `./utils/quality-dashboard.sh`                   | Executes all fidelity and performance phases and displays the interactive dashboard. |
-| **Save (baseline)** | `./utils/quality-dashboard.sh --save <arquivo>`  | Saves plain-text dashboard results as the official baseline.                         |
-| **Check (verify)**  | `./utils/quality-dashboard.sh --check <arquivo>` | Executes phases and compares current results against baseline, reporting violations. |
+| Mode                | Command                                          | Function                                                                                      |
+|:------------------- |:------------------------------------------------ |:--------------------------------------------------------------------------------------------- |
+| **Dashboard**       | `./utils/quality-dashboard.sh`                   | Executes all fidelity and performance phases and displays the interactive dashboard.          |
+| **Save (baseline)** | `./utils/quality-dashboard.sh --save <arquivo>`  | Saves dashboard results as the official JSON baseline contract.                               |
+| **Check (verify)**  | `./utils/quality-dashboard.sh --check <arquivo>` | Executes phases and compares current results against the JSON contract, reporting violations. |
 
 The dashboard's defense functions (metric sanitization, toolchain fingerprint,
-JSONL parsing, test-execution assertion, and the golden-freshness gate) are covered by
-a stable Bash unit-test suite (`run_bash_scripts_unit_tests`) embedded directly in
-[utils/tests-long.sh](../utils/tests-long.sh) (defense phase).
+JSONL parsing, test-execution assertion, and the golden-freshness gate) are
+covered by the Rust defense harness [tests/qa_defense.rs](../tests/qa_defense.rs),
+run by the long suite's defense phase (Sprint S5 — the former inline Bash
+unit-test suite `run_bash_scripts_unit_tests` was removed).
 
-The official baseline resides in [docs/quality-contract.txt](quality-contract.txt).
+The canonical contract is [docs/quality-contract.json](quality-contract.json) — **JSON-only** authority since Sprint S2 (finding R-01): serde types in `src/testing/qa/` define the schema and the wrapper never interprets contracts. The legacy ASCII snapshot (`quality-contract.txt`, formerly the baseline) was retired with S7; do **not** teach `--check`/`--save` against it.
 
 ### 9.2. Tolerance Margins
 
@@ -323,7 +324,7 @@ QA scripts report these domains independently:
 
 ```sh
 # Run full quality check against baseline contract
-./utils/quality-dashboard.sh --check docs/quality-contract.txt
+./utils/quality-dashboard.sh --check docs/quality-contract.json
 
 # Run primary performance regression wall
 ./utils/tests-performance-regression.sh --check
@@ -333,10 +334,10 @@ QA scripts report these domains independently:
 
 Two artifacts must stay aligned after intentional performance or fidelity changes:
 
-| Artifact                       | Location                                | Owner command                                                 |
-| ------------------------------ | --------------------------------------- | ------------------------------------------------------------- |
-| Criterion statistical baseline | `.performance-baselines/` (gitignored)  | `utils/tests-performance-regression.sh --bootstrap-baseline`  |
-| Quality contract snapshot      | `docs/quality-contract.txt` (committed) | `utils/quality-dashboard.sh --save docs/quality-contract.txt` |
+| Artifact                       | Location                                 | Owner command                                                  |
+| ------------------------------ | ---------------------------------------- | -------------------------------------------------------------- |
+| Criterion statistical baseline | `.performance-baselines/` (gitignored)   | `utils/tests-performance-regression.sh --bootstrap-baseline`   |
+| Quality contract snapshot      | `docs/quality-contract.json` (committed) | `utils/quality-dashboard.sh --save docs/quality-contract.json` |
 
 **Agents/CI must never run bootstrap or `--save`.** Operator machine: governor
 `performance`, low load, optional `NAM_BENCH_CORE`.
@@ -351,10 +352,10 @@ utils/tests-performance-regression.sh --bootstrap-baseline
 utils/tests-performance-regression.sh --check   # MUST exit 0
 
 # 3) Freeze integrated contract (fails closed if regression_gate != PASS)
-utils/quality-dashboard.sh --save docs/quality-contract.txt
+utils/quality-dashboard.sh --save docs/quality-contract.json
 
 # 4) Verify on the same revision
-utils/quality-dashboard.sh --check docs/quality-contract.txt
+utils/quality-dashboard.sh --check docs/quality-contract.json
 ```
 
 **Provenance:** the saved contract header records `git_commit`, dirty/clean state,
@@ -367,7 +368,7 @@ phases for ~minutes before Criterion, so micro-benches can trip p&lt;0.05 noise
 bootstrap again only if the delta is intentional or reproducible under isolation.
 See [benchmarks.md — First-Time Setup and Post-Optimization Renewal](benchmarks.md#first-time-setup-and-post-optimization-renewal-human-only).
 
-1. **Commit** `docs/quality-contract.txt` (and any related docs) with measured
+1. **Commit** `docs/quality-contract.json` (and any related docs) with measured
    before/after numbers. Do **not** commit `.performance-baselines/` (local,
    machine-specific). Each developer/CI host bootstraps its own Criterion baseline.
 
@@ -379,7 +380,7 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 
 | Script                                                                                | Responsibility                             | Key Engineering Guarantees                                                                                                                                                                                                                                                                                                                                                                               |
 |:------------------------------------------------------------------------------------- |:------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[utils/_lib.sh](../utils/_lib.sh)**                                                 | Shared Bash library                        | Dynamic `$PROJECT_DIR` resolution at initialization; standard `ok`, `warn`, `die` helpers; `NAM_LIB_NO_CD=1` support; typed receipt emission; 100% unit-tested via the `run_bash_scripts_unit_tests` suite embedded in `tests-long.sh`.                                                                                                                                                                  |
+| **[utils/_lib.sh](../utils/_lib.sh)**                                                 | Shared Bash library                        | Dynamic `$PROJECT_DIR` resolution at initialization; standard `ok`, `warn`, `die` helpers; `NAM_LIB_NO_CD=1` support; typed receipt emission; shell-husk wrappers delegating to the QA bins (S4/S5); defense coverage via `tests/qa_defense.rs` + unit tests in `src/testing/`.                                                                                                                          |
 | **[utils/lints.sh](../utils/lints.sh)**                                               | Static analysis & quality defense          | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`). |
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                       |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                        |

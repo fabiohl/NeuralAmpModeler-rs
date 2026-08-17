@@ -32,6 +32,8 @@ scratch.rs
 # Ignore stray JSON except test fixtures
 *.json
 !tests/fixtures/**/*.json
+# Canonical quality-contract authority is JSON (R-01, S1.T3) — do not ignore
+!docs/quality-contract.json
 
 # Proptest regression files (auto-generated)
 *.proptest-regressions

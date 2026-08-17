@@ -39,7 +39,7 @@ Designed for ultra-low latency or CPU-constrained setups:
 > [!WARNING]
 > **Calibration Limits under Fast Mode:** `Fast` mode approximations are optimized over compact domains: `tanh` on $[-4, 4]$ (max absolute error $\approx 2.32 \times 10^{-3}$) and `sigmoid` on $[-8, 8]$ (max absolute error $\approx 4.09 \times 10^{-4}$). In recurrent architectures (LSTM) with large hidden states where gate inputs $|g| > 4$, approximation errors accumulate over time, creating recurrent state drift. Standard mode avoids this drift and is recommended for recurrent models.
 
-#### Activation Precision Impact Across Topologies (Measured in `quality-contract.txt`)
+#### Activation Precision Impact Across Topologies (Measured in `quality-contract.json`)
 
 | Model Topology          | Fast Mode SNR (Padé) | Standard Mode SNR (Exact) | Δ SNR Gain  |
 |:----------------------- |:-------------------- |:------------------------- |:----------- |
@@ -180,4 +180,4 @@ When modifying or adding activation functions in [`src/math/activations/`](../sr
 - [Sollya](https://www.sollya.org/) — Software tool for computing optimal `fpminimax` polynomial coefficients.
 - [docs/architecture.md](architecture.md) — System Architecture & Quality Modes.
 - [docs/audio_fidelity_map.md](audio_fidelity_map.md) — Audio Fidelity and Parity Map.
-- [docs/quality-contract.txt](quality-contract.txt) — Automated Quality Dashboard Baseline.
+- [docs/quality-contract.json](quality-contract.json) — Automated Quality Dashboard Baseline (JSON).

@@ -19,6 +19,8 @@ pub mod freshness;
 pub mod isa_guard;
 pub mod mushra;
 pub mod perceptual;
+#[cfg(feature = "testing")]
+pub mod qa;
 pub mod receipt;
 pub mod reference_oracle;
 pub mod spectral;

@@ -157,6 +157,16 @@ name = "nam_long_receipt"
 path = "src/bin/nam_long_receipt.rs"
 required-features = ["testing"]
 
+[[bin]]
+name = "nam_quality"
+path = "src/bin/nam_quality.rs"
+required-features = ["testing"]
+
+[[bin]]
+name = "nam_perf_gate"
+path = "src/bin/nam_perf_gate.rs"
+required-features = ["testing"]
+
 [[example]]
 name = "load_model"
 path = "examples/load_model.rs"

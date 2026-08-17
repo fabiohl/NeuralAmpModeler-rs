@@ -75,6 +75,8 @@ mod namb_v2_validation;
 mod nondist_validation;
 #[path = "models/oversampling_characterization.rs"]
 mod oversampling_characterization;
+#[path = "models/perf_gate_cli_test.rs"]
+mod perf_gate_cli_test;
 #[path = "models/prewarm_test.rs"]
 mod prewarm_test;
 #[path = "models/process_contract_test.rs"]
@@ -83,6 +85,8 @@ mod process_contract_test;
 mod proptest_math;
 #[path = "models/proptest_parsers.rs"]
 mod proptest_parsers;
+#[path = "models/quality_cli_test.rs"]
+mod quality_cli_test;
 #[path = "models/self_consistency.rs"]
 mod self_consistency;
 #[path = "models/spectral_fidelity.rs"]
