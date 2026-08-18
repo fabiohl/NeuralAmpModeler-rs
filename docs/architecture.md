@@ -225,14 +225,14 @@ Host Input (Nk Hz)
     ▼ Output to Host
 ```
 
-### Native Resampler Architecture
+### 4.1 Native Resampler Architecture
 
 NAM models are trained at 48 kHz; when the host runs at a different rate, NeuralAmpModeler-rs converts using a native **Minimum-Phase Polyphase FIR Sinc Resampler** (`NamResampler` in `src/dsp/resampler/mod.rs`), replacing external dependencies such as `rubato`:
 
 - **Polyphase oversampled with linear interpolation:** 256 phases × 64 taps, Kaiser β=12 windowed sinc.
 - **Minimum-phase transform (Real Cepstrum):** Eliminates pre-ringing by concentrating filter energy into the shortest possible delay via f64 FFT.
 - **Linear-phase option:** `NamResampler::new_linear()` for offline/mixdown use where zero pre-ringing is not required.
-- **AVX2+FMA inner product:** Coefficients aligned to 64 bytes.
+- **AVX2+FMA inner product:** Coefficients aligned to 64 bytes, processing in ~0.7–1.3 µs per block.
 - **Double-buffer delay line:** Two contiguous copies of history (2 × `TAPS_PER_PHASE` samples), eliminating circular wrap logic in the SIMD inner loop.
 - **Bypass at native rate:** When the host sample rate matches 48 kHz, samples are `memcpy`'d directly with zero convolution overhead.
 
@@ -241,11 +241,11 @@ parameter was evaluated and **rejected** after benchmarking. Full quality metric
 (passband ripple, stopband attenuation, multitone SNR) and the rejection rationale:
 [docs/audio_fidelity_map.md](audio_fidelity_map.md) §4.
 
-### Gate FSM
+### 4.2 Gate FSM
 
 Implements temporal and amplitude hysteresis (Schmitt Trigger) to prevent chattering at noise floor levels. Includes linear SIMD ramping for smooth transitions (fade-in/out), fused into a single stereo pass to optimize cache locality.
 
-## 4.3 Oversampling Engine — Anti-Aliasing for Neural Activations
+### 4.3 Oversampling Engine — Anti-Aliasing for Neural Activations
 
 NeuralAmpModeler-rs provides optional **2×/4× oversampling** around the neural model to suppress aliasing from non-linear activations (tanh, sigmoid, ReLU), implemented in `src/dsp/oversample.rs` following the half-band filter design of Kahles, Esqueda & Välimäki (JAES 2019).
 
@@ -256,11 +256,13 @@ Each 2× stage uses a **Kaiser-windowed half-band FIR filter** (25 taps, β=12, 
 
 `Off` is the default (zero overhead, live monitoring); `X2`/`X4` cascade one/two stages for offline rendering and critical listening. Latency, per-stage stop-band figures, and the Live-vs-HQ trade-off rationale (including why ADAA was rejected in favor of this activation-agnostic approach) are documented once in [docs/audio_fidelity_map.md](audio_fidelity_map.md) §5 — not repeated here.
 
+> **LSTM Oversampling Characterization:** Feedforward models (WaveNet, ConvNet, A2) exhibit transparent anti-aliasing under oversampling. In recurrent architectures (LSTM), oversampling increases the discrete clock rate ($\Delta t = 1/f_s$), modulating the physical time window of recurrent memory ($h_t, c_t$) and resulting in a tighter, brighter tone ($\text{ESR} \approx -15\text{ to } -25\text{ dB}$). Running LSTMs with oversampling is an intentional acoustic choice rather than a transparent anti-aliasing filter. See [docs/audio_fidelity_map.md](audio_fidelity_map.md) §3.2 and [docs/perceptual_validation.md](perceptual_validation.md).
+
 **RT-Safety:** All filter coefficients, ring buffers, and scratch space are allocated at `OversampleEngine::new()`, outside the audio thread. `process()` only reads/writes pre-allocated buffers — zero allocations, zero heap-drops. Factor changes trigger an off-RT rebuild (host thread constructs new engines → SPSC → audio thread swaps inline).
 
 > **References:** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs) (`model_process_stereo_with_os()`), [`src/common/spsc/status.rs`](../src/common/spsc/status.rs) (`RT_STATUS_NEEDS_OS_REBUILD`).
 
-## 4.1 Adaptive Compute: Graceful CPU Fallback
+### 4.4 Adaptive Compute: Graceful CPU Fallback
 
 To guarantee xrun-free operation under high CPU utilization, NeuralAmpModeler-rs includes a dynamic **Adaptive Compute** sub-system that gracefully lowers model complexity when the audio thread approaches its deadline budget. User-facing impact and the `--slim` override are documented in [docs/audio_fidelity_map.md](audio_fidelity_map.md) §7; the FSM mechanics themselves are:
 
@@ -272,7 +274,7 @@ To guarantee xrun-free operation under high CPU utilization, NeuralAmpModeler-rs
 - **Deterministic Offline Bounce:** During offline rendering/export, the render mode transition forces `AdaptiveCompute` to `Off` (resetting the FSM to `Full`), clears all active degradation flags (`RT_STATUS_DEGRADE_REDUCED`, `RT_STATUS_DEGRADE_MINIMAL`), and ignores all block deadline measurements — guaranteeing deterministic, maximum-quality output regardless of host RT pressure.
 - **A2 slimmable degradation:** For A2 models delivered as a `SlimmableContainer`, the same FSM drives the runtime **A2-Full → A2-Lite** switch instead of layer-skipping, reusing the crossfade machinery. See §7.
 
-## 4.2 IR Cabsim — Impulse Response Convolution
+### 4.5 IR Cabsim — Impulse Response Convolution
 
 The cabsim stage performs real-time convolution of the neural model output with a speaker cabinet impulse response (IR), simulating the physical cabinet/speaker coloration that follows amplifier modeling.
 

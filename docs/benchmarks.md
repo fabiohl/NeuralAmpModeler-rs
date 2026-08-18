@@ -93,12 +93,14 @@ All historical tracking metrics are recorded in local files within your project 
 > **Current vs. historical numbers.** The authoritative *current* per-model latency
 > figures come from a fresh `regression_gate` run — most conveniently via
 > [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) (PERFORMANCE section, median per 64-sample block).
-> Reference snapshot (Ryzen 7 5700U, AVX2): WaveNet Std CH16 ≈ 36.9 µs
-> (2.8%, 2404 µs/MMAC), Feather CH8 ≈ 19.3 µs (1.4%, 5031 µs/MMAC), Lite CH12 ≈ 52.2 µs (3.9%, 6039 µs/MMAC),
-> Nano CH4 ≈ 17.2 µs (1.3%, 17969 µs/MMAC outlier due to layer overhead),
-> A2-Full CH8 ≈ 27.3 µs (2.0%), A2-Lite CH3 ≈ 18.4 µs (1.4%), LSTM 1×16 ≈ 7.5 µs (0.6%),
-> LSTM 2×8 ≈ 7.5 µs (0.6%), ConvNet ≈ 10.2 µs (0.8%), Linear RF=2048 ≈ 0.3 µs (0.0%).
-> All ≤ 3.9% of the 1333 µs RT budget (64 samples @ 48 kHz). The "Experiment Report"
+> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 36.9 µs
+> (2.8%, 2404 µs/MMAC), Feather CH8 ≈ 19.4 µs (1.5%, 5031 µs/MMAC), Lite CH12 ≈ 52.6 µs (3.9%, 6039 µs/MMAC),
+> Nano CH4 ≈ 17.4 µs (1.3%, 17969 µs/MMAC outlier due to layer overhead),
+> A2-Full CH8 ≈ 27.6 µs (2.1%), A2-Lite CH3 ≈ 18.4 µs (1.4%), LSTM 1×16 ≈ 7.5 µs (0.6%),
+> LSTM 2×8 ≈ 7.6 µs (0.6%), ConvNet ≈ 10.2 µs (0.8%), Linear RF=2048 ≈ 0.3 µs (0.02%),
+> DSP Resampler (44.1k→48k) ≈ 1.3 µs, DSP CabSim IR Medium (512) ≈ 1.3 µs,
+> Full DSP Pipeline Base (No OS) ≈ 37.2 µs (2.8%), Full DSP Pipeline HQ (4× OS) ≈ 150.6 µs (11.3%).
+> All ≤ 3.9% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
 > sections further down are **historical point-in-time studies** documenting engineering
 > decisions; their absolute numbers (e.g. WaveNet Std ≈ 92.6 µs) predate later optimizations
 > and are retained only to justify the decisions, not as current performance claims.

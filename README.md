@@ -21,29 +21,33 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 
 ## ⚡ Key Strengths & Architectural Highlights
 
-* **Pure Rust & Zero-Allocation RT Safety:** Engineered from the ground up for absolute real-time audio determinism — zero heap allocations, zero mutex locks, and zero blocking I/O on the hot path. Parameter updates and control-plane commands pass through lock-free SPSC channels.
-* **Extremely Fast SIMD Inference:** Hand-crafted AVX2 (`x86-64-v3`) baseline vectorization and optional AVX-512 multiversioning (BF16/VNNI) protected by statistical performance gates and real-time deadline tests.
-* **Uncompromising Audio Parity:** Validated against three independent test oracles (canonical C++ NAMCore f32, double-precision f64 reference oracle, and cross-ISA parity). In quality audits, BossWN Standard measured `2.31e-14` ESR against NAMCore and BossLSTM 1x16 measured `8.50e-12`; paired f64-oracle ESR measured `9.05e-15` and `8.90e-13`, respectively.
-* **Const-Generic Optimization:** Static WaveNet and LSTM profiles leverage Rust const generics so kernel sizes, receptive fields, and channel counts are known at compile time, enabling aggressive LLVM compiler optimization, register allocation, and SIMD loop unrolling.
-* **Cabinet IR & DSP Pipeline:** Integrated partitioned FFT and direct FIR convolution engine for speaker cabinet impulse responses (.wav), paired with polyphase half-band anti-aliasing oversampling and Padé FastMath activations.
-* **Flexible Host Integration:** Exposes a clean, host-agnostic API for model loading, DSP pipeline construction, dynamic quality switching (`.namb` bundles), and diagnostics. Designed to be embedded as an `rlib` dependency in any Rust application.
+* **Pure Rust & Strict Zero-Allocation RT Safety:** Engineered from the ground up for absolute real-time audio determinism — zero heap allocations, zero mutex locks, and zero blocking syscalls on the audio processing thread (verified via `CountingAllocator` in heap audit suites). Parameter updates and model swaps pass through lock-free SPSC channels, while a 3-tier GC cascade (*SPSC queue → 16-slot thread-local parking lot → overwrite ring*) guarantees safe off-RT resource disposal without audio glitches.
+* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Mandatory `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization and optional AVX-512 multiversioning (BF16/VNNI) resolved at compile time via the `dispatch_simd!` macro with zero function pointers or vtables. Multi-accumulator ILP (`sum0..sum3` in AVX2, `acc0..acc7` in AVX-512) and tap-major frame-tiling saturate hardware execution ports.
+* **Uncompromising Dual-Oracle Audio Parity:** Validated against two independent co-equal test oracles: canonical C++ NAMCore f32 (market interop) and double-precision f64 reference oracle (mathematical ideality). Grounded in `docs/quality-contract.json`, BossWN Standard measures `2.31e-14` ESR against NAMCore and `9.05e-15` against the f64 oracle (SNR `136.4 dB`, MR-STFT `6.46e-6`), with ConvNet reaching `4.23e-15` ESR (SNR `143.7 dB`).
+* **Const-Generic Optimization & Dynamic Topology Fallback:** 23 static model profiles leverage Rust const generics so kernel sizes, receptive fields, and channel counts (`CH=16, 12, 8, 4, 3`) are known at compile time, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies gracefully fallback to zero-allocation dynamic engines (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`, `WaveNetA2Cascade`).
+* **Complete Native DSP Stack (Zero External Audio Crates):** Integrated native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, >105 dB stopband, zero pre-ringing cepstrum, 0.7–1.3 µs latency, replacing external libraries like `rubato`), UPOLS Partitioned FFT CabSim IR convolution (1.3 µs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, >100 dB attenuation, Kahles et al. JAES 2019).
+* **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load monitoring with hysteresis FSM that gracefully degrades model complexity (Full → Reduced → Minimal) with 32 ms click-free linear crossfades to prevent audio xruns. Binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model hot-swap latency from ~50 ms to <1 ms with mandatory IEEE 802.3 CRC32 integrity validation.
+* **Denormal & Subnormal Armor:** Injected symmetric `−220 dBFS` deterministic dither (`1.0e-11`) + SSE2 MXCSR FTZ/DAZ reassertion on every processing call, eliminating 10–100× CPU microcode penalties on digital silence with zero net DC drift.
 
 ---
 
 ## 🥊 Feature Showcase ("Roofshoot")
 
-| Feature / Attribute              | Technical Implementation                                                                 | Benefit & Impact                                                                     |
-|:-------------------------------- |:---------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------ |
-| **Inference Engine**             | Core WaveNet (A1/A2), LSTM (1-layer & 2-layer), ConvNet, and Linear topologies           | Complete model ecosystem compatibility with native Rust DSP speed                    |
-| **RT Safety Determinism**        | Strict Zero Heap Drop, Zero Mutex Locks, Zero Hot-Path Logging                           | Guaranteed audio stability without dropouts/xruns under sub-millisecond deadlines    |
-| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline + optional AVX-512 (BF16/VNNI) multiversioning | Ultra-low CPU usage (< 38 µs per 64-sample block on AMD Ryzen 7)                     |
-| **Const-Generic Profiles**       | Rust const generics for channel counts (`CH=16`, `12`, `8`, `4`) and layer depths        | Enables compile-time LLVM loop unrolling and register allocation optimization        |
-| **Numerical Parity Oracles**     | Verified against canonical C++ NAMCore f32, double-precision f64, and cross-ISA oracles  | Bit/float-exact accuracy matching C++ reference models (`< 1e-11` ESR / `2.31e-14`)  |
-| **Cabinet IR Convolution**       | Partitioned FFT & Direct FIR convolution engine (.wav IRs)                               | Zero-latency, low-overhead speaker cabinet simulation                                |
-| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`off`, `2x`, `4x`)                                      | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models       |
-| **Activation Math Modes**        | `Standard` (exact precision) vs `Fast` (Padé polynomial minimax approximations)          | User-selectable trade-off between floating-point precision and latency               |
-| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                     | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes |
-| **Comprehensive QA Suite**       | 1,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks      | Enterprise-grade software stability and strict protection against regressions        |
+| Feature / Attribute              | Technical Implementation                                                                      | Benefit & Impact                                                                      |
+|:-------------------------------- |:--------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------- |
+| **Inference Engine**             | Core WaveNet (A1/A2), LSTM (1-layer & 2-layer), ConvNet, and Linear topologies                | Complete model ecosystem compatibility with native Rust DSP speed                     |
+| **RT Safety Determinism**        | Strict Zero Heap Drop, Zero Mutex Locks, 3-Tier Lock-Free GC Cascade                          | Guaranteed audio stability without dropouts/xruns under sub-millisecond deadlines     |
+| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline + optional AVX-512 (BF16/VNNI) multiversioning      | Ultra-low CPU usage (< 37 µs for WaveNet Std, 7.5 µs for LSTM on AMD Ryzen 7)         |
+| **Const-Generic Profiles**       | 23 static variants with Rust const generics for channel counts (`CH=16`, `12`, `8`, `4`, `3`) | Enables compile-time LLVM loop unrolling and register allocation optimization         |
+| **Numerical Parity Oracles**     | Verified against canonical C++ NAMCore f32, double-precision f64, and cross-ISA oracles       | Bit/float-exact accuracy matching C++ reference models (`2.31e-14` to `4.23e-15` ESR) |
+| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)            | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs     |
+| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)                    | Ultra-low overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)             |
+| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`off`, `2x`, `4x`, >100 dB stopband)                         | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models        |
+| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)               | User-selectable trade-off between floating-point precision (+89.5 dB SNR) & latency   |
+| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                          | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes  |
+| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32              | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                           |
+| **Denormal Armor**               | Symmetric `−220 dBFS` dither injection + hardware MXCSR FTZ/DAZ                               | Prevents 10–100× CPU microcode stalls on silence with zero DC drift                   |
+| **Comprehensive QA Suite**       | 1,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks           | Enterprise-grade software stability and strict protection against regressions         |
 
 ---
 
@@ -159,14 +163,14 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 
 ### Rustdoc Module Map
 
-| Module                                                | Purpose                                                      |
-|:----------------------------------------------------- |:------------------------------------------------------------ |
-| [`loader`](src/loader/)                               | Model deserialization & construction (`.nam`, `.namb`)       |
-| [`math`](src/math/)                                   | SIMD math primitives, activation approximations, DSP kernels |
-| [`models`](src/models/)                               | Neural network architectures & `StaticModel` dispatch        |
-| [`dsp`](src/dsp/)                                     | DSP engine: resampling, gating, oversampling, pipeline       |
-| [`common`](src/common/)                               | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
-| `testing`                                             | Off-RT test utilities & perceptual metrics (feature-gated)   |
+| Module                  | Purpose                                                      |
+|:----------------------- |:------------------------------------------------------------ |
+| [`loader`](src/loader/) | Model deserialization & construction (`.nam`, `.namb`)       |
+| [`math`](src/math/)     | SIMD math primitives, activation approximations, DSP kernels |
+| [`models`](src/models/) | Neural network architectures & `StaticModel` dispatch        |
+| [`dsp`](src/dsp/)       | DSP engine: resampling, gating, oversampling, pipeline       |
+| [`common`](src/common/) | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
+| `testing`               | Off-RT test utilities & perceptual metrics (feature-gated)   |
 
 Full API documentation:
 
@@ -180,10 +184,23 @@ Full API documentation:
 
 ## 🏆 Quality & Performance
 
-* **Numerical Fidelity:** The quality contract tracks NAMCore parity, independent f64-oracle error, SNR, and MR-STFT instead of relying on a single metric.
-* **Measured CPU Headroom:** On the logged AMD Ryzen 7 5700U run, WaveNet Standard CH16 processed a 64-sample block in **37.5 µs** (**2.8%** of the 1.33 ms deadline), while LSTM 1x16 used **7.4 µs** (**0.6%**).
+* **Numerical Fidelity:** The quality contract (`docs/quality-contract.json`) tracks NAMCore parity, independent f64-oracle error, SNR (110–144 dB), and MR-STFT (< 1e-5) across 584 lines of per-model baseline envelopes.
+* **Measured CPU Headroom (AMD Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz):**
+  * **WaveNet Standard CH16:** **36.9 µs** (**2.8%** of the 1.33 ms deadline)
+  * **WaveNet Feather CH8:** **19.4 µs** (**1.5%**)
+  * **WaveNet Lite CH12:** **52.6 µs** (**3.9%**)
+  * **WaveNet Nano CH4:** **17.4 µs** (**1.3%**)
+  * **WaveNet A2 Full CH8:** **27.6 µs** (**2.1%**)
+  * **WaveNet A2 Lite CH3:** **18.4 µs** (**1.4%**)
+  * **LSTM 1×16:** **7.5 µs** (**0.6%**)
+  * **LSTM 2×8:** **7.6 µs** (**0.6%**)
+  * **ConvNet:** **10.2 µs** (**0.8%**)
+  * **Linear RF=2048:** **0.3 µs** (**0.02%**)
+  * **Full DSP Pipeline Base (No OS):** **37.2 µs** (**2.8%**)
+  * **Full DSP Pipeline HQ (4× OS):** **150.6 µs** (**11.3%**)
+  * **DSP Resampler (44.1k→48k):** **1.3 µs** | **CabSim IR Medium (512):** **1.3 µs**
 * **Stress Coverage:** Soak, concurrency, heap-audit, deadline, and model-checking suites exercise long-running and real-time invariants; skipped coverage and failed audit phases must be reviewed separately from passing checks.
-* **SIMD Acceleration:** AVX2 baseline (`x86-64-v3`), AVX-512 multiversioning with BF16/VNNI on supported hardware (Intel Sapphire Rapids+, AMD Zen 4+). FastMath activations (tanh, sigmoid) via Padé/minimax polynomial approximations.
+* **SIMD Acceleration:** AVX2 baseline (`x86-64-v3`), AVX-512 multiversioning with BF16/VNNI on supported hardware (Intel Sapphire Rapids+, AMD Zen 4+). FastMath activations (tanh, sigmoid) via Padé/minimax polynomial approximations, with exact-grade `Standard` mode as default.
 
 ---
 
@@ -267,21 +284,21 @@ cat target/logs/quick-receipt.txt   # plus target/logs/quick-phase{1,2,3}.log
 
 The following technical documents are maintained in the source repository. The public Rust API is documented on [docs.rs](https://docs.rs/NeuralAmpModeler-rs).
 
-| Document                                                                                       | Primary Focus & Topic Coverage                                                                         |
-|:---------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](docs/architecture.md)                                                 | Engine architecture, SIMD microarchitecture, mixed precision math, and `.namb` format design           |
-| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)                                     | DSP decision quality trade-off matrix and frequency response analysis                                  |
-| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md)                           | Activation function approximations (Padé / minimax polynomials) and error bound benchmarks             |
-| [`docs/namb-spec.md`](docs/namb-spec.md)                                                       | Binary `.namb` multi-profile container specification, metadata schema, and CRC32 layout                |
-| [`docs/testing.md`](docs/testing.md)                                                           | Test suite layout, verification phases, oracle hierarchy, and testing policies                         |
-| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)                               | Perceptual measurement framework (ESR, MR-STFT, ASR, LUFS) and auditory distance metrics               |
-| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                                             | Bit-exact and float-exact parity audit against canonical C++ NeuralAmpModelerCore                      |
-| [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates                 |
-| [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research                 |
-| [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Engine functional test matrix, runner execution protocols, and human certification record              |
-| [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers                  |
-| [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Quality contract: benchmark and audio fidelity regression baseline thresholds (JSON)                   |
-| [`docs/fixtures.md`](docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures             |
+| Document                                                                                       | Primary Focus & Topic Coverage                                                               |
+|:---------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)                                                 | Engine architecture, SIMD microarchitecture, mixed precision math, and `.namb` format design |
+| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)                                     | DSP decision quality trade-off matrix and frequency response analysis                        |
+| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md)                           | Activation function approximations (Padé / minimax polynomials) and error bound benchmarks   |
+| [`docs/namb-spec.md`](docs/namb-spec.md)                                                       | Binary `.namb` multi-profile container specification, metadata schema, and CRC32 layout      |
+| [`docs/testing.md`](docs/testing.md)                                                           | Test suite layout, verification phases, oracle hierarchy, and testing policies               |
+| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)                               | Perceptual measurement framework (ESR, MR-STFT, ASR, LUFS) and auditory distance metrics     |
+| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                                             | Bit-exact and float-exact parity audit against canonical C++ NeuralAmpModelerCore            |
+| [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates       |
+| [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research       |
+| [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Engine functional test matrix, runner execution protocols, and human certification record    |
+| [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers        |
+| [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Quality contract: benchmark and audio fidelity regression baseline thresholds (JSON)         |
+| [`docs/fixtures.md`](docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures   |
 
 ---
 
