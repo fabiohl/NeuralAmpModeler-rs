@@ -37,8 +37,8 @@ use crate::models::a2::layer::A2Layer;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
 use core::arch::x86_64::{
-    _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
-    _mm256_storeu_ps,
+    _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps,
+    _mm256_setzero_ps, _mm256_storeu_ps,
 };
 
 #[cfg(any(test, feature = "testing"))]
@@ -225,10 +225,32 @@ impl WaveNetA2Dyn {
         let channels = self.channels;
         let in_ch = self.input_channels;
         if in_ch == 1 {
-            for (f, &x) in input[pos..pos + nf].iter().enumerate() {
-                let base = f * channels;
-                for c in 0..channels {
-                    self.layer_in[base + c] = self.rechannel_w_f32[c] * x;
+            if channels >= 8 {
+                let channels_aligned = channels & !7;
+                for (f, &x) in input[pos..pos + nf].iter().enumerate() {
+                    let base = f * channels;
+                    unsafe {
+                        let x_vec = _mm256_set1_ps(x);
+                        let mut c = 0;
+                        while c < channels_aligned {
+                            let rw = _mm256_loadu_ps(self.rechannel_w_f32.as_ptr().add(c));
+                            _mm256_storeu_ps(
+                                self.layer_in.as_mut_ptr().add(base + c),
+                                _mm256_mul_ps(rw, x_vec),
+                            );
+                            c += 8;
+                        }
+                        for c in channels_aligned..channels {
+                            self.layer_in[base + c] = self.rechannel_w_f32[c] * x;
+                        }
+                    }
+                }
+            } else {
+                for (f, &x) in input[pos..pos + nf].iter().enumerate() {
+                    let base = f * channels;
+                    for c in 0..channels {
+                        self.layer_in[base + c] = self.rechannel_w_f32[c] * x;
+                    }
                 }
             }
         } else {

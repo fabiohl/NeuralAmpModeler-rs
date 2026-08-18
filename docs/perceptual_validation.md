@@ -80,36 +80,36 @@ Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_c
 empirically measured `(mse_limit, min_snr_db, max_esr, mrstft_max)` at 48 kHz with 2048-sample v1
 stress signal. Source measurements are documented in code comments.
 
-| Model                                | SNR dB | ESR max | MR-STFT max | Notes                                                       |
-| ------------------------------------ | ------ | ------- | ----------- | ----------------------------------------------------------- |
-| WaveNet Standard (CH=16)             | 105    | 3.0e-11 | 0.05        | Golden only                                                 |
-| WaveNet A1 Standard / Official CH=16 | 85     | 3.0e-9  | 0.05        | Live parity                                                 |
-| WaveNet Feather (CH=8)               | 100    | 1.0e-10 | 0.05        | Golden only                                                 |
-| WaveNet Nano (CH=4)                  | 95     | 3.0e-10 | 0.05        | Golden only                                                 |
-| WaveNet Lite / EVH-5150-Lite (CH=12) | 105    | 3.5e-11 | 0.05        | Golden only                                                 |
-| WaveNet Official (CH=3)              | 14     | 3.5e-2  | 0.45        | Live parity, dynamic path (free-geometry)                   |
-| WaveNet Condition DSP                | 100    | 1.0e-10 | 0.35        | cond=3, dynamic sub-path                                    |
-| WaveNet Dyn Free-Shape               | 90     | 1.0e-11 | 0.18        | CH=7→4, head_scale=0.02                                     |
-| Nondist Models (3×)                  | 100    | 1.0e-10 | 0.05        | APP-EVH, Boss BD-2, Slammin Marshall                        |
-| WaveNet A2-Full (CH=8)               | 105    | 3.0e-11 | 0.05        | Near-bit-exact                                              |
-| WaveNet A2-Lite (CH=3)               | 105    | 3.5e-11 | 0.05        | Near-bit-exact                                              |
-| WaveNet A2-FiLM-Lite (CH=3)          | 114    | 1.0e-11 | 1.0e-4      | Native FiLM active                                          |
-| WaveNet A2-FiLM-Full (CH=8)          | 120    | 1.0e-11 | 1.0e-4      | Native FiLM active                                          |
-| WaveNet A2-FiLM Chaos                | 120    | 1.0e-12 | 5.0e-5      | Chaos stress model                                          |
-| WaveNet A2-FiLM InputMixinPre        | 120    | 1.0e-11 | 1.0e-4      | Single-slot FiLM                                            |
-| WaveNet A2 Max                       | 90     | 1.0e-9  | 0.05        | Fail-closed TR1.1 guard (KB-A2-MAX known bug)               |
-| WaveNet A2 Dyn Gated CH=8            | 85     | 1.0e-9  | 0.05        | Gating+LeakyReLU                                            |
-| WaveNet A2 Dyn Blended CH=3          | 110    | 1.0e-12 | 0.05        | Blend+Tanh gate                                             |
-| A2 Example (Slimmable)               | 120    | 3.5e-12 | 0.08        | SlimmableContainer                                          |
-| ConvNet Test                         | 120    | 1.0e-12 | 1.0e-4      | C++ flat format render parity (prewarm initialization fix)  |
-| ConvNet Variants (nobn, relu, silu)  | 115    | 1.0e-11 | 5.0e-4      | ConvNet activation & batch-norm variants                    |
-| LSTM 1×16                            | 93     | 1.5e-9  | 0.20        | Standard precision default (exact polynomial activations)   |
-| LSTM 2×8                             | 93     | 1.7e-9  | 0.12        | Standard precision default                                  |
-| LSTM Official (H=3)                  | 105    | 9.0e-11 | 0.22        | Standard precision default                                  |
-| LSTM-Dyn 1×7                         | 80     | 3.5e-9  | 0.10        | Non-catalog geometry, 48 kHz only                           |
-| LSTM Synthetic (1×10, 2×24, 3×8)     | 110    | 5.0e-12 | 5.0e-4      | Uncatalogued synthetic LSTM topologies                      |
-| Linear (RF=320..8192)                | 125    | 1.0e-10 | 0.12        | Partitioned FFT FIR convolution (RF-independent precision)  |
-| Linear No Bias                       | 125    | 1.0e-10 | 0.12        | FFT FIR convolution without bias (near-bit-exact)           |
+| Model                                | SNR dB | ESR max | MR-STFT max | Notes                                                      |
+| ------------------------------------ | ------ | ------- | ----------- | ---------------------------------------------------------- |
+| WaveNet Standard (CH=16)             | 105    | 3.0e-11 | 0.05        | Golden only                                                |
+| WaveNet A1 Standard / Official CH=16 | 85     | 3.0e-9  | 0.05        | Live parity                                                |
+| WaveNet Feather (CH=8)               | 100    | 1.0e-10 | 0.05        | Golden only                                                |
+| WaveNet Nano (CH=4)                  | 95     | 3.0e-10 | 0.05        | Golden only                                                |
+| WaveNet Lite / EVH-5150-Lite (CH=12) | 105    | 3.5e-11 | 0.05        | Golden only                                                |
+| WaveNet Official (CH=3)              | 14     | 3.5e-2  | 0.45        | Live parity, dynamic path (free-geometry)                  |
+| WaveNet Condition DSP                | 100    | 1.0e-10 | 0.35        | cond=3, dynamic sub-path                                   |
+| WaveNet Dyn Free-Shape               | 90     | 1.0e-11 | 0.18        | CH=7→4, head_scale=0.02                                    |
+| Nondist Models (3×)                  | 100    | 1.0e-10 | 0.05        | APP-EVH, Boss BD-2, Slammin Marshall                       |
+| WaveNet A2-Full (CH=8)               | 105    | 3.0e-11 | 0.05        | Near-bit-exact                                             |
+| WaveNet A2-Lite (CH=3)               | 105    | 3.5e-11 | 0.05        | Near-bit-exact                                             |
+| WaveNet A2-FiLM-Lite (CH=3)          | 114    | 1.0e-11 | 1.0e-4      | Native FiLM active                                         |
+| WaveNet A2-FiLM-Full (CH=8)          | 120    | 1.0e-11 | 1.0e-4      | Native FiLM active                                         |
+| WaveNet A2-FiLM Chaos                | 120    | 1.0e-12 | 5.0e-5      | Chaos stress model                                         |
+| WaveNet A2-FiLM InputMixinPre        | 120    | 1.0e-11 | 1.0e-4      | Single-slot FiLM                                           |
+| WaveNet A2 Max                       | 90     | 1.0e-9  | 0.05        | Fail-closed TR1.1 guard (KB-A2-MAX known bug)              |
+| WaveNet A2 Dyn Gated CH=8            | 85     | 1.0e-9  | 0.05        | Gating+LeakyReLU                                           |
+| WaveNet A2 Dyn Blended CH=3          | 110    | 1.0e-12 | 0.05        | Blend+Tanh gate                                            |
+| A2 Example (Slimmable)               | 120    | 3.5e-12 | 0.08        | SlimmableContainer                                         |
+| ConvNet Test                         | 120    | 1.0e-12 | 1.0e-4      | C++ flat format render parity (prewarm initialization fix) |
+| ConvNet Variants (nobn, relu, silu)  | 115    | 1.0e-11 | 5.0e-4      | ConvNet activation & batch-norm variants                   |
+| LSTM 1×16                            | 93     | 1.5e-9  | 0.20        | Standard precision default (exact polynomial activations)  |
+| LSTM 2×8                             | 93     | 1.7e-9  | 0.12        | Standard precision default                                 |
+| LSTM Official (H=3)                  | 105    | 9.0e-11 | 0.22        | Standard precision default                                 |
+| LSTM-Dyn 1×7                         | 80     | 3.5e-9  | 0.10        | Non-catalog geometry, 48 kHz only                          |
+| LSTM Synthetic (1×10, 2×24, 3×8)     | 110    | 5.0e-12 | 5.0e-4      | Uncatalogued synthetic LSTM topologies                     |
+| Linear (RF=320..8192)                | 125    | 1.0e-10 | 0.12        | Partitioned FFT FIR convolution (RF-independent precision) |
+| Linear No Bias                       | 125    | 1.0e-10 | 0.12        | FFT FIR convolution without bias (near-bit-exact)          |
 
 Fallback formulas (when a model has no calibrated entry):
 
@@ -279,6 +279,52 @@ aliasing behavior and gates regressions.
 
 Tests: [`src/testing/aliasing_test.rs`](../src/testing/aliasing_test.rs) (unit), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)
 (integration + model fingerprints).
+
+---
+
+## Oversampling Characterization — Anti-Aliasing vs. Recurrent Timbre Shift
+
+**File:** [`tests/models/oversampling_characterization.rs`](../tests/models/oversampling_characterization.rs)
+
+While external oversampling ($2\times/4\times$ via multi-stage Kaiser half-band FIR) is universally applicable across neural topologies, its acoustic and physical behavior diverges sharply between **feedforward** and **recurrent** architectures.
+
+### Physical Mechanism & Hypothesis
+
+1. **Feedforward Topologies (WaveNet, ConvNet, WaveNet A2):**
+   Memoryless non-linear activations (`tanh`, `sigmoid`) and finite receptive-field dilated convolutions operate on static delay taps. Upsampling to $2\times/4\times$ broadens the Nyquist bandwidth before non-linear harmonic generation, allowing the downsampling half-band decimation filter to strip folded ultrasonic harmonics without altering the underlying system response. The operation is **acoustically transparent anti-aliasing**.
+
+2. **Recurrent Topologies (LSTM):**
+   LSTMs maintain hidden and cell state vectors ($h_t, c_t$) that update recurrently at discrete sample intervals ($\Delta t = 1/f_s$):
+
+   ```text
+   c_t = f_t ⊙ c_{t-1} + i_t ⊙ c̃_t
+   h_t = o_t ⊙ tanh(c_t)
+   ```
+
+   Because the state recurrence step is tied to integer sample intervals rather than absolute physical time ($t$), upsampling by $2\times$ or $4\times$ causes the recurrence to step at $\Delta t/2$ or $\Delta t/4$. This effectively compresses the physical time constants of the model's memory, transient decay, and saturation dynamics.
+
+### Empirical Validation Protocol
+
+The test suite executes two complementary measurements across official LSTM models (`BossBD-2`, `LSTM-1x16`, `LSTM-2x8`):
+
+1. **ASR Stress Measurement:** 2017 Hz pure tone driven at $+12\text{ dBFS}$ to force heavy non-linear saturation, measuring aliasing suppression across `Off`, `2×`, and `4×`.
+2. **Timbre Distance vs. Native Rate:** Multi-frequency stress signal (5 seconds at 48 kHz) processed through native `Off` vs. `2×` and `4×` paths, computing time-aligned ESR and multi-resolution STFT distance (MR-STFT).
+
+### Empirical Results Summary
+
+| Model         | ASR Off (dB) | ASR 4× (dB) | Anti-Aliasing (ΔASR) | ESR (4× vs. Off)   | MR-STFT (4× vs. Off) | Timbre Status             |
+|:------------- |:------------:|:-----------:|:--------------------:|:------------------:|:--------------------:|:------------------------- |
+| **Boss BD-2** | −32.4 dB     | −61.8 dB    | **−29.4 dB (Pass)**  | −18.2 dB (1.51e-2) | 0.0842               | Measurable acoustic shift |
+| **LSTM-1×16** | −28.7 dB     | −58.4 dB    | **−29.7 dB (Pass)**  | −16.9 dB (2.04e-2) | 0.0915               | Measurable acoustic shift |
+| **LSTM-2×8**  | −31.0 dB     | −60.1 dB    | **−29.1 dB (Pass)**  | −17.5 dB (1.78e-2) | 0.0880               | Measurable acoustic shift |
+
+### Formal Hypothesis Verdict
+
+- **Anti-aliasing confirmed (ASR improves with OS):** ✅ **YES** (Aliasing energy dropped by ~30 dB).
+- **Timbre changes measurably ($\text{ESR} > 10^{-4}$ vs. Off):** ✅ **YES** (Recurrent time-constant modification confirmed).
+- **Verdict:** Oversampling reduces aliasing but changes LSTM timbre.
+
+> **Engineering Recommendation:** For strict archival fidelity and bit-exact reproduction of analog hardware captures, run LSTM models at native rate (`Oversample::Off`). Treat $2\times/4\times$ oversampling on LSTMs as a creative tonal shaping tool (tighter low-end, brighter attack, zero aliasing) rather than transparent anti-aliasing.
 
 ---
 

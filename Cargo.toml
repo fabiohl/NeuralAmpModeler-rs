@@ -206,13 +206,19 @@ allow_attributes = "warn"
 
 [profile.release]
 strip = true
-lto = "fat"
+lto = "thin"
 opt-level = 3
 codegen-units = 1
 panic = "unwind"
 
+[profile.bench]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+
 [profile.dist]
 inherits = "release"
+lto = "fat"
 panic = "abort"
 
 [profile.dev]
