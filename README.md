@@ -94,12 +94,12 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 
 ### Feature Flags
 
-| Feature          | Description                                                              |
-|:---------------- |:------------------------------------------------------------------------ |
-| `stereo`         | Enables multi-channel / stereo dual-model loader support                 |
-| `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics |
-| `heap-audit`     | Enables heap-allocation auditing infrastructure                          |
-| `long_bench`     | Enables long-form inference benchmarks                                   |
+| Feature          | Description                                                                                            |
+|:---------------- |:------------------------------------------------------------------------------------------------------ |
+| `stereo`         | Enables multi-channel / stereo dual-model loader support                                               |
+| `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics                               |
+| `heap-audit`     | Enables heap-allocation auditing infrastructure                                                        |
+| `long_bench`     | Enables long-form inference benchmarks                                                                 |
 | `dynamic-engine` | Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies |
 
 ---
@@ -304,7 +304,7 @@ The following technical documents are maintained in the source repository. The p
 
 ### AI Transparency Note
 
-The system architecture, core DSP engineering decisions, mathematical verification framework, and project orchestration are the intellectual work of the maintainer (**Fábio Henrique de Lima Silva**). The implementation was accelerated through pair programming (*Vibe Coding*) using artificial intelligence models (Gemini, Claude, DeepSeek) within Google Antigravity IDE and Kilo Code.
+The system architecture, core DSP engineering decisions, mathematical verification framework, and project orchestration are intellectual work (and love) of the maintainer (**Fábio Lima**). The implementation was accelerated through pair programming (*Vibe Coding*) using artificial intelligence models (Gemini, Claude, Grok, DeepSeek and others) within Google Antigravity IDE and Kilo Code. IA is just a tool that make wonder in wise hands.
 
 ### License
 
