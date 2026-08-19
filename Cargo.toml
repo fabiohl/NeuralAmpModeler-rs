@@ -42,7 +42,7 @@ thiserror = "2.0"
 # POSIX calls (mlockall, prctl THP) for system utilities.
 libc = "0.2.189"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
-rtrb = "0.3.4"
+rtrb = "0.4.0"
 # .nam (JSON) model deserialization.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
