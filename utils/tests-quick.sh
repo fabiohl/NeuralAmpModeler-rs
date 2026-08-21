@@ -177,8 +177,13 @@ if [ ${#GAPS[@]} -gt 0 ]; then
     done
     echo -e "${YELLOW}FIDELITY: INCOMPLETE${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A${NC}"
-    echo -e "${YELLOW}${BOLD}OVERALL: PASSED_WITH_GAPS${NC}"
-    emit "OVERALL: PASSED_WITH_GAPS"
+    echo -e "\n${YELLOW}${BOLD}================================================================================${NC}"
+    echo -e "  ${BOLD}Artifacts saved:${NC}"
+    echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
+    echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
+    echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
+    echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
+    echo -e "${YELLOW}${BOLD}================================================================================${NC}\n"
     if [ "${NAM_QUICK_STRICT:-0}" = "1" ]; then
         echo -e "${RED}${BOLD}FAIL: NAM_QUICK_STRICT=1 treats gaps as failure${NC}"
         emit "OVERALL: FAIL reason=strict_gaps"
@@ -190,3 +195,12 @@ fi
 echo -e "${GREEN}FIDELITY: OK${NC}"
 echo -e "${BLUE}PERFORMANCE: N/A${NC}"
 emit "OVERALL: PASSED"
+
+echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
+echo -e "${GREEN}${BOLD}✓ Quick QA Suite completed successfully!${NC}"
+echo -e "  ${BOLD}Artifacts saved:${NC}"
+echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
+echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
+echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
+echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
+echo -e "${GREEN}${BOLD}================================================================================${NC}\n"

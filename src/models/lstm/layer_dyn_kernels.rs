@@ -7,7 +7,6 @@
 //! from `crate::math::gemm` and `crate::math::lstm`, which infer dimensions
 //! directly from slice lengths at runtime.
 
-use crate::dispatch_simd;
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
 use crate::math::activations::scalar_minimax_sigmoid;
@@ -151,74 +150,18 @@ impl LstmLayerDyn {
 }
 
 // =========================================================================
-// AVX-512 specialization (F+VL)
-// =========================================================================
-
-impl LstmLayerDyn {
-    /// Processes a sample through the dynamic LSTM layer using AVX-512F+VL.
-    ///
-    /// # Safety
-    /// The caller must have verified AVX-512F+VL CPU support.
-    #[target_feature(enable = "avx512f,avx512vl")]
-    pub unsafe fn process_sample_avx512(&mut self, input: &[f32]) {
-        let i = self.input_size;
-        let h = self.hidden_size;
-        let ih = i + h;
-        let stride = ih * h;
-
-        self.state[..i].copy_from_slice(&input[..i]);
-
-        _mm_prefetch::<_MM_HINT_T0>(self.state.as_ptr().cast::<i8>());
-
-        unsafe {
-            crate::math::gemm::gemv_4gate_avx512(
-                &self.state[..ih],
-                &self.input_hidden_weights[0..stride],
-                &self.input_hidden_weights[stride..2 * stride],
-                &self.input_hidden_weights[2 * stride..3 * stride],
-                &self.input_hidden_weights[3 * stride..4 * stride],
-                &self.bias[..4 * h],
-                &mut self.gates[..4 * h],
-                true,
-            );
-        }
-
-        let (gates_slice, _rest) = &mut self.gates.split_at_mut(4 * h);
-        let (cell_slice, _) = &mut self.cell_state.split_at_mut(h);
-        let (cell_err_slice, _) = &mut self.cell_error.split_at_mut(h);
-        let hidden_slice = &mut self.state[i..];
-        unsafe {
-            crate::math::lstm::fused_lstm_gates_dyn_avx512(
-                gates_slice,
-                cell_slice,
-                cell_err_slice,
-                hidden_slice,
-                h,
-            );
-        }
-    }
-}
-
-// =========================================================================
 // Dispatch helper — selects the right kernel at call site
 // =========================================================================
 
 impl LstmLayerDyn {
-    /// Dispatches to the highest available SIMD kernel based on global config.
+    /// Processes a sample through the dynamic LSTM layer.
     ///
-    /// Calls the matching `#[target_feature]` method, which is safe because
-    /// the global `SIMD_MATH` configuration was validated against the CPU
-    /// at application startup.
+    /// Routes to the baseline x86-64-v3 AVX2 kernel (dynamic LSTM is a fallback
+    /// topology where AVX-512 duplication has low ROI).
     #[inline]
     pub fn process(&mut self, input: &[f32]) {
         unsafe {
-            dispatch_simd!(
-                @self,
-                process_sample_avx512,
-                process_sample_avx512,
-                process_sample_avx2,
-                input
-            );
+            self.process_sample_avx2(input);
         }
     }
 }

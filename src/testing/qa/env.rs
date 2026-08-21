@@ -77,7 +77,7 @@ pub fn parse_cpuinfo(text: &str) -> CpuInfo {
 pub fn classify_isa(flags_line: &str) -> &'static str {
     let flags: Vec<&str> = flags_line.split_whitespace().collect();
     let has = |flag: &str| flags.contains(&flag);
-    if has("avx512f") {
+    if has("avx512f") && has("avx512vl") {
         ISA_AVX512
     } else if has("avx")
         && has("avx2")

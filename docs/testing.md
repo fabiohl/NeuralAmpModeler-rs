@@ -221,7 +221,7 @@ The project includes a comprehensive measurement framework for audio fidelity as
 
 - **Two references:** Parity (C++ NAMCore f32) measures implementation agreement; absolute (f64 Oracle) measures intrinsic quality loss from f32 approximations.
 - **ESR as primary gate:** Normalizes error by reference energy — invariant to linear scale mismatch.
-- **ISA parity:** End-to-end cross-ISA determinism via `TEST_ISA_OVERRIDE`. Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets. Full cross-ISA matrix (AVX-512/VNNI+BF16) and per-model spectral baselines are long-suite only (`#[ignore]`d in quick); quick covers AVX2 self-consistency + synthetic spectral.
+- **ISA parity:** End-to-end cross-ISA determinism via `TEST_ISA_OVERRIDE`. Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets. Production cross-ISA targets AVX-512 f32, while legacy VNNI+BF16 tests remain evaluation checkpoints (`#[ignore]`d in quick); quick covers AVX2 self-consistency + synthetic spectral.
 - **MR-STFT dual gate:** Hard gate at 44.1/48 kHz (`mrstft_max` calibrated per model); soft informational gate at higher sample rates (88.2–192 kHz).
 - **RT-safety:** All metrics run off-RT. Hot-path audio processing uses sample-peak detection only.
 

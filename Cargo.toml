@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.94.0"
 license = "Apache-2.0"
@@ -168,6 +168,11 @@ name = "nam_perf_gate"
 path = "src/bin/nam_perf_gate.rs"
 required-features = ["testing"]
 
+[[bin]]
+name = "nam_remote_simd_receipt"
+path = "src/bin/nam_remote_simd_receipt.rs"
+required-features = ["testing"]
+
 [[example]]
 name = "load_model"
 path = "examples/load_model.rs"
@@ -203,6 +208,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [lints.clippy]
 allow_attributes = "warn"
+chunks_exact_to_as_chunks = "allow"
 
 [profile.release]
 strip = true

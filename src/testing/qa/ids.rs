@@ -15,6 +15,13 @@
 //! `benches/regression_gate.rs` (bench label → contract performance id +
 //! fixture). Both tables are guarded by consistency tests against their Rust
 //! sources, so they can never silently drift from the catalog or the bench.
+//!
+//! S3 added the contract-label-family → f64-oracle fixture table: the ingest
+//! join of `esr_f64` onto the fidelity records that `verify_contract` reads.
+//! Unlike the catalog table, this one **is** a port of the legacy bash
+//! `ESR_F64_MODEL_MAP` (pre-`nam_quality` `verify_contract`), because no Rust
+//! source predates it — the join key is the family part of the contract
+//! fidelity label, which neither the catalog nor the bench table carries.
 
 #[cfg(test)]
 use super::super::catalog::GOLDEN_GEN_CATALOG;
@@ -227,6 +234,128 @@ pub fn resolve_rt_contract_id(bench_label: &str) -> Option<&'static str> {
         .map(|entry| entry.contract_id)
 }
 
+/// Contract fidelity-label family → f64-oracle fixture projection.
+///
+/// Port of the legacy bash `ESR_F64_MODEL_MAP` of the pre-`nam_quality`
+/// `verify_contract` (removed in the S2 refactor, which lost the `esr_f64`
+/// join). The key is the *family* part of a contract fidelity label — the
+/// label minus the ` @<rate> Live` suffix (e.g. `BossWN-standard` of
+/// `BossWN-standard @48000 Live`); the value is the fixture file whose
+/// prewarm-paired ESR the `reference_oracle_f64` phase measures. The ingest
+/// joins that value onto the fidelity record as `esr_f64`, restoring the
+/// verify key that `verify_contract` reads.
+///
+/// Guarded by `f64_oracle_fixture_table_covers_every_contract_esr_f64_entry`
+/// against `docs/quality-contract.json`, so it can never silently drift from
+/// the contract.
+pub static F64_ORACLE_FIXTURE_TABLE: &[(&str, &str)] = &[
+    ("BossWN-standard", "BossWN-standard.nam"),
+    ("BossWN-feather", "BossWN-feather.nam"),
+    ("BossWN-nano", "BossWN-nano.nam"),
+    ("EVH-5150-Lite", "EVH-5150-Lite.nam"),
+    ("wavenet_a1_standard (Official)", "wavenet_a1_standard.nam"),
+    (
+        "WaveNet Condition DSP (CH=3, cond=3, dynamic path) C++ cross-reference",
+        "wavenet_condition_dsp.nam",
+    ),
+    (
+        "WaveNet Official (CH=3, dynamic path) C++ cross-reference",
+        "wavenet_official.nam",
+    ),
+    (
+        "WaveNetDyn Free-Shape (CH=7→4, dynamic path) C++ cross-reference",
+        "wavenet_dyn_free.nam",
+    ),
+    ("BossLSTM-1x16", "BossLSTM-1x16.nam"),
+    ("BossLSTM-2x8", "BossLSTM-2x8.nam"),
+    ("lstm (Official)", "lstm.nam"),
+    (
+        "LSTM-Dyn 1×7 (dynamic path) C++ cross-reference",
+        "lstm_dyn_test.nam",
+    ),
+    (
+        "WaveNet A2-Full (CH=8) C++ cross-reference",
+        "wavenet_a2_full.nam",
+    ),
+    (
+        "WaveNet A2-Lite (CH=3) C++ cross-reference",
+        "wavenet_a2_lite.nam",
+    ),
+    (
+        "Container A2-Full (CH=8) C++ cross-reference",
+        "wavenet_a2_full.nam",
+    ),
+    (
+        "Container A2-Lite (CH=3) C++ cross-reference",
+        "wavenet_a2_lite.nam",
+    ),
+    (
+        "Container File A2-Lite (CH=3) C++ cross-reference",
+        "wavenet_a2_lite.nam",
+    ),
+    (
+        "Container File A2-Full (CH=8) C++ cross-reference",
+        "wavenet_a2_full.nam",
+    ),
+    (
+        "SlimmableContainer A2 Example (CH=3→6) C++ cross-reference",
+        // Deliberate: the contract's `esr_f64` baselines for the
+        // SlimmableContainer A2 Example and the A2-Lite family are IDENTICAL
+        // (1.82e-14) — the legacy bash `ESR_F64_MODEL_MAP` used the A2-Lite
+        // fixture for this family, and `--save` recorded its value. The
+        // golden catalog's `a2_example.nam` is a different fixture (CH=8)
+        // that the f64-oracle phase does not measure.
+        "wavenet_a2_lite.nam",
+    ),
+    (
+        "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference",
+        "a2_dynamic_gated_ch8.nam",
+    ),
+    (
+        "WaveNet A2 Dynamic Blended (CH=3, blended layers 2/23) C++ cross-reference",
+        "a2_dynamic_blended_ch3.nam",
+    ),
+    (
+        "WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference",
+        "wavenet_a2_film_lite.nam",
+    ),
+    (
+        "WaveNet A2-FiLM Chaos Stress (CH=3, FiLM active) C++ cross-reference",
+        "wavenet_a2_film_chaos_stress.nam",
+    ),
+    (
+        "WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference",
+        "wavenet_a2_film_full.nam",
+    ),
+    (
+        "WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference",
+        "wavenet_a2_film_input_mixin_pre.nam",
+    ),
+    ("ConvNet Test", "convnet_test.nam"),
+    ("Quick LSTM 1×16", "BossLSTM-1x16.nam"),
+    ("Quick WaveNet CH16", "BossWN-standard.nam"),
+    ("Quick A2-Full", "wavenet_a2_full.nam"),
+];
+
+/// Family part of a contract fidelity label — everything before the
+/// ` @<rate> Live` suffix (v1 golden, v2 golden and cpp-parity shapes all
+/// end with ` @… Live`). Labels without the suffix resolve to themselves.
+pub fn fidelity_label_family(label: &str) -> &str {
+    label
+        .split_once(" @")
+        .map(|(family, _)| family)
+        .unwrap_or(label)
+}
+
+/// Resolves the family part of a contract fidelity label to the f64-oracle
+/// fixture file that measures its prewarm-paired ESR.
+pub fn resolve_f64_oracle_fixture(family: &str) -> Option<&'static str> {
+    F64_ORACLE_FIXTURE_TABLE
+        .iter()
+        .find(|(label_family, _)| *label_family == family)
+        .map(|(_, fixture)| *fixture)
+}
+
 /// Resolves a Criterion bench label to the fixture file it loads.
 ///
 /// Returns `None` for DSP-infrastructure benches, which exercise components
@@ -366,5 +495,67 @@ mod tests {
         assert_eq!(resolve_rt_fixture("RT_Linear"), Some("linear_test.nam"));
         assert_eq!(resolve_rt_fixture("RT_DSP_CabSim_IR_Medium"), None);
         assert_eq!(resolve_rt_fixture("RT_DSP_Pipeline_HQ_4xOS"), None);
+    }
+
+    /// Every contract fidelity entry with a finite `esr_f64` baseline must
+    /// resolve to an f64-oracle fixture through its label family — the ingest
+    /// join would otherwise leave the verify key unmeasured and the contract
+    /// check would fail with `ESR_F64 missing from report`.
+    #[test]
+    fn f64_oracle_fixture_table_covers_every_contract_esr_f64_entry() {
+        use crate::testing::qa::QualityContract;
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/quality-contract.json");
+        let content = std::fs::read_to_string(&path).expect("read docs/quality-contract.json");
+        let contract = QualityContract::from_json_str(&content)
+            .expect("contract must validate against the schema");
+        let mut covered = 0;
+        for entry in &contract.fidelity {
+            if let Some(baseline) = entry.esr_f64.filter(|v| v.is_finite()) {
+                let family = fidelity_label_family(&entry.label);
+                let fixture = resolve_f64_oracle_fixture(family);
+                assert!(
+                    fixture.is_some(),
+                    "contract esr_f64 entry '{}' (family '{family}', baseline {baseline:e}) \
+                     has no f64-oracle fixture — ingest cannot join esr_f64",
+                    entry.label
+                );
+                covered += 1;
+            }
+        }
+        assert!(
+            covered > 0,
+            "contract must carry at least one finite esr_f64 baseline"
+        );
+    }
+
+    /// The family stripping must match the canonical label shapes: v1 golden
+    /// (`@48000 Live`), v2 golden (`@<sr> (v2) Live`) and cpp-parity
+    /// (`@<sr> Live`) all resolve to the same family prefix.
+    #[test]
+    fn fidelity_label_family_strips_the_rate_suffix() {
+        assert_eq!(
+            fidelity_label_family("BossWN-standard @48000 Live"),
+            "BossWN-standard"
+        );
+        assert_eq!(
+            fidelity_label_family("Quick A2-Full v2 @48000 Live"),
+            "Quick A2-Full v2"
+        );
+        assert_eq!(
+            fidelity_label_family("LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live"),
+            "LSTM-Dyn 1×7 (dynamic path) C++ cross-reference"
+        );
+        assert_eq!(
+            resolve_f64_oracle_fixture(fidelity_label_family("Quick WaveNet CH16 @48000 Live")),
+            Some("BossWN-standard.nam")
+        );
+        assert_eq!(
+            resolve_f64_oracle_fixture(fidelity_label_family(
+                "WaveNet A2-Lite (CH=3) C++ cross-reference @48000 Live"
+            )),
+            Some("wavenet_a2_lite.nam")
+        );
+        assert_eq!(resolve_f64_oracle_fixture("no-such-family"), None);
     }
 }

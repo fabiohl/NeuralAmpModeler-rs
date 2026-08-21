@@ -140,7 +140,12 @@ pub enum NamErrorCode {
     GcCorrupted,
     /// Memory allocation failed (OOM) — layout overflow or allocator exhaustion.
     OutOfMemory,
+    /// Host CPU lacks required x86-64-v3 feature set (AVX2/FMA).
+    UnsupportedCpuArchitecture,
 }
+
+/// Convenience type alias for `NamErrorCode`.
+pub type NamError = NamErrorCode;
 
 impl NamErrorCode {
     /// Returns the numeric code in "Exxxx" format.
@@ -190,6 +195,7 @@ impl NamErrorCode {
             Self::CtrlCHandlerFailed => "E4102",
             Self::IrLoadFailed => "E4103",
             Self::OutOfMemory => "E5000",
+            Self::UnsupportedCpuArchitecture => "E5001",
         }
     }
 
@@ -250,6 +256,9 @@ impl NamErrorCode {
             Self::CtrlCHandlerFailed => "Ctrl-C handler setup failed",
             Self::IrLoadFailed => "Cab-sim IR load failed",
             Self::OutOfMemory => "Out of memory",
+            Self::UnsupportedCpuArchitecture => {
+                "Host CPU lacks required x86-64-v3 feature set (AVX2/FMA)"
+            }
         }
     }
 
@@ -300,6 +309,7 @@ impl NamErrorCode {
             Self::CtrlCHandlerFailed => "CTRL_C_HANDLER_FAILED",
             Self::IrLoadFailed => "IR_LOAD_FAILED",
             Self::OutOfMemory => "OUT_OF_MEMORY",
+            Self::UnsupportedCpuArchitecture => "UNSUPPORTED_CPU_ARCHITECTURE",
         }
     }
 }

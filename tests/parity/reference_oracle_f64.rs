@@ -1398,43 +1398,69 @@ fn test_oracle_warmup_paired_a2() {
 
 // ── Summary table ──────────────────────────────────────────────────────────
 
+/// The (fixture, family) set measured by the f64-oracle summary table.
+///
+/// This is the **sole emitter** of the `kind: "f64_table"` rows that
+/// `nam_quality ingest` joins onto fidelity records as `esr_f64`
+/// (`ids::F64_ORACLE_FIXTURE_TABLE`). Hoisted to module scope so a guard test
+/// can bind the two sources together: if a fixture here is renamed or
+/// removed, `f64_oracle_fixture_table_matches_summary_models` fails instead
+/// of silently leaving the join key unmeasured.
+const SUMMARY_MODELS: &[(&str, &str)] = &[
+    ("wavenet_official.nam", "WaveNet"),
+    ("lstm.nam", "LSTM"),
+    ("wavenet_a2_lite.nam", "WaveNet(A2)"),
+    ("convnet_test.nam", "ConvNet"),
+    ("wavenet_a2_film_lite.nam", "A2-FiLM-Lite"),
+    ("wavenet_a2_film_full.nam", "A2-FiLM-Full"),
+    (
+        "wavenet_a2_film_input_mixin_pre.nam",
+        "A2-FiLM-InputMixinPre",
+    ),
+    ("BossWN-standard.nam", "BossWN-standard"),
+    ("BossWN-feather.nam", "BossWN-feather"),
+    ("BossWN-nano.nam", "BossWN-nano"),
+    ("wavenet_a1_standard.nam", "wavenet_a1_standard"),
+    ("BossLSTM-1x16.nam", "BossLSTM-1x16"),
+    ("BossLSTM-2x8.nam", "BossLSTM-2x8"),
+    ("lstm_dyn_test.nam", "LSTMDyn"),
+    ("wavenet_a2_full.nam", "A2Full"),
+    ("a2_dynamic_gated_ch8.nam", "A2DynGated"),
+    ("a2_dynamic_blended_ch3.nam", "A2DynBlended"),
+    ("wavenet_a2_film_chaos_stress.nam", "A2FiLMChaos"),
+    ("wavenet_dyn_free.nam", "WaveNetDynFree"),
+    ("wavenet_condition_dsp.nam", "WaveNetCondDSP"),
+    ("EVH-5150-Lite.nam", "EVH-5150-Lite"),
+];
+
+/// Every fixture that `nam_quality ingest` keys the `esr_f64` join on must be
+/// measured by `test_summary_table` — otherwise the contract check degrades
+/// from a wrong-value join to a silent `ESR_F64 missing` (or worse, a stale
+/// filename that never matches). This binds `ids::F64_ORACLE_FIXTURE_TABLE`
+/// to the phase's measured set (contract ↔ table ↔ phase triangle).
+#[test]
+fn f64_oracle_fixture_table_matches_summary_models() {
+    use neural_amp_modeler_rs::testing::qa::ids::F64_ORACLE_FIXTURE_TABLE;
+    let measured: Vec<&str> = SUMMARY_MODELS.iter().map(|(f, _)| *f).collect();
+    for (family, fixture) in F64_ORACLE_FIXTURE_TABLE {
+        assert!(
+            measured.contains(fixture),
+            "contract family '{family}' joins on '{fixture}', which test_summary_table \
+             does not measure — the esr_f64 join would silently miss"
+        );
+    }
+}
+
 #[test]
 fn test_summary_table() {
-    let models: Vec<(&str, &str)> = vec![
-        ("wavenet_official.nam", "WaveNet"),
-        ("lstm.nam", "LSTM"),
-        ("wavenet_a2_lite.nam", "WaveNet(A2)"),
-        ("convnet_test.nam", "ConvNet"),
-        ("wavenet_a2_film_lite.nam", "A2-FiLM-Lite"),
-        ("wavenet_a2_film_full.nam", "A2-FiLM-Full"),
-        (
-            "wavenet_a2_film_input_mixin_pre.nam",
-            "A2-FiLM-InputMixinPre",
-        ),
-        ("BossWN-standard.nam", "BossWN-standard"),
-        ("BossWN-feather.nam", "BossWN-feather"),
-        ("BossWN-nano.nam", "BossWN-nano"),
-        ("wavenet_a1_standard.nam", "wavenet_a1_standard"),
-        ("BossLSTM-1x16.nam", "BossLSTM-1x16"),
-        ("BossLSTM-2x8.nam", "BossLSTM-2x8"),
-        ("lstm_dyn_test.nam", "LSTMDyn"),
-        ("wavenet_a2_full.nam", "A2Full"),
-        ("a2_dynamic_gated_ch8.nam", "A2DynGated"),
-        ("a2_dynamic_blended_ch3.nam", "A2DynBlended"),
-        ("wavenet_a2_film_chaos_stress.nam", "A2FiLMChaos"),
-        ("wavenet_dyn_free.nam", "WaveNetDynFree"),
-        ("wavenet_condition_dsp.nam", "WaveNetCondDSP"),
-        ("EVH-5150-Lite.nam", "EVH-5150-Lite"),
-    ];
+    for &(filename, family) in SUMMARY_MODELS {
+        println!("\n=== ESR(f32 vs f64 oracle) Summary (prewarm-paired: 24k + 256) ===");
+        println!(
+            "{:<40} {:<20} {:<15} {:<15}",
+            "Model", "Family", "ESR linear", "ESR (dB)"
+        );
+        println!("{}", "-".repeat(90));
 
-    println!("\n=== ESR(f32 vs f64 oracle) Summary (prewarm-paired: 24k + 256) ===");
-    println!(
-        "{:<40} {:<20} {:<15} {:<15}",
-        "Model", "Family", "ESR linear", "ESR (dB)"
-    );
-    println!("{}", "-".repeat(90));
-
-    for (filename, family) in &models {
         let path = resolve_model_path(filename);
         if !path.exists() {
             println!(

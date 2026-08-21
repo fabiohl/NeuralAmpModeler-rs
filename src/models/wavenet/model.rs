@@ -84,9 +84,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     ///
     /// **For Scientists and Devs:** The `dispatch_simd!` macro monomorphizes
     /// this function via the `SimdMath` trait, matching the global hardware
-    /// configuration once at the call site. The compiler generates branchless
-    /// assembly optimized for your processor (AVX2, AVX-512, or AVX-512 VNNI BF16)
-    /// without v-table or dynamic dispatch overhead.
+    /// configuration once at the call site. Inference is strictly `f32`.
+    /// The compiler generates branchless assembly optimized for your processor
+    /// (AVX2 or AVX-512) without v-table or dynamic dispatch overhead.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
     }
@@ -158,8 +158,8 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Stabilizes the model by processing silence (Zero Input) for pre-warm.
     ///
     /// Dispatches via `dispatch_simd!` macro — a single static `match` on the
-    /// globally detected `SIMD_MATH.instruction_set` — to run the AVX2, AVX-512,
-    /// or AVX-512 VNNI BF16 kernel without runtime feature detection per call.
+    /// globally detected `SIMD_MATH.instruction_set` — to run the AVX2 or AVX-512
+    /// kernel without runtime feature detection per call (inference is strictly `f32`).
     #[cold]
     pub fn prewarm(&mut self) {
         unsafe {

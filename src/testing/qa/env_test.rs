@@ -49,11 +49,21 @@ fn base_fixture_classifies_base() {
     assert_eq!(cpu.physical_cores, 2);
 }
 
-/// `avx512f` wins even when the v3 feature set is also complete.
+/// `avx512f` and `avx512vl` together classify as AVX-512 over v3 set.
 #[test]
-fn avx512f_takes_precedence_over_v3_set() {
-    let flags = "flags : fpu sse avx avx2 bmi1 bmi2 f16c fma abm movbe avx512f";
+fn avx512f_and_vl_takes_precedence_over_v3_set() {
+    let flags = "flags : fpu sse avx avx2 bmi1 bmi2 f16c fma abm movbe avx512f avx512vl";
     assert_eq!(classify_isa(flags), ISA_AVX512);
+}
+
+/// `avx512f` without `avx512vl` does not classify as AVX-512; falls back to v3 / incomplete.
+#[test]
+fn avx512f_without_vl_falls_back_to_v3() {
+    let flags_v3 = "flags : fpu sse avx avx2 bmi1 bmi2 f16c fma abm movbe avx512f";
+    assert_eq!(classify_isa(flags_v3), ISA_X86_64_V3);
+
+    let flags_incomplete = "flags : fpu sse avx avx2 bmi1 f16c fma movbe avx512f";
+    assert_eq!(classify_isa(flags_incomplete), ISA_AVX2_INCOMPLETE);
 }
 
 /// Both spellings of LZCNT (`lzcnt` Intel / `abm` AMD) satisfy the v3 gate.

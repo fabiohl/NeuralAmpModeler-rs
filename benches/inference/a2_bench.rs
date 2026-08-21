@@ -91,7 +91,7 @@ pub fn bench_a2_lite_process(c: &mut Criterion) {
 }
 
 /// Measures A2-Lite (CH=3) scaling across different DSP buffer sizes.
-/// With fewer channels and the u16 interleaved kernel path, A2-Lite
+/// With fewer channels and the f32 col-major/interleaved kernel path, A2-Lite
 /// targets minimal CPU usage for low-power / high-polyphony scenarios.
 pub fn bench_a2_lite_block_sizes(c: &mut Criterion) {
     let mut model = match load_and_prewarm("wavenet_a2_lite.nam") {

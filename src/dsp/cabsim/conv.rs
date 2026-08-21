@@ -27,10 +27,6 @@ use crate::common::diagnostics::NamErrorCode;
 use crate::common::spsc::{RT_STATUS_CABSIM_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::math::common::AlignedVec;
 use crate::math::common::Avx2Math;
-use crate::math::common::Avx512Math;
-use crate::math::common::Avx512VnniBf16Math;
-use crate::math::common::dispatch::InstructionSet;
-use crate::math::common::dispatch::SimdMathConfig;
 use crate::math::common::traits::SimdMath;
 use crate::math::dsp::fft::RfftPlanner;
 use log::info;
@@ -85,9 +81,6 @@ pub struct ConvEngine {
     output_buf: AlignedVec<f32>,
     /// Cached output start index (= fft_size - partition_size).
     output_start: usize,
-    /// Instruction set captured at construction time to avoid runtime CPU
-    /// feature checks in the audio hot path.
-    isa: InstructionSet,
 }
 
 impl ConvEngine {
@@ -160,7 +153,6 @@ impl ConvEngine {
         let acc_re = AlignedVec::new(n_bins, 0.0_f32)?;
         let acc_im = AlignedVec::new(n_bins, 0.0_f32)?;
         let output_buf = AlignedVec::new(fft_size, 0.0_f32)?;
-        let isa = SimdMathConfig::current().instruction_set;
 
         if num_partitions == 0 {
             info!(
@@ -169,12 +161,11 @@ impl ConvEngine {
             );
         } else {
             info!(
-                "[Conv] Engine built: {} IR samples, partition={}, fft={}, {} partitions, isa={:?}",
+                "[Conv] Engine built: {} IR samples, partition={}, fft={}, {} partitions",
                 ir.len(),
                 partition_size,
                 fft_size,
-                num_partitions,
-                isa
+                num_partitions
             );
         }
 
@@ -196,7 +187,6 @@ impl ConvEngine {
             acc_im,
             output_buf,
             output_start,
-            isa,
         })
     }
 
@@ -335,34 +325,16 @@ impl ConvEngine {
         if p_count == 1 {
             let fdl_start = self.fdl_idx * self.n_bins;
             // SAFETY: all slices have length n_bins, guaranteed by construction.
-            // ISA detection was performed once at ConvEngine::new.
+            // Baseline x86-64-v3 (Avx2Math) used directly without runtime branching.
             unsafe {
-                match self.isa {
-                    InstructionSet::Avx512VnniBf16 => Avx512VnniBf16Math::complex_mac_overwrite(
-                        &self.h_fdl_re[..n_bins],
-                        &self.h_fdl_im[..n_bins],
-                        &self.fdl_re[fdl_start..fdl_start + n_bins],
-                        &self.fdl_im[fdl_start..fdl_start + n_bins],
-                        &mut self.acc_re[..n_bins],
-                        &mut self.acc_im[..n_bins],
-                    ),
-                    InstructionSet::Avx512 => Avx512Math::complex_mac_overwrite(
-                        &self.h_fdl_re[..n_bins],
-                        &self.h_fdl_im[..n_bins],
-                        &self.fdl_re[fdl_start..fdl_start + n_bins],
-                        &self.fdl_im[fdl_start..fdl_start + n_bins],
-                        &mut self.acc_re[..n_bins],
-                        &mut self.acc_im[..n_bins],
-                    ),
-                    InstructionSet::Avx2 => Avx2Math::complex_mac_overwrite(
-                        &self.h_fdl_re[..n_bins],
-                        &self.h_fdl_im[..n_bins],
-                        &self.fdl_re[fdl_start..fdl_start + n_bins],
-                        &self.fdl_im[fdl_start..fdl_start + n_bins],
-                        &mut self.acc_re[..n_bins],
-                        &mut self.acc_im[..n_bins],
-                    ),
-                }
+                Avx2Math::complex_mac_overwrite(
+                    &self.h_fdl_re[..n_bins],
+                    &self.h_fdl_im[..n_bins],
+                    &self.fdl_re[fdl_start..fdl_start + n_bins],
+                    &self.fdl_im[fdl_start..fdl_start + n_bins],
+                    &mut self.acc_re[..n_bins],
+                    &mut self.acc_im[..n_bins],
+                );
             }
         } else {
             self.acc_re[..n_bins].fill(0.0);
@@ -374,36 +346,15 @@ impl ConvEngine {
                 let h_start = p * self.n_bins;
 
                 // SAFETY: all slices have length n_bins, guaranteed by construction.
-                // ISA detection was performed once at ConvEngine::new.
                 unsafe {
-                    match self.isa {
-                        InstructionSet::Avx512VnniBf16 => {
-                            Avx512VnniBf16Math::complex_mac_accumulate(
-                                &self.h_fdl_re[h_start..h_start + n_bins],
-                                &self.h_fdl_im[h_start..h_start + n_bins],
-                                &self.fdl_re[fdl_start..fdl_start + n_bins],
-                                &self.fdl_im[fdl_start..fdl_start + n_bins],
-                                &mut self.acc_re[..n_bins],
-                                &mut self.acc_im[..n_bins],
-                            )
-                        }
-                        InstructionSet::Avx512 => Avx512Math::complex_mac_accumulate(
-                            &self.h_fdl_re[h_start..h_start + n_bins],
-                            &self.h_fdl_im[h_start..h_start + n_bins],
-                            &self.fdl_re[fdl_start..fdl_start + n_bins],
-                            &self.fdl_im[fdl_start..fdl_start + n_bins],
-                            &mut self.acc_re[..n_bins],
-                            &mut self.acc_im[..n_bins],
-                        ),
-                        InstructionSet::Avx2 => Avx2Math::complex_mac_accumulate(
-                            &self.h_fdl_re[h_start..h_start + n_bins],
-                            &self.h_fdl_im[h_start..h_start + n_bins],
-                            &self.fdl_re[fdl_start..fdl_start + n_bins],
-                            &self.fdl_im[fdl_start..fdl_start + n_bins],
-                            &mut self.acc_re[..n_bins],
-                            &mut self.acc_im[..n_bins],
-                        ),
-                    }
+                    Avx2Math::complex_mac_accumulate(
+                        &self.h_fdl_re[h_start..h_start + n_bins],
+                        &self.h_fdl_im[h_start..h_start + n_bins],
+                        &self.fdl_re[fdl_start..fdl_start + n_bins],
+                        &self.fdl_im[fdl_start..fdl_start + n_bins],
+                        &mut self.acc_re[..n_bins],
+                        &mut self.acc_im[..n_bins],
+                    );
                 }
             }
         }

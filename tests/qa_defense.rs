@@ -479,7 +479,7 @@ fn f27_canonical_jsonl_parse() {
 
     let model_a = &records[0];
     assert_eq!(model_a.label, "Model A @48000 Live");
-    assert_eq!(model_a.esr, MetricValue::Na, "null esr -> N/A");
+    assert_eq!(model_a.esr, MetricValue::Null, "null esr -> Null");
     assert_eq!(model_a.esr_db, MetricValue::Na, "empty esr_db -> N/A");
     assert_eq!(model_a.snr_db, MetricValue::Raw("1.5e2".into()));
     assert_eq!(model_a.mrstft, MetricValue::Raw("inf".into()));

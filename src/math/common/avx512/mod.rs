@@ -39,8 +39,11 @@ use core::arch::x86_64::*;
 pub struct Avx512Math;
 
 /// Static implementation for AVX-512 with VNNI and BF16 (Brain Float 16) support.
-/// This is the "Ferrari" of audio processing, available on very recent Intel CPUs (e.g.: Sapphire Rapids).
-/// The BF16 format allows the chip to process twice the numbers with almost the same precision as the original f32.
+/// Deprecated marker type for backwards compatibility with test harnesses and ISA overrides.
+#[deprecated(
+    since = "0.7.0",
+    note = "AVX-512 VNNI+BF16 kernels have been unified with Avx512Math to optimize L1i cache utilization."
+)]
 pub struct Avx512VnniBf16Math;
 
 // ── Avx512Math ──
@@ -59,6 +62,7 @@ impl SimdMath for Avx512Math {
 
 // ── Avx512VnniBf16Math ──
 
+#[expect(deprecated)]
 impl SimdMath for Avx512VnniBf16Math {
     type V = __m512;
 

@@ -547,7 +547,7 @@ impl Palette {
 /// the bash `_fmt_metric`); `N/A` and non-finite literals pass through.
 fn fmt_metric(mv: &MetricValue) -> String {
     match mv {
-        MetricValue::Na => "N/A".to_string(),
+        MetricValue::Na | MetricValue::Null => "N/A".to_string(),
         MetricValue::Raw(raw) => match raw.parse::<f64>() {
             Ok(v) if v.is_finite() => {
                 if raw.contains(['e', 'E']) || (v != 0.0 && v.abs() < 0.0001) {
@@ -564,7 +564,7 @@ fn fmt_metric(mv: &MetricValue) -> String {
 /// SNR is rendered with one decimal (mirror of the bash `_nfmt "%.1f"`).
 fn fmt_snr(mv: &MetricValue) -> String {
     match mv {
-        MetricValue::Na => "N/A".to_string(),
+        MetricValue::Na | MetricValue::Null => "N/A".to_string(),
         MetricValue::Raw(raw) => match raw.parse::<f64>() {
             Ok(v) if v.is_finite() => format!("{v:.1}"),
             _ => raw.clone(),
@@ -575,7 +575,7 @@ fn fmt_snr(mv: &MetricValue) -> String {
 /// Finite numeric value behind a metric, if any.
 fn metric_f64(mv: &MetricValue) -> Option<f64> {
     match mv {
-        MetricValue::Na => None,
+        MetricValue::Na | MetricValue::Null => None,
         MetricValue::Raw(raw) => raw.parse::<f64>().ok().filter(|v| v.is_finite()),
     }
 }
@@ -1064,11 +1064,16 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
     out.push_str("═════════════\n\n");
 
     if report.isa.is_empty() {
-        out.push_str(
-            &p.yellow(
+        if report.phase_status("isa_parity") == "PASS" {
+            // The phase receipt passed (e.g. self-consistency on a CPU without
+            // AVX-512); "not covered" would be a lie — say what actually
+            // happened instead (P0.T3).
+            out.push_str("  ok isa_parity phase passed; no per-model ISA rows in this report.\n\n");
+        } else {
+            out.push_str(&p.yellow(
                 "  (i) Not covered in quick mode — run tests-long for full verification.\n\n",
-            ),
-        );
+            ));
+        }
         return out;
     }
 
@@ -1243,6 +1248,11 @@ fn render_spectral_summary(report: &QualityReport, p: &Palette) -> String {
         out.push_str(&p.green(&format!(
             "  ok {count} model(s) with spectral metrics inside baseline.\n"
         )));
+    } else if report.phase_status("spectral_fidelity") == "PASS" {
+        // The phase receipt passed; "not covered" would be a lie (P0.T3).
+        out.push_str(
+            "  ok spectral_fidelity phase passed; no per-model baseline counts in this report.\n",
+        );
     } else {
         out.push_str(
             &p.yellow("  (i) Not covered in quick mode — run tests-long for full verification.\n"),

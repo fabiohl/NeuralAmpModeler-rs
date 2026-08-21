@@ -260,6 +260,42 @@ fn verify_regression_gate_not_verified_is_performance_domain() {
 }
 
 #[test]
+fn verify_fidelity_only_succeeds_when_regression_gate_not_verified() {
+    let contract = load_contract();
+    let phases = [
+        ("golden_vectors", "PASS"),
+        ("reference_oracle_f64", "PASS"),
+        ("quick_parity", "PASS"),
+        ("regression_gate", "NOT_VERIFIED"),
+    ];
+    let report = write_report(&build_report(
+        &contract,
+        &phases,
+        canonical_fidelity,
+        canonical_latency,
+    ));
+    let out = run(&[
+        "verify",
+        "--contract",
+        contract_path().to_str().unwrap(),
+        "--report",
+        report.to_str().unwrap(),
+        "--fidelity-only",
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = stdout(&out);
+    assert!(text.contains("FIDELITY: OK"), "fidelity must pass: {text}");
+    assert!(
+        text.contains("FIDELITY-ONLY VERIFICATION"),
+        "mode header expected: {text}"
+    );
+    assert!(
+        !text.contains("CONTRACT VIOLATED"),
+        "fidelity-only must not report contract violation when fidelity passes: {text}"
+    );
+}
+
+#[test]
 fn verify_f64_violation_triggers_review_required() {
     let contract = load_contract();
     let report = write_report(&build_report(
@@ -390,6 +426,76 @@ fn ingest_merges_streams_into_parseable_report() {
     ]);
     assert_eq!(run_out.status.code(), Some(0));
     assert_eq!(stdout(&run_out), content);
+}
+
+/// The `reference_oracle_f64` phase sinks `f64_table` records (fixture +
+/// prewarm-paired ESR) into the metrics stream; the ingest must join that ESR
+/// onto the fidelity record the verify engine reads as `esr_f64` (P0.T3).
+#[test]
+fn ingest_joins_f64_oracle_esr_onto_fidelity_records() {
+    let receipt = temp_path("receipt.jsonl");
+    let metrics = temp_path("metrics.jsonl");
+    let out = temp_path("report.jsonl");
+    write_file(
+        &receipt,
+        r#"{"phase_id":"reference_oracle_f64","status":"PASS"}
+{"phase_id":"golden_vectors","status":"PASS"}
+"#,
+    );
+    write_file(
+        &metrics,
+        r#"{"kind":"fidelity","label":"BossWN-standard @48000 Live","esr":"2.31e-14","snr_db":"136.4","mrstft":"6.46e-6"}
+{"kind":"f64_table","filename":"BossWN-standard.nam","family":"BossWN-standard","esr":9.05e-15,"esr_db":"-140.9"}
+{"kind":"f64_table","filename":"wavenet_a2_full.nam","family":"A2Full","esr":7.83e-14,"esr_db":"-132.1"}
+{"kind":"fidelity","label":"WaveNet A2-Full (CH=8) C++ cross-reference @48000 Live","esr":"7.28e-14","snr_db":"128.3","mrstft":"1.68e-5"}
+{"kind":"f64_table","filename":"convnet_test.nam","family":"ConvNet","esr":3.57e-15,"esr_db":"-148.9"}
+{"kind":"fidelity","label":"Quick ConvNet @48000 Live","esr":"4.18e-15","snr_db":"143.8","mrstft":"1.26e-6"}
+"#,
+    );
+
+    let run_out = run(&[
+        "ingest",
+        "--receipt",
+        receipt.to_str().unwrap(),
+        "--metrics",
+        metrics.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        run_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&run_out)
+    );
+
+    let content = fs::read_to_string(&out).unwrap();
+    let report = parse_verify_report(&content).expect("joined report must parse");
+    let by_label: Vec<_> = report
+        .fidelity
+        .iter()
+        .map(|r| (r.label.as_str(), r.esr_f64.as_raw().map(str::to_string)))
+        .collect();
+    assert!(
+        by_label.contains(&("BossWN-standard @48000 Live", Some("9.05e-15".to_string()))),
+        "f64 ESR must land on the BossWN-standard record: {by_label:?}"
+    );
+    assert!(
+        by_label.contains(&(
+            "WaveNet A2-Full (CH=8) C++ cross-reference @48000 Live",
+            Some("7.83e-14".to_string())
+        )),
+        "f64 ESR must land on the A2-Full record via its family: {by_label:?}"
+    );
+    assert!(
+        by_label.contains(&("Quick ConvNet @48000 Live", Some("3.57e-15".to_string()))),
+        "f64 ESR must land on the quick_parity record via its alias: {by_label:?}"
+    );
+    // The f64_table rows survive verbatim as the forensic stream.
+    assert!(
+        content.contains(r#""kind":"f64_table""#),
+        "f64_table records must pass through: {content}"
+    );
 }
 
 #[test]

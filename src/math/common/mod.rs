@@ -45,6 +45,7 @@ pub mod utility;
 pub use aligned::Aligned64;
 pub use aligned::AlignedVec;
 pub use avx2_impl::Avx2Math;
+#[expect(deprecated)]
 pub use avx512::{Avx512Math, Avx512VnniBf16Math};
 pub use dispatch::{InstructionSet, SIMD_MATH, SimdMathConfig, TEST_ISA_OVERRIDE};
 pub use dispatch::{decode_isa_override, effective_instruction_set, encode_isa_override};
@@ -57,10 +58,31 @@ pub use utility::*;
 
 /// Macro for dynamic SIMD dispatch based on global configuration.
 ///
-/// Checks `TEST_ISA_OVERRIDE` (u8::MAX = disabled) before consulting
-/// `SIMD_MATH.instruction_set`. This allows integration tests to force a
-/// specific ISA path (AVX2, AVX-512, VNNI+BF16) and measure cross-ISA
-/// determinism.
+/// Dispatches execution to the optimal SIMD math implementation ([`Avx2Math`] or
+/// [`Avx512Math`]) based on the detected host CPU capabilities or test overrides.
+///
+/// # Baseline and Dynamic Dispatch Policy
+/// - **Baseline (`x86-64-v3`):** The crate compiles unconditionally with AVX2 + FMA + BMI2
+///   support. [`Avx2Math`] is the default baseline backend.
+/// - **Upward-only Dispatch:** Runtime CPU feature detection (`SIMD_MATH` via `detect_best_simd`)
+///   checks for AVX-512 (`avx512f` + `avx512vl`). If supported, [`InstructionSet::Avx512`] is active.
+/// - **VNNI / BF16 is Not Production:** Production neural inference runs strictly in single-precision
+///   `f32`. Runtime detection never returns [`InstructionSet::Avx512VnniBf16`]. Both [`InstructionSet::Avx512`]
+///   and [`InstructionSet::Avx512VnniBf16`] fold into [`Avx512Math`] (f32) to eliminate redundant
+///   monomorphizations and ensure numerical parity with C++ NAMCore.
+///
+/// # Modes
+/// - **Mode 1 (Generic Method):** `dispatch_simd!(target, method, args...)`
+///   Calls `$target.$method::<Avx512Math>(...)` or `$target.$method::<Avx2Math>(...)`.
+/// - **Mode 2 (Specific Method / Multi-branch):** `dispatch_simd!(@ target, m512bf16, m512, m256, args...)`
+///   Calls `$target.$m512(...)` for both AVX-512 arms, and `$target.$m256(...)` for AVX2.
+/// - **Mode 3 (Static Associated Function):** `dispatch_simd!(method(args...))`
+///   Calls `<Avx512Math as SimdMath>::$method(...)` or `<Avx2Math as SimdMath>::$method(...)`.
+///
+/// # Test Overrides
+/// Checks `TEST_ISA_OVERRIDE` via [`effective_instruction_set()`] before consulting
+/// `SIMD_MATH.instruction_set`. This allows integration tests (such as `tests/parity/isa_parity.rs`)
+/// to deterministically force an ISA path in serial execution.
 #[macro_export]
 macro_rules! dispatch_simd {
     // Mode 2: Dispatch to specific methods of an object (e.g.: lstm.rs)
@@ -68,9 +90,9 @@ macro_rules! dispatch_simd {
         {
             use $crate::math::common::InstructionSet;
             let __isa = $crate::math::common::effective_instruction_set();
+            #[expect(deprecated)]
             match __isa {
-                InstructionSet::Avx512VnniBf16 => $target.$m512bf16($($arg),*),
-                InstructionSet::Avx512 => $target.$m512($($arg),*),
+                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => $target.$m512($($arg),*),
                 InstructionSet::Avx2 => $target.$m256($($arg),*),
             }
         }
@@ -81,11 +103,9 @@ macro_rules! dispatch_simd {
         {
             use $crate::math::common::InstructionSet;
             let __isa = $crate::math::common::effective_instruction_set();
+            #[expect(deprecated)]
             match __isa {
-                InstructionSet::Avx512VnniBf16 => {
-                    $target.$method::<$crate::math::common::Avx512VnniBf16Math>($($arg),*)
-                }
-                InstructionSet::Avx512 => {
+                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
                     $target.$method::<$crate::math::common::Avx512Math>($($arg),*)
                 }
                 InstructionSet::Avx2 => {
@@ -102,13 +122,10 @@ macro_rules! dispatch_simd {
             use $crate::math::common::traits::SimdMath;
             let __isa = $crate::math::common::effective_instruction_set();
             // SAFETY: Inner safety guarantees are upheld by caller invariants or the execution environment.
-            #[allow(clippy::macro_metavars_in_unsafe, clippy::allow_attributes)]
+            #[allow(clippy::macro_metavars_in_unsafe, clippy::allow_attributes, deprecated)]
             unsafe {
                 match __isa {
-                    InstructionSet::Avx512VnniBf16 => {
-                        $crate::math::common::Avx512VnniBf16Math::$method($($arg),*)
-                    }
-                    InstructionSet::Avx512 => {
+                    InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
                         $crate::math::common::Avx512Math::$method($($arg),*)
                     }
                     InstructionSet::Avx2 => {

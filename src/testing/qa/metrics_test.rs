@@ -26,7 +26,7 @@ fn canonical_fixture_matches_tests_long_expect_str() {
     let model_a = &records[0];
     assert_eq!(model_a.label, "Model A @48000 Live");
     assert_eq!(model_a.kind.as_deref(), Some("fidelity"));
-    assert_eq!(model_a.esr, MetricValue::Na, "null esr -> N/A");
+    assert_eq!(model_a.esr, MetricValue::Null, "null esr -> Null");
     assert_eq!(model_a.esr_db, MetricValue::Na, "empty esr_db -> N/A");
     assert_eq!(
         model_a.snr_db,
@@ -49,9 +49,9 @@ fn canonical_fixture_matches_tests_long_expect_str() {
     assert_eq!(model_b.label, "Model B");
     assert_eq!(model_b.kind.as_deref(), Some("fidelity"));
     assert_eq!(model_b.esr, MetricValue::Na, "empty esr -> N/A");
-    assert_eq!(model_b.esr_db, MetricValue::Na, "null esr_db -> N/A");
+    assert_eq!(model_b.esr_db, MetricValue::Null, "null esr_db -> Null");
     assert_eq!(model_b.snr_db, MetricValue::Raw("-inf".into()));
-    assert_eq!(model_b.mse, MetricValue::Na);
+    assert_eq!(model_b.mse, MetricValue::Null);
     assert_eq!(model_b.mrstft, MetricValue::Raw("nan".into()));
 
     let model_c = &records[2];

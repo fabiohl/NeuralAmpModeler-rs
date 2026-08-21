@@ -108,8 +108,12 @@ bootstrap_baseline() {
         --out "$REGRESSION_RECEIPT" >&2
 
     echo -e "  ${GREEN}✓${NC} Baseline '${BASELINE_NAME}' created and persisted." >&2
-    echo -e "  Fingerprint saved to ${YELLOW}${FINGERPRINT_FILE}${NC}" >&2
-    echo -e "  Baseline data persisted under ${YELLOW}${BASELINE_DIR}${NC}" >&2
+    echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
+    echo -e "  ${BOLD}Performance Bootstrap Artifacts saved:${NC}"
+    echo -e "    - Fingerprint:   ${CYAN}${FINGERPRINT_FILE}${NC}"
+    echo -e "    - Baseline Data: ${CYAN}${BASELINE_DIR}${NC}"
+    echo -e "    - Receipt:       ${CYAN}${REGRESSION_RECEIPT}${NC}"
+    echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
 }
 
 # ── Check mode (strictly read-only) ────────────────────────────────────────
@@ -249,6 +253,12 @@ check_regression() {
         --reason "" \
         --run-id "$NAM_RUN_ID" \
         --out "$REGRESSION_RECEIPT" >&2
+
+    echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
+    echo -e "  ${BOLD}Performance Gate Artifacts saved:${NC}"
+    echo -e "    - Benchmark Log: ${CYAN}${LOG_FILE}${NC}"
+    echo -e "    - Receipt:       ${CYAN}${REGRESSION_RECEIPT}${NC}"
+    echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
 }
 
 # ── Main entry point ───────────────────────────────────────────────────────

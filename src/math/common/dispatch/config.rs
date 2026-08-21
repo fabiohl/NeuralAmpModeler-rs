@@ -24,6 +24,7 @@ pub struct SimdMathConfig {
 impl SimdMathConfig {
     /// Returns the active global SIMD configuration, respecting any
     /// `TEST_ISA_OVERRIDE` that may be set by integration tests.
+    #[expect(deprecated)]
     pub fn current() -> Self {
         let raw = TEST_ISA_OVERRIDE.load(Ordering::Relaxed);
         if let Some(isa) = decode_isa_override(raw) {

@@ -5,14 +5,12 @@
 //!
 //! Dynamically dispatches to the configured SIMD backend.
 
-#[doc = "Internal: the `gain_kernel!` macro used by AVX2 and AVX-512 gain kernels."]
+#[doc = "Internal: the `gain_kernel!` macro used by AVX2 gain kernels."]
 mod kernel_macro;
 
 mod avx2;
-mod avx512;
 
 pub use avx2::*;
-pub use avx512::*;
 
 /// Applies constant gain to a mono buffer via SIMD dispatch.
 ///
@@ -71,7 +69,7 @@ pub unsafe fn apply_ramp(data: &mut [f32], start: f32, step: f32) {
 /// Applies the linear gain multiplier to the buffer (safe wrapper).
 ///
 /// Fast-returns if `gain_linear` ~= 1.0 (fast-path bypass).
-/// Routes to the SIMD backend via v-table.
+/// Routes to the SIMD backend via monomorphized `dispatch_simd!`.
 pub fn apply_gain_simd(buffer: &mut [f32], gain_linear: f32) {
     if (gain_linear - 1.0).abs() < 1e-6 {
         return;
@@ -82,7 +80,7 @@ pub fn apply_gain_simd(buffer: &mut [f32], gain_linear: f32) {
 /// Applies a linear gain ramp to the buffer (safe wrapper).
 ///
 /// If the increment is negligible, applies constant gain instead.
-/// Routes to the SIMD backend via v-table.
+/// Routes to the SIMD backend via monomorphized `dispatch_simd!`.
 pub fn apply_ramp_simd(buffer: &mut [f32], start: f32, step: f32) {
     if step.abs() < 1e-9 {
         apply_gain_simd(buffer, start);

@@ -4,9 +4,10 @@
 //! AVX-512 dispatch macro for DSP kernels (`impl_avx512_dsp!()`).
 //!
 //! Covers `convolve`, `apply_gain`, `apply_gain_ramp`, `butterfly`/`ibutterfly`
-//! (FFT), `batch_norm`, and `crossfade_blend_mono`. Delegates to AVX-512
-//! intrinsics kernels in [`crate::math::dsp`] and
-//! [`crate::math::dsp::stereo`]. Invoked by [`dispatch_simd!`].
+//! (FFT), `batch_norm`, and `crossfade_blend_mono`. Memory-bound kernels (gain,
+//! dither, ramp, crossfade, cabsim FFT/MAC) delegate directly to `Avx2Math`
+//! to eliminate low-ROI AVX-512 code duplication and instruction-cache overhead.
+//! Invoked by [`dispatch_simd!`].
 
 macro_rules! impl_avx512_dsp {
     () => {
@@ -71,17 +72,15 @@ macro_rules! impl_avx512_dsp {
 
         #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; gain is a finite f32;
-        // CPU supports AVX-512F (verified by dispatch). Kernel uses unaligned loads/stores.
+        // AVX-512 implies AVX2/x86-64-v3 baseline. Delegates to AVX2 kernel.
         unsafe fn apply_gain_and_detect_clipping_mono(data: &mut [f32], gain: f32) -> bool {
             // SAFETY: data and gain satisfy function invariants.
-            unsafe {
-                crate::math::dsp::gain::apply_gain_and_detect_clipping_mono_avx512(data, gain)
-            }
+            unsafe { crate::math::dsp::gain::apply_gain_and_detect_clipping_mono_avx2(data, gain) }
         }
 
         #[inline(always)]
         // SAFETY: left and right are valid mutable f32 slices of equal length;
-        // gain is a finite f32; CPU supports AVX-512F.
+        // gain is a finite f32; AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_gain_and_detect_clipping_stereo(
             left: &mut [f32],
             right: &mut [f32],
@@ -89,7 +88,7 @@ macro_rules! impl_avx512_dsp {
         ) -> bool {
             // SAFETY: left, right, and gain satisfy function invariants.
             unsafe {
-                crate::math::dsp::gain::apply_gain_and_detect_clipping_stereo_avx512(
+                crate::math::dsp::gain::apply_gain_and_detect_clipping_stereo_avx2(
                     left, right, gain,
                 )
             }
@@ -97,63 +96,63 @@ macro_rules! impl_avx512_dsp {
 
         #[inline(always)]
         // SAFETY: left and right are valid mutable f32 slices of equal length;
-        // gain is a finite f32; CPU supports AVX-512F.
+        // gain is a finite f32; AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_gain_stereo(left: &mut [f32], right: &mut [f32], gain: f32) {
             // SAFETY: left, right, and gain satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_gain_stereo_avx512(left, right, gain) }
+            unsafe { crate::math::dsp::gain::apply_gain_stereo_avx2(left, right, gain) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; gain is a finite f32;
-        // CPU supports AVX-512F (verified by dispatch).
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_gain(data: &mut [f32], gain: f32) {
             // SAFETY: data and gain satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_gain_avx512(data, gain) }
+            unsafe { crate::math::dsp::gain::apply_gain_avx2(data, gain) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; start and step are finite f32 values;
-        // CPU supports AVX-512F.
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_ramp(data: &mut [f32], start: f32, step: f32) {
             // SAFETY: data, start, and step satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_ramp_avx512(data, start, step) }
+            unsafe { crate::math::dsp::gain::apply_ramp_avx2(data, start, step) }
         }
 
         #[inline(always)]
         // SAFETY: left and right are valid mutable f32 slices of equal length;
-        // start and step are finite f32 values; CPU supports AVX-512F.
+        // start and step are finite f32 values; AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_ramp_stereo(left: &mut [f32], right: &mut [f32], start: f32, step: f32) {
             // SAFETY: left, right, start, and step satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_ramp_stereo_avx512(left, right, start, step) }
+            unsafe { crate::math::dsp::gain::apply_ramp_stereo_avx2(left, right, start, step) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; gain and offset are finite f32 values;
-        // CPU supports AVX-512F (verified by dispatch). Kernel uses unaligned 512-bit loads/stores.
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_gain_then_dither(data: &mut [f32], gain: f32, offset: f32) {
             // SAFETY: data, gain, and offset satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_gain_then_dither_avx512(data, gain, offset) }
+            unsafe { crate::math::dsp::gain::apply_gain_then_dither_avx2(data, gain, offset) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; offset is a finite f32;
-        // CPU supports AVX-512F.
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_dither_add(data: &mut [f32], offset: f32) {
             // SAFETY: data and offset satisfy function invariants.
-            unsafe { crate::math::dsp::gain::apply_dither_add_avx512(data, offset) }
+            unsafe { crate::math::dsp::gain::apply_dither_add_avx2(data, offset) }
         }
 
         #[inline(always)]
         // SAFETY: out and pending are valid f32 slices of equal length; t is a finite f32;
-        // CPU supports AVX-512F.
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn crossfade_blend_mono(out: &mut [f32], pending: &[f32], t: f32) {
             // SAFETY: out, pending, and t satisfy function invariants.
-            unsafe { crate::math::dsp::gain::crossfade_blend_mono_avx512(out, pending, t) }
+            unsafe { crate::math::dsp::gain::crossfade_blend_mono_avx2(out, pending, t) }
         }
 
         #[inline(always)]
-        // SAFETY: all 6 slices are valid f32 slices of equal length n; CPU supports AVX-512F
-        // (verified by dispatch). No aliasing between slices.
+        // SAFETY: all 6 slices are valid f32 slices of equal length n; AVX-512 implies AVX2.
+        // Delegates to Avx2Math complex MAC routine (Sprint 1.4 low-ROI deduplication).
         unsafe fn complex_mac_overwrite(
             h_re: &[f32],
             h_im: &[f32],
@@ -162,36 +161,17 @@ macro_rules! impl_avx512_dsp {
             out_re: &mut [f32],
             out_im: &mut [f32],
         ) {
-            let n = h_re.len();
-            let mut i = 0;
-            while i + 16 <= n {
-                // SAFETY: i is bounds-checked (i+16 <= n); unaligned 512-bit loads/stores valid
-                // for f32 slices.
-                unsafe {
-                    let hr = _mm512_loadu_ps(h_re.as_ptr().add(i));
-                    let hi = _mm512_loadu_ps(h_im.as_ptr().add(i));
-                    let xr = _mm512_loadu_ps(x_re.as_ptr().add(i));
-                    let xi = _mm512_loadu_ps(x_im.as_ptr().add(i));
-                    let prod_re = _mm512_fmsub_ps(hr, xr, _mm512_mul_ps(hi, xi));
-                    let prod_im = _mm512_fmadd_ps(hr, xi, _mm512_mul_ps(hi, xr));
-                    _mm512_storeu_ps(out_re.as_mut_ptr().add(i), prod_re);
-                    _mm512_storeu_ps(out_im.as_mut_ptr().add(i), prod_im);
-                }
-                i += 16;
-            }
-            for j in i..n {
-                let hr = *h_re.get_unchecked(j);
-                let hi = *h_im.get_unchecked(j);
-                let xr = *x_re.get_unchecked(j);
-                let xi = *x_im.get_unchecked(j);
-                *out_re.get_unchecked_mut(j) = f32::mul_add(hr, xr, -hi * xi);
-                *out_im.get_unchecked_mut(j) = f32::mul_add(hr, xi, hi * xr);
+            // SAFETY: argument invariants forwarded to Avx2Math.
+            unsafe {
+                crate::math::common::Avx2Math::complex_mac_overwrite(
+                    h_re, h_im, x_re, x_im, out_re, out_im,
+                )
             }
         }
 
         #[inline(always)]
-        // SAFETY: all 6 slices are valid f32 slices of equal length n; CPU supports AVX-512F
-        // (verified by dispatch). No aliasing between slices.
+        // SAFETY: all 6 slices are valid f32 slices of equal length n; AVX-512 implies AVX2.
+        // Delegates to Avx2Math complex MAC accumulate routine.
         unsafe fn complex_mac_accumulate(
             h_re: &[f32],
             h_im: &[f32],
@@ -200,39 +180,17 @@ macro_rules! impl_avx512_dsp {
             acc_re: &mut [f32],
             acc_im: &mut [f32],
         ) {
-            let n = h_re.len();
-            let mut i = 0;
-            while i + 16 <= n {
-                // SAFETY: i is bounds-checked (i+16 <= n); unaligned 512-bit loads/stores valid
-                // for f32 slices.
-                unsafe {
-                    let hr = _mm512_loadu_ps(h_re.as_ptr().add(i));
-                    let hi = _mm512_loadu_ps(h_im.as_ptr().add(i));
-                    let xr = _mm512_loadu_ps(x_re.as_ptr().add(i));
-                    let xi = _mm512_loadu_ps(x_im.as_ptr().add(i));
-                    let prod_re = _mm512_fmsub_ps(hr, xr, _mm512_mul_ps(hi, xi));
-                    let prod_im = _mm512_fmadd_ps(hr, xi, _mm512_mul_ps(hi, xr));
-                    let cur_re = _mm512_loadu_ps(acc_re.as_ptr().add(i));
-                    let cur_im = _mm512_loadu_ps(acc_im.as_ptr().add(i));
-                    _mm512_storeu_ps(acc_re.as_mut_ptr().add(i), _mm512_add_ps(cur_re, prod_re));
-                    _mm512_storeu_ps(acc_im.as_mut_ptr().add(i), _mm512_add_ps(cur_im, prod_im));
-                }
-                i += 16;
-            }
-            for j in i..n {
-                let hr = *h_re.get_unchecked(j);
-                let hi = *h_im.get_unchecked(j);
-                let xr = *x_re.get_unchecked(j);
-                let xi = *x_im.get_unchecked(j);
-                *acc_re.get_unchecked_mut(j) += f32::mul_add(hr, xr, -hi * xi);
-                *acc_im.get_unchecked_mut(j) += f32::mul_add(hr, xi, hi * xr);
+            // SAFETY: argument invariants forwarded to Avx2Math.
+            unsafe {
+                crate::math::common::Avx2Math::complex_mac_accumulate(
+                    h_re, h_im, x_re, x_im, acc_re, acc_im,
+                )
             }
         }
 
         #[inline(always)]
-        // SAFETY: re, im, tw_re, tw_im are valid for the described ranges;
-        // CPU supports AVX-512F (verified by dispatch).
-        // In-place butterfly: re/im read from and written to the same array.
+        // SAFETY: re, im, tw_re, tw_im are valid for the described ranges; AVX-512 implies AVX2.
+        // Delegates to Avx2Math FFT butterfly routine.
         unsafe fn fft_butterfly_stage(
             re: *mut f32,
             im: *mut f32,
@@ -242,58 +200,17 @@ macro_rules! impl_avx512_dsp {
             group_start: usize,
             inverse: bool,
         ) {
-            let top = group_start;
-            let bot = group_start + half;
-            let zero = _mm512_setzero_ps();
-            let mut j = 0;
-            while j + 16 <= half {
-                // SAFETY: j+16 <= half, pointers are advanced by j.
-                unsafe {
-                    let w_re = _mm512_loadu_ps(tw_re.add(j));
-                    let w_im = if inverse {
-                        _mm512_sub_ps(zero, _mm512_loadu_ps(tw_im.add(j)))
-                    } else {
-                        _mm512_loadu_ps(tw_im.add(j))
-                    };
-
-                    let re_top = _mm512_loadu_ps(re.add(top + j));
-                    let im_top = _mm512_loadu_ps(im.add(top + j));
-                    let re_bot = _mm512_loadu_ps(re.add(bot + j));
-                    let im_bot = _mm512_loadu_ps(im.add(bot + j));
-
-                    let t_re = _mm512_fmsub_ps(w_re, re_bot, _mm512_mul_ps(w_im, im_bot));
-                    let t_im = _mm512_fmadd_ps(w_re, im_bot, _mm512_mul_ps(w_im, re_bot));
-
-                    _mm512_storeu_ps(re.add(bot + j), _mm512_sub_ps(re_top, t_re));
-                    _mm512_storeu_ps(im.add(bot + j), _mm512_sub_ps(im_top, t_im));
-                    _mm512_storeu_ps(re.add(top + j), _mm512_add_ps(re_top, t_re));
-                    _mm512_storeu_ps(im.add(top + j), _mm512_add_ps(im_top, t_im));
-                }
-                j += 16;
-            }
-            for j in j..half {
-                // SAFETY: j < half, both top+j and bot+j are in bounds.
-                unsafe {
-                    let w_re = *tw_re.add(j);
-                    let w_im = if inverse {
-                        -(*tw_im.add(j))
-                    } else {
-                        *tw_im.add(j)
-                    };
-
-                    let re_idx1 = *re.add(top + j);
-                    let im_idx1 = *im.add(top + j);
-                    let re_idx2 = *re.add(bot + j);
-                    let im_idx2 = *im.add(bot + j);
-
-                    let t_re = f32::mul_add(w_re, re_idx2, -w_im * im_idx2);
-                    let t_im = f32::mul_add(w_re, im_idx2, w_im * re_idx2);
-
-                    *re.add(bot + j) = re_idx1 - t_re;
-                    *im.add(bot + j) = im_idx1 - t_im;
-                    *re.add(top + j) = re_idx1 + t_re;
-                    *im.add(top + j) = im_idx1 + t_im;
-                }
+            // SAFETY: pointer invariants forwarded to Avx2Math.
+            unsafe {
+                crate::math::common::Avx2Math::fft_butterfly_stage(
+                    re,
+                    im,
+                    half,
+                    tw_re,
+                    tw_im,
+                    group_start,
+                    inverse,
+                )
             }
         }
 

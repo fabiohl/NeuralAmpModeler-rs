@@ -284,7 +284,9 @@ pub fn load_and_build_model(
         model_data.architecture, model_data.weights_layout
     );
     let mut model_l = dispatcher::build_model(&model_data).inspect_err(|e| {
-        let code = if e.to_string().contains("slimmable") {
+        let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
+            code
+        } else if e.to_string().contains("slimmable") {
             NamErrorCode::InvalidModelTopology
         } else {
             NamErrorCode::ModelBuildFailed
@@ -308,7 +310,9 @@ pub fn load_and_build_model(
 
     let model_r = if stereo {
         let mut model = dispatcher::build_model(&model_data).inspect_err(|e| {
-            let code = if e.to_string().contains("slimmable") {
+            let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
+                code
+            } else if e.to_string().contains("slimmable") {
                 NamErrorCode::InvalidModelTopology
             } else {
                 NamErrorCode::ModelBuildFailed

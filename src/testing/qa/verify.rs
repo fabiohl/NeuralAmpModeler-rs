@@ -253,6 +253,16 @@ impl VerifyOutcome {
             1
         }
     }
+
+    /// `0` when only the fidelity domain passes and no oracle review is pending,
+    /// ignoring whether performance was certified.
+    pub fn fidelity_exit_code(&self) -> i32 {
+        if self.fidelity.is_ok() && self.review_required == 0 {
+            0
+        } else {
+            1
+        }
+    }
 }
 
 /// Fidelity check of one contract entry.
@@ -453,7 +463,7 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             let esr_baseline = entry.esr_namcore;
             if esr_baseline.is_finite() {
                 match &record.esr {
-                    MetricValue::Na => {
+                    MetricValue::Na | MetricValue::Null => {
                         fidelity_violations += 1;
                         namcore_ok = false;
                         metrics.push(MetricCheck {
@@ -585,8 +595,23 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             }
 
             // SNR (exact floor: baseline − 6.0 dB).
+            //
+            // A JSON `null` SNR is **not** a violation: the canonical sink
+            // (`tests/common/validation.rs::json_snr_db`) emits `null` for
+            // the positive non-finite SNR — bit-identical perfect parity
+            // (`+∞` dB), which is above any floor (P0.T3). An *absent* or
+            // empty `snr_db` (the `N/A` state) still fails closed, and the
+            // non-finite string sentinels (`"-inf"`, `"nan"`) stay
+            // malformed — the sink never writes them for a positive SNR, so
+            // their presence signals a foreign or corrupt writer.
             if let Some(snr_baseline) = entry.snr_db.filter(|v| v.is_finite()) {
                 match &record.snr_db {
+                    MetricValue::Null => {
+                        metrics.push(MetricCheck {
+                            metric: Metric::SnrDb,
+                            outcome: MetricOutcome::Ok,
+                        });
+                    }
                     MetricValue::Na => {
                         fidelity_violations += 1;
                         metrics.push(MetricCheck {
@@ -629,7 +654,7 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             // MR-STFT (exact ceiling: baseline × 10.0).
             if entry.mrstft.is_finite() {
                 match &record.mrstft {
-                    MetricValue::Na => {
+                    MetricValue::Na | MetricValue::Null => {
                         fidelity_violations += 1;
                         metrics.push(MetricCheck {
                             metric: Metric::Mrstft,
@@ -788,8 +813,11 @@ fn parse_finite(raw: &str) -> f64 {
 }
 
 /// Matches a contract performance entry against the report latency records:
-/// exact label, exact id, or bash-style normalized equality (`×`→`x`,
-/// `→`→`->`, collapsed double spaces, case-insensitive).
+/// exact label, exact id, the `RT_*` bench-label alias table
+/// (`ids::resolve_rt_contract_id` — the Criterion bench names differ from the
+/// contract ids for `RT_Linear` and the DSP benches), or bash-style
+/// normalized equality (`×`→`x`, `→`→`->`, collapsed double spaces,
+/// case-insensitive).
 fn match_latency<'a>(
     entry: &PerformanceEntry,
     report: &'a [LatencyRecord],
@@ -797,6 +825,7 @@ fn match_latency<'a>(
     report.iter().find(|record| {
         record.label == entry.label
             || record.label == entry.id
+            || ids::resolve_rt_contract_id(&record.label) == Some(entry.id.as_str())
             || normalize_bench_label(&record.label) == normalize_bench_label(&entry.label)
     })
 }

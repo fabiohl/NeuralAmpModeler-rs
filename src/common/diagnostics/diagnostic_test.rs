@@ -33,6 +33,17 @@ fn test_all_codes_have_unique_numeric() {
         NamJsonWeightsExceedLimit,
         NamJsonTrainingTooLarge,
         NamJsonTrainingTooDeep,
+        NamJsonSubmodelsExceedLimit,
+        NamJsonSubmodelsTooDeep,
+        NamJsonWeightNotFinite,
+        NamJsonInvalidSampleRate,
+        NamJsonUnsupportedTopology,
+        NamJsonInvalidVersionFormat,
+        NamJsonUnsupportedVersion,
+        NamJsonUnsupportedMultiChannel,
+        InvalidMetadata,
+        NambNonFiniteWeight,
+        NambInvalidHeaderField,
         NambCrc32Mismatch,
         NambCrc32Missing,
         NambInvalidMagic,
@@ -42,17 +53,24 @@ fn test_all_codes_have_unique_numeric() {
         TopologyDetectionFailed,
         WeightCountMismatch,
         ModelBuildFailed,
+        ModelTooLarge,
+        InvalidModelTopology,
         AudioInitFailed,
         StreamError,
         ResamplerBuildFailed,
         ResamplerChannelFull,
         RtPriorityDenied,
         CpuAffinityFailed,
+        ProcessingOverload,
         ParamChannelFull,
+        GcOverflow,
+        GcCorrupted,
         InvalidGainValue,
         UnknownCommand,
         CtrlCHandlerFailed,
-        ProcessingOverload,
+        IrLoadFailed,
+        OutOfMemory,
+        UnsupportedCpuArchitecture,
     ];
 
     let codes: Vec<&str> = all.iter().map(|c| c.code()).collect();
@@ -370,4 +388,28 @@ fn test_redact_path_and_xdg_priority() {
 
     // full=false redacts HOME to ~
     assert_eq!(redact_path(p, false), "~/test.nam");
+}
+
+/// Validates that `UnsupportedCpuArchitecture` is properly formatted in diagnostics.
+#[test]
+fn test_unsupported_cpu_architecture_diagnostic() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = SystemSnapshot::capture();
+    let code = NamErrorCode::UnsupportedCpuArchitecture;
+
+    assert_eq!(code.code(), "E5001");
+    assert_eq!(code.mnemonic(), "UNSUPPORTED_CPU_ARCHITECTURE");
+    assert_eq!(
+        code.message(),
+        "Host CPU lacks required x86-64-v3 feature set (AVX2/FMA)"
+    );
+
+    let diag = NamDiagnostic::new(code, &snap)
+        .message("CPU incompatible: x86-64-v3 baseline required (AVX2 + FMA).")
+        .hint("Upgrade to a CPU supporting AVX2 and FMA (Intel Haswell+ / AMD Excavator+).");
+
+    let block = diag.support_block();
+    assert!(block.contains("E5001"));
+    assert!(block.contains("UNSUPPORTED_CPU_ARCHITECTURE"));
+    assert!(format!("{}", diag).contains("[E5001] CPU incompatible"));
 }

@@ -99,47 +99,13 @@ impl LstmModelDyn {
     }
 
     // =====================================================================
-    // AVX-512 specialization (F+VL)
-    // =====================================================================
-
-    #[target_feature(enable = "avx512f,avx512vl")]
-    unsafe fn process_avx512(&mut self, input: &[f32], output: &mut [f32]) {
-        if self.layers.is_empty() {
-            return;
-        }
-        unsafe {
-            let n_layers = self.layers.len();
-            debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
-            let layers_ptr = self.layers.as_mut_ptr();
-
-            for (s, &val) in input.iter().enumerate() {
-                (*layers_ptr).process_sample_avx512(&[val]);
-
-                for i in 1..n_layers {
-                    let prev = &*layers_ptr.add(i - 1);
-                    let hidden = &prev.state[prev.input_size..];
-                    (*layers_ptr.add(i)).process_sample_avx512(hidden);
-                }
-
-                let last = &*layers_ptr.add(n_layers - 1);
-                let h = last.get_hidden_state();
-                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan(
-                    h,
-                    &self.head_weights_f32,
-                );
-                output[s] = dot + self.head_bias;
-            }
-        }
-    }
-
-    // =====================================================================
     // Dispatch hub
     // =====================================================================
 
     /// Processes an audio block through the dynamic LSTM model.
     ///
-    /// Dispatches to the highest available SIMD kernel based on the global
-    /// configuration validated at startup.
+    /// Routes to the baseline x86-64-v3 AVX2 kernel (dynamic LSTM is a fallback
+    /// topology where AVX-512 duplication has low ROI).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         // Length contract: clamp to the shorter buffer; never index past
         // `output.len()` even with asymmetric caller buffers.
@@ -147,14 +113,7 @@ impl LstmModelDyn {
         let input = &input[..n];
         let output = &mut output[..n];
         unsafe {
-            crate::math::common::dispatch_simd!(
-                @self,
-                process_avx512,
-                process_avx512,
-                process_avx2,
-                input,
-                output
-            );
+            self.process_avx2(input, output);
         }
     }
 

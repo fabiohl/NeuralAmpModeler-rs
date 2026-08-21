@@ -223,6 +223,7 @@ impl<const CH: usize> WaveNetA2<CH> {
                         );
                     },
                     super::super::super::layer::A2ConvCh::Ch8(ch8_conv) => unsafe {
+                        #[expect(deprecated)]
                         match M::ISA {
                             crate::math::common::InstructionSet::Avx512
                             | crate::math::common::InstructionSet::Avx512VnniBf16 => {

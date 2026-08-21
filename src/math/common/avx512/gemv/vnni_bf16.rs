@@ -41,7 +41,7 @@ macro_rules! impl_avx512vnni_bf16_gemv {
         #[inline(always)]
         // SAFETY: weights and state are valid slices; CPU supports AVX-512 VNNI+BF16.
         unsafe fn dot_product_4x_f32(weights: &[[f32; 4]], state: &[f32]) -> [f32; 4] {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_avx512(weights, state)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_avx512vl(weights, state)
         }
         #[inline(always)]
         // SAFETY: weights, state_f0, state_f1 are valid slices; CPU supports AVX-512 VNNI+BF16.
@@ -50,7 +50,7 @@ macro_rules! impl_avx512vnni_bf16_gemv {
             state_f0: &[f32],
             state_f1: &[f32],
         ) -> ([f32; 4], [f32; 4]) {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_avx512(weights, state_f0, state_f1)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_avx512vl(weights, state_f0, state_f1)
         }
         #[inline(always)]
         // SAFETY: weights and state are valid slices; CPU supports AVX-512 VNNI+BF16.
@@ -91,7 +91,7 @@ macro_rules! impl_avx512vnni_bf16_gemv {
             state: &[f32],
             init: &[f32; 4],
         ) -> [f32; 4] {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_accumulate_avx512(weights, state, init)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_accumulate_avx512vl(weights, state, init)
         }
         #[inline(always)]
         // SAFETY: weights, state_f0, state_f1, init_f0, init_f1 are valid slices;
@@ -103,7 +103,7 @@ macro_rules! impl_avx512vnni_bf16_gemv {
             init_f0: &[f32; 4],
             init_f1: &[f32; 4],
         ) -> ([f32; 4], [f32; 4]) {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_accumulate_avx512(
+            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_accumulate_avx512vl(
                 weights, state_f0, state_f1, init_f0, init_f1,
             )
         }
@@ -270,25 +270,16 @@ macro_rules! impl_avx512vnni_bf16_gemv {
         // SAFETY: in_frame (u16 BF16), weights (u16 BF16), bias (f32), out_gates (f32) are
         // valid slices; CPU supports AVX-512 VNNI+BF16.
         unsafe fn gemv_overwrite_bf16_4gate(
-            in_frame: &[u16],
-            weights: &[u16],
-            bias: &[f32],
-            out_gates: &mut [f32],
-            hidden_size: usize,
-            do_bias: bool,
+            _in_frame: &[u16],
+            _weights: &[u16],
+            _bias: &[f32],
+            _out_gates: &mut [f32],
+            _hidden_size: usize,
+            _do_bias: bool,
         ) {
-            // SAFETY: arguments satisfy the documented invariants; AVX-512 VNNI+BF16
-            // ISA verified by caller via dispatch.
-            unsafe {
-                Avx512Math::gemv_overwrite_bf16_4gate(
-                    in_frame,
-                    weights,
-                    bias,
-                    out_gates,
-                    hidden_size,
-                    do_bias,
-                )
-            }
+            unreachable!(
+                "gemv_overwrite_bf16_4gate is unused; 4-gate dispatch uses direct kernel functions"
+            );
         }
         #[inline(always)]
         // SAFETY: in_frames, weights, bias, out_frames are valid slices;

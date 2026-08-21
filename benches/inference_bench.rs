@@ -13,7 +13,7 @@
 //! | `WaveNet_Standard_CH16_64samp_48kHz`    | Complete WaveNet Standard inference     | ~284 KB model, 10+10 dilated layers      |
 //! | `LSTM_2x16_64samp_48kHz`                | LSTM 2 layers × 16 hidden inference     | Heaviest supported recurrent network     |
 //! | `A2Full_CH8_64samp_48kHz`               | A2-Full (CH=8) inference                | AVX2 col-major T=4 broadcast-FMA         |
-//! | `A2Lite_CH3_64samp_48kHz`               | A2-Lite (CH=3) inference                | u16 interleaved GEMV, CPU-efficient      |
+//! | `A2Lite_CH3_64samp_48kHz`               | A2-Lite (CH=3) inference                | f32 col-major/interleaved, CPU-efficient |
 //! | `WaveNet_Dynamic_CH5_64samp_48kHz`      | WaveNet Dynamic free-geom inference     | Fallback for non-cataloged WaveNet geom  |
 //! | `LSTM_Dynamic_1x7_64samp_48kHz`         | LSTM Dynamic 1×7 inference              | Fallback for non-cataloged LSTM geom     |
 //! | `ConvNet_Model_64samp_48kHz`            | ConvNet end-to-end model inference      | Full pipeline: 2 blocks CH=8→4 + head    |
@@ -48,6 +48,9 @@ mod misc;
 #[path = "inference/a2_dyn_stage_bench.rs"]
 mod a2_dyn_stage;
 
+#[path = "inference/isa_compare_bench.rs"]
+mod isa_compare;
+
 use criterion::{criterion_group, criterion_main};
 
 criterion_group!(
@@ -81,7 +84,12 @@ criterion_group!(
     a2::bench_a2_comparison,
     misc::bench_nondist_models,
     misc::bench_convnet_model_process,
-    a2_dyn_stage::bench_a2dyn_stages
+    a2_dyn_stage::bench_a2dyn_stages,
+    isa_compare::bench_isa_compare_lstm_2x16,
+    isa_compare::bench_isa_compare_lstm_1x16,
+    isa_compare::bench_isa_compare_a2_full,
+    isa_compare::bench_isa_compare_a2_lite,
+    isa_compare::bench_isa_compare_wavenet_standard
 );
 
 criterion_main!(benches);

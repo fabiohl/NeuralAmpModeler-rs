@@ -15,7 +15,7 @@ macro_rules! impl_avx512_activations {
         // CPU supports AVX-512F+VL (verified by dispatch). Kernel uses unaligned loads/stores.
         unsafe fn accumulate_head(dest: &mut [f32], src: &[f32]) {
             // SAFETY: dest and src satisfy the function's documented invariants.
-            unsafe { crate::math::wavenet::accumulate::accumulate_head_avx512(dest, src) }
+            unsafe { crate::math::wavenet::accumulate::accumulate_head_avx512vl(dest, src) }
         }
 
         #[inline(always)]
@@ -24,7 +24,7 @@ macro_rules! impl_avx512_activations {
         unsafe fn tanh_and_accumulate_block(head_input: &mut [f32], block: &mut [f32]) {
             // SAFETY: head_input and block satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::tanh_and_accumulate_block_avx512(
+                crate::math::wavenet::accumulate::tanh_and_accumulate_block_avx512vl(
                     head_input, block,
                 )
             }
@@ -36,7 +36,7 @@ macro_rules! impl_avx512_activations {
         unsafe fn relu_and_accumulate_block(head_input: &mut [f32], block: &mut [f32]) {
             // SAFETY: head_input and block satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::relu_and_accumulate_block_avx512(
+                crate::math::wavenet::accumulate::relu_and_accumulate_block_avx512vl(
                     head_input, block,
                 )
             }
@@ -52,7 +52,7 @@ macro_rules! impl_avx512_activations {
         ) {
             // SAFETY: head_input, block, and ch satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::gated_activation_and_accumulate_block_avx512(
+                crate::math::wavenet::accumulate::gated_activation_and_accumulate_block_avx512vl(
                     head_input, block, ch,
                 )
             }
@@ -64,7 +64,9 @@ macro_rules! impl_avx512_activations {
         unsafe fn tanh_and_overwrite_block(head_input: &mut [f32], block: &mut [f32]) {
             // SAFETY: head_input and block satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::tanh_and_overwrite_block_avx512(head_input, block)
+                crate::math::wavenet::accumulate::tanh_and_overwrite_block_avx512vl(
+                    head_input, block,
+                )
             }
         }
 
@@ -74,7 +76,9 @@ macro_rules! impl_avx512_activations {
         unsafe fn relu_and_overwrite_block(head_input: &mut [f32], block: &mut [f32]) {
             // SAFETY: head_input and block satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::relu_and_overwrite_block_avx512(head_input, block)
+                crate::math::wavenet::accumulate::relu_and_overwrite_block_avx512vl(
+                    head_input, block,
+                )
             }
         }
 
@@ -88,7 +92,7 @@ macro_rules! impl_avx512_activations {
         ) {
             // SAFETY: arguments satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::tanh_and_accumulate_with_seed_avx512(
+                crate::math::wavenet::accumulate::tanh_and_accumulate_with_seed_avx512vl(
                     head_input, block, seed,
                 )
             }
@@ -104,7 +108,7 @@ macro_rules! impl_avx512_activations {
         ) {
             // SAFETY: arguments satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::relu_and_accumulate_with_seed_avx512(
+                crate::math::wavenet::accumulate::relu_and_accumulate_with_seed_avx512vl(
                     head_input, block, seed,
                 )
             }
@@ -120,7 +124,7 @@ macro_rules! impl_avx512_activations {
         ) {
             // SAFETY: head_input, block, and ch satisfy the function's documented invariants.
             unsafe {
-                crate::math::wavenet::accumulate::gated_activation_and_overwrite_block_avx512(
+                crate::math::wavenet::accumulate::gated_activation_and_overwrite_block_avx512vl(
                     head_input, block, ch,
                 )
             }

@@ -48,6 +48,7 @@ use serde_json::Value;
 
 use neural_amp_modeler_rs::testing::qa::QualityContract;
 use neural_amp_modeler_rs::testing::qa::classify::classify_regression_outcome;
+use neural_amp_modeler_rs::testing::qa::ids;
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
 };
@@ -110,7 +111,7 @@ fn print_help() {
     println!("Usage:");
     println!("  nam_quality ingest [--receipt <path>] [--metrics <path>] [--latency <path>]");
     println!("                          [--out <path>]");
-    println!("  nam_quality verify --contract <path> --report <path>");
+    println!("  nam_quality verify --contract <path> --report <path> [--fidelity-only]");
     println!("  nam_quality render --report <path> [--ansi | --plain]");
     println!("  nam_quality classify --status <STATUS> --reason <text>");
     println!("  nam_quality receipt append --phase-id <id> --status <STATUS> --out <path>");
@@ -247,6 +248,13 @@ fn cmd_ingest(args: &[String]) {
     let metrics = read_optional_stream("metrics", &flags);
     let latency = read_optional_stream("latency", &flags);
 
+    // Join the f64-oracle table (`kind: f64_table`) onto the fidelity
+    // records: `verify_contract` reads `esr_f64` from the SAME record as the
+    // NAMCore metrics, so the fixture ESR has to land on the fidelity label
+    // (P0.T3 — the reference_oracle_f64 phase passed but its values never
+    // reached the verify key).
+    let metrics = join_f64_oracle_esr(&metrics);
+
     let mut rendered = String::new();
     for line in phases.iter().chain(&metrics).chain(&latency) {
         rendered.push_str(line);
@@ -276,6 +284,82 @@ fn cmd_ingest(args: &[String]) {
         }
     }
     exit(0);
+}
+
+/// Joins the `f64_table` oracle ESR onto the fidelity records it measures.
+///
+/// The `reference_oracle_f64` phase sinks one `kind: "f64_table"` record per
+/// golden fixture (`filename` + prewarm-paired `esr`), while the
+/// golden/quick fidelity records carry the NAMCore metrics under the contract
+/// label. `verify_contract` reads `esr_f64` from the fidelity record itself,
+/// so the two streams must be joined here: a fidelity record whose label
+/// family resolves (via `ids::resolve_f64_oracle_fixture`) to a measured
+/// fixture receives that fixture's ESR as `esr_f64`.
+///
+/// Fail-closed: records without a resolution are passed through verbatim —
+/// never fabricated, never coerced to `0.0`. Non-fidelity kinds (including
+/// the `f64_table` rows themselves) survive untouched as the forensic stream.
+fn join_f64_oracle_esr(metrics: &[String]) -> Vec<String> {
+    if metrics.is_empty() {
+        return metrics.to_vec();
+    }
+    let mut parsed: Vec<(usize, Value)> = Vec::with_capacity(metrics.len());
+    let mut f64_by_fixture: HashMap<String, Value> = HashMap::new();
+    for (idx, line) in metrics.iter().enumerate() {
+        // `read_optional_stream` already validated every line; a parse miss
+        // here is unreachable but must not corrupt the join.
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("kind").and_then(Value::as_str) == Some("f64_table")
+            && let (Some(filename), Some(esr)) = (
+                value.get("filename").and_then(Value::as_str),
+                value.get("esr"),
+            )
+        {
+            f64_by_fixture
+                .entry(filename.to_string())
+                .or_insert_with(|| esr.clone());
+        }
+        parsed.push((idx, value));
+    }
+    if f64_by_fixture.is_empty() {
+        return metrics.to_vec();
+    }
+
+    let mut out: Vec<Option<String>> = metrics.iter().map(|l| Some(l.clone())).collect();
+    for (idx, value) in parsed {
+        let is_fidelity = match value.get("kind") {
+            None => true,
+            Some(Value::String(kind)) => kind == "fidelity",
+            Some(_) => false,
+        };
+        let Some(label) = value.get("label").and_then(Value::as_str) else {
+            continue;
+        };
+        if !is_fidelity || value.get("esr_f64").is_some() {
+            continue;
+        }
+        // Alias-aware join: quick_parity records like `Quick ConvNet @48000
+        // Live` resolve to the contract label `ConvNet Test @48000 Live`
+        // (`ids::resolve_fidelity_alias`) — the family must be stripped from
+        // the RESOLVED label or the fixture lookup misses.
+        let resolved = ids::resolve_fidelity_alias(label).unwrap_or(label);
+        let family = ids::fidelity_label_family(resolved);
+        let Some(fixture) = ids::resolve_f64_oracle_fixture(family) else {
+            continue;
+        };
+        let Some(esr) = f64_by_fixture.get(fixture) else {
+            continue;
+        };
+        let Some(obj) = value.as_object() else {
+            continue;
+        };
+        let mut joined = obj.clone();
+        joined.insert("esr_f64".to_string(), esr.clone());
+        out[idx] = Some(serde_json::Value::Object(joined).to_string());
+    }
+    out.into_iter().flatten().collect()
 }
 
 fn print_ingest_help() {
@@ -326,7 +410,11 @@ fn read_jsonl_lines(path: &str) -> io::Result<Vec<String>> {
 // ── verify ──────────────────────────────────────────────────────────────────
 
 fn cmd_verify(args: &[String]) {
-    let flags = match parse_flags(args, &["contract", "report"], &[]) {
+    let flags = match parse_flags(
+        args,
+        &["contract", "report", "fidelity-only"],
+        &["fidelity-only"],
+    ) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_verify_help();
@@ -342,6 +430,7 @@ fn cmd_verify(args: &[String]) {
         Ok(v) => v,
         Err(e) => usage_error("verify", &e),
     };
+    let fidelity_only = flags.get("fidelity-only").is_some();
 
     let contract = match fs::read_to_string(contract_path)
         .map_err(|e| format!("cannot read contract {contract_path}: {e}"))
@@ -356,19 +445,31 @@ fn cmd_verify(args: &[String]) {
     };
 
     let outcome = verify_contract(&contract, &report);
-    print!("{}", render_outcome(&contract, &report, &outcome));
-    exit(outcome.exit_code());
+    print!(
+        "{}",
+        render_outcome(&contract, &report, &outcome, fidelity_only)
+    );
+    let exit_code = if fidelity_only {
+        outcome.fidelity_exit_code()
+    } else {
+        outcome.exit_code()
+    };
+    exit(exit_code);
 }
 
 fn print_verify_help() {
-    println!("Usage: nam_quality verify --contract <path> --report <path>");
+    println!("Usage: nam_quality verify --contract <path> --report <path> [--fidelity-only]");
     println!();
     println!("Runs the literal port of the bash `verify_contract` against");
     println!("docs/quality-contract.json (JSON-only) and a JSONL report produced");
     println!("by `nam_quality ingest` (or by the test fixtures).");
     println!();
+    println!("Options:");
+    println!("  --fidelity-only   verifies only the fidelity domain (mandatory phases &");
+    println!("                    metric envelopes); unverified performance does not fail.");
+    println!();
     println!("Prints the verdict lines (`FIDELITY: OK/FAIL`, `PERFORMANCE: OK/");
-    println!("FAIL/NOT_VERIFIED`, `CONTRACT VIOLATED`) and exits 0 only when both");
+    println!("FAIL/NOT_VERIFIED`, `CONTRACT VIOLATED`) and exits 0 only when the active");
     println!("domains pass and no oracle review is pending; exit 1 otherwise.");
 }
 
@@ -379,9 +480,13 @@ fn render_outcome(
     contract: &QualityContract,
     report: &neural_amp_modeler_rs::testing::qa::verify::VerifyReport,
     outcome: &VerifyOutcome,
+    fidelity_only: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str("QUALITY CONTRACT VERIFICATION\n");
+    if fidelity_only {
+        out.push_str("  [MODE] FIDELITY-ONLY VERIFICATION (latency checks skipped)\n");
+    }
     out.push('\n');
 
     for phase in &report.phases {
@@ -448,7 +553,7 @@ fn render_outcome(
                             limit,
                             baseline,
                         } => out.push_str(&format!(
-                            "    FAIL {}: {} outside envelope (current={current:.3}, limit={limit:.3}, baseline={baseline:.3})\n",
+                            "    FAIL {}: {} out of envelope (current={current:.3e}, limit={limit:.3e}, baseline={baseline:.3e})\n",
                             check.label,
                             metric_name(m.metric)
                         )),
@@ -459,7 +564,7 @@ fn render_outcome(
                             malformed_reason(reason)
                         )),
                         MetricOutcome::Missing => out.push_str(&format!(
-                            "    FAIL {}: {} not measured in report (MISSING)\n",
+                            "    FAIL {}: {} missing from report\n",
                             check.label,
                             metric_name(m.metric)
                         )),
@@ -471,30 +576,43 @@ fn render_outcome(
     out.push('\n');
 
     out.push_str(&format!(
-        "  PERFORMANCE — {} entry(ies) in contract\n",
+        "  PERFORMANCE — {} benchmark(s) in contract\n",
         contract.performance.len()
     ));
-    for check in &outcome.perf_checks {
-        match &check.result {
-            PerfResult::Ok { median_us } => {
-                out.push_str(&format!("    ok {}: latency {median_us:.2} us\n", check.label));
+    if fidelity_only {
+        out.push_str("    [SKIPPED] performance checks skipped in fidelity-only mode\n");
+    } else {
+        for check in &outcome.perf_checks {
+            match &check.result {
+                PerfResult::Ok { median_us } => {
+                    out.push_str(&format!(
+                        "    ok {}: median={median_us:.3} µs\n",
+                        check.label
+                    ));
+                }
+                PerfResult::Regressed {
+                    median_us,
+                    limit_us,
+                    baseline_us,
+                } => {
+                    out.push_str(&format!(
+                        "    FAIL {}: latency regressed (current={median_us:.3} µs, limit={limit_us:.3} µs, baseline={baseline_us:.3} µs)\n",
+                        check.label
+                    ));
+                }
+                PerfResult::MissingLabel => {
+                    out.push_str(&format!(
+                        "    FAIL {}: MISSING_LABEL — contract entry not found in report\n",
+                        check.label
+                    ));
+                }
+                PerfResult::MissingLatency => {
+                    out.push_str(&format!(
+                        "    FAIL {}: MISSING_LATENCY — benchmark carried no latency data\n",
+                        check.label
+                    ));
+                }
             }
-            PerfResult::Regressed {
-                median_us,
-                limit_us,
-                baseline_us,
-            } => out.push_str(&format!(
-                "    FAIL {}: latency regressed (current={median_us:.2} us, limit={limit_us:.2} us, baseline={baseline_us:.2} us)\n",
-                check.label
-            )),
-            PerfResult::MissingLabel => out.push_str(&format!(
-                "    FAIL {}: MISSING_LABEL — mandatory contract entry not found in report\n",
-                check.label
-            )),
-            PerfResult::MissingLatency => out.push_str(&format!(
-                "    FAIL {}: MISSING_LATENCY — benchmark data not available\n",
-                check.label
-            )),
         }
     }
     out.push('\n');
@@ -511,26 +629,40 @@ fn render_outcome(
             }
         }
     }
-    match outcome.performance {
-        PerformanceVerdict::Ok => out.push_str("  PERFORMANCE: OK\n"),
-        PerformanceVerdict::NotVerified => {
-            out.push_str("  PERFORMANCE: NOT_VERIFIED\n");
-        }
-        PerformanceVerdict::Fail { violations } => {
-            out.push_str(&format!(
-                "  PERFORMANCE: FAIL ({violations} violation(s))\n"
-            ));
+    if fidelity_only {
+        out.push_str("  PERFORMANCE: NOT_VERIFIED (skipped in fidelity-only mode)\n");
+    } else {
+        match outcome.performance {
+            PerformanceVerdict::Ok => out.push_str("  PERFORMANCE: OK\n"),
+            PerformanceVerdict::NotVerified => {
+                out.push_str("  PERFORMANCE: NOT_VERIFIED\n");
+            }
+            PerformanceVerdict::Fail { violations } => {
+                out.push_str(&format!(
+                    "  PERFORMANCE: FAIL ({violations} violation(s))\n"
+                ));
+            }
         }
     }
 
-    if outcome.fidelity.is_ok() && outcome.performance.is_ok() && outcome.review_required > 0 {
+    if outcome.fidelity.is_ok()
+        && (outcome.performance.is_ok() || fidelity_only)
+        && outcome.review_required > 0
+    {
         out.push_str(
             "  CONTRACT UNDER REVIEW — numeric metrics OK, but oracle divergence needs investigation.\n",
         );
         out.push('\n');
-    } else if outcome.exit_code() != 0 {
-        out.push_str("  CONTRACT VIOLATED\n");
-        out.push('\n');
+    } else {
+        let is_violated = if fidelity_only {
+            outcome.fidelity_exit_code() != 0
+        } else {
+            outcome.exit_code() != 0
+        };
+        if is_violated {
+            out.push_str("  CONTRACT VIOLATED\n");
+            out.push('\n');
+        }
     }
     out
 }

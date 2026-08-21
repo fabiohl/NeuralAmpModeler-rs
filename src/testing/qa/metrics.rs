@@ -12,9 +12,11 @@
 //! `tests/common/validation.rs:567-575`: one JSON object per line with
 //! `label`, `kind`, and the metric fields `esr`, `esr_db`, `snr_db`, `mse`,
 //! `mrstft`. Metrics arrive either as numbers or as explicit string
-//! sentinels (`"inf"`, `"-inf"`, `"nan"`) — never `null` when written by the
-//! sink, but `null` and empty strings are normalized to the `N/A` state on
-//! read exactly like the bash `canon` helper.
+//! sentinels (`"inf"`, `"-inf"`, `"nan"`) — except the fidelity `snr_db`,
+//! whose non-finite (perfect-parity) state the sink writes as JSON `null`
+//! (P0.T3). On read, `null` normalizes to `MetricValue::Null` and absent
+//! fields/empty strings to `MetricValue::Na`, exactly like the bash
+//! `canon` helper plus the distinct-null refinement.
 //!
 //! Non-finite values are **preserved** as raw text at ingest time and
 //! rejected only by `is_finite_num` at verify time — fail-closed, never
@@ -27,31 +29,42 @@ use serde_json::Value;
 
 /// Canonical metric value of a JSONL fidelity record.
 ///
-/// Mirrors the bash/jq `canon` normalization: JSON `null` and the empty
-/// string map to [`Na`](Self::Na); every other JSON value is preserved as
-/// raw stream text (strings verbatim, numbers in their JSON rendering).
+/// Mirrors the bash/jq `canon` normalization: JSON `null` maps to
+/// [`Null`](Self::Null), the empty string and absent fields map to
+/// [`Na`](Self::Na), and every other JSON value is preserved as raw stream
+/// text (strings verbatim, numbers in their JSON rendering).
+///
+/// The two "empty" states are deliberately distinct: the canonical sink
+/// (`tests/common/validation.rs::json_snr_db`) emits JSON `null` for the
+/// non-finite (perfect-parity) SNR, which the verify engine accepts as
+/// above-the-floor — while an absent/empty field stays the `N/A` missing
+/// sentinel that fails closed (P0.T3).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetricValue {
-    /// `null` or empty-string metric — the `N/A` sentinel of the bash parse.
+    /// Absent field or empty-string metric — the `N/A` sentinel of the bash
+    /// parse (missing, fail-closed).
     Na,
+    /// JSON `null` — a present-but-empty field. Distinct from [`Na`](Self::Na):
+    /// the canonical sink emits `null` for the non-finite (perfect-parity) SNR.
+    Null,
     /// Raw stream text, preserved verbatim (`"1.5e2"`, `"inf"`, numbers, …).
     Raw(String),
 }
 
 impl MetricValue {
-    /// The raw text behind a non-`N/A` value.
+    /// The raw text behind a non-`N/A`/non-`null` value.
     pub fn as_raw(&self) -> Option<&str> {
         match self {
-            MetricValue::Na => None,
+            MetricValue::Na | MetricValue::Null => None,
             MetricValue::Raw(raw) => Some(raw),
         }
     }
 
     /// Fail-closed accessor for the `--check` path: only finite values pass.
     ///
-    /// Non-finite sentinels (`"inf"`, `"nan"`, …) and `N/A` return `None` —
-    /// they are never coerced to `0.0` (invariant: fail-closed on
+    /// Non-finite sentinels (`"inf"`, `"nan"`, …) and the empty states return
+    /// `None` — they are never coerced to `0.0` (invariant: fail-closed on
     /// non-finite in the verify path).
     pub fn as_finite(&self) -> Option<&str> {
         self.as_raw().filter(|raw| is_finite_num(raw))
@@ -123,7 +136,8 @@ pub(crate) fn fidelity_from_json(value: &Value) -> Option<FidelityRecord> {
 /// - records whose `kind` is neither `"fidelity"` nor absent are skipped
 ///   (other kinds land with S2.T6; non-string `kind` values are skipped too
 ///   — the canonical sink only ever emits `"fidelity"`);
-/// - null/empty metric fields normalize to [`MetricValue::Na`];
+/// - JSON `null` metrics normalize to `MetricValue::Null`; absent fields
+///   and empty strings normalize to `MetricValue::Na`;
 /// - records with a missing, null, empty, or `"null"` label are dropped;
 /// - blank lines are ignored.
 ///
@@ -233,7 +247,8 @@ pub fn is_finite_num(v: &str) -> bool {
 
 fn canon_metric(value: Option<&Value>) -> MetricValue {
     match value {
-        None | Some(Value::Null) => MetricValue::Na,
+        None => MetricValue::Na,
+        Some(Value::Null) => MetricValue::Null,
         Some(Value::String(s)) if s.is_empty() => MetricValue::Na,
         Some(Value::String(s)) => MetricValue::Raw(s.clone()),
         Some(Value::Number(n)) => MetricValue::Raw(n.to_string()),

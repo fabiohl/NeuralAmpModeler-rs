@@ -235,7 +235,7 @@ impl WaveNetModelDyn {
     /// the `dispatch_simd!` macro evaluates the hardware once and "teleports" execution
     /// to a cloned (monomorphized) version of this function strictly optimized for your processor.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
+        unsafe { self.process_internal::<crate::math::common::Avx2Math>(input, output) };
     }
 
     /// Fast, generic routine that implements the neural network (WaveNet).
@@ -365,18 +365,8 @@ impl WaveNetModelDyn {
     #[cold]
     pub fn prewarm(&mut self) {
         unsafe {
-            crate::math::common::dispatch_simd!(self, prewarm_internal);
+            self.prewarm_internal::<crate::math::common::Avx2Math>();
         }
-    }
-
-    /// Prewarm strictly optimized for AVX-512 architecture.
-    ///
-    /// # Safety
-    /// Requires a supported processor (AVX-512).
-    #[target_feature(enable = "avx512f,avx512vl")]
-    #[cold]
-    pub unsafe fn prewarm_avx512(&mut self) {
-        unsafe { self.prewarm_internal::<crate::math::common::Avx512Math>() };
     }
 
     /// Prewarm strictly optimized for AVX2 architecture.

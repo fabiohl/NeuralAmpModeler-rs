@@ -45,9 +45,7 @@ pub fn capture_dsp_pipeline(
     bufs: DspBuffers<'_>,
     sample_rate: u32,
 ) -> usize {
-    use crate::math::common::{
-        Avx2Math, Avx512Math, Avx512VnniBf16Math, InstructionSet, effective_instruction_set,
-    };
+    use crate::math::common::{Avx2Math, Avx512Math, InstructionSet, effective_instruction_set};
 
     // F-04 / T3.2: reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
     // before any DSP runs. This is a fixed stmxcsr/ldmxcsr pair — zero-alloc,
@@ -67,21 +65,9 @@ pub fn capture_dsp_pipeline(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
 
+    #[expect(deprecated)]
     match effective_instruction_set() {
-        InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe {
-                capture_dsp_pipeline_inner::<Avx512VnniBf16Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    bufs,
-                    sample_rate,
-                )
-            }
-        }
-        InstructionSet::Avx512 => {
+        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
             // SAFETY: inner invariants upheld by caller.
             unsafe {
                 capture_dsp_pipeline_inner::<Avx512Math>(

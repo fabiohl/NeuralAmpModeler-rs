@@ -87,7 +87,7 @@ macro_rules! impl_avx512vnni_bf16_dsp {
         // SAFETY: data is a valid mutable f32 slice; gain is a finite f32;
         // CPU supports AVX-512 VNNI+BF16.
         unsafe fn apply_gain(data: &mut [f32], gain: f32) {
-            crate::math::dsp::gain::apply_gain_avx512(data, gain)
+            Avx512Math::apply_gain(data, gain)
         }
 
         #[inline(always)]

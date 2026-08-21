@@ -5,13 +5,20 @@
 //!
 //! Guards the invariant of Tarefa 1.1: `report_dsp_fidelity*` must never emit
 //! JSON `null` in the fundamental numeric metric fields (`esr`, `esr_db`,
-//! `snr_db`). `serde_json` serializes non-finite floats (`f64::INFINITY`,
-//! `-inf`, `NaN`) as `null`, so a perfect-parity result (SNR = ∞) or a silent
-//! signal (ESR = ∞, ESR dB = −∞) would otherwise corrupt the metric stream that
-//! `quality-dashboard.sh` consumes — where `null` is coerced to `0.0` (fail-open).
+//! `mse`, `mrstft`) and must never write the literal `"inf"` for `snr_db`.
+//! `serde_json` serializes non-finite floats (`f64::INFINITY`, `-inf`, `NaN`)
+//! as `null`, so a perfect-parity result (SNR = ∞) or a silent signal
+//! (ESR = ∞, ESR dB = −∞) would otherwise corrupt the metric stream that
+//! `quality-dashboard.sh` consumes — where `null` is coerced to `0.0`
+//! (fail-open).
 //!
 //! The generator maps non-finite values to canonical string sentinels `"inf"`,
-//! `"-inf"`, and `"nan"` instead.
+//! `"-inf"`, and `"nan"` instead — **except** for the fidelity record's
+//! `snr_db`: a non-finite SNR is bit-identical perfect parity (above any
+//! floor), so the sink emits JSON `null` (the "measured, non-finite" state)
+//! and the verify engine reads it as a PASS. The literal `"inf"` is never
+//! written for SNR because it trips the `is_finite_num` gate of foreign
+//! consumers (P0.T3).
 //!
 //! # Concurrency (S6-T02 / RES-07)
 //!
@@ -112,24 +119,52 @@ fn metrics_jsonl_never_emits_null() {
         "finite-divergence-selftest",
         48000,
     );
+    // Degenerate measurement (silent reference, noisy output): SNR = −∞ must
+    // stay a fail-closed sentinel, not collapse into the perfect-parity
+    // `null` (P0.T3). The sink's own `snr >= min_snr_db` assertion is lifted
+    // (the `−∞` state is exactly what the sentinel path guards).
+    let silent: Vec<f32> = vec![0.0; n];
+    report_dsp_fidelity_no_lufs(
+        &silent,
+        &noisy,
+        None,
+        f64::NEG_INFINITY,
+        None,
+        None,
+        "degenerate-snr-selftest",
+        48000,
+    );
 
     // The guard is still alive here: the file is read while the sink is
     // thread-exclusive, then removed by `JsonlFileGuard::drop`.
     let content = std::fs::read_to_string(&tmp).expect("JSONL output file must exist");
 
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 2, "expected two JSONL lines, got:\n{content}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected three JSONL lines, got:\n{content}"
+    );
 
     let identity: serde_json::Value =
         serde_json::from_str(lines[0]).expect("identity line must be valid JSON");
-    for field in ["esr", "esr_db", "snr_db", "mrstft", "mse"] {
+    // `esr`, `esr_db`, `mrstft`, `mse` never emit `null` — non-finite values
+    // stay typed string sentinels.
+    for field in ["esr", "esr_db", "mrstft", "mse"] {
         assert!(
             !identity[field].is_null(),
             "identity `{field}` must not be null in: {}",
             lines[0]
         );
     }
-    assert_eq!(identity["snr_db"], "inf");
+    // `snr_db` is the one exception: perfect parity (SNR = +∞) is a
+    // non-finite state that is *above* any envelope floor, so the sink emits
+    // `null` — never the literal `"inf"` (P0.T3).
+    assert!(
+        identity["snr_db"].is_null(),
+        "identity snr_db must be null (perfect parity), got: {}",
+        lines[0]
+    );
     assert_eq!(identity["esr_db"], "-inf");
     assert_eq!(identity["esr"].as_f64().unwrap(), 0.0);
 
@@ -142,12 +177,22 @@ fn metrics_jsonl_never_emits_null() {
             lines[1]
         );
     }
+
+    let degenerate: serde_json::Value =
+        serde_json::from_str(lines[2]).expect("degenerate line must be valid JSON");
+    assert_eq!(
+        degenerate["snr_db"], "-inf",
+        "degenerate (silent reference) SNR must stay a fail-closed sentinel: {}",
+        lines[2]
+    );
 }
 
 // ── S2.T6 oracle sinks (R-06, slice 1) ──────────────────────────────────────
 // One test per `report_*` kind: each emits a serde-valid JSONL line with the
 // canonical `kind` and finite numeric fields (non-finite → string sentinels,
 // never `null`), following the `metrics_jsonl_never_emits_null` invariant.
+// The single exception is the fidelity record's `snr_db` — see the module
+// doc (P0.T3).
 
 #[test]
 fn f64_table_sink_emits_valid_jsonl() {

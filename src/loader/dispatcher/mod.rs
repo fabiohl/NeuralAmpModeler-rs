@@ -8,6 +8,7 @@
 //! ensuring the resulting `Box<StaticModel>` is ready for injection into the
 //! DSP thread via SPSC without any allocation on the RT path.
 
+use crate::common::diagnostics::NamErrorCode;
 use crate::loader::nam_json::NamModelData;
 use crate::models::StaticModel;
 use anyhow::bail;
@@ -21,6 +22,17 @@ use anyhow::bail;
 /// Branches by architecture (`"WaveNet"` / `"LSTM"` / `"SlimmableContainer"`) and delegates to the
 /// specialized builders with const generics.
 pub fn build_model(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !std::is_x86_feature_detected!("avx2") || !std::is_x86_feature_detected!("fma") {
+            log::error!(
+                "CPU incompatible: x86-64-v3 baseline required (AVX2 + FMA). \
+                 Execution aborted cleanly to prevent SIGILL."
+            );
+            return Err(anyhow::anyhow!(NamErrorCode::UnsupportedCpuArchitecture));
+        }
+    }
+
     match data.architecture.as_str() {
         "WaveNet" => wavenet::build_wavenet(data),
         "LSTM" => lstm::build_lstm(data),

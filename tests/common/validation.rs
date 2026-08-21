@@ -159,6 +159,33 @@ fn json_metric(v: f64) -> serde_json::Value {
     }
 }
 
+/// Serializes the SNR of a fidelity record.
+///
+/// SNR is the one metric where a non-finite value can be a **positive**
+/// outcome: `+∞` dB means the output is bit-identical to the reference
+/// (perfect parity), which is above any envelope floor. The literal `"inf"`
+/// sentinel is therefore never written for a positive `snr_db` — it trips the
+/// `is_finite_num` syntactic gate of foreign consumers (jq/awk `+0` coercion)
+/// and the fail-closed verify engine reads the omission as the
+/// above-the-floor state instead. `null` is the canonical representation of
+/// "measured, non-finite, positive".
+///
+/// Non-positive non-finite values stay typed sentinels (`"-inf"`, `"nan"`):
+/// a silent reference with noisy output (`-∞` dB) or a NaN measurement is a
+/// broken/degenerate result, not an above-floor one, and must keep failing
+/// the contract.
+fn json_snr_db(snr: f64) -> serde_json::Value {
+    if snr.is_finite() {
+        serde_json::json!(snr)
+    } else if snr.is_nan() {
+        serde_json::json!("nan")
+    } else if snr.is_sign_positive() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!("-inf")
+    }
+}
+
 /// Appends one JSONL line to the metric sink — thread-local override first,
 /// process env `NAM_METRICS_JSONL` fallback, serialized under [`REPORT_LOCK`]
 /// so concurrent reporters never interleave partial lines.
@@ -687,7 +714,7 @@ fn report_dsp_fidelity_impl(
         "kind": json_kind,
         "esr": json_metric(esr_linear),
         "esr_db": json_metric(esr_db),
-        "snr_db": json_metric(snr),
+        "snr_db": json_snr_db(snr),
         "mrstft": json_metric(mr_stft),
         "mse": json_metric(mse),
     });

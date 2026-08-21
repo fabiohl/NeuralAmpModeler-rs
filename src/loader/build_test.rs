@@ -193,4 +193,15 @@ mod tests {
         let res = load_and_build_model(path, &sys, false, LoadOptions::default());
         assert!(res.is_err(), "Nonexistent model path must return Err");
     }
+
+    #[test]
+    fn test_build_model_fail_fast_on_valid_system() {
+        // On a valid x86-64-v3 host (where avx2 & fma are supported),
+        // dispatcher::build_model must succeed in feature check and construct the model.
+        let path = model_path("wavenet.nam");
+        let content = std::fs::read_to_string(&path).expect("fixture must exist");
+        let data = crate::loader::nam_json::parse_nam_json(&content).expect("JSON must parse");
+        let model = crate::loader::dispatcher::build_model(&data);
+        assert!(model.is_ok(), "build_model must succeed on supported CPU");
+    }
 }

@@ -9,7 +9,6 @@
 
 use crate::math::common::Avx2Math;
 use crate::math::common::Avx512Math;
-use crate::math::common::Avx512VnniBf16Math;
 use crate::math::common::dispatch::InstructionSet;
 use crate::math::common::traits::SimdMath;
 
@@ -91,23 +90,18 @@ impl super::LinearFftState {
 
         // Partition 0 (delays P..2P−1): uses the current block's input spectrum.
         unsafe {
+            #[expect(deprecated)]
             match self.isa {
-                InstructionSet::Avx512VnniBf16 => Avx512VnniBf16Math::complex_mac_accumulate(
-                    &self.h_fdl_re[..num_bins],
-                    &self.h_fdl_im[..num_bins],
-                    &self.fft_re[..num_bins],
-                    &self.fft_im[..num_bins],
-                    &mut self.acc_re[..num_bins],
-                    &mut self.acc_im[..num_bins],
-                ),
-                InstructionSet::Avx512 => Avx512Math::complex_mac_accumulate(
-                    &self.h_fdl_re[..num_bins],
-                    &self.h_fdl_im[..num_bins],
-                    &self.fft_re[..num_bins],
-                    &self.fft_im[..num_bins],
-                    &mut self.acc_re[..num_bins],
-                    &mut self.acc_im[..num_bins],
-                ),
+                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                    Avx512Math::complex_mac_accumulate(
+                        &self.h_fdl_re[..num_bins],
+                        &self.h_fdl_im[..num_bins],
+                        &self.fft_re[..num_bins],
+                        &self.fft_im[..num_bins],
+                        &mut self.acc_re[..num_bins],
+                        &mut self.acc_im[..num_bins],
+                    )
+                }
                 InstructionSet::Avx2 => Avx2Math::complex_mac_accumulate(
                     &self.h_fdl_re[..num_bins],
                     &self.h_fdl_im[..num_bins],
@@ -126,23 +120,18 @@ impl super::LinearFftState {
             let h_start = k * num_bins;
 
             unsafe {
+                #[expect(deprecated)]
                 match self.isa {
-                    InstructionSet::Avx512VnniBf16 => Avx512VnniBf16Math::complex_mac_accumulate(
-                        &self.h_fdl_re[h_start..h_start + num_bins],
-                        &self.h_fdl_im[h_start..h_start + num_bins],
-                        &self.fdl_re[fdl_start..fdl_start + num_bins],
-                        &self.fdl_im[fdl_start..fdl_start + num_bins],
-                        &mut self.acc_re[..num_bins],
-                        &mut self.acc_im[..num_bins],
-                    ),
-                    InstructionSet::Avx512 => Avx512Math::complex_mac_accumulate(
-                        &self.h_fdl_re[h_start..h_start + num_bins],
-                        &self.h_fdl_im[h_start..h_start + num_bins],
-                        &self.fdl_re[fdl_start..fdl_start + num_bins],
-                        &self.fdl_im[fdl_start..fdl_start + num_bins],
-                        &mut self.acc_re[..num_bins],
-                        &mut self.acc_im[..num_bins],
-                    ),
+                    InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                        Avx512Math::complex_mac_accumulate(
+                            &self.h_fdl_re[h_start..h_start + num_bins],
+                            &self.h_fdl_im[h_start..h_start + num_bins],
+                            &self.fdl_re[fdl_start..fdl_start + num_bins],
+                            &self.fdl_im[fdl_start..fdl_start + num_bins],
+                            &mut self.acc_re[..num_bins],
+                            &mut self.acc_im[..num_bins],
+                        )
+                    }
                     InstructionSet::Avx2 => Avx2Math::complex_mac_accumulate(
                         &self.h_fdl_re[h_start..h_start + num_bins],
                         &self.h_fdl_im[h_start..h_start + num_bins],

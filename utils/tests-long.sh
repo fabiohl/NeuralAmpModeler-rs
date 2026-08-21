@@ -740,6 +740,12 @@ fi
 echo -e "\n${BLUE}${BOLD}================ AUDIT SUMMARY ================${NC}"
 printf '%s\n' "$SUMMARY_TEXT"
 
+echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
+echo -e "  ${BOLD}Audit Artifacts saved:${NC}"
+echo -e "    - JSONL Receipt: ${CYAN}$LONG_RECEIPT_FILE${NC}"
+echo -e "    - Phase Logs:    ${CYAN}target/logs/phase*.log${NC}"
+echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
+
 case "$SUMMARY_TEXT" in
     *"OVERALL: FAILED"*)
         echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check target/logs/long-audit-receipt.jsonl${NC}"

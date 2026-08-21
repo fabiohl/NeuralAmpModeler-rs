@@ -27,27 +27,10 @@ pub fn apply_output_stage(
     adaptive: &mut AdaptiveCompute,
     sample_rate: u32,
 ) {
-    use crate::math::common::{
-        Avx2Math, Avx512Math, Avx512VnniBf16Math, InstructionSet, effective_instruction_set,
-    };
+    use crate::math::common::{Avx2Math, Avx512Math, InstructionSet, effective_instruction_set};
+    #[expect(deprecated)]
     match effective_instruction_set() {
-        InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe {
-                apply_output_stage_inner::<Avx512VnniBf16Math>(
-                    resamp_out_l,
-                    resamp_out_r,
-                    n_pw,
-                    output_gain_mult,
-                    silence_hysteresis,
-                    rt_status,
-                    process_mono,
-                    adaptive,
-                    sample_rate,
-                )
-            }
-        }
-        InstructionSet::Avx512 => {
+        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
             // SAFETY: inner invariants upheld by caller.
             unsafe {
                 apply_output_stage_inner::<Avx512Math>(

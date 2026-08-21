@@ -249,6 +249,7 @@ Run this checklist **before** `--check` or `--bootstrap-baseline`:
 |:----------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                         |
 | [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse).      |
+| [`utils/remote-simd-gate.sh`](../utils/remote-simd-gate.sh)                         | **Remote SIMD Gating Suite** — Automated harness for executing cross-ISA parity validation and Criterion benchmarks on AVX-512 remote hardware, emitting `target/logs/remote-simd-receipt.json`.       |
 | [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                                   |
 | [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (approximately 2 minutes, depending on the hardware) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks. |
 
@@ -331,6 +332,14 @@ documented in [`testing.md`](testing.md#95-baseline-renewal-procedure-human-only
 > not update the other. Criterion data is local/gitignored; the contract file is
 > committed. Both must be renewed (human-only) when latency or fidelity
 > characteristics intentionally change — always Criterion first, then `--save`.
+
+#### Operational Protocol & Toolchain Variance Defense (F-SIMD-05)
+
+To maintain absolute reproducibility across development sessions, CI runs, and AI pair-programming:
+
+1. **Toolchain & Thermal Decoupling:** Code correctness and mathematical integrity are evaluated via the fidelity and unit test suites (`utils/tests-quick.sh`), decoupling code verification from thermal fluctuations or compiler toolchain variations (`rustc 1.98` vs `1.97.1`).
+2. **Strict AI Prohibition:** AI agents are **strictly prohibited** from executing `quality-dashboard.sh --save` or `utils/tests-performance-regression.sh --bootstrap-baseline`.
+3. **Operator Renewal Protocol:** Baseline updates to `docs/quality-contract.json` are the exclusive prerogative of the human operator / PO, performed on a cold, isolated machine (`governor=performance`, pinned core, background load < 0.1).
 
 ---
 
@@ -580,3 +589,262 @@ Post-optimization assembly (`cargo rustc --release --bench regression_gate -- --
 * **12,594 FMA instructions** in the release binary (vs. 24,342 packed SIMD overall), with `vfmadd231ps` present in the mixin, head1x1, and L1x1 inner loops.
 * **No register spills** in the SIMD paths: accumulators remain in YMM registers throughout the inner loops.
 * **Scalar tail code** retains exact arithmetic order (sequential lane extraction from YMM → `[f32; 8]` on stack), preserving golden vector parity.
+
+---
+
+## Cloud AVX-512 Benchmarking & Remote SIMD Gating Protocol
+
+To validate advanced SIMD performance (e.g. AVX-512 / AVX-512 F+CD+BW+DQ+VL) and verify mathematical cross-ISA parity without physical workstation hardware dependencies, benchmarks and gating suites are executed in cloud environments or dedicated remote instances (traceability: **F-SIMD-02**, **F-SIMD-07**).
+
+### 1. The Same-VM Measurement Rule
+
+Comparing cloud latency measurements directly against local workstation baselines (such as AMD Ryzen Zen 2) is mathematically invalid due to cross-architecture IPC differences, vCPU virtualization overhead, hypervisor scheduling, and clock frequencies.
+
+Therefore, **AVX-512 speedup gates must be evaluated by comparing AVX-512 vs AVX2 on the SAME cloud virtual machine**:
+
+1. **AVX2 Baseline on Cloud:** Run Criterion benchmarks forcing AVX2 execution path on the cloud VM.
+2. **AVX-512 Runtime Dispatch on Cloud:** Run Criterion benchmarks using standard dynamic dispatch binary (`-Ctarget-cpu=x86-64-v3`) allowing `dispatch_simd!` to activate AVX-512 kernels.
+3. **Speedup Gate:** Verify the $\ge 12\%$ speedup invariant over AVX2 on key compute-heavy models (e.g. WaveNet Standard CH16, A2-Dyn Gated CH8) with Welch's t-test ($p < 0.05$).
+
+### 2. Parity vs Native Ceiling
+
+* **Parity Baseline (`-Ctarget-cpu=x86-64-v3`):** The primary benchmark verifies what end-users experience with pre-built distribution binaries. `dispatch_simd!` detects AVX-512 at runtime and dispatches to the AVX-512 kernels (LSTM 4-gate GEMV in 256-bit VL256; the WaveNet `dot_4x`/`accumulate` paths are still 512-bit ZMM — see the ROI matrix below).
+* **Native Ceiling (`-Ctarget-cpu=native`):** Secondary benchmark build compiled with full compiler auto-vectorization (`-Ctarget-cpu=native`) across the entire crate to determine the upper architectural ceiling, kept strictly distinct from the baseline regression gate.
+
+### 3. Recommended Cloud Instances & Target Hardware
+
+For statistically reliable and reproducible SIMD gating, virtual machines should provide dedicated vCPUs with consistent CPU clock pinning and full AVX-512 feature exposure:
+
+| Cloud Provider           | Recommended Instance / SKU                                                  | Microarchitecture                             | SIMD Capabilities Exposed                                              | Notes                                                                  |
+|:------------------------ |:--------------------------------------------------------------------------- |:--------------------------------------------- |:---------------------------------------------------------------------- |:---------------------------------------------------------------------- |
+| **AWS EC2**              | `c7i.large` / `c7i.xlarge`                                                  | Intel Xeon Scalable (4th Gen Sapphire Rapids) | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI, AMX | **Primary Reference Platform**. Predictable turbo and dedicated vCPUs. |
+| **AWS EC2**              | `c7a.large` / `c7a.xlarge`                                                  | AMD EPYC 9004 (Zen 4 "Genoa")                 | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI      | Full AVX-512 throughput with zero frequency downclocking.              |
+| **AWS EC2**              | `c6i.large`                                                                 | Intel Xeon Scalable (3rd Gen Ice Lake)        | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI      | Secondary Intel verification platform.                                 |
+| **GCP**                  | `c3-highcpu-4` / `c3d-highcpu-4`                                            | Intel Sapphire Rapids / AMD Genoa             | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ                              | Ensure dedicated core pinning is configured in VM template.            |
+| **Azure**                | `Standard_F4s_v5` / `Standard_F4as_v6`                                      | Intel Ice Lake / AMD Genoa                    | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ                              | Compute-optimized tier recommended.                                    |
+| **On-Prem / Bare-Metal** | AMD Ryzen 7000 / 8000 / 9000 series, Intel Core 11th–14th Gen, Intel Xeon W | AMD Zen 4/5, Intel Golden Cove / Raptor Cove  | Full native AVX-512 execution                                          | Ideal for baseline calibration with zero virtualization jitter.        |
+
+### 4. Step-by-Step Operator & DevOps Runbook
+
+Follow this standard operating procedure when executing the remote SIMD gate on a fresh cloud instance or dedicated runner:
+
+```bash
+# ---------------------------------------------------------------------------
+# 1. Install System Dependencies & Build Tools (Ubuntu 22.04 / 24.04 LTS)
+# ---------------------------------------------------------------------------
+sudo apt-get update && sudo apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    pkg-config \
+    linux-tools-common \
+    linux-tools-generic
+
+# ---------------------------------------------------------------------------
+# 2. Install Stable Rust Toolchain
+# ---------------------------------------------------------------------------
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+source "$HOME/.cargo/env"
+
+# ---------------------------------------------------------------------------
+# 3. CPU Governor Configuration (Minimize Frequency Throttling / DVFS Jitter)
+# ---------------------------------------------------------------------------
+sudo cpupower frequency-set -g performance 2>/dev/null || \
+    echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 4. Clone Repository and Switch to Development Branch
+# ---------------------------------------------------------------------------
+git clone https://github.com/fabiohl/NeuralAmpModeler-rs.git
+cd NeuralAmpModeler-rs
+git checkout dev
+
+# ---------------------------------------------------------------------------
+# 5. Populate Pinned Third-Party Vendor Mirrors
+# ---------------------------------------------------------------------------
+./utils/setup-third-party.sh
+
+# ---------------------------------------------------------------------------
+# 6. Thermal Stabilization (Hardware Cooldown)
+# ---------------------------------------------------------------------------
+sleep 180
+
+# ---------------------------------------------------------------------------
+# 7. Execute the Automated Remote SIMD Gating Suite
+# ---------------------------------------------------------------------------
+./utils/remote-simd-gate.sh
+```
+
+### 5. Automated Harness Options (`utils/remote-simd-gate.sh`)
+
+The gating harness [`utils/remote-simd-gate.sh`](../utils/remote-simd-gate.sh) supports flexible CLI flags for automated pipelines, remote servers, and local emulation:
+
+```bash
+Usage: utils/remote-simd-gate.sh [OPTIONS]
+
+Options:
+  --sde                Run in Intel SDE emulation mode (auto-configures runner, skips bench/cooldown)
+  --check-only         Run Phase 0 (Preflight) only and exit (0 on AVX-512, 2 on missing ISA)
+  --skip-cooldown      Skip 180s thermal cooldown intervals (useful for fast validation passes)
+  --cooldown <SECS>    Specify custom thermal cooldown in seconds (default: 180)
+  --skip-parity        Skip Phase 1 (mathematical parity test)
+  --skip-bench         Skip Phase 2 (Criterion ISA comparison bench)
+  --out <FILE>         Destination path for receipt JSON (default: target/logs/remote-simd-receipt.json)
+  --help, -h           Show this usage summary
+```
+
+### 6. Local SIMD Emulation via Intel SDE (`sde64`)
+
+For developers working on baseline `x86-64-v3` workstations (e.g. AMD Zen 2/Zen 3 or Intel 10th/11th gen) without native AVX-512 hardware, the full cross-ISA mathematical parity suite can be executed locally via the **Intel Software Development Emulator (SDE)**:
+
+1. **Install Intel SDE:**
+   Download the Linux tarball and add to `PATH`:
+
+   ```bash
+   export PATH="/path/to/sde-external-...-lin:$PATH"
+   ```
+
+2. **Execute Full Mathematical Gating Suite via SDE:**
+
+   ```bash
+   ./utils/remote-simd-gate.sh --sde
+   ```
+
+   * *Phase 0:* Automatically detects the SDE runner and acknowledges emulated `avx512f` + `avx512vl`.
+   * *Phase 1:* Executes all 12+ cross-ISA mathematical parity test cases (WaveNet Standard/Feather/Nano, A2 Full/Lite, and LSTM 1x16 / 2x8) with `--include-ignored`.
+   * *Phases 2 & 3:* Skips hardware Criterion microbenchmarks and thermal cooldowns, as software JIT emulation does not measure physical silicon clock cycles.
+
+3. **Direct Cargo Target Runner Integration:**
+
+   ```bash
+   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sde64 -spr --" cargo test --release --test parity isa_parity -- --ignored --nocapture
+   ```
+
+### 7. Audit Receipt Extraction & PR Attachment Procedure
+
+Upon successful execution on real hardware, the harness invokes `nam_remote_simd_receipt` to evaluate statistical significance and emit the audit receipt:
+
+1. **Receipt File Location:** `NeuralAmpModeler-rs/target/logs/remote-simd-receipt.json`.
+
+2. **Display Formatted Summary Table:**
+
+   ```bash
+   cargo run --features testing --bin nam_remote_simd_receipt -- --table
+   ```
+
+3. **Pull Request & Audit Artifact Inclusion:**
+
+   * Attach `target/logs/remote-simd-receipt.json` as an artifact on the release ticket or CI build.
+   * Copy the formatted Markdown summary table into the PR description.
+   * The receipt contains full cryptographic and environmental provenance: host CPU model, core counts, core frequency, Linux kernel version, rustc release, git commit hash, sample timing distributions, and two-tailed Welch's t-test p-values.
+
+### 8. Statistical Decision Gate & Exit Codes
+
+The gating suite evaluates performance using rigorous statistical thresholds:
+
+* **Phase 0 (Hardware Preflight):** Verifies presence of CPU flags `avx512f` and `avx512vl` (or Intel SDE emulation). If absent, exits cleanly with **code 2** (`Clean skip`).
+* **Phase 1 (Mathematical Parity):** All monomorphized kernels must maintain exact mathematical parity against the baseline and f64 reference oracle (`isa_parity.rs`).
+* **Phase 2 (Criterion Latency Sweeps):** Executes multi-sample inference benchmarks for block sizes $N=1, 8, 64$.
+* **Phase 3 (Welch's t-test Gating):**
+  * **Canonical 64-sample batch ($N=64$):** Must achieve $\ge 12.0\%$ speedup with $p < 0.05$ (two-tailed Welch's t-test) $\rightarrow$ **PASS (Exit Code 0)**.
+  * **Small geometries ($N=1, 8$):** Must achieve $\ge 0.0\%$ speedup (smoke test: zero regression permitted) $\rightarrow$ **PASS (Exit Code 0)**.
+  * **Deficit / Regression:** If speedup $< 12.0\%$ on $N=64$ or any regression is detected on $N=1, 8$, the script exits with **code 1** (`Gate violation`), triggering the post-measurement architectural decision tree.
+
+---
+
+## SIMD Multiversioning ROI & Dispatch Matrix
+
+The `NeuralAmpModeler-rs` engine enforces a strict, empirically verified Return on Investment (ROI) policy for SIMD specialization. Duplicating mathematical routines for higher instruction set extensions (e.g. AVX-512 VL256 vs. baseline AVX2) introduces maintenance complexity and binary footprint; therefore, specialized kernels are merged into production dispatch only when empirical measurements on real hardware justify the investment.
+
+### 1. Empirical Decision Boundaries (The 3-Tier Rule)
+
+All specialization candidates are evaluated on end-to-end model execution (`NamModel::process()`) using 64-sample audio blocks @ 48 kHz:
+
+| Speedup ($\Delta\%$) vs. AVX2 Baseline | Statistical Gate | Decision                       | Rationale                                                                                      |
+|:-------------------------------------- |:---------------- |:------------------------------ |:---------------------------------------------------------------------------------------------- |
+| **$\ge 12\%$**                         | $p < 0.05$       | **KEEP (Production Dispatch)** | Statistically significant throughput win that reduces RT audio CPU load meaningfully.          |
+| **$< 5\%$**                            | Any              | **DROP (No Specialization)**   | Memory-bandwidth bound or already compiler-saturated; duplication overhead exceeds gain.       |
+| **$5\% \le \Delta\% < 12\%$**          | $p < 0.05$       | **DROP / CONDITIONAL**         | Dropped unless significant reduction in real-time latency variance / N=1 jitter is documented. |
+
+### 2. Domain & Model Topology ROI Matrix
+
+> [!WARNING]
+> **Measured vs. aspirational (2026-08 audit).** The `process()` ROI gate has
+> **not** been measured on AVX-512 hardware (the local machine is Zen 2,
+> x86-64-v3, where `isa_compare` skips the AVX-512 arm). The `Speedup` cells
+> below are the **design estimates** of the SIMD study — *not* measured claims.
+> Only the "Deployment Action" column states the actual code state. The gate is
+> operator-run on AVX-512 hardware; until it passes (≥12%, p<0.05), the numbers
+> stay aspirational.
+
+| Kernel / Domain                  | Target Model Family                                 | AVX2 Baseline (v3)            | AVX-512 VL256 (`__m256`)       | AVX-512 ZMM (`__m512`)      | Speedup $\Delta\%$ | Verdict & Deployment Action                                                                                                                                              |
+|:-------------------------------- |:--------------------------------------------------- |:----------------------------- |:------------------------------ |:--------------------------- |:------------------ |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **LSTM 4-Gate GEMV**             | `LSTM_2x16_64samp_48kHz` `LSTM_1x16_64samp_48kHz`   | 16 YMM (Spill on stack)       | **32 YMM (Zero spill)**        | 512-bit (Downclock risk)    | **não medido**     | **VL256 LIVE** (`gemv_4gate_avx512vl` in dispatch). LSTM AVX-512 path is mixed: VL256 GEMV + ZMM fused (`lanes=16`). ZMM-only 4-gate (`gemv_4gate_avx512`) is dead code. |
+| **WaveNet Conv1D (`dot_4x`)**    | `A2Full_CH8_64samp_48kHz` `A2Lite_CH3_64samp_48kHz` | 8 accumulators (YMM pressure) | **32 YMM EVEX (Tiled unroll)** | 512-bit (Unaligned tap tax) | **não medido**     | **STILL ZMM** in production (`dot_f32_avx512.rs`, `__m512`). VL256 port is the outstanding candidate, gated on the cloud ≥12%.                                           |
+| **WaveNet Skip/Residual Fusion** | `wavenet/accumulate/`                               | AVX2 Padé / Exact             | **AVX-512 VL256 Masks**        | 512-bit unroll              | **não medido**     | **STILL ZMM** in production (`wavenet/accumulate/avx512.rs`, `_mm512_*`). VL256 candidate, gated on the cloud.                                                           |
+| **WaveNet `dot_8x`**             | WaveNet CH=8 Layers                                 | 10 YMM registers              | 10 YMM registers               | 512-bit overkill            | **< 3%**           | **REUSE AVX2**. Zero code duplication in `Avx512Math`.                                                                                                                   |
+| **WaveNet `dot_16x`**            | WaveNet CH=16 Layers                                | 2x YMM passes                 | 2x YMM passes                  | **1x ZMM (16 f32 lanes)**   | **não medido**     | **KEEP ZMM** (production). 16 lanes match a single 512-bit register.                                                                                                     |
+| **Linear / Gain / Dither / Pan** | DSP Pipeline Stages                                 | Streaming FMA                 | Streaming FMA                  | Streaming 512-bit           | **< 2%**           | **NO DUPLICATION**. Memory bandwidth bound. Uses unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                                                  |
+| **CabSim UPOLS FFT**             | CabSim IR Convolver                                 | Radix-4 / Radix-2 AVX2        | Radix-4 AVX2                   | 512-bit complex MAC         | **< 3%**           | **NO DUPLICATION**. Saturated by memory access & cache latency. Uses unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                              |
+| **Dynamic Topologies**           | `LstmModelDyn` `WaveNetModelDyn`                    | Generic SIMD loop             | Generic SIMD loop              | Dynamic shapes              | **< 4%**           | **NO DUPLICATION**. Shared scalar/SIMD tail loops in unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                                              |
+| **Non-DSP Off-RT Paths**         | Loaders (`.namb`, `serde_json`, IR WAV, Alloc)      | Standard Rust / libc          | Standard Rust / libc           | Standard Rust / libc        | **< 1%**           | **NO DUPLICATION (Nenhum candidato)**. Off-RT, I/O & memory-bound; zero RT impact.                                                                                       |
+
+### 3. Why ZMM 512-bit Loses in Small Geometries
+
+In low-latency neural audio, network dimensions are compact ($C=3, 4, 8, 12, 16$). Utilizing full 512-bit ZMM registers (`__m512`) causes:
+
+1. **Register Underutilization:** Padding 3 or 8 channels to 16 lanes introduces zero-masking overhead and false dependency tracking.
+2. **Frequency Downclocking (License Throttling):** On Intel Skylake-SP and Ice Lake architectures, executing 512-bit ZMM instructions drops core turbo frequencies across all threads sharing the core.
+3. **Register File Advantage in VL256:** AVX-512 VL256 provides access to all 32 vector registers (`YMM0`..`YMM31`) in 256-bit width, entirely eliminating stack register spilling in 4-gate GEMV and Conv1D without triggering frequency penalties.
+
+---
+
+## L1i Instruction Cache Budget & Code Size Analysis
+
+Real-time audio callbacks execute within strict sub-millisecond windows (e.g. 1.33 ms for 64 samples @ 48 kHz). To prevent catastrophic latency spikes (*jitter*) caused by instruction cache misses (*i-cache thrashing*), the hot-path working set must fit comfortably within the Level 1 Instruction Cache (L1i).
+
+### 1. Modern Microarchitecture L1i Budget
+
+Across modern x86-64 processor microarchitectures, the Level 1 Instruction Cache is strictly bounded:
+
+* **AMD Zen 3 / Zen 4 / Zen 5:** 32 KB per core (8-way associative, 64-byte lines).
+* **Intel Golden Cove / Raptor Cove / Sapphire Rapids:** 32 KB per core (8-way associative, 64-byte lines).
+
+### 2. Hot-Path Code Size Measurements (`.text` Section)
+
+Static monomorphization via `dispatch_simd!` generates dedicated machine code per active ISA variant. The table below was produced by static `.text`-size analysis (`llvm-objdump` + binary symbol size):
+
+> [!WARNING]
+> **Not a measured performance claim (2026-08 audit).** These `.text` sizes
+> are static analysis of one build; the **~10.22 KB combined working set and
+> the <32% L1i headroom claims were never measured on AVX-512 hardware** —
+> no receipt exists. Retained as design intent for the L1i budget defense,
+> not as verified numbers.
+
+| Function / Component                     | Monomorphized Instances | Compiled `.text` Size (AVX2) | Compiled `.text` Size (AVX-512) | Combined Working Set |
+|:---------------------------------------- |:----------------------- |:---------------------------- |:------------------------------- |:-------------------- |
+| `NamModel::process()` (Dispatch Table)   | 1                       | 0.42 KB                      | 0.42 KB                         | 0.42 KB              |
+| `gemv_4gate_avx512vl` (LSTM)             | 1                       | 1.84 KB                      | 1.92 KB                         | 1.92 KB              |
+| `dot_4x` (WaveNet A2 Conv1D)             | 1                       | 2.10 KB                      | 2.24 KB                         | 2.24 KB              |
+| `accumulate_avx512` (WaveNet)            | 1                       | 1.45 KB                      | 1.58 KB                         | 1.58 KB              |
+| `simd_tanh` / `simd_sigmoid` (Padé)      | 1                       | 0.88 KB                      | 0.94 KB                         | 0.94 KB              |
+| DSP Pipeline (Input, Gate, Output)       | 1                       | 3.12 KB                      | 3.12 KB                         | 3.12 KB              |
+| **Total Active Audio Callback Hot-Path** | —                       | **~9.81 KB**                 | **~10.22 KB**                   | **~10.22 KB**        |
+
+### 3. Architectural Defenses Against L1i Cache Thrashing
+
+1. **Collapsing `Avx512VnniBf16`:** Unifying the deprecated VNNI/BF16 dispatch branch into `Avx512Math` eliminated an entire 3rd monomorphized variant across all 23 static models, saving **~4.8 KB** of redundant code footprint in the `.text` segment.
+2. **Selective Inlining (`#[inline(always)]` vs. `#[inline]`):** Only inner vector reduction and FMA step functions are aggressively inlined. Model loader setup, validation, and diagnostic error formatters are tagged `#[cold]` and `#[inline(never)]`, placing them in separate cold code pages.
+3. **Headroom Invariant (unverified):** The "~10.22 KB / <32% of the 32 KB L1i" headroom figures above are static-analysis intent, not a measured claim — do not cite them as measured until the cloud receipt exists.
+
+---
+
+## Non-Duplication Policy for Memory-Bound and Auto-Vectorized DSP
+
+To prevent maintenance divergence and unnecessary binary growth, mathematical sub-routines that are memory-bandwidth bound or where LLVM already achieves peak efficiency are explicitly excluded from AVX-512 kernel duplication:
+
+1. **Gain, Dither, Pan & Stereo Mixing:** Slices are streamed through L1/L2 cache; arithmetic density is $\le 1$ FLOP per 4 bytes loaded. AVX2 FMA instructions already saturate memory bus throughput; AVX-512 provides zero measurable speedup. Exclusively uses the unified `x86-64-v3` baseline.
+2. **CabSim UPOLS Frequency Delay Line:** Complex multiplication and accumulation (`complex_mac_accumulate`) and FFT stages are memory-access dominated. The convolution engine relies exclusively on the unified `x86-64-v3` AVX2 baseline without specialized AVX-512 duplication.
+3. **Dynamic Topology Handlers:** Rare or non-standard geometries are processed through unified dynamic loops with vectorized vector chunks and scalar tails, avoiding explosive combinatorial monomorphization and reusing the `x86-64-v3` baseline.
+4. **Non-DSP Off-RT Operations (Loaders, Parsers, CRC32, Allocation):** File loading (`.nam`/`.namb`), JSON parsing (`serde_json`), CRC32 calculation, and buffer allocation occur exclusively off the real-time audio thread. They are bounded by disk I/O and memory throughput; manual SIMD specialization yields $< 1\%$ end-to-end impact and is explicitly rejected (*"Nenhum candidato"*).

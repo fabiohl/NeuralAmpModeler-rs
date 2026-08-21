@@ -302,7 +302,10 @@ run_golden_vectors() {
 run_reference_oracle() {
     local start_t end_t
     start_t=$(date +%s%N)
-    run_dashboard_phase "reference_oracle_f64" 10 \
+    # The f64-oracle table sinks into the metrics stream so the ingest can
+    # join `esr_f64` onto the fidelity records the verify engine reads
+    # (P0.T3). The phase itself is not JSONL-gated (min_jsonl stays 0).
+    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "reference_oracle_f64" 10 \
         cargo test --release --features testing --test parity reference_oracle_f64 -- --test-threads=1 --nocapture
     end_t=$(date +%s%N)
     local dur
@@ -874,7 +877,11 @@ run_quality_check() {
         echo -e "  ${RED}✗${NC} Report missing (${report_file}) — run the dashboard phases first; --check verifies the current run." >&2
         return 1
     fi
-    if ! "$NAM_QUALITY_BIN" verify --contract "$check_file" --report "$report_file"; then
+    local verify_args=(--contract "$check_file" --report "$report_file")
+    if [ "$MODE" = "fidelity" ]; then
+        verify_args+=(--fidelity-only)
+    fi
+    if ! "$NAM_QUALITY_BIN" verify "${verify_args[@]}"; then
         return 1
     fi
     return 0
@@ -1031,6 +1038,15 @@ main() {
             final_exit=1
         fi
     fi
+
+    echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
+    echo -e "  ${BOLD}Quality Dashboard Artifacts saved:${NC}"
+    echo -e "    - Report JSONL:  ${CYAN}$report_file${NC}"
+    echo -e "    - Phase Receipt: ${CYAN}$DASHBOARD_PHASE_RECEIPT${NC}"
+    if [ -n "$SAVE_FILE" ]; then
+        echo -e "    - Contract:      ${CYAN}$SAVE_FILE${NC}"
+    fi
+    echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
 
     exit "$final_exit"
 }

@@ -36,7 +36,7 @@ pub enum A2ConvCh {
 /// and layer1x1 (`Conv1x1 CH→CH`, with bias, col-major).
 ///
 /// When `conv_ch` is `Some`, it holds f32 col-major-per-tap weights for the CH=3 or CH=8
-/// optimized path. When `None`, the standard `A2Conv1d` (u16 interleaved) is used (fallback).
+/// optimized path. When `None`, the standard `A2Conv1d` (f32 interleaved) is used (fallback).
 ///
 /// FiLM layers (8 insertion points) are `Some` only when the JSON config marks them `active: true`.
 pub struct A2Layer {

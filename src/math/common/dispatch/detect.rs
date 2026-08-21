@@ -30,10 +30,10 @@ pub static SIMD_MATH: LazyLock<SimdMathConfig> = LazyLock::new(detect_best_simd)
 #[doc(hidden)]
 pub static TEST_ISA_OVERRIDE: AtomicU8 = AtomicU8::new(u8::MAX);
 
-/// Encodes an [`InstructionSet`] to its `TEST_ISA_OVERRIDE` byte value.
-#[doc(hidden)]
+/// Encodes an `InstructionSet` enum into the corresponding test override raw byte.
 #[inline]
-pub fn encode_isa_override(isa: InstructionSet) -> u8 {
+#[expect(deprecated)]
+pub const fn encode_isa_override(isa: InstructionSet) -> u8 {
     match isa {
         InstructionSet::Avx2 => 0,
         InstructionSet::Avx512 => 1,
@@ -41,11 +41,12 @@ pub fn encode_isa_override(isa: InstructionSet) -> u8 {
     }
 }
 
-/// Decodes a `TEST_ISA_OVERRIDE` byte into an [`InstructionSet`], or `None`
-/// when the override is disabled.
-#[doc(hidden)]
+/// Decodes a raw test override byte into an `InstructionSet` enum.
+///
+/// Returns `None` if the byte does not correspond to a valid ISA enum variant.
 #[inline]
-pub fn decode_isa_override(raw: u8) -> Option<InstructionSet> {
+#[expect(deprecated)]
+pub const fn decode_isa_override(raw: u8) -> Option<InstructionSet> {
     match raw {
         0 => Some(InstructionSet::Avx2),
         1 => Some(InstructionSet::Avx512),
@@ -71,13 +72,10 @@ pub fn effective_instruction_set() -> InstructionSet {
 /// compatible SIMD configuration.
 ///
 /// Detection checks supported hardware features using the compiler macro `is_x86_feature_detected!`.
-/// We follow a descending priority order, choosing the most advanced instruction set
-/// available on the processor where the software is running.
+/// AVX-512 is selected only when both `avx512f` and `avx512vl` are supported by the processor.
+/// Production runtime detection never emits `InstructionSet::Avx512VnniBf16`.
 fn detect_best_simd() -> SimdMathConfig {
-    if is_x86_feature_detected!("avx512bf16") && is_x86_feature_detected!("avx512vnni") {
-        return config_table!(InstructionSet::Avx512VnniBf16, "AVX-512 (VNNI+BF16)", true);
-    }
-    if is_x86_feature_detected!("avx512f") {
+    if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl") {
         return config_table!(InstructionSet::Avx512, "AVX-512", true);
     }
     config_table!(InstructionSet::Avx2, "AVX2", false)

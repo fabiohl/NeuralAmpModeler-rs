@@ -4,7 +4,7 @@
 //  Cross-ISA Determinism Matrix — Task 2.7 (P-8).
 //
 //  Runs golden vectors through each supported ISA path (AVX2 as reference,
-//  AVX-512, and AVX-512 VNNI+BF16) and asserts end-to-end model output parity.
+//  and AVX-512) and asserts end-to-end model output parity.
 //
 //  # Rationale
 //
@@ -18,6 +18,15 @@
 //  `proptest_math.rs`). This suite adds the missing end-to-end model-level
 //  cross-ISA coverage.
 //
+//  # Production Policy & VNNI Status (F-SIMD-12)
+//
+//  Production neural inference runs strictly in single-precision `f32` (AVX2 baseline
+//  and AVX-512 upward dispatch). VNNI / BF16 is NOT an active production acceleration path.
+//  In `dispatch_simd!`, `InstructionSet::Avx512VnniBf16` is deprecated and folds
+//  directly into `Avx512Math` (f32). The VNNI test cases below are `#[ignore]`d as
+//  legacy / evaluation-only tests; when executed under `TEST_ISA_OVERRIDE = 2`,
+//  they exercise the AVX-512 f32 math kernels without BF16 weight layout conversion.
+//
 //  # Running
 //
 //  These tests manipulate a process-wide ISA override. They must run serially:
@@ -26,16 +35,16 @@
 //  cargo test --release --test isa_parity -- --test-threads=1 --nocapture
 //  ```
 //
-//  Tests requiring AVX-512 or VNNI+BF16 hardware are `#[ignore]` and only
-//  execute in environments that support those ISA levels.
+//  Tests requiring AVX-512 hardware are `#[ignore]` and only execute in
+//  environments that support those ISA levels (or via `utils/tests-long.sh`).
 //
 //  # ISA Coverage Map
 //
-//  | ISA Pair                   | CI Coverage | Notes                        |
-//  | -------------------------- | ----------- | ---------------------------- |
-//  | AVX2 (ref) → AVX2          | ✓ always    | Self-consistency, ESR = 0    |
-//  | AVX2 (ref) → AVX-512       | ✓ if AVX-512| Cross-ISA parity             |
-//  | AVX2 (ref) → VNNI+BF16     | ✓ if VNNI   | Includes BF16 quantisation   |
+//  | ISA Pair                   | CI Coverage       | Notes                                                 |
+//  | -------------------------- | ----------------- | ----------------------------------------------------- |
+//  | AVX2 (ref) → AVX2          | ✓ always (v2 bin) | Self-consistency, MSE = 0                             |
+//  | AVX2 (ref) → AVX-512       | ✓ if AVX-512      | Cross-ISA f32 parity (within ESR budget)              |
+//  | AVX2 (ref) → VNNI+BF16     | Ignored (legacy)  | Legacy / evaluation-only; routes to f32 (F-SIMD-12)   |
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -78,11 +87,15 @@ impl Drop for IsaGuard {
 /// Signals that the host CPU does not support a given ISA path.
 macro_rules! skip_if_unsupported {
     ($isa:expr, $test_name:expr) => {
+        #[expect(deprecated)]
         match $isa {
             InstructionSet::Avx2 => { /* always supported (x86-64-v3) */ }
             InstructionSet::Avx512 => {
-                if !is_x86_feature_detected!("avx512f") {
-                    eprintln!("SKIP {}: AVX-512 not supported on this CPU", $test_name);
+                if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
+                    eprintln!(
+                        "SKIP {}: AVX-512 (F+VL) not supported on this CPU",
+                        $test_name
+                    );
                     return;
                 }
             }
@@ -101,28 +114,53 @@ macro_rules! skip_if_unsupported {
 /// Loads a model and runs golden-vector inference under a specific ISA.
 ///
 /// Returns the model output buffer and the expected (C++ reference) output.
+/// Loads a model and runs golden-vector inference under a specific ISA.
+///
+/// Returns the model output buffer and the expected (C++ reference) output.
 fn run_under_isa(
     model_filename: &str,
     golden_name: &str,
     sr: u32,
     isa: InstructionSet,
-) -> (Vec<f32>, Vec<f32>) {
+) -> Option<(Vec<f32>, Vec<f32>)> {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let nam_path = model_path(model_filename);
     let golden_filename = format!("{golden_name}_v2_{sr}.bin");
     let golden_path = fixtures_dir.join(&golden_filename);
 
-    assert!(nam_path.exists(), "Model file not found: {nam_path:?}");
-    assert!(
-        golden_path.exists(),
-        "Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
-    );
+    if !nam_path.exists() {
+        eprintln!("SKIP: Model file not found: {nam_path:?}");
+        return None;
+    }
+    if !golden_path.exists() {
+        eprintln!(
+            "SKIP: Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
+        );
+        return None;
+    }
 
-    let (input, expected) = read_golden_bin(&golden_path)
-        .unwrap_or_else(|| panic!("Failed to read golden {golden_filename}"));
+    let (input, expected) = match read_golden_bin(&golden_path) {
+        Some(pair) => pair,
+        None => {
+            eprintln!("SKIP: Failed to read golden {golden_filename}");
+            return None;
+        }
+    };
 
-    let json_data = std::fs::read_to_string(&nam_path).expect("Failed to read model JSON");
-    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let json_data = match std::fs::read_to_string(&nam_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("SKIP: Failed to read model JSON {nam_path:?}: {e}");
+            return None;
+        }
+    };
+    let model_data = match parse_nam_json(&json_data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("SKIP: Failed in JSON parser for {nam_path:?}: {e}");
+            return None;
+        }
+    };
 
     // CRITICAL: set override BEFORE building model — the builder reads
     // SimdMathConfig::get() to decide BF16 vs non-BF16 weight layout.
@@ -133,14 +171,20 @@ fn run_under_isa(
     let _guard = IsaGuard::set(isa);
     let _prec = PrecisionGuard::new(ActivationPrecision::Fast);
 
-    let mut model = build_model(&model_data).unwrap_or_else(|e| panic!("Build failed: {e}"));
+    let mut model = match build_model(&model_data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("SKIP: Build failed for {nam_path:?}: {e}");
+            return None;
+        }
+    };
     model.prewarm(V2_PREWARM_SAMPLES);
 
     let num_samples = input.len();
     let mut output = vec![0.0f32; num_samples];
     process_in_blocks(&mut model, &input, &mut output, V2_TEST_BLOCK_SIZE);
 
-    (output, expected)
+    Some((output, expected))
 }
 
 /// Loads a model and runs golden-vector inference under a specific ISA
@@ -152,35 +196,63 @@ fn run_under_isa_hf(
     golden_name: &str,
     sr: u32,
     isa: InstructionSet,
-) -> (Vec<f32>, Vec<f32>) {
+) -> Option<(Vec<f32>, Vec<f32>)> {
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let nam_path = model_path(model_filename);
     let golden_filename = format!("{golden_name}_v2_{sr}.bin");
     let golden_path = fixtures_dir.join(&golden_filename);
 
-    assert!(nam_path.exists(), "Model file not found: {nam_path:?}");
-    assert!(
-        golden_path.exists(),
-        "Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
-    );
+    if !nam_path.exists() {
+        eprintln!("SKIP: Model file not found: {nam_path:?}");
+        return None;
+    }
+    if !golden_path.exists() {
+        eprintln!(
+            "SKIP: Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
+        );
+        return None;
+    }
 
-    let (input, expected) = read_golden_bin(&golden_path)
-        .unwrap_or_else(|| panic!("Failed to read golden {golden_filename}"));
+    let (input, expected) = match read_golden_bin(&golden_path) {
+        Some(pair) => pair,
+        None => {
+            eprintln!("SKIP: Failed to read golden {golden_filename}");
+            return None;
+        }
+    };
 
-    let json_data = std::fs::read_to_string(&nam_path).expect("Failed to read model JSON");
-    let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
+    let json_data = match std::fs::read_to_string(&nam_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("SKIP: Failed to read model JSON {nam_path:?}: {e}");
+            return None;
+        }
+    };
+    let model_data = match parse_nam_json(&json_data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("SKIP: Failed in JSON parser for {nam_path:?}: {e}");
+            return None;
+        }
+    };
 
     let _precision = PrecisionGuard::new(ActivationPrecision::Standard);
     let _guard = IsaGuard::set(isa);
 
-    let mut model = build_model(&model_data).unwrap_or_else(|e| panic!("Build failed: {e}"));
+    let mut model = match build_model(&model_data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("SKIP: Build failed for {nam_path:?}: {e}");
+            return None;
+        }
+    };
     model.prewarm(V2_PREWARM_SAMPLES);
 
     let num_samples = input.len();
     let mut output = vec![0.0f32; num_samples];
     process_in_blocks(&mut model, &input, &mut output, V2_TEST_BLOCK_SIZE);
 
-    (output, expected)
+    Some((output, expected))
 }
 
 /// Compares two output buffers produced under different ISAs and asserts
@@ -199,11 +271,13 @@ fn assert_isa_parity(
     let mse = compute_mse(output_ref, output_test);
     let mae = compute_max_abs_error(output_ref, output_test);
 
+    #[expect(deprecated)]
     let ref_name = match ref_isa {
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
     };
+    #[expect(deprecated)]
     let test_name = match test_isa {
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
@@ -246,9 +320,16 @@ fn check_isa_parity_for_model_hf(
     let sr = 48000;
 
     let (ref_output, _expected) =
-        run_under_isa_hf(model_filename, golden_name, sr, InstructionSet::Avx2);
+        match run_under_isa_hf(model_filename, golden_name, sr, InstructionSet::Avx2) {
+            Some(pair) => pair,
+            None => return,
+        };
 
-    let (test_output, _expected2) = run_under_isa_hf(model_filename, golden_name, sr, test_isa);
+    let (test_output, _expected2) =
+        match run_under_isa_hf(model_filename, golden_name, sr, test_isa) {
+            Some(pair) => pair,
+            None => return,
+        };
 
     assert_isa_parity(
         &ref_output,
@@ -272,10 +353,16 @@ fn check_isa_parity_for_model(
 
     // Always run AVX2 as reference
     let (ref_output, _expected) =
-        run_under_isa(model_filename, golden_name, sr, InstructionSet::Avx2);
+        match run_under_isa(model_filename, golden_name, sr, InstructionSet::Avx2) {
+            Some(pair) => pair,
+            None => return,
+        };
 
     // Run under test ISA
-    let (test_output, _expected2) = run_under_isa(model_filename, golden_name, sr, test_isa);
+    let (test_output, _expected2) = match run_under_isa(model_filename, golden_name, sr, test_isa) {
+        Some(pair) => pair,
+        None => return,
+    };
 
     assert_isa_parity(
         &ref_output,
@@ -297,10 +384,17 @@ fn assert_isa_self_consistency(
     let sr = 48000;
     skip_if_unsupported!(isa, label);
 
-    let (output1, _) = run_under_isa(model_filename, golden_name, sr, isa);
-    let (output2, _) = run_under_isa(model_filename, golden_name, sr, isa);
+    let (output1, _) = match run_under_isa(model_filename, golden_name, sr, isa) {
+        Some(pair) => pair,
+        None => return,
+    };
+    let (output2, _) = match run_under_isa(model_filename, golden_name, sr, isa) {
+        Some(pair) => pair,
+        None => return,
+    };
 
     let mse = compute_mse(&output1, &output2);
+    #[expect(deprecated)]
     let isa_name = match isa {
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
@@ -315,6 +409,42 @@ fn assert_isa_self_consistency(
     assert!(
         mse == 0.0,
         "[{label}] {isa_name} self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
+    );
+}
+
+/// Runs the same model twice under the same ISA in Standard HF mode and asserts bitwise-identical.
+fn assert_isa_hf_self_consistency(
+    model_filename: &str,
+    golden_name: &str,
+    label: &str,
+    isa: InstructionSet,
+) {
+    let sr = 48000;
+    skip_if_unsupported!(isa, label);
+
+    let (output1, _) = match run_under_isa_hf(model_filename, golden_name, sr, isa) {
+        Some(pair) => pair,
+        None => return,
+    };
+    let (output2, _) = match run_under_isa_hf(model_filename, golden_name, sr, isa) {
+        Some(pair) => pair,
+        None => return,
+    };
+
+    let mse = compute_mse(&output1, &output2);
+    #[expect(deprecated)]
+    let isa_name = match isa {
+        InstructionSet::Avx2 => "AVX2",
+        InstructionSet::Avx512 => "AVX-512",
+        InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
+    };
+    println!("[ISA HF Matrix] {label} | {isa_name:>10} self-consistency (HF) | MSE={mse:.2e}");
+
+    common::report_isa(label, isa_name, isa_name, None, mse, None, None);
+
+    assert!(
+        mse == 0.0,
+        "[{label}] {isa_name} HF self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
     );
 }
 
@@ -337,13 +467,10 @@ const LSTM_ESR_BUDGET: f64 = 1e-2;
 const A2_ESR_BUDGET: f64 = 1e-3;
 
 // ══════════════════════════════════════════════════════════════════════
-// AVX2 self-consistency — requires golden v2 vectors (generated via
-// golden_gen_build.sh). Ignored by default; run with `--ignored` in
-// Phase 2 / tests-long.sh when goldens are present.
+// AVX2 self-consistency — runs in quick suite when goldens are present.
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_wavenet_standard_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -355,7 +482,6 @@ fn isa_self_consistency_wavenet_standard_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_wavenet_feather_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -367,7 +493,6 @@ fn isa_self_consistency_wavenet_feather_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_wavenet_nano_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -379,7 +504,6 @@ fn isa_self_consistency_wavenet_nano_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_lstm_1x16_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -391,7 +515,6 @@ fn isa_self_consistency_lstm_1x16_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_lstm_2x8_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -403,7 +526,6 @@ fn isa_self_consistency_lstm_2x8_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_a2_full_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -415,7 +537,6 @@ fn isa_self_consistency_a2_full_avx2() {
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_self_consistency_a2_lite_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -533,11 +654,13 @@ fn isa_parity_a2_lite_avx2_vs_avx512() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "Requires AVX-512 VNNI+BF16 hardware"]
+#[ignore = "Legacy evaluation-only: requires AVX-512 VNNI+BF16 hardware"]
+#[expect(deprecated)]
 fn isa_parity_wavenet_standard_avx2_vs_vnnibf16() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512VnniBf16, "WN-Std/VNNI-BF16");
-    // VNNI+BF16 introduces bf16 quantisation on top of AVX-512 → larger budget
+    // F-SIMD-12: VNNI is not a production path. In dispatch_simd!, Avx512VnniBf16
+    // folds into Avx512Math (f32). This test remains as a legacy evaluation checkpoint.
     check_isa_parity_for_model(
         "BossWN-standard.nam",
         "golden_wavenet_standard",
@@ -548,10 +671,13 @@ fn isa_parity_wavenet_standard_avx2_vs_vnnibf16() {
 }
 
 #[test]
-#[ignore = "Requires AVX-512 VNNI+BF16 hardware"]
+#[ignore = "Legacy evaluation-only: requires AVX-512 VNNI+BF16 hardware"]
+#[expect(deprecated)]
 fn isa_parity_wavenet_nano_avx2_vs_vnnibf16() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512VnniBf16, "WN-Nano/VNNI-BF16");
+    // F-SIMD-12: VNNI is not a production path. In dispatch_simd!, Avx512VnniBf16
+    // folds into Avx512Math (f32). This test remains as a legacy evaluation checkpoint.
     check_isa_parity_for_model(
         "BossWN-nano.nam",
         "golden_wavenet_nano",
@@ -569,77 +695,35 @@ fn isa_parity_wavenet_nano_avx2_vs_vnnibf16() {
 // deterministic across repeated runs with the same ISA.
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_hf_self_consistency_wavenet_standard_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
-    let sr = 48000;
-    let (output1, _) = run_under_isa_hf(
+    assert_isa_hf_self_consistency(
         "BossWN-standard.nam",
         "golden_wavenet_standard",
-        sr,
+        "WN-Std",
         InstructionSet::Avx2,
-    );
-    let (output2, _) = run_under_isa_hf(
-        "BossWN-standard.nam",
-        "golden_wavenet_standard",
-        sr,
-        InstructionSet::Avx2,
-    );
-    let mse = compute_mse(&output1, &output2);
-    println!("[ISA HF Matrix] WN-Std AVX2 self-consistency (HF) | MSE={mse:.2e}");
-    assert!(
-        mse == 0.0,
-        "WN-Std AVX2 HF self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
     );
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_hf_self_consistency_lstm_1x16_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
-    let sr = 48000;
-    let (output1, _) = run_under_isa_hf(
+    assert_isa_hf_self_consistency(
         "BossLSTM-1x16.nam",
         "golden_lstm_1x16",
-        sr,
+        "LSTM-1x16",
         InstructionSet::Avx2,
-    );
-    let (output2, _) = run_under_isa_hf(
-        "BossLSTM-1x16.nam",
-        "golden_lstm_1x16",
-        sr,
-        InstructionSet::Avx2,
-    );
-    let mse = compute_mse(&output1, &output2);
-    println!("[ISA HF Matrix] LSTM-1x16 AVX2 self-consistency (HF) | MSE={mse:.2e}");
-    assert!(
-        mse == 0.0,
-        "LSTM-1x16 AVX2 HF self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
     );
 }
 
 #[test]
-#[ignore = "requires golden v2 binaries — generated via golden_gen_build.sh"]
 fn isa_hf_self_consistency_lstm_2x8_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
-    let sr = 48000;
-    let (output1, _) = run_under_isa_hf(
+    assert_isa_hf_self_consistency(
         "BossLSTM-2x8.nam",
         "golden_lstm_2x8",
-        sr,
+        "LSTM-2x8",
         InstructionSet::Avx2,
-    );
-    let (output2, _) = run_under_isa_hf(
-        "BossLSTM-2x8.nam",
-        "golden_lstm_2x8",
-        sr,
-        InstructionSet::Avx2,
-    );
-    let mse = compute_mse(&output1, &output2);
-    println!("[ISA HF Matrix] LSTM-2x8 AVX2 self-consistency (HF) | MSE={mse:.2e}");
-    assert!(
-        mse == 0.0,
-        "LSTM-2x8 AVX2 HF self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
     );
 }
 

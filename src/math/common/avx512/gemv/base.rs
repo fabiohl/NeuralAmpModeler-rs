@@ -44,7 +44,7 @@ macro_rules! impl_avx512_gemv {
         // SAFETY: weights and state are valid slices; weights.len() >= state.len();
         // CPU supports AVX-512F+VL (verified by dispatch).
         unsafe fn dot_product_4x_f32(weights: &[[f32; 4]], state: &[f32]) -> [f32; 4] {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_avx512(weights, state)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_avx512vl(weights, state)
         }
         #[inline(always)]
         // SAFETY: weights, state_f0, and state_f1 are valid slices;
@@ -55,7 +55,7 @@ macro_rules! impl_avx512_gemv {
             state_f0: &[f32],
             state_f1: &[f32],
         ) -> ([f32; 4], [f32; 4]) {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_avx512(weights, state_f0, state_f1)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_avx512vl(weights, state_f0, state_f1)
         }
         #[inline(always)]
         // SAFETY: weights and state are valid slices; weights.len() >= state.len();
@@ -102,7 +102,7 @@ macro_rules! impl_avx512_gemv {
             state: &[f32],
             init: &[f32; 4],
         ) -> [f32; 4] {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_accumulate_avx512(weights, state, init)
+            crate::math::gemm::dot_4x::dot_product_4x_f32_accumulate_avx512vl(weights, state, init)
         }
         #[inline(always)]
         // SAFETY: weights, state_f0, state_f1, init_f0, init_f1 are valid slices;
@@ -114,7 +114,7 @@ macro_rules! impl_avx512_gemv {
             init_f0: &[f32; 4],
             init_f1: &[f32; 4],
         ) -> ([f32; 4], [f32; 4]) {
-            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_accumulate_avx512(
+            crate::math::gemm::dot_4x::dot_product_4x_f32_dual_accumulate_avx512vl(
                 weights, state_f0, state_f1, init_f0, init_f1,
             )
         }
@@ -303,31 +303,16 @@ macro_rules! impl_avx512_gemv {
         #[inline(always)]
         // SAFETY: in_frame (u16 BF16), weights (u16 BF16), bias (f32), out_gates (f32) are
         // valid slices with weights.len() == 4 * in_frame.len() * hidden_size,
-        // out_gates.len() == 4 * hidden_size; CPU supports AVX-512 VNNI+BF16 (verified by dispatch).
+        // out_gates.len() == 4 * hidden_size; CPU supports AVX-512.
         unsafe fn gemv_overwrite_bf16_4gate(
-            in_frame: &[u16],
-            weights: &[u16],
-            bias: &[f32],
-            out_gates: &mut [f32],
-            hidden_size: usize,
-            do_bias: bool,
+            _in_frame: &[u16],
+            _weights: &[u16],
+            _bias: &[f32],
+            _out_gates: &mut [f32],
+            _hidden_size: usize,
+            _do_bias: bool,
         ) {
-            let ih = in_frame.len();
-            let stride = ih * hidden_size;
-            // SAFETY: weights indices [0..4*stride] are within bounds per function invariants;
-            // AVX-512 VNNI+BF16 ISA verified by caller via dispatch.
-            unsafe {
-                crate::math::gemm::gemv_4gate::gemv_4gate_bf16_avx512(
-                    in_frame,
-                    &weights[0..stride],
-                    &weights[stride..2 * stride],
-                    &weights[2 * stride..3 * stride],
-                    &weights[3 * stride..4 * stride],
-                    bias,
-                    out_gates,
-                    do_bias,
-                )
-            }
+            unreachable!("AVX-512 IS_BF16=false; BF16 paths are dead code pruned in release");
         }
         #[inline(always)]
         // SAFETY: in_frames, weights, bias, out_frames are valid slices with lengths

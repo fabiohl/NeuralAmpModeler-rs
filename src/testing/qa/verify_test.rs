@@ -380,7 +380,10 @@ fn missing_metrics_are_malformed() {
             let mut obj = canonical_fidelity(e)?;
             if e.id == TARGET {
                 obj["esr"] = json!("");
-                obj["snr_db"] = json!(null);
+                // Absent `snr_db` (foreign/corrupt writer) must stay
+                // fail-closed — distinct from the canonical `null` encoding
+                // of perfect parity (P0.T3).
+                obj.as_object_mut().unwrap().remove("snr_db");
             }
             Some(obj)
         },
@@ -400,6 +403,64 @@ fn missing_metrics_are_malformed() {
         metric_check(&outcome, TARGET, Metric::SnrDb),
         &MetricOutcome::Malformed(MalformedReason::Missing)
     );
+}
+
+/// A `null` SNR is the canonical sink's representation of non-finite SNR —
+/// bit-identical perfect parity (`+∞` dB), which is above any envelope floor
+/// (P0.T3). It must not fail the contract; the non-finite *literal*
+/// sentinels (`"inf"`, `"-inf"`, `"nan"`) still fail closed.
+#[test]
+fn null_snr_from_perfect_parity_is_ok() {
+    let contract = load_contract();
+    let report = build_report(
+        &contract,
+        &ALL_PASS,
+        |e| {
+            let mut obj = canonical_fidelity(e)?;
+            if e.id == TARGET {
+                obj["snr_db"] = json!(null);
+            }
+            Some(obj)
+        },
+        canonical_latency,
+    );
+    let outcome = verify(&contract, &report);
+
+    assert!(outcome.fidelity.is_ok(), "fidelity must be OK: {outcome:?}");
+    assert_eq!(
+        metric_check(&outcome, TARGET, Metric::SnrDb),
+        &MetricOutcome::Ok
+    );
+}
+
+/// A non-finite SNR *literal* never comes from the canonical sink — its
+/// presence signals a foreign/corrupt writer and stays fail-closed.
+#[test]
+fn non_finite_snr_literal_is_malformed() {
+    let contract = load_contract();
+    for sentinel in ["inf", "-inf", "nan"] {
+        let report = build_report(
+            &contract,
+            &ALL_PASS,
+            |e| {
+                let mut obj = canonical_fidelity(e)?;
+                if e.id == TARGET {
+                    obj["snr_db"] = json!(sentinel);
+                }
+                Some(obj)
+            },
+            canonical_latency,
+        );
+        let outcome = verify(&contract, &report);
+        assert!(matches!(
+            metric_check(&outcome, TARGET, Metric::SnrDb),
+            MetricOutcome::Malformed(MalformedReason::NonFinite(raw)) if raw == sentinel
+        ));
+        assert!(
+            matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 }),
+            "{sentinel}"
+        );
+    }
 }
 
 #[test]
@@ -607,6 +668,42 @@ fn latency_label_normalization_matches_contract() {
     assert!(
         outcome.performance.is_ok(),
         "normalized label must match: {outcome:?}"
+    );
+}
+
+/// The Criterion bench labels of `regression_gate.rs` differ from the
+/// contract performance ids for `RT_Linear` and the DSP benches — the verify
+/// must resolve them through `ids::resolve_rt_contract_id`, otherwise the
+/// dashboard reports `MISSING_LABEL` for benches that ran and passed
+/// (P0.T3).
+#[test]
+fn latency_bench_labels_resolve_to_contract_ids() {
+    let contract = load_contract();
+    let report = build_report(&contract, &ALL_PASS, canonical_fidelity, |e| {
+        let bench_label = match e.id.as_str() {
+            "RT_Linear_RF2048" => "RT_Linear",
+            "RT_DSP_Resampler_44k_to_48k" => "RT_DSP_Resampler_44k1_to_48k",
+            "RT_DSP_Pipeline_Base" => "RT_DSP_Pipeline_Base_NoOS",
+            "RT_DSP_Pipeline_HQ" => "RT_DSP_Pipeline_HQ_4xOS",
+            id => id,
+        };
+        Some(json!({
+            "kind": "latency",
+            "label": bench_label,
+            "median_latency_us": e.median_latency_us,
+        }))
+    });
+    let outcome = verify(&contract, &report);
+    assert!(
+        outcome.performance.is_ok(),
+        "bench labels must resolve via the RT_* alias table: {outcome:?}"
+    );
+    assert_eq!(outcome.perf_checks.len(), contract.performance.len());
+    assert!(
+        outcome
+            .perf_checks
+            .iter()
+            .all(|c| matches!(c.result, PerfResult::Ok { .. }))
     );
 }
 

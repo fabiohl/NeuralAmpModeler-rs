@@ -28,4 +28,4 @@ pub mod spectral;
 pub mod stress;
 pub mod wav;
 
-pub use isa_guard::ForceAvx2Guard;
+pub use isa_guard::{ForceAvx2Guard, ForceAvx512Guard, IsaGuard};
