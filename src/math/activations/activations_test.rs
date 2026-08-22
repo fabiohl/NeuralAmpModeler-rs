@@ -242,6 +242,7 @@ proptest! {
 /// Deterministic sweep of the Padé NR2 AVX-512 path against `f64::tanh`
 /// over the full audio domain `[-10, 10]`.  Only executes on hardware
 /// with AVX-512F+VL+DQ support.
+#[cfg(feature = "avx512")]
 #[test]
 fn test_tanh_pade_nr2_sweep_avx512() {
     use std::arch::x86_64::*;
@@ -319,6 +320,7 @@ proptest! {
             .unwrap_or(if cfg!(debug_assertions) { 1_000 } else { 100_000 }),
         .. ProptestConfig::default()
     })]
+    #[cfg(feature = "avx512")]
     #[test]
     fn test_tanh_pade_nr2_proptest_100k_avx512(x in -10.0f32..10.0f32) {
         use std::arch::x86_64::*;
@@ -538,8 +540,9 @@ fn test_fused_sigmoid_relu_slice_dispatch_smoke() {
     let mut data: Vec<f32> = (-32..32).map(|i| i as f32 * 0.25).collect();
     let original = data.clone();
     unsafe {
-        #[expect(deprecated)]
+        #[cfg_attr(feature = "avx512", expect(deprecated))]
         match crate::math::common::SIMD_MATH.instruction_set {
+            #[cfg(feature = "avx512")]
             crate::math::common::InstructionSet::Avx512
             | crate::math::common::InstructionSet::Avx512VnniBf16 => {
                 fused::fused_sigmoid_relu_slice_avx512(&mut data);

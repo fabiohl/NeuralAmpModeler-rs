@@ -134,6 +134,7 @@ pub unsafe fn simd_tanh_pade_nr1_dual_avx2(x1: __m256, x2: __m256) -> (__m256, _
 ///
 /// # Safety
 /// The caller must guarantee AVX-512F, AVX-512VL, and AVX-512DQ support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn simd_tanh_pade_nr1_avx512(x: __m512) -> __m512 {
@@ -219,6 +220,7 @@ pub unsafe fn simd_tanh_pade_nr2_avx2(x: __m256) -> __m256 {
 ///
 /// # Safety
 /// The caller must guarantee AVX-512F, AVX-512VL, and AVX-512DQ support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn simd_tanh_pade_nr2_avx512(x: __m512) -> __m512 {

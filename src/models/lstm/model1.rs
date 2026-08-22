@@ -61,6 +61,7 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
         process_sample_avx2,
     );
 
+    #[cfg(feature = "avx512")]
     define_lstm1_process!(
         process_avx512,
         target_feature(enable = "avx512f,avx512vl"),

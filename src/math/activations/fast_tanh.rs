@@ -4,6 +4,7 @@
 //! Optimized FastTanh (Padé rational approximation) activation kernels.
 
 use crate::activation_simd_avx2;
+#[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
 use core::arch::x86_64::*;
 
@@ -83,6 +84,7 @@ pub unsafe fn fast_tanh_slice_avx2(data: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, AVX-512DQ, and FMA support.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq,fma")]
 #[expect(
     clippy::excessive_precision,

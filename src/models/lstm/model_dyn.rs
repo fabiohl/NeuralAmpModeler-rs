@@ -17,12 +17,9 @@ use crate::math::common::AlignedVec;
 ///   - Layers 1..N receive the previous layer's hidden state as input.
 ///   - Final output = `dot(hidden_last, head_weights) + head_bias`.
 ///
-/// ## SIMD dispatch
-/// Follows the same `dispatch_simd!( @self, ... )` pattern as the static
-/// LSTM models. The outer dispatch selects the target-feature variant
-/// (`process_avx2`, `process_avx512`, `process_avx512_vnni_bf16`), which
-/// calls each layer's `#[target_feature]` kernel directly, avoiding
-/// double dispatch per sample.
+/// ## SIMD
+/// `process()` calls `process_avx2` only. There is no AVX-512 or BF16
+/// arm on the dynamic LSTM path.
 pub struct LstmModelDyn {
     /// Dynamically-sized LSTM layers.
     ///

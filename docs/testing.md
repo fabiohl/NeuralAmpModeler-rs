@@ -260,6 +260,22 @@ The suite maintains three reference systems that answer complementary questions:
 - **Tier 2 (CI gate):** Tests comparing against a mathematical ground truth (`f32::tanh`, `f64::tanh`, analytical values) answer "is the approximation correct?".
 - **Tier 3 (Long suite):** Tests comparing two approximations against each other (`Padé+NR1 vs Padé+div`, `nr2_vs_nr1`) verify agreement between approximations. With the f64 Oracle providing absolute precision, these run in the long suite for regression location.
 
+### Stochastic Proptest Tolerance Scaling Rules
+
+When running Property-Based Tests (`proptest_math`) across large, randomly generated vectors ($N \le 1024$ elements in $[-1.0, 1.0]$):
+
+1. **$L_1$ Norm Scaling:** The accumulated floating-point rounding error in single-precision (`f32`) dot products grows with vector length and element magnitude. Setting a tolerance relative to `scalar_result.abs()` causes false positives when positive and negative products cancel out ($\text{sum} \approx 0.0$).
+2. **Standard Assertion Rule:** The error bound MUST be scaled by the $L_1$ norm of the product terms:
+   $$\text{threshold} = 10^{-6} \times \max\left(1.0, \sum_{i=1}^N |x_i \cdot y_i|\right)$$
+   This invariant is enforced consistently across both AVX2 and AVX-512 property tests.
+
+### Virtualized & Cloud Verification Caveats
+
+When executing audit suites ([`utils/tests-long.sh`](../utils/tests-long.sh) or [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh)) inside virtualized cloud environments (e.g. AWS EC2 Nitro/KVM):
+
+- **Timing & Jitter (Phases 5 & 6):** Virtual machine hypervisors do not guarantee hard-real-time timer precision or dedicated CPU frequency governors (`scaling_governor`). The suite detects virtualized environments and marks RT Jitter / Regression Gates cleanly as `INCONCLUSIVE` / `INCOMPARABLE_ENVIRONMENT`, without failing the hard functional or fidelity gates.
+- **Hardware SIMD Gating:** Gating scripts (`utils/remote-simd-gate.sh`) bypass frequency-governor checks via `--skip-cooldown` and rely on Criterion statistical $p$-values ($p < 0.05$) to ensure conclusive comparative results between ISAs on identical VM cores.
+
 ---
 
 ## 9. Quality Contract (Contrato de Qualidade)
@@ -316,6 +332,7 @@ QA scripts report these domains independently:
 - `FIDELITY: OK` / `PERFORMANCE: NOT_VERIFIED` — all fidelity phases and ESR/SNR envelopes passed; only `regression_gate` failed or was skipped (Criterion noise, missing baseline, or incomparable environment). This is **not** a sonic regression.
 - `FIDELITY: FAIL` / `PERFORMANCE: *` — at least one mandatory fidelity phase or metric envelope failed. Investigate audio parity first.
 - A `regression_gate` failure must **never** be counted as a fidelity violation (the quality dashboard's `verify_contract` attributes phase failures strictly by domain).
+- **SIMD policy:** production performance claims are AVX2 (`x86-64-v3`) only. The remote AVX-512 receipt (`utils/remote-simd-gate.sh`) is a promotion gate, not a fidelity oracle. A FAIL receipt means “do not promote”, not “audio is wrong”. See [`architecture.md`](architecture.md) §1.2.
 
 > [!NOTE]
 > [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the primary statistical authority for performance regressions (two-sample t-test, p < 0.05); the quality contract acts as an integrated second line of defense.
@@ -384,6 +401,7 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 | **[utils/lints.sh](../utils/lints.sh)**                                               | Static analysis & quality defense          | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`). |
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                       |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                        |
+| **[utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh)**         | Binary surface guard                       | Disassembles and symbol-scans release build artifacts using `llvm-nm`/`llvm-objdump`, asserting zero AVX-512 symbol leaks or EVEX/ZMM opcodes in default builds.                                                                                                                                                                                                                                        |
 | **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                           |
 
 ---

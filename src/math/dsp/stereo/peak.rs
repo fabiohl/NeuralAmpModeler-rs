@@ -71,6 +71,7 @@ pub unsafe fn compute_peak_abs_stereo_avx2(left: &[f32], right: &[f32]) -> (f32,
 }
 
 /// Computes the peak absolute value of both stereo channels via AVX-512.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_peak_abs_stereo_avx512(left: &[f32], right: &[f32]) -> (f32, f32) {
@@ -158,6 +159,7 @@ pub unsafe fn compute_peak_abs_mono_avx2(data: &[f32]) -> f32 {
 }
 
 /// Mono peak absolute value via AVX-512.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_peak_abs_mono_avx512(data: &[f32]) -> f32 {

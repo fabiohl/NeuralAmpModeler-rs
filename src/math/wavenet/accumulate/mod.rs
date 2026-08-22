@@ -8,17 +8,21 @@
 
 //! Accumulation and activation kernels for WaveNet — AVX2, AVX-512 and scalar fallback.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "avx512"))]
 mod accumulate_test;
 mod avx2;
+#[cfg(feature = "avx512")]
 mod avx512;
+#[cfg(feature = "avx512")]
 mod avx512vl;
 mod kernel_macro;
 #[cfg(test)]
 pub mod scalar;
 
 pub use avx2::*;
+#[cfg(feature = "avx512")]
 pub use avx512::*;
+#[cfg(feature = "avx512")]
 pub use avx512vl::*;
 #[cfg(test)]
 pub use scalar::*;

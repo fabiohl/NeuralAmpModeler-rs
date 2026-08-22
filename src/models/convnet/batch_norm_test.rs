@@ -536,6 +536,7 @@ mod batch_norm_simd_parity {
     }
 
     /// Tests AVX-512 parity when AVX-512F is supported at runtime.
+    #[cfg(feature = "avx512")]
     #[test]
     fn avx512_vs_scalar() {
         if !std::arch::is_x86_feature_detected!("avx512f") {
@@ -572,6 +573,7 @@ mod batch_norm_simd_parity {
     }
 
     /// Tests AVX-512 parity with 32 channels and unaligned channel count (35).
+    #[cfg(feature = "avx512")]
     #[test]
     fn avx512_vs_scalar_32ch_and_35ch() {
         if !std::arch::is_x86_feature_detected!("avx512f") {

@@ -4,10 +4,12 @@
 //! Modularized Fused Residual Batch GEMM kernels across ISAs.
 
 mod avx2;
+#[cfg(feature = "avx512")]
 mod avx512;
 mod scalar;
 
 pub use avx2::*;
+#[cfg(feature = "avx512")]
 pub use avx512::*;
 pub use scalar::*;
 

@@ -2,7 +2,9 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
-use crate::math::activations::{simd_tanh_avx2, simd_tanh_avx512, simd_tanh_dual_avx2};
+#[cfg(feature = "avx512")]
+use crate::math::activations::simd_tanh_avx512;
+use crate::math::activations::{simd_tanh_avx2, simd_tanh_dual_avx2};
 
 const DENSE_POINTS: usize = 4001;
 
@@ -95,6 +97,7 @@ fn test_pade_nr2_vs_nr1_precision_avx2() {
     );
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 #[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
 fn test_pade_nr1_vs_div_precision_avx512() {

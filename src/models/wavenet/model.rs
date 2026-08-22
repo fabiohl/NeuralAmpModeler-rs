@@ -83,10 +83,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Combines the outputs of both arrays: `sum(head1) + sum(head2)` × `head_scale`.
     ///
     /// **For Scientists and Devs:** The `dispatch_simd!` macro monomorphizes
-    /// this function via the `SimdMath` trait, matching the global hardware
-    /// configuration once at the call site. Inference is strictly `f32`.
-    /// The compiler generates branchless assembly optimized for your processor
-    /// (AVX2 or AVX-512) without v-table or dynamic dispatch overhead.
+    /// this function via the `SimdMath` trait. Inference is strictly `f32`.
+    /// Production policy is the AVX2 backend; the AVX-512 match arm is not a
+    /// promoted product path (see `docs/architecture.md` §1.2).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
     }
@@ -157,9 +156,8 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
 
     /// Stabilizes the model by processing silence (Zero Input) for pre-warm.
     ///
-    /// Dispatches via `dispatch_simd!` macro — a single static `match` on the
-    /// globally detected `SIMD_MATH.instruction_set` — to run the AVX2 or AVX-512
-    /// kernel without runtime feature detection per call (inference is strictly `f32`).
+    /// Dispatches via `dispatch_simd!` (static match, `f32`). Production
+    /// policy is AVX2; the AVX-512 arm is not a promoted product path.
     #[cold]
     pub fn prewarm(&mut self) {
         unsafe {
@@ -171,6 +169,7 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     ///
     /// # Safety
     /// Requires a supported processor (AVX-512).
+    #[cfg(feature = "avx512")]
     #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]
     pub unsafe fn prewarm_avx512(&mut self) {

@@ -171,8 +171,8 @@ else
         sleep "$COOLDOWN_SECS"
     fi
 
-    echo -e "  ${BLUE}Running: cargo test --release --test parity -- isa_parity -- --include-ignored --test-threads=1 --nocapture${NC}"
-    cargo test --release --test parity -- isa_parity -- --include-ignored --test-threads=1 --nocapture
+    echo -e "  ${BLUE}Running: cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture${NC}"
+    cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture
     ok "Mathematical cross-ISA parity verified against AVX2 reference."
 fi
 
@@ -189,8 +189,8 @@ else
         sleep "$COOLDOWN_SECS"
     fi
 
-    echo -e "  ${BLUE}Running: cargo bench --bench inference_bench -- isa_compare${NC}"
-    cargo bench --bench inference_bench -- isa_compare
+    echo -e "  ${BLUE}Running: cargo bench --features avx512 --bench inference_bench -- ISA_Compare${NC}"
+    cargo bench --features avx512 --bench inference_bench -- ISA_Compare
     ok "Criterion ISA comparison benchmarks completed."
 fi
 
@@ -202,12 +202,22 @@ phase "Phase 3: Structured Receipt Generation..."
 if [ "$SKIP_BENCH" -eq 1 ]; then
     warn "Skipping Phase 3 receipt generation & ROI check (--skip-bench specified)."
 else
-    mkdir -p "$(dirname "$RECEIPT_OUT")"
+    RECEIPT_STATUS=0
     cargo run --quiet --features testing --bin nam_remote_simd_receipt -- \
         --criterion-dir "target/criterion" \
         --out "$RECEIPT_OUT" \
         --table \
-        --check
+        --check || RECEIPT_STATUS=$?
+
+    if [ "$RECEIPT_STATUS" -ne 0 ]; then
+        warn "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
+        echo -e "\n${YELLOW}${BOLD}================================================================================"
+        echo -e "  Remote SIMD Gate: Parity verified (100% PASS), but ROI criteria not met."
+        echo -e "  Verdict: Gate Check FAILED (ROI policy directs fallback to AVX2)."
+        echo -e "  Artifact saved: ${CYAN}$RECEIPT_OUT${NC}"
+        echo -e "${YELLOW}${BOLD}================================================================================${NC}\n"
+        exit 1
+    fi
 
     ok "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
 fi

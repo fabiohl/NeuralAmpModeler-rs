@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
-PHASE_TOTAL=7
+PHASE_TOTAL=8
 source "$SCRIPT_DIR/_lib.sh"
 
 if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]; then
@@ -185,6 +185,13 @@ if [ -n "$undocumented_allows" ]; then
     exit 1
 fi
 ok "All #[allow(clippy::)] suppressions are documented."
+
+# ---------------------------------------------------------------------------
+# [8/8] Binary scan: zero EVEX/ZMM and zero AVX-512 symbols in default release
+# ---------------------------------------------------------------------------
+phase "Validating binary artifact (zero AVX-512 in default release build)..."
+"$SCRIPT_DIR/verify_no_avx512_release.sh"
+ok "Binary artifact is clean of AVX-512 symbols and EVEX instructions."
 
 echo -e "${GREEN}${BOLD}================================================================${NC}"
 echo -e "${GREEN}${BOLD} Quality suite completed successfully!                          ${NC}"

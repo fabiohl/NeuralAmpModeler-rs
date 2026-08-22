@@ -230,10 +230,8 @@ impl WaveNetModelDyn {
     ///
     /// Combines the outputs of both arrays: sum(head1) + sum(head2) × `head_scale`.
     ///
-    /// **For Scientists and Devs:** This is where the performance "magic trick" happens (SIMD Dispatch).
-    /// Instead of using slow `if/else` per frame to check the CPU (AVX2 vs AVX-512),
-    /// the `dispatch_simd!` macro evaluates the hardware once and "teleports" execution
-    /// to a cloned (monomorphized) version of this function strictly optimized for your processor.
+    /// Dynamic WaveNet is hardcoded to `Avx2Math`. It does not call
+    /// `dispatch_simd!` and has no AVX-512 monomorph.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         unsafe { self.process_internal::<crate::math::common::Avx2Math>(input, output) };
     }

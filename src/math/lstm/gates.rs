@@ -12,14 +12,18 @@
 
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
-use crate::math::activations::sigmoid::high_fidelity::{
-    simd_sigmoid_poly_avx2, simd_sigmoid_poly_avx512,
-};
-use crate::math::activations::sigmoid::{
-    simd_sigmoid_avx2, simd_sigmoid_avx512, simd_sigmoid_dual_avx2,
-};
-use crate::math::activations::tanh::high_fidelity::{simd_tanh_poly_avx2, simd_tanh_poly_avx512};
-use crate::math::activations::tanh::{simd_tanh_avx2, simd_tanh_avx512};
+use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
+#[cfg(feature = "avx512")]
+use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx512;
+#[cfg(feature = "avx512")]
+use crate::math::activations::sigmoid::simd_sigmoid_avx512;
+use crate::math::activations::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_dual_avx2};
+use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx2;
+#[cfg(feature = "avx512")]
+use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx512;
+use crate::math::activations::tanh::simd_tanh_avx2;
+#[cfg(feature = "avx512")]
+use crate::math::activations::tanh::simd_tanh_avx512;
 use core::arch::x86_64::*;
 
 /// Fused kernel for LSTM gates (AVX2) — Standard (exact-grade) accuracy path.
@@ -115,6 +119,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_hf(
@@ -148,6 +153,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_std(
@@ -180,6 +186,7 @@ pub unsafe fn fused_lstm_gates_avx512_std(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512(
@@ -341,6 +348,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 /// Fused kernel to update the memory (state) of an LSTM network.
 /// This function decides what the network should "forget" from the past and what to "learn" from the present,
 /// updating the values all at once for 16 memory cells.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_dyn_avx512(

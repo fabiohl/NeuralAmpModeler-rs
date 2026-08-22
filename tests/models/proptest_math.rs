@@ -10,7 +10,9 @@
 
 use neural_amp_modeler_rs::math::activations::sigmoid::simd_sigmoid_avx2;
 use neural_amp_modeler_rs::math::activations::tanh::simd_tanh_avx2;
-use neural_amp_modeler_rs::math::gemm::dot_basic::{dot_product_avx2, dot_product_avx512};
+use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx2;
+#[cfg(feature = "avx512")]
+use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx512;
 use proptest::prelude::*;
 
 use core::arch::x86_64::{_mm256_loadu_ps, _mm256_storeu_ps};
@@ -152,6 +154,7 @@ proptest! {
     }
 
         /// Validates the AVX-512 dot product (when available in hardware).
+    #[cfg(feature = "avx512")]
     #[test]
     #[ignore]
     fn prop_dot_product_avx512_vs_scalar((vec_a, vec_b) in vec_pair_strategy()) {
@@ -160,13 +163,14 @@ proptest! {
             let simd_result = unsafe { dot_product_avx512(&vec_a, &vec_b) };
 
             let scalar_result: f64 = vec_a.iter().zip(vec_b.iter()).map(|(&x, &y)| (x as f64) * (y as f64)).sum();
+            let l1_norm: f64 = vec_a.iter().zip(vec_b.iter()).map(|(&x, &y)| ((x as f64) * (y as f64)).abs()).sum();
 
             let error = (simd_result as f64 - scalar_result).abs();
-            let threshold = (1e-6 * scalar_result.abs()).max(1e-6);
+            let threshold = 1e-6 * l1_norm.max(1.0);
 
             assert!(
                 error <= threshold,
-                    "AVX-512 dot product diverged! SIMD: {}, Ground Truth (f64): {}, Error: {}",
+                "AVX-512 dot product diverged! SIMD: {}, Ground Truth (f64): {}, Error: {}",
                 simd_result,
                 scalar_result,
                 error

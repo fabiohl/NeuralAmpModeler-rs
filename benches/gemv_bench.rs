@@ -20,9 +20,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use neural_amp_modeler_rs::math::common::scalar_ref::fused_add_gemv_fallback;
 use neural_amp_modeler_rs::math::gemm::gemv::fused_add_gemv_avx2;
-use neural_amp_modeler_rs::math::gemm::gemv_4gate::{
-    gemv_4gate_avx2, gemv_4gate_avx512, gemv_4gate_avx512vl,
-};
+use neural_amp_modeler_rs::math::gemm::gemv_4gate::gemv_4gate_avx2;
+#[cfg(feature = "avx512")]
+use neural_amp_modeler_rs::math::gemm::gemv_4gate::{gemv_4gate_avx512, gemv_4gate_avx512vl};
 
 #[path = "gemv/kernels.rs"]
 mod kernels;
@@ -247,6 +247,7 @@ macro_rules! bench_4gate_dim {
     ($c:expr, $name:literal, $in_len:expr, $out_len:expr) => {{
         let mut group = $c.benchmark_group($name);
         let data = make_4gate_test_data($in_len, $out_len);
+        #[cfg(feature = "avx512")]
         let has_avx512 =
             is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
@@ -269,6 +270,7 @@ macro_rules! bench_4gate_dim {
             })
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("avx512_zmm", |b| {
                 b.iter(|| {

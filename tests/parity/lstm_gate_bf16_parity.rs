@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+#![cfg(feature = "avx512")]
+
 use neural_amp_modeler_rs::math::common::gemv_4gate_bf16_fallback;
 use neural_amp_modeler_rs::math::gemm::gemv_4gate_bf16_avx512;
 use proptest::prelude::*;
@@ -68,7 +70,7 @@ proptest! {
             let max_val = out_simd[i].abs().max(out_scalar[i].abs()).max(1.0);
             let rel_diff = diff / max_val;
             assert!(
-                rel_diff < 1e-3
+                rel_diff < 5e-3
                     || (out_simd[i].is_nan() && out_scalar[i].is_nan())
                     || (out_simd[i].is_infinite() && out_scalar[i].is_infinite()),
                 "GEMV 4-gate BF16 parity failed at index {}: SIMD={}, Scalar={}, Diff={}, RelDiff={}",

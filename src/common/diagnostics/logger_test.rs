@@ -515,6 +515,10 @@ fn global_returns_some_after_init() {
 
 #[test]
 fn log_buffer_returns_some_after_init() {
+    let _ = NamLogger::init(LoggerConfig {
+        level_filter: LevelFilter::Warn,
+        emit_stderr: false,
+    });
     let buf = NamLogger::log_buffer();
     assert!(buf.is_some());
     assert_eq!(buf.unwrap().capacity(), DEFAULT_CAPACITY);

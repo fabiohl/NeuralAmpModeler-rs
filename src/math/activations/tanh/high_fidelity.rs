@@ -16,6 +16,7 @@
 //!
 //! Coefficients in `crate::math::constants` (`POLY_*`).
 
+#[cfg(feature = "avx512")]
 pub use super::high_fidelity_avx512::*;
 use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
 use crate::math::constants::*;

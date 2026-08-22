@@ -7,6 +7,7 @@
 
 mod conv_kernels;
 mod convolution_avx2;
+#[cfg(feature = "avx512")]
 mod convolution_avx512;
 mod energy;
 mod max_diff;
@@ -15,19 +16,20 @@ mod peak;
 pub use convolution_avx2::{
     convolve_mono_avx2, convolve_mono_dual_avx2, convolve_stereo_avx2, convolve_stereo_dual_avx2,
 };
+#[cfg(feature = "avx512")]
 pub use convolution_avx512::{
     convolve_mono_avx512, convolve_mono_dual_avx512, convolve_stereo_avx512,
     convolve_stereo_dual_avx512,
 };
-pub use energy::{
-    compute_energy_avx2, compute_energy_avx512, compute_energy_stereo_avx2,
-    compute_energy_stereo_avx512,
-};
-pub use max_diff::{compute_max_diff_avx2, compute_max_diff_avx512};
-pub use peak::{
-    compute_peak_abs_mono_avx2, compute_peak_abs_mono_avx512, compute_peak_abs_stereo_avx2,
-    compute_peak_abs_stereo_avx512,
-};
+pub use energy::{compute_energy_avx2, compute_energy_stereo_avx2};
+#[cfg(feature = "avx512")]
+pub use energy::{compute_energy_avx512, compute_energy_stereo_avx512};
+pub use max_diff::compute_max_diff_avx2;
+#[cfg(feature = "avx512")]
+pub use max_diff::compute_max_diff_avx512;
+pub use peak::{compute_peak_abs_mono_avx2, compute_peak_abs_stereo_avx2};
+#[cfg(feature = "avx512")]
+pub use peak::{compute_peak_abs_mono_avx512, compute_peak_abs_stereo_avx512};
 
 /// Computes the maximum energy between two audio channels via SIMD dispatch.
 ///

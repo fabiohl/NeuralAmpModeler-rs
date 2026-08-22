@@ -55,6 +55,7 @@
 //! | `long_bench`     | No      | Enables long-form inference benchmarks.                            |
 //! | `dynamic-engine` | No      | Enables generic dynamic-dimension fallback execution paths for     |
 //! |                  |         | arbitrary non-standard model topologies.                           |
+//! | `avx512`         | No      | Enables opt-in AVX-512 upward dispatch and measurement harnesses.  |
 //!
 //! ---
 //!

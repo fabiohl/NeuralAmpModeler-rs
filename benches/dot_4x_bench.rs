@@ -19,6 +19,7 @@ use neural_amp_modeler_rs::math::common::scalar_ref;
 use neural_amp_modeler_rs::math::gemm::dot_4x;
 use neural_amp_modeler_rs::math::gemm::dot_product_8x_f32_avx2;
 use neural_amp_modeler_rs::math::gemm::dot_product_8x_f32_scalar;
+#[cfg(feature = "avx512")]
 use neural_amp_modeler_rs::math::gemm::dot_product_16x_f32_avx512;
 use neural_amp_modeler_rs::math::gemm::dot_product_16x_f32_scalar;
 
@@ -61,6 +62,7 @@ fn bench_dot_4x_interleaved_avx512(c: &mut Criterion) {
             b.iter(|| unsafe { dot_4x::dot_product_4x_interleaved_avx2(&weights, &state) })
         });
 
+        #[cfg(feature = "avx512")]
         if std::is_x86_feature_detected!("avx512f") {
             group.bench_function(format!("avx512_{}", size), |b| {
                 b.iter(|| unsafe { dot_4x::dot_product_4x_interleaved_avx512(&weights, &state) })
@@ -91,6 +93,7 @@ fn bench_dot_4x_interleaved_dual_frame_avx512(c: &mut Criterion) {
             })
         });
 
+        #[cfg(feature = "avx512")]
         if std::is_x86_feature_detected!("avx512f") {
             group.bench_function(format!("avx512_{}", size), |b| {
                 b.iter(|| unsafe {
@@ -133,6 +136,7 @@ fn bench_dot_16x_f32_avx512(c: &mut Criterion) {
             b.iter(|| unsafe { dot_product_16x_f32_scalar(&weights, &state) })
         });
 
+        #[cfg(feature = "avx512")]
         if std::is_x86_feature_detected!("avx512f") {
             group.bench_function(format!("avx512_{}", size), |b| {
                 b.iter(|| unsafe { dot_product_16x_f32_avx512(&weights, &state) })

@@ -24,7 +24,7 @@ pub struct SimdMathConfig {
 impl SimdMathConfig {
     /// Returns the active global SIMD configuration, respecting any
     /// `TEST_ISA_OVERRIDE` that may be set by integration tests.
-    #[expect(deprecated)]
+    #[cfg_attr(feature = "avx512", expect(deprecated))]
     pub fn current() -> Self {
         let raw = TEST_ISA_OVERRIDE.load(Ordering::Relaxed);
         if let Some(isa) = decode_isa_override(raw) {
@@ -32,10 +32,17 @@ impl SimdMathConfig {
                 instruction_set: isa,
                 name: match isa {
                     InstructionSet::Avx2 => "AVX2 (overridden)",
+                    #[cfg(feature = "avx512")]
                     InstructionSet::Avx512 => "AVX-512 (overridden)",
+                    #[cfg(feature = "avx512")]
                     InstructionSet::Avx512VnniBf16 => "AVX-512 VNNI+BF16 (overridden)",
+                    #[cfg(not(feature = "avx512"))]
+                    _ => "AVX2 (overridden)",
                 },
+                #[cfg(feature = "avx512")]
                 is_avx512: matches!(isa, InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16),
+                #[cfg(not(feature = "avx512"))]
+                is_avx512: false,
             }
         } else {
             *SIMD_MATH

@@ -11,6 +11,7 @@
 //! and its associated rescaling and error propagation.
 
 use crate::activation_simd_avx2;
+#[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
 use crate::math::constants::*;
 use core::arch::x86_64::*;
@@ -115,6 +116,7 @@ pub unsafe fn simd_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256)
 ///
 /// # Safety
 /// The caller must guarantee AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_sigmoid_avx512(x: __m512) -> __m512 {
@@ -190,6 +192,7 @@ pub unsafe fn sigmoid_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn sigmoid_slice_avx512(slice: &mut [f32]) {

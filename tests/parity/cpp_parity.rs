@@ -50,6 +50,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEST_WAV_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParityOutcome {
@@ -267,8 +270,10 @@ fn run_render_comparison(
     };
 
     let suffix = if use_hf { "_hf" } else { "" };
+    let seq = TEST_WAV_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
     let stress_wav = temp_dir.join(format!(
-        "stress_live_{golden_name}_{sample_rate}{suffix}.wav"
+        "stress_live_{golden_name}_{sample_rate}_{pid}_{seq}{suffix}.wav"
     ));
 
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
@@ -314,7 +319,9 @@ fn run_render_comparison(
     common::wav::write_wav_f32(&stress_wav, &input_for_render, input_sr)
         .expect("Failed to write stress WAV");
 
-    let output_wav = temp_dir.join(format!("{golden_name}_live_{sample_rate}{suffix}.wav"));
+    let output_wav = temp_dir.join(format!(
+        "{golden_name}_live_{sample_rate}_{pid}_{seq}{suffix}.wav"
+    ));
 
     // Execute render tool — capture stdout/stderr to prevent interleaving
     // with the Rust test harness output.
@@ -585,6 +592,7 @@ fn run_render_comparison(
     }
 
     // Cleanup
+    fs::remove_file(&stress_wav).ok();
     fs::remove_file(&output_wav).ok();
     ParityOutcome::Completed
 }

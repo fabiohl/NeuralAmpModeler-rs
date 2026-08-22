@@ -133,6 +133,7 @@ pub unsafe fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> f32 {
 
 /// Computes the maximum energy between two channels (Mean Square) via AVX-512.
 /// Fuses both passes into one to save memory bandwidth.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> f32 {
     let len = core::cmp::min(l.len(), r.len());
@@ -166,6 +167,7 @@ pub unsafe fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> f32 {
 }
 
 /// Computes the energy (Mean Square) of a block via AVX-512.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_energy_avx512(data: &[f32]) -> f32 {
     let len = data.len();

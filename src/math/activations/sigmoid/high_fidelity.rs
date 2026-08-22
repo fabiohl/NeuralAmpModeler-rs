@@ -15,6 +15,7 @@
 //!
 //! Coefficients in `crate::math::constants` (`POLY_*`).
 
+#[cfg(feature = "avx512")]
 pub use super::high_fidelity_avx512::*;
 use crate::math::constants::*;
 use core::arch::x86_64::*;

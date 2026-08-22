@@ -4,9 +4,13 @@
 //! Optimized SiLU (Sigmoid Linear Unit / Swish) activation kernels.
 
 use super::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
+#[cfg(feature = "avx512")]
 use super::sigmoid::high_fidelity_avx512::simd_sigmoid_poly_avx512;
-use super::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_avx512, simd_sigmoid_dual_avx2};
+#[cfg(feature = "avx512")]
+use super::sigmoid::simd_sigmoid_avx512;
+use super::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_dual_avx2};
 use crate::activation_simd_avx2;
+#[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
 use core::arch::x86_64::*;
 
@@ -40,6 +44,7 @@ pub unsafe fn simd_silu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_silu_avx512(x: __m512) -> __m512 {
     unsafe {
@@ -88,6 +93,7 @@ pub unsafe fn silu_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn silu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
@@ -137,6 +143,7 @@ pub unsafe fn simd_silu_poly_avx2(x: __m256) -> __m256 {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_silu_poly_avx512(x: __m512) -> __m512 {
     unsafe {
@@ -183,6 +190,7 @@ pub unsafe fn silu_poly_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn silu_poly_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;

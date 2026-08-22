@@ -418,6 +418,7 @@ fn test_fast_tanh_avx2_large_slice() {
 
 // --- AVX-512 parity tests ---
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_hard_tanh_avx512_parity() {
     if !is_x86_feature_detected!("avx512f") {
@@ -443,6 +444,7 @@ fn test_hard_tanh_avx512_parity() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_hard_tanh_avx512_large_slice() {
     if !is_x86_feature_detected!("avx512f") {
@@ -468,6 +470,7 @@ fn test_hard_tanh_avx512_large_slice() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_hard_swish_avx512_parity() {
     if !is_x86_feature_detected!("avx512f") {
@@ -494,6 +497,7 @@ fn test_hard_swish_avx512_parity() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_hard_swish_avx512_large_slice() {
     if !is_x86_feature_detected!("avx512f") {
@@ -520,6 +524,7 @@ fn test_hard_swish_avx512_large_slice() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_leaky_hard_tanh_avx512_parity() {
     if !is_x86_feature_detected!("avx512f") {
@@ -562,6 +567,7 @@ fn test_leaky_hard_tanh_avx512_parity() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_leaky_hard_tanh_avx512_large_slice() {
     if !is_x86_feature_detected!("avx512f") {
@@ -600,6 +606,7 @@ fn test_leaky_hard_tanh_avx512_large_slice() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_fast_tanh_avx512_parity() {
     if !is_x86_feature_detected!("avx512f") {
@@ -638,6 +645,7 @@ fn test_fast_tanh_avx512_parity() {
     }
 }
 
+#[cfg(feature = "avx512")]
 #[test]
 fn test_fast_tanh_avx512_large_slice() {
     if !is_x86_feature_detected!("avx512f") {

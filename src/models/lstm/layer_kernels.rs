@@ -157,6 +157,7 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
     // 2. AVX-512 (F/VL) Specialization:
     // Uses 256-bit EVEX registers with 4-way input unrolling for 4-gate GEMV,
     // eliminating register spilling and serial FMA latency bottlenecks.
+    #[cfg(feature = "avx512")]
     define_lstm_process!(
         process_sample_avx512,
         target_feature(enable = "avx512f,avx512vl"),

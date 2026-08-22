@@ -42,11 +42,13 @@ impl Drop for ForceAvx2Guard {
 /// exclusively on [`InstructionSet::Avx512`] for the lifetime of the guard.
 ///
 /// On [`Drop::drop`], the previous instruction set override setting is restored.
+#[cfg(feature = "avx512")]
 #[derive(Debug)]
 pub struct ForceAvx512Guard {
     prev_override: u8,
 }
 
+#[cfg(feature = "avx512")]
 impl ForceAvx512Guard {
     /// Creates a new guard, forcing [`InstructionSet::Avx512`] SIMD dispatch.
     pub fn new() -> Self {
@@ -60,12 +62,14 @@ impl ForceAvx512Guard {
     }
 }
 
+#[cfg(feature = "avx512")]
 impl Default for ForceAvx512Guard {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "avx512")]
 impl Drop for ForceAvx512Guard {
     fn drop(&mut self) {
         TEST_ISA_OVERRIDE.store(self.prev_override, Ordering::SeqCst);
@@ -99,8 +103,10 @@ impl Drop for IsaGuard {
 mod tests {
     use super::*;
     use crate::math::common::effective_instruction_set;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_force_avx2_guard_lifecycle() {
         let initial_isa = effective_instruction_set();
         {
@@ -119,6 +125,27 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn test_generic_isa_guard_avx2_lifecycle() {
+        let initial_isa = effective_instruction_set();
+        {
+            let _guard = IsaGuard::set(InstructionSet::Avx2);
+            assert_eq!(
+                effective_instruction_set(),
+                InstructionSet::Avx2,
+                "effective_instruction_set() must return InstructionSet::Avx2 while guard is active"
+            );
+        }
+        assert_eq!(
+            effective_instruction_set(),
+            initial_isa,
+            "effective_instruction_set() must revert to initial state after guard drops"
+        );
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(feature = "avx512")]
     fn test_force_avx512_guard_lifecycle() {
         let initial_isa = effective_instruction_set();
         {
@@ -137,7 +164,9 @@ mod tests {
     }
 
     #[test]
-    fn test_generic_isa_guard_lifecycle() {
+    #[serial]
+    #[cfg(feature = "avx512")]
+    fn test_generic_isa_guard_avx512_lifecycle() {
         let initial_isa = effective_instruction_set();
         {
             let _guard = IsaGuard::set(InstructionSet::Avx512);

@@ -55,6 +55,7 @@ pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Computes the maximum absolute difference between two blocks via AVX-512.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_max_diff_avx512(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());

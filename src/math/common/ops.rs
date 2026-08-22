@@ -12,6 +12,7 @@ use core::arch::x86_64::*;
 /// # Safety
 /// `src` and `dest` must be valid slices. `dest` must have at least `src.len()` elements.
 /// AVX-512F+VL target feature must be available (enforced by CPU dispatch).
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 // SAFETY: Caller must ensure AVX-512F+VL is available and src/dest are valid
 // non-overlapping slices. This `pub unsafe fn` is the trust boundary.

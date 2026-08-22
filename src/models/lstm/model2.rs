@@ -84,6 +84,7 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
         process_sample_avx2,
     );
 
+    #[cfg(feature = "avx512")]
     define_lstm2_process_pipelined!(
         process_avx512,
         target_feature(enable = "avx512f,avx512vl"),

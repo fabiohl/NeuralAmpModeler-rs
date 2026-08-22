@@ -15,6 +15,7 @@
 //! Coefficients in `crate::math::constants` (`PADE_TANH_*`).
 
 use crate::activation_simd_avx2;
+#[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
 use crate::math::constants::*;
 use core::arch::x86_64::*;
@@ -108,14 +109,11 @@ pub unsafe fn simd_tanh_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     )
 }
 
-/// Padé \[5,4\] rational approximant for `tanh(x)` with hardware division (AVX-512).
-///
-/// Production path. ~9 SIMD ops, max absolute error ~2.32e-3.
-///
-/// Formula: `tanh(x) ≈ x·(x²+105)·(x²+945) / ((15x²+420)·x²+945)`
+/// Padé \[5,4\] rational tanh — single 16-float path (AVX-512).
 ///
 /// # Safety
 /// The caller must guarantee AVX-512F, AVX-512VL, and AVX-512DQ support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn simd_tanh_avx512(x: __m512) -> __m512 {
@@ -187,6 +185,7 @@ pub unsafe fn tanh_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, and AVX-512DQ support.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn tanh_slice_avx512(slice: &mut [f32]) {

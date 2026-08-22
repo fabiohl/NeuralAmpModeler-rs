@@ -161,6 +161,7 @@ fn test_gemv_no_bias_f32_avx2_batch_vs_fallback() {
 // ── AVX-512 with_bias ───────────────────────────────────────────────────────
 
 #[test]
+#[cfg(feature = "avx512")]
 fn test_gemv_with_bias_f32_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -199,6 +200,7 @@ fn test_gemv_with_bias_f32_avx512_vs_fallback() {
 }
 
 #[test]
+#[cfg(feature = "avx512")]
 fn test_gemv_with_bias_f32_avx512_batch_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -240,6 +242,7 @@ fn test_gemv_with_bias_f32_avx512_batch_vs_fallback() {
 // ── AVX-512 no_bias ─────────────────────────────────────────────────────────
 
 #[test]
+#[cfg(feature = "avx512")]
 fn test_gemv_no_bias_f32_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -277,6 +280,7 @@ fn test_gemv_no_bias_f32_avx512_vs_fallback() {
 }
 
 #[test]
+#[cfg(feature = "avx512")]
 fn test_gemv_no_bias_f32_avx512_batch_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;

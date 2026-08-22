@@ -127,6 +127,8 @@ heap-audit = []
 long_bench = []
 # Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies.
 dynamic-engine = []
+# Research and re-measurement only: enables AVX-512 kernels and instruction dispatch (not used in default/production).
+avx512 = []
 
 [[bin]]
 name = "gen_stress"

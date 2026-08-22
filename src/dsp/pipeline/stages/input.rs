@@ -45,12 +45,20 @@ pub fn apply_input_stage(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
-    use crate::math::common::{Avx2Math, Avx512Math, InstructionSet, effective_instruction_set};
+    #[cfg(feature = "avx512")]
+    use crate::math::common::Avx512Math;
+    use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
     #[expect(deprecated)]
     match effective_instruction_set() {
+        #[cfg(feature = "avx512")]
         InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
             // SAFETY: inner invariants upheld by caller.
             unsafe { apply_input_stage_inner::<Avx512Math>(samples_l, samples_r, n_samples, ctx) }
+        }
+        #[cfg(not(feature = "avx512"))]
+        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+            // SAFETY: inner invariants upheld by caller.
+            unsafe { apply_input_stage_inner::<Avx2Math>(samples_l, samples_r, n_samples, ctx) }
         }
         InstructionSet::Avx2 => {
             // SAFETY: inner invariants upheld by caller.

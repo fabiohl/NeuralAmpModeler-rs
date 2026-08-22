@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  NeuralAmpModeler-rs — Off-RT Model Loader Demonstration  ");
     println!("============================================================");
 
-    // 1. Capture host CPU capabilities and SIMD feature snapshot (AVX2/AVX-512, topology).
+    // 1. Capture host CPU capabilities and SIMD feature snapshot (AVX2 production).
     let sys = SystemSnapshot::capture();
     println!("\n[System Info]");
     println!("  CPU SIMD Features : AVX2/FMA baseline enabled");

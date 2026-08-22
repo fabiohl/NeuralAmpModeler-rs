@@ -32,6 +32,7 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
 /// Horizontal sum of an AVX-512 (512-bit) register to scalar f32.
 ///
 /// Uses the native AVX-512 Foundation reduction intrinsic.
+#[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f")]
 // SAFETY: Inner safety guarantees are upheld by caller invariants or the execution environment.
@@ -64,6 +65,7 @@ pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
 }
 
 /// Horizontal sum of an f32 buffer via AVX-512.
+#[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f")]
 // SAFETY: Inner safety guarantees are upheld by caller invariants or the execution environment.
 pub unsafe fn horizontal_sum_avx512(ptr: *const f32, len: usize) -> f32 {

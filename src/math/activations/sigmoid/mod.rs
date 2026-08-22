@@ -13,6 +13,7 @@
 /// Polynomial exp-based sigmoid kernels (degree-6 Taylor, ≤ 2.1e-7 error).
 pub mod high_fidelity;
 /// AVX-512 polynomial exp/sigmoid kernels (re-exported by `high_fidelity`).
+#[cfg(feature = "avx512")]
 pub mod high_fidelity_avx512;
 pub mod production;
 

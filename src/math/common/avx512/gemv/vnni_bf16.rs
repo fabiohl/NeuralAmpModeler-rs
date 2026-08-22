@@ -4,9 +4,8 @@
 //! AVX-512 VNNI+BF16 dispatch macro for GEMV/GEMM kernels
 //! (`impl_avx512vnni_bf16_gemv!()`).
 //!
-//! Uses 512-bit VNNI-BF16 dot-product instructions for 2× throughput
-//! over the base AVX-512 f32 path when the ISA is available.
-//! Invoked by [`dispatch_simd!`] when `IS_BF16=true`.
+//! Research/legacy VNNI-BF16 GEMV wrappers. Production `dispatch_simd!`
+//! never instantiates `Avx512VnniBf16Math`. Not a production path.
 
 macro_rules! impl_avx512vnni_bf16_gemv {
     () => {

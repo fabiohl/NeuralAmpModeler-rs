@@ -3,8 +3,9 @@
 
 //! AVX-512 BF16 dispatch macro (`impl_avx512_bf16!()`).
 //!
-//! Generates BF16 conversion, GEMV, and activation wrappers when
-//! AVX-512 VNNI+BF16 ISA is available. Invoked by [`dispatch_simd!`].
+//! BF16 conversion helpers compiled into `Avx512Math` for tests and
+//! error decomposition. Production inference is `f32`; `dispatch_simd!`
+//! never selects a BF16 backend.
 
 macro_rules! impl_avx512_bf16 {
     () => {

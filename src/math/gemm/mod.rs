@@ -33,13 +33,17 @@ pub mod gemv_bf16;
 
 pub use dot_4x::avx2::*;
 pub use dot_4x::avx2_dual::*;
+#[cfg(feature = "avx512")]
 pub use dot_4x::avx512::*;
+#[cfg(feature = "avx512")]
 pub use dot_4x::avx512_dual::*;
 pub use dot_4x::dot_f32_avx2::*;
+#[cfg(feature = "avx512")]
 pub use dot_4x::dot_f32_avx512::*;
 pub use dot_4x::scalar::*;
 pub use dot_8x::dot_f32_avx2::*;
 pub use dot_8x::scalar::dot_product_8x_f32_scalar;
+#[cfg(feature = "avx512")]
 pub use dot_16x::dot_f32_avx512::*;
 /// Test/bench oracle only — not for production dispatch.
 pub use dot_16x::scalar::dot_product_16x_f32_scalar;

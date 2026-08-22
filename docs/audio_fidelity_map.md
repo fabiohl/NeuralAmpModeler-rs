@@ -32,13 +32,17 @@ of the `.nam` / `.namb` file format contract.
 
 ---
 
-## 1. Native f32 Weight Representation
+## 1. Native f32 Weight Representation & Numerical Error Budgets
 
 **What it is.** All neural model weight matrices in `nam-rs` are stored and processed natively as `f32` vectors, matching the reference NAMCore engine (`Eigen::MatrixXf`/`VectorXf`).
 
-**Rationale for removing weight compression.** An earlier optimization using half-precision (`f16c`/`bf16`) weight compression was evaluated and removed. Quantitative profiling confirmed that `f16c` decompression overhead on L1 cache outweighed any bandwidth benefits for LSTM models, while introducing artificial interop drift in recurrent models. Weights are loaded directly as `f32` across all model families.
+**Rationale for removing weight compression (f16c / bfloat16).** An earlier optimization using half-precision (`f16c`/`bf16`) weight compression and hardware dot-product instructions (`vdpbf16ps`) was thoroughly evaluated and removed from production dispatch:
 
-**Implementation.** Weight loading and vector storage in [src/models/](../src/models/) (`set_weights.rs` and `model.rs` per architecture). Utility modules in [src/math/common/half.rs](../src/math/common/half.rs) are retained exclusively for benchmark and test reference.
+1. **Mantissa Bit Width & ULP Error:** Standard `f32` provides a 24-bit significand (23 stored + 1 hidden bit) with machine epsilon $\epsilon_{mach} \approx 1.19 \times 10^{-7}$ ($\text{SNR} > 140\text{ dB}$). Conversely, `bfloat16` retains an 8-bit exponent but restricts the significand to only 8 bits (7 stored + 1 hidden bit), yielding $\epsilon_{mach} \approx 3.91 \times 10^{-3}$ and $1\text{ ULP} \approx 0.781\%$ relative precision ($\text{SNR} \approx 45\text{ dB}$).
+2. **Compound Recurrent Drift:** In recurrent architectures (LSTM) and deep convolutional cascades (WaveNet 23-layer), truncation errors at $0.1\%\text{--}0.5\%$ per layer compound multiplicatively, destroying audio fidelity and introducing tone drift.
+3. **Cache & Throughput Penalty:** Quantitative profiling on Intel Xeon Sapphire Rapids confirmed that runtime decompression overhead on L1 cache and EVEX prefix overhead out-taxed any memory bandwidth gains.
+
+**Implementation.** Weight loading and vector storage in [src/models/](../src/models/) (`set_weights.rs` and `model.rs` per architecture). Utility modules in [src/math/common/half.rs](../src/math/common/half.rs) and [tests/parity/lstm_gate_bf16_parity.rs](../tests/parity/lstm_gate_bf16_parity.rs) are retained exclusively for benchmark and numerical error decomposition reference, calibrated to a realistic BF16 relative tolerance of $5 \times 10^{-3}$ (0.5%).
 
 ---
 

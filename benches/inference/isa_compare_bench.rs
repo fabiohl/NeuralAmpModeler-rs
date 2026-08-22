@@ -44,7 +44,9 @@
 use criterion::Criterion;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::models::NamModel;
-use neural_amp_modeler_rs::testing::isa_guard::{ForceAvx2Guard, ForceAvx512Guard};
+use neural_amp_modeler_rs::testing::isa_guard::ForceAvx2Guard;
+#[cfg(feature = "avx512")]
+use neural_amp_modeler_rs::testing::isa_guard::ForceAvx512Guard;
 
 use super::common::{generate_sine_440hz, load_and_prewarm, make_lstm_data};
 
@@ -54,6 +56,7 @@ pub fn bench_isa_compare_lstm_2x16(c: &mut Criterion) {
     let mut model = build_model(&data).expect("Dispatcher failed for LSTM 2x16 benchmark");
     model.prewarm(2048);
 
+    #[cfg(feature = "avx512")]
     let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
     for &size in &[64usize, 1, 8] {
@@ -71,6 +74,7 @@ pub fn bench_isa_compare_lstm_2x16(c: &mut Criterion) {
             });
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
                 let _guard = ForceAvx512Guard::new();
@@ -90,6 +94,7 @@ pub fn bench_isa_compare_lstm_1x16(c: &mut Criterion) {
     let mut model = build_model(&data).expect("Dispatcher failed for LSTM 1x16 benchmark");
     model.prewarm(2048);
 
+    #[cfg(feature = "avx512")]
     let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
     for &size in &[64usize, 1, 8] {
@@ -107,6 +112,7 @@ pub fn bench_isa_compare_lstm_1x16(c: &mut Criterion) {
             });
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
                 let _guard = ForceAvx512Guard::new();
@@ -127,6 +133,7 @@ pub fn bench_isa_compare_a2_full(c: &mut Criterion) {
         None => return,
     };
 
+    #[cfg(feature = "avx512")]
     let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
     for &size in &[64usize, 1, 8] {
@@ -144,6 +151,7 @@ pub fn bench_isa_compare_a2_full(c: &mut Criterion) {
             });
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
                 let _guard = ForceAvx512Guard::new();
@@ -164,6 +172,7 @@ pub fn bench_isa_compare_a2_lite(c: &mut Criterion) {
         None => return,
     };
 
+    #[cfg(feature = "avx512")]
     let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
     for &size in &[64usize, 1, 8] {
@@ -181,6 +190,7 @@ pub fn bench_isa_compare_a2_lite(c: &mut Criterion) {
             });
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
                 let _guard = ForceAvx512Guard::new();
@@ -201,6 +211,7 @@ pub fn bench_isa_compare_wavenet_standard(c: &mut Criterion) {
         None => return,
     };
 
+    #[cfg(feature = "avx512")]
     let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
 
     for &size in &[64usize, 1, 8] {
@@ -218,6 +229,7 @@ pub fn bench_isa_compare_wavenet_standard(c: &mut Criterion) {
             });
         });
 
+        #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
                 let _guard = ForceAvx512Guard::new();

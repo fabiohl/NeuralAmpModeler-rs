@@ -594,7 +594,7 @@ Post-optimization assembly (`cargo rustc --release --bench regression_gate -- --
 
 ## Cloud AVX-512 Benchmarking & Remote SIMD Gating Protocol
 
-To validate advanced SIMD performance (e.g. AVX-512 / AVX-512 F+CD+BW+DQ+VL) and verify mathematical cross-ISA parity without physical workstation hardware dependencies, benchmarks and gating suites are executed in cloud environments or dedicated remote instances (traceability: **F-SIMD-02**, **F-SIMD-07**).
+AVX-512 is **not** a production backend (2026-08 receipt failed the ≥12% `process()` N=64 gate; see [`architecture.md`](architecture.md) §1.2). This section is the **re-measurement** protocol only: same-VM AVX2 vs AVX-512 parity and latency, so a future geometry or SKU can be re-evaluated without guessing. It is not a claim that distribution binaries should dispatch AVX-512.
 
 ### 1. The Same-VM Measurement Rule
 
@@ -603,12 +603,10 @@ Comparing cloud latency measurements directly against local workstation baseline
 Therefore, **AVX-512 speedup gates must be evaluated by comparing AVX-512 vs AVX2 on the SAME cloud virtual machine**:
 
 1. **AVX2 Baseline on Cloud:** Run Criterion benchmarks forcing AVX2 execution path on the cloud VM.
-2. **AVX-512 Runtime Dispatch on Cloud:** Run Criterion benchmarks using standard dynamic dispatch binary (`-Ctarget-cpu=x86-64-v3`) allowing `dispatch_simd!` to activate AVX-512 kernels.
-3. **Speedup Gate:** Verify the $\ge 12\%$ speedup invariant over AVX2 on key compute-heavy models (e.g. WaveNet Standard CH16, A2-Dyn Gated CH8) with Welch's t-test ($p < 0.05$).
+2. **AVX-512 arm on Cloud:** Force the AVX-512 `SimdMath` monomorph (`ForceAvx512Guard` / `TEST_ISA_OVERRIDE`) on the same binary (`-Ctarget-cpu=x86-64-v3`). Do not compare against a `-Ctarget-cpu=native` build.
+3. **Speedup Gate:** Promote only if $\ge 12\%$ vs AVX2 on the canonical N=64 SKUs (WaveNet Standard CH16, A2-Full CH8, A2-Lite CH3, LSTM 1×16, LSTM 2×16) with Welch's t-test ($p < 0.05$). The 2026-08 receipt failed this gate.
 
-### 2. Parity vs Native Ceiling
-
-* **Parity Baseline (`-Ctarget-cpu=x86-64-v3`):** The primary benchmark verifies what end-users experience with pre-built distribution binaries. `dispatch_simd!` detects AVX-512 at runtime and dispatches to the AVX-512 kernels (LSTM 4-gate GEMV in 256-bit VL256; the WaveNet `dot_4x`/`accumulate` paths are still 512-bit ZMM — see the ROI matrix below).
+* **Parity Baseline (`-Ctarget-cpu=x86-64-v3`):** What a distribution binary is compiled as. **Policy:** production runs the AVX2 `Avx2Math` path. In default builds, `detect_best_simd()` resolves to `Avx2` and `dispatch_simd!` monomorphizes only `Avx2Math`. AVX-512 research kernels (VL256 for WaveNet `dot_4x`/`accumulate` and LSTM 4-gate GEMV, ZMM for LSTM fused gates and `dot_16x`) are compiled only with `--features avx512`.
 * **Native Ceiling (`-Ctarget-cpu=native`):** Secondary benchmark build compiled with full compiler auto-vectorization (`-Ctarget-cpu=native`) across the entire crate to determine the upper architectural ceiling, kept strictly distinct from the baseline regression gate.
 
 ### 3. Recommended Cloud Instances & Target Hardware
@@ -767,28 +765,24 @@ All specialization candidates are evaluated on end-to-end model execution (`NamM
 | **$< 5\%$**                            | Any              | **DROP (No Specialization)**   | Memory-bandwidth bound or already compiler-saturated; duplication overhead exceeds gain.       |
 | **$5\% \le \Delta\% < 12\%$**          | $p < 0.05$       | **DROP / CONDITIONAL**         | Dropped unless significant reduction in real-time latency variance / N=1 jitter is documented. |
 
-### 2. Domain & Model Topology ROI Matrix
+### 2. Domain & Model Topology ROI Matrix (Empirical Hardware Receipt)
 
-> [!WARNING]
-> **Measured vs. aspirational (2026-08 audit).** The `process()` ROI gate has
-> **not** been measured on AVX-512 hardware (the local machine is Zen 2,
-> x86-64-v3, where `isa_compare` skips the AVX-512 arm). The `Speedup` cells
-> below are the **design estimates** of the SIMD study — *not* measured claims.
-> Only the "Deployment Action" column states the actual code state. The gate is
-> operator-run on AVX-512 hardware; until it passes (≥12%, p<0.05), the numbers
-> stay aspirational.
+> [!NOTE]
+> **Empirical Hardware Measurement (2026-08-22 Remote Audit Receipt):** `NamModel::process()` on **Intel Xeon Platinum 8488C** (Sapphire Rapids, AWS EC2 `c7i.xlarge` 2c/4t, rustc 1.98.0, git `75ceac1` dirty). Cross-ISA f32 parity on the gate harness passed. Numbers below are from `target/logs-remoto/remote-simd-receipt.json` (also summarized in-tree as the operator copy). **Policy = Scenario 2 DROP** (do not promote). In default builds, `detect()` and `dispatch_simd!` unconditionally execute `Avx2Math`, with AVX-512 kernels cfg-gated out of default `.text`. A2-Full N=1 was +50% AVX-512; that does not pass the N=64 gate.
 
-| Kernel / Domain                  | Target Model Family                                 | AVX2 Baseline (v3)            | AVX-512 VL256 (`__m256`)       | AVX-512 ZMM (`__m512`)      | Speedup $\Delta\%$ | Verdict & Deployment Action                                                                                                                                              |
-|:-------------------------------- |:--------------------------------------------------- |:----------------------------- |:------------------------------ |:--------------------------- |:------------------ |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **LSTM 4-Gate GEMV**             | `LSTM_2x16_64samp_48kHz` `LSTM_1x16_64samp_48kHz`   | 16 YMM (Spill on stack)       | **32 YMM (Zero spill)**        | 512-bit (Downclock risk)    | **não medido**     | **VL256 LIVE** (`gemv_4gate_avx512vl` in dispatch). LSTM AVX-512 path is mixed: VL256 GEMV + ZMM fused (`lanes=16`). ZMM-only 4-gate (`gemv_4gate_avx512`) is dead code. |
-| **WaveNet Conv1D (`dot_4x`)**    | `A2Full_CH8_64samp_48kHz` `A2Lite_CH3_64samp_48kHz` | 8 accumulators (YMM pressure) | **32 YMM EVEX (Tiled unroll)** | 512-bit (Unaligned tap tax) | **não medido**     | **STILL ZMM** in production (`dot_f32_avx512.rs`, `__m512`). VL256 port is the outstanding candidate, gated on the cloud ≥12%.                                           |
-| **WaveNet Skip/Residual Fusion** | `wavenet/accumulate/`                               | AVX2 Padé / Exact             | **AVX-512 VL256 Masks**        | 512-bit unroll              | **não medido**     | **STILL ZMM** in production (`wavenet/accumulate/avx512.rs`, `_mm512_*`). VL256 candidate, gated on the cloud.                                                           |
-| **WaveNet `dot_8x`**             | WaveNet CH=8 Layers                                 | 10 YMM registers              | 10 YMM registers               | 512-bit overkill            | **< 3%**           | **REUSE AVX2**. Zero code duplication in `Avx512Math`.                                                                                                                   |
-| **WaveNet `dot_16x`**            | WaveNet CH=16 Layers                                | 2x YMM passes                 | 2x YMM passes                  | **1x ZMM (16 f32 lanes)**   | **não medido**     | **KEEP ZMM** (production). 16 lanes match a single 512-bit register.                                                                                                     |
-| **Linear / Gain / Dither / Pan** | DSP Pipeline Stages                                 | Streaming FMA                 | Streaming FMA                  | Streaming 512-bit           | **< 2%**           | **NO DUPLICATION**. Memory bandwidth bound. Uses unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                                                  |
-| **CabSim UPOLS FFT**             | CabSim IR Convolver                                 | Radix-4 / Radix-2 AVX2        | Radix-4 AVX2                   | 512-bit complex MAC         | **< 3%**           | **NO DUPLICATION**. Saturated by memory access & cache latency. Uses unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                              |
-| **Dynamic Topologies**           | `LstmModelDyn` `WaveNetModelDyn`                    | Generic SIMD loop             | Generic SIMD loop              | Dynamic shapes              | **< 4%**           | **NO DUPLICATION**. Shared scalar/SIMD tail loops in unified AVX2 baseline (`x86-64-v3`); zero duplication in `Avx512Math`.                                              |
-| **Non-DSP Off-RT Paths**         | Loaders (`.namb`, `serde_json`, IR WAV, Alloc)      | Standard Rust / libc          | Standard Rust / libc           | Standard Rust / libc        | **< 1%**           | **NO DUPLICATION (Nenhum candidato)**. Off-RT, I/O & memory-bound; zero RT impact.                                                                                       |
+| Kernel / Domain                  | Target Model Family                            | AVX2 Baseline (v3)     | AVX-512 Measured Latency       | Speedup $\Delta\%$   | Statistical Gate ($p$) | Verdict (policy) vs code status                                                                    |
+|:-------------------------------- |:---------------------------------------------- |:---------------------- |:------------------------------ |:-------------------- |:---------------------- |:-------------------------------------------------------------------------------------------------- |
+| **LSTM 2x16**                    | `LSTM_2x16_64samp_48kHz`                       | 14.77 µs (YMM FMA)     | 18.04 µs (VL256+ZMM mix)       | **−22.10%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                           |
+| **LSTM 1x16**                    | `LSTM_1x16_64samp_48kHz`                       | 7.31 µs (YMM FMA)      | 10.40 µs (VL256+ZMM mix)       | **−42.20%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in. Small $H=16$ GEMV.        |
+| **A2-Full (CH=8)**               | `A2Full_CH8_64samp_48kHz`                      | 22.58 µs (YMM FMA)     | 29.74 µs (VL256)               | **−31.74%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                           |
+| **A2-Lite (CH=3)**               | `A2Lite_CH3_64samp_48kHz`                      | 20.37 µs (YMM FMA)     | 21.43 µs (VL256)               | **−5.20%**           | $p < 0.0001$           | **DROP** (below 12%; at the $<5\%$ line). Default builds dispatch AVX2.                            |
+| **WaveNet Standard (CH=16)**     | `WaveNet_Standard_CH16_64samp_48kHz`           | 43.36 µs (YMM FMA)     | 44.22 µs (VL256+`dot_16x` ZMM) | **−1.98%**           | $p = 0.0121$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                           |
+| **WaveNet `dot_8x`**             | WaveNet CH=8 Layers                            | 10 YMM registers       | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse in `Avx512Math` (true).**                                                             |
+| **WaveNet `dot_16x`**            | WaveNet CH=16 Layers                           | 2× YMM                 | dedicated `__m512`             | not separately gated | —                      | **Dedicated ZMM kernel** (`dot_product_16x_f32_avx512` under `--features avx512`).                |
+| **Linear / Gain / Dither / Pan** | DSP Pipeline Stages                            | Streaming FMA          | wraps AVX2                     | **< 2%**             | —                      | **AVX2 reuse (true)** for gain/dither/ramp.                                                        |
+| **CabSim UPOLS FFT**             | CabSim IR Convolver                            | Radix-4 / Radix-2 AVX2 | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse (true)** for MAC/FFT butterflies. Stereo FIR has `convolve_*_avx512` opt-in.          |
+| **Dynamic Topologies**           | `LstmModelDyn` `WaveNetModelDyn` `WaveNetA2Dyn` ConvNet | AVX2 only      | not selected                   | —                    | —                      | **AVX2 in default builds.** All dynamic and ConvNet paths dispatch `Avx2Math`.                      |
+| **Non-DSP Off-RT Paths**         | Loaders (`.namb`, `serde_json`, IR WAV, Alloc) | Standard Rust / libc   | none                           | **< 1%**             | —                      | **NO DUPLICATION.** Off-RT, I/O-bound.                                                             |
 
 ### 3. Why ZMM 512-bit Loses in Small Geometries
 
@@ -836,7 +830,7 @@ Static monomorphization via `dispatch_simd!` generates dedicated machine code pe
 
 1. **Collapsing `Avx512VnniBf16`:** Unifying the deprecated VNNI/BF16 dispatch branch into `Avx512Math` eliminated an entire 3rd monomorphized variant across all 23 static models, saving **~4.8 KB** of redundant code footprint in the `.text` segment.
 2. **Selective Inlining (`#[inline(always)]` vs. `#[inline]`):** Only inner vector reduction and FMA step functions are aggressively inlined. Model loader setup, validation, and diagnostic error formatters are tagged `#[cold]` and `#[inline(never)]`, placing them in separate cold code pages.
-3. **Headroom Invariant (unverified):** The "~10.22 KB / <32% of the 32 KB L1i" headroom figures above are static-analysis intent, not a measured claim — do not cite them as measured until the cloud receipt exists.
+3. **Headroom Invariant (unverified):** The "~10.22 KB / <32% of the 32 KB L1i" figures are static-analysis intent. The 2026-08 remote receipt measures `process()` latency, **not** L1i occupancy. Do not cite the KB numbers as measured.
 
 ---
 

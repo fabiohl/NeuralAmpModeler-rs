@@ -67,7 +67,7 @@ phase "Structural: unit + deterministic integration (debug)"
     # module's structural checks still run in this phase.
     cargo test --features testing --lib \
         --test models --test perf_soak --test parity --test dsp_core \
-        --test target_features_compliance_test --test libm_export_guard -- \
+        --test target_features_compliance_test --test libm_export_guard --test avx512_guard -- \
         --skip golden_vectors:: --skip linear_fft_test:: \
         --skip spectral_fidelity:: --skip reference_oracle_f64:: \
         --skip cpp_parity:: --skip isa_parity:: \

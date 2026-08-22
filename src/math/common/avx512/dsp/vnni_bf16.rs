@@ -4,9 +4,9 @@
 //! AVX-512 VNNI+BF16 dispatch macro for DSP kernels
 //! (`impl_avx512vnni_bf16_dsp!()`).
 //!
-//! Currently delegates to the standard `Avx512Math` DSP implementations.
-//! VNNI-BF16 acceleration for DSP operators is planned for a future release.
-//! Invoked by [`dispatch_simd!`] when `IS_BF16=true`.
+//! Research/legacy `Avx512VnniBf16Math` DSP wrappers. Production
+//! `dispatch_simd!` never instantiates this type (`Avx512VnniBf16` folds
+//! to `Avx512Math` / `f32`). Not a planned DSP acceleration.
 
 macro_rules! impl_avx512vnni_bf16_dsp {
     () => {

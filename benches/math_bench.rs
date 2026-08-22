@@ -223,6 +223,7 @@ fn bench_dot_product_avx2_64(c: &mut Criterion) {
 /// Benchmarks for processors that support AVX-512 (e.g. AMD Zen 4, Intel Ice Lake+).
 /// AVX-512 allows processing 16 floats simultaneously (512 bits), theoretically
 /// doubling throughput compared to AVX2.
+#[cfg(feature = "avx512")]
 fn bench_tanh_avx512_256elem(c: &mut Criterion) {
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
@@ -235,7 +236,10 @@ fn bench_tanh_avx512_256elem(c: &mut Criterion) {
         });
     }
 }
+#[cfg(not(feature = "avx512"))]
+fn bench_tanh_avx512_256elem(_c: &mut Criterion) {}
 
+#[cfg(feature = "avx512")]
 fn bench_sigmoid_avx512_256elem(c: &mut Criterion) {
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
@@ -248,7 +252,10 @@ fn bench_sigmoid_avx512_256elem(c: &mut Criterion) {
         });
     }
 }
+#[cfg(not(feature = "avx512"))]
+fn bench_sigmoid_avx512_256elem(_c: &mut Criterion) {}
 
+#[cfg(feature = "avx512")]
 macro_rules! bench_avx512 {
     ($func_name:ident, $bench_name:literal, |$x:ident| $simd_call:expr) => {
         fn $func_name(c: &mut Criterion) {
@@ -270,6 +277,12 @@ macro_rules! bench_avx512 {
                 });
             }
         }
+    };
+}
+#[cfg(not(feature = "avx512"))]
+macro_rules! bench_avx512 {
+    ($func_name:ident, $bench_name:literal, |$x:ident| $simd_call:expr) => {
+        fn $func_name(_c: &mut Criterion) {}
     };
 }
 
