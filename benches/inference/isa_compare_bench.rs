@@ -57,7 +57,7 @@ pub fn bench_isa_compare_lstm_2x16(c: &mut Criterion) {
     model.prewarm(2048);
 
     #[cfg(feature = "avx512")]
-    let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+    let has_avx512 = neural_amp_modeler_rs::math::common::has_full_avx512();
 
     for &size in &[64usize, 1, 8] {
         let group_name = format!("ISA_Compare_LSTM_2x16_{size}samp_48kHz");
@@ -77,7 +77,8 @@ pub fn bench_isa_compare_lstm_2x16(c: &mut Criterion) {
         #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
-                let _guard = ForceAvx512Guard::new();
+                let _guard = ForceAvx512Guard::try_new()
+                    .expect("ISA comparison bench requires full AVX-512 (F+VL+BW+DQ)");
                 b.iter(|| {
                     model.process(&input, &mut output);
                 });
@@ -95,7 +96,7 @@ pub fn bench_isa_compare_lstm_1x16(c: &mut Criterion) {
     model.prewarm(2048);
 
     #[cfg(feature = "avx512")]
-    let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+    let has_avx512 = neural_amp_modeler_rs::math::common::has_full_avx512();
 
     for &size in &[64usize, 1, 8] {
         let group_name = format!("ISA_Compare_LSTM_1x16_{size}samp_48kHz");
@@ -115,7 +116,8 @@ pub fn bench_isa_compare_lstm_1x16(c: &mut Criterion) {
         #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
-                let _guard = ForceAvx512Guard::new();
+                let _guard = ForceAvx512Guard::try_new()
+                    .expect("ISA comparison bench requires full AVX-512 (F+VL+BW+DQ)");
                 b.iter(|| {
                     model.process(&input, &mut output);
                 });
@@ -134,7 +136,7 @@ pub fn bench_isa_compare_a2_full(c: &mut Criterion) {
     };
 
     #[cfg(feature = "avx512")]
-    let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+    let has_avx512 = neural_amp_modeler_rs::math::common::has_full_avx512();
 
     for &size in &[64usize, 1, 8] {
         let group_name = format!("ISA_Compare_A2Full_CH8_{size}samp_48kHz");
@@ -154,7 +156,8 @@ pub fn bench_isa_compare_a2_full(c: &mut Criterion) {
         #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
-                let _guard = ForceAvx512Guard::new();
+                let _guard = ForceAvx512Guard::try_new()
+                    .expect("ISA comparison bench requires full AVX-512 (F+VL+BW+DQ)");
                 b.iter(|| {
                     model.process(&input, &mut output);
                 });
@@ -173,7 +176,7 @@ pub fn bench_isa_compare_a2_lite(c: &mut Criterion) {
     };
 
     #[cfg(feature = "avx512")]
-    let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+    let has_avx512 = neural_amp_modeler_rs::math::common::has_full_avx512();
 
     for &size in &[64usize, 1, 8] {
         let group_name = format!("ISA_Compare_A2Lite_CH3_{size}samp_48kHz");
@@ -193,7 +196,8 @@ pub fn bench_isa_compare_a2_lite(c: &mut Criterion) {
         #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
-                let _guard = ForceAvx512Guard::new();
+                let _guard = ForceAvx512Guard::try_new()
+                    .expect("ISA comparison bench requires full AVX-512 (F+VL+BW+DQ)");
                 b.iter(|| {
                     model.process(&input, &mut output);
                 });
@@ -212,7 +216,7 @@ pub fn bench_isa_compare_wavenet_standard(c: &mut Criterion) {
     };
 
     #[cfg(feature = "avx512")]
-    let has_avx512 = is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl");
+    let has_avx512 = neural_amp_modeler_rs::math::common::has_full_avx512();
 
     for &size in &[64usize, 1, 8] {
         let group_name = format!("ISA_Compare_WaveNet_Std_CH16_{size}samp_48kHz");
@@ -232,7 +236,8 @@ pub fn bench_isa_compare_wavenet_standard(c: &mut Criterion) {
         #[cfg(feature = "avx512")]
         if has_avx512 {
             group.bench_function("AVX512", |b| {
-                let _guard = ForceAvx512Guard::new();
+                let _guard = ForceAvx512Guard::try_new()
+                    .expect("ISA comparison bench requires full AVX-512 (F+VL+BW+DQ)");
                 b.iter(|| {
                     model.process(&input, &mut output);
                 });

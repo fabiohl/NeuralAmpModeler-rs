@@ -147,6 +147,9 @@ fn ensure_render_compiled() -> bool {
         if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
             panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: {msg}");
         }
+        // T3.2: typed machine-parseable marker (the detailed message follows
+        // as free-form diagnostic text).
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
         eprintln!("{msg}");
         false
     }
@@ -233,12 +236,12 @@ fn run_render_comparison(
     let model_status = FIXTURE_CATALOG.check(model_filename);
     if !model_status.is_available() {
         if model_status == FixtureStatus::MissingOptional {
-            eprintln!("SKIP: {label} — optional fixture {model_filename} not found.");
+            eprintln!(
+                "[STATUS] SKIP_OPTIONAL reason=\"optional_fixture_missing:{model_filename}\""
+            );
             return ParityOutcome::SkippedModelNotFound;
         }
-        eprintln!(
-            "REQUIRED FIXTURE ABSENT: {label} — {model_filename} is a DistributedCore model that must exist."
-        );
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"required_fixture_absent:{model_filename}\"");
         return ParityOutcome::SkippedModelNotFound;
     }
 
@@ -252,7 +255,7 @@ fn run_render_comparison(
     let model_data = parse_nam_json(&json_data).expect("JSON parser failed");
 
     if !ensure_render_compiled() {
-        eprintln!("SKIP: {label} — C++ render tool not available, skipping cross-validation.");
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
         return ParityOutcome::SkippedToolNotAvailable;
     }
 
@@ -345,14 +348,19 @@ fn run_render_comparison(
                 )
             };
             eprintln!(
-                "SKIP: {label} — render returned exit code {}\n\
+                "[STATUS] SKIP_CAPABILITY reason=\"render_exit_{}\"",
+                o.status.code().unwrap_or(-1)
+            );
+            eprintln!(
+                "[{label}] render returned exit code {}\n\
                  --- render stderr ---\n{stderr_msg}{stdout_msg}",
                 o.status.code().unwrap_or(-1)
             );
             return ParityOutcome::SkippedRateRejected;
         }
         Err(e) => {
-            eprintln!("SKIP: {label} — failed to execute render: {e}");
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_exec_failed:{label}\"");
+            eprintln!("[{label}] failed to execute render: {e}");
             return ParityOutcome::SkippedRateRejected;
         }
     }
@@ -382,8 +390,9 @@ fn run_render_comparison(
     {
         let has_nonfinite = cpp_output.iter().any(|x| !x.is_finite());
         if has_nonfinite {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_garbage_output:{label}\"");
             eprintln!(
-                "SKIP: {label} — C++ render produced garbage output (non-finite=true); skipping comparison.",
+                "[{label}] C++ render produced garbage output (non-finite=true); skipping comparison."
             );
             fs::remove_file(&output_wav).ok();
             return ParityOutcome::SkippedGarbageOutput;
@@ -637,7 +646,9 @@ fn run_v2_multi_sr_impl(
     let model_status = FIXTURE_CATALOG.check(model_filename);
     if !model_status.is_available() {
         if model_status == FixtureStatus::MissingOptional {
-            eprintln!("SKIP: {label_base} (v2) — optional fixture {model_filename} not found.");
+            eprintln!(
+                "[STATUS] SKIP_OPTIONAL reason=\"optional_fixture_missing:{model_filename}\""
+            );
             return;
         }
         panic!(
@@ -1112,7 +1123,8 @@ fn live_cross_validation_wavenet_condition_lstm() {
         ParityOutcome::Completed => {}
         ParityOutcome::SkippedRateRejected => {
             eprintln!(
-                "SKIP: Condition DSP LSTM — C++ render tool limitation (condition_size mismatch)"
+                "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
+                 reason=\"C++ render tool limitation (condition_size mismatch)\""
             )
         }
         other => panic!("Unexpected outcome: {other:?}"),
@@ -1283,7 +1295,9 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
     let model_status = FIXTURE_CATALOG.check(model_filename);
     if !model_status.is_available() {
         if model_status == FixtureStatus::MissingOptional {
-            eprintln!("SKIP: {label_base} — optional fixture {model_filename} not found.");
+            eprintln!(
+                "[STATUS] SKIP_OPTIONAL reason=\"optional_fixture_missing:{model_filename}\""
+            );
             return;
         }
         panic!(
@@ -1310,13 +1324,18 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
             ParityOutcome::Completed => {
                 // Unexpected success is fine if upstream ever gains support.
             }
-            ParityOutcome::SkippedRateRejected
-            | ParityOutcome::SkippedToolNotAvailable
-            | ParityOutcome::SkippedModelNotFound => {
+            ParityOutcome::SkippedRateRejected | ParityOutcome::SkippedToolNotAvailable => {
                 eprintln!(
-                    "SKIP: {label_base} @ {sr} Hz — C++ render tool limitation \
+                    "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
+                     reason=\"C++ render tool limitation (LSTM condition_dsp channel mismatch)\""
+                );
+                eprintln!(
+                    "[{label_base} @ {sr} Hz] C++ render tool limitation \
                      (LSTM condition_dsp channel mismatch / KnownGap)"
                 );
+            }
+            ParityOutcome::SkippedModelNotFound => {
+                eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:{model_filename}\"");
             }
             ParityOutcome::SkippedGarbageOutput => {
                 panic!("[{label_base} @ {sr}] FAIL: SkippedGarbageOutput is never acceptable");
@@ -1778,8 +1797,9 @@ fn live_cross_validation_nondist_models() {
     nondist_path.push("tests/fixtures/models-nondist");
 
     if !nondist_path.exists() {
+        println!("[STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"");
         println!(
-            "SKIP: Non-distributable models directory {:?} not found.",
+            "Non-distributable models directory {:?} not found.",
             nondist_path
         );
         return;
@@ -1791,7 +1811,8 @@ fn live_cross_validation_nondist_models() {
         .collect();
 
     if models.is_empty() {
-        println!("SKIP: No models found in {:?}", nondist_path);
+        println!("[STATUS] SKIP_OPTIONAL reason=\"models_nondist_empty\"");
+        println!("No models found in {:?}", nondist_path);
         return;
     }
 
@@ -1799,7 +1820,8 @@ fn live_cross_validation_nondist_models() {
     let temp_dir = project_root.join("tests/fixtures/.temp_live");
     fs::create_dir_all(&temp_dir).ok();
     if !ensure_render_compiled() {
-        println!("SKIP: C++ render tool not available, skipping nondist cross-validation.");
+        println!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        println!("C++ render tool not available, skipping nondist cross-validation.");
         return;
     }
 

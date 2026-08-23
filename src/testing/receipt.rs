@@ -644,6 +644,22 @@ pub struct LongAuditReceipt {
     pub phases: Vec<LongPhaseReceipt>,
 }
 
+/// `true` when a `gaps` entry belongs to the canonical gap family `id`
+/// (exact match or `id:<detail>` suffix — T3.3 attaches typed details).
+fn gap_has_id(gap: &str, id: &str) -> bool {
+    gap == id
+        || gap
+            .strip_prefix(id)
+            .is_some_and(|rest| rest.starts_with(':'))
+}
+
+/// `true` when a timed phase (`phase<N>`) reports `PASSED` while executing zero
+/// tests/benchmarks — a mandatory subphase gate violation (T3.3): a `#[cfg]`
+/// filter mismatch must never be promoted to a clean `PASSED`.
+fn is_zero_test_pass(p: &LongPhaseReceipt) -> bool {
+    p.phase_id.starts_with("phase") && p.status == LongPhaseStatus::Passed && p.tests_executed == 0
+}
+
 impl LongAuditReceipt {
     /// Parses a JSONL stream; every non-empty line must be valid JSON with the
     /// `LongPhaseReceipt` schema (fail-closed validation). Preflight lines
@@ -713,17 +729,18 @@ impl LongAuditReceipt {
         self.phase_entries().map(|p| p.duration_ms).sum()
     }
 
-    /// Derives the suite-level `overall` receipt line.
+    /// Derived suite-level `overall` receipt line.
     ///
     /// Verdict semantics mirror the runner's final summary:
     /// - any `FAILED` phase or preflight ⇒ `FAILED`;
     /// - otherwise any **declared gap** ⇒ `COMPLETED_WITH_GAPS`. A declared
     ///   gap is a gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
-    ///   NOT_RUN) **or** a `PASSED` phase whose `gaps` list is non-empty —
-    ///   the S5 contract: the bash post-phase status overrides are gone, so
-    ///   typed log markers (`detect_gap_markers`) are the only carrier of a
-    ///   measurement bypass, and "exit-0 with internal bypass" must never be
-    ///   promoted to a clean `PASSED` verdict;
+    ///   NOT_RUN), a `PASSED` phase whose `gaps` list is non-empty, or a
+    ///   `PASSED` timed phase that executed zero tests (T3.3 zero-test-pass
+    ///   invariant — the S5 contract: typed log markers
+    ///   (`detect_gap_markers`) are the only carrier of a measurement bypass, and
+    ///   "exit-0 with internal bypass" must never be promoted to a clean `PASSED`
+    ///   verdict);
     /// - otherwise ⇒ `PASSED`.
     ///
     /// Preflight entries (`preflight-*`, S6-T03) participate in the verdict
@@ -733,7 +750,9 @@ impl LongAuditReceipt {
     /// declared-gap entry as `phase_id:STATUS`.
     pub fn summary_receipt(&self) -> LongPhaseReceipt {
         let has_declared_gap = |p: &LongPhaseReceipt| {
-            p.status.is_gap() || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+            p.status.is_gap()
+                || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+                || is_zero_test_pass(p)
         };
 
         let status = if self
@@ -750,7 +769,13 @@ impl LongAuditReceipt {
         let gaps = self
             .phase_entries()
             .filter(|p| has_declared_gap(p))
-            .map(|p| format!("{}:{}", p.phase_id, p.status.as_str()))
+            .map(|p| {
+                if is_zero_test_pass(p) {
+                    format!("{}:ZERO_TESTS", p.phase_id)
+                } else {
+                    format!("{}:{}", p.phase_id, p.status.as_str())
+                }
+            })
             .collect();
 
         LongPhaseReceipt {
@@ -769,6 +794,35 @@ impl LongAuditReceipt {
         self.phases.retain(|p| p.phase_id != "overall");
         let summary = self.summary_receipt();
         self.phases.push(summary);
+    }
+
+    /// Timed phases (`phase<N>`) that report `PASSED` with zero executed tests
+    /// (T3.3 zero-test-pass invariant — mandatory subphase gate violations).
+    pub fn zero_test_passes(&self) -> impl Iterator<Item = &LongPhaseReceipt> {
+        self.phase_entries().filter(|p| is_zero_test_pass(p))
+    }
+
+    /// `true` when any phase declares a gap: a gap status, a `PASSED` phase
+    /// with non-empty log markers, or a zero-test `PASSED` timed phase.
+    pub fn has_declared_gaps(&self) -> bool {
+        self.phase_entries().any(|p| {
+            p.status.is_gap()
+                || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+                || is_zero_test_pass(p)
+        })
+    }
+
+    /// Fail-closed strict-pre-release verdict: `Ok(())` only when the derived
+    /// `overall` status is `PASSED` (no failures and no declared gaps — T3.3).
+    pub fn strict_verdict(&self) -> Result<(), String> {
+        match self.summary_receipt().status {
+            LongPhaseStatus::Passed => Ok(()),
+            LongPhaseStatus::Failed => Err("audit FAILED: one or more phases failed".to_string()),
+            _ => Err(format!(
+                "audit COMPLETED_WITH_GAPS: {} declared gap(s) — strict-pre-release rejects gaps",
+                self.summary_receipt().gaps.len()
+            )),
+        }
     }
 
     /// First phase entry with the given `phase_id` (`overall` excluded).
@@ -804,7 +858,9 @@ impl LongAuditReceipt {
                 LongPhaseStatus::Failed => "FAIL",
                 LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
                 LongPhaseStatus::Passed
-                    if p.gaps.iter().any(|g| g == "inconclusive_environment") =>
+                    if p.gaps
+                        .iter()
+                        .any(|g| gap_has_id(g, "inconclusive_environment")) =>
                 {
                     "INCONCLUSIVE"
                 }
@@ -828,10 +884,12 @@ impl LongAuditReceipt {
                 LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
                 LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
                 LongPhaseStatus::Skipped => "INCONCLUSIVE",
-                LongPhaseStatus::Passed if p.gaps.iter().any(|g| g == "skip_capability") => {
+                LongPhaseStatus::Passed
+                    if p.gaps.iter().any(|g| gap_has_id(g, "skip_capability")) =>
+                {
                     "SKIP_CAPABILITY"
                 }
-                LongPhaseStatus::Passed if p.gaps.iter().any(|g| g == "inconclusive") => {
+                LongPhaseStatus::Passed if p.gaps.iter().any(|g| gap_has_id(g, "inconclusive")) => {
                     "INCONCLUSIVE"
                 }
                 _ => "PASS",
@@ -880,24 +938,96 @@ impl LongAuditReceipt {
 
 /// Canonical typed markers the long suite uses to annotate/override phase
 /// outcomes, mapped to stable gap identifiers for dashboards.
+///
+/// T3.2 grammar (emission side) — every deviation/bypass/skip must be emitted
+/// as one of the `[STATUS]` markers below; T3.3 (parsing side) recognizes
+/// them and attaches the `reason=`/`id=` detail to the gap entry:
+/// - `[STATUS] SKIP_CAPABILITY reason="..."` → `skip_capability:<reason>`
+/// - `[STATUS] SKIP_OPTIONAL reason="..."`    → `skip_optional:<reason>`
+/// - `[STATUS] KNOWN_GAP id="..." reason="..."` → `known_gap:<id>`
+/// - `[STATUS] INCONCLUSIVE reason="..."`     → `inconclusive:<reason>`
+///
+/// The legacy free-form `SKIP:` prefix is still recognized during the
+/// transition (T3.2 rollback) as `legacy_skip:<detail>` so an unconverted
+/// print is never silently promoted to a clean `PASSED`.
 const LONG_GAP_MARKERS: &[(&str, &str)] = &[
     ("INCONCLUSIVE_ENVIRONMENT", "inconclusive_environment"),
     ("[STATUS] SKIP_CAPABILITY", "skip_capability"),
+    ("[STATUS] SKIP_OPTIONAL", "skip_optional"),
+    ("[STATUS] KNOWN_GAP", "known_gap"),
     ("[STATUS] INCONCLUSIVE", "inconclusive"),
     ("MISSING-REQUIRED:", "missing_required"),
+    // T2.4: the default local runner compiles the long suite without
+    // `--features avx512`, so the cross-ISA AVX-512 subphase can legitimately
+    // execute zero cases. The explicit declaration below prevents that from
+    // being silently promoted to a clean PASSED verdict.
+    ("AVX512_OPT_IN: NOT_RUN", "avx512_opt_in_not_run"),
+    // T3.2 rollback: legacy free-form `SKIP:` prints still found in suites
+    // outside the converted scope (tests/models, tests/perf_soak, ...) must
+    // never be masked — they surface as a typed transitional gap.
+    ("SKIP:", "legacy_skip"),
 ];
 
+/// Extracts the value of a double-quoted attribute (`name="value"`) from a
+/// marker line, if present.
+fn extract_attr(line: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=\"");
+    let start = line.find(&needle)? + needle.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// Extracts the trailing text after a literal prefix (`MISSING-REQUIRED: ...`),
+/// trimming surrounding whitespace, if the prefix is present.
+fn detail_after(line: &str, prefix: &str) -> Option<String> {
+    let pos = line.find(prefix)?;
+    let detail = line[pos + prefix.len()..].trim();
+    (!detail.is_empty()).then(|| detail.to_string())
+}
+
+/// Computes the gap entry string for a matched marker line, attaching the
+/// typed detail when the grammar carries one (`reason=`/`id=`/trailing text).
+fn marker_gap_entry(needle: &str, id: &str, line: &str) -> String {
+    let detail = match needle {
+        "[STATUS] KNOWN_GAP" => extract_attr(line, "id").or_else(|| extract_attr(line, "reason")),
+        "[STATUS] SKIP_CAPABILITY" | "[STATUS] SKIP_OPTIONAL" | "[STATUS] INCONCLUSIVE" => {
+            extract_attr(line, "reason")
+        }
+        "MISSING-REQUIRED:" => detail_after(line, "MISSING-REQUIRED:"),
+        "SKIP:" => detail_after(line, "SKIP:"),
+        _ => None,
+    };
+    match detail {
+        Some(detail) => format!("{id}:{detail}"),
+        None => id.to_string(),
+    }
+}
+
 /// Scans a phase log for canonical typed gap markers, returning the stable
-/// gap identifiers in canonical order (deduplicated).
+/// gap identifiers (with detail suffixes, e.g. `skip_optional:model_not_found`)
+/// in canonical order (deduplicated).
+///
+/// Fail-closed (T3.3): an unreadable log is itself a deviation and yields
+/// `log_unreadable` — a missing/corrupt phase log can never be promoted to a
+/// clean `PASSED` with `gaps: []`.
 pub fn detect_gap_markers(path: &Path) -> Vec<String> {
-    let Ok(content) = fs::read_to_string(path) else {
-        return Vec::new();
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return vec!["log_unreadable".to_string()],
     };
     LONG_GAP_MARKERS
         .iter()
-        .filter(|(needle, _)| content.contains(needle))
-        .map(|(_, id)| (*id).to_string())
-        .collect()
+        .filter_map(|(needle, id)| {
+            let line = content.lines().find(|l| l.contains(needle))?;
+            Some(marker_gap_entry(needle, id, line))
+        })
+        .fold(Vec::new(), |mut acc, entry| {
+            if !acc.contains(&entry) {
+                acc.push(entry);
+            }
+            acc
+        })
 }
 
 /// Extracts the integer immediately preceding `needle` in `line` (the libtest
@@ -1127,23 +1257,74 @@ mod long_receipt_tests {
 
     #[test]
     fn gap_markers_are_detected_in_canonical_order() {
+        // T3.2/T3.3: all structured markers recognized; details (`reason=`,
+        // trailing text after `MISSING-REQUIRED:`) are attached to the gap
+        // entry so the receipt carries WHY the phase deviated.
         let log = write_temp(
             "preflight: INCONCLUSIVE_ENVIRONMENT\n\
              [STATUS] INCONCLUSIVE\n\
              [STATUS] SKIP_CAPABILITY\n\
-             MISSING-REQUIRED: wavenet_lite\n",
+             [STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"\n\
+             [STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" reason=\"C++ render limitation\"\n\
+             MISSING-REQUIRED: wavenet_lite\n\
+             AVX512_OPT_IN: NOT_RUN (default runner without --features avx512)\n\
+             SKIP: old-style free print not yet converted\n",
         );
         assert_eq!(
             detect_gap_markers(&log),
             vec![
                 "inconclusive_environment",
                 "skip_capability",
+                "skip_optional:models_nondist_absent",
+                "known_gap:condition_lstm_cpp_crash",
                 "inconclusive",
-                "missing_required",
+                "missing_required:wavenet_lite",
+                "avx512_opt_in_not_run",
+                "legacy_skip:old-style free print not yet converted",
             ]
         );
         let clean = write_temp("all good\n");
         assert!(detect_gap_markers(&clean).is_empty());
+    }
+
+    #[test]
+    fn unreadable_log_is_fail_closed() {
+        // T3.3: a missing/unreadable phase log must surface as a gap, never be
+        // silently promoted to a clean PASSED with `gaps: []`.
+        let missing = temp_path();
+        assert_eq!(detect_gap_markers(&missing), vec!["log_unreadable"]);
+    }
+
+    #[test]
+    fn avx512_opt_in_declaration_counts_as_declared_gap() {
+        // T2.4: a default local long-suite run compiles without `avx512`, so
+        // the isa_parity subphase executes zero cross-ISA cases. The explicit
+        // `AVX512_OPT_IN: NOT_RUN` declaration must surface as a typed gap —
+        // the suite verdict becomes COMPLETED_WITH_GAPS, never a clean PASSED.
+        let log = write_temp("AVX512_OPT_IN: NOT_RUN (default runner without --features avx512)\n");
+        assert_eq!(detect_gap_markers(&log), vec!["avx512_opt_in_not_run"]);
+
+        let run = write_temp("AVX512_OPT_IN: RUN (cross-ISA matrix compiled and exercised)\n");
+        assert!(
+            detect_gap_markers(&run).is_empty(),
+            "the RUN declaration must NOT be classified as a gap"
+        );
+
+        let phase = LongPhaseReceipt {
+            phase_id: "phase2".to_string(),
+            name: "Property-Based, Parity & Golden Vectors in Release".to_string(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 1000,
+            tests_executed: 42,
+            gaps: detect_gap_markers(&log),
+            timestamp: "t".to_string(),
+        };
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let summary = receipt.summary_receipt();
+        assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(summary.gaps, vec!["phase2:PASSED"]);
     }
 
     #[test]
@@ -1479,5 +1660,224 @@ mod long_receipt_tests {
             ],
         };
         assert_eq!(all_pass.summary_receipt().status, LongPhaseStatus::Passed);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // T3.4 — fixture-based tests: synthetic logs drive the marker parser and
+    // the receipt classifier through every status/gap branch.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    fn mk_phase(
+        phase_id: &str,
+        status: LongPhaseStatus,
+        tests_executed: u64,
+        gaps: &[&str],
+    ) -> LongPhaseReceipt {
+        LongPhaseReceipt {
+            phase_id: phase_id.to_string(),
+            name: phase_id.to_string(),
+            status,
+            duration_ms: 1000,
+            tests_executed,
+            gaps: gaps.iter().map(|s| s.to_string()).collect(),
+            timestamp: "t".to_string(),
+        }
+    }
+
+    #[test]
+    fn clean_log_classifies_as_passed_with_empty_gaps() {
+        // Fixture: a fully clean execution — no markers, real tests executed.
+        let log = write_temp(
+            "test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n\
+             all assertions green\n",
+        );
+        assert!(detect_gap_markers(&log).is_empty());
+        assert_eq!(count_tests_executed_from_log(&log), 42);
+
+        let phase = mk_phase("phase1", LongPhaseStatus::Passed, 42, &[]);
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let s = receipt.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::Passed);
+        assert!(s.gaps.is_empty());
+        assert_eq!(receipt.strict_verdict(), Ok(()));
+    }
+
+    #[test]
+    fn skip_optional_nondist_log_classifies_as_completed_with_gaps() {
+        // Fixture: SKIP_OPTIONAL (models-nondist absent) must surface as a
+        // typed gap and downgrade the overall verdict — never a silent PASSED.
+        let log = write_temp(
+            "[STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"\n\
+             test result: ok. 5 passed; 0 failed\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec!["skip_optional:models_nondist_absent"]
+        );
+
+        let phase = mk_phase(
+            "phase2",
+            LongPhaseStatus::Passed,
+            5,
+            &["skip_optional:models_nondist_absent"],
+        );
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let s = receipt.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(s.gaps, vec!["phase2:PASSED"]);
+        assert!(receipt.strict_verdict().is_err());
+    }
+
+    #[test]
+    fn known_gap_condition_lstm_registers_gap_with_correct_id() {
+        // Fixture: the upstream C++ condition_lstm gap must be recorded with
+        // its stable id (`known_gap:condition_lstm_cpp_crash`).
+        let log = write_temp(
+            "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
+             reason=\"C++ render tool limitation (LSTM condition_dsp channel mismatch)\"\n\
+             test result: ok. 1 passed; 0 failed\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec!["known_gap:condition_lstm_cpp_crash"]
+        );
+
+        let phase = mk_phase(
+            "phase2",
+            LongPhaseStatus::Passed,
+            1,
+            &["known_gap:condition_lstm_cpp_crash"],
+        );
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let s = receipt.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(s.gaps, vec!["phase2:PASSED"]);
+        assert!(receipt.strict_verdict().is_err());
+    }
+
+    #[test]
+    fn zero_test_pass_is_detected_as_inconsistency() {
+        // Fixture: a timed phase that PASSED with zero executed tests is a
+        // mandatory-subphase gate violation — it must not be promoted.
+        let zero = mk_phase("phase2", LongPhaseStatus::Passed, 0, &[]);
+        let receipt = LongAuditReceipt { phases: vec![zero] };
+        assert_eq!(receipt.zero_test_passes().count(), 1);
+        let s = receipt.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(s.gaps, vec!["phase2:ZERO_TESTS"]);
+        assert!(receipt.strict_verdict().is_err());
+
+        // Preflight lines with zero tests are NOT zero-test passes.
+        let preflight = LongAuditReceipt {
+            phases: vec![mk_phase(
+                "preflight-render",
+                LongPhaseStatus::Passed,
+                0,
+                &[],
+            )],
+        };
+        assert_eq!(preflight.zero_test_passes().count(), 0);
+        assert_eq!(preflight.summary_receipt().status, LongPhaseStatus::Passed);
+        assert_eq!(preflight.strict_verdict(), Ok(()));
+    }
+
+    #[test]
+    fn legacy_skip_lines_surface_as_transitional_gap() {
+        // T3.2 rollback: during the transition, unconverted free-form
+        // `SKIP:` prints are still recognized — never masked into a PASSED.
+        let log = write_temp(
+            "SKIP: Model file not found\n\
+             test result: ok. 3 passed; 0 failed\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec!["legacy_skip:Model file not found"]
+        );
+
+        let phase = mk_phase(
+            "phase2",
+            LongPhaseStatus::Passed,
+            3,
+            &["legacy_skip:Model file not found"],
+        );
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let s = receipt.summary_receipt();
+        assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
+        assert!(receipt.strict_verdict().is_err());
+    }
+
+    #[test]
+    fn strict_verdict_rejects_every_gap_condition() {
+        // T3.3 acceptance: strict mode fails on each gap family and passes
+        // only on a fully clean receipt.
+        let cases: Vec<Vec<LongPhaseReceipt>> = vec![
+            // gap status
+            vec![mk_phase("phase4", LongPhaseStatus::Inconclusive, 1, &[])],
+            // skip status
+            vec![mk_phase("phase2", LongPhaseStatus::Skipped, 0, &[])],
+            // not-run status
+            vec![mk_phase("phase6", LongPhaseStatus::NotRun, 0, &[])],
+            // PASSED with typed markers
+            vec![mk_phase(
+                "phase5",
+                LongPhaseStatus::Passed,
+                1,
+                &["inconclusive_environment"],
+            )],
+            // zero-test pass
+            vec![mk_phase("phase2", LongPhaseStatus::Passed, 0, &[])],
+            // failed phase
+            vec![mk_phase("phase3", LongPhaseStatus::Failed, 1, &[])],
+        ];
+        for phases in cases {
+            let receipt = LongAuditReceipt { phases };
+            assert!(
+                receipt.strict_verdict().is_err(),
+                "strict must reject gap condition: {}",
+                receipt.summary_receipt().status
+            );
+        }
+
+        let clean = LongAuditReceipt {
+            phases: vec![
+                mk_phase("phase1", LongPhaseStatus::Passed, 10, &[]),
+                mk_phase("phase2", LongPhaseStatus::Passed, 5, &[]),
+            ],
+        };
+        assert_eq!(clean.strict_verdict(), Ok(()));
+        assert_eq!(clean.summary_receipt().status, LongPhaseStatus::Passed);
+    }
+
+    #[test]
+    fn gap_family_prefix_matching_survives_details() {
+        // T3.3: verdict helpers match the canonical family even when the gap
+        // entry carries a `:detail` suffix from the marker grammar.
+        let with_detail = LongAuditReceipt {
+            phases: vec![mk_phase(
+                "phase6",
+                LongPhaseStatus::Passed,
+                1,
+                &["skip_capability:Single core affinity"],
+            )],
+        };
+        assert_eq!(with_detail.rt_jitter_verdict(), "SKIP_CAPABILITY");
+
+        let with_detail_deadline = LongAuditReceipt {
+            phases: vec![mk_phase(
+                "phase5",
+                LongPhaseStatus::Passed,
+                1,
+                &["inconclusive_environment:preflight_failed"],
+            )],
+        };
+        assert_eq!(with_detail_deadline.rt_deadline_verdict(), "INCONCLUSIVE");
     }
 }

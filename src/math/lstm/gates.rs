@@ -147,7 +147,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
     (new_cs, new_cs_err, hidden)
 }
 
-/// Fused kernel for LSTM gates (AVX-512) — Fast (production) accuracy path.
+/// Fused kernel for LSTM gates (AVX-512, research opt-in) — Fast accuracy path.
 /// Uses Padé tanh + minimax sigmoid with Kahan compensated summation
 /// for the cell state.
 ///

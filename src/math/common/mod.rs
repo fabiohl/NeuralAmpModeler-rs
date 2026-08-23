@@ -49,8 +49,13 @@ pub use avx2_impl::Avx2Math;
 #[cfg(feature = "avx512")]
 #[expect(deprecated)]
 pub use avx512::{Avx512Math, Avx512VnniBf16Math};
-pub use dispatch::{InstructionSet, SIMD_MATH, SimdMathConfig, TEST_ISA_OVERRIDE};
-pub use dispatch::{decode_isa_override, effective_instruction_set, encode_isa_override};
+pub use dispatch::{InstructionSet, SIMD_MATH, SimdMathConfig};
+pub use dispatch::{
+    IsaOverrideError, avx512_capability_complete, clear_test_isa_override, decode_isa_override,
+    effective_instruction_set, encode_isa_override, set_test_isa_override,
+};
+#[cfg(feature = "avx512")]
+pub use dispatch::{has_full_avx512, missing_avx512_features};
 /// Kahan compensated summation types and accumulator.
 pub use kahan::{Kahan4F32, KahanF32, kahan_add};
 pub use ops::*;

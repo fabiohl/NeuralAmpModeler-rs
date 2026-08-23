@@ -158,6 +158,7 @@ rm -f target/logs/catalog_preflight.log \
       target/logs/phase5-rt-jitter.log \
       target/logs/phase-defense-scripts.log \
       target/logs/phase6-loom.log \
+      target/logs/subphase-isa-parity.log \
       target/logs/long-audit-receipt.jsonl
 
 # Cleanup accumulated live-test artifacts from previous runs (41+ MB WAVs)
@@ -587,7 +588,24 @@ run_proptests_parity_phase() {
     # Phase 2 only asserts AVX2 self-consistency; gracefully skips per-model
     # when the running CPU lacks the target ISA (see skip_if_unsupported!
     # in tests/isa_parity.rs) — safe to run unconditionally on any machine.
-    timed_cargo_test "isa_parity_full_matrix" --release --no-fail-fast $(_test_flag isa_parity) -- --ignored --test-threads=1 --nocapture || status=1
+    #
+    # T2.4: the matrix runs under its OWN subphase log so the mandatory-
+    # subphase gate can prove real execution. On a default local runner
+    # (no `--features avx512`) the cross-ISA cases compile out via `#[cfg]` —
+    # the AVX2 self-consistency cases still prove the subphase ran, and the
+    # `AVX512_OPT_IN:` declaration below (echoed into the phase log, parsed
+    # by nam_long_receipt detect_gap_markers) records the missing opt-in as a
+    # typed gap instead of silently promoting a zero-case matrix to PASSED.
+    local SUBLOG="target/logs/subphase-isa-parity.log"
+    cargo test --features testing --release --no-fail-fast $(_test_flag isa_parity) -- \
+        --ignored --test-threads=1 --nocapture 2>&1 | tee -a "$SUBLOG" \
+        >> "target/logs/phase2-proptests-parity.log" || status=1
+    assert_subphase_ran "isa_parity_full_matrix" "$SUBLOG" 1 || status=1
+    if grep -qE "AVX-512" "$SUBLOG"; then
+        echo "AVX512_OPT_IN: RUN (cross-ISA AVX-512 matrix compiled and exercised)"
+    else
+        echo "AVX512_OPT_IN: NOT_RUN (default runner without --features avx512)"
+    fi
     # Spectral fidelity baseline immutability defense:
     # SHA-256 before/after guards the committed fixture against accidental
     # overwrite by the generator or any test-side mutation.

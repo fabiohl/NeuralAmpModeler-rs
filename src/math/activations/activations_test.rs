@@ -7,9 +7,10 @@
 //! Validates the precision of tanh/sigmoid approximations against
 //! the standard library scalar references.
 //!
-//! Production path: Padé [5,4] rational approximant (`simd_tanh_avx2` /
-//! `simd_tanh_avx512`), max error ~2.32e-3. The tanh tests below call
-//! `tanh::tanh` (the Padé dispatch).
+//! Production path (AVX2 backend): Padé [5,4] rational approximant
+//! (`simd_tanh_avx2` / `simd_tanh_dual_avx2`), max error ~2.32e-3. The AVX-512
+//! equivalent `simd_tanh_avx512` is research opt-in (`avx512` feature) only.
+//! The tanh tests below call `tanh::tanh` (the Padé dispatch).
 
 use super::*;
 use proptest::prelude::*;

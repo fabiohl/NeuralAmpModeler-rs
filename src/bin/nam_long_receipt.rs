@@ -67,7 +67,7 @@ fn print_help() {
     println!("                        --duration-ms <ms> [--tests-executed <n>] [--log <path>]");
     println!("                        [--gaps <a,b,...>] [--out <file>]");
     println!("  nam_long_receipt summary [--out <file>]");
-    println!("  nam_long_receipt validate [--out <file>]");
+    println!("  nam_long_receipt validate [--out <file>] [--strict]");
     println!("  nam_long_receipt count-log --log <path>");
     println!();
     println!("Status values: PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN");
@@ -76,7 +76,11 @@ fn print_help() {
         PREFLIGHT_PHASE_IDS.join(", ")
     );
     println!("Default output file: {DEFAULT_OUT}");
+    println!("validate --strict: fail-closed (exit 1) on any declared gap or failure.");
 }
+
+/// Flags that do not take a value (boolean switches).
+const VALUE_LESS_FLAGS: &[&str] = &["strict"];
 
 fn parse_flags(args: &[String]) -> Result<std::collections::HashMap<String, String>, String> {
     let mut flags = std::collections::HashMap::new();
@@ -85,6 +89,10 @@ fn parse_flags(args: &[String]) -> Result<std::collections::HashMap<String, Stri
         let name = flag.strip_prefix("--").unwrap_or(flag.as_str()).to_string();
         if name.is_empty() {
             return Err(format!("{flag}: expected a flag name"));
+        }
+        if VALUE_LESS_FLAGS.contains(&name.as_str()) {
+            flags.insert(name, String::new());
+            continue;
         }
         let value = iter
             .next()
@@ -259,6 +267,7 @@ fn cmd_validate(args: &[String]) {
         .get("out")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OUT.to_string());
+    let strict = flags.contains_key("strict");
 
     if !Path::new(&out).exists() {
         eprintln!("validate: receipt file not found: {out}");
@@ -290,6 +299,21 @@ fn cmd_validate(args: &[String]) {
     }
     summary.push_str(&format!(" | preflight: {preflight_count}"));
     println!("{summary}");
+
+    if strict {
+        // T3.3: fail-closed strict-pre-release — any declared gap (or failure)
+        // rejects the receipt with a non-zero exit code.
+        match audit.strict_verdict() {
+            Ok(()) => {
+                println!("STRICT: PASSED (no gaps, no failures)");
+                exit(0);
+            }
+            Err(reason) => {
+                eprintln!("STRICT: FAIL — {reason}");
+                exit(1);
+            }
+        }
+    }
     exit(0);
 }
 

@@ -175,6 +175,11 @@ name = "nam_remote_simd_receipt"
 path = "src/bin/nam_remote_simd_receipt.rs"
 required-features = ["testing"]
 
+[[bin]]
+name = "nam_bin_guard"
+path = "src/bin/nam_bin_guard.rs"
+required-features = ["testing"]
+
 [[example]]
 name = "load_model"
 path = "examples/load_model.rs"

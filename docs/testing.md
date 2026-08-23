@@ -82,6 +82,17 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is the canonical, fail-closed ELF surface gate over the *linked* binary, run automatically in `tests-quick.sh` Phase 1 and `tests-long.sh` Defense phase (see [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)). The former standalone wrapper `utils/debug/verify_no_libm_exports.sh` was removed: it scanned `.rlib` archives — the wrong surface, since object archives still carry `T` exports before the version script applies — and silently skipped when the artifact was missing.
 
+### Binary AVX-512 Absence Certification (fail-closed)
+
+The default (`not(feature = "avx512")`) release artifact is certified free of EVEX/AVX-512 machine code by a fail-closed protocol (Sprint 1 / F-ROB-01). The gate is [utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh) (invoked by `lints.sh`) plus the integration guard [tests/avx512_guard.rs](../tests/avx512_guard.rs):
+
+- **Isolated build.** The script rebuilds the release rlib inside a disposable `target/cert-release-XXXXXX` directory with `--locked --no-default-features`, never reusing a stale `target/release` artifact. Thin-LTO is disabled for the certification build (`CARGO_PROFILE_RELEASE_LTO=off`) so the `.rlib` archive members are disassemblable ELF objects — thin-LTO rlibs store LLVM IR, which contains no machine code to certify.
+- **SHA-256 provenance.** The digest of the freshly built artifact is computed and logged *before* inspection, so a human can audit which bytes the certificate refers to.
+- **Mandatory tools.** `llvm-objdump` and `llvm-nm` (rustc sysroot preferred) must resolve and exit with status zero. Missing tools, non-zero exits, unexpectedly empty output, unreadable artifacts, unsupported formats and undecodable archive members abort the scan with exit code 1 — never a silent PASS.
+- **EVEX byte scan.** The scanner ([src/testing/bin_guard.rs](../src/testing/bin_guard.rs), exposed as `nam_bin_guard scan`) parses the raw instruction *encoding bytes* emitted by `llvm-objdump -d` for every instruction in every executable section of every ELF member, and flags any instruction whose first byte is the EVEX `0x62` prefix. Register names and mnemonics are not trusted: AVX-512VL can encode EVEX instructions using only low `xmm0..15`/`ymm0..15` registers and opmasks, which register-based patterns miss.
+- **Symbol scan defense-in-depth.** `llvm-nm --demangle` additionally verifies that no AVX-512 kernel/symbol names appear in the artifact. This is a secondary layer, never a substitute for the opcode scan.
+- **Mutation battery.** `tests/avx512_guard.rs` and the unit tests in `bin_guard.rs` reject synthetic EVEX fixtures (VL256 with low registers, opmask, ZMM, `zmm16..31`, EVEX hidden inside an `.rlib`-style archive) and fail closed on corrupted artifacts, missing or errant tools, empty archives and bitcode-only (thin-LTO) archives. The same integration test certifies the *linked* test binary — the real machine-code surface of the build under test.
+
 ---
 
 ## 3. Placement Rules (source of truth = code)
@@ -152,8 +163,35 @@ the shell never hand-serializes). Line schema:
 - `phase_id`: `phase1`..`phase7` (emission order), then `overall` for the suite line.
 - `status`: `PASSED` | `FAILED` | `SKIPPED` | `INCONCLUSIVE` | `SKIP_CAPABILITY` | `NOT_RUN`; the suite line uses `PASSED` | `FAILED` | `COMPLETED_WITH_GAPS`.
 - `tests_executed`: count parsed from the phase log's `test result:` lines (`passed`+`failed`+`measured`; criterion `time:` lines as fallback).
-- `gaps`: canonical typed markers detected in the phase log (`inconclusive_environment`, `skip_capability`, `inconclusive`, `missing_required`) plus the phase's own gap status; the suite line lists gap phases as `phase_id:STATUS`.
+- `gaps`: canonical typed markers detected in the phase log (see the marker grammar below — T3.2/T3.3) plus the phase's own gap status; the suite line lists gap phases as `phase_id:STATUS` (and `phase_id:ZERO_TESTS` for a timed phase that passed with zero executed tests).
 - `timestamp`: ISO-8601 UTC emission time.
+
+**Typed marker grammar (T3.2 / F-ROB-04):** every test deviation, bypass, or
+skip MUST be emitted as one of the following machine-parseable markers. The
+receipt parser (`detect_gap_markers` in `src/testing/receipt.rs`) recognizes
+them and attaches the typed detail to the `gaps` entry:
+
+```text
+[STATUS] SKIP_CAPABILITY reason="<detail>"   → gap  skip_capability:<detail>   (ISA/hardware/environment absence)
+[STATUS] SKIP_OPTIONAL reason="<detail>"     → gap  skip_optional:<detail>     (missing non-distributable / optional model)
+[STATUS] KNOWN_GAP id="<id>" reason="<detail>" → gap  known_gap:<id>           (known upstream gap, e.g. condition_lstm_cpp_crash)
+[STATUS] INCONCLUSIVE reason="<detail>"       → gap  inconclusive:<detail>      (measurement bypass, non-gate)
+```
+
+Other recognized sources: `INCONCLUSIVE_ENVIRONMENT` (RT deadline bypass),
+`MISSING-REQUIRED: <name>` (catalog preflight), `AVX512_OPT_IN: NOT_RUN`
+(cross-ISA opt-in accounting, T2.4), and — during the transition only — the
+legacy free-form `SKIP:` prefix, surfaced as `legacy_skip:<detail>` so an
+unconverted print is never masked into a clean `PASSED`. A phase log that
+cannot be read is itself fail-closed (`log_unreadable`).
+
+**Fail-closed receipt invariant (T3.3):** `overall: PASSED` is only ever
+assigned when every phase has `gaps: []` and no timed phase passed with zero
+executed tests (mandatory-subphase gate). Any declared gap downgrades the
+verdict to `COMPLETED_WITH_GAPS`; `nam_long_receipt validate --strict` (and
+`tests-long.sh --strict-pre-release`) rejects the receipt with a non-zero exit
+code. A receipt can never report `gaps: []` + `PASSED` while the phase logs
+demonstrate skips or gaps.
 
 **Preflight trace:** every preflight step that runs
 ahead of Phase 1 also appends its own line (`preflight-render`,
@@ -198,7 +236,39 @@ To align test execution with developer workflows and integration schedules, the 
 - **Goal**: Provide a complete, comprehensive report of all test, parity, and performance outcomes for nightlies or release gates.
 - **Behavior**: Execution continues across all phases even if individual targets fail. Logs are collected and a final status summary table is generated.
 - **Configuration**: Phase wrappers use error isolation (`|| true`) and cargo invocations pass `--no-fail-fast`. Script exits with status `1` at the end if any phase logged an error.
+- **AVX-512 opt-in accounting (T2.4/F-ROB-02):** the cross-ISA matrix runs under its own subphase log with a mandatory minimum-execution gate (`assert_subphase_ran`). A default local runner compiles without `--features avx512`, so the AVX-512 cases compile out via `#[cfg]`; the suite declares that explicitly with the typed marker `AVX512_OPT_IN: NOT_RUN`, which `nam_long_receipt` records as a gap (`avx512_opt_in_not_run`) — the overall verdict becomes `COMPLETED_WITH_GAPS` (and `--strict-pre-release` fails), never a silent clean `PASSED` with a zero-case matrix. On an AVX-512-enabled runner the declaration reads `AVX512_OPT_IN: RUN`.
 - **Human certification**: AI agents must never execute this script. The operator checklist (execution, defense log verification, `OVERALL:` evidence, and the certification record) is in [functional-tests.md](functional-tests.md).
+
+### 6.3. Human Release-Certification Roadmap (operator-only, T4.3/F-EVID-06)
+
+The final certification battery is executed **exclusively by a human operator** on a calibrated, isolated machine (governor `performance`, low load, `NAM_BENCH_CORE` pinned) from the `NeuralAmpModeler-rs/` directory. AI agents must **never** run `utils/tests-long.sh`, `utils/tests-performance-regression.sh --bootstrap-baseline`, or `utils/quality-dashboard.sh --save`; the long suite and baseline renewal are delegated to the human by policy.
+
+```bash
+# No diretório NeuralAmpModeler-rs/ — bateria de certificação final (operador humano)
+utils/lints.sh | tee target/logs/lints.log                          # Receipt 1
+NAM_QUICK_STRICT=1 utils/tests-quick.sh | tee target/logs/quick-strict.log   # Receipt 2
+# Perf check contra baseline PREVIAMENTE aprovado (cerimônia separada, §5.2 de functional-tests.md):
+utils/tests-performance-regression.sh --check | tee target/logs/perf-check.log  # Receipt 4
+utils/quality-dashboard.sh --check docs/quality-contract.json | tee target/logs/quality-check.log  # Receipt 5
+# Execução longa em ambiente isolado (operador humano, ~10 min):
+utils/tests-long.sh --strict-pre-release | tee target/logs/long-strict.log    # Receipt 3
+```
+
+> [!IMPORTANT]
+> All five receipts must be produced on the **same clean git commit** and
+> archived with their digests in the certification record
+> ([functional-tests.md §6](functional-tests.md#6-human-pre-release-certification-record-template)).
+> `--bootstrap-baseline` is a separate approved ceremony with its own producer
+> commit — never fold it into the same command as `--check`.
+
+**Log validation checklist (visual inspection before any crates.io publication):**
+
+- [ ] `lints.log`: exit 0; zero compiler/clippy/rustdoc warnings; binary AVX-512 absence certification green (no EVEX in default release).
+- [ ] `quick-strict.log`: `NAM_QUICK_STRICT=1`; `FIDELITY: OK`; `OVERALL: PASSED`; zero `GAP:` entries.
+- [ ] `long-strict.log`: `--strict-pre-release`; `OVERALL: PASSED`; every phase `PASSED`; `gaps: []` (no `AVX512_OPT_IN: NOT_RUN`, no `SKIP_*`, no `KNOWN_GAP`, no `phase<N>:ZERO_TESTS`); `nam_long_receipt validate --strict` exit 0.
+- [ ] `perf-check.log`: exit 0; comparison against a baseline whose **producer commit is recorded and distinct** from the certified commit; no `NOT_VERIFIED`/missing-coverage fallback.
+- [ ] `quality-check.log`: exit 0; `FIDELITY: OK`; all fidelity + f64-oracle envelopes within contract; `regression_gate` green.
+- [ ] Same-commit binding: `git_commit` matches across receipts; working tree was clean; digests recorded.
 
 ---
 
@@ -221,7 +291,7 @@ The project includes a comprehensive measurement framework for audio fidelity as
 
 - **Two references:** Parity (C++ NAMCore f32) measures implementation agreement; absolute (f64 Oracle) measures intrinsic quality loss from f32 approximations.
 - **ESR as primary gate:** Normalizes error by reference energy — invariant to linear scale mismatch.
-- **ISA parity:** End-to-end cross-ISA determinism via `TEST_ISA_OVERRIDE`. Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets. Production cross-ISA targets AVX-512 f32, while legacy VNNI+BF16 tests remain evaluation checkpoints (`#[ignore]`d in quick); quick covers AVX2 self-consistency + synthetic spectral.
+- **ISA parity:** End-to-end cross-ISA determinism via validated `TEST_ISA_OVERRIDE` installs (`set_test_isa_override`/`testing::isa_guard` — safe Rust can never force dispatch to an ISA the host cannot execute, F-ROB-03/T2.1). Self-consistency asserts bit-exact output; cross-ISA asserts ESR within calibrated budgets. The AVX-512 path requires the **full `F+VL+BW+DQ` capability matrix** (`avx512f` + `avx512vl` + `avx512bw` + `avx512dq`); any partial subset deterministically falls back to AVX2. Production dispatch is **AVX2 only**; the AVX-512 cross-ISA matrix is a research opt-in (`avx512` feature) parity measurement, and legacy VNNI+BF16 tests remain evaluation checkpoints (`#[ignore]`d in quick); quick covers AVX2 self-consistency + synthetic spectral.
 - **MR-STFT dual gate:** Hard gate at 44.1/48 kHz (`mrstft_max` calibrated per model); soft informational gate at higher sample rates (88.2–192 kHz).
 - **RT-safety:** All metrics run off-RT. Hot-path audio processing uses sample-peak detection only.
 
@@ -401,7 +471,7 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 | **[utils/lints.sh](../utils/lints.sh)**                                               | Static analysis & quality defense          | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`). |
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                       |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                        |
-| **[utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh)**         | Binary surface guard                       | Disassembles and symbol-scans release build artifacts using `llvm-nm`/`llvm-objdump`, asserting zero AVX-512 symbol leaks or EVEX/ZMM opcodes in default builds.                                                                                                                                                                                                                                        |
+| **[utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh)**         | Fail-closed binary certification               | Rebuilds the default release in an isolated `target/cert-release-*` dir (thin-LTO off), logs the artifact SHA-256, requires `llvm-objdump`/`llvm-nm` with status zero, and delegates to `nam_bin_guard scan` — a single Rust scanner that flags any instruction whose `llvm-objdump -d` encoding bytes start with the EVEX `0x62` prefix across every ELF member and executable section, plus a defensive `llvm-nm` symbol scan. Any tool/format failure exits 1 (never a silent PASS). |
 | **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                           |
 
 ---

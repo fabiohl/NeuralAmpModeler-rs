@@ -22,7 +22,7 @@ pub enum InstructionSet {
     Avx512,
     /// AVX-512 VNNI + BF16 (legacy / evaluation-only; runtime detection uses standard AVX-512).
     #[deprecated(
-        note = "Avx512VnniBf16 is legacy/evaluation-only. Production uses Avx512 f32 math."
+        note = "Avx512VnniBf16 is legacy/evaluation-only. Default production dispatch is Avx2; standard AVX-512 f32 math is a research opt-in behind the `avx512` feature."
     )]
     Avx512VnniBf16,
 }

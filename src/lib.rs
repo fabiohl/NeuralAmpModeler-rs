@@ -17,7 +17,8 @@
 //!
 //! The library provides:
 //! - **SIMD-Accelerated Inference Kernels**: Native `x86-64-v3` (AVX2 + FMA)
-//!   and `AVX-512` math routines.
+//!   as the mandatory production backend, with AVX-512 kernels kept strictly as
+//!   an opt-in research/experimental path behind the `avx512` feature.
 //! - **Flexible Model Loader**: Parser and builder for `.nam` (JSON) and
 //!   `.namb` (binary profile) files.
 //! - **Lock-Free DSP Engine**: Zero heap allocations on the audio

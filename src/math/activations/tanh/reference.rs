@@ -16,9 +16,10 @@
 //   but div_ps is 1.77× faster (62 ns vs 110 ns on 256-elem AVX2).
 //   Decision: keep div_ps in production.  NR1 retained for documentation.
 //
-// NOTE: The production path (simd_tanh_avx2 / simd_tanh_avx512) now uses
-// the Padé [5,4] + hardware-div approach. The NR1/NR2 variants below are
-// kept for reference / benchmarking.
+// NOTE: The production AVX2 path (simd_tanh_avx2 / simd_tanh_dual_avx2) now
+// uses the Padé [5,4] + hardware-div approach. The AVX-512 equivalents
+// (simd_tanh_avx512) are research opt-in (`avx512` feature) only. The NR1/NR2
+// variants below are kept for reference / benchmarking.
 //
 // Padé [5,4]: tanh(x) ≈ x * P(x²) / Q(x²)
 //   P(t) = t² + 105t + 945

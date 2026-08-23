@@ -176,6 +176,36 @@ assert_ran_tests() {
     return 0
 }
 
+# assert_subphase_ran <phase_name> <log_file> [min_count]
+# Per-subphase counterpart of assert_ran_tests (T2.4): proves that ONE
+# mandatory subphase of a multi-subphase phase executed at least `min_count`
+# tests/benchmarks. The counting delegates to `nam_long_receipt count-log`
+# (src/testing/receipt.rs::count_tests_executed_from_log); the caller passes
+# a log file that isolates exactly that subphase's invocation.
+# Invariant (T2.4): a phase can never be registered PASSED if a mandatory
+# subphase executed zero tests due to `#[cfg]` compilation filters.
+assert_subphase_ran() {
+    local phase_name="$1" log_file="$2" min_count="${3:-1}"
+
+    local bin="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
+    if [ ! -x "$bin" ]; then
+        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
+            warn "failed to build nam_long_receipt — subphase gate fails closed"
+            return 1
+        fi
+    fi
+
+    local total
+    total=$("$bin" count-log --log "$log_file" 2>/dev/null || echo 0)
+
+    if [ "$total" -lt "$min_count" ]; then
+        echo -e "${RED}${BOLD}❌ Subphase gate failed: '${phase_name}' executed ${total} test(s)/benchmark(s) (< ${min_count}).${NC}"
+        return 1
+    fi
+    echo -e "  Gate: subphase '${phase_name}' executed ${total} test(s)/benchmark(s) ≥ ${min_count}  ✓"
+    return 0
+}
+
 # Run a dashboard phase with strict exit code capture.
 # The command is passed as an ARGUMENT ARRAY (no `eval`, S4.T3); the command's
 # stdout+stderr are redirected internally to $LOGDIR/$phase_id.log.

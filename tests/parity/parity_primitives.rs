@@ -35,10 +35,7 @@ fn mr_stft_golden_path() -> PathBuf {
 fn test_mulberry32_parity_with_ts() {
     let path = ts_golden_path();
     if !path.exists() {
-        eprintln!(
-            "SKIP: test_mulberry32_parity_with_ts — golden file not found at {:?}",
-            path
-        );
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_not_found:mushra_prng_golden.bin\"");
         eprintln!("Generate it by running the t3k-mushra demo and capturing PRNG output.");
         return;
     }
@@ -108,10 +105,7 @@ fn test_mulberry32_parity_with_ts() {
 fn test_mr_stft_parity_with_python() {
     let path = mr_stft_golden_path();
     if !path.exists() {
-        eprintln!(
-            "SKIP: test_mr_stft_parity_with_python — golden file not found at {:?}",
-            path
-        );
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_not_found:mrstft_golden.bin\"");
         eprintln!("Generate it by running: python tests/fixtures/scripts/gen_mrstft_golden.py");
         return;
     }

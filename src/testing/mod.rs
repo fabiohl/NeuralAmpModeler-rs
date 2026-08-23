@@ -12,6 +12,7 @@
 //! - WAV I/O helpers for test fixtures
 
 pub mod aliasing;
+pub mod bin_guard;
 pub mod catalog;
 pub mod diagnostics;
 pub mod fixtures;

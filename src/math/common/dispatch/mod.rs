@@ -12,8 +12,12 @@ pub mod instruction_set;
 
 pub use config::SimdMathConfig;
 pub use detect::SIMD_MATH;
-pub use detect::TEST_ISA_OVERRIDE;
-pub use detect::{decode_isa_override, effective_instruction_set, encode_isa_override};
+pub use detect::{
+    IsaOverrideError, avx512_capability_complete, clear_test_isa_override, decode_isa_override,
+    effective_instruction_set, encode_isa_override, set_test_isa_override,
+};
+#[cfg(feature = "avx512")]
+pub use detect::{has_full_avx512, missing_avx512_features};
 pub use instruction_set::InstructionSet;
 
 /// Generates a `SimdMathConfig` with static descriptive fields only.

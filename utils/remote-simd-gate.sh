@@ -30,13 +30,57 @@ SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 PHASE_TOTAL=4
 source "$SCRIPT_DIR/_lib.sh"
 
+mkdir -p target/logs
+
 trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line $LINENO status $?.${NC}"; exit 1' ERR
+
+# ── Structured receipt emitter (T2.4: cross-ISA matrix registered in a
+# dedicated receipt and validated end-to-end, fail-closed) ───────────────────
+# The remote gate appends machine-readable lines (phase_id, name, status,
+# duration_ms, tests_executed, gaps, timestamp) to target/logs/
+# remote-simd-receipt.jsonl via the same `nam_long_receipt` emitter used by
+# the long suite (src/testing/receipt.rs) — never hand-serialized JSON.
+LONG_RECEIPT_BIN="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
+
+ensure_long_receipt_bin() {
+    if [ -x "$LONG_RECEIPT_BIN" ]; then
+        return 0
+    fi
+    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
+        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_long_receipt${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+emit_remote_receipt() {
+    local phase_id="$1" name="$2" status="$3" duration_ms="$4" log_file="$5"
+    if ! ensure_long_receipt_bin; then
+        echo -e "  ${YELLOW}${BOLD}⚠ remote-simd receipt emission unavailable (nam_long_receipt missing)${NC}" >&2
+        return 1
+    fi
+    local rc=0
+    "$LONG_RECEIPT_BIN" append \
+        --phase-id "$phase_id" \
+        --name "$name" \
+        --status "$status" \
+        --duration-ms "$duration_ms" \
+        --log "$log_file" \
+        --out "$REMOTE_RECEIPT_JSONL" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo -e "  ${YELLOW}${BOLD}⚠ remote-simd receipt emission failed for $phase_id (rc=$rc)${NC}" >&2
+        return 1
+    fi
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # Default Configuration & CLI Options
 # ---------------------------------------------------------------------------
 COOLDOWN_SECS="${NAM_COOLDOWN_SECS:-180}"
 RECEIPT_OUT="target/logs/remote-simd-receipt.json"
+REMOTE_RECEIPT_JSONL="target/logs/remote-simd-receipt.jsonl"
+PARITY_LOG="target/logs/remote-simd-parity.log"
 CHECK_ONLY=0
 SKIP_PARITY=0
 SKIP_BENCH=0
@@ -133,25 +177,29 @@ if [ "$USE_SDE" -eq 1 ] || [[ "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER:-}
     fi
 elif [ -f /proc/cpuinfo ]; then
     CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//' || echo "unknown")
-    if grep -qw "avx512f" /proc/cpuinfo && grep -qw "avx512vl" /proc/cpuinfo; then
+    # T2.1/T2.4: the reachable AVX-512 kernels require the full capability
+    # matrix — F + VL + BW + DQ (a partial subset can SIGILL).
+    if grep -qw "avx512f" /proc/cpuinfo && grep -qw "avx512vl" /proc/cpuinfo \
+        && grep -qw "avx512bw" /proc/cpuinfo && grep -qw "avx512dq" /proc/cpuinfo; then
         HAS_AVX512=1
     fi
 elif command -v lscpu >/dev/null 2>&1; then
     CPU_MODEL=$(lscpu | grep -m1 "Model name:" | cut -d: -f2 | sed 's/^[ \t]*//' || echo "unknown")
     CPU_FLAGS=$(lscpu | grep -iE '^(Flags|Opções):' || true)
-    if echo "$CPU_FLAGS" | grep -qw "avx512f" && echo "$CPU_FLAGS" | grep -qw "avx512vl"; then
+    if echo "$CPU_FLAGS" | grep -qw "avx512f" && echo "$CPU_FLAGS" | grep -qw "avx512vl" \
+        && echo "$CPU_FLAGS" | grep -qw "avx512bw" && echo "$CPU_FLAGS" | grep -qw "avx512dq"; then
         HAS_AVX512=1
     fi
 fi
 
 if [ "$HAS_AVX512" -ne 1 ]; then
     warn "Host CPU: $CPU_MODEL"
-    warn "AVX-512 features (avx512f + avx512vl) not detected on this machine."
+    warn "AVX-512 features (avx512f + avx512vl + avx512bw + avx512dq) not detected on this machine."
     warn "Clean skip: This gate is designed for execution on AVX-512 hardware or under Intel SDE (--sde)."
     exit 2
 fi
 
-ok "AVX-512 environment verified: $CPU_MODEL (avx512f + avx512vl present)."
+ok "AVX-512 environment verified: $CPU_MODEL (avx512f + avx512vl + avx512bw + avx512dq present)."
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
     ok "Preflight check completed successfully (--check-only requested)."
@@ -172,7 +220,23 @@ else
     fi
 
     echo -e "  ${BLUE}Running: cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture${NC}"
-    cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture
+    echo "AVX512_OPT_IN: RUN (remote-simd-gate compiles with --features avx512)" > "$PARITY_LOG"
+    parity_start=$(date +%s%N)
+    parity_rc=0
+    cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture 2>&1 | tee -a "$PARITY_LOG" || parity_rc=$?
+    parity_dur=$(( ($(date +%s%N) - parity_start) / 1000000 ))
+
+    # T2.4 mandatory-subphase gate: the cross-ISA matrix must prove real
+    # execution (≥1 test) — never a silent zero-case PASS from a filter/compile
+    # mismatch. Under the AVX-512 opt-in build the matrix always has cases.
+    assert_subphase_ran "remote_simd_isa_parity" "$PARITY_LOG" 1 || parity_rc=1
+
+    if [ "$parity_rc" -ne 0 ]; then
+        emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "FAILED" "$parity_dur" "$PARITY_LOG" || true
+        echo -e "${RED}${BOLD}❌ Mathematical cross-ISA parity FAILED (rc=$parity_rc).${NC}"
+        exit 1
+    fi
+    emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "PASSED" "$parity_dur" "$PARITY_LOG" || true
     ok "Mathematical cross-ISA parity verified against AVX2 reference."
 fi
 
@@ -202,14 +266,19 @@ phase "Phase 3: Structured Receipt Generation..."
 if [ "$SKIP_BENCH" -eq 1 ]; then
     warn "Skipping Phase 3 receipt generation & ROI check (--skip-bench specified)."
 else
+    ROI_START=$(date +%s%N)
     RECEIPT_STATUS=0
     cargo run --quiet --features testing --bin nam_remote_simd_receipt -- \
         --criterion-dir "target/criterion" \
         --out "$RECEIPT_OUT" \
         --table \
         --check || RECEIPT_STATUS=$?
+    ROI_DUR=$(( ($(date +%s%N) - ROI_START) / 1000000 ))
+    ROI_LOG="target/logs/remote-simd-roi.log"
 
     if [ "$RECEIPT_STATUS" -ne 0 ]; then
+        echo "ROI criteria not met (exit $RECEIPT_STATUS) — see $RECEIPT_OUT" > "$ROI_LOG"
+        emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "FAILED" "$ROI_DUR" "$ROI_LOG" || true
         warn "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
         echo -e "\n${YELLOW}${BOLD}================================================================================"
         echo -e "  Remote SIMD Gate: Parity verified (100% PASS), but ROI criteria not met."
@@ -219,11 +288,31 @@ else
         exit 1
     fi
 
+    emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "PASSED" "$ROI_DUR" "$ROI_LOG" || true
     ok "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
+fi
+
+# ── End-to-end receipt validation (T2.4) ────────────────────────────────────
+# The dedicated remote-simd JSONL receipt (parity matrix + ROI check, when
+# run) is validated fail-closed: every line must match the LongPhaseReceipt
+# schema, and the derived overall verdict is printed by `summary`. A corrupt
+# or missing receipt fails the gate.
+if ensure_long_receipt_bin; then
+    if ! "$LONG_RECEIPT_BIN" validate --out "$REMOTE_RECEIPT_JSONL"; then
+        echo -e "${RED}${BOLD}❌ Remote SIMD receipt validation FAILED (target/logs/remote-simd-receipt.jsonl).${NC}"
+        exit 1
+    fi
+    echo -e "  ${GREEN}✓ Remote SIMD receipt validated (target/logs/remote-simd-receipt.jsonl)${NC}"
+    SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$REMOTE_RECEIPT_JSONL")" || true
+    printf '%s\n' "$SUMMARY_TEXT" | sed 's/^/    /'
+else
+    echo -e "${RED}${BOLD}❌ nam_long_receipt unavailable — remote SIMD receipt NOT emitted (fail-closed).${NC}"
+    exit 1
 fi
 
 echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
 echo -e "${GREEN}${BOLD}✓ Remote SIMD Gate passed all mathematical and parity criteria!${NC}"
+echo -e "  ${BOLD}AVX512_OPT_IN: RUN (remote-simd-gate compiles with --features avx512)${NC}"
 if [ "$SKIP_BENCH" -eq 0 ]; then
     echo -e "  ${BOLD}Artifact saved:${NC} ${CYAN}$RECEIPT_OUT${NC}"
 fi

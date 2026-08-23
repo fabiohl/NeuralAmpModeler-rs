@@ -709,7 +709,7 @@ For developers working on baseline `x86-64-v3` workstations (e.g. AMD Zen 2/Zen 
    ./utils/remote-simd-gate.sh --sde
    ```
 
-   * *Phase 0:* Automatically detects the SDE runner and acknowledges emulated `avx512f` + `avx512vl`.
+   * *Phase 0:* Automatically detects the SDE runner and acknowledges emulated `avx512f` + `avx512vl` + `avx512bw` + `avx512dq`.
    * *Phase 1:* Executes all 12+ cross-ISA mathematical parity test cases (WaveNet Standard/Feather/Nano, A2 Full/Lite, and LSTM 1x16 / 2x8) with `--include-ignored`.
    * *Phases 2 & 3:* Skips hardware Criterion microbenchmarks and thermal cooldowns, as software JIT emulation does not measure physical silicon clock cycles.
 
@@ -741,7 +741,7 @@ Upon successful execution on real hardware, the harness invokes `nam_remote_simd
 
 The gating suite evaluates performance using rigorous statistical thresholds:
 
-* **Phase 0 (Hardware Preflight):** Verifies presence of CPU flags `avx512f` and `avx512vl` (or Intel SDE emulation). If absent, exits cleanly with **code 2** (`Clean skip`).
+* **Phase 0 (Hardware Preflight):** Verifies presence of the full AVX-512 capability matrix `avx512f` + `avx512vl` + `avx512bw` + `avx512dq` (or Intel SDE emulation) — the reachable kernels require all four sub-features (T2.1/F-ROB-03). If absent, exits cleanly with **code 2** (`Clean skip`).
 * **Phase 1 (Mathematical Parity):** All monomorphized kernels must maintain exact mathematical parity against the baseline and f64 reference oracle (`isa_parity.rs`).
 * **Phase 2 (Criterion Latency Sweeps):** Executes multi-sample inference benchmarks for block sizes $N=1, 8, 64$.
 * **Phase 3 (Welch's t-test Gating):**

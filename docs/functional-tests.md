@@ -269,26 +269,69 @@ All test runners, compilation helpers, and preflight steps persist detailed exec
 
 ---
 
-## 5. Release Acceptance Criteria
+## 5. Release Certification Protocol (5 Receipts)
 
-A build is certified for release only when all of the following conditions are satisfied:
+A build is certified for release only when **all five mandatory receipts** are
+generated, archived, and verified against the **same clean git commit hash**.
+A partial runner (e.g. a quick suite executed without strictness, a long suite
+without `--strict-pre-release`, or a performance comparison against a freshly
+bootstrapped baseline) is *evidence of execution*, never a release certificate.
+
+### 5.1. The Five Mandatory Receipts
+
+| # | Receipt (record name)  | Command (in `NeuralAmpModeler-rs/`)                                        | Environment / Flags                        | Generated Artifact(s)                                                                               | Blocking Criteria                                                                                                            |
+|:-:|:---------------------- |:-------------------------------------------------------------------------- |:------------------------------------------ |:--------------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------- |
+| 1 | `lints.log`            | `utils/lints.sh`                                                           | `--all-targets --all-features` (script)    | console output — operator must archive `target/logs/lints.log` (`tee`)                             | exit 0; zero compiler/clippy warnings; zero rustdoc warnings; SPDX, anti-pattern and `#[allow]` policies green; binary AVX-512 absence certification green |
+| 2 | `quick-strict.log`     | `utils/tests-quick.sh`                                                     | `NAM_QUICK_STRICT=1`                       | `target/logs/quick-receipt.txt` (+ `quick-phase{1,2,3}.log`)                                       | `FIDELITY: OK` and `OVERALL: PASSED`; zero `GAP:` entries; exit 0                                                             |
+| 3 | `long-strict.log`      | `utils/tests-long.sh --strict-pre-release`                                 | `--strict-pre-release`                     | `target/logs/long-audit-receipt.jsonl`                                                              | `OVERALL: PASSED` with `gaps: []` (validated via `nam_long_receipt validate --strict`); exit 0                                 |
+| 4 | `perf-check.log`       | `utils/tests-performance-regression.sh --check`                            | pre-approved baseline (see §5.2)           | `target/logs/regression_phase_receipt.jsonl` (+ `target/logs/regression-check.log`)                 | statistically valid comparison (two-sample t-test, p < 0.05) against a baseline **produced by an earlier, explicitly approved commit**; exit 0 |
+| 5 | `quality-contract.json`| `utils/quality-dashboard.sh --check docs/quality-contract.json`            | `docs/quality-contract.json` (committed)   | `target/logs/dashboard/report.jsonl` + `target/logs/dashboard/phase_receipt.jsonl`                  | all fidelity envelopes (ESR/SNR/MR-STFT) and f64-oracle checks validated; `regression_gate` must not be `NOT_VERIFIED` (perf receipt #4 must be green first); exit 0 |
+
+> [!IMPORTANT]
+> **Same-commit rule (F-EVID-06).** All five receipts must refer to the *same*
+> commit hash with a **clean working tree**. The release record (§6) must bind
+> them together: the operator archives the five artifacts under the canonical
+> names above plus the `git_commit`, `run_id`, timestamps and SHA-256 digests.
+> A receipt produced on any other commit, dirty tree, or stale artifact does
+> not count. `git_commit` in fingerprints is provenance only — the archived
+> receipts are the authority.
+
+### 5.2. Baseline Bootstrap Is a Separate Ceremony
+
+`utils/tests-performance-regression.sh --bootstrap-baseline` (Criterion
+baseline) and `utils/quality-dashboard.sh --save` (contract snapshot) are
+**never** run in the same command as their `--check`, and never by an AI agent.
+
+- The bootstrap/`--save` is a **separate ceremony** performed by a human
+  operator on an isolated, calibrated machine (governor `performance`, low
+  load, optional `NAM_BENCH_CORE`).
+- The produced baseline is bound to its **producer commit**: the release record
+  must record which commit generated the baseline and evidence that this commit
+  was explicitly approved as the performance/fidelity reference for the release.
+  Re-using a baseline bootstrapped in the same session as the check proves
+  repeatability only — it does not prove absence of regression (F-EVID-06).
+- A baseline may be renewed only when the delta is intentional and
+  reproducible; the renewal is a new approved ceremony with its own record
+  entry, never folded silently into the certification run.
+
+### 5.3. Human Certification Checklist (all five receipts, same clean commit)
 
 - [ ] **Zero Panics or Memory Leaks:** Across all manual tiers and automated test suites.
 - [ ] **Strict RT-Safety:** Zero heap allocations on the audio thread hot-path (Tier 2C.1 and Long Phase 4).
 - [ ] **Determinism & Invariance:** Block-size invariance verified ($< 10^{-7}$ difference) and reset idempotency confirmed.
 - [ ] **Architecture Coverage:** All five model families (WaveNet A1/A2, LSTM, ConvNet, Linear) load and process cleanly.
-- [ ] **Automated Suites Green (Fail-Closed):**
-  - `utils/lints.sh` passes with zero compiler/clippy warnings, valid formatting, and verified SPDX headers.
-  - `NAM_QUICK_STRICT=1 utils/tests-quick.sh` passes with `FIDELITY: OK` and `OVERALL: PASSED` (zero gaps, exit 0).
-  - `utils/tests-long.sh --strict-pre-release` passes with `OVERALL: PASSED` and receipt validated via `nam_long_receipt` (zero gaps, exit 0).
-  - `utils/tests-performance-regression.sh --check` satisfies all benchmark latency bounds.
-  - `utils/quality-dashboard.sh --check docs/quality-contract.json` validates all audio quality contracts.
+- [ ] **Receipt 1 — `lints.log`:** `utils/lints.sh` exit 0, zero warnings (all-features `--all-targets`), formatting/SPDX/anti-pattern/`#[allow]` policies green, binary AVX-512 absence certification green.
+- [ ] **Receipt 2 — `quick-strict.log`:** `NAM_QUICK_STRICT=1 utils/tests-quick.sh` with `FIDELITY: OK` and `OVERALL: PASSED` (zero gaps, exit 0).
+- [ ] **Receipt 3 — `long-strict.log`:** `utils/tests-long.sh --strict-pre-release` with `OVERALL: PASSED` and receipt validated via `nam_long_receipt validate --strict` (`gaps: []`, exit 0).
+- [ ] **Receipt 4 — `perf-check.log`:** `utils/tests-performance-regression.sh --check` passed against a pre-approved baseline from an earlier commit (exit 0).
+- [ ] **Receipt 5 — `quality-contract.json`:** `utils/quality-dashboard.sh --check docs/quality-contract.json` validated all audio fidelity and f64-oracle contracts (exit 0, `regression_gate` green).
+- [ ] **Same-commit binding:** all five receipts reference the same clean commit hash; digests and `run_id`s recorded in the certification record (§6).
 
 ---
 
 ## 6. Human Pre-Release Certification Record Template
 
-When certifying a release candidate or milestone tag, the human operator completes and archives the following audit record:
+When certifying a release candidate or milestone tag, the human operator completes and archives the following audit record. **All five receipts must reference the same clean commit hash** (§5.1); the baseline producer commit (§5.2) is recorded separately.
 
 ```markdown
 ### Release / Audit Certification Record
@@ -299,14 +342,22 @@ When certifying a release candidate or milestone tag, the human operator complet
 - **Rustc Version:** rustc X.Y.Z (Edition 2024)
 - **CPU Architecture & Model:** <lscpu output summary>
 - **CPU Governor:** performance
-- **Quick Receipt Path:** `target/logs/quick-receipt.txt`
-- **Long Receipt Path:** `target/logs/long-audit-receipt.jsonl`
+- **Run IDs:** <run_id> per receipt below
+- **Baseline Producer Commit (perf):** <commit-sha of the approved --bootstrap-baseline ceremony, §5.2>
+
+#### The Five Mandatory Receipts (same clean commit):
+- [ ] **Receipt 1 — lints:** `target/logs/lints.log` (archived), exit 0, zero warnings, binary AVX-512 absence certification green. Digest: <sha256>
+- [ ] **Receipt 2 — quick-strict:** `target/logs/quick-receipt.txt` with `FIDELITY: OK` / `OVERALL: PASSED` (zero gaps). Digest: <sha256>
+- [ ] **Receipt 3 — long-strict:** `target/logs/long-audit-receipt.jsonl` validated via `nam_long_receipt validate --strict` — `OVERALL: PASSED`, `gaps: []`. Digest: <sha256>
+- [ ] **Receipt 4 — perf-check:** `target/logs/regression_phase_receipt.jsonl` (exit 0) against baseline produced by `<baseline producer commit>` — distinct from the certified commit. Digest: <sha256>
+- [ ] **Receipt 5 — quality-contract:** `docs/quality-contract.json` verified via `utils/quality-dashboard.sh --check` (exit 0, all fidelity + f64-oracle envelopes green, `regression_gate` not `NOT_VERIFIED`). Digest: <sha256>
 
 #### Verification Checklist:
-- [ ] `utils/lints.sh` executed cleanly (zero warnings, formatting intact, SPDX headers verified).
+- [ ] All five receipts were generated on the **same clean commit** (no dirty-tree or stale-artifact receipts).
+- [ ] `utils/lints.sh` executed cleanly (zero warnings, formatting intact, SPDX headers verified, binary AVX-512 absence certified).
 - [ ] `NAM_QUICK_STRICT=1 utils/tests-quick.sh` passed with `FIDELITY: OK` and `OVERALL: PASSED` (zero gaps).
-- [ ] `utils/tests-long.sh --strict-pre-release` executed with `OVERALL: PASSED` (receipt validated via `nam_long_receipt validate`).
-- [ ] `utils/tests-performance-regression.sh --check` passed without regression against baseline.
+- [ ] `utils/tests-long.sh --strict-pre-release` executed with `OVERALL: PASSED` (receipt validated via `nam_long_receipt validate --strict`, `gaps: []`).
+- [ ] `utils/tests-performance-regression.sh --check` passed without regression against the pre-approved baseline (producer commit recorded, distinct from the certified commit).
 - [ ] `utils/quality-dashboard.sh --check docs/quality-contract.json` satisfied all fidelity and latency envelopes.
 
 #### Certification Verdict:

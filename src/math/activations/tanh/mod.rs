@@ -3,8 +3,12 @@
 
 //! Optimized Tanh (Hyperbolic Tangent) activation kernels.
 //!
-//! - **Production path:** Padé \[5,4\] rational approximant with hardware division
-//!   (`simd_tanh_avx2`, `simd_tanh_dual_avx2`, `simd_tanh_avx512`).
+//! - **Production path (default):** Padé \[5,4\] rational approximant with
+//!   hardware division on the AVX2 backend (`simd_tanh_avx2`,
+//!   `simd_tanh_dual_avx2`).
+//! - **Research opt-in path (`avx512` feature):** AVX-512 equivalents
+//!   (`simd_tanh_avx512`) compiled only under `--features avx512`; not a
+//!   production/default backend.
 //! - **Reference path:** Padé NR2 variants retained for benchmarking and
 //!   documentation (`simd_tanh_pade_nr2_avx2`, `simd_tanh_pade_nr2_avx512`).
 //! - **High-fidelity path:** Polynomial exp-based tanh kernels (degree-6 Taylor,

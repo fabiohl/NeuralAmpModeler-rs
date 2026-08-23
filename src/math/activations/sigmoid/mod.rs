@@ -3,12 +3,16 @@
 
 //! Optimized Sigmoid (Logistic) activation kernels.
 //!
-//! - **Production path:** Direct degree-17 minimax polynomial (9 odd terms)
-//!   optimised for the interval [-8, 8], computed via Lawson's weighted minimax
-//!   algorithm (`simd_sigmoid_avx2`, `simd_sigmoid_dual_avx2`, `simd_sigmoid_avx512`).
+//! - **Production path (default):** Direct degree-17 minimax polynomial (9 odd
+//!   terms) optimised for the interval [-8, 8], computed via Lawson's weighted
+//!   minimax algorithm on the AVX2 backend (`simd_sigmoid_avx2`,
+//!   `simd_sigmoid_dual_avx2`).
+//! - **Research opt-in path (`avx512` feature):** AVX-512 equivalents
+//!   (`simd_sigmoid_avx512`, `simd_sigmoid_poly_avx512`) compiled only under
+//!   `--features avx512`; not a production/default backend.
 //! - **High-fidelity path:** Polynomial exp-based sigmoid (degree-6 Taylor with
 //!   integer range reduction), max absolute error ≤ 2.1e-7
-//!   (`simd_sigmoid_poly_avx2`, `simd_sigmoid_poly_avx512`).
+//!   (`simd_sigmoid_poly_avx2`).
 
 /// Polynomial exp-based sigmoid kernels (degree-6 Taylor, ≤ 2.1e-7 error).
 pub mod high_fidelity;

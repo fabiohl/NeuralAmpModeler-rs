@@ -20,9 +20,12 @@
 //
 //  # Production Policy & VNNI Status (F-SIMD-12)
 //
-//  Production neural inference runs strictly in single-precision `f32` (AVX2 baseline
-//  and AVX-512 upward dispatch). VNNI / BF16 is NOT an active production acceleration path.
-//  In `dispatch_simd!`, `InstructionSet::Avx512VnniBf16` is deprecated and folds
+//  Production neural inference runs strictly in single-precision `f32` on the
+//  AVX2 (x86-64-v3) backend — the only production/default dispatch. AVX-512 is
+//  strictly opt-in research (`avx512` feature): the AVX2→AVX-512 cross-ISA cases
+//  below are research parity measurements, never a claim of production dispatch.
+//  VNNI / BF16 is NOT an active production acceleration path. In
+//  `dispatch_simd!`, `InstructionSet::Avx512VnniBf16` is deprecated and folds
 //  directly into `Avx512Math` (f32). The VNNI test cases below are `#[ignore]`d as
 //  legacy / evaluation-only tests; when executed under `TEST_ISA_OVERRIDE = 2`,
 //  they exercise the AVX-512 f32 math kernels without BF16 weight layout conversion.
@@ -48,62 +51,69 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::Ordering;
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::math::activations::ActivationPrecision;
-use neural_amp_modeler_rs::math::common::{InstructionSet, TEST_ISA_OVERRIDE, encode_isa_override};
+use neural_amp_modeler_rs::math::common::InstructionSet;
+#[cfg(feature = "avx512")]
+use neural_amp_modeler_rs::math::common::has_full_avx512;
 use neural_amp_modeler_rs::models::NamModel;
+use neural_amp_modeler_rs::testing::isa_guard::IsaGuard;
 
 use super::common;
 use common::*;
 
-/// Serialises access to the process-wide `TEST_ISA_OVERRIDE`.
+/// Serialises access to the process-wide ISA override (T2.3: all installs go
+/// through the validated `testing::isa_guard::IsaGuard`).
 static ISA_LOCK: Mutex<()> = Mutex::new(());
 
-/// Clears the ISA override.
-fn clear_override() {
-    TEST_ISA_OVERRIDE.store(u8::MAX, Ordering::SeqCst);
-}
-
-/// Sets the ISA override for the current test and returns a guard that
-/// clears it on drop. The `ISA_LOCK` must already be held.
-struct IsaGuard;
-
-impl IsaGuard {
-    fn set(isa: InstructionSet) -> Self {
-        TEST_ISA_OVERRIDE.store(encode_isa_override(isa), Ordering::SeqCst);
-        IsaGuard
-    }
-}
-
-impl Drop for IsaGuard {
-    fn drop(&mut self) {
-        clear_override();
-    }
-}
-
 /// Signals that the host CPU does not support a given ISA path.
+///
+/// T3.2: emits the typed `[STATUS] SKIP_CAPABILITY` marker (machine-parseable
+/// by `detect_gap_markers` in `src/testing/receipt.rs`) instead of free-form
+/// `SKIP ...` prints.
 macro_rules! skip_if_unsupported {
     ($isa:expr, $test_name:expr) => {
         #[expect(deprecated)]
         match $isa {
             InstructionSet::Avx2 => { /* always supported (x86-64-v3) */ }
             InstructionSet::Avx512 => {
-                if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
+                #[cfg(feature = "avx512")]
+                if !has_full_avx512() {
                     eprintln!(
-                        "SKIP {}: AVX-512 (F+VL) not supported on this CPU",
+                        "[STATUS] SKIP_CAPABILITY reason=\"avx512_cpu_unsupported:{}\"",
+                        $test_name
+                    );
+                    return;
+                }
+                #[cfg(not(feature = "avx512"))]
+                {
+                    eprintln!(
+                        "[STATUS] SKIP_CAPABILITY reason=\"avx512_not_compiled:{}\"",
                         $test_name
                     );
                     return;
                 }
             }
             InstructionSet::Avx512VnniBf16 => {
-                if !is_x86_feature_detected!("avx512bf16")
+                #[cfg(feature = "avx512")]
+                if !has_full_avx512()
+                    || !is_x86_feature_detected!("avx512bf16")
                     || !is_x86_feature_detected!("avx512vnni")
                 {
-                    eprintln!("SKIP {}: VNNI+BF16 not supported on this CPU", $test_name);
+                    eprintln!(
+                        "[STATUS] SKIP_CAPABILITY reason=\"vnni_bf16_cpu_unsupported:{}\"",
+                        $test_name
+                    );
+                    return;
+                }
+                #[cfg(not(feature = "avx512"))]
+                {
+                    eprintln!(
+                        "[STATUS] SKIP_CAPABILITY reason=\"vnni_bf16_not_compiled:{}\"",
+                        $test_name
+                    );
                     return;
                 }
             }
@@ -129,35 +139,35 @@ fn run_under_isa(
     let golden_path = fixtures_dir.join(&golden_filename);
 
     if !nam_path.exists() {
-        eprintln!("SKIP: Model file not found: {nam_path:?}");
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:{model_filename}\"");
         return None;
     }
     if !golden_path.exists() {
-        eprintln!(
-            "SKIP: Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
-        );
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_not_found:{golden_filename}\"");
         return None;
     }
 
     let (input, expected) = match read_golden_bin(&golden_path) {
         Some(pair) => pair,
         None => {
-            eprintln!("SKIP: Failed to read golden {golden_filename}");
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_unreadable:{golden_filename}\"");
             return None;
         }
     };
 
     let json_data = match std::fs::read_to_string(&nam_path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("SKIP: Failed to read model JSON {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_json_unreadable:{model_filename}\"");
             return None;
         }
     };
     let model_data = match parse_nam_json(&json_data) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("SKIP: Failed in JSON parser for {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!(
+                "[STATUS] SKIP_CAPABILITY reason=\"model_json_parse_failed:{model_filename}\""
+            );
             return None;
         }
     };
@@ -168,13 +178,21 @@ fn run_under_isa(
     // parity of the Padé/minimax kernels specifically (the `_hf` sibling
     // function below measures the Standard/exact-grade kernels instead).
     // Standard-mode tests may have left the global atomic dirty (Tarefa β1.3).
-    let _guard = IsaGuard::set(isa);
+    // T2.3: installs go through the validated crate guard (host capability
+    // checked) — a mismatch degrades to a typed skip, never a SIGILL.
+    let _guard = match IsaGuard::try_set(isa) {
+        Ok(g) => g,
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"isa_override_install_failed:{isa:?}\"");
+            return None;
+        }
+    };
     let _prec = PrecisionGuard::new(ActivationPrecision::Fast);
 
     let mut model = match build_model(&model_data) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("SKIP: Build failed for {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_build_failed:{model_filename}\"");
             return None;
         }
     };
@@ -203,46 +221,52 @@ fn run_under_isa_hf(
     let golden_path = fixtures_dir.join(&golden_filename);
 
     if !nam_path.exists() {
-        eprintln!("SKIP: Model file not found: {nam_path:?}");
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:{model_filename}\"");
         return None;
     }
     if !golden_path.exists() {
-        eprintln!(
-            "SKIP: Golden vector not found: {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh'."
-        );
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_not_found:{golden_filename}\"");
         return None;
     }
 
     let (input, expected) = match read_golden_bin(&golden_path) {
         Some(pair) => pair,
         None => {
-            eprintln!("SKIP: Failed to read golden {golden_filename}");
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"golden_unreadable:{golden_filename}\"");
             return None;
         }
     };
 
     let json_data = match std::fs::read_to_string(&nam_path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("SKIP: Failed to read model JSON {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_json_unreadable:{model_filename}\"");
             return None;
         }
     };
     let model_data = match parse_nam_json(&json_data) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("SKIP: Failed in JSON parser for {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!(
+                "[STATUS] SKIP_CAPABILITY reason=\"model_json_parse_failed:{model_filename}\""
+            );
             return None;
         }
     };
 
     let _precision = PrecisionGuard::new(ActivationPrecision::Standard);
-    let _guard = IsaGuard::set(isa);
+    let _guard = match IsaGuard::try_set(isa) {
+        Ok(g) => g,
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"isa_override_install_failed:{isa:?}\"");
+            return None;
+        }
+    };
 
     let mut model = match build_model(&model_data) {
         Ok(m) => m,
-        Err(e) => {
-            eprintln!("SKIP: Build failed for {nam_path:?}: {e}");
+        Err(_) => {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_build_failed:{model_filename}\"");
             return None;
         }
     };
