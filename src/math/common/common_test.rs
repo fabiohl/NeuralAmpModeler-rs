@@ -94,13 +94,15 @@ fn test_set_daz_ftz() {
 fn test_compute_energy_avx2() {
     // Tests energy calculation (average volume) using AVX2 acceleration.
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
+    // SAFETY: the kernel requires the AVX2/FMA target features, which are not
+    // carried by this plain test function's codegen (only by its own
+    // `#[target_feature]` attribute or via inlining).
     let energy = unsafe { compute_energy_avx2(&data) };
     // (1^2 + 2^2 + 3^2 + 4^2) / 4 = (1 + 4 + 9 + 16) / 4 = 30 / 4 = 7.5
     assert!((energy - 7.5).abs() < 1e-6);
 
     let data2 = vec![0.0; 16];
-    // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
+    // SAFETY: same target-feature requirement as above.
     let energy2 = unsafe { compute_energy_avx2(&data2) };
     assert_eq!(energy2, 0.0);
 }

@@ -69,8 +69,13 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 | Dependency                | Minimum Version                               | Package / Command     |
 |:------------------------- |:--------------------------------------------- |:--------------------- |
 | **CPU Architecture**      | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | `lscpu`               |
-| **Rust Toolchain**        | ≥ 1.94.0 (Edition 2024)                       | `rustc --version`     |
+| **Rust Toolchain**        | ≥ 1.98.0 (Edition 2024)                       | `rustc --version`     |
 | **Development Libraries** | `build-essential`, `pkg-config`, `cmake`      | See apt command below |
+
+> **MSRV policy:** `rust-version = "1.98.0"` in `Cargo.toml` is the **public MSRV promise**.
+> Development happens on `stable` (pinned by `rust-toolchain.toml`). The MSRV promise is
+> verified as an **isolated local check** — never mixed with the dev toolchain:
+> `cargo +1.98.0 check --locked` from the repository root.
 
 ### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
 

@@ -184,11 +184,11 @@ fn test_diagnostic_bundle_nominal() {
     let rendered = bundle.render();
 
     assert!(
-        rendered.contains("NAM-rs Diagnostic"),
+        rendered.contains("NeuralAmpModeler-rs Diagnostic"),
         "Must contain standard header"
     );
     assert!(
-        rendered.contains(&format!("nam-rs v{}", bundle.system.version)),
+        rendered.contains(&format!("NeuralAmpModeler-rs v{}", bundle.system.version)),
         "Must contain version"
     );
     assert!(!rendered.contains("E1"), "Must not contain error codes");

@@ -93,7 +93,7 @@ fn test_lstm_v2_gate_major_parity() {
 /// Validates NAMB v2 format parity with `Interleaved4WaveNet` layout.
 ///
 /// This layout organizes dilated convolution weights in blocks of 4 (tiling),
-/// which is optimized for NAM-rs AVX2 `fused_gemm_residual` kernels.
+/// which is optimized for NeuralAmpModeler-rs AVX2 `fused_gemm_residual` kernels.
 #[test]
 fn test_wavenet_v2_interleaved4_parity() {
     let path = model_path("BossWN-nano.nam");

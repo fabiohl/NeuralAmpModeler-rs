@@ -43,6 +43,17 @@ macro_rules! define_gc_item {
             )*
         }
 
+        impl std::fmt::Debug for GcItem {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(
+                        $(#[$attr])*
+                        GcItem::$variant(_) => f.debug_tuple(stringify!($variant)).finish(),
+                    )*
+                }
+            }
+        }
+
         impl GcItem {
             /// Returns the type ID for the overflow buffer.
             fn type_id(&self) -> u8 {

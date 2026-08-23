@@ -1042,7 +1042,7 @@ fn test_community_models_inference() {
 
 /// Legacy Format (Keras/H5) Rejection Test.
 ///
-/// The NAM-rs engine focuses on the modern JSON-based format (v0.5+) and NAMB (v1/v2).
+/// The NeuralAmpModeler-rs engine focuses on the modern JSON-based format (v0.5+) and NAMB (v1/v2).
 /// Old Keras/TensorFlow H5 models must be gracefully rejected by the dispatcher.
 ///
 /// Fixture: `tests/fixtures/models/keras_unsupported.json`

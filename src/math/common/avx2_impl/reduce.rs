@@ -21,15 +21,17 @@ macro_rules! impl_avx2_reduce {
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
-            // SAFETY: arguments satisfy the function's documented invariants.
-            unsafe { super::super::dsp::stereo::compute_energy_stereo_avx2(l, r) }
+            // The kernel is safe to call directly: the `x86-64-v3` baseline
+            // enables AVX2+FMA, satisfying the kernel's `#[target_feature]`.
+            super::super::dsp::stereo::compute_energy_stereo_avx2(l, r)
         }
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn compute_energy(data: &[f32]) -> f32 {
-            // SAFETY: arguments satisfy the function's documented invariants.
-            unsafe { super::super::dsp::stereo::compute_energy_avx2(data) }
+            // The kernel is safe to call directly: the `x86-64-v3` baseline
+            // enables AVX2+FMA, satisfying the kernel's `#[target_feature]`.
+            super::super::dsp::stereo::compute_energy_avx2(data)
         }
 
         #[inline(always)]
@@ -42,15 +44,17 @@ macro_rules! impl_avx2_reduce {
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn compute_peak_abs_stereo(left: &[f32], right: &[f32]) -> (f32, f32) {
-            // SAFETY: arguments satisfy the function's documented invariants.
-            unsafe { super::super::dsp::stereo::compute_peak_abs_stereo_avx2(left, right) }
+            // The kernel is safe to call directly: the `x86-64-v3` baseline
+            // enables AVX2, satisfying the kernel's `#[target_feature]`.
+            super::super::dsp::stereo::compute_peak_abs_stereo_avx2(left, right)
         }
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-            // SAFETY: arguments satisfy the function's documented invariants.
-            unsafe { super::super::dsp::stereo::compute_peak_abs_mono_avx2(data) }
+            // The kernel is safe to call directly: the `x86-64-v3` baseline
+            // enables AVX2, satisfying the kernel's `#[target_feature]`.
+            super::super::dsp::stereo::compute_peak_abs_mono_avx2(data)
         }
     };
 }

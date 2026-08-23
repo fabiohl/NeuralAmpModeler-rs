@@ -24,10 +24,10 @@ pub fn set_host_library_version(version: String) {
 /// Snapshot of the execution environment, captured once at startup.
 ///
 /// Includes static system information useful for triage:
-/// NAM-rs version, architecture, OS, CPU features, kernel version.
+/// NeuralAmpModeler-rs version, architecture, OS, CPU features, kernel version.
 #[derive(Debug, Clone)]
 pub struct SystemSnapshot {
-    /// NAM-rs version (e.g. "1.0.0").
+    /// NeuralAmpModeler-rs version (e.g. "1.0.0").
     pub version: &'static str,
     /// CPU architecture (e.g. "x86_64").
     pub arch: &'static str,

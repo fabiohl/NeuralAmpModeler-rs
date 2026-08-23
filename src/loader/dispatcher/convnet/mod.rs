@@ -20,7 +20,7 @@ use crate::loader::dispatcher::wavenet::layout;
 /// Builds a `Box<StaticModel::ConvNet>` from the parsed model data.
 ///
 /// Supports two formats:
-/// - **Layers** (nam-rs native): per-block config via `layers` array,
+/// - **Layers** (NeuralAmpModeler-rs native): per-block config via `layers` array,
 ///   pre-fused BatchNorm scale/offset, optional PostStackHead + head_scale.
 /// - **FlatCpp**: C++ NAMCore flat config (`channels` scalar, `dilations` array,
 ///   `batchnorm` bool), raw BatchNorm params, separate linear head.
@@ -227,7 +227,7 @@ fn transpose_cpp_head_to_row_major(src: &[f32], dst: &mut [f32], _in_ch: usize, 
     dst[..src.len()].copy_from_slice(src);
 }
 
-/// Builds ConvNet from the nam-rs `layers` format (existing behavior).
+/// Builds ConvNet from the NeuralAmpModeler-rs `layers` format (existing behavior).
 fn build_convnet_layers(
     data: &NamModelData,
     topo: &crate::loader::nam_json::ConvNetTopology,

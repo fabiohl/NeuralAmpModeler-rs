@@ -101,16 +101,16 @@ impl DiagnosticBundle {
         let separator = "────────────────────────────────────────────────";
         let mut block = if let Some(ref err) = self.error {
             format!(
-                "──── NAM-rs Diagnostic {separator}\n\
-                 nam-rs v{} | {} | {}\n",
+                "──── NeuralAmpModeler-rs Diagnostic {separator}\n\
+                 NeuralAmpModeler-rs v{} | {} | {}\n",
                 self.system.version,
                 err.code.code(),
                 err.code.mnemonic(),
             )
         } else {
             format!(
-                "──── NAM-rs Diagnostic {separator}\n\
-                 nam-rs v{}\n",
+                "──── NeuralAmpModeler-rs Diagnostic {separator}\n\
+                 NeuralAmpModeler-rs v{}\n",
                 self.system.version,
             )
         };

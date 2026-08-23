@@ -25,6 +25,7 @@
 
 use crate::common::diagnostics::NamErrorCode;
 use crate::common::spsc::{RT_STATUS_CABSIM_CONTRACT_VIOLATION, RtStatusFlags};
+use crate::common::unlikely;
 use crate::math::common::AlignedVec;
 use crate::math::common::Avx2Math;
 use crate::math::common::traits::SimdMath;
@@ -253,7 +254,7 @@ impl ConvEngine {
         rt_status: Option<&RtStatusFlags>,
     ) {
         let n = input.len().min(output.len()).min(self.partition_size);
-        if n < self.partition_size {
+        if unlikely(n < self.partition_size) {
             output.fill(0.0);
             if let Some(rt) = rt_status {
                 rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);

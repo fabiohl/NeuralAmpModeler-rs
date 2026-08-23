@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Numerical Stability Suite (Soak Test) for NAM-rs.
+//  Numerical Stability Suite (Soak Test) for NeuralAmpModeler-rs.
 //
 //  These tests are designed to run for millions of iterations, checking
 //  numerical drift, filter stability, absence of NaNs/Infs, and circular

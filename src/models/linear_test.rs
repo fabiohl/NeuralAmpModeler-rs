@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use std::assert_matches;
 
 // ── select_partition_size ──
 
@@ -30,31 +31,31 @@ fn test_select_partition_size_non_power_of_two_n() {
 #[test]
 fn test_direct_explicit_always_direct() {
     let model = LinearModel::new(vec![1.0; 1024], 0.0, LinearImplementation::Direct).unwrap();
-    assert!(matches!(model.mode, LinearMode::Direct));
+    assert_matches!(model.mode, LinearMode::Direct);
 }
 
 #[test]
 fn test_auto_direct_below_threshold() {
     let model = LinearModel::new(vec![1.0; 128], 0.0, LinearImplementation::Auto).unwrap();
-    assert!(matches!(model.mode, LinearMode::Direct));
+    assert_matches!(model.mode, LinearMode::Direct);
 }
 
 #[test]
 fn test_auto_fft_above_threshold() {
     let model = LinearModel::new(vec![1.0; 512], 0.0, LinearImplementation::Auto).unwrap();
-    assert!(matches!(model.mode, LinearMode::Fft(_)));
+    assert_matches!(model.mode, LinearMode::Fft(_));
 }
 
 #[test]
 fn test_fft_explicit_above_threshold() {
     let model = LinearModel::new(vec![1.0; 512], 0.0, LinearImplementation::Fft).unwrap();
-    assert!(matches!(model.mode, LinearMode::Fft(_)));
+    assert_matches!(model.mode, LinearMode::Fft(_));
 }
 
 #[test]
 fn test_fft_explicit_below_threshold_fallback() {
     let model = LinearModel::new(vec![1.0; 128], 0.0, LinearImplementation::Fft).unwrap();
-    assert!(matches!(model.mode, LinearMode::Direct));
+    assert_matches!(model.mode, LinearMode::Direct);
 }
 
 // ── FFT process_sample correctness ──

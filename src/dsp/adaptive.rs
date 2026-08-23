@@ -39,6 +39,7 @@
 
 use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::spsc::RtStatusFlags;
+use crate::common::unlikely;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
@@ -308,7 +309,7 @@ impl AdaptiveCompute {
                     // Overload detected — increment counter toward degradation
                     self.overload_counter = self.overload_counter.saturating_add(1);
                     self.recovery_counter = 0;
-                    if self.overload_counter >= DEGRADE_CONSECUTIVE {
+                    if unlikely(self.overload_counter >= DEGRADE_CONSECUTIVE) {
                         self.transition_to(AdaptiveState::Reduced, sample_rate, rt_status);
                     }
                 } else {
@@ -320,7 +321,7 @@ impl AdaptiveCompute {
                     // Further degradation — escalate to Minimal
                     self.overload_counter = self.overload_counter.saturating_add(1);
                     self.recovery_counter = 0;
-                    if self.overload_counter >= DEGRADE_CONSECUTIVE {
+                    if unlikely(self.overload_counter >= DEGRADE_CONSECUTIVE) {
                         self.transition_to(AdaptiveState::Minimal, sample_rate, rt_status);
                     }
                 } else if ratio < recovery_reduced {

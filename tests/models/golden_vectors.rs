@@ -3,7 +3,7 @@
 
 //  Golden Vector Cross-Reference Tests.
 //
-//  Compares NAM-rs Rust engine output against C++ reference golden vectors
+//  Compares NeuralAmpModeler-rs Rust engine output against C++ reference golden vectors
 //  (NeuralAmpModelerCore — Steven Atkinson) recorded in `tests/fixtures/*.bin`.
 //
 //  ## `.golden.bin` Format
@@ -172,7 +172,7 @@ fn run_v2_golden_test(
 // Golden Vector Tests (Cross-Reference C++ ↔ Rust)
 // =============================================================================
 
-/// Test 7: Golden Vectors WaveNet — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 7: Golden Vectors WaveNet — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_wavenet_standard.bin`, builds the `StaticModel`
 /// from `BossWN-standard.nam`, runs prewarm + processing,
@@ -234,7 +234,7 @@ fn test_golden_vectors_wavenet() {
     );
 }
 
-/// Test 8: Golden Vectors LSTM 1×16 — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8: Golden Vectors LSTM 1×16 — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_lstm_1x16.bin`, builds the `StaticModel`
 /// from `BossLSTM-1x16.nam`, runs prewarm + processing,
@@ -294,7 +294,7 @@ fn test_golden_vectors_lstm_1x16() {
     );
 }
 
-/// Test 8b: Golden Vectors LSTM 2×8 — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8b: Golden Vectors LSTM 2×8 — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_lstm_2x8.bin`, builds the `StaticModel`
 /// from `BossLSTM-2x8.nam`. Exercises 2-layer LSTM.
@@ -346,7 +346,7 @@ fn test_golden_vectors_lstm_2x8() {
     );
 }
 
-/// Test 8d-L: Golden Vectors WaveNet A1 Standard (Official) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8d-L: Golden Vectors WaveNet A1 Standard (Official) — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 #[test]
 fn test_golden_vectors_wavenet_a1_standard() {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -392,7 +392,7 @@ fn test_golden_vectors_wavenet_a1_standard() {
     );
 }
 
-/// Test 8f-L: Golden Vectors LSTM Official — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8f-L: Golden Vectors LSTM Official — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 #[test]
 fn test_golden_vectors_lstm_official() {
     let golden_path =
@@ -434,7 +434,7 @@ fn test_golden_vectors_lstm_official() {
     );
 }
 
-/// Test 8c: Golden Vectors WaveNet Feather — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8c: Golden Vectors WaveNet Feather — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// ## Thresholds
 /// - Thresholds auto-computed by `topology_thresholds()` (CH=8 → 100 dB).
@@ -485,7 +485,7 @@ fn test_golden_vectors_wavenet_feather() {
     );
 }
 
-/// Test 8d: Golden Vectors WaveNet Nano — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8d: Golden Vectors WaveNet Nano — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// ## Thresholds
 /// - Thresholds auto-computed by `topology_thresholds()` (CH=4 → 95 dB).
@@ -536,7 +536,7 @@ fn test_golden_vectors_wavenet_nano() {
     );
 }
 
-/// Test 8e: Golden Vectors WaveNet Lite — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8e: Golden Vectors WaveNet Lite — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_wavenet_lite.bin`, builds the `StaticModel`
 /// from `EVH-5150-Lite.nam` (real community model, CH=12, K=3, HEAD=6, 20 layers),
@@ -598,7 +598,7 @@ fn test_golden_vectors_wavenet_lite() {
     );
 }
 
-/// Test 8g: Golden Vectors WaveNet A2-Full (CH=8) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8g: Golden Vectors WaveNet A2-Full (CH=8) — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_wavenet_a2_full.bin`, builds the `StaticModel`
 /// from `wavenet_a2_full.nam`, runs prewarm + processing,
@@ -651,7 +651,7 @@ fn test_golden_vectors_wavenet_a2_full() {
     );
 }
 
-/// Test 8h: Golden Vectors WaveNet A2-Lite (CH=3) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Test 8h: Golden Vectors WaveNet A2-Lite (CH=3) — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_wavenet_a2_lite.bin`, builds the `StaticModel`
 /// from `wavenet_a2_lite.nam`, runs prewarm + processing,
@@ -1843,7 +1843,7 @@ fn test_slimmable_wavenet_inference_and_breakpoints() {
     }
 }
 
-/// Test 8l: Golden Vectors WaveNet Condition DSP cross-reference C++ ↔ NAM-rs.
+/// Test 8l: Golden Vectors WaveNet Condition DSP cross-reference C++ ↔ NeuralAmpModeler-rs.
 ///
 /// Replaces the gap test (`test_loader_gap_wavenet_condition_dsp`).
 /// The condition_dsp sub-model is fully functional and the dynamic engine
@@ -1935,7 +1935,7 @@ fn test_policy_reject_condition_lstm() {
     );
 }
 
-/// Test 8m: Golden Vectors WaveNet Official (dynamic path) — cross-reference C++ ↔ NAM-rs.
+/// Test 8m: Golden Vectors WaveNet Official (dynamic path) — cross-reference C++ ↔ NeuralAmpModeler-rs.
 ///
 /// This replaces the gap test (`test_loader_gap_slimmable_wavenet`).
 /// Free-geometry WaveNet A1 models now load via the
@@ -3948,7 +3948,7 @@ fn test_golden_vectors_wavenet_a2_film_input_mixin_pre() {
     );
 }
 
-/// Golden Vectors LSTM 1×10 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors LSTM 1×10 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_lstm_1x10.bin`, builds the `StaticModel`
 /// from `lstm_1x10.nam`. Exercises single-layer LSTM with hidden_size=10.
@@ -3996,7 +3996,7 @@ fn test_golden_vectors_lstm_1x10() {
     );
 }
 
-/// Golden Vectors LSTM 2×24 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors LSTM 2×24 (uncatalogued) — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_lstm_2x24.bin`, builds the `StaticModel`
 /// from `lstm_2x24.nam`. Exercises 2-layer LSTM with hidden_size=24.
@@ -4044,7 +4044,7 @@ fn test_golden_vectors_lstm_2x24() {
     );
 }
 
-/// Golden Vectors LSTM 3×8 — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors LSTM 3×8 — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_lstm_3x8.bin`, builds the `StaticModel`
 /// from `lstm_3x8.nam`. Exercises 3-layer LSTM with hidden_size=8.
@@ -4091,7 +4091,7 @@ fn test_golden_vectors_lstm_3x8() {
     );
 }
 
-/// Golden Vectors ConvNet No BatchNorm — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors ConvNet No BatchNorm — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_convnet_nobn.bin`, builds the `StaticModel`
 /// from `convnet_nobn.nam`. Exercises ConvNet without batch normalization.
@@ -4139,7 +4139,7 @@ fn test_golden_vectors_convnet_nobn() {
     );
 }
 
-/// Golden Vectors ConvNet ReLU — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors ConvNet ReLU — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_convnet_relu.bin`, builds the `StaticModel`
 /// from `convnet_relu.nam`. Exercises ConvNet with ReLU activation.
@@ -4187,7 +4187,7 @@ fn test_golden_vectors_convnet_relu() {
     );
 }
 
-/// Golden Vectors ConvNet SiLU — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors ConvNet SiLU — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_convnet_silu.bin`, builds the `StaticModel`
 /// from `convnet_silu.nam`. Exercises ConvNet with SiLU activation.
@@ -4235,7 +4235,7 @@ fn test_golden_vectors_convnet_silu() {
     );
 }
 
-/// Golden Vectors Linear No Bias — cross-reference NeuralAmpModelerCore ↔ NAM-rs.
+/// Golden Vectors Linear No Bias — cross-reference NeuralAmpModelerCore ↔ NeuralAmpModeler-rs.
 ///
 /// Reads `tests/fixtures/golden_linear_nobias.bin`, builds the `StaticModel`
 /// from `linear_nobias.nam`. Exercises Linear without bias vector.

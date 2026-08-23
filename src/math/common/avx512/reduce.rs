@@ -21,14 +21,18 @@ macro_rules! impl_avx512_reduce {
         // SAFETY: l and r are valid f32 slices of equal length;
         // CPU supports AVX-512F (verified by dispatch).
         unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
-            // SAFETY: l and r satisfy function invariants.
+            // SAFETY: the kernel is safe, but calling it requires AVX-512F,
+            // which this dispatch impl does not enable in its own codegen: the
+            // caller must guarantee the CPU supports it (verified by dispatch).
             unsafe { crate::math::dsp::stereo::compute_energy_stereo_avx512(l, r) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid f32 slice; CPU supports AVX-512F (verified by dispatch).
         unsafe fn compute_energy(data: &[f32]) -> f32 {
-            // SAFETY: data satisfies function invariants.
+            // SAFETY: the kernel is safe, but calling it requires AVX-512F,
+            // which this dispatch impl does not enable in its own codegen: the
+            // caller must guarantee the CPU supports it (verified by dispatch).
             unsafe { crate::math::dsp::stereo::compute_energy_avx512(data) }
         }
 
@@ -44,14 +48,18 @@ macro_rules! impl_avx512_reduce {
         // SAFETY: left and right are valid f32 slices of equal length;
         // CPU supports AVX-512F (verified by dispatch).
         unsafe fn compute_peak_abs_stereo(left: &[f32], right: &[f32]) -> (f32, f32) {
-            // SAFETY: left and right satisfy function invariants.
+            // SAFETY: the kernel is safe, but calling it requires AVX-512F,
+            // which this dispatch impl does not enable in its own codegen: the
+            // caller must guarantee the CPU supports it (verified by dispatch).
             unsafe { crate::math::dsp::stereo::compute_peak_abs_stereo_avx512(left, right) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid f32 slice; CPU supports AVX-512F (verified by dispatch).
         unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-            // SAFETY: data satisfies function invariants.
+            // SAFETY: the kernel is safe, but calling it requires AVX-512F,
+            // which this dispatch impl does not enable in its own codegen: the
+            // caller must guarantee the CPU supports it (verified by dispatch).
             unsafe { crate::math::dsp::stereo::compute_peak_abs_mono_avx512(data) }
         }
     };

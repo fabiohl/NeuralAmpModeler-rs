@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Structured diagnostics system for NAM-rs.
+//! Structured diagnostics system for NeuralAmpModeler-rs.
 //!
 //! Provides error messages in two layers:
 //! 1. **User-friendly message** — readable text for the end user.

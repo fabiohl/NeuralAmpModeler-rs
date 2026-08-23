@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Long-running (soak) inference benchmarks for the NAM-rs engine.
+//! Long-running (soak) inference benchmarks for the NeuralAmpModeler-rs engine.
 //!
 //! These benchmarks use extended measurement times (35 s) with large buffer
 //! sizes to validate CPU thermal stability and detect performance jitter /

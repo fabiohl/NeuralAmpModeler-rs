@@ -2,7 +2,7 @@
 // Copyright (c) 2022–2025 t3k-mushra contributors
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //
-// License exception: This file is the sole MIT-licensed source in NAM-rs. All
+// License exception: This file is the sole MIT-licensed source in NeuralAmpModeler-rs. All
 // other source files use Apache-2.0. The MIT license is inherited from the
 // upstream project t3k-mushra <https://github.com/tone-3000/t3k-mushra> and
 // cannot be re-licensed.

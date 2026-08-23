@@ -12,7 +12,7 @@ use super::super::validation::{
 /// ConvNet configuration format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConvNetFormat {
-    /// Per-block config via `layers` array (nam-rs native format).
+    /// Per-block config via `layers` array (NeuralAmpModeler-rs native format).
     Layers,
     /// Flat C++ config: scalar `channels`, global `dilations`, `batchnorm` bool.
     FlatCpp,

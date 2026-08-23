@@ -3,6 +3,19 @@
 
 //! Host-agnostic infrastructure shared by engine integrations.
 
+/// Branch-hint helper for statistically rare (fail-closed) paths.
+///
+/// Hints the CPU front-end (via `core::hint::cold_path`) that the branch
+/// taken when `b` is `true` is cold, keeping the common path linear in the
+/// I-cache. Semantically identical to `b`; it never changes control flow.
+#[inline(always)]
+pub(crate) const fn unlikely(b: bool) -> bool {
+    if b {
+        core::hint::cold_path();
+    }
+    b
+}
+
 /// Crossfade duration in milliseconds for level transitions
 /// (adaptive degradation FSM and slimmable container submodel swaps).
 ///

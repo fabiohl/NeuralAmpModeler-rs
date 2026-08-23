@@ -15,7 +15,7 @@
 //! audio thread — potentially triggering `WaveNet`'s heap deallocation
 //! (hundreds of KB to MB) inside the real-time callback.
 //!
-//! NAM-rs **intentionally diverges** from this design to guarantee strict
+//! NeuralAmpModeler-rs **intentionally diverges** from this design to guarantee strict
 //! zero-heap-deallocation on the DSP hot-path. The old model is never dropped
 //! on the audio thread. Instead, it is packed into a `GcItem::Model(…)` and
 //! routed through the **SPSC GC pipeline**:

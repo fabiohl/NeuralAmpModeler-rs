@@ -63,7 +63,7 @@ pub use tanh::*;
 /// Prior to this rename, `Standard` denoted the Padé/minimax approximation
 /// (now `Fast`) and `HighFidelity` denoted the exact-grade polynomial path
 /// (now `Standard`). `Standard` is the universal production default for
-/// every model in nam-rs — `Fast` is an explicit, opt-in trade-off of
+/// every model in NeuralAmpModeler-rs — `Fast` is an explicit, opt-in trade-off of
 /// fidelity for CPU headroom. Numeric discriminants are unchanged from the
 /// previous naming, so existing host automation/state (raw `0`/`1`
 /// values) keeps selecting the same underlying kernel.

@@ -252,7 +252,7 @@ fn test_panic_hook_behavior() {
     let report_path = found_report.expect("Crash report file should be created");
     let content = fs::read_to_string(&report_path).expect("Should read report content");
 
-    assert!(content.contains("NAM-rs CRASH REPORT"));
+    assert!(content.contains("NeuralAmpModeler-rs CRASH REPORT"));
     assert!(content.contains(&format!("Component: {}", component_name)));
     assert!(content.contains("Location:"));
     assert!(content.contains("Message: Controlled testing panic message"));
@@ -437,8 +437,8 @@ fn test_diagnostic_bundle_capture_nominal() {
     let rendered = bundle.render();
 
     // Test 1: Verify it is a valid diagnostic block
-    assert!(rendered.contains("NAM-rs Diagnostic"));
-    assert!(rendered.contains("nam-rs v"));
+    assert!(rendered.contains("NeuralAmpModeler-rs Diagnostic"));
+    assert!(rendered.contains("NeuralAmpModeler-rs v"));
     assert!(rendered.contains("arch="));
     assert!(rendered.contains("os="));
     assert!(rendered.contains("kernel="));

@@ -5,6 +5,7 @@
 mod tests {
     use crate::loader::namb::*;
     use anyhow::Result;
+    use std::assert_matches;
 
     /// Builds a .namb v1 file (binary format) in memory for testing purposes.
     /// It's like "fabricating" a fake file to see if the program can read it.
@@ -900,7 +901,7 @@ mod tests {
             // v2 parser must fail with CrcMismatch
             let err = parse_namb(&corrupted).unwrap_err();
             let namb_err = err.downcast_ref::<NambError>().unwrap();
-            assert!(matches!(namb_err, NambError::CrcMismatch { .. }));
+            assert_matches!(namb_err, NambError::CrcMismatch { .. });
         }
 
         Ok(())

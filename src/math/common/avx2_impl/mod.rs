@@ -21,7 +21,7 @@ use core::arch::x86_64::*;
 /// Concrete implementation of the SimdMath trait for processors with AVX2 and FMA support.
 ///
 /// This is where we "connect the wires": we connect the abstract mathematical operations of the system
-/// to the ultra-fast functions documented above. This struct ensures that NAM-rs
+/// to the ultra-fast functions documented above. This struct ensures that NeuralAmpModeler-rs
 /// takes full advantage of modern hardware to process audio in real time.
 pub struct Avx2Math;
 

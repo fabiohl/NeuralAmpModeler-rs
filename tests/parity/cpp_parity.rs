@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Live cross-validation tests NAM-rs ↔ NeuralAmpModelerCore (Layer 2).
+//  Live cross-validation tests NeuralAmpModeler-rs ↔ NeuralAmpModelerCore (Layer 2).
 //
 //  ## When it runs
 //  - `utils/tests-long.sh` (full slow suite)
@@ -438,7 +438,7 @@ fn run_render_comparison(
             *esr *= 1.5;
         }
         // MR-STFT is particularly sensitive to resampling phase/timing mismatches
-        // between the C++ render's SRC and nam-rs's polyphase resampler
+        // between the C++ render's SRC and NeuralAmpModeler-rs's polyphase resampler
         if let Some(ref mut mr) = mrstft_max {
             *mr *= 3.0;
         }

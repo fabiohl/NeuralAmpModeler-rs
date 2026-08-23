@@ -76,7 +76,7 @@ pub enum JsonError {
         /// Human-readable explanation.
         reason: String,
     },
-    /// LSTM model has multi-channel I/O, which NAM-rs does not support
+    /// LSTM model has multi-channel I/O, which NeuralAmpModeler-rs does not support
     /// (C++ NAMcore supports arbitrary channels but no known .nam model uses them).
     UnsupportedMultiChannel {
         /// The architecture for context.
@@ -259,7 +259,7 @@ impl std::fmt::Display for JsonError {
             } => {
                 write!(
                     f,
-                    "{architecture} {field}={value} is not supported — NAM-rs only supports mono models. \
+                    "{architecture} {field}={value} is not supported — NeuralAmpModeler-rs only supports mono models. \
                      C++ NAMcore accepts multi-channel LSTM but no known production .nam model uses this feature."
                 )
             }

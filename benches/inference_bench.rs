@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! End-to-end neural network inference latency benchmarks for the NAM-rs engine.
+//! End-to-end neural network inference latency benchmarks for the NeuralAmpModeler-rs engine.
 //!
 //! Measures the processing time of 1 DSP block (64 samples at 48 kHz = 1.33 ms
 //! deadline) for WaveNet, LSTM, A2, ConvNet, and Linear neural networks.

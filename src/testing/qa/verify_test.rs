@@ -7,6 +7,7 @@
 //! fidelity + 19 performance entries) with a report generated from it, so
 //! the four acceptance scenarios exercise the full contract surface.
 
+use std::assert_matches;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -141,16 +142,11 @@ fn acceptance_fixture_2_esr_above_safety_fidelity_fail() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
     assert_eq!(outcome.exit_code(), 1);
-    assert!(
-        matches!(
-            metric_check(&outcome, TARGET, Metric::EsrNamcore),
-            MetricOutcome::SafetyCeiling { .. }
-        ),
+    assert_matches!(
+        metric_check(&outcome, TARGET, Metric::EsrNamcore),
+        MetricOutcome::SafetyCeiling { .. },
         "1e-3 is above the rounded safety ceiling"
     );
     // NAMCore violated while f64 stayed ok → oracle divergence review.
@@ -199,7 +195,7 @@ fn acceptance_fixture_4_f64_violates_namcore_ok_review_required() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(outcome.fidelity, FidelityVerdict::Fail { .. }));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { .. });
     assert_eq!(
         outcome.review_required, 1,
         "NAMCore ok + f64 violated → review"
@@ -209,11 +205,9 @@ fn acceptance_fixture_4_f64_violates_namcore_ok_review_required() {
         metric_check(&outcome, TARGET, Metric::EsrNamcore),
         &MetricOutcome::Ok
     );
-    assert!(
-        matches!(
-            metric_check(&outcome, TARGET, Metric::EsrF64),
-            MetricOutcome::SafetyCeiling { .. }
-        ),
+    assert_matches!(
+        metric_check(&outcome, TARGET, Metric::EsrF64),
+        MetricOutcome::SafetyCeiling { .. },
         "f64 ESR above its rounded safety ceiling"
     );
 }
@@ -229,10 +223,7 @@ fn mandatory_phase_fail_and_not_run_count_without_double_counting() {
     let report = build_report(&contract, &phases, canonical_fidelity, canonical_latency);
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 2 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 2 });
     assert!(
         outcome.performance.is_not_verified(),
         "absent regression_gate is NOT_RUN → performance not certified"
@@ -253,8 +244,9 @@ fn non_mandatory_phase_fail_still_counts_as_fidelity_violation() {
     let report = build_report(&contract, &phases, canonical_fidelity, canonical_latency);
     let outcome = verify(&contract, &report);
 
-    assert!(
-        matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 }),
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
         "any non-regression phase FAIL belongs to the fidelity domain (bash scan)"
     );
 }
@@ -302,10 +294,7 @@ fn missing_label_is_fail_closed_and_optional_is_skipped() {
         canonical_latency,
     );
     let outcome = verify(&contract, &report);
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
     let check = outcome
         .fidelity_checks
         .iter()
@@ -358,14 +347,11 @@ fn non_finite_esr_is_malformed_and_fail_closed() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
-    assert!(matches!(
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
+    assert_matches!(
         metric_check(&outcome, TARGET, Metric::EsrNamcore),
         MetricOutcome::Malformed(MalformedReason::NonFinite(raw)) if raw == "inf"
-    ));
+    );
     // NAMCore malformed + f64 ok → divergence review.
     assert_eq!(outcome.review_required, 1);
 }
@@ -391,10 +377,7 @@ fn missing_metrics_are_malformed() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 2 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 2 });
     assert_eq!(
         metric_check(&outcome, TARGET, Metric::EsrNamcore),
         &MetricOutcome::Malformed(MalformedReason::Missing)
@@ -452,12 +435,13 @@ fn non_finite_snr_literal_is_malformed() {
             canonical_latency,
         );
         let outcome = verify(&contract, &report);
-        assert!(matches!(
+        assert_matches!(
             metric_check(&outcome, TARGET, Metric::SnrDb),
             MetricOutcome::Malformed(MalformedReason::NonFinite(raw)) if raw == sentinel
-        ));
-        assert!(
-            matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 }),
+        );
+        assert_matches!(
+            outcome.fidelity,
+            FidelityVerdict::Fail { violations: 1 },
             "{sentinel}"
         );
     }
@@ -480,10 +464,7 @@ fn f64_baseline_present_but_not_measured_is_missing() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
     assert_eq!(
         metric_check(&outcome, TARGET, Metric::EsrF64),
         &MetricOutcome::Missing
@@ -512,10 +493,7 @@ fn snr_regression_violates_the_exact_floor() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
     let MetricOutcome::Envelope {
         limit, baseline, ..
     } = metric_check(&outcome, TARGET, Metric::SnrDb)
@@ -547,14 +525,11 @@ fn mrstft_regression_violates_the_exact_ceiling() {
     );
     let outcome = verify(&contract, &report);
 
-    assert!(matches!(
-        outcome.fidelity,
-        FidelityVerdict::Fail { violations: 1 }
-    ));
-    assert!(matches!(
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
+    assert_matches!(
         metric_check(&outcome, TARGET, Metric::Mrstft),
         MetricOutcome::Envelope { .. }
-    ));
+    );
 }
 
 #[test]
@@ -607,10 +582,10 @@ fn latency_regression_and_missing_label_are_performance_violations() {
     });
     let outcome = verify(&contract, &report);
     assert!(outcome.fidelity.is_ok());
-    assert!(matches!(
+    assert_matches!(
         outcome.performance,
         PerformanceVerdict::Fail { violations: 1 }
-    ));
+    );
     assert_eq!(outcome.exit_code(), 1);
     let check = outcome
         .perf_checks
@@ -641,10 +616,10 @@ fn latency_regression_and_missing_label_are_performance_violations() {
         }
     });
     let outcome = verify(&contract, &report);
-    assert!(matches!(
+    assert_matches!(
         outcome.performance,
         PerformanceVerdict::Fail { violations: 1 }
-    ));
+    );
     let check = outcome
         .perf_checks
         .iter()
@@ -758,20 +733,20 @@ fn report_parser_routes_kinds_and_skips_unknown() {
 
 #[test]
 fn report_parser_fails_closed_on_bad_records() {
-    assert!(matches!(
+    assert_matches!(
         parse_verify_report("not json\n"),
         Err(VerifyError::MalformedLine { line: 1, .. })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         parse_verify_report(r#"{"phase_id":1,"status":"PASS"}"#),
         Err(VerifyError::InvalidPhaseRecord { line: 1 })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         parse_verify_report(r#"{"kind":"latency","label":"X","median_latency_us":"slow"}"#),
         Err(VerifyError::InvalidLatencyRecord { line: 1 })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         parse_verify_report(r#"{"kind":"latency","label":"X","median_latency_us":null}"#),
         Err(VerifyError::InvalidLatencyRecord { line: 1 })
-    ));
+    );
 }

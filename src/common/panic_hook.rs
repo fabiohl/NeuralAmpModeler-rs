@@ -18,6 +18,7 @@ use crate::common::diagnostics::SystemSnapshot;
 use crate::common::diagnostics::snapshot::{
     ACTIVE_MODEL_INFO, ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE,
 };
+use core::fmt::NumBuffer;
 use core::fmt::Write as FmtWrite;
 use std::cell::Cell;
 use std::fs::OpenOptions;
@@ -123,7 +124,7 @@ fn format_panic_report_to_buf(
     let _ = write!(
         w,
         "================================================================\n\
-         NAM-rs CRASH REPORT\n\
+         NeuralAmpModeler-rs CRASH REPORT\n\
          ================================================================\n\
          Version: {}\n\
          Component: {}\n\
@@ -153,9 +154,24 @@ fn format_panic_report_to_buf(
             if let Some(ref info) = *guard {
                 let _ = writeln!(w, "model.arch={}", info.arch_label);
                 let _ = writeln!(w, "model.topology={}", info.topology);
-                let _ = writeln!(w, "model.channels={}", info.channels);
-                let _ = writeln!(w, "model.receptive_field={}", info.receptive_field);
-                let _ = writeln!(w, "model.sample_rate={}", info.model_sample_rate);
+                let mut channels_buf = NumBuffer::new();
+                let _ = writeln!(
+                    w,
+                    "model.channels={}",
+                    info.channels.format_into(&mut channels_buf)
+                );
+                let mut rf_buf = NumBuffer::new();
+                let _ = writeln!(
+                    w,
+                    "model.receptive_field={}",
+                    info.receptive_field.format_into(&mut rf_buf)
+                );
+                let mut sr_buf = NumBuffer::new();
+                let _ = writeln!(
+                    w,
+                    "model.sample_rate={}",
+                    info.model_sample_rate.format_into(&mut sr_buf)
+                );
                 let _ = writeln!(w, "model.weights_layout={}", info.weights_layout);
                 let _ = writeln!(w, "model.path_basename={}", info.path_basename);
             }
@@ -167,7 +183,8 @@ fn format_panic_report_to_buf(
 
     let rate = ACTIVE_SAMPLE_RATE.load(Ordering::Relaxed);
     if rate != 0 {
-        let _ = writeln!(w, "audio.sr={}", rate);
+        let mut rate_buf = NumBuffer::new();
+        let _ = writeln!(w, "audio.sr={}", rate.format_into(&mut rate_buf));
     }
 
     // Recent Log Trace (up to 30 lines, zero-alloc via try_lock)
@@ -206,7 +223,8 @@ fn format_panic_report_to_buf(
         }
     }
     let _ = writeln!(w);
-    let _ = writeln!(w, "timestamp_unix={}", unix_ts);
+    let mut ts_buf = NumBuffer::new();
+    let _ = writeln!(w, "timestamp_unix={}", unix_ts.format_into(&mut ts_buf));
 
     let _ = write!(
         w,
@@ -254,20 +272,21 @@ pub fn install_panic_hook(component: &'static str) {
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("unknown");
 
-        let payload = info.payload();
-        let payload_str = if let Some(s) = payload.downcast_ref::<&str>() {
-            *s
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.as_str()
-        } else {
-            "Box<dyn Any>"
-        };
+        let payload_str = info.payload_as_str().unwrap_or("Box<dyn Any>");
 
         let mut location_buf = [0u8; 256];
         let location_str = {
             let mut lw = LimitWriter::new(&mut location_buf);
             if let Some(loc) = info.location() {
-                let _ = write!(lw, "{}:{}:{}", loc.file(), loc.line(), loc.column());
+                let mut line_buf = NumBuffer::new();
+                let mut col_buf = NumBuffer::new();
+                let _ = write!(
+                    lw,
+                    "{}:{}:{}",
+                    loc.file(),
+                    loc.line().format_into(&mut line_buf),
+                    loc.column().format_into(&mut col_buf)
+                );
             } else {
                 let _ = write!(lw, "unknown");
             }
@@ -306,10 +325,13 @@ pub fn install_panic_hook(component: &'static str) {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
 
+                let mut ts_buf = NumBuffer::new();
+                let ts_str = unix_ts.format_into(&mut ts_buf);
+
                 let mut filename_buf = [0u8; 128];
                 let filename = {
                     let mut lw = LimitWriter::new(&mut filename_buf);
-                    let _ = write!(lw, "crash-{}-{}.txt", unix_ts, component);
+                    let _ = write!(lw, "crash-{}-{}.txt", ts_str, component);
                     let len = lw.cursor;
                     std::str::from_utf8(&filename_buf[..len]).unwrap_or("crash-unknown.txt")
                 };
@@ -317,7 +339,7 @@ pub fn install_panic_hook(component: &'static str) {
                 let mut tmp_buf = [0u8; 128];
                 let tmp_filename = {
                     let mut lw = LimitWriter::new(&mut tmp_buf);
-                    let _ = write!(lw, "crash-{}-{}.tmp", unix_ts, component);
+                    let _ = write!(lw, "crash-{}-{}.tmp", ts_str, component);
                     let len = lw.cursor;
                     std::str::from_utf8(&tmp_buf[..len]).unwrap_or("crash-unknown.tmp")
                 };

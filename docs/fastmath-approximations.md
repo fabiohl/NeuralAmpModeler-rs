@@ -145,7 +145,22 @@ To prevent CPU soft-emulation penalties when processing near-zero values during 
 - Constant `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is added during input processing ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs)) and subtracted during output processing ([`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)).
 - Completely inaudible ($76\text{ dB}$ below 24-bit DAC floor) with zero runtime performance cost.
 
-### 4.3 DAZ / FTZ Enforcement
+### 4.3 Algebraic Operators (`f32::algebraic_*` / `f64::algebraic_*`, Rust 1.98+)
+
+Rust 1.98 stabilized per-operation algebraic floating-point methods. The standard library documents them as allowing unspecified optimizations similar to `-ffast-math`: reassociation, reciprocal multiplication, and non-deterministic results even within a single program run. They never cause undefined behavior, but they **do** void IEEE-754 left-to-right evaluation.
+
+**Forbidden** in this crate on any path covered by NAMCore parity, the f64 oracle, golden vectors, Offline/HQ determinism, or bit-exact Fast-mode constants:
+
+- production kernels under `src/math/` (GEMM, activations including Padé `fast_tanh`, LSTM gates, WaveNet dots);
+- inference under `src/models/`;
+- `src/dsp/` resampler, sinc/half-band design (`bessel_i0`), cabsim, audio gate, pipeline;
+- Kahan compensation (`kahan_add`) — that helper exists *because* addition is not associative.
+
+Hot-path FMA must stay explicit (`mul_add` or `_mm256_fmadd_ps`). Do not introduce `algebraic_*` to “help the vectorizer” on code that already uses AVX2/FMA intrinsics.
+
+Off-RT meters that no oracle observes may use `algebraic_*` only after `cargo bench` shows a \(p < 0.05\) win and `docs/quality-contract.json` envelopes are unchanged. Prefer IEEE `mul_add` / `recip` even then.
+
+### 4.4 DAZ / FTZ Enforcement
 
 Denormals-Are-Zero (DAZ) and Flush-To-Zero (FTZ) flags are active at the audio processing entry point:
 
@@ -163,6 +178,7 @@ When modifying or adding activation functions in [`src/math/activations/`](../sr
 - [ ] **Check Function Symmetry:** Verify odd symmetry for `tanh` ($f(-x) == -f(x)$).
 - [ ] **Maintain Single/Dual Lanes:** Keep shared broadcast structure in `simd_tanh_dual_avx2` to amortize coefficient loading cost.
 - [ ] **Hardware Division Preference:** Prefer `_mm256_div_ps` over manual Newton-Raphson reciprocal chains when target precision is `f32`.
+- [ ] **No algebraic operators on oracle paths:** Do not call `f32::algebraic_*` / `f64::algebraic_*` in math, models, or DSP (see §4.3).
 - [ ] **Validate Parity & Lints:** Run `utils/lints.sh` and `cargo test` to ensure zero broken assertions across standard and fast precision modes.
 
 ---

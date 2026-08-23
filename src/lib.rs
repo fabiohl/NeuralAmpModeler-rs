@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #![warn(missing_docs)]
 
-//! # Neural Amp Modeler (NAM-rs) — DSP Core Library
+//! # NeuralAmpModeler-rs — DSP Core Library
 //!
 //! **NeuralAmpModeler-rs** is the pure DSP kernel for high-performance,
 //! real-time inference of [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Structured diagnostic for NAM-rs errors and warnings.
+//! Structured diagnostic for NeuralAmpModeler-rs errors and warnings.
 //!
 //! Combines a user-friendly message with a copyable technical
 //! support block. Formatted for precise triage.
@@ -17,7 +17,7 @@ pub(crate) use super::snapshot::{ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE};
 use super::system_info::SystemSnapshot;
 use std::fmt;
 
-/// Structured diagnostic for NAM-rs errors and warnings.
+/// Structured diagnostic for NeuralAmpModeler-rs errors and warnings.
 ///
 /// Combines a user-friendly message with a copyable technical
 /// support block. Formatted for precise triage.

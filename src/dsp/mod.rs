@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Digital Signal Processing (DSP) module for generic operations
-//! before and after the neural engine in NAM-rs.
+//! before and after the neural engine in NeuralAmpModeler-rs.
 
 /// Adaptive compute mode: quality-tier hysteresis FSM for dynamic power scaling.
 pub mod adaptive;

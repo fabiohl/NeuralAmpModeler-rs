@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Neural Inference Architectures (Brain Engines) module for NAM-rs.
+//! Neural Inference Architectures (Brain Engines) module for NeuralAmpModeler-rs.
 //!
 //! This module contains the acoustic brains of the program: neural networks that have learned how,
 //! for example, a real amplifier or pedal distorts and colors a guitar sound.

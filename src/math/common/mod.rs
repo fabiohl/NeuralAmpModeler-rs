@@ -5,7 +5,7 @@
 
 //! Common foundation for mathematical operations and SIMD.
 //!
-//! This module contains the structural definitions that allow NAM-rs to be
+//! This module contains the structural definitions that allow NeuralAmpModeler-rs to be
 //! hardware-agnostic while maintaining native performance.
 //!
 //! # Components

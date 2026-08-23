@@ -387,7 +387,7 @@ pub const MRSTFT_SOFT_THRESHOLD: f64 = 0.50;
 ///
 /// # Output format
 /// ```text
-/// [NeuralAmpModelerCore × NAM-rs — label]
+/// [NeuralAmpModelerCore × NeuralAmpModeler-rs — label]
 ///   MSE     = 3.21e-02      (threshold < 5.0e-02)  ✓
 ///   MAE     = 2.84e-01
 ///   SNR     = 10.1 dB       (threshold ≥ 9.0 dB)   ✓
@@ -564,7 +564,11 @@ fn report_dsp_fidelity_impl(
     // even under --test-threads > 1.
     let mut buf = String::with_capacity(1024);
     writeln!(buf).unwrap();
-    writeln!(buf, "[NeuralAmpModelerCore × NAM-rs — {label}]").unwrap();
+    writeln!(
+        buf,
+        "[NeuralAmpModelerCore × NeuralAmpModeler-rs — {label}]"
+    )
+    .unwrap();
     if let Some(limit) = mse_limit {
         writeln!(
             buf,

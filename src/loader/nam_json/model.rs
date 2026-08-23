@@ -260,7 +260,7 @@ pub struct NamConfig {
     /// Number of input channels (WaveNet A2). Defaults to 1 when absent.
     #[serde(default)]
     pub in_channels: Option<usize>,
-    /// Number of output channels. Defaults to 1 when absent (nam-rs only supports mono).
+    /// Number of output channels. Defaults to 1 when absent (NeuralAmpModeler-rs only supports mono).
     #[serde(default)]
     pub out_channels: Option<usize>,
     /// Post-stack head sub-object (WaveNet with head / ConvNet).

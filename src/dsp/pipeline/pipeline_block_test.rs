@@ -165,7 +165,7 @@ mod block_tests {
                 crossfade_scratch_r,
             };
 
-            // We run the main pipeline that orchestrates all NAM-rs DSP.
+            // We run the main pipeline that orchestrates all NeuralAmpModeler-rs DSP.
             capture_dsp_pipeline(&mut samples_l, &mut samples_r, n, ctx, bufs, 48000);
         }
 

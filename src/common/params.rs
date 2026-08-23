@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Host-agnostic parameters for NAM-rs.
+//! Host-agnostic parameters for NeuralAmpModeler-rs.
 //!
 //! This module defines the complete processing configuration state,
 //! allowing different host applications to manage and

@@ -259,7 +259,7 @@ fn format_wall_clock_time() -> String {
     format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
 }
 
-/// Central bridge between the `log` crate facade and NAM-rs logging infra.
+/// Central bridge between the `log` crate facade and NeuralAmpModeler-rs logging infra.
 ///
 /// Implements `log::Log` and routes every log record to:
 /// 1. The global `LogBuffer` ring buffer.

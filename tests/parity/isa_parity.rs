@@ -259,6 +259,7 @@ fn run_under_isa_hf(
 /// ESR parity within the given budget.
 ///
 /// Reports the SIMD-vs-reference ESR floor for diagnostics (P-8 / P-4).
+#[cfg(feature = "avx512")]
 fn assert_isa_parity(
     output_ref: &[f32],
     output_test: &[f32],
@@ -343,6 +344,7 @@ fn check_isa_parity_for_model_hf(
 }
 
 /// Convenience: runs cross-ISA comparison for one model at 48 kHz.
+#[cfg(feature = "avx512")]
 fn check_isa_parity_for_model(
     model_filename: &str,
     golden_name: &str,
@@ -458,6 +460,7 @@ fn assert_isa_hf_self_consistency(
 // specific calibration in a CI runner with AVX-512 support.
 
 /// Default cross-ISA ESR budget for WaveNet models (conservative).
+#[cfg(feature = "avx512")]
 const WN_ESR_BUDGET: f64 = 1e-3;
 
 /// Default cross-ISA ESR budget for LSTM models (recurrent accumulation

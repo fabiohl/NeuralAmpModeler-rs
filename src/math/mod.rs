@@ -3,7 +3,7 @@
 
 //! Root module for mathematical operations and neural inference kernels.
 //!
-//! NAM-rs organizes its mathematical infrastructure in a modular way to ensure
+//! NeuralAmpModeler-rs organizes its mathematical infrastructure in a modular way to ensure
 //! extreme performance (SIMD) and maintainability. This module coordinates the
 //! linear algebra kernels, activation functions, and DSP utilities.
 //!

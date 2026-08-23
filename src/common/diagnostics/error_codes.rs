@@ -67,7 +67,7 @@ pub enum NamErrorCode {
     NamJsonInvalidVersionFormat,
     /// JSON version is outside the supported range (min 0.5.0, max 0.7.x).
     NamJsonUnsupportedVersion,
-    /// LSTM model has multi-channel I/O (NAM-rs supports mono only).
+    /// LSTM model has multi-channel I/O (NeuralAmpModeler-rs supports mono only).
     NamJsonUnsupportedMultiChannel,
     /// Model metadata float is non-finite or outside the plausible range
     /// (`input_level_dbu`, `output_level_dbu`, `loudness`, `head_scale`).

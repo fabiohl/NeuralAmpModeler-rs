@@ -3,7 +3,7 @@
 
 //! SIMD linear algebra kernels (GEMM, GEMV, Dot Product).
 //!
-//! This module is the high-throughput engine of NAM-rs, responsible for the
+//! This module is the high-throughput engine of NeuralAmpModeler-rs, responsible for the
 //! massive multiplication of weights by neural network states.
 //!
 //! # Performance Strategies
