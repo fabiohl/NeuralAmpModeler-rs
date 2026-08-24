@@ -432,10 +432,14 @@ run_phase() {
     PHASE_NAMES[$PHASE_COUNT]="$name"
     PHASE_DURATIONS[$PHASE_COUNT]="$duration"
 
-    if [ $status -eq 77 ]; then
-        echo -e "${YELLOW}⚠ SKIPPED (${duration}s)${NC}"
-        PHASE_STATUS[$PHASE_COUNT]="SKIPPED"
-    elif [ $status -eq 0 ]; then
+    # T2.4: the legacy exit-code 77 skip convention is dead — skips are now
+    # conveyed exclusively by typed `[STATUS]` log markers, picked up by
+    # `nam_long_receipt append --log` (detect_gap_markers) and recorded as
+    # gaps in the structured receipt. `run_phase` only distinguishes PASSED
+    # from FAILED; a phase that internally bypassed its measurement exits 0
+    # but its typed markers downgrade the suite verdict to
+    # COMPLETED_WITH_GAPS — never a clean PASSED.
+    if [ $status -eq 0 ]; then
         echo -e "${GREEN}✓ Success (${duration}s)${NC}"
         PHASE_STATUS[$PHASE_COUNT]="PASSED"
 
@@ -598,7 +602,7 @@ run_proptests_parity_phase() {
     # typed gap instead of silently promoting a zero-case matrix to PASSED.
     local SUBLOG="target/logs/subphase-isa-parity.log"
     cargo test --features testing --release --no-fail-fast $(_test_flag isa_parity) -- \
-        --ignored --test-threads=1 --nocapture 2>&1 | tee -a "$SUBLOG" \
+        --include-ignored --test-threads=1 --nocapture 2>&1 | tee -a "$SUBLOG" \
         >> "target/logs/phase2-proptests-parity.log" || status=1
     assert_subphase_ran "isa_parity_full_matrix" "$SUBLOG" 1 || status=1
     if grep -qE "AVX-512" "$SUBLOG"; then

@@ -42,7 +42,12 @@ impl Conv1dDyn {
     ///
     /// # Safety
     /// The caller must guarantee that `layer_buffer` and `out_frame` have sizes
-    /// compatible with the layer dimensions.
+    /// compatible with the layer dimensions, and that `frame_idx` satisfies the
+    /// warm-up invariant `frame_idx >= (kernel - 1) * dilation` — otherwise the
+    /// tap offsets below would be negative. A defensive clamp to the buffer
+    /// start keeps any violation in-bounds (no `usize` wrapping into a wild
+    /// pointer), but only a caller honoring the invariant produces correct
+    /// audio (F-01).
     #[inline(always)]
     pub unsafe fn process_single_frame<M: SimdMath>(
         &self,
@@ -58,7 +63,10 @@ impl Conv1dDyn {
 
         for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
             let offset = (self.dilation as isize) * ((k as isize) + 1 - (kernel as isize));
-            let in_start = ((frame_idx as isize) + offset) as usize * in_ch;
+            // F-01: `frame_idx + offset` is negative when frame_idx is below the
+            // warm-up threshold; the `.max(0)` clamp prevents `as usize` from
+            // wrapping into an out-of-bounds pointer.
+            let in_start = ((frame_idx as isize) + offset).max(0) as usize * in_ch;
             unsafe {
                 *tap = layer_buffer.as_ptr().add(in_start);
                 if self.dilation >= 128 {

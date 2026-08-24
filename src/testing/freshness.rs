@@ -68,7 +68,7 @@ impl fmt::Display for FreshnessMode {
     }
 }
 
-/// Machine-readable outcome classification for `run_freshness_gate`.
+/// Machine-readable outcome classification for the freshness gate wrapper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreshnessReason {
     /// No drift detected.

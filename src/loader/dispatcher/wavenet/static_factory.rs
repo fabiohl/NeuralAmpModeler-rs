@@ -14,7 +14,7 @@ use crate::math::common::AlignedVec;
 use crate::models::StaticModel;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
-use crate::models::a2::params::{A2_DILATIONS, A2_KERNEL_SIZES, A2_LEAKY_SLOPE};
+use crate::models::a2::params::A2_LEAKY_SLOPE;
 use crate::models::a2::weights_layout::FILM_KEYS;
 use crate::models::a2::{WaveNetA2, WaveNetA2Cascade, WaveNetA2Dyn};
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
@@ -28,8 +28,9 @@ use log::info;
 /// or corrupted file cannot trigger OOM-class allocations on the loader path.
 ///
 /// Re-exported at [`crate::loader::dispatcher::wavenet::MAX_CONDITION_SIZE`]
-/// for integration-test adversarial fuzzing.
-pub const MAX_CONDITION_SIZE: usize = 4096;
+/// for integration-test adversarial fuzzing. Canonical definition lives in
+/// [`crate::loader::nam_json::validation::MAX_CONDITION_SIZE`].
+pub use crate::loader::nam_json::validation::MAX_CONDITION_SIZE;
 
 // =============================================================================
 // Validation
@@ -271,7 +272,10 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     let total_weights = data.weights.len();
     let mut weight_pos: usize = 0;
 
-    // Validate all arrays.
+    // Validate all arrays (F-02/F-03/F-04: topology vectors are checked before
+    // any allocation; a hostile layer count must never reach the builder).
+    let mut resolved_topos: Vec<crate::loader::nam_json::A2TopologyVectors> =
+        Vec::with_capacity(num_arrays);
     for (ai, layer_cfg) in data.config.layers.iter().enumerate() {
         let ch = layer_cfg.channels.unwrap_or(0);
         let bn = layer_cfg.bottleneck.unwrap_or(ch);
@@ -300,6 +304,10 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 MAX_CONDITION_SIZE
             );
         }
+        resolved_topos.push(
+            crate::loader::nam_json::validate_a2_layer_topology(layer_cfg)
+                .map_err(anyhow::Error::msg)?,
+        );
     }
 
     let l0 = &data.config.layers[0];
@@ -315,22 +323,10 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             data.config.layers[ai - 1].channels.unwrap_or(1)
         };
 
-        let kernel_sizes = if let Some(ks) = layer_cfg.kernel_sizes.clone() {
-            ks
-        } else if let Some(ks_scalar) = layer_cfg.kernel_size {
-            let dils = layer_cfg
-                .dilations
-                .clone()
-                .unwrap_or_else(|| A2_DILATIONS.to_vec());
-            vec![ks_scalar; dils.len()]
-        } else {
-            A2_KERNEL_SIZES.to_vec()
-        };
-        let dilations = layer_cfg
-            .dilations
-            .clone()
-            .unwrap_or_else(|| A2_DILATIONS.to_vec());
-        let num_layers = kernel_sizes.len();
+        let topo = &resolved_topos[ai];
+        let kernel_sizes = topo.kernel_sizes.clone();
+        let dilations = topo.dilations.clone();
+        let num_layers = topo.num_layers;
 
         let act_cfg = layer_cfg
             .parse_activation_config(num_layers)
@@ -387,14 +383,9 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         };
 
         // Head kernel size — legacy models use `head_size`/`head_bias` format
-        // with implicit kernel=1; new models use `head.kernel_size`.
-        let head_kernel_size = layer_cfg
-            .layer_raw
-            .as_ref()
-            .and_then(|raw| raw.get("head"))
-            .and_then(|h| h.get("kernel_size"))
-            .and_then(|k| k.as_u64())
-            .unwrap_or(1) as usize;
+        // with implicit kernel=1; new models use `head.kernel_size` (already
+        // validated against MAX_KERNEL_SIZE by `validate_a2_layer_topology`).
+        let head_kernel_size = topo.head_kernel_size;
 
         let mut model = WaveNetA2Dyn::new(
             input_channels,
@@ -485,7 +476,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
 
     if num_arrays == 1 {
         let mut model = arrays.remove(0);
-        model.set_condition_dsp(condition_dsp, WAVENET_MAX_NUM_FRAMES);
+        model.set_condition_dsp(condition_dsp, WAVENET_MAX_NUM_FRAMES)?;
         info!(
             "[Dispatcher] WaveNet A2-Dynamic built — CH={}, BN={}, layers={}, weights={}",
             model.channels,
@@ -496,7 +487,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         return Ok(Box::new(StaticModel::WavenetA2Dyn(Box::new(model))));
     }
 
-    let cascade = WaveNetA2Cascade::new(arrays, condition_dsp, condition_size);
+    let cascade = WaveNetA2Cascade::try_new(arrays, condition_dsp, condition_size)?;
     info!(
         "[Dispatcher] WaveNet A2-Cascade built — {} arrays, CH=[{}], weights={}",
         num_arrays,

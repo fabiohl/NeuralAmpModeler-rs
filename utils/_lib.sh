@@ -40,7 +40,7 @@
 #   * Thin wrappers over the QA binaries:
 #     - assert_ran_tests        → nam_long_receipt count-log
 #     - dashboard_phase_receipt → nam_quality receipt append
-#     - check_freshness / run_freshness_gate → nam_freshness
+#     - check_freshness → nam_freshness
 #
 # Delegated to Rust:
 #   * classify_regression_outcome → src/testing/qa/classify.rs
@@ -116,6 +116,8 @@ DASHBOARD_PHASE_RECEIPT="${DASHBOARD_PHASE_RECEIPT:-}"
 DASHBOARD_PHASE_HAD_FAILURE=0
 
 # Register a phase receipt entry in the JSONL stream (delegates to the bin).
+# T2.2: strictly fail-closed — a receipt-append failure aborts the script (a
+# run whose receipt stream is lost must never be certified as clean).
 dashboard_phase_receipt() {
     local phase_id="$1" status="$2" exit_code="${3:-0}" \
           observed_records="${4:-0}" expected_records="${5:-0}" reason="${6:-}"
@@ -125,16 +127,14 @@ dashboard_phase_receipt() {
     local bin="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
     if [ ! -x "$bin" ]; then
         if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_quality >/dev/null 2>&1 ); then
-            warn "failed to build nam_quality — phase receipt not recorded"
-            return 0
+            die "failed to build nam_quality — phase receipt for ${phase_id} not recorded (fail-closed)"
         fi
     fi
     if ! "$bin" receipt append --phase-id "$phase_id" --status "$status" \
         --exit-code "$exit_code" --observed-records "$observed_records" \
         --expected-records "$expected_records" --reason "$reason" \
         --run-id "${NAM_RUN_ID:-}" --out "$DASHBOARD_PHASE_RECEIPT" >/dev/null 2>&1; then
-        warn "nam_quality receipt append failed for ${phase_id} — phase receipt not recorded"
-        return 0
+        die "nam_quality receipt append failed for ${phase_id} — phase receipt not recorded (fail-closed)"
     fi
     if [ "$status" = "FAIL" ]; then
         DASHBOARD_PHASE_HAD_FAILURE=1
@@ -489,29 +489,4 @@ check_freshness() {
         fi
     fi
     "$bin" --root "$PWD" "$mode"
-}
-
-# ── Typed freshness gate (F-22) ─────────────────────────────────────────────
-# Reports a machine-readable outcome via the global FRESHNESS_REASON variable.
-run_freshness_gate() {
-    local mode="${1:-artifacts-hard}"
-    local log
-    log="$(mktemp "${TMPDIR:-/tmp}/nam-freshness-XXXXXX")"
-    FRESHNESS_REASON="OK"
-    check_freshness "$mode" > "$log" 2>&1
-    local rc=$?
-    if [ "$rc" -ne 0 ]; then
-        if grep -q 'STALE' "$log"; then
-            FRESHNESS_REASON="STALE_FIXTURES"
-        elif grep -q 'MISSING' "$log"; then
-            FRESHNESS_REASON="MISSING_FIXTURES"
-        elif grep -q 'ORPHAN' "$log"; then
-            FRESHNESS_REASON="ORPHAN_FIXTURE"
-        else
-            FRESHNESS_REASON="FRESHNESS_FAILED"
-        fi
-        cat "$log"
-    fi
-    rm -f "$log"
-    return "$rc"
 }

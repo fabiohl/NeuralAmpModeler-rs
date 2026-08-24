@@ -1068,3 +1068,140 @@ fn test_regression_a1_lstm() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// T1.2 — Adversarial A2 topology validation (F-02 / F-03 / F-04)
+// ---------------------------------------------------------------------------
+
+fn make_a2_data_with_topology(
+    channels: u8,
+    kernel_sizes: Vec<usize>,
+    dilations: Vec<usize>,
+) -> NamModelData {
+    NamModelData {
+        version: Some("0.6.0".to_string()),
+        architecture: "WaveNet".to_string(),
+        config: NamConfig {
+            layers: vec![NamLayerConfig {
+                input_size: Some(1),
+                condition_size: Some(1),
+                head_size: None,
+                channels: Some(channels as usize),
+                kernel_size: None,
+                kernel_sizes: Some(kernel_sizes),
+                dilations: Some(dilations),
+                activation: Some("LeakyReLU".to_string()),
+                gated: None,
+                head_bias: None,
+                bottleneck: Some(channels as usize),
+                ..Default::default()
+            }],
+            head: None,
+            head_scale: Some(1.0),
+            num_layers: None,
+            hidden_size: None,
+            receptive_field: None,
+            bias: None,
+            submodels: None,
+            ..Default::default()
+        },
+        weights: vec![],
+        sample_rate: Some(48000.0),
+        metadata: None,
+        weights_layout: WeightsLayout::Original,
+    }
+}
+
+/// F-03: a zero kernel size would underflow `(kernel - 1)` in the A2 dynamic
+/// builder — it must be rejected before any allocation, without panicking.
+#[test]
+fn test_a2_rejects_zero_kernel_size() {
+    let data = make_a2_data_with_topology(8, vec![0], vec![1]);
+    let err = match build_model(&data) {
+        Ok(_) => panic!("kernel_sizes=[0] must be rejected"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("kernel_sizes[0] is 0") || err.contains("must be >= 1"),
+        "error should describe the zero kernel, got: {err}"
+    );
+}
+
+/// F-02: diverging `kernel_sizes`/`dilations` lengths must be rejected at the
+/// semantic layer (previously `assert_eq!` in `WaveNetA2Dyn::new` panicked).
+#[test]
+fn test_a2_rejects_divergent_vector_lengths() {
+    let data = make_a2_data_with_topology(8, vec![3, 3, 3], vec![1, 2]);
+    let err = match build_model(&data) {
+        Ok(_) => panic!("divergent kernel_sizes/dilations lengths must be rejected"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("kernel_sizes length (3) != dilations length (2)"),
+        "error should describe the length divergence, got: {err}"
+    );
+}
+
+/// F-02: activation-array length divergence must be rejected (no silent
+/// fallback to default LeakyReLU).
+#[test]
+fn test_a2_rejects_divergent_activation_array_length() {
+    let layer = NamLayerConfig {
+        input_size: Some(1),
+        condition_size: Some(1),
+        head_size: None,
+        channels: Some(8),
+        kernel_size: None,
+        kernel_sizes: Some(vec![6, 6]),
+        dilations: Some(vec![1, 2]),
+        activation: Some("LeakyReLU".to_string()),
+        gated: None,
+        head_bias: None,
+        bottleneck: Some(8),
+        layer_raw: Some(serde_json::json!({
+            "activation": ["LeakyReLU"], // length 1 != num_layers 2
+            "gating_mode": ["none", "none"],
+            "secondary_activation": [null, null],
+        })),
+        ..Default::default()
+    };
+    let data = NamModelData {
+        version: Some("0.6.0".to_string()),
+        architecture: "WaveNet".to_string(),
+        config: NamConfig {
+            layers: vec![layer],
+            head: None,
+            head_scale: Some(1.0),
+            ..Default::default()
+        },
+        weights: vec![],
+        sample_rate: Some(48000.0),
+        metadata: None,
+        weights_layout: WeightsLayout::Original,
+    };
+    let err = match build_model(&data) {
+        Ok(_) => panic!("activation-array length divergence must be rejected"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("array length (1) != num_layers (2)") || err.contains("topology divergence"),
+        "error should describe a topology divergence, got: {err}"
+    );
+}
+
+/// F-04: a massive layer count (100k elements) must be rejected before any
+/// mmap'd MirroredBuffer is allocated (each layer allocates one).
+#[test]
+fn test_a2_rejects_massive_layer_count_without_allocations() {
+    let kernel_sizes = vec![6usize; 100_000];
+    let dilations = vec![1usize; 100_000];
+    let data = make_a2_data_with_topology(8, kernel_sizes, dilations);
+    let err = match build_model(&data) {
+        Ok(_) => panic!("100k layers must be rejected"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("exceeding maximum") || err.contains("layers"),
+        "error should describe the layer cap, got: {err}"
+    );
+}

@@ -456,12 +456,11 @@ fn test_4wide_to_16wide_transpose_correctness() {
     }
 }
 
-/// Verifies that `Conv1d::from_parts` panics when the weights buffer
-/// is smaller than the SIMD-padded total required by the interleaved layout.
+/// Verifies that `Conv1d::from_parts` rejects a weights buffer smaller
+/// than the SIMD-padded total required by the interleaved layout.
 /// This hardening protects against silent UB caused by out-of-bounds reads
 /// in the SIMD convolution kernels.
 #[test]
-#[should_panic(expected = "Conv1d weights buffer is too small")]
 fn test_conv1d_from_parts_subdimensioned_weights() {
     use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
     use crate::loader::dispatcher::wavenet::traits::ConvWeightsOutput;
@@ -480,5 +479,12 @@ fn test_conv1d_from_parts_subdimensioned_weights() {
     let bias =
         AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed for test-sized buffers");
 
-    Conv1d::<IN, OUT, K>::from_parts(weights, bias, false, 1, IN, OUT, K);
+    let err = match Conv1d::<IN, OUT, K>::from_parts(weights, bias, false, 1, IN, OUT, K) {
+        Ok(_) => panic!("sub-dimensioned weights must be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("weights buffer is too small"),
+        "unexpected error: {err}"
+    );
 }

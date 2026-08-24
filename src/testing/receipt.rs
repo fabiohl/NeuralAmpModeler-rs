@@ -464,7 +464,9 @@ pub enum LongPhaseStatus {
     Passed,
     /// Phase failed (test failure, gate promotion, or non-zero exit).
     Failed,
-    /// Phase was skipped by the runner (exit code 77).
+    /// Phase was skipped by the runner (legacy exit code 77 convention;
+    /// current phases convey skips via typed `[STATUS]` log markers that the
+    /// receipt detects as gaps — `Skipped` remains parseable for old lines).
     Skipped,
     /// Phase ran but could not certify its assertion (environment telemetry).
     Inconclusive,
@@ -939,17 +941,27 @@ impl LongAuditReceipt {
 /// Canonical typed markers the long suite uses to annotate/override phase
 /// outcomes, mapped to stable gap identifiers for dashboards.
 ///
-/// T3.2 grammar (emission side) — every deviation/bypass/skip must be emitted
-/// as one of the `[STATUS]` markers below; T3.3 (parsing side) recognizes
-/// them and attaches the `reason=`/`id=` detail to the gap entry:
-/// - `[STATUS] SKIP_CAPABILITY reason="..."` → `skip_capability:<reason>`
-/// - `[STATUS] SKIP_OPTIONAL reason="..."`    → `skip_optional:<reason>`
-/// - `[STATUS] KNOWN_GAP id="..." reason="..."` → `known_gap:<id>`
-/// - `[STATUS] INCONCLUSIVE reason="..."`     → `inconclusive:<reason>`
+/// T3.2/T2.1 grammar (emission side) — every deviation/bypass/skip must be
+/// emitted as one of the `[STATUS]` markers below, in either of the two
+/// canonical detail forms:
+/// - attribute form:  `[STATUS] SKIP_OPTIONAL reason="models_nondist_absent"`
+/// - colon form:      `[STATUS] SKIP_OPTIONAL: models_nondist_absent`
+///
+/// The colon form is the canonical skip grammar of T2.1
+/// (`[STATUS] SKIP_<MOTIVO>: <detalhes>`); the attribute form is kept as an
+/// equivalent emission so both dialects share one detection grammar:
+/// - `[STATUS] SKIP_CAPABILITY reason="..."` / `[STATUS] SKIP_CAPABILITY: ...`
+///   → `skip_capability:<reason>`
+/// - `[STATUS] SKIP_OPTIONAL reason="..."`  / `[STATUS] SKIP_OPTIONAL: ...`
+///   → `skip_optional:<reason>`
+/// - `[STATUS] KNOWN_GAP id="..." reason="..."` / `[STATUS] KNOWN_GAP: ...`
+///   → `known_gap:<id>`
+/// - `[STATUS] INCONCLUSIVE reason="..."`  / `[STATUS] INCONCLUSIVE: ...`
+///   → `inconclusive:<reason>`
 ///
 /// The legacy free-form `SKIP:` prefix is still recognized during the
-/// transition (T3.2 rollback) as `legacy_skip:<detail>` so an unconverted
-/// print is never silently promoted to a clean `PASSED`.
+/// transition (T3.2 rollback / T2.1 safety net) as `legacy_skip:<detail>` so
+/// an unconverted print is never silently promoted to a clean `PASSED`.
 const LONG_GAP_MARKERS: &[(&str, &str)] = &[
     ("INCONCLUSIVE_ENVIRONMENT", "inconclusive_environment"),
     ("[STATUS] SKIP_CAPABILITY", "skip_capability"),
@@ -986,13 +998,33 @@ fn detail_after(line: &str, prefix: &str) -> Option<String> {
     (!detail.is_empty()).then(|| detail.to_string())
 }
 
+/// Extracts the T2.1 canonical colon-form detail
+/// (`[STATUS] SKIP_<MOTIVO>: <detalhes>`) immediately after `needle`, if the
+/// marker line uses that dialect. Returns `None` for the attribute form
+/// (`reason="..."`) and for lines without a `: ` suffix.
+///
+/// The match is located with `find` (like `detail_after`/`extract_attr`) so a
+/// marker occurring mid-line — `detect_gap_markers` matches on `.contains` —
+/// still yields the correct detail instead of a byte-offset slice.
+fn colon_detail(line: &str, needle: &str) -> Option<String> {
+    let pos = line.find(needle)?;
+    let rest = line[pos + needle.len()..].trim_start();
+    let detail = rest.strip_prefix(':')?.trim_start();
+    if detail.is_empty() || detail.starts_with('"') {
+        return None;
+    }
+    Some(detail.to_string())
+}
+
 /// Computes the gap entry string for a matched marker line, attaching the
-/// typed detail when the grammar carries one (`reason=`/`id=`/trailing text).
+/// typed detail when the grammar carries one (`reason=`/`id=`/colon detail).
 fn marker_gap_entry(needle: &str, id: &str, line: &str) -> String {
     let detail = match needle {
-        "[STATUS] KNOWN_GAP" => extract_attr(line, "id").or_else(|| extract_attr(line, "reason")),
+        "[STATUS] KNOWN_GAP" => extract_attr(line, "id")
+            .or_else(|| extract_attr(line, "reason"))
+            .or_else(|| colon_detail(line, needle)),
         "[STATUS] SKIP_CAPABILITY" | "[STATUS] SKIP_OPTIONAL" | "[STATUS] INCONCLUSIVE" => {
-            extract_attr(line, "reason")
+            extract_attr(line, "reason").or_else(|| colon_detail(line, needle))
         }
         "MISSING-REQUIRED:" => detail_after(line, "MISSING-REQUIRED:"),
         "SKIP:" => detail_after(line, "SKIP:"),
@@ -1008,6 +1040,12 @@ fn marker_gap_entry(needle: &str, id: &str, line: &str) -> String {
 /// gap identifiers (with detail suffixes, e.g. `skip_optional:model_not_found`)
 /// in canonical order (deduplicated).
 ///
+/// T2.1: **all** occurrences are accumulated per phase — a phase log with
+/// several distinct skips of the same family yields one gap entry per unique
+/// skip, never just the first line of each marker family. Deduplication keeps
+/// repeated emissions of the same reason from inflating the array while a
+/// second distinct reason is never swallowed.
+///
 /// Fail-closed (T3.3): an unreadable log is itself a deviation and yields
 /// `log_unreadable` — a missing/corrupt phase log can never be promoted to a
 /// clean `PASSED` with `gaps: []`.
@@ -1016,18 +1054,16 @@ pub fn detect_gap_markers(path: &Path) -> Vec<String> {
         Ok(c) => c,
         Err(_) => return vec!["log_unreadable".to_string()],
     };
-    LONG_GAP_MARKERS
-        .iter()
-        .filter_map(|(needle, id)| {
-            let line = content.lines().find(|l| l.contains(needle))?;
-            Some(marker_gap_entry(needle, id, line))
-        })
-        .fold(Vec::new(), |mut acc, entry| {
-            if !acc.contains(&entry) {
-                acc.push(entry);
+    let mut gaps: Vec<String> = Vec::new();
+    for (needle, id) in LONG_GAP_MARKERS {
+        for line in content.lines().filter(|l| l.contains(needle)) {
+            let entry = marker_gap_entry(needle, id, line);
+            if !gaps.contains(&entry) {
+                gaps.push(entry);
             }
-            acc
-        })
+        }
+    }
+    gaps
 }
 
 /// Extracts the integer immediately preceding `needle` in `line` (the libtest
@@ -1293,6 +1329,99 @@ mod long_receipt_tests {
         // silently promoted to a clean PASSED with `gaps: []`.
         let missing = temp_path();
         assert_eq!(detect_gap_markers(&missing), vec!["log_unreadable"]);
+    }
+
+    #[test]
+    fn all_skip_occurrences_accumulate_per_phase() {
+        // T2.1: every distinct skip of a phase log is accumulated — the
+        // detector never collapses a family to its first line.
+        let log = write_temp(
+            "[STATUS] SKIP_OPTIONAL: models_nondist_absent\n\
+             test result: ok. 3 passed; 0 failed\n\
+             [STATUS] SKIP_OPTIONAL reason=\"optional_fixture_missing:lstm_2x24.nam\"\n\
+             SKIP: legacy print A\n\
+             SKIP: legacy print B\n\
+             [STATUS] SKIP_CAPABILITY: model_not_found:BossWN-standard.nam\n\
+             test result: ok. 5 passed; 0 failed\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec![
+                "skip_capability:model_not_found:BossWN-standard.nam",
+                "skip_optional:models_nondist_absent",
+                "skip_optional:optional_fixture_missing:lstm_2x24.nam",
+                "legacy_skip:legacy print A",
+                "legacy_skip:legacy print B",
+            ]
+        );
+    }
+
+    #[test]
+    fn colon_form_skip_markers_are_recognized() {
+        // T2.1 canonical grammar `[STATUS] SKIP_<MOTIVO>: <detalhes>` — the
+        // colon dialect and the attribute dialect parse to the same gap ids.
+        let log = write_temp(
+            "[STATUS] SKIP_CAPABILITY: avx512_cpu_unsupported:Zen1\n\
+             [STATUS] SKIP_OPTIONAL: models_nondist_empty\n\
+             [STATUS] INCONCLUSIVE: governor not performance\n\
+             [STATUS] KNOWN_GAP: condition_lstm_cpp_crash\n",
+        );
+        assert_eq!(
+            detect_gap_markers(&log),
+            vec![
+                "skip_capability:avx512_cpu_unsupported:Zen1",
+                "skip_optional:models_nondist_empty",
+                "known_gap:condition_lstm_cpp_crash",
+                "inconclusive:governor not performance",
+            ]
+        );
+        // The attribute dialect keeps parsing identically.
+        let attr = write_temp("[STATUS] SKIP_CAPABILITY reason=\"avx512_not_compiled:x\"\n");
+        assert_eq!(
+            detect_gap_markers(&attr),
+            vec!["skip_capability:avx512_not_compiled:x"]
+        );
+        // A marker occurring MID-line (`.contains` match) still yields the
+        // colon detail — the detector never drops the reason.
+        let midline = write_temp("NOTE: [STATUS] SKIP_OPTIONAL: models_nondist_absent\n");
+        assert_eq!(
+            detect_gap_markers(&midline),
+            vec!["skip_optional:models_nondist_absent"]
+        );
+    }
+
+    #[test]
+    fn typed_skip_changes_receipt_verdict_to_completed_with_gaps() {
+        // T2.1 regression: ANY typed skip emission alters the phase receipt
+        // so the suite-level verdict is COMPLETED_WITH_GAPS — never a clean
+        // PASSED with `gaps: []`.
+        let log = write_temp(
+            "[STATUS] SKIP_OPTIONAL: model_not_found:linear_test.nam\n\
+             test result: ok. 2 passed; 0 failed\n",
+        );
+        let gaps = detect_gap_markers(&log);
+        assert_eq!(gaps, vec!["skip_optional:model_not_found:linear_test.nam"]);
+
+        let phase = LongPhaseReceipt {
+            phase_id: "phase2".to_string(),
+            name: "Property-Based, Parity & Golden Vectors in Release".to_string(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 1000,
+            tests_executed: 2,
+            gaps: gaps.clone(),
+            timestamp: "t".to_string(),
+        };
+        let receipt = LongAuditReceipt {
+            phases: vec![phase],
+        };
+        let summary = receipt.summary_receipt();
+        assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
+        assert_eq!(summary.gaps, vec!["phase2:PASSED"]);
+        assert!(receipt.strict_verdict().is_err());
+        assert_eq!(
+            detect_gap_markers(&write_temp("all good\n")),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

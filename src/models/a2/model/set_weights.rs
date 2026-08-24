@@ -52,7 +52,7 @@ impl<const CH: usize> WaveNetA2<CH> {
         // ── 1. Rechannel: Conv1x1(1 → CH) (no bias) ─────────────────────
         let rw_f32 = read_slice(weights, &mut pos, CH, total, "rechannel_w")?;
         let rechannel_w = AlignedVec::from_vec(rw_f32.to_vec())
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
         // ── 2. Per-layer weights ──────────────────────────────────────────
         let mut layers = Vec::with_capacity(A2_NUM_LAYERS);
@@ -77,14 +77,14 @@ impl<const CH: usize> WaveNetA2<CH> {
             let conv_w_f32_owned: Vec<f32> = conv_w_f32.to_vec();
             // Interleave-4-wide f32 for the fallback conv path.
             let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_conv1d_interleaved_4wide(conv_w_f32, &mut conv_w, CH, CH, ksize);
 
             // 2b. Conv bias (f32, one per output channel).
             let conv_b_f32 =
                 read_slice(weights, &mut pos, CH, total, &format!("layer[{i}].conv_b"))?;
             let conv_b = AlignedVec::from_vec(conv_b_f32.to_vec())
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
             // Build the scalar/SIMD fallback conv (interleaved-4-wide f32 weights).
             let conv = crate::models::a2::conv1d::A2Conv1d::new(
@@ -118,7 +118,7 @@ impl<const CH: usize> WaveNetA2<CH> {
             let mixin_w_f32 =
                 read_slice(weights, &mut pos, CH, total, &format!("layer[{i}].mixin_w"))?;
             let mixin_w = AlignedVec::from_vec(mixin_w_f32.to_vec())
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
             // 2d. Layer 1×1 projection: CH×CH dense matrix (f32, col-major).
             // NAM JSON stores row-major; we transpose to col-major for SIMD dot products.
@@ -130,14 +130,14 @@ impl<const CH: usize> WaveNetA2<CH> {
                 &format!("layer[{i}].l1x1_w"),
             )?;
             let mut l1x1_w = AlignedVec::new(CH * CH, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_dense_f32(l1x1_w_f32, &mut l1x1_w, CH, CH);
 
             // 2e. Layer 1×1 bias: one f32 per output channel.
             let l1x1_b_f32 =
                 read_slice(weights, &mut pos, CH, total, &format!("layer[{i}].l1x1_b"))?;
             let l1x1_b = AlignedVec::from_vec(l1x1_b_f32.to_vec())
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
             // Assemble the layer: priority is ch3_conv > ch8_conv > scalar fallback.
             let mut layer = A2Layer::new(conv, mixin_w, l1x1_w, l1x1_b);
@@ -157,7 +157,7 @@ impl<const CH: usize> WaveNetA2<CH> {
         // ── 3. Head rechannel: Conv1D(CH → 1, K=16, bias) ─────────────────
         let head_w_f32 = read_slice(weights, &mut pos, A2_HEAD_KERNEL_SIZE * CH, total, "head_w")?;
         let mut head_w = AlignedVec::new(A2_HEAD_KERNEL_SIZE * CH, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         transpose_head_w(head_w_f32, &mut head_w, CH, A2_HEAD_KERNEL_SIZE);
 
         let head_b = {

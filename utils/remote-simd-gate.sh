@@ -232,11 +232,11 @@ else
     assert_subphase_ran "remote_simd_isa_parity" "$PARITY_LOG" 1 || parity_rc=1
 
     if [ "$parity_rc" -ne 0 ]; then
-        emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "FAILED" "$parity_dur" "$PARITY_LOG" || true
+        emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "FAILED" "$parity_dur" "$PARITY_LOG"
         echo -e "${RED}${BOLD}❌ Mathematical cross-ISA parity FAILED (rc=$parity_rc).${NC}"
         exit 1
     fi
-    emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "PASSED" "$parity_dur" "$PARITY_LOG" || true
+    emit_remote_receipt "remote-simd-parity" "Remote SIMD Cross-ISA Parity Matrix" "PASSED" "$parity_dur" "$PARITY_LOG"
     ok "Mathematical cross-ISA parity verified against AVX2 reference."
 fi
 
@@ -278,7 +278,7 @@ else
 
     if [ "$RECEIPT_STATUS" -ne 0 ]; then
         echo "ROI criteria not met (exit $RECEIPT_STATUS) — see $RECEIPT_OUT" > "$ROI_LOG"
-        emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "FAILED" "$ROI_DUR" "$ROI_LOG" || true
+        emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "FAILED" "$ROI_DUR" "$ROI_LOG"
         warn "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
         echo -e "\n${YELLOW}${BOLD}================================================================================"
         echo -e "  Remote SIMD Gate: Parity verified (100% PASS), but ROI criteria not met."
@@ -288,7 +288,7 @@ else
         exit 1
     fi
 
-    emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "PASSED" "$ROI_DUR" "$ROI_LOG" || true
+    emit_remote_receipt "remote-simd-roi" "Remote SIMD ROI Receipt Check" "PASSED" "$ROI_DUR" "$ROI_LOG"
     ok "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
 fi
 
@@ -303,7 +303,7 @@ if ensure_long_receipt_bin; then
         exit 1
     fi
     echo -e "  ${GREEN}✓ Remote SIMD receipt validated (target/logs/remote-simd-receipt.jsonl)${NC}"
-    SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$REMOTE_RECEIPT_JSONL")" || true
+    SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$REMOTE_RECEIPT_JSONL")"
     printf '%s\n' "$SUMMARY_TEXT" | sed 's/^/    /'
 else
     echo -e "${RED}${BOLD}❌ nam_long_receipt unavailable — remote SIMD receipt NOT emitted (fail-closed).${NC}"

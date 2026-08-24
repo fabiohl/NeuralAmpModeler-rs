@@ -21,8 +21,8 @@ fn test_nondist_models_validation() {
             nondist_path = community;
         } else {
             println!(
-                "SKIP: Non-distributable models directory not found \
-                 (tests/fixtures/models-nondist or third-party/community_models)."
+                "[STATUS] SKIP_OPTIONAL: models_nondist_absent \
+                 (tests/fixtures/models-nondist or third-party/community_models)"
             );
             return;
         }
@@ -60,7 +60,10 @@ fn test_nondist_models_validation() {
     };
 
     if models.is_empty() {
-        println!("SKIP: No .nam or .json models found in {:?}", nondist_path);
+        println!(
+            "[STATUS] SKIP_OPTIONAL: models_nondist_empty ({:?})",
+            nondist_path
+        );
         return;
     }
 

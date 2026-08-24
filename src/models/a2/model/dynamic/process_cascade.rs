@@ -7,7 +7,7 @@
 //! (`[WaveNetA2Dyn]`) in sequence: propagating condition outputs, residuals,
 //! and head accumulators from one array to the next.
 
-use crate::math::common::{AlignedVec, SimdMath};
+use crate::math::common::SimdMath;
 
 use super::WaveNetA2Dyn;
 
@@ -134,14 +134,28 @@ impl WaveNetA2Dyn {
 
     /// Copies condition output into this array's `condition_dsp_output` buffer
     /// so that `layer_forward_dispatch` can use it.
+    ///
+    /// Fail-closed (F-10/H-05): this runs on the RT path and must never
+    /// allocate or panic. The destination is pre-allocated to
+    /// `condition_size × max_buffer_size`; the copied frame count is clamped to
+    /// both the destination and source capacities so a hostile/host-provided
+    /// `cond_buf` or oversized `nf` degrades gracefully instead of panicking.
     #[inline(always)]
     pub(crate) fn cascade_set_condition(&mut self, cond_buf: &[f32], nf: usize, cond_size: usize) {
         let dest = &mut self.condition_dsp_output;
-        if dest.len() < nf * cond_size {
-            *dest = AlignedVec::new(nf * cond_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+        let cond_size = cond_size.max(1);
+        let dest_frames = dest.len() / cond_size;
+        let src_frames = cond_buf.len() / cond_size;
+        let nf_copied = nf.min(dest_frames).min(src_frames);
+        if nf_copied > 0 {
+            let n = nf_copied * cond_size;
+            // When `condition_dsp` is present the caller passes the engine's own
+            // `condition_dsp_output` as `cond_buf` — a self-copy. Skip it to
+            // avoid overlapping `copy_from_slice` (UB contract violation).
+            if !core::ptr::eq(cond_buf.as_ptr(), dest.as_ptr()) {
+                dest[0..n].copy_from_slice(&cond_buf[0..n]);
+            }
         }
-        dest[0..nf * cond_size].copy_from_slice(&cond_buf[0..nf * cond_size]);
     }
 
     /// Seeds this array's head_accum from the previous array's post-rechannel

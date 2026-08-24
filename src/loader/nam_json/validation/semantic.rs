@@ -28,7 +28,12 @@ pub const MAX_A2_DYN_BOTTLENECK: usize = 256;
 
 /// Maximum kernel size accepted from model config.
 /// Larger values cause O(n³) all-pair computations in the hot-path.
-pub const MAX_KERNEL_SIZE: usize = 64;
+///
+/// Aligned with [`crate::models::wavenet::common::MAX_KERNEL`]: the dynamic
+/// WaveNet convolution kernels (`Conv1dDyn` / dual-frame path) read taps through
+/// a fixed `[null; MAX_KERNEL]` array, so a kernel above this cap would either
+/// silently drop taps or compute out-of-bounds negative offsets (F-01).
+pub const MAX_KERNEL_SIZE: usize = crate::models::wavenet::common::MAX_KERNEL;
 
 /// Maximum dilation factor accepted from model config.
 /// Unbounded dilations create oversized receptive fields and kernel striding.
@@ -58,3 +63,11 @@ pub const MAX_RECEPTIVE_FIELD: usize = 65536;
 /// Prevents DoS via receptive-field amplification. Default: 64 Mi frames ≈ 256 MB @ f32.
 /// Each "frame" represents one sample per channel across all layer delay-line buffers.
 pub const MAX_TOTAL_STATE_FRAMES: usize = 1 << 26;
+
+/// Semantic cap on `condition_size` accepted from `.nam` JSON files (H-03).
+///
+/// Real conditioning sizes are ≤ 64 channels. This cap bounds the
+/// `cond_scratch` allocation (proportional to `condition_size`) so a hostile
+/// or corrupted file cannot trigger OOM-class allocations on the loader path,
+/// for both the A2-Dynamic builder and the WaveNet A1 free-geometry route.
+pub const MAX_CONDITION_SIZE: usize = 4096;

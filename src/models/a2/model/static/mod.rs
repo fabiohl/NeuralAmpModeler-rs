@@ -133,24 +133,20 @@ impl<const CH: usize> WaveNetA2<CH> {
 
         Ok(Self {
             layers: Vec::with_capacity(A2_NUM_LAYERS),
-            rechannel_w_f32: AlignedVec::new(CH, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            rechannel_w_f32: AlignedVec::new(CH, 0.0f32)?,
             head_conv: None,
-            head_accum: AlignedVec::new(head_ring_size * CH, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            head_accum: AlignedVec::new(head_ring_size * CH, 0.0f32)?,
             head_write_pos: rf,
             head_ring_mask,
             layer_buffers,
             layer_ring_sizes,
             layer_lookbacks,
             layer_buffer_starts,
-            layer_in: AlignedVec::new(CH * max_buf, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            layer_in: AlignedVec::new(CH * max_buf, 0.0f32)?,
             receptive_field_size: rf,
             max_buffer_size: max_buf,
             layer_raw: None,
-            z_scratch: AlignedVec::new(CH, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            z_scratch: AlignedVec::new(CH, 0.0f32)?,
             rt_status: None,
             prewarm_on_reset: true,
         })
@@ -223,13 +219,11 @@ impl<const CH: usize> WaveNetA2<CH> {
             self.layer_buffer_starts.push(ring_size);
         }
 
-        self.layer_in = AlignedVec::new(CH * max_buf, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.layer_in = AlignedVec::new(CH * max_buf, 0.0f32)?;
 
         let head_ring_size = (rf + max_buf + 1).next_power_of_two();
         self.head_ring_mask = head_ring_size - 1;
-        self.head_accum = AlignedVec::new(head_ring_size * CH, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.head_accum = AlignedVec::new(head_ring_size * CH, 0.0f32)?;
         self.head_write_pos = rf;
 
         Ok(())

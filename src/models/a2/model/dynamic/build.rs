@@ -75,7 +75,7 @@ impl WaveNetA2Dyn {
         let rw_f32 =
             super::super::set_weights::read_slice(weights, pos, rw_count, total, "rechannel_w")?;
         self.rechannel_w_f32 = AlignedVec::new(rw_count, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         self.rechannel_w_f32.copy_from_slice(rw_f32);
         Ok(())
     }
@@ -111,7 +111,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].conv_w"),
         )?;
         let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         transpose_conv1d_interleaved_4wide(conv_w_f32, &mut conv_w, channels, conv_out, ksize);
 
         // 2b. Conv bias.
@@ -123,7 +123,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].conv_b"),
         )?;
         let conv_b = AlignedVec::from_vec(conv_b_f32.to_vec())
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
         let conv = crate::models::a2::conv1d::A2Conv1d::new(
             conv_w, conv_b, true, dilation, channels, conv_out, ksize,
@@ -150,7 +150,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].mixin_w"),
         )?;
         let mut mixin_w_row = AlignedVec::new(mixin_count, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         // Reorder from group-major to per-output-channel-major:
         // Stream: for each group g, then oc, then ic.
         // Storage: mixin_w_row[oc * in_per_group + ic_local].
@@ -172,7 +172,7 @@ impl WaveNetA2Dyn {
         // use contiguous 8-wide SIMD loads across output channels with
         // broadcast condition (T4.3).
         let mut mixin_w = AlignedVec::new(mixin_count, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         for g in 0..mg as usize {
             let group_base = g * mixin_out_per_g * mixin_in_pg;
             let out_start = g * mixin_out_per_g;
@@ -204,7 +204,7 @@ impl WaveNetA2Dyn {
         )?;
         let l1x1_w = if lg > 1 {
             let mut w = AlignedVec::new(l1x1_w_count, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             let mut src_idx = 0usize;
             for g in 0..lg as usize {
                 let out_start = g * l1x1_out_per_g;
@@ -219,7 +219,7 @@ impl WaveNetA2Dyn {
             w
         } else {
             let mut w = AlignedVec::new(l1x1_w_count, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_dense_f32(l1x1_w_f32, &mut w, bottleneck, channels);
             w
         };
@@ -232,7 +232,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].l1x1_b"),
         )?;
         let l1x1_b = AlignedVec::from_vec(l1x1_b_f32.to_vec())
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
         let mut layer = A2Layer::new_dyn(
             conv,
@@ -322,7 +322,7 @@ impl WaveNetA2Dyn {
         )?;
         let h1_w = if h1_is_grouped {
             let mut w = AlignedVec::new(h1_w_count, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             let out_per_g = h1_out / h1_groups;
             let in_per_g = h1_in;
             let mut src_idx = 0usize;
@@ -339,7 +339,7 @@ impl WaveNetA2Dyn {
             w
         } else {
             let mut w = AlignedVec::new(h1_w_count, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_dense_f32(h1_w_f32, &mut w, h1_in, h1_out);
             w
         };
@@ -351,7 +351,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].head1x1_b"),
         )?;
         let mut h1_b = AlignedVec::new(h1_out, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         h1_b.copy_from_slice(h1_b_f32);
         debug_assert_eq!(
             h1_w.len(),
@@ -393,7 +393,7 @@ impl WaveNetA2Dyn {
                 "head_w",
             )?;
             let mut head_w = AlignedVec::new(head_k * channels, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_head_w(head_w_f32, &mut head_w, channels, head_k);
 
             let head_b = {
@@ -434,7 +434,7 @@ impl WaveNetA2Dyn {
                 "head_rechannel_w",
             )?;
             let mut head_w = AlignedVec::new(total_w_count, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             for oc in 0..head_size {
                 let src = &head_w_f32[oc * per_oc_w_count..(oc + 1) * per_oc_w_count];
                 let dst = &mut head_w[oc * per_oc_w_count..(oc + 1) * per_oc_w_count];
@@ -457,7 +457,7 @@ impl WaveNetA2Dyn {
                 }
             }
             let mut head_b = AlignedVec::new(head_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             head_b.copy_from_slice(head_b_f32);
 
             let head_scale_f32 = super::super::set_weights::read_slice(
@@ -476,7 +476,7 @@ impl WaveNetA2Dyn {
                 }
             }
             let mut head_scale = AlignedVec::new(head_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers");
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             head_scale.copy_from_slice(head_scale_f32);
 
             self.head_rechannel_w = head_w;

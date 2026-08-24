@@ -216,6 +216,8 @@ fn performance_not_verified_is_never_green() {
         phases: vec![PhaseRecord {
             phase_id: "regression_gate".into(),
             status: "NOT_VERIFIED".into(),
+            observed_records: 0,
+            expected_records: 10,
         }],
         fidelity: Vec::new(),
         latency: vec![LatencyRecord {

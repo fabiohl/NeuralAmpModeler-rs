@@ -194,17 +194,24 @@ impl X2Stage {
     /// center tap; odd samples are convolved against the odd-coefficient
     /// filter bank using AVX2 FMA.
     ///
+    /// Fail-closed (F-05): the caller contract `output.len() >= 2*input.len()`
+    /// is enforced here by clamping the processed sample count to
+    /// `output.len() / 2`, so the `assert_unchecked` bounds below are
+    /// established by this in-function check — not by an external
+    /// `debug_assert!` that disappears in release builds.
+    ///
     /// # Returns
     ///
-    /// Number of output samples written (always `2 * input.len()`).
+    /// Number of output samples written (≤ `2 * input.len()`, clamped to
+    /// `output.len()`).
     #[inline(always)]
     pub(crate) fn upsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let coeffs = &self.up_filter.coeffs;
         let center = self.up_center;
         let n = HB_DELAY;
-        let n_in = input.len();
+        let n_in = input.len().min(output.len() / 2);
 
-        for (i, &x) in input.iter().enumerate() {
+        for (i, &x) in input.iter().take(n_in).enumerate() {
             // ── Step 1: Write sample into double-buffer delay line ──
             let p = self.up_pos;
             // SAFETY: `up_pos` is maintained in `0..HB_DELAY` (it is only ever
@@ -259,11 +266,9 @@ impl X2Stage {
             };
 
             // ── Step 5: Write interleaved output pair ──
-            // SAFETY: the caller contract is `output.len() == 2 * input.len()`
-            // (enforced by `OversampleEngine::upsample`'s `debug_assert!`). With
-            // `i < n_in`, both `2*i` and `2*i + 1` are `< 2*n_in == output.len()`.
-            // This is a runtime caller invariant (not a compile-time constant),
-            // so no `const` assert applies to these two.
+            // SAFETY: the in-function clamp `n_in = input.len().min(output.len()/2)`
+            // guarantees `i < n_in` implies `2*i+1 <= 2*n_in-1 < output.len()`
+            // (F-05 — no longer relies on an external caller `debug_assert!`).
             unsafe {
                 core::hint::assert_unchecked(2 * i < output.len());
                 core::hint::assert_unchecked(2 * i + 1 < output.len());

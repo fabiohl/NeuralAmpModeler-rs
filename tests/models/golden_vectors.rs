@@ -56,7 +56,7 @@ fn run_v2_golden_test(
 
     if !nam_path.exists() {
         eprintln!(
-            "SKIP: Model {model_filename} not found at {nam_path:?}. Skipping v2 golden test."
+            "[STATUS] SKIP_CAPABILITY: model_not_found:{model_filename} — skipping v2 golden test"
         );
         return;
     }
@@ -70,7 +70,7 @@ fn run_v2_golden_test(
 
         if !golden_path.exists() {
             eprintln!(
-                "SKIP: {golden_filename} not found at {golden_path:?}. Run './tests/fixtures/golden_gen_build.sh' to generate v2 multi-SR golden vectors."
+                "[STATUS] SKIP_CAPABILITY: golden_not_found:{golden_filename} — run './tests/fixtures/golden_gen_build.sh' to generate v2 multi-SR golden vectors"
             );
             continue;
         }
@@ -561,7 +561,9 @@ fn test_golden_vectors_wavenet_lite() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_lite.bin");
 
     if !golden_path.exists() {
-        eprintln!("SKIP: golden_wavenet_lite.bin not found at {golden_path:?}.");
+        eprintln!(
+            "[STATUS] SKIP_CAPABILITY: golden_not_found:golden_wavenet_lite.bin — run './tests/fixtures/golden_gen_build.sh'"
+        );
         return;
     }
 
@@ -570,7 +572,7 @@ fn test_golden_vectors_wavenet_lite() {
 
     let nam_path = model_path("EVH-5150-Lite.nam");
     if !nam_path.exists() {
-        eprintln!("SKIP: EVH-5150-Lite.nam not found at {nam_path:?}.");
+        eprintln!("[STATUS] SKIP_CAPABILITY: model_not_found:EVH-5150-Lite.nam");
         return;
     }
 
@@ -718,7 +720,9 @@ fn test_golden_vectors_container_a2_full() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
     if !full_nam_path.exists() || !lite_nam_path.exists() {
-        eprintln!("SKIP: A2 model files not found. Container golden test impossible.");
+        eprintln!(
+            "[STATUS] SKIP_CAPABILITY: model_not_found:a2_full_or_lite — container golden test impossible"
+        );
         return;
     }
 
@@ -786,7 +790,9 @@ fn test_golden_vectors_container_a2_lite() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
     if !full_nam_path.exists() || !lite_nam_path.exists() {
-        eprintln!("SKIP: A2 model files not found. Container golden test impossible.");
+        eprintln!(
+            "[STATUS] SKIP_CAPABILITY: model_not_found:a2_full_or_lite — container golden test impossible"
+        );
         return;
     }
 
@@ -856,7 +862,9 @@ fn test_golden_vectors_container_a2_lite() {
 fn test_golden_vectors_wavenet_a2_container() {
     let container_path = model_path("wavenet_a2_container.nam");
     if !container_path.exists() {
-        eprintln!("SKIP: wavenet_a2_container.nam not found. Container golden test impossible.");
+        eprintln!(
+            "[STATUS] SKIP_CAPABILITY: model_not_found:wavenet_a2_container.nam — container golden test impossible"
+        );
         return;
     }
 
@@ -951,7 +959,7 @@ fn test_golden_vectors_a2_example_slimmable() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_a2_example.bin");
 
     if !golden_path.exists() {
-        eprintln!("SKIP: golden_a2_example.bin not found at {golden_path:?}.");
+        eprintln!("[STATUS] SKIP_CAPABILITY: golden_not_found:golden_a2_example.bin");
         return;
     }
 
@@ -960,7 +968,7 @@ fn test_golden_vectors_a2_example_slimmable() {
 
     let nam_path = model_path("a2_example.nam");
     if !nam_path.exists() {
-        eprintln!("SKIP: a2_example.nam not found at {nam_path:?}.");
+        eprintln!("[STATUS] SKIP_CAPABILITY: model_not_found:a2_example.nam");
         return;
     }
 
@@ -3361,7 +3369,7 @@ fn test_h0_triple_decomposition() {
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
     if !golden_path.exists() {
-        eprintln!("SKIP: golden_wavenet_a2_max.bin not found.");
+        eprintln!("[STATUS] SKIP_CAPABILITY: golden_not_found:golden_wavenet_a2_max.bin");
         return;
     }
 
@@ -3674,7 +3682,7 @@ fn test_tr2b2_condition_dsp_contract() {
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
     if !golden_path.exists() {
-        println!("SKIP: golden_wavenet_a2_max.bin not found.");
+        println!("[STATUS] SKIP_CAPABILITY: golden_not_found:golden_wavenet_a2_max.bin");
         return;
     }
     let (golden_input, _) =

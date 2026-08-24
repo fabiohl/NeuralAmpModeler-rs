@@ -125,12 +125,22 @@ pub fn mini_archive(members: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Write bytes to a unique temporary file and return its path.
 pub fn write_temp(bytes: &[u8], name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
-    path.push(format!("nam-avx512-guard-{}-{name}", std::process::id()));
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    path.push(format!(
+        "nam-avx512-guard-{}-{seq}-{name}",
+        std::process::id()
+    ));
     let mut f = fs::File::create(&path).expect("write fixture");
     f.write_all(bytes).expect("write fixture bytes");
+    f.sync_all().expect("sync fixture bytes");
+    drop(f);
     path
 }
 
@@ -138,9 +148,15 @@ pub fn write_temp(bytes: &[u8], name: &str) -> PathBuf {
 pub fn write_fake_tool(script: &str, label: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let mut path = std::env::temp_dir();
-    path.push(format!("nam-fake-objdump-{}-{label}", std::process::id()));
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    path.push(format!(
+        "nam-fake-objdump-{}-{seq}-{label}",
+        std::process::id()
+    ));
     let mut f = fs::File::create(&path).expect("write fake tool");
     f.write_all(script.as_bytes()).expect("write fake tool");
+    f.sync_all().expect("sync fake tool");
+    drop(f);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
     path
 }

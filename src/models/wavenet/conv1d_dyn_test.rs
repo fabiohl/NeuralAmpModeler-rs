@@ -126,12 +126,11 @@ fn test_conv1d_dyn_large_kernel_no_segfault() {
     }
 }
 
-/// Verifies that `Conv1dDyn::from_parts` panics when the weights buffer
-/// is smaller than the SIMD-padded total required by the interleaved layout.
+/// Verifies that `Conv1dDyn::from_parts` rejects a weights buffer smaller
+/// than the SIMD-padded total required by the interleaved layout.
 /// This hardening protects against silent UB caused by out-of-bounds reads
-/// in the SIMD convolution kernels for runtime-dimensional models.
+/// in the SIMD convolution kernels for runtime-dimensional models (F-01).
 #[test]
-#[should_panic(expected = "Conv1d weights buffer is too small")]
 fn test_conv1d_dyn_from_parts_subdimensioned_weights() {
     use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
     use crate::loader::dispatcher::wavenet::traits::ConvWeightsOutput;
@@ -150,5 +149,100 @@ fn test_conv1d_dyn_from_parts_subdimensioned_weights() {
     let bias =
         AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
 
-    Conv1dDyn::from_parts(weights, bias, false, 1, in_ch, out_ch, k_size);
+    let err = match Conv1dDyn::from_parts(weights, bias, false, 1, in_ch, out_ch, k_size) {
+        Ok(_) => panic!("sub-dimensioned weights must be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("weights buffer is too small"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Verifies that `Conv1dDyn::from_parts` rejects a zero kernel size
+/// (would underflow the tap-offset arithmetic on the hot-path — F-01/F-03).
+#[test]
+fn test_conv1d_dyn_from_parts_rejects_zero_kernel() {
+    use crate::loader::dispatcher::wavenet::traits::ConvWeightsOutput;
+    use crate::math::common::AlignedVec;
+
+    let weights =
+        AlignedVec::new(64, 0.0f32).expect("allocation should succeed for test-sized buffers");
+    let bias =
+        AlignedVec::new(4, 0.0f32).expect("allocation should succeed for test-sized buffers");
+
+    let err = match Conv1dDyn::from_parts(weights, bias, false, 1, 2, 4, 0) {
+        Ok(_) => panic!("kernel_size == 0 must be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("kernel_size must be >= 1"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Verifies that `Conv1dDyn::from_parts` rejects a kernel size above
+/// `MAX_KERNEL` (the hot-path tap array is fixed at MAX_KERNEL entries — F-01).
+#[test]
+fn test_conv1d_dyn_from_parts_rejects_kernel_above_max() {
+    use crate::loader::dispatcher::wavenet::traits::ConvWeightsOutput;
+    use crate::math::common::AlignedVec;
+    use crate::models::wavenet::MAX_KERNEL;
+
+    let k_size = MAX_KERNEL + 1;
+    let weights = AlignedVec::new(4 * 4 * 2 * k_size, 0.0f32)
+        .expect("allocation should succeed for test-sized buffers");
+    let bias =
+        AlignedVec::new(4, 0.0f32).expect("allocation should succeed for test-sized buffers");
+
+    let err = match Conv1dDyn::from_parts(weights, bias, false, 1, 2, 4, k_size) {
+        Ok(_) => panic!("kernel_size above MAX_KERNEL must be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("exceeds maximum supported"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Verifies that a frame index below the warm-up threshold
+/// (`frame_idx < (kernel-1)*dilation`) is clamped instead of producing a
+/// wrapped (out-of-bounds) tap pointer (F-01).
+#[test]
+fn test_conv1d_dyn_warmup_underflow_clamped() {
+    use crate::math::common::Avx2Math;
+
+    let in_ch = 2;
+    let out_ch: usize = 4;
+    let kernel = 4;
+    let dilation = 8;
+
+    let num_blocks = out_ch.div_ceil(4);
+    let total_padded = num_blocks * 4 * in_ch * kernel;
+
+    let weights = AlignedVec::new(total_padded, 1.0f32)
+        .expect("allocation should succeed for test-sized buffers");
+    let bias =
+        AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
+
+    let conv = Conv1dDyn {
+        weights,
+        bias,
+        do_bias: true,
+        dilation,
+        in_ch,
+        out_ch,
+        num_blocks: out_ch.div_ceil(4),
+        interleave_width: 4,
+        kernel,
+    };
+
+    // Warm-up threshold is (kernel-1)*dilation = 24; a frame_idx of 0 must be
+    // clamped to the buffer start (no wrapping, no crash, no UB).
+    let layer_buffer = vec![1.0f32; 48 * in_ch];
+    let mut block = vec![0.0f32; out_ch];
+    unsafe {
+        conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut block, 0, None);
+    }
+    assert!(block.iter().all(|v| v.is_finite()));
 }

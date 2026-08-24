@@ -710,20 +710,31 @@ mod tests {
         out
     }
 
+    static UNIT_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn write_temp(bytes: &[u8], name: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("nam-bin-guard-{}-{name}", std::process::id()));
+        let seq = UNIT_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        path.push(format!("nam-bin-guard-{}-{seq}-{name}", std::process::id()));
         let mut f = fs::File::create(&path).expect("write fixture");
         f.write_all(bytes).expect("write fixture bytes");
+        f.sync_all().expect("sync fixture bytes");
+        drop(f);
         path
     }
 
     fn write_fake_tool(script: &str, label: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let mut path = std::env::temp_dir();
-        path.push(format!("nam-fake-objdump-{}-{label}", std::process::id()));
+        let seq = UNIT_TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        path.push(format!(
+            "nam-fake-objdump-{}-{seq}-{label}",
+            std::process::id()
+        ));
         let mut f = fs::File::create(&path).expect("write fake tool");
         f.write_all(script.as_bytes()).expect("write fake tool");
+        f.sync_all().expect("sync fake tool");
+        drop(f);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
         path
     }

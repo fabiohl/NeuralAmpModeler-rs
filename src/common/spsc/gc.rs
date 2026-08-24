@@ -112,7 +112,10 @@ macro_rules! define_gc_item {
             ///
             /// Should a future x86-64 extension widen the canonical address range
             /// beyond 57 bits or a non-Linux kernel violate this convention, the
-            /// `debug_assert!` below will fire and the packing scheme must be revised.
+            /// `assert!` below fires deterministically (H-01): a silent truncation
+            /// would corrupt the `type_id` and later dispatch `Box::from_raw` with
+            /// a mismatched type — UB. `GcOverflowBuffer::new` also runs an
+            /// initialization probe so the failure surfaces at setup time.
             pub(crate) fn into_packed(self) -> u64 {
                 let type_id = self.type_id();
                 let ptr = match self {
@@ -122,7 +125,10 @@ macro_rules! define_gc_item {
                     )*
                 };
 
-                debug_assert!(
+                // H-01: explicit release check (previously `debug_assert!`,
+                // which was compiled out of release builds — a 57-bit+ address
+                // would then collide with the type_id silently).
+                assert!(
                     (ptr as u64) < (1u64 << 56),
                     "GC pointer 0x{:016X} exceeds 56 bits — packing scheme is unsafe \
                      on this system (requires LA57 with 57-bit canonical addresses or less).",
@@ -161,8 +167,8 @@ impl GcItem {
     /// See [`into_packed`](Self::into_packed) — the same 56-bit canonical
     /// address assumption applies here, as the pointer is extracted via
     /// `packed & 0x00FF_FFFF_FFFF_FFFF`.  If that assumption does not hold,
-    /// the pointer will be silently truncated (caught by the `debug_assert!`
-    /// in `into_packed`).
+    /// `into_packed` aborts deterministically before a truncated pointer can
+    /// reach this function (H-01).
     ///
     /// # Safety
     /// The pointer embedded in `packed` must be valid for the type encoded
@@ -202,6 +208,27 @@ impl GcOverflowBuffer {
         assert!(
             capacity > 0,
             "GcOverflowBuffer: capacity must be greater than 0 to avoid division by zero panic."
+        );
+        // H-01: initialization probe — verify the 56-bit pointer packing scheme
+        // is safe on this system before any real GC item is packed. On x86-64
+        // with 4-level (LA48) or 5-level (LA57) paging this always passes; a
+        // widened canonical address range fails deterministically here (off-RT,
+        // at setup) instead of silently colliding with the type_id at runtime.
+        let probe_addr = {
+            let probe = Box::new(0u8);
+            let addr = Box::into_raw(probe) as u64;
+            // SAFETY: immediately re-box the probe pointer — same type, same
+            // allocation, no aliasing — restoring its ownership for a normal
+            // drop. This only observes the address; nothing is leaked or freed.
+            unsafe {
+                drop(Box::from_raw(addr as *mut u8));
+            }
+            addr
+        };
+        assert!(
+            probe_addr < (1u64 << 56),
+            "GC 56-bit packing scheme is unsafe on this system: heap probe pointer \
+             0x{probe_addr:016X} exceeds 56 bits (requires LA48/LA57 canonical addressing)"
         );
         let mut slots = Vec::with_capacity(capacity);
         for _ in 0..capacity {

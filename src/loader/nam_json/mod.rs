@@ -33,9 +33,9 @@ pub use parse::parse_nam_json;
 #[cfg(test)]
 pub(crate) use topology::parse_semver;
 pub use topology::{
-    A2TopologyResult, ConvNetFormat, ConvNetTopology, FreeWavenetGeometry, NamWavenetTopology,
-    WavenetTopologyResult, get_convnet_topology, get_linear_topology, get_lstm_topology,
-    get_wavenet_topology, is_a2_shape,
+    A2TopologyResult, A2TopologyVectors, ConvNetFormat, ConvNetTopology, FreeWavenetGeometry,
+    NamWavenetTopology, WavenetTopologyResult, get_convnet_topology, get_linear_topology,
+    get_lstm_topology, get_wavenet_topology, is_a2_shape, validate_a2_layer_topology,
 };
 
 #[cfg(test)]

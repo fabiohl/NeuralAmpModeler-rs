@@ -28,7 +28,7 @@
 use serde_json::Value;
 
 use super::metrics::{FidelityRecord, MetricValue, fidelity_from_json};
-use super::verify::{LatencyRecord, PhaseRecord};
+use super::verify::{LatencyRecord, PhaseRecord, parse_record_counts};
 
 /// Output style of the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,7 +343,13 @@ pub fn parse_quality_report_file(
 fn phase_from_json(value: &Value) -> Option<PhaseRecord> {
     let phase_id = value.get("phase_id")?.as_str()?.to_string();
     let status = value.get("status")?.as_str()?.to_string();
-    Some(PhaseRecord { phase_id, status })
+    let (observed_records, expected_records) = parse_record_counts(value);
+    Some(PhaseRecord {
+        phase_id,
+        status,
+        observed_records,
+        expected_records,
+    })
 }
 
 fn header_from_json(value: &Value) -> ReportHeader {

@@ -47,7 +47,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use neural_amp_modeler_rs::testing::qa::QualityContract;
-use neural_amp_modeler_rs::testing::qa::classify::classify_regression_outcome;
+use neural_amp_modeler_rs::testing::qa::classify::{
+    classify_fresh_regression, classify_regression_outcome,
+};
 use neural_amp_modeler_rs::testing::qa::ids;
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
@@ -187,13 +189,30 @@ fn required<'a>(flags: &'a Flags, name: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing required flag --{name}"))
 }
 
+/// Parses a non-negative integer flag value.
+///
+/// T2.3: values produced by shell `grep -c` pipelines may carry multiple
+/// lines. The FIRST non-empty, trimmed line must be the plain count — the
+/// embedded newline is tolerated instead of failing the whole receipt. A
+/// non-numeric value (including the `file:count` form of a multi-file grep,
+/// which is rejected fail-closed) still fails with a usage error.
 fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
     match flags.get(name) {
         None => 0,
-        Some(v) => match v.parse() {
-            Ok(n) => n,
-            Err(_) => usage_error(context, &format!("--{name} must be a non-negative integer")),
-        },
+        Some(v) => {
+            let first_line = v
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("");
+            match first_line.parse() {
+                Ok(n) => n,
+                Err(_) => usage_error(
+                    context,
+                    &format!("--{name} must be a non-negative integer (got '{first_line}')"),
+                ),
+            }
+        }
     }
 }
 
@@ -727,7 +746,7 @@ fn print_render_help() {
 // ── classify ────────────────────────────────────────────────────────────────
 
 fn cmd_classify(args: &[String]) {
-    let flags = match parse_flags(args, &["status", "reason"], &[]) {
+    let flags = match parse_flags(args, &["status", "reason", "reg-exit", "run-id-match"], &[]) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_classify_help();
@@ -741,14 +760,37 @@ fn cmd_classify(args: &[String]) {
     };
     let reason = flags.get("reason").unwrap_or("");
 
-    // The single performance-status classifier (qa::classify, F-08) — the
-    // dashboard delegates here instead of keeping a second 3-way copy.
-    println!("{}", classify_regression_outcome(status, reason).as_str());
+    // T2.3: fresh-run classification — `--reg-exit <n>` and
+    // `--run-id-match <0|1>` make the classifier stale-receipt-proof. When
+    // omitted (legacy callers) the 3-way F-08 classifier is used.
+    let reg_exit = flags.get("reg-exit");
+    let run_id_match = flags.get("run-id-match");
+    let outcome = match (reg_exit, run_id_match) {
+        (Some(exit_str), Some(match_str)) => {
+            let exit_code: i32 = match exit_str.parse() {
+                Ok(n) => n,
+                Err(_) => usage_error("classify", "--reg-exit must be an integer"),
+            };
+            let matches = match match_str {
+                "1" | "true" => true,
+                "0" | "false" => false,
+                _ => usage_error("classify", "--run-id-match must be 0 or 1"),
+            };
+            classify_fresh_regression(exit_code, status, reason, matches)
+        }
+        (None, None) => classify_regression_outcome(status, reason),
+        _ => usage_error(
+            "classify",
+            "--reg-exit and --run-id-match must be provided together",
+        ),
+    };
+    println!("{}", outcome.as_str());
     exit(0);
 }
 
 fn print_classify_help() {
     println!("Usage: nam_quality classify --status <STATUS> --reason <text>");
+    println!("                           [--reg-exit <n> --run-id-match <0|1>]");
     println!();
     println!("Classifies a regression receipt into the single performance status");
     println!("(`qa::classify`, F-08): PASS / NOT_VERIFIED / FAIL.");
@@ -756,6 +798,11 @@ fn print_classify_help() {
     println!("  --status <STATUS>  receipt status (e.g. PASS, FAIL, NOT_RUN).");
     println!("  --reason <text>    receipt reason (e.g. MISSING_BASELINE,");
     println!("                      INCOMPARABLE_ENVIRONMENT, REGRESSION_DETECTED).");
+    println!("  --reg-exit <n>     exit code of the regression runner (T2.3).");
+    println!("  --run-id-match     whether the receipt's run_id equals the current");
+    println!("                     RUN_ID (0|1). Together they make the classifier");
+    println!("                     stale-receipt-proof: a PASS from a previous run");
+    println!("                     never validates a failed/aborted current run.");
 }
 
 // ── receipt append ──────────────────────────────────────────────────────────

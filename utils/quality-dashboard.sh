@@ -215,15 +215,10 @@ declare -a ALL_BENCH_NAMES=()
 
 SPECTRAL_PASSED_COUNT=0
 
-# ── Mandatory dashboard phases (fail-closed gate) ───────────────────────────
-# Phases listed here must receive PASS status in the phase receipt for the
-# dashboard to be considered successful. Any FAIL or missing receipt triggers
-# a contract violation in --check mode.
-declare -A PHASE_MANDATORY=(
-    ["golden_vectors"]="1"
-    ["reference_oracle_f64"]="1"
-    ["quick_parity"]="1"
-)
+# ── Mandatory dashboard phases ──────────────────────────────────────────────
+# The authoritative mandatory-phase list lives in Rust
+# (`src/testing/qa/verify.rs::MANDATORY_FIDELITY_PHASES`) — the old bash
+# `PHASE_MANDATORY` associative table was dead code and is gone (T2.2).
 
 # ── Coverage matrix axes (coverage governance) ─────────────────────────────
 # Tracks per-axis coverage info for the coverage matrix summary.
@@ -252,22 +247,49 @@ BENCH_DURATION_S=0
 run_phase0_freshness() {
     local freshness_log="$LOGDIR/freshness.log"
 
+    # NAM_BYPASS_FRESHNESS=1 is an explicit, receipt-visible gap (T2.2):
+    # recorded as NOT_RUN + reason `bypass:freshness` with observed=0/expected=1
+    # (the record shortfall fails `nam_quality verify`) — never a clean PASS.
+    if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
+        echo -e "  ${YELLOW}ⓘ NAM_BYPASS_FRESHNESS=1 — freshness gate bypassed (recorded as gap).${NC}"
+        dashboard_phase_receipt "freshness" "NOT_RUN" 0 0 1 "bypass:freshness"
+        return 0
+    fi
+
     set +e
-    run_freshness_gate artifacts-hard > "$freshness_log" 2>&1
+    # Direct `check_freshness` (nam_freshness) capture — the stdout-swallowing
+    # `run_freshness_gate` wrapper was removed from `_lib.sh`; capturing the
+    # binary's actual diagnostics proves the gate observed real records (an
+    # empty freshness log would leave observed=0 and fail the contract).
+    check_freshness artifacts-hard > "$freshness_log" 2>&1
     local freshness_rc=$?
     set -e
 
+    # F-07: observed records = actual diagnostic lines the gate produced; an
+    # empty/suppressed freshness log yields observed=0 and fails the contract.
+    local observed_records=0
+    if [ -f "$freshness_log" ]; then
+        observed_records=$(grep -c '[^[:space:]]' "$freshness_log" 2>/dev/null || echo 0)
+    fi
+
     if [ "$freshness_rc" -ne 0 ]; then
-        local reason="${FRESHNESS_REASON:-FRESHNESS_FAILED}"
+        local reason="FRESHNESS_FAILED"
+        if grep -q 'STALE' "$freshness_log" 2>/dev/null; then
+            reason="STALE_FIXTURES"
+        elif grep -q 'MISSING' "$freshness_log" 2>/dev/null; then
+            reason="MISSING_FIXTURES"
+        elif grep -q 'ORPHAN' "$freshness_log" 2>/dev/null; then
+            reason="ORPHAN_FIXTURE"
+        fi
         DASHBOARD_PHASE_HAD_FAILURE=1
-        dashboard_phase_receipt "freshness" "FAIL" "$freshness_rc" 0 1 "$reason"
+        dashboard_phase_receipt "freshness" "FAIL" "$freshness_rc" "$observed_records" 1 "$reason"
         echo -e "  ${RED}✗${NC} ${reason} — golden fixtures diverged from the committed manifest."
         echo -e "  ${RED}  Run './tests/fixtures/golden_gen_build.sh' to regenerate goldens and manifest.${NC}"
         echo -e "  ${RED}  Freshness gate detail: ${freshness_log}${NC}"
         return 1
     fi
 
-    dashboard_phase_receipt "freshness" "PASS" "$freshness_rc" 0 1 ""
+    dashboard_phase_receipt "freshness" "PASS" "$freshness_rc" "$observed_records" 1 ""
     echo -e "  ${GREEN}ok${NC} freshness gate passed (goldens trustworthy; no false alarms)"
 
     # NAMCore third-party reference — graceful, non-noisy skip when absent.
@@ -408,10 +430,19 @@ run_benchmarks() {
         fi
 
         # The single performance-status classifier lives in
-        # `qa::classify` (F-08) — delegated via `nam_quality classify`; no
-        # second 3-way copy here anymore.
+        # `qa::classify` (F-08/T2.3) — delegated via `nam_quality classify`
+        # with the stale-receipt guards: `--reg-exit` and `--run-id-match`.
+        # A non-zero benchmark exit is an immediate FAIL unless a FRESH
+        # receipt from THIS run declares the typed NOT_VERIFIED reasons; a
+        # stale PASS from a previous run never validates the current run.
+        local run_id_match=0
+        if [ -n "$RUN_ID" ] && [ -n "$receipt_run_id" ] && [ "$receipt_run_id" = "$RUN_ID" ]; then
+            run_id_match=1
+        fi
         local perf_status
-        perf_status=$("$NAM_QUALITY_BIN" classify --status "${receipt_status:-}" --reason "${receipt_reason:-}") \
+        perf_status=$("$NAM_QUALITY_BIN" classify \
+            --status "${receipt_status:-}" --reason "${receipt_reason:-}" \
+            --reg-exit "$reg_exit" --run-id-match "$run_id_match") \
             || perf_status="FAIL"
         case "$perf_status" in
             PASS)
@@ -972,6 +1003,8 @@ main() {
     fi
 
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "bench" ]; then
+        echo -e "  ${BLUE}⏳ Aguardando 180s para estabilização térmica do sistema antes dos benchmarks...${NC}"
+        sleep 180
         phase "regression_gate benchmarks"
         run_benchmarks
     fi

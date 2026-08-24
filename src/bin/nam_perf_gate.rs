@@ -181,13 +181,30 @@ fn required<'a>(flags: &'a Flags, name: &str) -> Result<&'a str, String> {
         .ok_or_else(|| format!("missing required flag --{name}"))
 }
 
+/// Parses a non-negative integer flag value.
+///
+/// T2.3: values produced by shell `grep -c` pipelines may carry multiple
+/// lines. The FIRST non-empty, trimmed line must be the plain count — the
+/// embedded newline is tolerated instead of failing the whole gate. A
+/// non-numeric value (including the `file:count` form of a multi-file grep,
+/// which is rejected fail-closed) still fails with a usage error.
 fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
     match flags.get(name) {
         None => 0,
-        Some(v) => match v.parse() {
-            Ok(n) => n,
-            Err(_) => usage_error(context, &format!("--{name} must be a non-negative integer")),
-        },
+        Some(v) => {
+            let first_line = v
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("");
+            match first_line.parse() {
+                Ok(n) => n,
+                Err(_) => usage_error(
+                    context,
+                    &format!("--{name} must be a non-negative integer (got '{first_line}')"),
+                ),
+            }
+        }
     }
 }
 

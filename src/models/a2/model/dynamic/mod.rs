@@ -218,20 +218,65 @@ impl WaveNetA2Dyn {
         secondary_activations: Vec<Option<ActivationType>>,
     ) -> anyhow::Result<Self> {
         let num_layers = kernel_sizes.len();
-        assert_eq!(dilations.len(), num_layers);
-        assert_eq!(activations.len(), num_layers);
-        assert_eq!(gating_modes.len(), num_layers);
-        assert_eq!(secondary_activations.len(), num_layers);
+        // F-02: diverging topology vector lengths are pre-condition errors
+        // (previously `assert_eq!` — panicked across the loader API).
+        if dilations.len() != num_layers {
+            anyhow::bail!(
+                "WaveNetA2Dyn::new: dilations length ({}) != kernel_sizes length ({num_layers})",
+                dilations.len()
+            );
+        }
+        if activations.len() != num_layers {
+            anyhow::bail!(
+                "WaveNetA2Dyn::new: activations length ({}) != kernel_sizes length ({num_layers})",
+                activations.len()
+            );
+        }
+        if gating_modes.len() != num_layers {
+            anyhow::bail!(
+                "WaveNetA2Dyn::new: gating_modes length ({}) != kernel_sizes length ({num_layers})",
+                gating_modes.len()
+            );
+        }
+        if secondary_activations.len() != num_layers {
+            anyhow::bail!(
+                "WaveNetA2Dyn::new: secondary_activations length ({}) != kernel_sizes length ({num_layers})",
+                secondary_activations.len()
+            );
+        }
 
         let max_buf = WAVENET_MAX_NUM_FRAMES;
 
+        // F-03/F-04: checked arithmetic and layer caps before any allocation.
         let mut rf = 0usize;
+        let mut per_layer_lookbacks = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
-            rf += (kernel_sizes[i] - 1) * dilations[i];
+            let kernel = kernel_sizes[i];
+            let dilation = dilations[i];
+            let lookback = kernel
+                .checked_sub(1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "WaveNetA2Dyn::new: kernel_sizes[{i}] must be >= 1, got {kernel}"
+                    )
+                })?
+                .checked_mul(dilation)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "WaveNetA2Dyn::new: (kernel_sizes[{i}] - 1) * dilations[{i}] overflows usize"
+                    )
+                })?;
+            rf = rf.checked_add(lookback).ok_or_else(|| {
+                anyhow::anyhow!("WaveNetA2Dyn::new: receptive field sum overflows usize")
+            })?;
+            per_layer_lookbacks.push(lookback);
         }
         rf += head_kernel_size.saturating_sub(1);
 
-        let head_ring_size = (rf + max_buf + 1).next_power_of_two();
+        let head_ring_cap = rf.checked_add(max_buf + 1).ok_or_else(|| {
+            anyhow::anyhow!("WaveNetA2Dyn::new: head ring capacity overflows usize")
+        })?;
+        let head_ring_size = head_ring_cap.next_power_of_two();
         let head_ring_mask = head_ring_size - 1;
 
         let mut layer_buffers = Vec::with_capacity(num_layers);
@@ -239,10 +284,14 @@ impl WaveNetA2Dyn {
         let mut layer_lookbacks = Vec::with_capacity(num_layers);
         let mut layer_buffer_starts = Vec::with_capacity(num_layers);
 
-        for i in 0..num_layers {
-            let max_lookback = (kernel_sizes[i] - 1) * dilations[i];
-            let cap = max_lookback + max_buf + 1;
-            let mb = MirroredBuffer::<f32>::new(cap * channels)?;
+        for (i, &max_lookback) in per_layer_lookbacks.iter().enumerate() {
+            let cap = max_lookback.checked_add(max_buf + 1).ok_or_else(|| {
+                anyhow::anyhow!("WaveNetA2Dyn::new: layer[{i}] buffer capacity overflows usize")
+            })?;
+            let elem_count = cap.checked_mul(channels).ok_or_else(|| {
+                anyhow::anyhow!("WaveNetA2Dyn::new: layer[{i}] buffer size overflows usize")
+            })?;
+            let mb = MirroredBuffer::<f32>::new(elem_count)?;
             let ring_size = mb.size();
             layer_buffers.push(mb);
             layer_ring_sizes.push(ring_size);
@@ -280,8 +329,7 @@ impl WaveNetA2Dyn {
             blending_configs.push(bc);
         }
 
-        let head1x1_scratch = AlignedVec::new(head_accum_size, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        let head1x1_scratch = AlignedVec::new(head_accum_size, 0.0f32)?;
 
         Ok(Self {
             input_channels,
@@ -291,29 +339,23 @@ impl WaveNetA2Dyn {
             bottleneck,
             num_layers,
             layers: Vec::with_capacity(num_layers),
-            rechannel_w_f32: AlignedVec::new(input_channels * channels, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            rechannel_w_f32: AlignedVec::new(input_channels * channels, 0.0f32)?,
             head_conv: None,
             head_kernel_size,
             head_rechannel_w: AlignedVec::new(
                 head_size.max(1) * head_kernel_size * head_accum_size,
                 0.0f32,
-            )
-            .expect("allocation should succeed for test-sized buffers"),
-            head_rechannel_b: AlignedVec::new(head_size.max(1), 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            head_rechannel_scale: AlignedVec::new(head_size.max(1), 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            head_accum: AlignedVec::new(head_ring_size * head_accum_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            )?,
+            head_rechannel_b: AlignedVec::new(head_size.max(1), 0.0f32)?,
+            head_rechannel_scale: AlignedVec::new(head_size.max(1), 0.0f32)?,
+            head_accum: AlignedVec::new(head_ring_size * head_accum_size, 0.0f32)?,
             head_write_pos: rf,
             head_ring_mask,
             layer_buffers,
             layer_ring_sizes,
             layer_lookbacks,
             layer_buffer_starts,
-            layer_in: AlignedVec::new(channels * max_buf, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            layer_in: AlignedVec::new(channels * max_buf, 0.0f32)?,
             kernel_sizes: kernel_sizes.to_vec(),
             dilations: dilations.to_vec(),
             activations,
@@ -329,19 +371,14 @@ impl WaveNetA2Dyn {
             max_buffer_size: max_buf,
             layer_raw: None,
             condition_size: 1,
-            z_scratch: AlignedVec::new(bottleneck * 2, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            mixin_scratch: AlignedVec::new(bottleneck * 2, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            l1x1_scratch: AlignedVec::new(channels, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            cond_scratch: AlignedVec::new(1, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            z_scratch: AlignedVec::new(bottleneck * 2, 0.0f32)?,
+            mixin_scratch: AlignedVec::new(bottleneck * 2, 0.0f32)?,
+            l1x1_scratch: AlignedVec::new(channels, 0.0f32)?,
+            cond_scratch: AlignedVec::new(1, 0.0f32)?,
             head1x1_scratch,
             prewarm_on_reset: true,
             condition_dsp: None,
-            condition_dsp_output: AlignedVec::new(0, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            condition_dsp_output: AlignedVec::new(0, 0.0f32)?,
             diag: DiagnosticState::default(),
         })
     }
@@ -371,15 +408,22 @@ impl WaveNetA2Dyn {
     ///
     /// `max_buf` is the maximum number of frames per processing block
     /// (typically [`WAVENET_MAX_NUM_FRAMES`]).
-    pub fn set_condition_dsp(&mut self, cond_dsp: Option<Box<StaticModel>>, max_buf: usize) {
+    ///
+    /// Fallible (H-05): an allocation failure propagates as `Err` instead of
+    /// panicking on the loader path.
+    pub fn set_condition_dsp(
+        &mut self,
+        cond_dsp: Option<Box<StaticModel>>,
+        max_buf: usize,
+    ) -> anyhow::Result<()> {
         let cond_size = if cond_dsp.is_some() {
             self.condition_size
         } else {
             0
         };
-        self.condition_dsp_output = AlignedVec::new(cond_size * max_buf, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.condition_dsp_output = AlignedVec::new(cond_size * max_buf, 0.0f32)?;
         self.condition_dsp = cond_dsp;
+        Ok(())
     }
 
     /// Returns whether weights have been loaded.
@@ -442,9 +486,34 @@ impl WaveNetA2Dyn {
         self.layer_buffer_starts.clear();
 
         for i in 0..self.num_layers {
-            let max_lookback = (self.kernel_sizes[i] - 1) * self.dilations[i];
-            let cap = max_lookback + max_buf + 1;
-            let mb = MirroredBuffer::<f32>::new(cap * channels)?;
+            // F-03/F-04: checked arithmetic (kernel underflow / capacity overflow
+            // must never reach the allocator).
+            let kernel = self.kernel_sizes[i];
+            let dilation = self.dilations[i];
+            let max_lookback = kernel
+                .checked_sub(1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "WaveNetA2Dyn::set_max_buffer_size: kernel_sizes[{i}] must be >= 1, got {kernel}"
+                    )
+                })?
+                .checked_mul(dilation)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "WaveNetA2Dyn::set_max_buffer_size: (kernel_sizes[{i}] - 1) * dilations[{i}] overflows usize"
+                    )
+                })?;
+            let cap = max_lookback.checked_add(max_buf + 1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "WaveNetA2Dyn::set_max_buffer_size: layer[{i}] capacity overflows usize"
+                )
+            })?;
+            let elem_count = cap.checked_mul(channels).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "WaveNetA2Dyn::set_max_buffer_size: layer[{i}] buffer size overflows usize"
+                )
+            })?;
+            let mb = MirroredBuffer::<f32>::new(elem_count)?;
             let ring_size = mb.size();
             self.layer_buffers.push(mb);
             self.layer_ring_sizes.push(ring_size);
@@ -452,18 +521,18 @@ impl WaveNetA2Dyn {
             self.layer_buffer_starts.push(ring_size);
         }
 
-        self.layer_in = AlignedVec::new(channels * max_buf, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.layer_in = AlignedVec::new(channels * max_buf, 0.0f32)?;
 
-        let head_ring_size = (rf + max_buf + 1).next_power_of_two();
+        let head_ring_cap = rf.checked_add(max_buf + 1).ok_or_else(|| {
+            anyhow::anyhow!("WaveNetA2Dyn::set_max_buffer_size: head ring capacity overflows usize")
+        })?;
+        let head_ring_size = head_ring_cap.next_power_of_two();
         self.head_ring_mask = head_ring_size - 1;
-        self.head_accum = AlignedVec::new(head_ring_size * self.head_accum_size, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.head_accum = AlignedVec::new(head_ring_size * self.head_accum_size, 0.0f32)?;
         self.head_write_pos = rf;
 
         let cond_output_size = self.condition_size * max_buf;
-        self.condition_dsp_output = AlignedVec::new(cond_output_size, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.condition_dsp_output = AlignedVec::new(cond_output_size, 0.0f32)?;
 
         Ok(())
     }

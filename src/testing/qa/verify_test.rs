@@ -251,6 +251,249 @@ fn non_mandatory_phase_fail_still_counts_as_fidelity_violation() {
     );
 }
 
+// ── F-07: record-count gate (observed_records >= expected_records) ──────────
+
+/// Phase line carrying the F-07 record counts (`observed`/`expected`).
+fn phase_line_counts(phase_id: &str, status: &str, observed: u64, expected: u64) -> String {
+    format!(
+        r#"{{"phase_id":"{phase_id}","status":"{status}","observed_records":{observed},"expected_records":{expected}}}"#
+    )
+}
+
+#[test]
+fn f07_phase_pass_with_zero_or_low_records_is_fidelity_violation() {
+    // Acceptance (F-07): a phase classified PASS while observing zero records
+    // (empty/suppressed freshness log) fails immediately — never certified.
+    let contract = load_contract();
+    let mut lines: Vec<String> = ALL_PASS
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("freshness", "PASS", 0, 1));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
+        "freshness PASS with 0/1 records must fail closed: {outcome:?}"
+    );
+    assert_eq!(outcome.exit_code(), 1);
+}
+
+#[test]
+fn f07_phase_pass_with_sufficient_records_is_ok() {
+    let contract = load_contract();
+    let mut lines: Vec<String> = ALL_PASS
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("freshness", "PASS", 1, 1));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert!(
+        outcome.fidelity.is_ok(),
+        "freshness PASS with 1/1 records must pass: {outcome:?}"
+    );
+    assert_eq!(outcome.exit_code(), 0);
+}
+
+#[test]
+fn f07_bypass_freshness_not_run_registers_record_gap() {
+    // NAM_BYPASS_FRESHNESS=1 is recorded as NOT_RUN + reason bypass:freshness
+    // with observed=0/expected=1 — the record shortfall is a violation, the
+    // bypass is never promoted to a clean PASS.
+    let contract = load_contract();
+    let mut lines: Vec<String> = ALL_PASS
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("freshness", "NOT_RUN", 0, 1));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
+        "bypass:freshness (NOT_RUN, 0/1) must fail closed: {outcome:?}"
+    );
+}
+
+#[test]
+fn f07_regression_gate_shortfall_never_flips_fidelity() {
+    // PERF-006: a NOT_VERIFIED regression_gate records 0/10 records — the
+    // shortfall belongs to the performance domain, never to FIDELITY.
+    let contract = load_contract();
+    let phases = [
+        ("golden_vectors", "PASS"),
+        ("reference_oracle_f64", "PASS"),
+        ("quick_parity", "PASS"),
+        ("regression_gate", "NOT_VERIFIED"),
+    ];
+    let mut lines: Vec<String> = phases
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("regression_gate", "NOT_VERIFIED", 0, 10));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert!(
+        outcome.fidelity.is_ok(),
+        "regression_gate shortfall must never flip FIDELITY (PERF-006): {outcome:?}"
+    );
+    assert!(
+        outcome.performance.is_not_verified(),
+        "regression_gate NOT_VERIFIED must yield PERFORMANCE: NOT_VERIFIED"
+    );
+    assert_eq!(outcome.exit_code(), 1);
+}
+
+#[test]
+fn f07_skip_capability_with_zero_records_is_not_a_violation() {
+    // A declared skip (graceful third_party absence) with 0/1 records is not
+    // a record shortfall — the phase declared it did not run.
+    let contract = load_contract();
+    let mut lines: Vec<String> = ALL_PASS
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("third_party", "SKIP_CAPABILITY", 0, 1));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert!(
+        outcome.fidelity.is_ok(),
+        "declared SKIP_CAPABILITY with 0/1 records must not violate: {outcome:?}"
+    );
+}
+
+#[test]
+fn f07_mandatory_not_run_with_shortfall_counts_exactly_once() {
+    // A mandatory fidelity phase recorded NOT_RUN with a record shortfall is
+    // accounted exactly once — by the mandatory scan, not twice (F-07 must
+    // not double-count it as both NOT_RUN and record-shortfall).
+    let contract = load_contract();
+    let phases = [
+        ("golden_vectors", "NOT_RUN"),
+        ("reference_oracle_f64", "PASS"),
+        ("quick_parity", "PASS"),
+        ("regression_gate", "PASS"),
+    ];
+    let mut lines: Vec<String> = phases
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("golden_vectors", "NOT_RUN", 0, 50));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
+        "mandatory NOT_RUN + shortfall must count once: {outcome:?}"
+    );
+    assert_eq!(outcome.exit_code(), 1);
+}
+
+#[test]
+fn f07_mandatory_pass_with_shortfall_still_counts_once() {
+    // A mandatory phase that CLAIMS PASS while observing a record shortfall
+    // is NOT covered by the mandatory scan (PASS is acceptable there) — the
+    // F-07 gate must count it exactly once.
+    let contract = load_contract();
+    let phases = [
+        ("golden_vectors", "PASS"),
+        ("reference_oracle_f64", "PASS"),
+        ("quick_parity", "PASS"),
+        ("regression_gate", "PASS"),
+    ];
+    let mut lines: Vec<String> = phases
+        .iter()
+        .map(|(id, status)| phase_line(id, status))
+        .collect();
+    lines.push(phase_line_counts("golden_vectors", "PASS", 0, 50));
+    for entry in &contract.fidelity {
+        if let Some(obj) = canonical_fidelity(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    for entry in &contract.performance {
+        if let Some(obj) = canonical_latency(entry) {
+            lines.push(obj.to_string());
+        }
+    }
+    let report = lines.join("\n");
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
+        "mandatory PASS + shortfall must count exactly once: {outcome:?}"
+    );
+}
+
 // ── Fidelity matching ──────────────────────────────────────────────────────
 
 #[test]

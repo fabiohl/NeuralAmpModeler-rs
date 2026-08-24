@@ -204,6 +204,12 @@ impl OversampleEngine {
     /// `output` must have room for `input.len() * factor.multiplier()` samples.
     /// Returns number of oversampled samples written.
     ///
+    /// Fail-closed (F-05): the output capacity contract is enforced in release
+    /// builds, not just by `debug_assert!`. When `output` is smaller than
+    /// required, the processed input is clamped so the stages never write past
+    /// `output`, and `RT_STATUS_HOST_CONTRACT_VIOLATION` is raised when
+    /// `rt_status` is provided.
+    ///
     /// Input blocks larger than `max_samples` are truncated defensively (F-12 /
     /// T2.4): when `rt_status` is provided the truncation raises
     /// `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
@@ -213,7 +219,12 @@ impl OversampleEngine {
         output: &mut [f32],
         rt_status: Option<&RtStatusFlags>,
     ) -> usize {
-        let n_in = input.len().min(self.max_samples);
+        let multiplier = self.factor.multiplier();
+        let mut n_in = input.len().min(self.max_samples);
+        // F-05: clamp to the output capacity so the half-band stages always
+        // write within `output` (previously release builds relied on a
+        // `debug_assert!` + `core::hint::assert_unchecked`, which was UB).
+        n_in = n_in.min(output.len() / multiplier);
         if n_in != input.len()
             && let Some(rt) = rt_status
         {
@@ -221,10 +232,7 @@ impl OversampleEngine {
         }
         let input = &input[..n_in];
         debug_assert!(input.len() <= self.max_samples);
-        debug_assert!(
-            output.len() >= input.len() * self.factor.multiplier(),
-            "oversample: output buffer too small for upsampling factor"
-        );
+        debug_assert!(output.len() >= input.len() * self.factor.multiplier());
 
         match &mut self.stages {
             OsStages::Off => {
@@ -252,6 +260,12 @@ impl OversampleEngine {
     /// `output` must have room for `input.len() / factor.multiplier()` samples.
     /// Returns number of native-rate samples written.
     ///
+    /// Fail-closed (F-05): the output capacity contract is enforced in release
+    /// builds, not just by `debug_assert!`. When `output` is smaller than
+    /// required, the processed input is clamped and
+    /// `RT_STATUS_HOST_CONTRACT_VIOLATION` is raised when `rt_status` is
+    /// provided.
+    ///
     /// Input blocks larger than `max_samples × multiplier` are truncated
     /// defensively (F-12 / T2.4): when `rt_status` is provided the truncation
     /// raises `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
@@ -261,8 +275,12 @@ impl OversampleEngine {
         output: &mut [f32],
         rt_status: Option<&RtStatusFlags>,
     ) -> usize {
-        let max_os = self.max_samples * self.factor.multiplier();
-        let n_in = input.len().min(max_os);
+        let multiplier = self.factor.multiplier();
+        let max_os = self.max_samples * multiplier;
+        let mut n_in = input.len().min(max_os);
+        // F-05: `output` must hold `n_in / multiplier` samples; clamp the
+        // processed input so the decimation stages never write past `output`.
+        n_in = n_in.min(output.len().saturating_mul(multiplier));
         if n_in != input.len()
             && let Some(rt) = rt_status
         {

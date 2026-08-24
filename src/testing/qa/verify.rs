@@ -55,6 +55,12 @@ pub struct PhaseRecord {
     pub phase_id: String,
     /// Receipt status, e.g. `PASS`, `FAIL`, `NOT_VERIFIED`, `NOT_RUN`.
     pub status: String,
+    /// Number of records actually observed by the phase (`0` when the receipt
+    /// predates the F-07 records field — a phase with `expected_records > 0`
+    /// observing zero records is a harness-integrity violation).
+    pub observed_records: u64,
+    /// Number of records the phase promised to observe (`0` = no promise).
+    pub expected_records: u64,
 }
 
 /// One latency measurement of the report.
@@ -150,6 +156,23 @@ pub enum VerifyError {
     Io(#[from] std::io::Error),
 }
 
+/// Extracts the F-07 record counts from a phase record, defaulting to `0/0`
+/// for reports that predate the records gate (no promise ⇒ no check).
+///
+/// Shared by the strict verify parser and the lenient render parser so the
+/// gate and the report can never drift on these fields.
+pub(crate) fn parse_record_counts(value: &Value) -> (u64, u64) {
+    let observed_records = value
+        .get("observed_records")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let expected_records = value
+        .get("expected_records")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    (observed_records, expected_records)
+}
+
 fn phase_from_json(value: &Value, line: usize) -> Result<PhaseRecord, VerifyError> {
     let phase_id = value
         .get("phase_id")
@@ -159,9 +182,12 @@ fn phase_from_json(value: &Value, line: usize) -> Result<PhaseRecord, VerifyErro
         .get("status")
         .and_then(Value::as_str)
         .ok_or(VerifyError::InvalidPhaseRecord { line })?;
+    let (observed_records, expected_records) = parse_record_counts(value);
     Ok(PhaseRecord {
         phase_id: phase_id.to_string(),
         status: status.to_string(),
+        observed_records,
+        expected_records,
     })
 }
 
@@ -406,8 +432,35 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
     // other phase with status FAIL is a fidelity violation. Mandatory
     // fidelity phases that are neither PASS nor FAIL (NOT_RUN, SKIP, …) also
     // count — without double-counting the FAILs of the first scan.
+    //
+    // F-07 record-count gate: a phase claiming `PASS`/`NOT_RUN` while
+    // observing fewer records than it expected is a harness-integrity
+    // violation — an empty or suppressed record stream (e.g. a freshness log
+    // with zero records) can never be certified. The performance domain
+    // (`regression_gate`) is excluded: its record shortfall is already
+    // represented by the `NOT_VERIFIED` status (PERF-006), and skip statuses
+    // (`SKIP_CAPABILITY`/`SKIP_OPTIONAL_FIXTURE`/`NOT_VERIFIED`) declare that
+    // the phase deliberately did not run.
     for phase in &report.phases {
         if phase.status == "FAIL" && phase.phase_id != REGRESSION_GATE_PHASE {
+            fidelity_violations += 1;
+        }
+        // F-07 record-count gate: a phase claiming `PASS`/`NOT_RUN` while
+        // observing fewer records than it expected is a harness-integrity
+        // violation — an empty or suppressed record stream (e.g. a freshness
+        // log with zero records) can never be certified. The performance
+        // domain (`regression_gate`) is excluded: its record shortfall is
+        // already represented by the `NOT_VERIFIED` status (PERF-006), and
+        // skip statuses (`SKIP_CAPABILITY`/`SKIP_OPTIONAL_FIXTURE`/`NOT_VERIFIED`)
+        // declare that the phase deliberately did not run. Mandatory phases
+        // with a non-PASS status are accounted by the mandatory scan below,
+        // so the shortfall applies to them only when they claim `PASS` — one
+        // broken phase always yields exactly one violation.
+        let mandatory = MANDATORY_FIDELITY_PHASES.contains(&phase.phase_id.as_str());
+        let shortfall =
+            phase.expected_records > 0 && phase.observed_records < phase.expected_records;
+        let clean_claim = phase.status == "PASS" || (phase.status == "NOT_RUN" && !mandatory);
+        if phase.phase_id != REGRESSION_GATE_PHASE && clean_claim && shortfall {
             fidelity_violations += 1;
         }
     }

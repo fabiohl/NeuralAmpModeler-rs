@@ -56,8 +56,11 @@ impl Conv1dDyn {
             .take(k_limit)
         {
             let offset = (self.dilation as isize) * ((k as isize) + 1 - (self.kernel as isize));
-            let in_start_f0 = ((idx_f0 as isize) + offset) as usize * self.in_ch;
-            let in_start_f1 = ((idx_f1 as isize) + offset) as usize * self.in_ch;
+            // F-01: same warm-up clamp as `Conv1dDyn::process_single_frame` —
+            // `idx + offset` below the receptive-field threshold must not wrap
+            // through `as usize` into an out-of-bounds pointer.
+            let in_start_f0 = ((idx_f0 as isize) + offset).max(0) as usize * self.in_ch;
+            let in_start_f1 = ((idx_f1 as isize) + offset).max(0) as usize * self.in_ch;
 
             unsafe {
                 *tap_f0 = layer_buffer.as_ptr().add(in_start_f0);

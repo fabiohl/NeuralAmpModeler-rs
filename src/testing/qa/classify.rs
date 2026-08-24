@@ -48,6 +48,37 @@ pub fn classify_regression_outcome(status: &str, reason: &str) -> RegressionOutc
     }
 }
 
+/// Fail-closed fresh-run classification (T2.3 / F-08) — the dashboard's
+/// `regression_gate` phase.
+///
+/// A receipt from a **previous** execution can never validate the current
+/// run, and a failed benchmark run can never be green:
+/// - `reg_exit == 0` ⇒ the runner certified the run; only a **fresh** `PASS`
+///   receipt (`run_id_matches`) proves it. A stale `PASS` from an older run
+///   (or an absent one) is `FAIL`.
+/// - `reg_exit != 0` ⇒ the phase is `FAIL` immediately — unless the **fresh**
+///   receipt from THIS run declares the typed `NOT_VERIFIED` reasons
+///   (`MISSING_BASELINE` / `INCOMPARABLE_ENVIRONMENT`), which are deliberate
+///   states recorded by the runner, not aborts.
+pub fn classify_fresh_regression(
+    reg_exit: i32,
+    status: &str,
+    reason: &str,
+    run_id_matches: bool,
+) -> RegressionOutcome {
+    if reg_exit == 0 {
+        if run_id_matches && status == "PASS" {
+            RegressionOutcome::Pass
+        } else {
+            RegressionOutcome::Fail
+        }
+    } else if run_id_matches && matches!(reason, "MISSING_BASELINE" | "INCOMPARABLE_ENVIRONMENT") {
+        RegressionOutcome::NotVerified
+    } else {
+        RegressionOutcome::Fail
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +137,52 @@ mod tests {
         assert_eq!(
             classify_regression_outcome("PASS", "MISSING_BASELINE"),
             RegressionOutcome::Pass
+        );
+    }
+
+    /// T2.3 acceptance: a stale or absent receipt never validates the run.
+    #[test]
+    fn fresh_classification_rejects_stale_and_aborted_runs() {
+        // Clean run with a FRESH PASS receipt → PASS.
+        assert_eq!(
+            classify_fresh_regression(0, "PASS", "", true),
+            RegressionOutcome::Pass
+        );
+        // Clean run but the PASS receipt belongs to a PREVIOUS run → FAIL
+        // (a stale green must never validate the current execution).
+        assert_eq!(
+            classify_fresh_regression(0, "PASS", "", false),
+            RegressionOutcome::Fail
+        );
+        // Aborted run (non-zero exit) with no fresh receipt → FAIL.
+        assert_eq!(
+            classify_fresh_regression(1, "PASS", "", false),
+            RegressionOutcome::Fail
+        );
+        // Aborted run reading a stale PASS receipt → FAIL.
+        assert_eq!(
+            classify_fresh_regression(1, "PASS", "REGRESSION_DETECTED", false),
+            RegressionOutcome::Fail
+        );
+        // Failed run with a fresh typed NOT_VERIFIED reason (deliberate state
+        // recorded by the runner, not an abort) → NOT_VERIFIED.
+        assert_eq!(
+            classify_fresh_regression(1, "FAIL", "MISSING_BASELINE", true),
+            RegressionOutcome::NotVerified
+        );
+        assert_eq!(
+            classify_fresh_regression(1, "FAIL", "INCOMPARABLE_ENVIRONMENT", true),
+            RegressionOutcome::NotVerified
+        );
+        // Fresh receipt but unclassified failure → FAIL.
+        assert_eq!(
+            classify_fresh_regression(1, "FAIL", "REGRESSION_DETECTED", true),
+            RegressionOutcome::Fail
+        );
+        // Stale NOT_VERIFIED receipt cannot soften a failed current run.
+        assert_eq!(
+            classify_fresh_regression(1, "FAIL", "MISSING_BASELINE", false),
+            RegressionOutcome::Fail
         );
     }
 }

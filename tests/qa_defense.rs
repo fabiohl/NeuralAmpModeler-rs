@@ -19,7 +19,7 @@
 //!   `nam_long_receipt count-log`, `src/testing/receipt.rs`).
 //! - F-22 — freshness gate sandbox: consistent / stale / missing / orphan
 //!   (`src/testing/freshness.rs` + the `nam_freshness` stdout tokens the
-//!   bash wrapper classifies into `FRESHNESS_REASON`).
+//!   dashboard wrapper classifies into the receipt reason).
 //! - F-24 — baseline coverage cross-check (`src/testing/qa/coverage.rs` +
 //!   `nam_perf_gate coverage`).
 //! - F-27 — canonical JSONL fidelity parse (`src/testing/qa/metrics.rs`).
@@ -296,9 +296,8 @@ fn sha256_of_file(path: &Path) -> String {
         .to_string()
 }
 
-/// The 4 `run_freshness_gate` sandbox cases of the removed bash block
-/// (F-22), verbatim: OK / STALE_FIXTURES / MISSING_FIXTURES /
-/// ORPHAN_FIXTURE.
+/// The 4 freshness sandbox cases of the removed bash block (F-22), verbatim:
+/// OK / STALE_FIXTURES / MISSING_FIXTURES / ORPHAN_FIXTURE.
 #[test]
 fn f22_freshness_sandbox_reasons() {
     let ok = check_freshness(
@@ -339,10 +338,9 @@ fn f22_freshness_sandbox_reasons() {
     assert_eq!(orphan.reason, FreshnessReason::OrphanFixture);
 }
 
-/// The `nam_freshness` stdout tokens the bash `run_freshness_gate` wrapper
-/// classifies into `FRESHNESS_REASON` (grep STALE/MISSING/ORPHAN) — asserted
-/// through the real bin so the wrapper semantics survive the bash block
-/// removal.
+/// The `nam_freshness` stdout tokens the dashboard wrapper classifies into
+/// the receipt reason (grep STALE/MISSING/ORPHAN) — asserted through the real
+/// bin so the classification semantics survive the bash block removal.
 #[test]
 fn f22_freshness_bin_classifies_tokens() {
     let bin = env!("CARGO_BIN_EXE_nam_freshness");

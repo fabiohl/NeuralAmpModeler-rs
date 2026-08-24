@@ -164,13 +164,13 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
     let golden_full = fixtures_dir.join(golden_path);
 
     if !golden_full.exists() {
-        eprintln!("SKIP: {} not found at {:?}.", golden_path, golden_full);
+        eprintln!("[STATUS] SKIP_OPTIONAL: golden_not_found:{}", golden_path);
         return (f64::NAN, f64::NAN);
     }
 
     let nam_path = model_path(model_filename);
     if !nam_path.exists() {
-        eprintln!("SKIP: {} not found.", model_filename);
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:{}", model_filename);
         return (f64::NAN, f64::NAN);
     }
 
@@ -412,7 +412,7 @@ fn measure_lstm_snr_stress_v2(model_filename: &str, label: &str) -> (f64, f64) {
 
     let nam_path = model_path(model_filename);
     if !nam_path.exists() {
-        eprintln!("SKIP: {} not found.", model_filename);
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:{}", model_filename);
         return (f64::NAN, f64::NAN);
     }
 

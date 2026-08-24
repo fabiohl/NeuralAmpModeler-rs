@@ -4,7 +4,7 @@
 //! Integration gate for the Rust freshness verifier.
 //!
 //! Exercises `testing::freshness` end-to-end with synthetic manifests, ensuring
-//! the same contract expected by `utils/_lib.sh::run_freshness_gate`.
+//! the same contract expected by the `nam_freshness` CLI (`check_freshness`).
 
 use std::fs;
 use std::io::Write;

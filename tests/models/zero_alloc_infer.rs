@@ -33,7 +33,7 @@ use crate::common::*;
 fn test_zero_alloc_process_wavenet() {
     let path = model_path("BossWN-standard.nam");
     if !path.exists() {
-        eprintln!("SKIP: WaveNet model not found for zero-alloc test.");
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:BossWN-standard.nam — zero-alloc test");
         return;
     }
 
@@ -63,7 +63,7 @@ fn test_zero_alloc_process_wavenet() {
 fn test_zero_alloc_process_lstm() {
     let path = model_path("BossLSTM-1x16.nam");
     if !path.exists() {
-        eprintln!("SKIP: LSTM model not found for zero-alloc test.");
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:BossLSTM-1x16.nam — zero-alloc test");
         return;
     }
 
@@ -98,7 +98,7 @@ fn test_zero_alloc_process_wavenet_dynamic() {
     // We use Feather, which is allocated with a specific topology (or test with non-static topology)
     let path = model_path("BossWN-feather.nam");
     if !path.exists() {
-        eprintln!("SKIP: WaveNet Feather model not found for zero-alloc test.");
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:BossWN-feather.nam — zero-alloc test");
         return;
     }
 
@@ -142,7 +142,7 @@ fn test_zero_alloc_capture_pipeline() {
 
     let path = model_path("BossWN-standard.nam");
     if !path.exists() {
-        eprintln!("SKIP: BossWN-standard.nam not found.");
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:BossWN-standard.nam");
         return;
     }
 
@@ -266,7 +266,7 @@ fn test_zero_alloc_set_slimmable_size() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
     if !full_nam_path.exists() || !lite_nam_path.exists() {
-        eprintln!("SKIP: A2 model files not found.");
+        eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:a2_full_or_lite");
         return;
     }
 
@@ -313,7 +313,9 @@ fn test_zero_alloc_container_transition() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
     if !full_nam_path.exists() || !lite_nam_path.exists() {
-        eprintln!("SKIP: A2 model files not found. Container transition test impossible.");
+        eprintln!(
+            "[STATUS] SKIP_OPTIONAL: model_not_found:a2_full_or_lite — container transition test impossible"
+        );
         return;
     }
 
@@ -419,7 +421,7 @@ fn test_zero_alloc_nondist_models() {
     nondist_path.push("tests/fixtures/models-nondist");
 
     if !nondist_path.exists() {
-        println!("SKIP: Non-distributable models directory not found.");
+        println!("[STATUS] SKIP_OPTIONAL: models_nondist_absent");
         return;
     }
 
@@ -439,7 +441,7 @@ fn test_zero_alloc_nondist_models() {
     }
 
     if models.is_empty() {
-        println!("SKIP: No nondist models found.");
+        println!("[STATUS] SKIP_OPTIONAL: models_nondist_empty");
         return;
     }
 

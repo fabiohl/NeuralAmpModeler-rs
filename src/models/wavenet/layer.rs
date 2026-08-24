@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use super::common::WavenetProcessContext;
+use super::common::{WAVENET_MAX_NUM_FRAMES, WavenetProcessContext};
 use super::conv1d::Conv1d;
 use super::dense::DenseLayer;
 use crate::math::common::{AlignedVec, SimdMath};
@@ -58,6 +58,15 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
     ///
     /// # Safety
     /// Math dispatch via pointer to inlined intrinsic functions.
+    ///
+    /// # RT-safety (F-10)
+    /// The audio hot-path is 100% panic-free: the previous `assert!(...)` with
+    /// `format!` allocations were removed. `num_frames` is clamped defensively
+    /// to the scratch capacities, so an oversized frame count is truncated
+    /// (fail-closed) instead of aborting the RT thread. Host contract
+    /// violations are flagged at the pipeline boundary (`capture.rs`,
+    /// `RT_STATUS_HOST_CONTRACT_VIOLATION`); the clamp here is the last line of
+    /// defense and never allocates or panics.
     #[inline]
     pub unsafe fn process_block_internal<M: SimdMath>(&mut self, ctx: WavenetProcessContext<'_>) {
         let WavenetProcessContext {
@@ -73,19 +82,20 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
         } = ctx;
 
         unsafe {
+            // F-10: fail-closed clamp — never panic on an oversized `num_frames`,
+            // truncate it to the pre-allocated scratch capacity instead. The
+            // scratch buffers are constructed as `CH * WAVENET_MAX_NUM_FRAMES`,
+            // so `min(WAVENET_MAX_NUM_FRAMES)` is equivalent to
+            // `min(scratch.len() / CH)` while staying division-free on the
+            // audio hot-path.
+            let num_frames = num_frames.min(WAVENET_MAX_NUM_FRAMES);
             debug_assert!(
                 num_frames * CH <= self.scratch_mixin.len(),
                 "process_block_internal: num_frames*CH ({}) exceeds scratch_mixin capacity ({})",
                 num_frames * CH,
                 self.scratch_mixin.len(),
             );
-            assert!(
-                num_frames * CH <= self.scratch_mixin.len(),
-                "process_block_internal: num_frames*CH ({}) exceeds scratch_mixin capacity ({})",
-                num_frames * CH,
-                self.scratch_mixin.len(),
-            );
-            assert!(
+            debug_assert!(
                 num_frames * CH <= self.scratch_conv.len(),
                 "process_block_internal: num_frames*CH ({}) exceeds scratch_conv capacity ({})",
                 num_frames * CH,

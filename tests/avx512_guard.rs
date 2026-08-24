@@ -245,9 +245,12 @@ fn guard_fails_closed_on_missing_tool() {
     fixtures::cleanup(&path);
 }
 
+use serial_test::serial;
+
 /// Failure injection: an inspection tool exiting non-zero must fail closed
 /// instead of being treated as a clean scan.
 #[test]
+#[serial]
 fn guard_fails_closed_on_tool_exit_nonzero() {
     let path = fixtures::write_temp(&fixtures::mini_elf(fixtures::CLEAN_VEX), "tool-fail.o");
     let fake = fixtures::write_fake_tool("#!/bin/sh\nexit 1\n", "exit1");
@@ -260,6 +263,7 @@ fn guard_fails_closed_on_tool_exit_nonzero() {
 /// Failure injection: an inspection tool producing empty output must fail
 /// closed instead of being treated as "zero instructions".
 #[test]
+#[serial]
 fn guard_fails_closed_on_tool_empty_output() {
     let path = fixtures::write_temp(&fixtures::mini_elf(fixtures::CLEAN_VEX), "empty-out.o");
     let fake = fixtures::write_fake_tool("#!/bin/sh\nexit 0\n", "emptyout");
@@ -296,6 +300,7 @@ fn guard_fails_closed_on_unknown_archive_member() {
 
 /// Defensive symbol scan: the nm fallback must fail closed on tool errors.
 #[test]
+#[serial]
 fn guard_symbol_scan_fails_closed_on_tool_error() {
     let path = fixtures::write_temp(&fixtures::mini_elf(fixtures::CLEAN_VEX), "symscan-fail.o");
     let fake = fixtures::write_fake_tool("#!/bin/sh\nexit 3\n", "nm-fail");

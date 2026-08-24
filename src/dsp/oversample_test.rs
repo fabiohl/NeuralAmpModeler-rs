@@ -373,3 +373,47 @@ fn contract_compliant_blocks_do_not_raise_flag() {
 
     assert!(!rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
 }
+
+#[test]
+fn undersized_output_upsample_clamps_and_flags_x2() {
+    // F-05: an output buffer smaller than `input.len() * multiplier` must be
+    // clamped (never written past) and raise RT_STATUS_HOST_CONTRACT_VIOLATION.
+    // Verified in release builds too (`cargo test --release dsp::oversample`).
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 256).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.5f32; 64];
+    let mut up = vec![0.0f32; 32]; // needs 128 for a full 64-sample upsample
+    let n_up = engine.upsample(&input, &mut up, Some(&rt));
+
+    assert!(n_up <= 32, "clamped to output capacity, got {n_up}");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+#[test]
+fn undersized_output_upsample_clamps_and_flags_x4() {
+    let mut engine = OversampleEngine::new(OversampleFactor::X4, 256).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.5f32; 64];
+    let mut up = vec![0.0f32; 64]; // needs 256 for a full 64-sample 4× upsample
+    let n_up = engine.upsample(&input, &mut up, Some(&rt));
+
+    assert!(n_up <= 64, "clamped to output capacity, got {n_up}");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+#[test]
+fn undersized_output_downsample_clamps_and_flags_x2() {
+    // F-05: output smaller than `input.len() / multiplier` must be clamped and
+    // raise RT_STATUS_HOST_CONTRACT_VIOLATION (no silent truncation).
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 256).unwrap();
+    let rt = RtStatusFlags::new();
+
+    let input = vec![0.25f32; 128];
+    let mut down = vec![0.0f32; 8]; // needs 64 for a full 128-sample downsample
+    let n_down = engine.downsample(&input, &mut down, Some(&rt));
+
+    assert!(n_down <= 8, "clamped to output capacity, got {n_down}");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}

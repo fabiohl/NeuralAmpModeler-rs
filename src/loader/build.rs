@@ -71,31 +71,54 @@ fn validate_metadata_floats(
 /// Centralizes metadata retrieval, size validation against
 /// [`MAX_MODEL_BYTES`], and byte reading previously duplicated for `.nam`
 /// and `.namb` paths.
+///
+/// Anti-TOCTOU (H-04): the file is opened **once** and read through
+/// `take(MAX_MODEL_BYTES + 1)`. The previous `stat` + `fs::read` sequence left
+/// a window where the file could grow past the cap between the two syscalls.
 fn read_and_validate_model_bytes(
     path: &Path,
     path_str: &str,
     sys: &SystemSnapshot,
 ) -> anyhow::Result<Vec<u8>> {
-    let len = std::fs::metadata(path)
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        NamDiagnostic::new(NamErrorCode::FileReadError, sys)
+            .message(format!("Failed to open the file \"{}\".", path_str))
+            .hint("Please verify file access permissions.")
+            .param("file", path_str)
+            .param("io_error", &e)
+            .emit();
+        anyhow::Error::from(e)
+    })?;
+
+    // H-04: single open + bounded read. Reading `MAX_MODEL_BYTES + 1` bytes
+    // detects an oversized file without ever buffering more than the cap.
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_MODEL_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|e| {
             NamDiagnostic::new(NamErrorCode::FileReadError, sys)
-                .message(format!("Failed to read metadata of \"{}\".", path_str))
+                .message(format!("Failed to read the file \"{}\".", path_str))
                 .hint("Please verify file access permissions.")
                 .param("file", path_str)
                 .param("io_error", &e)
                 .emit();
             anyhow::Error::from(e)
-        })?
-        .len();
-    if len > MAX_MODEL_BYTES {
+        })?;
+
+    if bytes.len() as u64 > MAX_MODEL_BYTES {
         NamDiagnostic::new(NamErrorCode::ModelTooLarge, sys)
             .message(format!(
                 "Model file \"{}\" is too large ({} bytes, max is {} bytes).",
-                path_str, len, MAX_MODEL_BYTES
+                path_str,
+                bytes.len(),
+                MAX_MODEL_BYTES
             ))
             .hint("Please check the file size and ensure it is a valid NAM model.")
             .param("file", path_str)
-            .param("size_bytes", len)
+            .param("size_bytes", bytes.len())
             .emit();
         return Err(anyhow::anyhow!(
             "Model file \"{}\" exceeds maximum allowed size of {} MiB.",
@@ -103,15 +126,6 @@ fn read_and_validate_model_bytes(
             MAX_MODEL_BYTES / (1024 * 1024)
         ));
     }
-    let bytes = std::fs::read(path).map_err(|e| {
-        NamDiagnostic::new(NamErrorCode::FileReadError, sys)
-            .message(format!("Failed to read the file \"{}\".", path_str))
-            .hint("Please verify file access permissions.")
-            .param("file", path_str)
-            .param("io_error", &e)
-            .emit();
-        anyhow::Error::from(e)
-    })?;
     Ok(bytes)
 }
 

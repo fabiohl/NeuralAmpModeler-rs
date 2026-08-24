@@ -15,5 +15,6 @@ pub use linear::get_linear_topology;
 pub use lstm::get_lstm_topology;
 pub(crate) use wavenet::parse_semver;
 pub use wavenet::{
-    FreeWavenetGeometry, NamWavenetTopology, WavenetTopologyResult, get_wavenet_topology,
+    A2TopologyVectors, FreeWavenetGeometry, NamWavenetTopology, WavenetTopologyResult,
+    get_wavenet_topology, validate_a2_layer_topology,
 };

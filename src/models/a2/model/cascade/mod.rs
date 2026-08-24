@@ -55,11 +55,14 @@ impl WaveNetA2Cascade {
     /// Creates a new cascade from individually-built A2 dynamic engines.
     ///
     /// The arrays must be ordered sequentially (array 0 first).
-    pub fn new(
+    ///
+    /// Fallible (H-05): buffer allocation failures propagate to the caller as
+    /// `Err` instead of panicking on the loader path.
+    pub fn try_new(
         arrays: Vec<WaveNetA2Dyn>,
         condition_dsp: Option<Box<StaticModel>>,
         condition_size: usize,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let rf = arrays
             .iter()
             .map(|a| a.receptive_field_size)
@@ -72,22 +75,49 @@ impl WaveNetA2Cascade {
         } else {
             0
         } * WAVENET_MAX_NUM_FRAMES;
-        Self {
+
+        // H-05/F-10: when the cascade feeds a processed condition, each array's
+        // `condition_dsp_output` must be pre-allocated off-RT — the processing
+        // path must never allocate (previously `cascade_set_condition` lazily
+        // allocated on the RT thread and the hardcoded `use_cond_dsp=true`
+        // would then read a length-0 buffer).
+        let mut arrays = arrays;
+        if condition_dsp.is_some() {
+            for arr in arrays.iter_mut() {
+                arr.condition_dsp_output =
+                    AlignedVec::new(arr.condition_size.max(1) * WAVENET_MAX_NUM_FRAMES, 0.0f32)?;
+            }
+        }
+
+        Ok(Self {
             arrays,
             receptive_field_size: rf,
             condition_dsp,
-            condition_dsp_output: AlignedVec::new(cond_buf_size, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            condition_dsp_output: AlignedVec::new(cond_buf_size, 0.0f32)?,
             condition_size,
             prewarm_on_reset: true,
-            cascade_residual: AlignedVec::new(max_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
-            intermediate_head_output: AlignedVec::new(max_hs * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("allocation should succeed for test-sized buffers"),
+            cascade_residual: AlignedVec::new(max_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
+            intermediate_head_output: AlignedVec::new(max_hs * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
             max_channels: max_ch,
             max_head_size: max_hs,
             max_buffer_size: WAVENET_MAX_NUM_FRAMES,
-        }
+        })
+    }
+
+    /// Compatibility wrapper over [`try_new`](Self::try_new) for external
+    /// callers that pre-date the fallible constructor (H-05). The loader path
+    /// uses [`try_new`](Self::try_new) so allocation failures propagate as
+    /// errors instead of aborting the process.
+    ///
+    /// # Panics
+    /// Panics if a cascade scratch allocation fails.
+    pub fn new(
+        arrays: Vec<WaveNetA2Dyn>,
+        condition_dsp: Option<Box<StaticModel>>,
+        condition_size: usize,
+    ) -> Self {
+        Self::try_new(arrays, condition_dsp, condition_size)
+            .expect("WaveNetA2Cascade allocation should succeed for fixed-size scratch buffers")
     }
 
     /// Returns the number of channels of the first array.
@@ -167,7 +197,14 @@ impl WaveNetA2Cascade {
                 let arr0 = &mut self.arrays[0];
                 arr0.cascade_write_mono_input(input, pos, nf);
                 arr0.cascade_set_condition(cond_slice, nf, arr0.condition_size);
-                arr0.cascade_layer_loop::<M>(nf, input, pos, true, arr0.condition_size, true);
+                arr0.cascade_layer_loop::<M>(
+                    nf,
+                    input,
+                    pos,
+                    self.condition_dsp.is_some(),
+                    arr0.condition_size,
+                    true,
+                );
 
                 // Save residual and compute head output for next array.
                 let ch0 = arr0.channels;
@@ -197,7 +234,14 @@ impl WaveNetA2Cascade {
                 // Write residual input.
                 curr.cascade_write_residual_input(&self.cascade_residual, nf, prev_ch);
                 curr.cascade_set_condition(cond_slice, nf, curr.condition_size);
-                curr.cascade_layer_loop::<M>(nf, input, pos, true, curr.condition_size, false);
+                curr.cascade_layer_loop::<M>(
+                    nf,
+                    input,
+                    pos,
+                    self.condition_dsp.is_some(),
+                    curr.condition_size,
+                    false,
+                );
 
                 // Save residual and compute head output for next array (if not last).
                 let curr_ch = curr.channels;
@@ -234,12 +278,9 @@ impl WaveNetA2Cascade {
             arr.set_max_buffer_size(max_buf)?;
         }
         let cond_output_size = self.condition_size * max_buf;
-        self.condition_dsp_output = AlignedVec::new(cond_output_size, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
-        self.cascade_residual = AlignedVec::new(self.max_channels * max_buf, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
-        self.intermediate_head_output = AlignedVec::new(self.max_head_size * max_buf, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers");
+        self.condition_dsp_output = AlignedVec::new(cond_output_size, 0.0f32)?;
+        self.cascade_residual = AlignedVec::new(self.max_channels * max_buf, 0.0f32)?;
+        self.intermediate_head_output = AlignedVec::new(self.max_head_size * max_buf, 0.0f32)?;
         Ok(())
     }
 

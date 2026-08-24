@@ -7,8 +7,6 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg)
 
-> **Series note:** the current release series is `0.x`; the `3.x` versions on crates.io/docs.rs are yanked leftovers of an earlier monolithic packaging.
-
 **NeuralAmpModeler-rs** is a high-performance, real-time neural inference DSP engine written in pure Rust. It provides the core DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — as well as impulse response (.wav) cabinet convolution.
 
 Designed for embedding in audio hosts, CLAP plugins, standalone audio hosts, offline renderers, and embedded DSP pipelines, it guarantees **zero heap allocations**, **zero locks**, and **zero blocking system calls** on the real-time audio processing thread.
@@ -16,6 +14,8 @@ Designed for embedding in audio hosts, CLAP plugins, standalone audio hosts, off
 NeuralAmpModeler-rs is an independent public library for the wider audio and Rust communities. Public APIs and policies remain strictly host-agnostic and generally reusable; integration-specific logic belongs in downstream crates (such as standalone audio hosts, CLAP plugins, and real-time processing applications).
 
 > **❤️‍🔥 NeuralAmpModeler-rs is in beta stage.** Feedback, bug reports, performance metrics, and patch contributions are very welcome!
+>
+> **Series note:** the current release series is `0.x`; the `3.x` versions on crates.io/docs.rs are yanked leftovers of an [earlier monolithic incarnation](https://github.com/fabiohl/nam-rs) of this project.
 
 ---
 
@@ -314,9 +314,10 @@ The following technical documents are maintained in the source repository. The p
 
 ## 🤝 Contributing & Feedback
 
+* **Testing, testing, testing!** Go on, "cargo add NeuralAmpModeler-rs" into your own project and make NeuralAmpModeler-rs it live and evolve!
 * **Test Models:** Try your favorite `.nam` models and IR files — share your feedback and performance metrics.
 * **Report Issues:** Submit detailed bug reports or feature suggestions on GitHub.
-* **Code & Docs:** Pull requests for SIMD optimizations, bug fixes, or documentation enhancements are very welcome.
+* **Code & Docs:** Help me to make NeuralAmpModeler-rs more useful and correct for the community!
 
 ---
 

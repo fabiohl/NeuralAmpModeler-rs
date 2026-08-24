@@ -260,3 +260,49 @@ fn test_repeated_rejections_are_stable() {
         assert!(result.is_err(), "must reject on every iteration");
     }
 }
+
+// ── Kernel-size hard limit (F-01) ──
+
+/// A WaveNet A1 free-geometry model with `kernel_size` above the dynamic
+/// kernel cap (`MAX_KERNEL_SIZE == 16`) must be rejected at build time with a
+/// descriptive error — never silently truncated into the fixed MAX_KERNEL tap
+/// array of `Conv1dDyn` (F-01).
+#[test]
+fn test_reject_kernel_size_above_dynamic_cap() {
+    for k in [17usize, 64] {
+        let layer = format!(
+            r#"{{"input_size":1,"condition_size":1,"head_size":4,"channels":8,"kernel_size":{},"dilations":[1],"activation":"Tanh","gated":false,"head_bias":false}}"#,
+            k
+        );
+        let json = wavenet_json_with_layers(&format!("[{layer}]"));
+        let data = crate::loader::nam_json::parse_nam_json(&json).expect("JSON parse must succeed");
+        let result = crate::loader::dispatcher::build_model(&data);
+        let msg = match result {
+            Ok(_) => panic!("kernel_size={k} must be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("kernel_size") || msg.contains("exceeds maximum"),
+            "error should describe the kernel cap, got: {msg}"
+        );
+    }
+}
+
+/// H-03: a WaveNet A1 free-geometry model with `condition_size` above the
+/// semantic cap must be rejected before the dynamic engine allocates
+/// conditioning buffers proportional to it (no OOM-class allocation).
+#[test]
+fn test_reject_oversized_condition_size_a1_free_geometry() {
+    let layer = r#"{"input_size":1,"condition_size":5000,"head_size":4,"channels":8,"kernel_size":3,"dilations":[1],"activation":"Tanh","gated":false,"head_bias":false}"#.to_string();
+    let json = wavenet_json_with_layers(&format!("[{layer}]"));
+    let data = crate::loader::nam_json::parse_nam_json(&json).expect("JSON parse must succeed");
+    let result = crate::loader::dispatcher::build_model(&data);
+    let msg = match result {
+        Ok(_) => panic!("condition_size=5000 must be rejected"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        msg.contains("condition_size") && msg.contains("exceeds maximum"),
+        "error should describe the condition_size cap, got: {msg}"
+    );
+}
