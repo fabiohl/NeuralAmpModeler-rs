@@ -32,6 +32,10 @@ impl A2Conv1d {
         frame_idx: usize,
         mixin: Option<&[f32]>,
     ) {
+        // SAFETY: this `unsafe fn` is only reachable under its documented preconditions:
+        // `layer_buffer` holds valid elements for the dilated tap indices, `out_frame`
+        // has length at least `self.out_ch`, and `frame_idx` allows kernel lookback taps
+        // within `layer_buffer`.
         unsafe {
             match self {
                 Self::Standard(c) => {
@@ -62,6 +66,9 @@ impl A2Conv1d {
         num_frames: usize,
         mixin: Option<&[f32]>,
     ) {
+        // SAFETY: this `unsafe fn` is only reachable under its documented preconditions:
+        // `layer_buffer` covers `buffer_start..buffer_start + num_frames` plus
+        // kernel*dilation lookback, and `block` has at least `num_frames * out_ch` elements.
         unsafe {
             match self {
                 Self::Standard(c) => {

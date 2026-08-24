@@ -6,7 +6,8 @@
 //! Contains `DspBridge`, `BridgeBuffer`, `BridgeRef`, `DspBridgeWriter`,
 //! `DspBridgeReader` and the constants `MAX_BRIDGE_BUF` / `MAX_RESAMP_BUF`.
 
-use std::sync::atomic::Ordering;
+use crate::common::atomics::{AtomicU32, AtomicU64, AtomicUsize};
+use core::sync::atomic::Ordering;
 
 /// Maximum intermediate buffer size between the two streams (capture → playback).
 /// Sized for the maximum host quantum (8192 frames).
@@ -48,15 +49,15 @@ pub struct DspBridge {
     /// The two physical buffers (front/back) for double-buffering.
     pub buffers: [BridgeBuffer; 2],
     /// Index of the active buffer for READING (0 or 1). Capture always writes to (1 - active).
-    pub active_read_idx: std::sync::atomic::AtomicUsize,
+    pub active_read_idx: AtomicUsize,
     /// Generation counter — incremented on each write by the capture callback.
     /// Playback compares with its local copy to detect new data.
-    pub generation: std::sync::atomic::AtomicU64,
+    pub generation: AtomicU64,
     /// Consumed generation counter — updated by the playback callback.
-    pub consumed_gen: std::sync::atomic::AtomicU64,
+    pub consumed_gen: AtomicU64,
     /// Counter of dropped frames (overwritten without consumption).
     /// Incremented by RT callbacks, drained via `drain_dropped_frames()` by the main loop.
-    pub dropped_frames: std::sync::atomic::AtomicU32,
+    pub dropped_frames: AtomicU32,
 }
 
 impl DspBridge {
@@ -142,6 +143,9 @@ impl DspBridgeWriter {
             !ptr.is_null(),
             "DspBridgeWriter requires a non-null pointer"
         );
+        // SAFETY: the caller contract of this `unsafe fn` guarantees `ptr` is
+        // non-null (checked above) and points to heap-immortal memory that
+        // outlives the writer.
         Self(unsafe { std::ptr::NonNull::new_unchecked(ptr) })
     }
 
@@ -277,6 +281,9 @@ impl DspBridgeReader {
             !ptr.is_null(),
             "DspBridgeReader requires a non-null pointer"
         );
+        // SAFETY: the caller contract of this `unsafe fn` guarantees `ptr` is
+        // non-null (checked above) and points to heap-immortal memory that
+        // outlives the reader.
         Self(unsafe { std::ptr::NonNull::new_unchecked(ptr) })
     }
 

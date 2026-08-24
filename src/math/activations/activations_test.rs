@@ -158,6 +158,7 @@ fn test_tanh_pade_nr2_sweep() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and `result` is an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_pade_nr2_avx2(x);
@@ -186,6 +187,7 @@ fn test_tanh_pade_nr2_sweep() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y = simd_tanh_pade_nr2_avx2(x);
@@ -225,6 +227,7 @@ proptest! {
         use std::arch::x86_64::*;
 
         let expected = (x as f64).tanh() as f32;
+        // SAFETY: `_mm256_set1_ps` broadcasts a scalar and `_mm256_storeu_ps` writes to the 8-element `result` array, so no out-of-bounds access occurs.
         let actual = unsafe {
             let vx = _mm256_set1_ps(x);
             let vy = simd_tanh_pade_nr2_avx2(vx);
@@ -259,6 +262,7 @@ fn test_tanh_pade_nr2_sweep_avx512() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and `result` is a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_pade_nr2_avx512(x);
@@ -287,6 +291,7 @@ fn test_tanh_pade_nr2_sweep_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y = simd_tanh_pade_nr2_avx512(x);
@@ -334,6 +339,7 @@ proptest! {
         }
 
         let expected = (x as f64).tanh() as f32;
+        // SAFETY: `_mm512_set1_ps` broadcasts a scalar and `_mm512_storeu_ps` writes to the 16-element `result` array, so no out-of-bounds access occurs.
         let actual = unsafe {
             let vx = _mm512_set1_ps(x);
             let vy = simd_tanh_pade_nr2_avx512(vx);
@@ -540,6 +546,7 @@ fn test_silu_slice_dispatch_smoke() {
 fn test_fused_sigmoid_relu_slice_dispatch_smoke() {
     let mut data: Vec<f32> = (-32..32).map(|i| i as f32 * 0.25).collect();
     let original = data.clone();
+    // SAFETY: the match dispatches to the kernel matching `SIMD_MATH.instruction_set`, which was validated at detection time; `data` is a valid 64-element slice.
     unsafe {
         #[cfg_attr(feature = "avx512", expect(deprecated))]
         match crate::math::common::SIMD_MATH.instruction_set {

@@ -11,7 +11,7 @@ use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::{AlignedVec, SimdMath};
 use crate::models::a2::activations::ActivationType;
 use crate::models::wavenet::Conv1dDyn;
-use crate::models::wavenet::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
+use crate::models::wavenet::common::WaveNetLayerState;
 
 use super::batch_norm::BatchNorm1D;
 
@@ -19,10 +19,9 @@ use super::batch_norm::BatchNorm1D;
 ///
 /// Processing pipeline:
 /// 1. Write input frames into the causal ring buffer
-/// 2. Run causal Conv1D on the ring buffer → scratch buffer
-/// 3. Apply BatchNorm (affine transform) in-place on scratch
-/// 4. Apply activation function in-place on scratch
-/// 5. Copy scratch to output
+/// 2. Run causal Conv1D directly into the output slice
+/// 3. Apply BatchNorm (affine transform) in-place on output
+/// 4. Apply activation function in-place on output
 #[derive(Clone)]
 #[repr(align(64))]
 pub struct ConvNetBlock {
@@ -34,8 +33,6 @@ pub struct ConvNetBlock {
     pub activation: ActivationType,
     /// Ring buffer state for causal convolution lookback.
     pub state: WaveNetLayerState,
-    /// Scratch buffer for convolution output (out_ch * WAVENET_MAX_NUM_FRAMES).
-    scratch: AlignedVec<f32>,
 }
 
 impl ConvNetBlock {
@@ -77,15 +74,11 @@ impl ConvNetBlock {
         let receptive_field = (kernel - 1) * dilation;
         let state = WaveNetLayerState::new(in_ch, receptive_field, alloc_num)?;
 
-        let scratch = AlignedVec::new(out_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
-
         Ok(Self {
             conv,
             bn,
             activation,
             state,
-            scratch,
         })
     }
 
@@ -119,6 +112,10 @@ impl ConvNetBlock {
     /// `input.len() == num_frames * in_ch`, `output.len() == num_frames * out_ch`.
     #[inline(always)]
     pub unsafe fn process_block(&mut self, input: &[f32], output: &mut [f32], num_frames: usize) {
+        // SAFETY: this `unsafe fn` is only reachable under its documented
+        // preconditions: `input.len() == num_frames * in_ch` and
+        // `output.len() == num_frames * out_ch`; `dispatch_simd!` selects a
+        // matching `#[target_feature]` backend on runtime CPUID checks.
         unsafe {
             crate::math::common::dispatch_simd!(
                 self,
@@ -150,26 +147,35 @@ impl ConvNetBlock {
         self.state.layer_buffer[buf_start..buf_start + input_len]
             .copy_from_slice(&input[..input_len]);
 
-        let scratch_slice = &mut self.scratch[..num_frames * out_ch];
+        let out_slice = &mut output[..num_frames * out_ch];
+        // SAFETY: `conv.process_block::<M>` is an `unsafe fn`; its preconditions
+        // hold: `layer_buffer` is large enough for `buffer_start..buffer_start + num_frames`
+        // plus kernel lookback, `out_slice` has `num_frames * out_ch` elements, and `M`
+        // matches the CPU ISA (top-level `dispatch_simd!`).
         unsafe {
             self.conv.process_block::<M>(
                 &self.state.layer_buffer,
-                scratch_slice,
+                out_slice,
                 self.state.buffer_start,
                 num_frames,
                 None,
             );
         }
 
+        // SAFETY: `out_slice.len() == num_frames * out_ch` and the batch norm was
+        // built with `self.conv.out_ch` channels (`set_bn_params`/constructor),
+        // satisfying `process_simd`'s `data.len() == num_frames * num_channels`
+        // contract; `M` matches the CPU ISA.
         unsafe {
-            self.bn.process_simd::<M>(scratch_slice, num_frames);
+            self.bn.process_simd::<M>(out_slice, num_frames);
         }
 
+        // SAFETY: `out_slice` is a valid mutable slice of `num_frames * out_ch`
+        // elements and `M` matches the CPU ISA; both are `apply_simd`'s
+        // documented preconditions.
         unsafe {
-            self.activation.apply_simd::<M>(scratch_slice);
+            self.activation.apply_simd::<M>(out_slice);
         }
-
-        output[..num_frames * out_ch].copy_from_slice(scratch_slice);
 
         self.state.advance_frames(num_frames, in_ch);
     }

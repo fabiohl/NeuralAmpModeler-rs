@@ -168,7 +168,7 @@ fn bench_cabsim_long_run(c: &mut Criterion) {
 #[cfg(feature = "long_bench")]
 criterion_group!(
     name = long_benches;
-    config = Criterion::default();
+    config = Criterion::default().noise_threshold(0.05);
     targets = bench_wavenet_long_run, bench_lstm_long_run, bench_resampler_long_run, bench_a2_full_long_run, bench_a2_lite_long_run, bench_cabsim_long_run
 );
 

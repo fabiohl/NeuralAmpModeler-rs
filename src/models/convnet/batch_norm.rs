@@ -185,6 +185,8 @@ unsafe fn process_scalar_ref(
         // each have `n_ch` elements (guaranteed at construction time
         // by from_params/from_fused).
         let s = unsafe { *scale.get_unchecked(ch) };
+        // SAFETY: `ch < n_ch` by the loop bound and `offset` has `n_ch`
+        // elements (validated at construction time by from_params/from_fused).
         let o = unsafe { *offset.get_unchecked(ch) };
         for f in 0..num_frames {
             let idx = ch + f * n_ch;

@@ -29,6 +29,7 @@ fn test_gemv_with_bias_f32_avx2_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len * num_frames];
             let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+            // SAFETY: the input/weight/bias/output buffers were sized to the GEMV kernel contract and outlive the call.
             unsafe {
                 gemv_with_bias_f32_avx2(&in_frames, &weights, &bias, &mut out_simd, num_frames);
                 scalar_ref::gemv_with_bias_f32_fallback(
@@ -63,6 +64,7 @@ fn test_gemv_with_bias_f32_avx2_batch_vs_fallback() {
         let mut out_simd = vec![0.0f32; out_len * num_frames];
         let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+        // SAFETY: the input/weight/bias/output buffers were sized to the GEMV kernel contract and outlive the call.
         unsafe {
             gemv_with_bias_f32_avx2(&in_frames, &weights, &bias, &mut out_simd, num_frames);
             scalar_ref::gemv_with_bias_f32_fallback(
@@ -100,6 +102,7 @@ fn test_gemv_no_bias_f32_avx2_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len * num_frames];
             let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+            // SAFETY: the input/weight/output buffers were sized to the GEMV kernel contract and outlive the call.
             unsafe {
                 gemv_no_bias_f32_avx2(&in_frames, &weights, &mut out_simd, num_frames);
                 scalar_ref::gemv_no_bias_f32_fallback(
@@ -133,6 +136,7 @@ fn test_gemv_no_bias_f32_avx2_batch_vs_fallback() {
         let mut out_simd = vec![0.0f32; out_len * num_frames];
         let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+        // SAFETY: the input/weight/output buffers were sized to the GEMV kernel contract and outlive the call.
         unsafe {
             gemv_no_bias_f32_avx2(&in_frames, &weights, &mut out_simd, num_frames);
             scalar_ref::gemv_no_bias_f32_fallback(
@@ -174,6 +178,7 @@ fn test_gemv_with_bias_f32_avx512_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len * num_frames];
             let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+            // SAFETY: `avx512f` support was checked above; the buffers were sized to the GEMV kernel contract and outlive the call.
             unsafe {
                 gemv_with_bias_f32_avx512(&in_frames, &weights, &bias, &mut out_simd, num_frames);
                 scalar_ref::gemv_with_bias_f32_fallback(
@@ -213,6 +218,7 @@ fn test_gemv_with_bias_f32_avx512_batch_vs_fallback() {
         let mut out_simd = vec![0.0f32; out_len * num_frames];
         let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+        // SAFETY: `avx512f` support was checked above; the buffers were sized to the GEMV kernel contract and outlive the call.
         unsafe {
             gemv_with_bias_f32_avx512(&in_frames, &weights, &bias, &mut out_simd, num_frames);
             scalar_ref::gemv_with_bias_f32_fallback(
@@ -255,6 +261,7 @@ fn test_gemv_no_bias_f32_avx512_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len * num_frames];
             let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+            // SAFETY: `avx512f` support was checked above; the buffers were sized to the GEMV kernel contract and outlive the call.
             unsafe {
                 gemv_no_bias_f32_avx512(&in_frames, &weights, &mut out_simd, num_frames);
                 scalar_ref::gemv_no_bias_f32_fallback(
@@ -293,6 +300,7 @@ fn test_gemv_no_bias_f32_avx512_batch_vs_fallback() {
         let mut out_simd = vec![0.0f32; out_len * num_frames];
         let mut out_scalar = vec![0.0f32; out_len * num_frames];
 
+        // SAFETY: `avx512f` support was checked above; the buffers were sized to the GEMV kernel contract and outlive the call.
         unsafe {
             gemv_no_bias_f32_avx512(&in_frames, &weights, &mut out_simd, num_frames);
             scalar_ref::gemv_no_bias_f32_fallback(
@@ -421,6 +429,7 @@ fn test_fused_add_gemv_f32_specialized_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len];
             let mut out_fb = vec![0.0f32; out_len];
 
+            // SAFETY: `in_frame`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
             unsafe {
                 kernel(&in_frame, &weights, &bias, &mut out_simd, do_bias);
                 fused_add_gemv_f32_ref(&in_frame, &weights, &bias, &mut out_fb, do_bias);
@@ -448,6 +457,7 @@ fn test_gemv_overwrite_f32_specialized_vs_fallback() {
             let mut out_simd = vec![0.0f32; out_len];
             let mut out_fb = vec![0.0f32; out_len];
 
+            // SAFETY: `in_frame`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
             unsafe {
                 kernel(&in_frame, &weights, &bias, &mut out_simd, do_bias);
                 gemv_overwrite_f32_ref(&in_frame, &weights, &bias, &mut out_fb, do_bias);
@@ -487,6 +497,7 @@ fn test_f32_specialized_denormal_f32_inputs() {
                 let mut out_simd = vec![0.0; out_len];
                 let mut out_fb = vec![0.0; out_len];
 
+                // SAFETY: `in_frames`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
                 unsafe {
                     kernel(&in_frames, &weights, &bias, &mut out_simd, do_bias);
                     fused_add_gemv_f32_ref(&in_frames, &weights, &bias, &mut out_fb, do_bias);
@@ -516,6 +527,7 @@ fn test_f32_specialized_all_zeros() {
             let mut out_simd = vec![1.0f32; out_len];
             let mut out_fb = vec![1.0f32; out_len];
 
+            // SAFETY: `in_frames`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
             unsafe {
                 kernel(&in_frames, &weights, &bias, &mut out_simd, do_bias);
                 fused_add_gemv_f32_ref(&in_frames, &weights, &bias, &mut out_fb, do_bias);
@@ -541,6 +553,7 @@ fn test_f32_specialized_all_zeros() {
             let mut out_simd = vec![1.0f32; out_len];
             let mut out_fb = vec![1.0f32; out_len];
 
+            // SAFETY: `in_frames`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
             unsafe {
                 kernel(&in_frames, &weights, &bias, &mut out_simd, do_bias);
                 gemv_overwrite_f32_ref(&in_frames, &weights, &bias, &mut out_fb, do_bias);
@@ -570,6 +583,7 @@ fn test_f32_specialized_large_values() {
             let mut out_simd = vec![large; out_len];
             let mut out_fb = vec![large; out_len];
 
+            // SAFETY: `in_frames`/`weights`/`bias`/`out_simd`/`out_fb` were sized to the specialized kernel's `(in_len, out_len)` shape and outlive the call.
             unsafe {
                 kernel(&in_frames, &weights, &bias, &mut out_simd, do_bias);
                 fused_add_gemv_f32_ref(&in_frames, &weights, &bias, &mut out_fb, do_bias);

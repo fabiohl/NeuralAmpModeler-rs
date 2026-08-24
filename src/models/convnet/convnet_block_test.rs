@@ -39,6 +39,9 @@ fn test_process_identity_tanh() {
     let input = [0.5f32];
     let mut output = [0.0f32];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (in_ch = out_ch = 1); the block's causal
+    // state was initialized by construction, satisfying `process_block`'s contract.
     unsafe {
         block.process_block(&input, &mut output, 1);
     }
@@ -62,6 +65,9 @@ fn test_process_with_relu() {
     let input = [0.5f32, -0.3, 0.8, -1.0];
     let mut output = [0.0f32; 4];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (4 each, in_ch = out_ch = 1); the block's
+    // causal state was initialized by construction, satisfying `process_block`'s contract.
     unsafe {
         block.process_block(&input, &mut output, 4);
     }
@@ -87,6 +93,9 @@ fn test_batch_norm_integration() {
     let input = [0.5f32];
     let mut output = [0.0f32];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (in_ch = out_ch = 1); the block's causal
+    // state was initialized by construction, satisfying `process_block`'s contract.
     unsafe {
         block.process_block(&input, &mut output, 1);
     }
@@ -112,6 +121,9 @@ fn test_multi_frame_causal() {
     let input = [1.0f32, 2.0, 3.0];
     let mut output = [0.0f32; 3];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (3 each, in_ch = out_ch = 1); the block's
+    // causal state was initialized by construction, satisfying `process_block`'s contract.
     unsafe {
         block.process_block(&input, &mut output, 3);
     }
@@ -147,6 +159,9 @@ fn test_conv_bias() {
     let input = [1.0f32];
     let mut output = [0.0f32];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (in_ch = out_ch = 1); the block's causal
+    // state was initialized by construction, satisfying `process_block`'s contract.
     unsafe {
         block.process_block(&input, &mut output, 1);
     }

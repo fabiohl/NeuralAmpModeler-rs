@@ -119,6 +119,10 @@ impl LstmLayerDyn {
         _mm_prefetch::<_MM_HINT_T0>(self.state.as_ptr().cast::<i8>());
 
         // 3. Compute the 4 LSTM gates via the AVX2 GEMV kernel.
+        // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma,f16c")]`
+        // and only reachable under its documented precondition (caller verified
+        // AVX2+FMA+F16C). The slices are the layer's own `ih`/`stride`/`4h` sized
+        // buffers, matching the `gemv_4gate_avx2` length contract.
         unsafe {
             crate::math::gemm::gemv_4gate_avx2(
                 &self.state[..ih],
@@ -137,6 +141,10 @@ impl LstmLayerDyn {
         let (cell_slice, _) = &mut self.cell_state.split_at_mut(h);
         let (cell_err_slice, _) = &mut self.cell_error.split_at_mut(h);
         let hidden_slice = &mut self.state[i..];
+        // SAFETY: same `#[target_feature(enable = "avx2,fma,f16c")]` precondition
+        // as the GEMV call above; the gate/cell/error/hidden slices are split
+        // from `self` and all have length `h`, matching the fused-gate kernel's
+        // length contract.
         unsafe {
             crate::math::lstm::fused_lstm_gates_dyn_avx2(
                 gates_slice,
@@ -160,6 +168,9 @@ impl LstmLayerDyn {
     /// topology where AVX-512 duplication has low ROI).
     #[inline]
     pub fn process(&mut self, input: &[f32]) {
+        // SAFETY: `process_sample_avx2` requires AVX2+FMA+F16C, guaranteed by the
+        // crate's x86-64-v3 build baseline (`-Ctarget-cpu=x86-64-v3` in
+        // `.cargo/config.toml`).
         unsafe {
             self.process_sample_avx2(input);
         }

@@ -16,16 +16,15 @@ use crate::math::activations::tanh::scalar_pade_tanh;
 macro_rules! define_lstm_process {
     (
         $fn_name:ident,
+        $fn_hf:ident,
+        $fn_std:ident,
         $target_meta:meta,
         $gemv_4gate:path,
         $step:expr,
         $load:ident,
         $store:ident,
-        $add:ident,
-        $mul:ident,
-        $tanh:path,
-        $sigmoid:path,
-        $fused_gates:path,
+        $fused_gates_hf:path,
+        $fused_gates_std:path,
     ) => {
         /// Processes a sample through the LSTM layer.
         ///
@@ -33,8 +32,68 @@ macro_rules! define_lstm_process {
         /// The caller must guarantee support for the specified SIMD instructions.
         // NOTE: $target_meta allows injecting #[inline(always)] for AVX2 (our x86-64-v3 baseline)
         // or #[target_feature] for higher extensions, ensuring correct codegen.
+        //
+        // Hoists the TLS `activation_precision()` read and branch out of the
+        // SIMD lane loop: the precision is resolved once per sample and the
+        // call is forwarded to the specialized `_hf` / `_std` fused-gate
+        // variants, keeping the inner loop free of TLS reads and branches.
         #[$target_meta]
         pub unsafe fn $fn_name(&mut self, input: &[f32]) {
+            if activation_precision() == ActivationPrecision::Standard {
+                // SAFETY: `$fn_hf` is an `unsafe fn` compiled under `$target_meta`
+                // with a `# Safety` doc; this `unsafe fn` body is only reachable
+                // under those preconditions (caller guarantees the SIMD features).
+                unsafe { self.$fn_hf(input) }
+            } else {
+                // SAFETY: `$fn_std` carries the same `# Safety` doc and
+                // `$target_meta` SIMD requirement as `$fn_hf` above.
+                unsafe { self.$fn_std(input) }
+            }
+        }
+
+        define_lstm_process_impl!(
+            $fn_hf,
+            $target_meta,
+            $gemv_4gate,
+            $step,
+            $load,
+            $store,
+            $fused_gates_hf,
+        );
+        define_lstm_process_impl!(
+            $fn_std,
+            $target_meta,
+            $gemv_4gate,
+            $step,
+            $load,
+            $store,
+            $fused_gates_std,
+        );
+    };
+}
+
+/// Shared SIMD loop body for the LSTM layer, specialized on a single
+/// fused-gate kernel (`_hf` or `_std`) so no precision branch exists
+/// inside the lane loop.
+macro_rules! define_lstm_process_impl {
+    (
+        $fn_name:ident,
+        $target_meta:meta,
+        $gemv_4gate:path,
+        $step:expr,
+        $load:ident,
+        $store:ident,
+        $fused_gates:path,
+    ) => {
+        #[$target_meta]
+        unsafe fn $fn_name(&mut self, input: &[f32]) {
+            // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
+            // `$target_meta`; callers guarantee the SIMD features and
+            // `input.len() >= I`. `state[..I]`/`input[..I]` obey that contract;
+            // the loop guard `i + $step <= H` keeps every `$load`/`$store`
+            // offset in-bounds (the tail stages `H - i` lanes in `$step`-lane
+            // stack buffers first); `$gemv_4gate`/`$fused_gates` share the same
+            // `# Safety` SIMD requirement.
             unsafe {
                 // 1. Feed the model's 'memory' with the new audio fragment.
                 self.state[..I].copy_from_slice(&input[..I]);
@@ -142,16 +201,15 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
     // Tanh and Sigmoid approximators via AVX2 SIMD.
     define_lstm_process!(
         process_sample_avx2,
+        process_sample_avx2_hf,
+        process_sample_avx2_std,
         target_feature(enable = "avx2,fma,f16c"),
         crate::math::gemm::gemv_4gate_avx2,
         8,
         _mm256_loadu_ps,
         _mm256_storeu_ps,
-        _mm256_add_ps,
-        _mm256_mul_ps,
-        crate::math::activations::simd_tanh_avx2,
-        crate::math::activations::simd_sigmoid_avx2,
-        crate::math::lstm::fused_lstm_gates_avx2,
+        crate::math::lstm::fused_lstm_gates_avx2_hf,
+        crate::math::lstm::fused_lstm_gates_avx2_std,
     );
 
     // 2. AVX-512 (F/VL) Specialization:
@@ -160,16 +218,15 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
     #[cfg(feature = "avx512")]
     define_lstm_process!(
         process_sample_avx512,
+        process_sample_avx512_hf,
+        process_sample_avx512_std,
         target_feature(enable = "avx512f,avx512vl"),
         crate::math::gemm::gemv_4gate_avx512vl,
         16,
         _mm512_loadu_ps,
         _mm512_storeu_ps,
-        _mm512_add_ps,
-        _mm512_mul_ps,
-        crate::math::activations::simd_tanh_avx512,
-        crate::math::activations::simd_sigmoid_avx512,
-        crate::math::lstm::fused_lstm_gates_avx512,
+        crate::math::lstm::fused_lstm_gates_avx512_hf,
+        crate::math::lstm::fused_lstm_gates_avx512_std,
     );
 
     /// Scalar processing (fallback) for tests and benchmarks.

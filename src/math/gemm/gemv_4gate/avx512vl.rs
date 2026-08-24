@@ -372,6 +372,10 @@ mod tests {
                 let mut out_ref = vec![0.0f32; 4 * out_len];
                 let mut out_avx2 = vec![0.0f32; 4 * out_len];
 
+                // SAFETY: `make_test_data` sizes every buffer to the kernel contract for the
+                // current `(in_len, out_len)`: `in_frame` has `in_len` elements, `w0..w3`
+                // have `in_len*out_len`, and `bias`/`out_vl`/`out_avx2` have `4*out_len`;
+                // AVX-512F+VL availability is runtime-checked above.
                 unsafe {
                     gemv_4gate_avx512vl(
                         &data.in_frame,

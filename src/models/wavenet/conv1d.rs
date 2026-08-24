@@ -61,6 +61,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                 self.dilation * (K - 1)
             );
             let in_slice_start = ((frame_idx as isize) + offset) as usize * IN;
+            // SAFETY: the `debug_assert!` above (`frame_idx >= dilation * (K - 1)`) keeps
+            // `(frame_idx as isize) + offset` non-negative, and the caller contract guarantees
+            // `layer_buffer` is sized for the causal receptive field, so the copy of `IN` f32s at
+            // `in_slice_start` stays in bounds; `in_tap` is a `[f32; IN]` stack array and the two
+            // buffers are distinct (no overlap).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     layer_buffer.as_ptr().add(in_slice_start),
@@ -68,6 +73,10 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                     IN,
                 );
             }
+            // SAFETY: `in_slice_start` is in bounds of `layer_buffer` (same invariant as the tap
+            // copy above: `frame_idx >= dilation * (K - 1)` and the caller's size contract), so
+            // `.add(in_slice_start)` is valid; `_mm_prefetch` only touches the address, not the
+            // memory contents.
             unsafe {
                 if self.dilation >= 128 {
                     prefetch_strategy_2stage(
@@ -90,6 +99,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         }
 
         let flat_taps: &[f32] =
+            // SAFETY: `in_taps` is a `[[f32; IN]; K]` stack array with all `K * IN` f32
+            // elements initialized by the tap copies above, so reinterpreting its storage as
+            // `&[f32]` of length `K * IN` is valid; the pointer is non-null and `f32`-aligned.
             unsafe { core::slice::from_raw_parts(in_taps.as_ptr() as *const f32, K * IN) };
 
         for b in 0..num_blocks {
@@ -114,11 +126,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 16 * K * IN <= self.weights.len(),
                         "conv1d: interleave-16 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 16 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 16]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 16]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 16]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 16]`) match the 16-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_16x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_16_accums` only takes the full-SIMD path when all 16 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_16_accums(out_frame, out_c, r, OUT) };
                 }
                 8 => {
@@ -135,11 +158,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 8 * K * IN <= self.weights.len(),
                         "conv1d: interleave-8 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 8 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 8]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 8]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 8]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 8]`) match the 8-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_8x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_8_accums` only takes the full-SIMD path when all 8 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_8_accums(out_frame, out_c, r, OUT) };
                 }
                 _ => {
@@ -156,11 +190,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 4 * K * IN <= self.weights.len(),
                         "conv1d: interleave-4 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 4 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 4]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 4]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 4]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 4]`) match the 4-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_4x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_4_accums` only takes the full-SIMD path when all 4 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_4_accums(out_frame, out_c, r, OUT) };
                 }
             }
@@ -193,6 +238,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                 self.dilation * (K - 1)
             );
             let in_slice_start = ((frame_idx as isize) + offset) as usize * IN;
+            // SAFETY: the `debug_assert!` above (`frame_idx >= dilation * (K - 1)`) keeps
+            // `(frame_idx as isize) + offset` non-negative, and the caller contract guarantees
+            // `layer_buffer` is sized for the causal receptive field, so the copy of `IN` f32s at
+            // `in_slice_start` stays in bounds; `in_tap` is a `[f32; IN]` stack array and the two
+            // buffers are distinct (no overlap).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     layer_buffer.as_ptr().add(in_slice_start),
@@ -200,6 +250,10 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                     IN,
                 );
             }
+            // SAFETY: `in_slice_start` is in bounds of `layer_buffer` (same invariant as the tap
+            // copy above: `frame_idx >= dilation * (K - 1)` and the caller's size contract), so
+            // `.add(in_slice_start)` is valid; `_mm_prefetch` only touches the address, not the
+            // memory contents.
             unsafe {
                 if self.dilation >= 128 {
                     prefetch_strategy_2stage(
@@ -222,6 +276,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         }
 
         let flat_taps: &[f32] =
+            // SAFETY: `in_taps` is a `[[f32; IN]; K]` stack array with all `K * IN` f32
+            // elements initialized by the tap copies above, so reinterpreting its storage as
+            // `&[f32]` of length `K * IN` is valid; the pointer is non-null and `f32`-aligned.
             unsafe { core::slice::from_raw_parts(in_taps.as_ptr() as *const f32, K * IN) };
 
         for b in 0..num_blocks {
@@ -242,11 +299,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 16 * K * IN <= self.weights.len(),
                         "conv1d: interleave-16 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 16 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 16]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 16]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 16]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 16]`) match the 16-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_16x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_16_accums` only takes the full-SIMD path when all 16 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_16_accums(out_frame, out_c, r, OUT) };
                 }
                 8 => {
@@ -261,11 +329,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 8 * K * IN <= self.weights.len(),
                         "conv1d: interleave-8 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 8 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 8]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 8]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 8]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 8]`) match the 8-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_8x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_8_accums` only takes the full-SIMD path when all 8 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_8_accums(out_frame, out_c, r, OUT) };
                 }
                 _ => {
@@ -280,11 +359,22 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         w_start + 4 * K * IN <= self.weights.len(),
                         "conv1d: interleave-4 weight block exceeds padded weights buffer"
                     );
+                    // SAFETY: the `debug_assert!` above proves `w_start + 4 * K * IN` lies within
+                    // the zero-padded weights buffer, so the slice of `K * IN` `[f32; 4]` blocks
+                    // is in bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
                     let w_slice: &[[f32; 4]] = unsafe {
                         let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                         core::slice::from_raw_parts(ptr, K * IN)
                     };
+                    // SAFETY: `w_slice` (K*IN `[f32; 4]` blocks), `flat_taps` (K*IN f32s) and
+                    // `init` (`[f32; 4]`) match the 4-wide accumulate kernel's required lane
+                    // counts, and `M` is selected by the runtime CPUID dispatch matching its
+                    // `#[target_feature]` backend.
                     let r = unsafe { M::dot_product_4x_f32_accumulate(w_slice, flat_taps, &init) };
+                    // SAFETY: `out_c` is a block start with `out_c < OUT` and `out_frame` has
+                    // `OUT` channels (caller contract), so the store stays in bounds;
+                    // `store_4_accums` only takes the full-SIMD path when all 4 lanes are valid
+                    // and falls back to guarded scalar writes otherwise.
                     unsafe { store_4_accums(out_frame, out_c, r, OUT) };
                 }
             }
@@ -306,7 +396,12 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         num_frames: usize,
     ) {
         for i in 0..num_frames {
+            // SAFETY: `i < num_frames` and `block` has at least `num_frames * OUT`
+            // elements (caller contract), so `i * OUT..i * OUT + OUT` is in bounds.
             let out_frame = unsafe { block.get_unchecked_mut(i * OUT..i * OUT + OUT) };
+            // SAFETY: `out_frame` is a valid `OUT`-element slice of `block`, and
+            // `layer_buffer`/`buffer_start + i` satisfy `process_single_frame`'s causal
+            // receptive-field contract (warm-up invariant asserted inside the kernel).
             unsafe {
                 self.process_single_frame::<M>(layer_buffer, out_frame, buffer_start + i);
             }

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::math::common::Avx2Math;
 use std::assert_matches;
 
 // ── select_partition_size ──
@@ -72,8 +73,14 @@ fn test_fft_process_basic_no_tail() {
 
     let inputs = [0.5, -0.3, 0.8, -0.1, 0.2];
     for &x in &inputs {
-        let direct = unsafe { model.process_sample(x) };
-        let fft = unsafe { model_fft.process_sample(x) };
+        // SAFETY: `model` was built by `LinearModel::new`, so its `weights` are
+        // 64-byte-aligned (`AlignedVec`) and hold `receptive_field` elements; `Avx2Math`
+        // matches the CPU ISA required by `process_sample`.
+        let direct = unsafe { model.process_sample::<Avx2Math>(x) };
+        // SAFETY: `model_fft` was built by `LinearModel::new`, so its `weights` are
+        // 64-byte-aligned (`AlignedVec`) and hold `receptive_field` elements; `Avx2Math`
+        // matches the CPU ISA required by `process_sample`.
+        let fft = unsafe { model_fft.process_sample::<Avx2Math>(x) };
         assert!(
             (direct - fft).abs() < 1e-5,
             "direct={direct} fft={fft} mismatch at input={x}"
@@ -95,8 +102,12 @@ fn test_fft_process_with_tail() {
     let mut max_diff = 0.0f32;
     for i in 0..100 {
         let x = (i as f32 * 0.7).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         let diff = (d - f).abs();
         if diff > max_diff {
             max_diff = diff;
@@ -138,7 +149,9 @@ fn test_fft_long_tail_many_partitions() {
     // Verify processing does not panic over 2000 samples
     for i in 0..2000 {
         let x = (i as f32 * 0.3).sin();
-        unsafe { model.process_sample(x) };
+        // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        unsafe { model.process_sample::<Avx2Math>(x) };
     }
 }
 
@@ -148,15 +161,27 @@ fn test_fft_reset_restores_behavior() {
     let mut model = LinearModel::new(ir, 0.2, LinearImplementation::Fft).unwrap();
     model.prewarm(0);
 
-    let out1 = unsafe { model.process_sample(0.7) };
-    let out2 = unsafe { model.process_sample(-0.3) };
-    let out3 = unsafe { model.process_sample(0.4) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out1 = unsafe { model.process_sample::<Avx2Math>(0.7) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out2 = unsafe { model.process_sample::<Avx2Math>(-0.3) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out3 = unsafe { model.process_sample::<Avx2Math>(0.4) };
 
     model.reset(0, 0);
 
-    let out1b = unsafe { model.process_sample(0.7) };
-    let out2b = unsafe { model.process_sample(-0.3) };
-    let out3b = unsafe { model.process_sample(0.4) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out1b = unsafe { model.process_sample::<Avx2Math>(0.7) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out2b = unsafe { model.process_sample::<Avx2Math>(-0.3) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out3b = unsafe { model.process_sample::<Avx2Math>(0.4) };
 
     assert!(
         (out1 - out1b).abs() < F32_EQUIVALENCE_TOLERANCE,
@@ -180,6 +205,8 @@ fn test_fft_process_block() {
 
     let input: Vec<f32> = (0..128).map(|i| (i as f32 * 0.2).sin()).collect();
     let mut output = vec![0.0f32; 128];
+    // SAFETY: `input`/`output` were allocated in this test with equal lengths;
+    // `dispatch_simd!` guarantees an ISA-matching backend and `weights` is 64-byte aligned.
     unsafe { model.process(&input, &mut output) };
 
     // Verify no NaN, no infinity
@@ -195,6 +222,8 @@ fn test_direct_process_block_still_works() {
 
     let input = [0.1f32; 64];
     let mut output = [0.0f32; 64];
+    // SAFETY: `input`/`output` were allocated in this test with equal lengths;
+    // `dispatch_simd!` guarantees an ISA-matching backend and `weights` is 64-byte aligned.
     unsafe { model.process(&input, &mut output) };
 
     for &v in &output {
@@ -222,7 +251,9 @@ fn test_linear_known_output() {
     // After prewarm, history is all zeros. Stored weights are reversed: [0.5, 0.3, 0.2]
     // Feed [1.0]: window (oldest→newest) = [0, 0, 1.0]
     //   dot = 0.5*0 + 0.3*0 + 0.2*1.0 = 0.2 + bias=0.1 = 0.3
-    let out0 = unsafe { model.process_sample(1.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out0 = unsafe { model.process_sample::<Avx2Math>(1.0) };
     let expected0 = 0.5 * 0.0 + 0.3 * 0.0 + 0.2 * 1.0 + 0.1;
     assert!(
         (out0 - expected0).abs() < F32_EQUIVALENCE_TOLERANCE,
@@ -231,7 +262,9 @@ fn test_linear_known_output() {
 
     // Feed [2.0]: window (oldest→newest) = [0, 1.0, 2.0]
     //   dot = 0.5*0 + 0.3*1.0 + 0.2*2.0 = 0.7 + bias=0.1 = 0.8
-    let out1 = unsafe { model.process_sample(2.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out1 = unsafe { model.process_sample::<Avx2Math>(2.0) };
     let expected1 = 0.5 * 0.0 + 0.3 * 1.0 + 0.2 * 2.0 + 0.1;
     assert!(
         (out1 - expected1).abs() < F32_EQUIVALENCE_TOLERANCE,
@@ -240,7 +273,9 @@ fn test_linear_known_output() {
 
     // Feed [3.0]: window (oldest→newest) = [1.0, 2.0, 3.0]
     //   dot = 0.5*1.0 + 0.3*2.0 + 0.2*3.0 = 0.5+0.6+0.6 = 1.7 + bias=0.1 = 1.8
-    let out2 = unsafe { model.process_sample(3.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out2 = unsafe { model.process_sample::<Avx2Math>(3.0) };
     let expected2 = 0.5 * 1.0 + 0.3 * 2.0 + 0.2 * 3.0 + 0.1;
     assert!(
         (out2 - expected2).abs() < F32_EQUIVALENCE_TOLERANCE,
@@ -253,7 +288,9 @@ fn test_linear_zero_output() {
     let mut model =
         LinearModel::new(vec![0.0, 0.0, 0.0], 0.0, LinearImplementation::default()).unwrap();
     model.prewarm(0);
-    let out = unsafe { model.process_sample(5.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out = unsafe { model.process_sample::<Avx2Math>(5.0) };
     assert!((out - 0.0).abs() < F32_EQUIVALENCE_TOLERANCE);
 }
 
@@ -264,6 +301,8 @@ fn test_linear_process_block() {
 
     let input = [0.1, 0.2, 0.3];
     let mut output = [0.0f32; 3];
+    // SAFETY: `input`/`output` were allocated in this test with equal lengths;
+    // `dispatch_simd!` guarantees an ISA-matching backend and `weights` is 64-byte aligned.
     unsafe { model.process(&input, &mut output) };
 
     // With weight=1 (reversed), bias=0: output = input
@@ -282,10 +321,14 @@ fn test_linear_reset() {
     let mut model = LinearModel::new(vec![0.5, 0.5], 0.0, LinearImplementation::default()).unwrap();
     model.prewarm(0);
 
-    let out1 = unsafe { model.process_sample(1.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out1 = unsafe { model.process_sample::<Avx2Math>(1.0) };
     model.reset(0, 0);
 
-    let out2 = unsafe { model.process_sample(1.0) };
+    // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let out2 = unsafe { model.process_sample::<Avx2Math>(1.0) };
     assert!(
         (out1 - out2).abs() < F32_EQUIVALENCE_TOLERANCE,
         "reset should reproduce the same output: {out1} != {out2}"
@@ -314,8 +357,12 @@ fn max_diff_direct_vs_fft(ir: &[f32], bias: f32, num_samples: usize, freq: f32) 
     let mut max_diff = 0.0f32;
     for i in 0..num_samples {
         let x = (i as f32 * freq).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         let diff = (d - f).abs();
         if diff > max_diff {
             max_diff = diff;
@@ -362,8 +409,12 @@ fn test_equivalence_ir_512_constant_input() {
 
     for i in 0..1024 {
         let x = 0.75;
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         let abs_diff = (d - f).abs();
         let scale = d.abs().max(f.abs()).max(1.0);
         assert!(
@@ -384,8 +435,12 @@ fn test_equivalence_ir_256_impulse() {
     fft.prewarm(0);
 
     // Impulse at t=0
-    let d0 = unsafe { direct.process_sample(1.0) };
-    let f0 = unsafe { fft.process_sample(1.0) };
+    // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let d0 = unsafe { direct.process_sample::<Avx2Math>(1.0) };
+    // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+    // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+    let f0 = unsafe { fft.process_sample::<Avx2Math>(1.0) };
     assert!(
         (d0 - f0).abs() < F32_EQUIVALENCE_TOLERANCE,
         "impulse mismatch at t=0: d={d0} f={f0}"
@@ -393,8 +448,12 @@ fn test_equivalence_ir_256_impulse() {
 
     // Silence for many samples — both should decay identically
     for i in 1..512 {
-        let d = unsafe { direct.process_sample(0.0) };
-        let f = unsafe { fft.process_sample(0.0) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(0.0) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(0.0) };
         assert!(
             (d - f).abs() < F32_EQUIVALENCE_TOLERANCE,
             "silence mismatch at sample {i}: d={d} f={f}"
@@ -415,8 +474,12 @@ fn test_equivalence_block_boundary_crossing() {
     let total = 3 * 256 + 1;
     for i in 0..total {
         let x = (i as f32 * 0.2).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         assert!(
             (d - f).abs() < F32_EQUIVALENCE_TOLERANCE,
             "block boundary mismatch at sample {i}: d={d} f={f}"
@@ -442,8 +505,12 @@ fn test_equivalence_ir_512_random() {
     for i in 0..1536 {
         seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
         let x = ((seed >> 16) as f32 / 32768.0) * 0.8;
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         assert!(
             (d - f).abs() < F32_EQUIVALENCE_TOLERANCE,
             "random mismatch at sample {i}: d={d} f={f}"
@@ -509,8 +576,12 @@ fn test_equivalence_multi_partition_manual() {
     let total = 8 * 128;
     for i in 0..total {
         let x = (i as f32 * 0.15).sin();
-        let d = unsafe { direct2.process_sample(x) };
-        let f = unsafe { fft_model2.process_sample(x) };
+        // SAFETY: `direct2` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct2.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft_model2` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft_model2.process_sample::<Avx2Math>(x) };
         assert!(
             (d - f).abs() < F32_EQUIVALENCE_TOLERANCE,
             "multi-partition mismatch at sample {i}: d={d} f={f}"
@@ -529,9 +600,12 @@ fn test_equivalence_after_reset() {
     // Feed some signal
     for i in 0..256 {
         let x = (i as f32 * 0.1).sin();
+        // SAFETY: `direct`/`fft` were built by `LinearModel::new` (64-byte-aligned
+        // `AlignedVec` weights sized to `receptive_field`, prewarmed history); `Avx2Math`
+        // matches the CPU ISA required by `process_sample`.
         unsafe {
-            direct.process_sample(x);
-            fft.process_sample(x);
+            direct.process_sample::<Avx2Math>(x);
+            fft.process_sample::<Avx2Math>(x);
         }
     }
 
@@ -542,8 +616,12 @@ fn test_equivalence_after_reset() {
     // After reset, outputs must match sample-by-sample
     for i in 0..512 {
         let x = (i as f32 * 0.2).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         assert!(
             (d - f).abs() < F32_EQUIVALENCE_TOLERANCE,
             "post-reset mismatch at sample {i}: d={d} f={f}"
@@ -565,8 +643,12 @@ fn test_equivalence_ir_8192_long_run() {
     let mut max_diff = 0.0f32;
     for i in 0..total {
         let x = (i as f32 * 0.05).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         let diff = (d - f).abs();
         if diff > max_diff {
             max_diff = diff;
@@ -600,8 +682,12 @@ fn test_equivalence_ir_512_extended_tail() {
     let mut max_diff = 0.0f32;
     for i in 0..total {
         let x = (i as f32 * 0.09).sin();
-        let d = unsafe { direct.process_sample(x) };
-        let f = unsafe { fft.process_sample(x) };
+        // SAFETY: `direct` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let d = unsafe { direct.process_sample::<Avx2Math>(x) };
+        // SAFETY: `fft` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+        // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the CPU ISA.
+        let f = unsafe { fft.process_sample::<Avx2Math>(x) };
         let diff = (d - f).abs();
         if diff > max_diff {
             max_diff = diff;
@@ -631,8 +717,11 @@ fn test_reset_cleans_state_with_prewarm_disabled() {
         // Feed DC/energy so the FIR history and (for FFT) the tail are dirty.
         for i in 0..2048 {
             let x = 1.0f32 - (i as f32 * 0.01);
+            // SAFETY: `model` was built by `LinearModel::new` (64-byte-aligned `AlignedVec`
+            // weights sized to `receptive_field`, prewarmed history); `Avx2Math` matches the
+            // CPU ISA required by `process_sample`.
             unsafe {
-                model.process_sample(x);
+                model.process_sample::<Avx2Math>(x);
             }
         }
 

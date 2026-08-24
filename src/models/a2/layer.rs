@@ -275,6 +275,10 @@ impl A2Layer {
         debug_assert!(layer_in_out.len() >= ch);
 
         // 1. Dilated conv (no mixin — A2 adds mixin after conv).
+        // SAFETY: `z_buf.len() >= ch` (debug_assert above), `layer_history` is the
+        // model's history ring buffer of sufficient length for the dilated taps at
+        // `frame_idx`, and `M` is guaranteed to match the CPU ISA by the caller's
+        // top-level `dispatch_simd!`; all are `process_single_frame`'s preconditions.
         unsafe {
             self.conv
                 .process_single_frame::<M>(layer_history, z_buf, frame_idx, None);

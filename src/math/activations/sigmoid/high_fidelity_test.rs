@@ -25,6 +25,7 @@ fn test_sigmoid_poly_avx2_sweep() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and `result` is an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y = simd_sigmoid_poly_avx2(x);
@@ -53,6 +54,7 @@ fn test_sigmoid_poly_avx2_sweep() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y = simd_sigmoid_poly_avx2(x);
@@ -84,6 +86,7 @@ fn test_sigmoid_poly_avx2_sweep() {
 fn test_sigmoid_poly_edge_cases() {
     let test_vals: [f32; 9] = [-100.0, -20.0, -1.0, -0.0, 0.0, 1.0, 20.0, 100.0, f32::NAN];
 
+    // SAFETY: `_mm256_set1_ps` broadcasts a scalar and `_mm256_storeu_ps` writes to the 8-element `result` array, so no out-of-bounds access occurs.
     unsafe {
         for &x in &test_vals {
             let vx = _mm256_set1_ps(x);
@@ -110,6 +113,7 @@ fn test_sigmoid_poly_edge_cases() {
 
 #[test]
 fn test_sigmoid_poly_saturation() {
+    // SAFETY: `_mm256_set1_ps` broadcasts scalars and `_mm256_storeu_ps` writes to the 8-element `result` array, staying in bounds.
     unsafe {
         let mut result = [0.0_f32; 8];
 
@@ -151,6 +155,7 @@ fn test_sigmoid_poly_avx512_sweep() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and `result` is a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y = simd_sigmoid_poly_avx512(x);
@@ -179,6 +184,7 @@ fn test_sigmoid_poly_avx512_sweep() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y = simd_sigmoid_poly_avx512(x);

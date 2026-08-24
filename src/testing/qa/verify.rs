@@ -9,6 +9,21 @@
 //! **never** flip `FIDELITY` to FAIL. Fidelity phases (`golden_vectors`,
 //! `reference_oracle_f64`, `quick_parity`) must be `PASS`.
 //!
+//! ## ISA phase naming (T3.2 / G-02)
+//!
+//! The ISA coverage is split into two distinct phase records so the report can
+//! never mistake internal consistency for inter-ISA parity:
+//!
+//! - `isa_self_consistency` — the local dashboard subphase (AVX2 vs AVX2,
+//!   MSE=0). A `FAIL` here is a real fidelity violation.
+//! - `isa_parity_cross_isa` — the full AVX2 vs AVX-512 matrix, restricted to
+//!   the multi-target/remote gate (`utils/remote-simd-gate.sh`). On the local
+//!   runner it is declared as `SKIP_CAPABILITY` (reason
+//!   `cross_isa_matrix_requires_avx512_remote`): a declared gap, never counted
+//!   as a pass and never a fidelity failure (see
+//!   `utils/quality-dashboard.sh` `run_isa_self_consistency`).
+//!
+//!
 //! Literal-port notes:
 //! - ESR envelope limits are rounded with `printf "%.2e"` semantics BEFORE
 //!   the comparison — the rounded value is the effective gate

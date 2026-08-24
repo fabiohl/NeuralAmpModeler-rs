@@ -43,6 +43,9 @@ pub unsafe fn dot_product_8x_f32_avx2(weights: &[[f32; 8]], state: &[f32]) -> [f
     let mut acc3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
+    // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
+    // 8-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm256_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -116,6 +119,9 @@ pub unsafe fn dot_product_8x_f32_dual_avx2(
     let mut acc_f1_3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `dot4x_simd4!` guard keeps `i < len`, so all
+    // unchecked reads and 8-f32 loads stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm256_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -196,6 +202,9 @@ pub unsafe fn dot_product_8x_f32_accumulate_avx2(
     let mut acc3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
+    // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
+    // 8-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm256_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -271,6 +280,9 @@ pub unsafe fn dot_product_8x_f32_dual_accumulate_avx2(
     let mut acc_f1_3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `dot4x_simd4!` guard keeps `i < len`, so all
+    // unchecked reads and 8-f32 loads stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm256_loadu_ps(weights.as_ptr().add(i) as *const f32);

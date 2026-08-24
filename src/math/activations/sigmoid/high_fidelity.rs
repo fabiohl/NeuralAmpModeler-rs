@@ -83,6 +83,8 @@ pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
 
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
     let neg_x = _mm256_sub_ps(zero, x);
+    // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let exp_neg_x = unsafe { simd_exp_poly_avx2(neg_x) };
     let den = _mm256_add_ps(one, exp_neg_x);
     let sig = _mm256_div_ps(one, den);
@@ -104,6 +106,8 @@ pub unsafe fn sigmoid_poly_slice_avx2(slice: &mut [f32]) {
     let len = slice.len();
 
     while i + 8 <= len {
+        // SAFETY: loop guard `i + 8 <= len`, so the 8-lane load/store at offset
+        // `i` stays within `slice`; `loadu`/`storeu` need no alignment.
         unsafe {
             let x = _mm256_loadu_ps(slice.as_ptr().add(i));
             let y = simd_sigmoid_poly_avx2(x);

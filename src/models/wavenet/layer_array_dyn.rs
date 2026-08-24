@@ -78,6 +78,11 @@ impl WaveNetLayerArrayDyn {
         let ch = self.ch;
         let head = self.head;
 
+        // SAFETY: `states_ptr` is derived from `self.states` with `layers.len() == states.len()`
+        // (the `debug_assert_eq!` above), and every index used is `< num_layers <= states.len()`
+        // (`states_ptr.add(0)`, `add(i)`, and `add(i + 1)` guarded by `i + 1 < num_layers`), so
+        // each `&mut *` reborrow is valid and targets a distinct state slot per layer iteration;
+        // the `_mm_prefetch` calls only touch the addresses, not the contents.
         unsafe {
             let state_0 = &mut *states_ptr.add(0);
             let start = state_0.buffer_start * ch;
@@ -186,6 +191,10 @@ impl WaveNetLayerArrayDyn {
         condition: &[f32],
         prev_head_outputs: Option<&[f32]>,
     ) {
+        // SAFETY: `prewarm_internal` is an `unsafe fn` only reachable through the `dispatch_simd!`
+        // macro (per its docs), which dispatches on runtime CPUID feature checks to a matching
+        // `#[target_feature]` backend `M`; the buffers are the same validated slices passed to
+        // this safe wrapper.
         unsafe {
             self.process_block_internal::<M, true>(layer_inputs, condition, 1, prev_head_outputs);
         }

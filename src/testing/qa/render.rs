@@ -1065,21 +1065,51 @@ fn render_performance(report: &QualityReport, p: &Palette) -> String {
 }
 
 fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
+    // T3.2 (G-02): the QA report must distinguish *self-consistency* (the local
+    // dashboard phase `isa_self_consistency`, AVX2 vs AVX2, MSE=0 tautology)
+    // from *real cross-ISA parity* (the remote gate `remote-simd-gate.sh`,
+    // tracked as phase `isa_parity_cross_isa`). The local runner declares the
+    // cross-ISA matrix as a SKIP_CAPABILITY gap instead of letting an
+    // `isa_parity: PASS` line imply inter-ISA comparison.
     let mut out = String::new();
-    out.push_str("ISA PARITY\n");
-    out.push_str("═════════════\n\n");
+    out.push_str("ISA SELF-CONSISTENCY / CROSS-ISA\n");
+    out.push_str("══════════════════════════════════\n\n");
 
     if report.isa.is_empty() {
-        if report.phase_status("isa_parity") == "PASS" {
-            // The phase receipt passed (e.g. self-consistency on a CPU without
-            // AVX-512); "not covered" would be a lie — say what actually
-            // happened instead (P0.T3).
-            out.push_str("  ok isa_parity phase passed; no per-model ISA rows in this report.\n\n");
+        // No per-model ISA rows: reflect what the phases actually declared.
+        let self_phase = super::phases::ISA_SELF_CONSISTENCY_PHASE;
+        let cross_phase = super::phases::ISA_PARITY_CROSS_ISA_PHASE;
+        if report.phase_status(self_phase) == "PASS" {
+            out.push_str(
+                "  ok isa_self_consistency passed (AVX2 vs AVX2 internal consistency; MSE=0).\n",
+            );
+        } else if report.phase_status(self_phase) == "FAIL" {
+            out.push_str(&p.red("  FAIL isa_self_consistency (AVX2 determinism violated).\n\n"));
+            return out;
         } else {
-            out.push_str(&p.yellow(
-                "  (i) Not covered in quick mode — run tests-long for full verification.\n\n",
-            ));
+            out.push_str(&p.yellow("  (i) isa_self_consistency not run.\n"));
         }
+        match report.phase_status(cross_phase) {
+            "PASS" => {
+                out.push_str(
+                    "  ok cross-ISA parity (AVX2 vs AVX-512) passed on the remote gate.\n",
+                );
+            }
+            "SKIP_CAPABILITY" => {
+                out.push_str(&p.yellow(&format!(
+                    "  (i) cross-ISA parity NOT executed here — declared gap \
+                     `{}` (multi-target/remote gate only).\n",
+                    super::phases::CROSS_ISA_GAP_REASON
+                )));
+            }
+            _ => {
+                out.push_str(&p.yellow(
+                    "  (i) cross-ISA parity not covered — run the remote SIMD gate \
+                     (utils/remote-simd-gate.sh) for the real inter-ISA matrix.\n",
+                ));
+            }
+        }
+        out.push('\n');
         return out;
     }
 
@@ -1110,7 +1140,9 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
             cross_isa.len()
         )));
     } else {
-        out.push_str("  AVX2 vs AVX-512: no data (CPU may lack AVX-512)\n");
+        out.push_str(&p.yellow(
+            "  cross-ISA parity: no data — declared gap `cross_isa_matrix_requires_avx512_remote`\n",
+        ));
     }
 
     out.push_str(&format!(

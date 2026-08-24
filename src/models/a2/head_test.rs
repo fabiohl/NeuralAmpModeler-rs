@@ -300,6 +300,8 @@ fn test_a2_head_ch8_avx2_parity() {
     let mut output = vec![0.0f32; num_frames];
     let mut scalar = vec![0.0f32; num_frames];
 
+    // SAFETY: `w` has K*8 elements, `history` has (ring_mask+1)*8 and `output` has num_frames; all
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         head_process_ch8_avx2(
             &w,
@@ -351,6 +353,8 @@ fn test_a2_head_ch8_avx2_parity_large_block() {
     let mut output = vec![0.0f32; num_frames];
     let mut scalar = vec![0.0f32; num_frames];
 
+    // SAFETY: `w` has K*8 elements, `history` has (ring_mask+1)*8 and `output` has num_frames; all
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         head_process_ch8_avx2(
             &w,
@@ -402,6 +406,8 @@ fn test_a2_head_ch8_avx2_wraparound() {
     let mut output = vec![0.0f32; num_frames];
     let mut scalar = vec![0.0f32; num_frames];
 
+    // SAFETY: `w` has K*8 elements, `history` has (ring_mask+1)*8 and `output` has num_frames; all
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         head_process_ch8_avx2(
             &w,
@@ -453,6 +459,8 @@ fn test_a2_head_ch3_sse_parity_wraparound() {
     let mut output = vec![0.0f32; num_frames];
     let mut scalar = vec![0.0f32; num_frames];
 
+    // SAFETY: `w` has K*3 elements, `history` has (ring_mask+1)*3 and `output` has num_frames; all
+    // outlive the call; SSE+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         head_process_ch3_sse(
             &w,

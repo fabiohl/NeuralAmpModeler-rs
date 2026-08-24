@@ -91,6 +91,10 @@ impl GatingActivationConfig {
             "gating: buf length must be even (2×ch)"
         );
 
+        // SAFETY: this `unsafe fn` is only reachable under its documented preconditions:
+        // `buf` is a valid slice and `M` matches the CPU ISA. The `debug_assert!`
+        // above guarantees `ch * 2 == buf.len()`, so the halves `buf[..ch]` and
+        // `buf[ch..]` are valid, disjoint, in-bounds sub-slices.
         unsafe {
             self.input_activation.apply_simd::<M>(&mut buf[..ch]);
             self.gating_activation.apply_simd::<M>(&mut buf[ch..]);
@@ -214,6 +218,10 @@ impl BlendingActivationConfig {
 
         self.scratch[..ch].copy_from_slice(&buf[..ch]);
 
+        // SAFETY: this `unsafe fn` is only reachable under its documented preconditions:
+        // `buf` is a valid slice and `M` matches the CPU ISA. The `debug_assert!`
+        // above guarantees `ch * 2 == buf.len()`, so `buf[..ch]` and `buf[ch..]`
+        // are valid, disjoint, in-bounds sub-slices.
         unsafe {
             self.input_activation.apply_simd::<M>(&mut buf[..ch]);
             self.blending_activation.apply_simd::<M>(&mut buf[ch..]);

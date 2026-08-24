@@ -130,8 +130,8 @@ PERFORMANCE — Block Latency (64 samples @ 48kHz)
   (i) Headroom > 75%:  4x oversampling usually safe without xruns
   (i) Headroom < 25%:  xrun risk with a 64-sample buffer
 
-ISA PARITY
-═════════════
+ISA SELF-CONSISTENCY / CROSS-ISA
+══════════════════════════════════
 
   AVX2 vs AVX-512: bitwise identical
   Self-consistency checks: 1 executed

@@ -18,6 +18,7 @@ fn test_pade_nr1_vs_div_precision_avx2() {
     let mut max_nr1_vs_div: f32 = 0.0;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the stores target 8-element arrays, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y_nr1 = simd_tanh_pade_nr1_avx2(x);
@@ -43,6 +44,7 @@ fn test_pade_nr1_vs_div_precision_avx2() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y_nr1 = simd_tanh_pade_nr1_avx2(x);
@@ -74,6 +76,7 @@ fn test_pade_nr2_vs_nr1_precision_avx2() {
     let mut max_nr1_vs_nr2: f32 = 0.0;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the stores target 8-element arrays, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y_nr1 = simd_tanh_pade_nr1_avx2(x);
@@ -112,6 +115,7 @@ fn test_pade_nr1_vs_div_precision_avx512() {
     let mut max_nr1_vs_div: f32 = 0.0;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the stores target 16-element arrays, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y_nr1 = simd_tanh_pade_nr1_avx512(x);
@@ -137,6 +141,7 @@ fn test_pade_nr1_vs_div_precision_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y_nr1 = simd_tanh_pade_nr1_avx512(x);
@@ -167,6 +172,7 @@ fn test_pade_nr1_dual_vs_production_avx2() {
     let mut max_nr1_vs_div: f32 = 0.0;
 
     for pair in sweep.chunks_exact(16) {
+        // SAFETY: `pair` has exactly 16 elements from `chunks_exact(16)`, so `pair[0..8]` and `pair[8..16]` are valid 8-element loads; the stores target 8-element arrays.
         unsafe {
             let x1 = _mm256_loadu_ps(pair[0..8].as_ptr());
             let x2 = _mm256_loadu_ps(pair[8..16].as_ptr());

@@ -8,6 +8,16 @@ use core::arch::x86_64::*;
 /// Applies the "gate" activation (tanh * sigmoid) to audio blocks.
 /// Imagine each sound goes through two filters: one that shapes the timbre (tanh)
 /// and another that controls the intensity (sigmoid). The result is added to "head_input".
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `ch >= 1` and `block.len() >= 2 * ch * (head_input.len() / ch)`: the
+///   vector loop performs unaligned 512-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` also divides by zero.
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn gated_activation_and_accumulate_block_avx512(
     head_input: &mut [f32],
@@ -50,6 +60,16 @@ pub unsafe fn gated_activation_and_accumulate_block_avx512(
 
 /// Applies the "gate" activation (tanh * sigmoid) to audio blocks.
 /// Overwrites to "head_input".
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `ch >= 1` and `block.len() >= 2 * ch * (head_input.len() / ch)`: the
+///   vector loop performs unaligned 512-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` also divides by zero.
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn gated_activation_and_overwrite_block_avx512(
     head_input: &mut [f32],
@@ -85,6 +105,16 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512(
 }
 
 /// Accumulates src into dest using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `src.len() >= dest.len()`: the unmasked vector loop performs unaligned
+///   512-bit raw-pointer loads from `src` up to `dest.len()`; a shorter `src`
+///   is read out of bounds (UB). The masked tail only covers
+///   `dest.len() % 16` lanes with fault suppression.
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn accumulate_head_avx512(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
@@ -104,6 +134,15 @@ pub unsafe fn accumulate_head_avx512(dest: &mut [f32], src: &[f32]) {
 }
 
 /// Applies tanh in-place on block and accumulates into head_input using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()`: the unmasked vector loop performs
+///   unaligned 512-bit raw-pointer loads/stores up to `block.len()` on both
+///   slices; a shorter `head_input` is accessed out of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn tanh_and_accumulate_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -129,6 +168,15 @@ pub unsafe fn tanh_and_accumulate_block_avx512(head_input: &mut [f32], block: &m
 }
 
 /// Applies tanh in-place on block and overwrites head_input using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()`: the unmasked vector loop performs
+///   unaligned 512-bit raw-pointer stores up to `block.len()` on both slices;
+///   a shorter `head_input` is written out of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn tanh_and_overwrite_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -153,6 +201,16 @@ pub unsafe fn tanh_and_overwrite_block_avx512(head_input: &mut [f32], block: &mu
 ///
 /// Computes `head_input[i] = seed[i] + tanh(block[i])`.
 /// Eliminates the separate `copy_from_slice(seed)` before `tanh_and_accumulate_block`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()` and `seed.len() >= block.len()`: the
+///   unmasked vector loop performs unaligned 512-bit raw-pointer loads/stores
+///   up to `block.len()` on all three slices; shorter slices are accessed out
+///   of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn tanh_and_accumulate_with_seed_avx512(
     head_input: &mut [f32],
@@ -182,6 +240,15 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512(
 }
 
 /// Applies ReLU in-place on block and accumulates into head_input using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()`: the unmasked vector loop performs
+///   unaligned 512-bit raw-pointer loads/stores up to `block.len()` on both
+///   slices; a shorter `head_input` is accessed out of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn relu_and_accumulate_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -207,6 +274,15 @@ pub unsafe fn relu_and_accumulate_block_avx512(head_input: &mut [f32], block: &m
 }
 
 /// Applies ReLU in-place on block and overwrites head_input using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()`: the unmasked vector loop performs
+///   unaligned 512-bit raw-pointer stores up to `block.len()` on both slices;
+///   a shorter `head_input` is written out of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn relu_and_overwrite_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -228,6 +304,16 @@ pub unsafe fn relu_and_overwrite_block_avx512(head_input: &mut [f32], block: &mu
 }
 
 /// Fused Seed + ReLU + Head Accumulate using AVX-512.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F and AVX-512VL (guaranteed by the ISA
+///   dispatch, which additionally requires BW+DQ; never call directly on an
+///   unchecked host).
+/// - `head_input.len() >= block.len()` and `seed.len() >= block.len()`: the
+///   unmasked vector loop performs unaligned 512-bit raw-pointer loads/stores
+///   up to `block.len()` on all three slices; shorter slices are accessed out
+///   of bounds (UB).
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn relu_and_accumulate_with_seed_avx512(
     head_input: &mut [f32],

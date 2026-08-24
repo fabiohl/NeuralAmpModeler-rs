@@ -251,6 +251,42 @@ fn non_mandatory_phase_fail_still_counts_as_fidelity_violation() {
     );
 }
 
+// ── T3.2: ISA self-consistency vs. cross-ISA gap ────────────────────────────
+
+/// T3.2 (G-02): a declared `SKIP_CAPABILITY` gap on `isa_parity_cross_isa` is
+/// not a fidelity failure and never implies inter-ISA parity — while a FAIL on
+/// the local `isa_self_consistency` phase is a real fidelity violation.
+#[test]
+fn isa_self_consistency_pass_with_cross_isa_gap_is_ok() {
+    let contract = load_contract();
+    let mut phases: Vec<(&str, &str)> = ALL_PASS.to_vec();
+    phases.push(("isa_self_consistency", "PASS"));
+    phases.push(("isa_parity_cross_isa", "SKIP_CAPABILITY"));
+    let report = build_report(&contract, &phases, canonical_fidelity, canonical_latency);
+    let outcome = verify(&contract, &report);
+
+    assert!(
+        outcome.fidelity.is_ok(),
+        "self-consistency PASS + declared cross-ISA gap must not fail fidelity: {outcome:?}"
+    );
+    assert_eq!(outcome.exit_code(), 0);
+}
+
+#[test]
+fn isa_self_consistency_fail_is_fidelity_violation() {
+    let contract = load_contract();
+    let mut phases: Vec<(&str, &str)> = ALL_PASS.to_vec();
+    phases.push(("isa_self_consistency", "FAIL"));
+    let report = build_report(&contract, &phases, canonical_fidelity, canonical_latency);
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(
+        outcome.fidelity,
+        FidelityVerdict::Fail { violations: 1 },
+        "a FAIL on isa_self_consistency (AVX2 determinism) is a fidelity violation: {outcome:?}"
+    );
+}
+
 // ── F-07: record-count gate (observed_records >= expected_records) ──────────
 
 /// Phase line carrying the F-07 record counts (`observed`/`expected`).

@@ -306,6 +306,9 @@ impl NamResampler {
     ) -> ResamplerProgress {
         let Some(ref mut core) = self.inner else {
             let n = in_l.len().min(in_r.len()).min(out_l.len()).min(out_r.len());
+            // SAFETY: `n` is the minimum length of the source and destination slices,
+            // so each `copy_nonoverlapping` moves `n` initialized `f32` values within
+            // bounds; in/out buffers are distinct (bypass path), so no overlap.
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_r.as_ptr(), out_r.as_mut_ptr(), n);
@@ -330,6 +333,9 @@ impl NamResampler {
     ) -> ResamplerProgress {
         let Some(ref mut core) = self.outer else {
             let n = in_l.len().min(in_r.len()).min(out_l.len()).min(out_r.len());
+            // SAFETY: `n` is the minimum length of source and destination slices, so
+            // each `copy_nonoverlapping` copies `n` `f32` values within bounds; the
+            // in/out buffers are distinct on the bypass path (no overlap).
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_r.as_ptr(), out_r.as_mut_ptr(), n);
@@ -353,6 +359,9 @@ impl NamResampler {
     ) -> ResamplerProgress {
         let Some(ref mut core) = self.inner else {
             let n = in_l.len().min(out_l.len()).min(out_r.len());
+            // SAFETY: `n` is the minimum of the source and both destination lengths,
+            // so both copies stay in bounds; `out_l`/`out_r` are distinct buffers and
+            // distinct from `in_l`, so the regions never overlap.
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_r.as_mut_ptr(), n);
@@ -376,6 +385,9 @@ impl NamResampler {
     ) -> ResamplerProgress {
         let Some(ref mut core) = self.outer else {
             let n = in_l.len().min(out_l.len()).min(out_r.len());
+            // SAFETY: `n` is the minimum of the source and both destination lengths,
+            // so both copies stay in bounds; `out_l`/`out_r` are distinct buffers and
+            // distinct from `in_l`, so the regions never overlap.
             unsafe {
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_l.as_mut_ptr(), n);
                 ptr::copy_nonoverlapping(in_l.as_ptr(), out_r.as_mut_ptr(), n);

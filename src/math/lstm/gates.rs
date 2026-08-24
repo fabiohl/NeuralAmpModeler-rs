@@ -42,9 +42,17 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
     cs: __m256,
     cs_err: __m256,
 ) -> (__m256, __m256, __m256) {
+    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
+    // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_poly_avx2`.
     let sig_f = unsafe { simd_sigmoid_poly_avx2(gf) };
+    // SAFETY: `simd_sigmoid_poly_avx2` needs the same AVX2+FMA support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_i = unsafe { simd_sigmoid_poly_avx2(gi) };
+    // SAFETY: `simd_sigmoid_poly_avx2` needs the same AVX2+FMA support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_o = unsafe { simd_sigmoid_poly_avx2(go) };
+    // SAFETY: `simd_tanh_poly_avx2` needs the same AVX2+FMA support guaranteed
+    // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_poly_avx2(gg) };
 
     let f_cs = _mm256_mul_ps(sig_f, cs);
@@ -54,6 +62,8 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
     let new_cs = _mm256_add_ps(f_cs, y);
     let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
 
+    // SAFETY: `simd_tanh_poly_avx2` requires AVX2+FMA, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let hidden = _mm256_mul_ps(sig_o, unsafe { simd_tanh_poly_avx2(new_cs) });
 
     (new_cs, new_cs_err, hidden)
@@ -75,8 +85,14 @@ pub unsafe fn fused_lstm_gates_avx2_std(
     cs: __m256,
     cs_err: __m256,
 ) -> (__m256, __m256, __m256) {
+    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
+    // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_dual_avx2`.
     let (sig_f, sig_i) = unsafe { simd_sigmoid_dual_avx2(gf, gi) };
+    // SAFETY: `simd_sigmoid_avx2` needs the same AVX2+FMA support guaranteed by
+    // this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_o = unsafe { simd_sigmoid_avx2(go) };
+    // SAFETY: `simd_tanh_avx2` needs the same AVX2+FMA support guaranteed by
+    // this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_avx2(gg) };
 
     let f_cs = _mm256_mul_ps(sig_f, cs);
@@ -86,6 +102,8 @@ pub unsafe fn fused_lstm_gates_avx2_std(
     let new_cs = _mm256_add_ps(f_cs, y);
     let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
 
+    // SAFETY: `simd_tanh_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let hidden = _mm256_mul_ps(sig_o, unsafe { simd_tanh_avx2(new_cs) });
 
     (new_cs, new_cs_err, hidden)
@@ -107,8 +125,13 @@ pub unsafe fn fused_lstm_gates_avx2(
     cs_err: __m256,
 ) -> (__m256, __m256, __m256) {
     if activation_precision() == ActivationPrecision::Standard {
+        // SAFETY: `fused_lstm_gates_avx2_hf` requires AVX2+FMA, guaranteed by
+        // this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller
+        // contract.
         unsafe { fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err) }
     } else {
+        // SAFETY: `fused_lstm_gates_avx2_std` requires the same AVX2+FMA support
+        // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
         unsafe { fused_lstm_gates_avx2_std(gf, gi, gg, go, cs, cs_err) }
     }
 }
@@ -130,9 +153,18 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
     cs: __m512,
     cs_err: __m512,
 ) -> (__m512, __m512, __m512) {
+    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx512f,avx512vl")]`
+    // and callers guarantee AVX-512F/VL, which also covers
+    // `simd_sigmoid_poly_avx512`.
     let sig_f = unsafe { simd_sigmoid_poly_avx512(gf) };
+    // SAFETY: `simd_sigmoid_poly_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_i = unsafe { simd_sigmoid_poly_avx512(gi) };
+    // SAFETY: `simd_sigmoid_poly_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_o = unsafe { simd_sigmoid_poly_avx512(go) };
+    // SAFETY: `simd_tanh_poly_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_poly_avx512(gg) };
 
     let f_cs = _mm512_mul_ps(sig_f, cs);
@@ -142,6 +174,9 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
     let new_cs = _mm512_add_ps(f_cs, y);
     let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
 
+    // SAFETY: `simd_tanh_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let hidden = _mm512_mul_ps(sig_o, unsafe { simd_tanh_poly_avx512(new_cs) });
 
     (new_cs, new_cs_err, hidden)
@@ -164,9 +199,17 @@ pub unsafe fn fused_lstm_gates_avx512_std(
     cs: __m512,
     cs_err: __m512,
 ) -> (__m512, __m512, __m512) {
+    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx512f,avx512vl")]`
+    // and callers guarantee AVX-512F/VL, which also covers `simd_sigmoid_avx512`.
     let sig_f = unsafe { simd_sigmoid_avx512(gf) };
+    // SAFETY: `simd_sigmoid_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_i = unsafe { simd_sigmoid_avx512(gi) };
+    // SAFETY: `simd_sigmoid_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let sig_o = unsafe { simd_sigmoid_avx512(go) };
+    // SAFETY: `simd_tanh_avx512` needs the same AVX-512F/VL support guaranteed
+    // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_avx512(gg) };
 
     let f_cs = _mm512_mul_ps(sig_f, cs);
@@ -176,6 +219,9 @@ pub unsafe fn fused_lstm_gates_avx512_std(
     let new_cs = _mm512_add_ps(f_cs, y);
     let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
 
+    // SAFETY: `simd_tanh_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let hidden = _mm512_mul_ps(sig_o, unsafe { simd_tanh_avx512(new_cs) });
 
     (new_cs, new_cs_err, hidden)
@@ -198,8 +244,14 @@ pub unsafe fn fused_lstm_gates_avx512(
     cs_err: __m512,
 ) -> (__m512, __m512, __m512) {
     if activation_precision() == ActivationPrecision::Standard {
+        // SAFETY: `fused_lstm_gates_avx512_hf` requires AVX-512F/VL, guaranteed
+        // by this `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]`
+        // and caller contract.
         unsafe { fused_lstm_gates_avx512_hf(gf, gi, gg, go, cs, cs_err) }
     } else {
+        // SAFETY: `fused_lstm_gates_avx512_std` requires the same AVX-512F/VL
+        // support guaranteed by this `unsafe fn`'s `#[target_feature]` and caller
+        // contract.
         unsafe { fused_lstm_gates_avx512_std(gf, gi, gg, go, cs, cs_err) }
     }
 }

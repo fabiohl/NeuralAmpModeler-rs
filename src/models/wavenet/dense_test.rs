@@ -26,6 +26,9 @@ fn test_dense_layer_identity() {
     let mut output = vec![0.0; 4];
 
     // 1x1 dense layers are fundamental for mixing channels without looking at time.
+    // SAFETY: `input`/`output` were allocated in this test with lengths matching the
+    // dense layer's `IN`/`OUT` per frame (4 each, one frame); `Avx2Math` is the
+    // CPUID-selected backend whose `#[target_feature]` matches the host ISA.
     unsafe {
         dense.process_block::<crate::math::common::Avx2Math>(&input, &mut output, 1);
     }
@@ -55,6 +58,9 @@ fn test_dense_layer_with_bias() {
     let mut output = vec![0.0; 4];
 
     // The result should be translated by the bias across all 4 channels.
+    // SAFETY: `input`/`output` were allocated in this test with lengths matching the
+    // dense layer's `IN`/`OUT` per frame (4 each, one frame); `Avx2Math` is the
+    // CPUID-selected backend whose `#[target_feature]` matches the host ISA.
     unsafe {
         dense.process_block::<crate::math::common::Avx2Math>(&input, &mut output, 1);
     }
@@ -91,6 +97,9 @@ fn test_dense_layer_rectangular() {
     let mut output = vec![0.0; 4];
 
     // Validate that the SIMD loop correctly handles the matrix row end (stride).
+    // SAFETY: `input` (8 elements = `IN` × 1 frame) and `output` (4 elements = `OUT` × 1
+    // frame) were allocated in this test matching the dense layer's contract; `Avx2Math`
+    // is the CPUID-selected backend whose `#[target_feature]` matches the host ISA.
     unsafe {
         dense.process_block::<crate::math::common::Avx2Math>(&input, &mut output, 1);
     }

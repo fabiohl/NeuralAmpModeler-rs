@@ -8,6 +8,7 @@
 //! process/prewarm/reset logic.
 
 use super::LinearMode;
+use crate::math::common::SimdMath;
 
 impl super::LinearModel {
     /// Processes a single audio sample using the Linear model.
@@ -20,10 +21,15 @@ impl super::LinearModel {
     ///      from the pre-computed `tail_output_buf`. Every `P` samples, a new
     ///      tail block is computed via `LinearFftState::process_tail_block`.
     ///
+    /// The convolution is monomorphized over `M: SimdMath` so the ISA is
+    /// resolved once per block (by the `dispatch_simd!` hub in `process`),
+    /// eliminating the per-sample atomic load and branch that the previous
+    /// `convolve_mono` wrapper incurred.
+    ///
     /// # Safety
     /// `self.weights` must be 64-byte aligned (guaranteed by `AlignedVec`).
     #[inline(always)]
-    pub(crate) unsafe fn process_sample(&mut self, input: f32) -> f32 {
+    pub(crate) unsafe fn process_sample<M: SimdMath>(&mut self, input: f32) -> f32 {
         self.history[self.write_pos] = input;
 
         self.write_pos += 1;
@@ -35,29 +41,34 @@ impl super::LinearModel {
             LinearMode::Direct => {
                 let start = self.write_pos - self.receptive_field;
                 let window = &self.history[start..self.write_pos];
+                // SAFETY: `window` is `history[start..write_pos]` with
+                // `start = write_pos - receptive_field`, so it has exactly
+                // `receptive_field` elements; `self.weights` also holds
+                // `receptive_field` elements (set in `new` from `weights.len()`) and
+                // is 64-byte aligned (AlignedVec); `M` matches the CPU ISA.
                 let dot = unsafe {
-                    crate::math::dsp::stereo::convolve_mono(
-                        self.weights.as_ptr(),
-                        window.as_ptr(),
-                        self.receptive_field,
-                    )
+                    M::convolve_mono(self.weights.as_ptr(), window.as_ptr(), self.receptive_field)
                 };
                 self.bias + dot
             }
             LinearMode::Fft(state) => {
                 let p = state.p;
 
+                // SAFETY: `self.weights` holds exactly `receptive_field` elements
+                // (set in `new` from `weights.len()`), and
+                // `receptive_field - p + p == receptive_field`, so `add(receptive_field - p)`
+                // plus the subsequent `p`-element read stays within bounds; `self.weights`
+                // is 64-byte aligned (AlignedVec).
                 let head_weights_ptr =
                     unsafe { self.weights.as_ptr().add(self.receptive_field - p) };
                 let head_start = self.write_pos - p;
                 let head_window = &self.history[head_start..self.write_pos];
-                let head_dot = unsafe {
-                    crate::math::dsp::stereo::convolve_mono(
-                        head_weights_ptr,
-                        head_window.as_ptr(),
-                        p,
-                    )
-                };
+                // SAFETY: `head_window` is `history[head_start..write_pos]` with
+                // `head_start = write_pos - p`, so it has exactly `p` elements;
+                // `head_weights_ptr` is valid for `p` elements (see above);
+                // `self.weights` is 64-byte aligned; `M` matches the CPU ISA.
+                let head_dot =
+                    unsafe { M::convolve_mono(head_weights_ptr, head_window.as_ptr(), p) };
 
                 let y_tail = state.tail_output_buf[state.sample_counter];
                 state.sample_counter += 1;
@@ -74,17 +85,36 @@ impl super::LinearModel {
         }
     }
 
-    /// Processes a block of audio samples.
+    /// Processes a block of audio samples, monomorphized over `M: SimdMath`.
+    ///
+    /// # Safety
+    /// `self.weights` must be 64-byte aligned.
+    #[inline(always)]
+    unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
+        let n = core::cmp::min(input.len(), output.len());
+        for i in 0..n {
+            // SAFETY: `process_sample::<M>` is an `unsafe fn`; its documented
+            // precondition holds (`self.weights` is 64-byte aligned via AlignedVec),
+            // `i < n <= input.len()` and `i < n <= output.len()`, and `M` matches
+            // the CPU ISA (top-level `dispatch_simd!`).
+            unsafe {
+                output[i] = self.process_sample::<M>(input[i]);
+            }
+        }
+    }
+
+    /// Processes a block of audio samples (SIMD dispatch once per block).
     ///
     /// # Safety
     /// `self.weights` must be 64-byte aligned.
     #[inline(always)]
     pub unsafe fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        let n = core::cmp::min(input.len(), output.len());
-        for i in 0..n {
-            unsafe {
-                output[i] = self.process_sample(input[i]);
-            }
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
+        // matching `#[target_feature]` backend; `input`/`output` are the same valid
+        // slices passed to this `unsafe fn`, whose documented precondition
+        // (64-byte-aligned weights) holds.
+        unsafe {
+            crate::math::common::dispatch_simd!(self, process_internal, input, output);
         }
     }
 

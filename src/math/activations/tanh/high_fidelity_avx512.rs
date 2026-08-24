@@ -75,6 +75,9 @@ pub unsafe fn simd_tanh_poly_avx512(x: __m512) -> __m512 {
 
     let x = _mm512_max_ps(clamp_lo, _mm512_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let exp_x = unsafe { simd_exp_poly_avx512(x) };
     let u2 = _mm512_mul_ps(exp_x, exp_x); // e²ˣ
     let num = _mm512_sub_ps(u2, one); // e²ˣ − 1
@@ -93,7 +96,12 @@ pub unsafe fn simd_tanh_poly_avx512(x: __m512) -> __m512 {
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_tanh_sigmoid_dual_poly_avx512(x1: __m512, x2: __m512) -> (__m512, __m512) {
+    // SAFETY: `simd_tanh_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let t1 = unsafe { simd_tanh_poly_avx512(x1) };
+    // SAFETY: `simd_sigmoid_poly_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let s2 = unsafe { simd_sigmoid_poly_avx512(x2) };
     (t1, s2)
 }
@@ -116,6 +124,9 @@ pub unsafe fn simd_tanh_poly_nr1_avx512(x: __m512) -> __m512 {
 
     let x = _mm512_max_ps(clamp_lo, _mm512_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let exp_x = unsafe { simd_exp_poly_avx512(x) };
     let u2 = _mm512_mul_ps(exp_x, exp_x);
     let num = _mm512_sub_ps(u2, one);
@@ -146,6 +157,9 @@ pub unsafe fn simd_tanh_poly_nr2_avx512(x: __m512) -> __m512 {
 
     let x = _mm512_max_ps(clamp_lo, _mm512_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let exp_x = unsafe { simd_exp_poly_avx512(x) };
     let u2 = _mm512_mul_ps(exp_x, exp_x);
     let num = _mm512_sub_ps(u2, one);
@@ -169,6 +183,9 @@ pub unsafe fn tanh_poly_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         crate::activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(slice.as_ptr().add(i));

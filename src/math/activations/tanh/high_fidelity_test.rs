@@ -25,6 +25,7 @@ fn test_tanh_poly_avx2_sweep() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the store targets an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_avx2(x);
@@ -53,6 +54,7 @@ fn test_tanh_poly_avx2_sweep() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_avx2(x);
@@ -84,6 +86,7 @@ fn test_tanh_poly_avx2_sweep() {
 fn test_tanh_poly_edge_cases() {
     let test_vals: [f32; 9] = [-100.0, -20.0, -1.0, -0.0, 0.0, 1.0, 20.0, 100.0, f32::NAN];
 
+    // SAFETY: `_mm256_set1_ps` broadcasts a scalar and `_mm256_storeu_ps` writes to the 8-element `result` array, so no out-of-bounds access occurs.
     unsafe {
         for &x in &test_vals {
             let vx = _mm256_set1_ps(x);
@@ -110,6 +113,7 @@ fn test_tanh_poly_edge_cases() {
 
 #[test]
 fn test_tanh_poly_saturation() {
+    // SAFETY: `_mm256_set1_ps` broadcasts scalars and `_mm256_storeu_ps` writes to the 8-element `result` array, staying in bounds.
     unsafe {
         let mut result = [0.0_f32; 8];
 
@@ -141,6 +145,7 @@ fn test_tanh_poly_saturation() {
 fn test_tanh_sigmoid_dual_poly_avx2() {
     let test_vals: [f32; 7] = [-10.0, -1.0, -0.1, 0.0, 0.1, 1.0, 10.0];
 
+    // SAFETY: `_mm256_set1_ps` broadcasts scalars and `_mm256_storeu_ps` writes to the 8-element `t_arr`/`s_arr` arrays, staying in bounds.
     unsafe {
         for &x1_val in &test_vals {
             for &x2_val in &test_vals {
@@ -188,6 +193,7 @@ fn test_tanh_poly_avx512_sweep() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the store targets a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_avx512(x);
@@ -216,6 +222,7 @@ fn test_tanh_poly_avx512_sweep() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_avx512(x);
@@ -248,6 +255,7 @@ fn test_tanh_sigmoid_dual_poly_avx512() {
 
     let test_vals: [f32; 7] = [-10.0, -1.0, -0.1, 0.0, 0.1, 1.0, 10.0];
 
+    // SAFETY: `_mm512_set1_ps` broadcasts scalars and `_mm512_storeu_ps` writes to the 16-element `t_arr`/`s_arr` arrays, staying in bounds.
     unsafe {
         for &x1_val in &test_vals {
             for &x2_val in &test_vals {
@@ -293,6 +301,7 @@ fn test_tanh_poly_nr1_vs_f32_tanh_avx2() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the store targets an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_nr1_avx2(x);
@@ -316,6 +325,7 @@ fn test_tanh_poly_nr1_vs_f32_tanh_avx2() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_nr1_avx2(x);
@@ -349,6 +359,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx2() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the store targets an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_nr2_avx2(x);
@@ -372,6 +383,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx2() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_nr2_avx2(x);
@@ -406,6 +418,7 @@ fn test_tanh_poly_nr1_vs_div_avx2() {
     let mut max_delta: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the store targets an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y_nr1 = simd_tanh_poly_nr1_avx2(x);
@@ -431,6 +444,7 @@ fn test_tanh_poly_nr1_vs_div_avx2() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y_nr1 = simd_tanh_poly_nr1_avx2(x);
@@ -457,6 +471,7 @@ fn test_tanh_poly_nr2_vs_div_avx2() {
     let mut max_delta: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(8) {
+        // SAFETY: `chunk` has exactly 8 elements from `chunks_exact(8)`, and the store targets an 8-element array, so the AVX2 load/store stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(chunk.as_ptr());
             let y_nr2 = simd_tanh_poly_nr2_avx2(x);
@@ -482,6 +497,7 @@ fn test_tanh_poly_nr2_vs_div_avx2() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is an 8-element array, so `_mm256_loadu_ps`/`_mm256_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm256_loadu_ps(batch.as_ptr());
             let y_nr2 = simd_tanh_poly_nr2_avx2(x);
@@ -516,6 +532,7 @@ fn test_tanh_poly_nr1_vs_f32_tanh_avx512() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the store targets a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_nr1_avx512(x);
@@ -539,6 +556,7 @@ fn test_tanh_poly_nr1_vs_f32_tanh_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_nr1_avx512(x);
@@ -577,6 +595,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx512() {
     let mut max_error: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the store targets a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y = simd_tanh_poly_nr2_avx512(x);
@@ -600,6 +619,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y = simd_tanh_poly_nr2_avx512(x);
@@ -639,6 +659,7 @@ fn test_tanh_poly_nr1_vs_div_avx512() {
     let mut max_delta: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the store targets a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y_nr1 = simd_tanh_poly_nr1_avx512(x);
@@ -664,6 +685,7 @@ fn test_tanh_poly_nr1_vs_div_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y_nr1 = simd_tanh_poly_nr1_avx512(x);
@@ -695,6 +717,7 @@ fn test_tanh_poly_nr2_vs_div_avx512() {
     let mut max_delta: f32 = 0.0_f32;
 
     for chunk in sweep.chunks_exact(16) {
+        // SAFETY: `chunk` has exactly 16 elements from `chunks_exact(16)`, and the store targets a 16-element array, so the AVX-512 load/store stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(chunk.as_ptr());
             let y_nr2 = simd_tanh_poly_nr2_avx512(x);
@@ -720,6 +743,7 @@ fn test_tanh_poly_nr2_vs_div_avx512() {
         for item in batch.iter_mut().skip(remainder.len()) {
             *item = 0.0_f32;
         }
+        // SAFETY: `batch` is a 16-element array, so `_mm512_loadu_ps`/`_mm512_storeu_ps` stay in bounds.
         unsafe {
             let x = _mm512_loadu_ps(batch.as_ptr());
             let y_nr2 = simd_tanh_poly_nr2_avx512(x);

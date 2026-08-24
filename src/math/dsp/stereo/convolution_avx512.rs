@@ -115,6 +115,9 @@ mod tests {
         let input_l = [1.0f32; 32];
         let input_r = [2.0f32; 32];
 
+        // SAFETY: `coeffs.0`, `input_l`, and `input_r` are 32-element f32 buffers and
+        // `taps=32`; the guarded 16-lane AVX-512 loop (`i + 16 <= taps`) and scalar tail
+        // keep every `_mm512_loadu_ps` load in bounds; `loadu` needs no 64-byte alignment.
         let (l, r) = unsafe {
             convolve_stereo_avx512(coeffs.0.as_ptr(), input_l.as_ptr(), input_r.as_ptr(), 32)
         };
@@ -133,6 +136,9 @@ mod tests {
         let input_l = [1.0f32; 17];
         let input_r = [2.0f32; 17];
 
+        // SAFETY: `coeffs.0`, `input_l`, and `input_r` are 17-element f32 buffers and
+        // `taps=17`; the guarded 16-lane AVX-512 loop plus scalar tail only touch indices
+        // in `[0, 17)`, and `_mm512_loadu_ps` needs no alignment.
         let (l, r) = unsafe {
             convolve_stereo_avx512(coeffs.0.as_ptr(), input_l.as_ptr(), input_r.as_ptr(), 17)
         };
@@ -152,6 +158,9 @@ mod tests {
         let input_l = [1.0f32; 32];
         let input_r = [2.0f32; 32];
 
+        // SAFETY: `coeffs0.0`, `coeffs1.0`, `input_l`, and `input_r` are 32-element f32
+        // buffers with `taps=32`; the guarded 16-lane AVX-512 loops and scalar tail keep
+        // every `_mm512_loadu_ps` load in bounds, and `loadu` needs no alignment.
         let ((l0, r0), (l1, r1)) = unsafe {
             convolve_stereo_dual_avx512(
                 coeffs0.0.as_ptr(),
@@ -177,6 +186,9 @@ mod tests {
         let coeffs = Aligned([0.5; 32]);
         let input = [1.0f32; 32];
 
+        // SAFETY: `coeffs.0` and `input` are 32-element f32 buffers with `taps=32`; the
+        // guarded 16-lane AVX-512 loop and scalar tail only touch indices in `[0, 32)`, and
+        // `_mm512_loadu_ps` needs no alignment.
         let result = unsafe { convolve_mono_avx512(coeffs.0.as_ptr(), input.as_ptr(), 32) };
         assert!((result - 16.0).abs() < 1e-5);
     }
@@ -192,6 +204,9 @@ mod tests {
         let coeffs1 = Aligned([0.5; 32]);
         let input = [1.0f32; 32];
 
+        // SAFETY: `coeffs0.0`, `coeffs1.0`, and `input` are 32-element f32 buffers with
+        // `taps=32`; the guarded 16-lane AVX-512 loops and scalar tail keep every
+        // `_mm512_loadu_ps` load in bounds, and `loadu` needs no alignment.
         let (out0, out1) = unsafe {
             convolve_mono_dual_avx512(coeffs0.0.as_ptr(), coeffs1.0.as_ptr(), input.as_ptr(), 32)
         };

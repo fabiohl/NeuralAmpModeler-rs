@@ -88,6 +88,8 @@ pub unsafe fn simd_tanh_poly_avx2(x: __m256) -> __m256 {
 
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x); // e²ˣ
     let num = _mm256_sub_ps(u2, one); // e²ˣ − 1
@@ -113,7 +115,11 @@ pub unsafe fn simd_tanh_poly_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m25
     let x1 = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x1));
     let x2 = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x2));
 
+    // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let exp1 = unsafe { simd_exp_poly_avx2(x1) };
+    // SAFETY: `simd_exp_poly_avx2` requires the same AVX2+FMA support guaranteed
+    // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let exp2 = unsafe { simd_exp_poly_avx2(x2) };
 
     let u2_1 = _mm256_mul_ps(exp1, exp1);
@@ -164,6 +170,8 @@ pub unsafe fn simd_tanh_poly_nr1_avx2(x: __m256) -> __m256 {
 
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x);
     let num = _mm256_sub_ps(u2, one);
@@ -194,6 +202,8 @@ pub unsafe fn simd_tanh_poly_nr2_avx2(x: __m256) -> __m256 {
 
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
+    // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x);
     let num = _mm256_sub_ps(u2, one);
@@ -221,7 +231,11 @@ pub unsafe fn simd_tanh_poly_nr2_avx2(x: __m256) -> __m256 {
 #[inline]
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_tanh_sigmoid_dual_poly_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
+    // SAFETY: `simd_tanh_poly_avx2` requires AVX2+FMA, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let t1 = unsafe { simd_tanh_poly_avx2(x1) };
+    // SAFETY: `simd_sigmoid_poly_avx2` needs the same AVX2+FMA support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let s2 = unsafe { simd_sigmoid_poly_avx2(x2) };
     (t1, s2)
 }
@@ -237,6 +251,9 @@ pub unsafe fn tanh_poly_slice_avx2(slice: &mut [f32]) {
     let len = slice.len();
 
     while i + 16 <= len {
+        // SAFETY: loop guard `i + 16 <= len`, so the 8-lane loads/stores at
+        // offsets `i` and `i + 8` stay within `slice`; `loadu`/`storeu` need no
+        // alignment.
         unsafe {
             let x1 = _mm256_loadu_ps(slice.as_ptr().add(i));
             let x2 = _mm256_loadu_ps(slice.as_ptr().add(i + 8));
@@ -248,6 +265,8 @@ pub unsafe fn tanh_poly_slice_avx2(slice: &mut [f32]) {
     }
 
     while i + 8 <= len {
+        // SAFETY: loop guard `i + 8 <= len`, so the 8-lane load/store at offset
+        // `i` stays within `slice`; `loadu`/`storeu` need no alignment.
         unsafe {
             let x = _mm256_loadu_ps(slice.as_ptr().add(i));
             let y = simd_tanh_poly_avx2(x);

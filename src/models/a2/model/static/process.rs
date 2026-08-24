@@ -42,6 +42,9 @@ impl<const CH: usize> WaveNetA2<CH> {
     /// A pre-write memmove preserves `K-1` tail samples when the ring is about
     /// to overflow, keeping the write-positions unmasked for vectorized stores.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
+        // matching `#[target_feature]` backend; `input`/`output` are the same valid
+        // slices passed to this safe wrapper.
         unsafe {
             crate::math::common::dispatch_simd!(self, process_internal, input, output);
         }
@@ -77,6 +80,9 @@ impl<const CH: usize> WaveNetA2<CH> {
             let head_wp = self.advance_head_ring(nf);
 
             for li in 0..A2_NUM_LAYERS {
+                // SAFETY: `layer_forward_dispatch` is an `unsafe fn`; its documented
+                // preconditions hold: `li < A2_NUM_LAYERS` (loop bound) and `nf` frames
+                // of valid data at `input[pos..pos+nf]` (chunked so `pos + nf <= nf_total`).
                 unsafe {
                     self.layer_forward_dispatch::<M>(li, nf, input, pos, head_wp);
                 }
@@ -94,6 +100,10 @@ impl<const CH: usize> WaveNetA2<CH> {
             use core::arch::x86_64::{
                 _mm256_load_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_store_ps,
             };
+            // SAFETY: `rechannel_w_f32` has exactly `CH == 8` elements and `layer_in`
+            // has capacity ≥ `nf*8`, so the aligned 8-lane load/store at `f*8` for
+            // `f < nf` stays in-bounds; both are `AlignedVec`s, guaranteeing the
+            // 32-byte alignment `_mm256_load_ps`/`_mm256_store_ps` require.
             unsafe {
                 let rw_vec = _mm256_load_ps(self.rechannel_w_f32.as_ptr());
                 for (f, &x) in input[pos..pos + nf].iter().enumerate() {
@@ -165,6 +175,10 @@ impl<const CH: usize> WaveNetA2<CH> {
             buf[bs..bs + nf * ch].copy_from_slice(&self.layer_in[..nf * ch]);
             for f in 0..nf {
                 if let Some(ref mut film) = self.layers[li].conv_pre_film {
+                    // SAFETY: `cond` is a 1-element slice of the input, matching this
+                    // FiLM layer's `cond_size == 1`, and the input slice is an in-bounds
+                    // sub-slice of length `ch` ≤ `channels`; both satisfy
+                    // `film.process`'s documented preconditions.
                     unsafe {
                         film.process(
                             &mut buf[bs + f * ch..bs + (f + 1) * ch],
@@ -203,6 +217,11 @@ impl<const CH: usize> WaveNetA2<CH> {
 
             if let Some(conv_ch) = conv_ch {
                 match conv_ch {
+                    // SAFETY: `layer_forward_ch3_block` is an `unsafe fn`; the
+                    // caller-verified preconditions hold: `nf` frames of valid data at
+                    // `input[pos..pos+nf]`, `history` covers `bs - lookback .. bs + nf*ch`
+                    // (guaranteed by the `debug_assert!`s above), and all scratch/ring
+                    // buffers are sized for CH=3.
                     super::super::super::layer::A2ConvCh::Ch3(ch3_conv) => unsafe {
                         super::super::super::conv1d_ch3::layer_forward_ch3_block(
                             ch3_conv,
@@ -222,6 +241,11 @@ impl<const CH: usize> WaveNetA2<CH> {
                             is_last,
                         );
                     },
+                    // SAFETY: `layer_forward_ch8_block*` are `unsafe fn`s; the
+                    // caller-verified preconditions hold: `nf` frames of valid data at
+                    // `input[pos..pos+nf]`, `history` covers `bs - lookback .. bs + nf*ch`
+                    // (guaranteed by the `debug_assert!`s above), and all scratch/ring
+                    // buffers are sized for CH=8.
                     super::super::super::layer::A2ConvCh::Ch8(ch8_conv) => unsafe {
                         #[expect(deprecated)]
                         match M::ISA {
@@ -281,6 +305,11 @@ impl<const CH: usize> WaveNetA2<CH> {
                     let frame_idx = max_lookback_cols + f;
 
                     // 1. Dilated conv → z_buf.
+                    // SAFETY: `process_single_frame::<M>` is an `unsafe fn`; its
+                    // preconditions hold: `history` spans `bs - lookback .. bs + nf*ch`,
+                    // `z_scratch[..ch]` has length ≥ the conv's out channels,
+                    // `frame_idx = max_lookback_cols + f` allows kernel lookback, and
+                    // `M` matches the CPU ISA (top-level `dispatch_simd!`).
                     unsafe {
                         layer.conv.process_single_frame::<M>(
                             history,
@@ -293,6 +322,10 @@ impl<const CH: usize> WaveNetA2<CH> {
                     // 1b. FiLM post-conv.
                     let cond = &input[pos + f..pos + f + 1];
                     if let Some(ref mut film) = film_block.conv_post_film {
+                        // SAFETY: `cond` is a 1-element slice matching this FiLM layer's
+                        // `cond_size == 1`, and `z_scratch[..ch]` is a valid in-bounds
+                        // slice of length `ch` ≤ `channels`; both satisfy
+                        // `film.process`'s documented preconditions.
                         unsafe {
                             film.process(&mut self.z_scratch[..ch], cond);
                         }
@@ -304,6 +337,9 @@ impl<const CH: usize> WaveNetA2<CH> {
                     {
                         let mut modulated = cond_val;
                         let orig = cond_val;
+                        // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values
+                        // create valid 1-element slices matching this FiLM layer's
+                        // `cond_size == 1`.
                         unsafe {
                             film.process(
                                 core::slice::from_mut(&mut modulated),
@@ -320,11 +356,19 @@ impl<const CH: usize> WaveNetA2<CH> {
 
                     // 2b. FiLM post-mixin.
                     if let Some(ref mut film) = film_block.input_mixin_post_film {
+                        // SAFETY: `cond` is a 1-element slice matching this FiLM layer's
+                        // `cond_size == 1`, and `z_scratch[..ch]` is a valid in-bounds
+                        // slice of length `ch` ≤ `channels`; both satisfy
+                        // `film.process`'s documented preconditions.
                         unsafe {
                             film.process(&mut self.z_scratch[..ch], cond);
                         }
                     }
                     if let Some(ref mut film) = film_block.activation_pre_film {
+                        // SAFETY: `cond` is a 1-element slice matching this FiLM layer's
+                        // `cond_size == 1`, and `z_scratch[..ch]` is a valid in-bounds
+                        // slice of length `ch` ≤ `channels`; both satisfy
+                        // `film.process`'s documented preconditions.
                         unsafe {
                             film.process(&mut self.z_scratch[..ch], cond);
                         }
@@ -339,6 +383,10 @@ impl<const CH: usize> WaveNetA2<CH> {
 
                     // 3b. FiLM post-activation.
                     if let Some(ref mut film) = film_block.activation_post_film {
+                        // SAFETY: `cond` is a 1-element slice matching this FiLM layer's
+                        // `cond_size == 1`, and `z_scratch[..ch]` is a valid in-bounds
+                        // slice of length `ch` ≤ `channels`; both satisfy
+                        // `film.process`'s documented preconditions.
                         unsafe {
                             film.process(&mut self.z_scratch[..ch], cond);
                         }
@@ -366,6 +414,10 @@ impl<const CH: usize> WaveNetA2<CH> {
                             self.layer_in[base + c] += sum;
                         }
                         if let Some(ref mut film) = film_block.layer1x1_post_film {
+                            // SAFETY: `cond` is a 1-element slice matching this FiLM
+                            // layer's `cond_size == 1`, and `layer_in[base..base+ch]` is
+                            // a valid in-bounds slice of length `ch` ≤ `channels`; both
+                            // satisfy `film.process`'s documented preconditions.
                             unsafe {
                                 film.process(&mut self.layer_in[base..base + ch], cond);
                             }
@@ -404,6 +456,10 @@ impl<const CH: usize> WaveNetA2<CH> {
                             self.layer_in[base + c] += sum;
                         }
                         if let Some(ref mut film) = film_block.layer1x1_post_film {
+                            // SAFETY: `layer_in[base..base+ch]` has `ch <= channels`
+                            // elements and the condition slice is 1 element, matching
+                            // `cond_size == 1` — the preconditions documented in
+                            // `FiLMLayer::process`'s `# Safety` section.
                             unsafe {
                                 film.process(
                                     &mut self.layer_in[base..base + ch],

@@ -93,6 +93,10 @@ pub fn encode_namb(
     header.version_str[..copy_len].copy_from_slice(&ver_bytes[..copy_len]);
 
     // 4. Writes everything into the buffer
+    // SAFETY: `header` is a live, fully initialized `NambHeader`; the pointer
+    // derived from `&header` is non-null and aligned, and
+    // `size_of::<NambHeader>()` spans exactly that object (a POD
+    // `#[repr(C, packed)]` + `Copy` value), so the byte slice is in-bounds.
     let header_bytes = unsafe {
         std::slice::from_raw_parts(
             (&header as *const NambHeader) as *const u8,

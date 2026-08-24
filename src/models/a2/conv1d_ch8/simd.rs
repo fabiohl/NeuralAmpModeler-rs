@@ -192,6 +192,9 @@ pub unsafe fn layer_forward_ch8_block(
             let mut cond_mod = *cond_val;
             if let Some(ref mut film) = film.input_mixin_pre_film {
                 let orig = cond_mod;
+                // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
+                // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
+                // this one element.
                 unsafe {
                     film.process(
                         core::slice::from_mut(&mut cond_mod),
@@ -391,6 +394,9 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             let mut cond_mod = *cond_val;
             if let Some(ref mut film) = film.input_mixin_pre_film {
                 let orig = cond_mod;
+                // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
+                // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
+                // this one element.
                 unsafe {
                     film.process(
                         core::slice::from_mut(&mut cond_mod),

@@ -55,6 +55,10 @@ pub unsafe fn prelu_slice_avx2(slice: &mut [f32], slopes: &[f32]) {
     // Optimized case: single slope (LeakyReLU)
     if s_len == 1 {
         let alpha = _mm256_set1_ps(slopes[0]);
+        // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <=
+        // len` (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`,
+        // so every 8-lane load/store stays within `slice`; `loadu`/`storeu`
+        // need no alignment.
         unsafe {
             activation_simd_avx2!(
                 i,
@@ -73,6 +77,11 @@ pub unsafe fn prelu_slice_avx2(slice: &mut [f32], slopes: &[f32]) {
         }
     } else if s_len == len {
         // Optimized case: per-element slopes
+        // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <=
+        // len` (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`.
+        // `s_len == len` (branch guard), so the same bounds keep every 8-lane
+        // load/store within both `slice` and `slopes`; `loadu`/`storeu` need no
+        // alignment.
         unsafe {
             activation_simd_avx2!(
                 i,
@@ -120,6 +129,9 @@ pub unsafe fn prelu_slice_avx512(slice: &mut [f32], slopes: &[f32]) {
 
     if s_len == 1 {
         let alpha = _mm512_set1_ps(slopes[0]);
+        // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len`
+        // (it loads/stores only at offset `i`), so the 16-lane access stays
+        // within `slice`; `loadu`/`storeu` need no alignment.
         unsafe {
             activation_simd_avx512!(i, len, {
                 let x = _mm512_loadu_ps(slice.as_ptr().add(i));
@@ -127,6 +139,10 @@ pub unsafe fn prelu_slice_avx512(slice: &mut [f32], slopes: &[f32]) {
             });
         }
     } else if s_len == len {
+        // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len`
+        // (it loads/stores only at offset `i`). `s_len == len` (branch guard),
+        // so the same bounds keep the 16-lane access within both `slice` and
+        // `slopes`; `loadu`/`storeu` need no alignment.
         unsafe {
             activation_simd_avx512!(i, len, {
                 let x = _mm512_loadu_ps(slice.as_ptr().add(i));

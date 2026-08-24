@@ -35,6 +35,10 @@ mod tests {
         let mut out_scalar = vec![0.0f32; num_frames * out_len];
         let mut out_avx2 = vec![0.0f32; num_frames * out_len];
 
+        // SAFETY: all buffers are sized to the declared dims (num_frames=4, in_len=8,
+        // out_len=8): `in_frames`/`residual` hold `num_frames*in_len`/`num_frames*out_len`
+        // elements, `weights` holds `in_len*out_len`, `bias` holds `out_len`, and the
+        // output buffers hold `num_frames*out_len`; the kernels re-assert these bounds.
         unsafe {
             fused_gemm_residual_batch_scalar(
                 &in_frames,
@@ -78,6 +82,9 @@ mod tests {
         let mut out_scalar = vec![0.0f32; num_frames * 12];
         let mut out_12x12 = vec![0.0f32; num_frames * 12];
 
+        // SAFETY: all buffers are sized to the declared dims (num_frames=8, 12x12):
+        // `in_frames`/`residual` and the output buffers hold `num_frames*12` elements,
+        // `weights` holds `12*12` elements, `bias` holds 12; the kernels re-assert these.
         unsafe {
             fused_gemm_residual_batch_f32_scalar(
                 &in_frames,

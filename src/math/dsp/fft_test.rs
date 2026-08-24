@@ -901,6 +901,7 @@ fn fft_butterfly_scalar_reference_n8() {
         re_ptr, im_ptr, half, tw_re_ptr, tw_im_ptr, 0, false
     ));
 
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),
@@ -943,6 +944,7 @@ fn fft_butterfly_scalar_reference_n16() {
         re_ptr, im_ptr, half, tw_re_ptr, tw_im_ptr, 0, false
     ));
 
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),
@@ -985,6 +987,7 @@ fn fft_butterfly_scalar_reference_n16_inverse() {
         re_ptr, im_ptr, half, tw_re_ptr, tw_im_ptr, 0, true
     ));
 
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),
@@ -1031,6 +1034,7 @@ fn fft_butterfly_scalar_reference_n32() {
         re_ptr, im_ptr, half, tw_re_ptr, tw_im_ptr, 0, false
     ));
 
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),
@@ -1073,6 +1077,7 @@ fn fft_butterfly_scalar_reference_n32_inverse() {
         re_ptr, im_ptr, half, tw_re_ptr, tw_im_ptr, 0, true
     ));
 
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),
@@ -1287,6 +1292,7 @@ fn fft_butterfly_two_groups_n16() {
         0,
         false
     ));
+    // SAFETY: `re_scalar`/`im_scalar` hold `2 * half` elements and `tw_re`/`tw_im` hold `half` elements, satisfying the butterfly stage contract.
     unsafe {
         fft_butterfly_stage_scalar(
             re_scalar.as_mut_ptr(),

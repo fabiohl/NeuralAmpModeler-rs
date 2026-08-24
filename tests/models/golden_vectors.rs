@@ -69,9 +69,15 @@ fn run_v2_golden_test(
         let golden_path = fixtures_dir.join(&golden_filename);
 
         if !golden_path.exists() {
-            eprintln!(
-                "[STATUS] SKIP_CAPABILITY: golden_not_found:{golden_filename} — run './tests/fixtures/golden_gen_build.sh' to generate v2 multi-SR golden vectors"
-            );
+            if model_filename == "wavenet_condition_lstm.nam" {
+                eprintln!(
+                    "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" reason=\"C++ upstream limitation: LSTM condition_dsp sub-model channel mismatch — golden binary cannot be generated\""
+                );
+            } else {
+                eprintln!(
+                    "[STATUS] SKIP_CAPABILITY: golden_not_found:{golden_filename} — run './tests/fixtures/golden_gen_build.sh' to generate v2 multi-SR golden vectors"
+                );
+            }
             continue;
         }
 

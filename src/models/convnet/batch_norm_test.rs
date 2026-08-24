@@ -57,6 +57,8 @@ fn test_process_scalar_identity_bn() {
         7.0, 8.0, 9.0, // frame 2
     ];
 
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (3 * 3) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 3);
     }
@@ -77,6 +79,8 @@ fn test_process_scalar_simple() {
         6.0, 7.0, // frame 2
     ];
 
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (2 * 3) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 3);
     }
@@ -100,6 +104,8 @@ fn test_process_scalar_with_offset() {
         2.0, 8.0, // frame 1
     ];
 
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (2 * 2) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 2);
     }
@@ -119,6 +125,8 @@ fn test_single_channel() {
 
     let mut data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (1 * 5) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 5);
     }
@@ -137,6 +145,8 @@ fn test_single_frame_many_channels() {
 
     let mut data: Vec<f32> = (0..10).map(|i| i as f32).collect();
 
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (10 * 1) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 1);
     }
@@ -198,11 +208,15 @@ fn test_scalar_simd_parity() {
     ];
 
     let mut data_simd = original.clone();
+    // SAFETY: `data_simd` holds `num_channels * num_frames` (2 * 10) elements,
+    // matching `process`'s documented layout contract.
     unsafe {
         bn.process(&mut data_simd, 10);
     }
 
     let mut data_scalar = original;
+    // SAFETY: `data_scalar` holds `num_channels * num_frames` (2 * 10) elements,
+    // matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data_scalar, 10);
     }
@@ -238,11 +252,15 @@ fn test_scalar_simd_parity_various_frame_counts() {
         }
 
         let mut data_simd = original.clone();
+        // SAFETY: `data_simd` holds `num_channels * n_frames` (4 * `n_frames`)
+        // elements, matching `process`'s documented layout contract.
         unsafe {
             bn.process(&mut data_simd, n_frames);
         }
 
         let mut data_scalar = original;
+        // SAFETY: `data_scalar` holds `num_channels * n_frames` (4 * `n_frames`)
+        // elements, matching `process_scalar`'s documented layout contract.
         unsafe {
             bn.process_scalar(&mut data_scalar, n_frames);
         }
@@ -268,6 +286,8 @@ fn test_zero_gamma_noop() {
     assert!((bn.offset[1] - (-0.5)).abs() < 1e-7);
 
     let mut data = vec![100.0, 200.0, 300.0, 400.0];
+    // SAFETY: `data` was allocated in this test with `num_channels * num_frames`
+    // (2 * 2) elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn.process_scalar(&mut data, 2);
     }
@@ -301,6 +321,8 @@ fn test_clone_preserves_behavior() {
     let mut data1 = vec![1.0, 2.0, 3.0, -1.0, -2.0, -3.0];
     let mut data2 = data1.clone();
 
+    // SAFETY: `data1`/`data2` each hold `num_channels * num_frames` (3 * 2)
+    // elements, matching `process_scalar`'s documented layout contract.
     unsafe {
         bn1.process_scalar(&mut data1, 2);
         bn2.process_scalar(&mut data2, 2);
@@ -334,6 +356,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -341,6 +366,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -365,6 +392,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -372,6 +402,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -396,6 +428,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -403,6 +438,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -427,6 +464,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -434,6 +474,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -456,6 +498,9 @@ mod batch_norm_simd_parity {
         let original: Vec<f32> = (0..num_frames).map(|i| (i as f32) * 0.1).collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -463,6 +508,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -487,6 +534,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -494,6 +544,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -516,6 +568,9 @@ mod batch_norm_simd_parity {
         let original: Vec<f32> = (0..n_ch).map(|i| (i as f32) * 0.5).collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the CPUID-selected `Avx2Math`
+        // backend guarantees the required ISA.
         unsafe {
             crate::math::common::Avx2Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -523,6 +578,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -553,6 +610,9 @@ mod batch_norm_simd_parity {
             .collect();
 
         let mut simd = original.clone();
+        // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching the kernel contract; the `is_x86_feature_detected!`
+        // ("avx512f") guard above guarantees the required ISA.
         unsafe {
             crate::math::common::Avx512Math::batch_norm_process(
                 &mut simd, &scale, &offset, n_ch, num_frames,
@@ -560,6 +620,8 @@ mod batch_norm_simd_parity {
         }
 
         let mut scalar = original;
+        // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+        // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
         unsafe {
             batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
         }
@@ -590,6 +652,9 @@ mod batch_norm_simd_parity {
                 .collect();
 
             let mut simd = original.clone();
+            // SAFETY: `simd` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+            // `n_ch` each, matching the kernel contract; the `is_x86_feature_detected!`
+            // ("avx512f") guard above guarantees the required ISA.
             unsafe {
                 crate::math::common::Avx512Math::batch_norm_process(
                     &mut simd, &scale, &offset, n_ch, num_frames,
@@ -597,6 +662,8 @@ mod batch_norm_simd_parity {
             }
 
             let mut scalar = original;
+            // SAFETY: `scalar` holds `n_ch * num_frames` elements and `scale`/`offset` hold
+            // `n_ch` each, matching `batch_norm_process_fallback`'s documented contract.
             unsafe {
                 batch_norm_process_fallback(&mut scalar, &scale, &offset, n_ch, num_frames);
             }

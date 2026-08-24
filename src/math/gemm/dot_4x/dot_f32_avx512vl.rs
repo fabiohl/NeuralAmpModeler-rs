@@ -46,6 +46,9 @@ pub unsafe fn dot_product_4x_f32_avx512vl(weights: &[[f32; 4]], state: &[f32]) -
     let mut acc7 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len = state.len().min(weights.len())` with
+    // `debug_assert!(weights.len() >= len)`; the loop guards `i + 16`/`i + 8`/
+    // `i + 4`/`i + 2`/`i < len` bound every load and unchecked read.
     unsafe {
         // 16-element main unroll (8 pairs)
         while i + 16 <= len {
@@ -222,6 +225,9 @@ pub unsafe fn dot_product_4x_f32_dual_avx512vl(
     let mut acc7 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the loop guards `i + 8`/`i + 4`/`i < len` bound all
+    // loads and unchecked reads.
     unsafe {
         // 8-sample unroll across 8 accumulators
         while i + 8 <= len {
@@ -377,6 +383,9 @@ pub unsafe fn dot_product_4x_f32_accumulate_avx512vl(
     let mut acc7 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len = state.len().min(weights.len())` with
+    // `debug_assert!(weights.len() >= len)`; the loop guards `i + 16`/`i + 8`/
+    // `i + 4`/`i + 2`/`i < len` bound every load and unchecked read.
     unsafe {
         while i + 16 <= len {
             let w01 = _mm256_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -546,6 +555,9 @@ pub unsafe fn dot_product_4x_f32_dual_accumulate_avx512vl(
     let mut acc7 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the loop guards `i + 8`/`i + 4`/`i < len` bound all
+    // loads and unchecked reads.
     unsafe {
         while i + 8 <= len {
             let w0_128 = _mm_loadu_ps(weights.as_ptr().add(i) as *const f32);

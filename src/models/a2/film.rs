@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+// SIMD intrinsics and `get_unchecked` calls are performed directly inside
+// `unsafe fn` bodies (`cond_to_scale_shift`, `apply_modulation`,
+// `dot_product_avx2`) whose contracts are documented at each call site and in
+// the `# Safety` sections of the public entry points.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 //! Feature-wise Linear Modulation (FiLM) module for the NAM A2 architecture.
 //!

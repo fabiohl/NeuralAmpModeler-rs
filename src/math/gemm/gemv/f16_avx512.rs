@@ -88,6 +88,11 @@ pub unsafe fn fused_add_gemv_avx512_small(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: this kernel is only reached with `out_len == 16` (dispatch in
+    // `fused_add_gemv_avx512`); `gemv_kernel!` keeps `in_c + 8 <= in_len` and
+    // the caller contract provides `weights.len() >= in_len * 16` and
+    // `bias.len() >= 16` when `do_bias`, so all 16-wide loads/stores are in
+    // bounds.
     unsafe {
         gemv_kernel!(
             8,
@@ -132,6 +137,9 @@ pub unsafe fn gemv_overwrite_avx512(
         return;
     }
 
+    // SAFETY: `gemv_kernel!` keeps `in_c + 8 <= in_len`; the `out_c + 16 <=
+    // out_len` loop guard bounds the 16-wide out/bias loads and stores, and
+    // the caller contract provides `weights.len() >= in_len * out_len`.
     unsafe {
         let mut out_c = 0;
         while out_c + 16 <= out_len {
@@ -225,6 +233,9 @@ pub unsafe fn fused_add_gemv_avx512(
         return;
     }
 
+    // SAFETY: `gemv_kernel!` keeps `in_c + 8 <= in_len`; the `out_c + 16 <=
+    // out_len` loop guard bounds the 16-wide out/bias loads and stores, and
+    // the caller contract provides `weights.len() >= in_len * out_len`.
     unsafe {
         let mut out_c = 0;
         while out_c + 16 <= out_len {

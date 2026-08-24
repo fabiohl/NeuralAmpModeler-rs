@@ -233,6 +233,9 @@ impl WaveNetModelDyn {
     /// Dynamic WaveNet is hardcoded to `Avx2Math`. It does not call
     /// `dispatch_simd!` and has no AVX-512 monomorph.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `process_internal` is an `unsafe fn` whose `M` is fixed to `Avx2Math` (this
+        // model hardcodes the AVX2 backend and never dispatches AVX-512), and it clamps the frame
+        // count to `input.len()`/`output.len()` per its documented contract.
         unsafe { self.process_internal::<crate::math::common::Avx2Math>(input, output) };
     }
 
@@ -287,6 +290,11 @@ impl WaveNetModelDyn {
                 in_slice
             };
 
+            // SAFETY: `arrays_ptr` is derived from `self.arrays` and `num_arrays = self.arrays.len()`,
+            // so `arrays_ptr.add(i)` stays in bounds for `i < num_arrays`; each `&*`/`&mut *`
+            // borrows a distinct array element (no aliasing), and `prev_head_out`/`prev_outputs`
+            // are sized `num_frames * head`/`num_frames * ch` matching the chained arrays'
+            // geometry, with `num_frames <= WAVENET_MAX_NUM_FRAMES`.
             unsafe {
                 let num_arrays = self.arrays.len();
                 let arrays_ptr = self.arrays.as_mut_ptr();
@@ -321,11 +329,17 @@ impl WaveNetModelDyn {
             if let Some(ref mut head_proc) = self.post_stack_head {
                 let out_ch = head_proc.out_channels();
                 let scratch = &mut self.head_output_scratch[0..num_frames * out_ch];
+                // SAFETY: `process_block` is an `unsafe fn` documented to require
+                // `input.len() == num_frames * in_ch` and `output.len() == num_frames * out_ch`;
+                // `last_head` has `num_frames * head_dim` and `scratch` has `num_frames * out_ch`
+                // (both indexed above), and the head's ring buffer was sized by its constructor.
                 unsafe {
                     head_proc.process_block(last_head, scratch, num_frames);
                 }
                 let out_start = pos * out_ch;
                 let out_slice = &mut output[out_start..out_start + num_frames * out_ch];
+                // SAFETY: `scratch` and `out_slice` both have exactly `num_frames * out_ch` f32s,
+                // are non-null/`f32`-aligned, and refer to distinct buffers (no overlap).
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         scratch.as_ptr(),
@@ -333,12 +347,16 @@ impl WaveNetModelDyn {
                         num_frames * out_ch,
                     );
                 }
+                // SAFETY: `M` is `Avx2Math` (the only backend this model dispatches), and
+                // `out_slice` has `num_frames * out_ch` elements as the kernel requires.
                 unsafe {
                     M::apply_gain(out_slice, self.head_scale);
                 }
             } else {
                 let out_start = pos * head_dim;
                 let out_slice = &mut output[out_start..out_start + num_frames * head_dim];
+                // SAFETY: `last_head` and `out_slice` both have exactly `num_frames * head_dim`
+                // f32s, are non-null/`f32`-aligned, and refer to distinct buffers (no overlap).
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         last_head.as_ptr(),
@@ -346,6 +364,8 @@ impl WaveNetModelDyn {
                         num_frames * head_dim,
                     );
                 }
+                // SAFETY: `M` is `Avx2Math` (the only backend this model dispatches), and
+                // `out_slice` has `num_frames * head_dim` elements as the kernel requires.
                 unsafe {
                     M::apply_gain(out_slice, self.head_scale);
                 }
@@ -362,6 +382,9 @@ impl WaveNetModelDyn {
     /// the dispatch pattern of the rest of the codebase).
     #[cold]
     pub fn prewarm(&mut self) {
+        // SAFETY: `prewarm_internal` is an `unsafe fn` reached here with `M` fixed to `Avx2Math`
+        // (this model's only backend), and it only touches the model's own pre-allocated buffers
+        // and the optional condition-DSP sub-model.
         unsafe {
             self.prewarm_internal::<crate::math::common::Avx2Math>();
         }
@@ -373,12 +396,14 @@ impl WaveNetModelDyn {
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
+        // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
+        // `Avx2Math` is selected only on such hosts, so its instructions are available;
+        // `prewarm_internal` only touches the model's own pre-allocated buffers.
         unsafe { self.prewarm_internal::<crate::math::common::Avx2Math>() };
     }
 
     /// # Safety
     /// Call this via `dispatch_simd!` macro only.
-    #[inline(always)]
     #[cold]
     unsafe fn prewarm_internal<M: SimdMath>(&mut self) {
         if let Some(ref mut cond_dsp) = self.condition_dsp {
@@ -402,6 +427,10 @@ impl WaveNetModelDyn {
             &zero_input
         };
 
+        // SAFETY: `arrays_ptr` comes from `self.arrays` with `num_arrays = self.arrays.len()`, so
+        // `arrays_ptr.add(i)` stays in bounds for `i < num_arrays`, and each `&*`/`&mut *`
+        // borrows a distinct element; `prev_outputs`/`prev_head_out` are sized `prev.ch`/`prev.head`
+        // for the single prewarm frame, and the arrays' buffers are pre-allocated.
         unsafe {
             let num_arrays = self.arrays.len();
             let arrays_ptr = self.arrays.as_mut_ptr();

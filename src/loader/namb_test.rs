@@ -12,6 +12,8 @@ mod tests {
     fn build_valid_namb_v1(w_floats: &[f32]) -> Vec<u8> {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + w_floats.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w_floats.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         // We fill the "header" (the file's identification label).
@@ -54,6 +56,8 @@ mod tests {
         let header_size = std::mem::size_of::<NambHeader>();
         let w = [0.0f32; 4];
         let mut data = vec![0u8; header_size + w.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -89,6 +93,8 @@ mod tests {
     fn test_v2_missing_crc32_flag_rejected() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -114,6 +120,8 @@ mod tests {
         // With FLAG_HAS_CRC32 set and valid whole-file CRC, the parser should accept.
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -143,6 +151,8 @@ mod tests {
         // crc32=0 sentinel is only skipped when weights are empty.
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -172,6 +182,8 @@ mod tests {
         // v1 with crc==0 AND empty weights: CRC32 bypass removed, now rejected.
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -197,6 +209,8 @@ mod tests {
     fn test_reject_magic_bman() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x424D414E; // "BMAN" — no longer accepted
@@ -238,6 +252,8 @@ mod tests {
             let header_size = std::mem::size_of::<NambHeader>();
             let weights_bytes = residue + 4;
             let mut data = vec![0u8; header_size + weights_bytes];
+            // SAFETY: `data` is `vec![0u8; header_size + weights_bytes]` (>= size_of::<NambHeader>()),
+            // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
             let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
             header.magic = 0x4E414D42;
@@ -336,6 +352,8 @@ mod tests {
     fn build_namb_v1_no_crc(w_floats: &[f32]) -> Vec<u8> {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + w_floats.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w_floats.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -456,6 +474,8 @@ mod tests {
         // Must parse successfully with 0 weights.
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -483,6 +503,8 @@ mod tests {
         // Must be rejected because weights section is not multiple of 4.
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 1];
+        // SAFETY: `data` is `vec![0u8; header_size + 1]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -515,6 +537,8 @@ mod tests {
         let header_size = std::mem::size_of::<NambHeader>();
         let w = [f32::NAN];
         let mut data = vec![0u8; header_size + w.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -544,6 +568,8 @@ mod tests {
         let header_size = std::mem::size_of::<NambHeader>();
         let w = [0.5f32, f32::INFINITY];
         let mut data = vec![0u8; header_size + w.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -576,6 +602,8 @@ mod tests {
         let header_size = std::mem::size_of::<NambHeader>();
         let w = [1.0f32, 2.0f32, f32::NEG_INFINITY];
         let mut data = vec![0u8; header_size + w.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -609,6 +637,8 @@ mod tests {
     fn test_invalid_header_sample_rate_nan() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -644,6 +674,8 @@ mod tests {
     fn test_invalid_header_sample_rate_negative() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -678,6 +710,8 @@ mod tests {
     fn test_invalid_header_sample_rate_zero() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -712,6 +746,8 @@ mod tests {
     fn test_invalid_header_input_level_inf() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -746,6 +782,8 @@ mod tests {
     fn test_invalid_header_output_level_neg_inf() {
         let header_size = std::mem::size_of::<NambHeader>();
         let mut data = vec![0u8; header_size + 4];
+        // SAFETY: `data` is `vec![0u8; header_size + 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -781,6 +819,8 @@ mod tests {
         let header_size = std::mem::size_of::<NambHeader>();
         let w = [0.1f32, 0.2f32];
         let mut data = vec![0u8; header_size + w.len() * 4];
+        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
         let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
         header.magic = 0x4E414D42;
@@ -840,6 +880,8 @@ mod tests {
             let header_size = std::mem::size_of::<NambHeader>();
             let w = [0.1f32, 0.2f32];
             let mut data = vec![0u8; header_size + w.len() * 4];
+            // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+            // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
             let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
             header.magic = 0x4E414D42;
@@ -859,6 +901,8 @@ mod tests {
             // Corrupt a header field: input_level_dbu (offset 68) from 12.0 to 13.0
             // Since 13.0 is a finite valid f32, it won't fail header validation, but CRC shouldn't catch it either.
             let mut corrupted = data.clone();
+            // SAFETY: `corrupted` is a clone of `data` (`vec![0u8; header_size + w.len() * 4]`),
+            // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `corrupted` outlives the borrow.
             let corrupted_header = unsafe { &mut *corrupted.as_mut_ptr().cast::<NambHeader>() };
             corrupted_header.input_level_dbu = 13.0;
 
@@ -872,6 +916,8 @@ mod tests {
             let header_size = std::mem::size_of::<NambHeader>();
             let w = [0.1f32, 0.2f32];
             let mut data = vec![0u8; header_size + w.len() * 4];
+            // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
+            // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
             let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
 
             header.magic = 0x4E414D42;
@@ -895,6 +941,8 @@ mod tests {
 
             // Corrupt input_level_dbu
             let mut corrupted = data.clone();
+            // SAFETY: `corrupted` is a clone of `data` (`vec![0u8; header_size + w.len() * 4]`),
+            // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `corrupted` outlives the borrow.
             let corrupted_header = unsafe { &mut *corrupted.as_mut_ptr().cast::<NambHeader>() };
             corrupted_header.input_level_dbu = 13.0;
 

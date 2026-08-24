@@ -90,6 +90,10 @@ impl super::LinearFftState {
         self.acc_im[..num_bins].fill(0.0);
 
         // Partition 0 (delays P..2P−1): uses the current block's input spectrum.
+        // SAFETY: all slices have length `num_bins`, guaranteed by construction, and
+        // `complex_mac_accumulate` reads/writes exactly `num_bins` elements; the match
+        // on `self.isa` (captured at construction) dispatches to the matching
+        // `#[target_feature]` backend.
         unsafe {
             #[expect(deprecated)]
             match self.isa {
@@ -132,6 +136,12 @@ impl super::LinearFftState {
             let fdl_start = input_idx * num_bins;
             let h_start = k * num_bins;
 
+            // SAFETY: `h_start = k*num_bins` with `k < num_partitions` and
+            // `fdl_start < num_partitions*num_bins`, so the `num_bins`-element
+            // `h_fdl_*`/`fdl_*` slices stay within the partition buffers (length
+            // `num_partitions*num_bins`, guaranteed by construction);
+            // `complex_mac_accumulate` reads/writes exactly `num_bins` elements, and
+            // the `self.isa` match dispatches to the matching `#[target_feature]` backend.
             unsafe {
                 #[expect(deprecated)]
                 match self.isa {

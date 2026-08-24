@@ -211,7 +211,7 @@ fn bench_large_block_4096(c: &mut Criterion) {
 
 criterion_group!(
     name = linear_benches;
-    config = Criterion::default();
+    config = Criterion::default().noise_threshold(0.05);
     targets = bench_direct_vs_fft_per_block, bench_direct_vs_fft_per_sample, bench_fft_prewarm, bench_fft_tail_block, bench_large_block_4096
 );
 

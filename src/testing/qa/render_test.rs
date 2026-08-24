@@ -73,10 +73,13 @@ fn build_report_fixture() -> String {
     );
 
     // All mandatory phases PASS (performance verified — green allowed).
+    // T3.2: the local ISA phase is `isa_self_consistency` (AVX2 vs AVX2) and the
+    // cross-ISA matrix is a declared SKIP_CAPABILITY gap on the local runner.
     for (phase, status) in [
         ("golden_vectors", "PASS"),
         ("reference_oracle_f64", "PASS"),
-        ("isa_parity", "PASS"),
+        ("isa_self_consistency", "PASS"),
+        ("isa_parity_cross_isa", "SKIP_CAPABILITY"),
         ("spectral_fidelity", "PASS"),
         ("lstm_activation_precision", "PASS"),
         ("quick_parity", "PASS"),
@@ -238,7 +241,7 @@ fn performance_not_verified_is_never_green() {
     // The performance section (from its title to the ISA section) must carry
     // no green escape sequence.
     let start = rendered.find("PERFORMANCE — Block Latency").unwrap();
-    let end = rendered.find("ISA PARITY").unwrap();
+    let end = rendered.find("ISA SELF-CONSISTENCY").unwrap();
     let perf_section = &rendered[start..end];
     assert!(
         !perf_section.contains("\x1b[0;32m"),
@@ -251,7 +254,11 @@ fn parse_routes_every_kind() {
     let fixture = build_report_fixture();
     let report = parse_quality_report(&fixture).expect("fixture must parse");
 
-    assert_eq!(report.phases.len(), 7);
+    assert_eq!(
+        report.phases.len(),
+        8,
+        "mandatory phases + declared cross-ISA gap"
+    );
     assert_eq!(report.fidelity.len(), 51, "all contract fidelity entries");
     assert_eq!(report.latency.len(), 19, "all RT_* latency records");
     assert_eq!(report.f64_table.len(), 2);

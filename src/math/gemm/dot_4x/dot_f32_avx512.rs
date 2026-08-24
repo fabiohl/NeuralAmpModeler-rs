@@ -23,6 +23,8 @@ use core::arch::x86_64::*;
 /// lanes 12‑15 = `s3`.
 #[inline(always)]
 unsafe fn make_state_m512(s0: f32, s1: f32, s2: f32, s3: f32) -> __m512 {
+    // SAFETY: called only from `#[target_feature(enable = "avx512f,avx512vl")]`
+    // kernels, so the AVX-512 intrinsics here are available on the target.
     unsafe {
         let mut v = _mm512_setzero_ps();
         v = _mm512_insertf32x4::<0>(v, _mm_set1_ps(s0));
@@ -56,6 +58,9 @@ pub unsafe fn dot_product_4x_f32_avx512(weights: &[[f32; 4]], state: &[f32]) -> 
     let mut acc512 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i + 4 <= len` (loop guard) with `len` the minimum of
+    // `state.len()` and `weights.len()`, so the 16-f32 load and the unchecked
+    // state reads stay in bounds.
     unsafe {
         while i + 4 <= len {
             let w512 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -131,6 +136,8 @@ pub unsafe fn dot_product_4x_f32_dual_avx512(
     let mut acc_f1 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `i + 4 <= len` loop guard bounds all accesses.
     unsafe {
         while i + 4 <= len {
             let w512 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -224,6 +231,9 @@ pub unsafe fn dot_product_4x_f32_accumulate_avx512(
     acc512 = _mm512_insertf32x4::<0>(acc512, init128);
     let mut i = 0;
 
+    // SAFETY: `i + 4 <= len` (loop guard) with `len` the minimum of
+    // `state.len()` and `weights.len()`, so the 16-f32 load and the unchecked
+    // state reads stay in bounds.
     unsafe {
         while i + 4 <= len {
             let w512 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -300,6 +310,8 @@ pub unsafe fn dot_product_4x_f32_dual_accumulate_avx512(
     acc_f1 = _mm512_insertf32x4::<0>(acc_f1, init_f1_128);
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `i + 4 <= len` loop guard bounds all accesses.
     unsafe {
         while i + 4 <= len {
             let w512 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);

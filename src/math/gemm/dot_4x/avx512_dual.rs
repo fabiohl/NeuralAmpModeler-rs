@@ -29,6 +29,9 @@ pub unsafe fn dot_product_4x_interleaved_dual_frame_avx512(
     debug_assert!(weights.len() >= len);
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()` (with `debug_assert!(weights.len() >= len)`); the loop
+    // guards `i + 32`/`i + 16`/`i + 4`/`i < len` bound every load.
     unsafe {
         // Accumulator alternation: 16 ZMM accumulators (8 per frame).
         // Set A (sum{a}{0..3}) and Set B (sum{b}{0..3}) alternate every

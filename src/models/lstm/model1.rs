@@ -13,11 +13,17 @@ macro_rules! define_lstm1_process {
     ) => {
         #[$target_meta]
         unsafe fn $fn_name(&mut self, input: &[f32], output: &mut [f32]) {
+            // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
+            // `$target_meta` and only reachable under its documented
+            // preconditions (the dispatch path guarantees the SIMD features).
+            // Callers pass `input`/`output` of equal length (clamped in
+            // `process`), so `output[i]` is in bounds for `i < input.len()`;
+            // `$layer_proc` is an `unsafe fn` requiring the same features.
             unsafe {
                 for (i, &val) in input.iter().enumerate() {
                     self.layer.$layer_proc(&[val]);
                     let h_f32 = self.layer.get_hidden_state();
-                    output[i] = $crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+                    output[i] = $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                         h_f32,
                         &self.head_weights_f32,
                     ) + self.head_bias;
@@ -74,6 +80,11 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
         let n = input.len().min(output.len());
         let input = &input[..n];
         let output = &mut output[..n];
+        // SAFETY: `dispatch_simd!` selects `process_avx512` or `process_avx2`
+        // based on `effective_instruction_set()`, which reflects the CPU's
+        // verified SIMD support, so the chosen `#[target_feature]` kernel's
+        // preconditions hold; `input`/`output` were clamped to the same length
+        // `n` above, matching the kernels' length contract.
         unsafe {
             crate::math::common::dispatch_simd!(
                 @self,
@@ -94,7 +105,7 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
         for i in 0..n {
             self.layer.process_sample_scalar(&[input[i]]);
             let hidden = self.layer.get_hidden_state();
-            let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+            let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                 hidden,
                 &self.head_weights_f32,
             );

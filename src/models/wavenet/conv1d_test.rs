@@ -42,6 +42,9 @@ fn test_conv1d_identity_kernel() {
 
     // Manually invoke the SIMD routine optimized for AVX2.
     // The unsafe block is necessary because we access hardware intrinsic primitives.
+    // SAFETY: `layer_buffer`/`block` were allocated in this test with lengths matching
+    // the kernel's contract (`IN` = `OUT` = 4, one frame at `buffer_start` 0), and
+    // `Avx2Math` matches the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 0, 1);
     }
@@ -85,6 +88,9 @@ fn test_conv1d_with_bias() {
     let mut block = vec![0.0; 4];
 
     // The SIMD engine executes Fused Multiply-Add (FMA): (input * 1.0) + 0.5.
+    // SAFETY: `layer_buffer`/`block` were allocated in this test with lengths matching
+    // the kernel's contract (`IN` = `OUT` = 4, one frame at `buffer_start` 0), and
+    // `Avx2Math` matches the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 0, 1);
     }
@@ -144,6 +150,9 @@ fn test_conv1d_dilation() {
     // Tap 0: frame 4 - (2 * 2) = frame 0 -> [1.0, 2.0]
     // Tap 1: frame 4 - (2 * 1) = frame 2 -> [3.0, 4.0]
     // Tap 2: frame 4 - (2 * 0) = frame 4 -> [5.0, 6.0]
+    // SAFETY: `layer_buffer` (6 frames × 2 channels) and `block` (2 channels) were
+    // allocated in this test so the taps reachable at `frame_idx` 4 with K=3, dilation=2
+    // stay in bounds, and `Avx2Math` matches the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 4, 1);
     }
@@ -185,6 +194,9 @@ fn test_conv1d_zero_input() {
     let mut block = vec![0.0; 2];
 
     // First pass: Without bias, output should be absolute 0.0.
+    // SAFETY: `layer_buffer` (4 frames × 2 channels) and `block` (2 channels) were
+    // allocated in this test so the taps reachable at `frame_idx` 2 with K=3, dilation=1
+    // stay in bounds, and `Avx2Math` matches the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 2, 1);
     }
@@ -196,6 +208,7 @@ fn test_conv1d_zero_input() {
     conv.bias = AlignedVec::from_vec(vec![7.5, 8.5])
         .expect("allocation should succeed for test-sized buffers");
 
+    // SAFETY: same buffers and bounds as the first pass; `Avx2Math` matches the CPU ISA.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 2, 1);
     }
@@ -246,6 +259,9 @@ fn test_conv1d_known_output() {
     //      = 1.0 + (2*0.5 + 3*1.0) + (4*1.5 + 5*2.0) = 1.0 + 4.0 + 16.0 = 21.0
     // out1 = bias[1] + dot(F0, w[out1,k0]) + dot(F1, w[out1,k1])
     //      = -1.0 + (2*-0.5 + 3*-1.0) + (4*-1.5 + 5*-2.0) = -1.0 - 4.0 - 16.0 = -21.0
+    // SAFETY: `layer_buffer` (2 frames × 2 channels) and `block` (2 channels) were
+    // allocated in this test so the taps reachable at `frame_idx` 1 with K=2, dilation=1
+    // stay in bounds, and `Avx2Math` matches the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_block::<crate::math::common::Avx2Math>(&layer_buffer, &mut block, 1, 1);
     }
@@ -294,6 +310,9 @@ fn test_conv1d_ch8_wide_interleaving() {
     layer_buffer.fill(1.0);
 
     let mut simd_out = vec![0.0f32; CH];
+    // SAFETY: `layer_buffer` (`CH` × 10 frames) and `simd_out` (`CH`) were allocated in
+    // this test so the K=2 taps at `frame_idx` 5 stay in bounds, and `Avx2Math` matches
+    // the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_single_frame::<crate::math::common::Avx2Math>(&layer_buffer, &mut simd_out, 5);
     }
@@ -365,6 +384,9 @@ fn test_conv1d_ch16_wide_interleaving() {
     layer_buffer.fill(1.0);
 
     let mut simd_out = vec![0.0f32; CH];
+    // SAFETY: `layer_buffer` (`CH` × 10 frames) and `simd_out` (`CH`) were allocated in
+    // this test so the K=2 taps at `frame_idx` 5 stay in bounds, and `Avx2Math` matches
+    // the CPU ISA of the `#[target_feature]` backend.
     unsafe {
         conv.process_single_frame::<crate::math::common::Avx2Math>(&layer_buffer, &mut simd_out, 5);
     }

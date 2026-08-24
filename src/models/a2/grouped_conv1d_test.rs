@@ -33,6 +33,8 @@ fn test_grouped_conv1d_groups2_single_frame() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -94,6 +96,8 @@ fn test_grouped_conv1d_groups4_single_frame() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -155,6 +159,8 @@ fn test_grouped_conv1d_depthwise() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -216,6 +222,8 @@ fn test_grouped_conv1d_large_kernel_dilation() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -286,6 +294,9 @@ fn test_grouped_conv1d_with_mixin() {
     let mut scalar_out = vec![0.0f32; out_ch];
     let mut scalar_out_ref = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `mixin` = `out_ch`, `frame_idx` within history); they outlive the
+    // call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(
             &conv,
@@ -357,6 +368,9 @@ fn test_grouped_conv1d_block() {
         let mut simd_block = vec![0.0f32; num_frames * out_ch];
         let mut scalar_block = vec![0.0f32; num_frames * out_ch];
 
+        // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+        // `simd_block` = `num_frames` × `out_ch`, `buffer_start` within history); they outlive
+        // the call; AVX2+FMA via `#[target_feature]`/dispatch.
         unsafe {
             conv.process_block(
                 &layer_buffer,
@@ -427,6 +441,8 @@ fn test_grouped_conv1d_groups1_delegates_correctly() {
     let mut grouped_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `grouped_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut grouped_out, frame_idx, None);
     }
@@ -482,15 +498,17 @@ fn test_grouped_conv1d_no_bias() {
 
     let buf_frames = 256;
     let layer_buffer = make_layer_buffer(buf_frames, in_ch, 33);
+
     let frame_idx = 200;
 
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: buffers sized to the kernel's contract (`layer_buffer` = buf_frames × `in_ch`,
+    // `simd_out` = `out_ch`, `frame_idx` within history); they outlive the call; AVX2+FMA via `#[target_feature]`/dispatch.
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
     }
-
     grouped_conv1d_single_frame_ref(
         &conv.weights,
         &conv.bias,
@@ -550,6 +568,8 @@ fn should_panic_process_single_frame_out_frame_too_short() {
     let frame_idx = 400;
     let mut out_frame = vec![0.0f32; out_ch - 1]; // too short by 1
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "out_frame").
     unsafe {
         conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, None);
     }
@@ -580,6 +600,8 @@ fn should_panic_process_single_frame_frame_idx_too_low() {
     let frame_idx = 1; // far too low: lookback = 64 * 2 = 128
     let mut out_frame = vec![0.0f32; out_ch];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "frame_idx").
     unsafe {
         conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, None);
     }
@@ -611,6 +633,8 @@ fn should_panic_process_single_frame_mixin_too_short() {
     let mut out_frame = vec![0.0f32; out_ch];
     let mixin = vec![0.0f32; out_ch - 1];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "mixin len").
     unsafe {
         conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, Some(&mixin));
     }
@@ -642,6 +666,8 @@ fn should_panic_process_single_frame_layer_buffer_too_small() {
     let frame_idx = 400; // way beyond buffer
     let mut out_frame = vec![0.0f32; out_ch];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "layer_buffer").
     unsafe {
         conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, None);
     }
@@ -672,6 +698,8 @@ fn should_panic_simd_kernel_out_frame_too_short() {
     let frame_idx = 400;
     let mut out_frame = vec![0.0f32; out_ch - 1];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "simd: out_frame").
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut out_frame, frame_idx, None);
     }
@@ -702,6 +730,8 @@ fn should_panic_simd_kernel_frame_idx_too_low() {
     let frame_idx = 50; // lookback = 128 * 14 = 1792
     let mut out_frame = vec![0.0f32; out_ch];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "simd: frame_idx").
     unsafe {
         grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut out_frame, frame_idx, None);
     }
@@ -733,6 +763,8 @@ fn should_panic_simd_kernel_mixin_too_short() {
     let mut out_frame = vec![0.0f32; out_ch];
     let mixin = vec![0.0f32; out_ch - 1];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "simd: mixin").
     unsafe {
         grouped_conv1d_single_frame_simd(
             &conv,
@@ -769,6 +801,8 @@ fn should_panic_depthwise_out_frame_too_short() {
     let frame_idx = 400;
     let mut out_frame = vec![0.0f32; out_ch - 1];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "depthwise: out_frame").
     unsafe {
         process_single_frame_depthwise_avx2(&conv, &layer_buffer, &mut out_frame, frame_idx);
     }
@@ -799,6 +833,8 @@ fn should_panic_depthwise_frame_idx_too_low() {
     let frame_idx = 10; // lookback = 32 * 4 = 128
     let mut out_frame = vec![0.0f32; out_ch];
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "depthwise: frame_idx").
     unsafe {
         process_single_frame_depthwise_avx2(&conv, &layer_buffer, &mut out_frame, frame_idx);
     }
@@ -830,6 +866,8 @@ fn should_panic_process_block_block_too_small() {
     let mut block = vec![0.0f32; num_frames * out_ch - 1]; // 1 element short
     let buffer_start = 1500;
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "process_block: block len").
     unsafe {
         conv.process_block(&layer_buffer, &mut block, buffer_start, num_frames, None);
     }
@@ -862,6 +900,8 @@ fn should_panic_process_block_mixin_too_short() {
     let mixin = vec![0.0f32; num_frames * out_ch - 1];
     let buffer_start = 1500;
 
+    // SAFETY: test-only call; buffers deliberately under-sized to exercise the kernel's
+    // debug_assert; the test is marked #[should_panic] (expected "process_block: mixin").
     unsafe {
         conv.process_block(
             &layer_buffer,

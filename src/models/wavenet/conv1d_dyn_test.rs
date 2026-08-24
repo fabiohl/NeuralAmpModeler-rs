@@ -61,6 +61,9 @@ fn test_conv1d_dyn_padding_non_multiple_of_4() {
     let layer_buffer = vec![1.0f32; 5 * in_ch];
     let mut block = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` (5 frames × `in_ch`) and `block` (`out_ch`) were allocated in
+    // this test so the K=3, dilation=1 taps at `frame_idx` 4 stay in bounds; `Avx2Math`
+    // matches the CPU ISA required by `process_single_frame`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut block, 4, None);
     }
@@ -104,6 +107,9 @@ fn test_conv1d_dyn_large_kernel_no_segfault() {
     let mut out_f0 = vec![0.0f32; out_ch];
     let mut out_f1 = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` (24 elements) covers the K=10, dilation=1 taps at `frame_idx`
+    // 9/10, and `out_f0`/`out_f1` each hold `out_ch` elements; `Avx2Math` matches the CPU
+    // ISA required by the single/dual-frame kernels.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut out_f0, 9, None);
         conv.process_dual_frame::<Avx2Math>(
@@ -241,6 +247,9 @@ fn test_conv1d_dyn_warmup_underflow_clamped() {
     // clamped to the buffer start (no wrapping, no crash, no UB).
     let layer_buffer = vec![1.0f32; 48 * in_ch];
     let mut block = vec![0.0f32; out_ch];
+    // SAFETY: `layer_buffer` (48 frames × `in_ch`) is sized beyond the warm-up threshold
+    // (kernel-1)*dilation = 24, and `block` holds `out_ch` elements, so the kernel's
+    // clamped tap reads stay in bounds; `Avx2Math` matches the CPU ISA.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut block, 0, None);
     }

@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use crate::common::atomics::{AtomicI32, AtomicI64, AtomicU32, AtomicU64};
+use core::sync::atomic::Ordering;
 
 /// Global flag for coordinated graceful shutdown across all threads.
 /// Set to `true` by the CTRL+C handler.
-pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+///
+/// Kept on the standard-library `AtomicBool` in every build (instead of
+/// `common::atomics`): `loom::sync::atomic::AtomicBool::new` is not `const`, and
+/// `SHUTDOWN` is a process-global control-plane flag that is never part of a
+/// modeled handshake — it is simply set by the signal handler and polled by the
+/// main loop, so there is nothing for the Loom permutation engine to validate.
+pub static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Flag indicating that the DSP thread needs a new `NamResampler`.
 pub const RT_STATUS_NEEDS_RESAMPLER_REBUILD: u64 = 1 << 0;
@@ -262,66 +269,130 @@ impl RtStatusFlags {
         }
     }
 
-    /// Sets one or more flags in the bitmask.
+    /// Sets one or more flags in the bitmask with `Relaxed` ordering.
+    ///
+    /// **Telemetry-only flags**: use this when the flag does not gate any
+    /// associated data — the consumer only needs to observe the bit eventually,
+    /// and a torn observation is harmless. This is the in-crate default: every
+    /// internal `RT_STATUS_*` set uses `Relaxed` because those bits are
+    /// self-contained status signals (no payload follows them).
     #[inline(always)]
     pub fn set_flag(&self, flag: u64) {
         self.status_bits.fetch_or(flag, Ordering::Relaxed);
     }
 
-    /// Clears one or more flags in the bitmask.
+    /// Clears one or more flags in the bitmask with `Relaxed` ordering.
+    ///
+    /// `Relaxed` is correct here because these bits are written by the RT
+    /// thread with `set_flag`/`set_flag_release` and are never read back by it —
+    /// the main thread is the only reader, and no happens-before edge is needed
+    /// to reset a bit the producer never re-reads.
     #[inline(always)]
     pub fn clear_flag(&self, flag: u64) {
         self.status_bits.fetch_and(!flag, Ordering::Relaxed);
     }
 
-    /// Checks whether a flag is active.
+    /// Checks whether a flag is active with `Relaxed` ordering.
+    ///
+    /// Use this only for telemetry flags (see [`Self::set_flag`]). For a flag
+    /// that gates associated data, use [`Self::check_flag_acquire`] so the
+    /// Acquire barrier orders the payload read.
     #[inline(always)]
     pub fn check_flag(&self, flag: u64) -> bool {
         (self.status_bits.load(Ordering::Relaxed) & flag) != 0
     }
 
-    /// Sets one or more flags with Release ordering (for data handshakes).
+    /// Sets one or more flags with `Release` ordering — producer side of a
+    /// **data handshake** (public API for downstream consumers).
     ///
-    /// Use this when the flag signals that associated data (e.g. `requested_host_rate`,
-    /// `requested_slimmable_ch`) is ready to be read by the consumer. The Release barrier
-    /// guarantees all prior writes on this thread are visible to any thread that reads
-    /// the flag with Acquire ordering.
+    /// # Synchronization protocol (RT producer → main/consumer)
+    ///
+    /// Use this when the flag signals that associated *data* (e.g.
+    /// `requested_host_rate`, `requested_slimmable_ch`) is ready to be read:
+    ///
+    /// 1. Producer writes the data fields (`Relaxed` or `Release` is sufficient
+    ///    for the individual fields, since the flag publication below orders
+    ///    them — `Release` is conventional for the last write).
+    /// 2. Producer calls [`Self::set_flag_release`] on the gating flag. The
+    ///    Release barrier publishes *all* prior writes on this thread to any
+    ///    thread that observes the flag with Acquire.
+    /// 3. Consumer observes the flag with [`Self::check_flag_acquire`] and then
+    ///    reads the data fields — the Acquire barrier makes every write
+    ///    sequenced-before the matching `set_flag_release` visible.
+    /// 4. Consumer resets the flag with [`Self::clear_flag`] /
+    ///    [`Self::clear_flag_relaxed`] (the RT producer never reads the bit back).
+    ///
+    /// The invariant — a consumer that sees the flag set must also see the
+    /// full data payload — is enforced by the Release/Acquire pair, and is
+    /// model-checked by the Loom suite (`tests/loom_tests.rs`, `--cfg loom`).
+    ///
+    /// ## Why these methods exist as public API
+    ///
+    /// They have **zero in-crate callers** by design: internal `RT_STATUS_*`
+    /// signaling is telemetry-only (`Relaxed`), so the crate itself never needs
+    /// the barrier. They are retained for *downstream hosts* that publish a
+    /// value + flag pair across their own RT/Main boundary (e.g. a plugin that
+    /// writes `requested_host_rate` then raises `RT_STATUS_NEEDS_RESAMPLER_REBUILD`).
+    /// This is the only sanctioned way for a consumer to publish associated
+    /// data through `RtStatusFlags`.
     #[inline(always)]
     pub fn set_flag_release(&self, flag: u64) {
         self.status_bits.fetch_or(flag, Ordering::Release);
     }
 
-    /// Clears one or more flags with Relaxed ordering.
+    /// Clears one or more flags with `Relaxed` ordering.
     ///
-    /// Use this when the consumer clears flags the RT reader never acquires —
+    /// Use this when the consumer clears flags the RT producer never acquires —
     /// the main thread simply resets its own flags after acting on them.
-    /// No happens-before edge is needed because the RT reader only sets
-    /// these flags (via `fetch_or(Release)`), never reads them back.
+    /// No happens-before edge is needed because the RT producer only sets
+    /// these flags (via `fetch_or`), never reads them back. Alias of
+    /// [`Self::clear_flag`], kept under a distinct name to document the intent.
     #[inline(always)]
     pub fn clear_flag_relaxed(&self, flag: u64) {
         self.status_bits.fetch_and(!flag, Ordering::Relaxed);
     }
 
-    /// Clears one or more flags with Release ordering (for data handshakes).
+    /// Clears one or more flags with `Release` ordering (data handshake).
     ///
-    /// Pair with [`Self::check_flag_acquire`] in the consumer handshake.
+    /// Consumer-side reset in a data handshake *before* publishing new data:
+    /// e.g. the RT thread lowers a handshake flag with Release so the main
+    /// thread's subsequent Acquire observes the lowering. Paired with
+    /// [`Self::set_flag_release`] / [`Self::check_flag_acquire`] in the
+    /// protocol documented there.
     #[inline(always)]
     pub fn clear_flag_release(&self, flag: u64) {
         self.status_bits.fetch_and(!flag, Ordering::Release);
     }
 
-    /// Checks whether a flag is active with Acquire ordering (for reading handshake data).
+    /// Checks whether a flag is active with `Acquire` ordering — consumer side
+    /// of a **data handshake**.
     ///
-    /// Use this when the flag gates access to data written by the producer. The Acquire
-    /// barrier guarantees all writes sequenced-before the corresponding Release store
-    /// are visible on this thread.
+    /// Use this when the flag gates access to data written by the producer.
+    /// The Acquire barrier guarantees all writes sequenced-before the matching
+    /// [`Self::set_flag_release`] are visible on this thread. See that method
+    /// for the full protocol.
     #[inline(always)]
     pub fn check_flag_acquire(&self, flag: u64) -> bool {
         (self.status_bits.load(Ordering::Acquire) & flag) != 0
     }
 
-    /// Checks whether a flag is active and clears it atomically in a single operation.
+    /// Checks whether a flag is active and clears it atomically in a single
+    /// operation, recording it into `flags_seen`.
+    ///
     /// Returns `true` if the flag was active.
+    ///
+    /// # Ordering note
+    ///
+    /// The clear uses `Relaxed` because this is a **telemetry drain**, not a
+    /// data handshake: it is meant for flags the main thread polls and resets
+    /// (e.g. `RT_STATUS_GC_OVERFLOW`), where no payload follows the flag. It
+    /// also ORs the bit into `flags_seen` so the set of flags ever raised is
+    /// preserved even after the bit is cleared.
+    ///
+    /// For a flag that gates associated data, do **not** use this: first
+    /// [`Self::check_flag_acquire`] (orders the payload read), then
+    /// [`Self::clear_flag_relaxed`] (or `clear_flag_release` if new data is
+    /// about to be published).
     #[inline(always)]
     pub fn check_and_clear_flag(&self, flag: u64) -> bool {
         let old = self.status_bits.fetch_and(!flag, Ordering::Relaxed);

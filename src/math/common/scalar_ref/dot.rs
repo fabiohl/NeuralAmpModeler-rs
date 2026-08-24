@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use crate::math::common::half::f16_bits_to_f32;
+use crate::math::common::kahan::Kahan4F32;
 use crate::math::common::kahan::KahanF32;
 
 /// 4-lane interleaved dot product implementations (scalar reference and fallback).
@@ -101,6 +102,42 @@ pub fn dot_product_f32_native_kahan(a: &[f32], b: &[f32]) -> f32 {
         acc.add(a_sub[i] * b_sub[i]);
     }
     acc.value()
+}
+
+/// Kahan-compensated native f32 dot product with 4 independent Kahan lanes.
+///
+/// Accumulates the dot product across 4 independent [`Kahan4F32`] channels
+/// (four parallel compensation chains) and sums the lanes at the end. This
+/// preserves the O(ε) error class of [`dot_product_f32_native_kahan`] while
+/// breaking the single sequential compensation dependency chain — the four
+/// lanes are independent and can be executed in parallel by the CPU (ILP) or
+/// vectorized by the compiler.
+///
+/// Used for the LSTM final head projection (P-02) where the head weight
+/// vectors exceed 32 channels and Kahan compensation is required.
+#[inline(always)]
+pub fn dot_product_f32_native_kahan4(a: &[f32], b: &[f32]) -> f32 {
+    let len = core::cmp::min(a.len(), b.len());
+    let a_sub = &a[..len];
+    let b_sub = &b[..len];
+    let mut acc = Kahan4F32::new([0.0; 4]);
+    let mut i = 0;
+    while i + 4 <= len {
+        let x = [
+            a_sub[i] * b_sub[i],
+            a_sub[i + 1] * b_sub[i + 1],
+            a_sub[i + 2] * b_sub[i + 2],
+            a_sub[i + 3] * b_sub[i + 3],
+        ];
+        acc.add(x);
+        i += 4;
+    }
+    while i < len {
+        acc.add_channel(0, a_sub[i] * b_sub[i]);
+        i += 1;
+    }
+    let s = acc.value();
+    s[0] + s[1] + s[2] + s[3]
 }
 
 /// Computes 4 dot products at once for BF16.

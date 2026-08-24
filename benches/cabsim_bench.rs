@@ -97,7 +97,7 @@ fn bench_cabsim_engine_construction_long(c: &mut criterion::Criterion) {
 
 criterion_group! {
     name = cabsim_benches;
-    config = criterion::Criterion::default().sample_size(50);
+    config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
     targets = bench_cabsim_short_ir_64samp,
     bench_cabsim_medium_ir_64samp,
     bench_cabsim_long_ir_64samp,

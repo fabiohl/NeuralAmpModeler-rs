@@ -187,7 +187,7 @@ fn bench_gate_fsm(c: &mut Criterion) {
 
 criterion_group! {
     name = dsp_benches;
-    config = criterion::Criterion::default().sample_size(50);
+    config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
     targets = bench_resampler_44100_to_48000_256samp,
     bench_resampler_96000_to_48000_256samp,
     bench_resampler_48000_bypass,

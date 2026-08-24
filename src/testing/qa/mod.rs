@@ -220,6 +220,10 @@ pub mod fingerprint;
 /// label↔fixture projection, explicit `RT_*` bench table).
 pub mod ids;
 
+/// Canonical QA phase-identifier constants shared by renderer, verify docs
+/// and the dashboard receipt emitter (T3.2 ISA phase split).
+pub mod phases;
+
 /// Contract verify engine — literal port of the bash `verify_contract`.
 pub mod verify;
 

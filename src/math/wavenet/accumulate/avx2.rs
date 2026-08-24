@@ -16,6 +16,14 @@ fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
 }
 
 /// Accumulates src into dest using AVX2.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 (guaranteed by the ISA dispatch; never call
+///   directly on an unchecked host).
+/// - `src.len() >= dest.len()`: the vector loop performs unaligned 256-bit
+///   raw-pointer loads from `src` up to `dest.len()`; a shorter `src` is read
+///   out of bounds (UB).
 #[target_feature(enable = "avx2")]
 pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
@@ -43,6 +51,13 @@ fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]
 
 /// Applies tanh in-place on block and accumulates into head_input using AVX2.
 /// Processes 2 ymm vectors per iteration to overlap `vdivps` latencies.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()`: the vector loop performs unaligned
+///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
+///   shorter `head_input` is accessed out of bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -96,6 +111,14 @@ fn gated_activation_and_accumulate_block_avx2_tail(
 }
 
 /// Applies gated activation (tanh * sigmoid) in-place on block and accumulates into head_input using AVX2.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `ch >= 1` and `block.len() >= 2 * ch * (head_input.len() / ch)`: the
+///   vector loop performs unaligned 256-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` also divides by zero.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn gated_activation_and_accumulate_block_avx2(
     head_input: &mut [f32],
@@ -141,6 +164,13 @@ fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32])
 
 /// Applies tanh in-place on block and overwrites head_input using AVX2.
 /// Processes 2 ymm vectors per iteration to overlap `vdivps` latencies.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()`: the vector loop performs unaligned
+///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
+///   `head_input` is written out of bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -187,6 +217,14 @@ fn tanh_and_accumulate_with_seed_avx2_tail(
 /// Computes `head_input[i] = seed[i] + tanh(block[i])`.
 /// Eliminates the separate `copy_from_slice(seed)` before `tanh_and_accumulate_block`.
 /// Processes 2 ymm vectors per iteration to overlap `vdivps` latencies.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()` and `seed.len() >= block.len()`: the
+///   vector loop performs unaligned 256-bit raw-pointer loads/stores up to
+///   `block.len()` on all three slices; shorter slices are accessed out of
+///   bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn tanh_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
@@ -234,6 +272,13 @@ fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]
 }
 
 /// Applies ReLU in-place on block and accumulates into head_input using AVX2.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()`: the vector loop performs unaligned
+///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
+///   shorter `head_input` is accessed out of bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -277,6 +322,13 @@ fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32])
 }
 
 /// Applies ReLU in-place on block and overwrites head_input using AVX2.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()`: the vector loop performs unaligned
+///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
+///   `head_input` is written out of bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
@@ -322,6 +374,14 @@ fn relu_and_accumulate_with_seed_avx2_tail(
 /// Fused Seed + ReLU + Head Accumulate using AVX2.
 ///
 /// Computes `head_input[i] = seed[i] + max(0.0, block[i])`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `head_input.len() >= block.len()` and `seed.len() >= block.len()`: the
+///   vector loop performs unaligned 256-bit raw-pointer loads/stores up to
+///   `block.len()` on all three slices; shorter slices are accessed out of
+///   bounds (UB).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn relu_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
@@ -379,6 +439,14 @@ fn gated_activation_and_overwrite_block_avx2_tail(
 }
 
 /// Applies gated activation (tanh * sigmoid) in-place on block and overwrites head_input using AVX2.
+///
+/// # Safety
+///
+/// - The CPU must support AVX2 and FMA (guaranteed by the ISA dispatch).
+/// - `ch >= 1` and `block.len() >= 2 * ch * (head_input.len() / ch)`: the
+///   vector loop performs unaligned 256-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` also divides by zero.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn gated_activation_and_overwrite_block_avx2(
     head_input: &mut [f32],

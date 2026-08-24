@@ -204,6 +204,13 @@ _is_numeric_esr() {
 
 # ── Data storage (global associative arrays) ────────────────────────────────
 
+# Canonical ISA QA phase identifiers (T3.2). These mirror the Rust constants in
+# `src/testing/qa/phases.rs` (single source of truth); `qa_test::qa_test::dashboard_phase_ids_match_rust_constants`
+# fails the build if they drift. Never rename here without updating that module.
+ISA_SELF_CONSISTENCY_PHASE="isa_self_consistency"
+ISA_PARITY_CROSS_ISA_PHASE="isa_parity_cross_isa"
+CROSS_ISA_GAP_REASON="cross_isa_matrix_requires_avx512_remote"
+
 declare -A ESR_NAMCORE
 declare -A ESR_F64_PAIRED
 declare -A LATENCY_US
@@ -335,17 +342,32 @@ run_reference_oracle() {
     FIDELITY_DURATION_S=$(awk -v a="$FIDELITY_DURATION_S" -v b="$dur" 'BEGIN { printf "%.1f", a + b }')
 }
 
-# ── Run: isa_parity ─────────────────────────────────────────────────────────
+# ── Run: isa_self_consistency ──────────────────────────────────────────────
+# T3.2 (G-02): the *local* runner executes only the AVX2-vs-AVX2 internal
+# consistency subset of the isa_parity suite (`#[ignore]`d cross-ISA cases are
+# compiled out without the `avx512` feature). The receipt therefore names the
+# phase `isa_self_consistency`, never `isa_parity`, and a companion
+# `isa_parity_cross_isa` receipt declares the explicit gap: the full cross-ISA
+# matrix (AVX2 vs AVX-512) is restricted to the multi-target/remote gate
+# (`utils/remote-simd-gate.sh`) and the long suite — it is never claimed by the
+# local dashboard.
 
-run_isa_parity() {
+run_isa_self_consistency() {
     local start_t end_t
     start_t=$(date +%s%N)
-    run_dashboard_phase "isa_parity" 5 \
+    run_dashboard_phase "$ISA_SELF_CONSISTENCY_PHASE" 5 \
         cargo test --release --features testing --test parity isa_parity -- --test-threads=1 --nocapture
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
     FIDELITY_DURATION_S=$(awk -v a="$FIDELITY_DURATION_S" -v b="$dur" 'BEGIN { printf "%.1f", a + b }')
+
+    # T3.2: explicit gap — the local runner never executes the cross-ISA
+    # matrix. Declared as a typed SKIP_CAPABILITY phase record (observed=0,
+    # expected=0) so the QA report distinguishes self-consistency from real
+    # cross-ISA parity without failing the fidelity domain.
+    dashboard_phase_receipt "$ISA_PARITY_CROSS_ISA_PHASE" "SKIP_CAPABILITY" 0 0 0 \
+        "$CROSS_ISA_GAP_REASON"
 }
 
 # ── Run: spectral_fidelity ──────────────────────────────────────────────────
@@ -638,13 +660,15 @@ parse_oracle_f64() {
 
 }
 
-# ── Parse: isa_parity ───────────────────────────────────────────────────────
+# ── Parse: isa_self_consistency ─────────────────────────────────────────────
+# T3.2: the local phase log is `isa_self_consistency.log` (self-consistency
+# rows only — cross-ISA rows are never emitted by the local runner).
 
-parse_isa_parity() {
-    local log="$LOGDIR/isa_parity.log"
+parse_isa_self_consistency() {
+    local log="$LOGDIR/${ISA_SELF_CONSISTENCY_PHASE}.log"
     [ -f "$log" ] || return 0
 
-    local parsed="$PARSEDIR/isa_parity.parsed"
+    local parsed="$PARSEDIR/${ISA_SELF_CONSISTENCY_PHASE}.parsed"
     LC_ALL=C awk '
     /\[ISA Matrix\]/ {
         line = $0
@@ -989,8 +1013,8 @@ main() {
         phase "reference_oracle_f64"
         run_reference_oracle
 
-        phase "isa_parity"
-        run_isa_parity
+        phase "isa_self_consistency (AVX2 vs AVX2)"
+        run_isa_self_consistency
 
         phase "spectral_fidelity"
         run_spectral_fidelity
@@ -1003,7 +1027,8 @@ main() {
     fi
 
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "bench" ]; then
-        echo -e "  ${BLUE}⏳ Aguardando 180s para estabilização térmica do sistema antes dos benchmarks...${NC}"
+        echo ""
+        echo -e "${BLUE}⏳ Waiting 180s for thermal cooling before benchmarks...${NC}"
         sleep 180
         phase "regression_gate benchmarks"
         run_benchmarks
@@ -1012,7 +1037,7 @@ main() {
     phase "Parseando resultados"
     parse_golden_vectors
     parse_oracle_f64
-    parse_isa_parity
+    parse_isa_self_consistency
     parse_spectral_fidelity
     parse_benchmarks
 

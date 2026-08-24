@@ -59,6 +59,9 @@ impl CountingAllocator {
                 count.set(count.get() + 1);
             });
         }
+        // SAFETY: `layout` validity is the caller's documented precondition of
+        // this `unsafe fn`; `System` upholds the `GlobalAlloc` contract and
+        // returns a pointer that `System.dealloc` with the same layout can free.
         unsafe { System.alloc(layout) }
     }
 
@@ -69,15 +72,26 @@ impl CountingAllocator {
     /// `ptr` must have been previously allocated via `CountingAllocator::alloc`
     /// with the same `layout`.
     pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` was returned by a matching `CountingAllocator::alloc`
+        // with the same `layout` (documented precondition of this `unsafe fn`);
+        // `System.dealloc` is then called with a valid `ptr`/`layout` pair.
         unsafe { System.dealloc(ptr, layout) }
     }
 }
 
+// SAFETY: every method forwards to `CountingAllocator::alloc`/`dealloc`, which
+// delegate to `System`'s `GlobalAlloc`; the trait contract is upheld for the
+// documented preconditions (valid `layout` for `alloc`; `ptr`/`layout` pairing
+// for `dealloc`).
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: `layout` validity is guaranteed by the `GlobalAlloc` caller;
+        // `Self::alloc` forwards it to the system allocator.
         unsafe { Self::alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` was allocated with the same `layout` (trait contract);
+        // `Self::dealloc` forwards it to the system allocator.
         unsafe { Self::dealloc(ptr, layout) }
     }
 }

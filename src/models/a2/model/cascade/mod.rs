@@ -104,22 +104,6 @@ impl WaveNetA2Cascade {
         })
     }
 
-    /// Compatibility wrapper over [`try_new`](Self::try_new) for external
-    /// callers that pre-date the fallible constructor (H-05). The loader path
-    /// uses [`try_new`](Self::try_new) so allocation failures propagate as
-    /// errors instead of aborting the process.
-    ///
-    /// # Panics
-    /// Panics if a cascade scratch allocation fails.
-    pub fn new(
-        arrays: Vec<WaveNetA2Dyn>,
-        condition_dsp: Option<Box<StaticModel>>,
-        condition_size: usize,
-    ) -> Self {
-        Self::try_new(arrays, condition_dsp, condition_size)
-            .expect("WaveNetA2Cascade allocation should succeed for fixed-size scratch buffers")
-    }
-
     /// Returns the number of channels of the first array.
     pub fn channels(&self) -> usize {
         self.arrays.first().map(|a| a.channels).unwrap_or(0)
@@ -127,6 +111,9 @@ impl WaveNetA2Cascade {
 
     /// Full forward pass through the cascade.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
+        // matching `#[target_feature]` backend; `input`/`output` are the same valid
+        // slices passed to this safe wrapper.
         unsafe {
             crate::math::common::dispatch_simd!(self, process_internal, input, output);
         }

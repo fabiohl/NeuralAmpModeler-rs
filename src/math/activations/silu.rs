@@ -22,6 +22,8 @@ use core::arch::x86_64::*;
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
+    // SAFETY: `simd_sigmoid_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     unsafe {
         let s = simd_sigmoid_avx2(x);
         _mm256_mul_ps(x, s)
@@ -34,6 +36,8 @@ pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_silu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
+    // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     unsafe {
         let (s1, s2) = simd_sigmoid_dual_avx2(x1, x2);
         (_mm256_mul_ps(x1, s1), _mm256_mul_ps(x2, s2))
@@ -47,6 +51,9 @@ pub unsafe fn simd_silu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_silu_avx512(x: __m512) -> __m512 {
+    // SAFETY: `simd_sigmoid_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     unsafe {
         let s = simd_sigmoid_avx512(x);
         _mm512_mul_ps(x, s)
@@ -62,6 +69,9 @@ pub unsafe fn silu_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <= len`
+    // (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`, so every
+    // 8-lane load/store stays within `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx2!(
             i,
@@ -99,6 +109,9 @@ pub unsafe fn silu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(slice.as_ptr().add(i));
@@ -133,6 +146,8 @@ pub fn silu_hf(x: f32) -> f32 {
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_silu_poly_avx2(x: __m256) -> __m256 {
+    // SAFETY: `simd_sigmoid_poly_avx2` requires AVX2+FMA, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     unsafe {
         let s = simd_sigmoid_poly_avx2(x);
         _mm256_mul_ps(x, s)
@@ -146,6 +161,9 @@ pub unsafe fn simd_silu_poly_avx2(x: __m256) -> __m256 {
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_silu_poly_avx512(x: __m512) -> __m512 {
+    // SAFETY: `simd_sigmoid_poly_avx512` requires AVX-512F/VL, guaranteed by
+    // this `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and
+    // caller contract.
     unsafe {
         let s = simd_sigmoid_poly_avx512(x);
         _mm512_mul_ps(x, s)
@@ -161,6 +179,9 @@ pub unsafe fn silu_poly_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <= len`
+    // (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`, so every
+    // 8-lane load/store stays within `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx2!(
             i,
@@ -196,6 +217,9 @@ pub unsafe fn silu_poly_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(slice.as_ptr().add(i));

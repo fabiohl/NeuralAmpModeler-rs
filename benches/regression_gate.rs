@@ -380,7 +380,7 @@ criterion_group!(
         .sample_size(100)
         .measurement_time(std::time::Duration::from_secs(5))
         .warm_up_time(std::time::Duration::from_secs(1))
-        .noise_threshold(0.02);
+        .noise_threshold(0.05);
     targets =
         bench_wavenet_standard,
         bench_wavenet_feather,

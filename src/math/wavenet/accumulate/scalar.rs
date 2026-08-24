@@ -6,9 +6,17 @@
 /// Accumulation of the network "Head".
 /// In WaveNet-like architectures, the various layers (blocks) of the network contribute
 /// to a common result called "head". This function simply sums those contributions.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the `#[target_feature]` SIMD
+/// variants dispatched through the same call sites. The body clamps to
+/// `min(dest.len(), src.len())` and documents its single unchecked access with
+/// an inner `// SAFETY:` block; no caller contract beyond valid slices.
 pub unsafe fn accumulate_head_fallback(dest: &mut [f32], src: &[f32]) {
     let len = core::cmp::min(dest.len(), src.len());
     for i in 0..len {
+        // SAFETY: `i < len` where `len = min(dest.len(), src.len())`, so `get_unchecked_mut(i)`/`get_unchecked(i)` are in bounds for both slices.
         unsafe {
             // Sum the contents of 'src' into 'dest'.
             let acc = *dest.get_unchecked_mut(i) as f64 + *src.get_unchecked(i) as f64;
@@ -20,6 +28,12 @@ pub unsafe fn accumulate_head_fallback(dest: &mut [f32], src: &[f32]) {
 /// Applies the 'Tanh' activation and accumulates into the main output.
 /// Tanh (Hyperbolic Tangent) is a function that "squashes" any number to
 /// be between -1.0 and 1.0. It is very common in guitar amplifier modeling.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`;
+/// a violation panics instead of causing UB.
 pub unsafe fn tanh_and_accumulate_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
     let len = head_input.len();
     for i in 0..len {
@@ -37,6 +51,13 @@ pub unsafe fn tanh_and_accumulate_block_fallback(head_input: &mut [f32], block: 
 /// 2. z2 goes through a Sigmoid (acts as a "volume" or "gate" for z1).
 ///
 /// At the end, we multiply the two. It's as if z2 decides how much of z1 will pass through.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `ch >= 1` and
+/// `block.len() >= 2 * ch * (head_input.len() / ch)`; violations panic instead
+/// of causing UB.
 pub unsafe fn gated_activation_and_accumulate_block_fallback(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -62,6 +83,12 @@ pub unsafe fn gated_activation_and_accumulate_block_fallback(
 }
 
 /// Applies the 'Tanh' activation and overwrites the main output.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`;
+/// a violation panics instead of causing UB.
 pub unsafe fn tanh_and_overwrite_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
     let len = head_input.len();
     for i in 0..len {
@@ -77,6 +104,12 @@ pub unsafe fn tanh_and_overwrite_block_fallback(head_input: &mut [f32], block: &
 /// Computes `head_input[i] = seed[i] + tanh(block[i])`.
 /// Equivalent to `copy_from_slice(seed)` followed by `tanh_and_accumulate_block`,
 /// fused into a single pass.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`
+/// and `seed.len() >= head_input.len()`; violations panic instead of causing UB.
 pub unsafe fn tanh_and_accumulate_with_seed_fallback(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -93,6 +126,13 @@ pub unsafe fn tanh_and_accumulate_with_seed_fallback(
 }
 
 /// Gated Activation + Overwrite.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `ch >= 1` and
+/// `block.len() >= 2 * ch * (head_input.len() / ch)`; violations panic instead
+/// of causing UB.
 pub unsafe fn gated_activation_and_overwrite_block_fallback(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -113,6 +153,12 @@ pub unsafe fn gated_activation_and_overwrite_block_fallback(
 }
 
 /// Applies the 'ReLU' activation and accumulates into the main output.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`;
+/// a violation panics instead of causing UB.
 pub unsafe fn relu_and_accumulate_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
     let len = head_input.len();
     for i in 0..len {
@@ -125,6 +171,12 @@ pub unsafe fn relu_and_accumulate_block_fallback(head_input: &mut [f32], block: 
 }
 
 /// Applies the 'ReLU' activation and overwrites the main output.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`;
+/// a violation panics instead of causing UB.
 pub unsafe fn relu_and_overwrite_block_fallback(head_input: &mut [f32], block: &mut [f32]) {
     let len = head_input.len();
     for i in 0..len {
@@ -136,6 +188,12 @@ pub unsafe fn relu_and_overwrite_block_fallback(head_input: &mut [f32], block: &
 }
 
 /// Fused Seed + ReLU + Head Accumulate.
+///
+/// # Safety
+///
+/// Marked `unsafe` only for signature parity with the SIMD variants. The body
+/// uses checked slice indexing only and expects `block.len() >= head_input.len()`
+/// and `seed.len() >= head_input.len()`; violations panic instead of causing UB.
 pub unsafe fn relu_and_accumulate_with_seed_fallback(
     head_input: &mut [f32],
     block: &mut [f32],

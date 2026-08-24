@@ -16,14 +16,18 @@
 //!
 //! *   **FIFO input accumulator** — sub-blocks are buffered until
 //!     `partition_size` samples are collected.
-//! *   **FIFO output queue** — processed partitions are staged and slices
-//!     are returned on subsequent
+//! *   **FIFO output queue** — [`ConvEngine::process()`](crate::dsp::cabsim::conv::ConvEngine::process)
+//!     renders partitions directly into the output queue (`2 × partition_size`),
+//!     with no intermediate scratch partition; slices are returned on subsequent
 //!     [`process_variable()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_variable) calls. The output
 //!     buffer is `2 × partition_size` to avoid overwriting unconsumed
 //!     output when a second partition completes before the first is fully
 //!     drained.
 //! *   **Zero-alloc hot path** — all buffers are pre-allocated in
 //!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
+//! *   **In-place processing** — [`process_in_place()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_in_place)
+//!     reads and writes the same buffer, eliminating the destination copy
+//!     on the audio callback.
 //! *   **Causal output** — the adapter respects the engine's intrinsic
 //!     latency. Until the first partition is fully accumulated, output is
 //!     silence.
@@ -40,7 +44,6 @@ pub struct CabSimAdapter {
     partition: usize,
     input_buf: AlignedVec<f32>,
     output_buf: AlignedVec<f32>,
-    output_scratch: AlignedVec<f32>,
     input_count: usize,
     output_read: usize,
     output_write: usize,
@@ -58,7 +61,6 @@ impl CabSimAdapter {
             partition,
             input_buf: AlignedVec::new(2 * partition, 0.0_f32)?,
             output_buf: AlignedVec::new(2 * partition, 0.0_f32)?,
-            output_scratch: AlignedVec::new(partition, 0.0_f32)?,
             input_count: 0,
             output_read: 0,
             output_write: 0,
@@ -129,6 +131,9 @@ impl CabSimAdapter {
     ///
     /// *   `input.len() == output.len() <= partition_size`
     /// *   `input.len() > 0` (use empty slice for flush passes)
+    /// *   `input` and `output` must not overlap — use
+    ///     [`process_in_place`](CabSimAdapter::process_in_place) to process a
+    ///     single buffer in place.
     ///
     /// # Host Contract Violations (F-03)
     ///
@@ -163,19 +168,64 @@ impl CabSimAdapter {
             return;
         }
 
+        self.accumulate(input, sub_n);
+        self.run_partitions(rt_status);
+        self.deliver(sub_n, output);
+    }
+
+    /// In-place variant of [`process_variable`](CabSimAdapter::process_variable)
+    /// that reads and writes the same buffer, avoiding a separate destination
+    /// slice (and its intermediate copy) on the audio callback.
+    ///
+    /// All input samples are consumed into the internal input FIFO before any
+    /// output is written back into `input_output`, so aliasing the source and
+    /// destination is safe.
+    ///
+    /// # Constraints
+    ///
+    /// *   `input_output.len() <= partition_size`
+    /// *   `input_output.len() > 0` (use empty slice for flush passes)
+    ///
+    /// # RT-Safety
+    ///
+    /// Zero-alloc, lock-free, never panics.
+    pub fn process_in_place(
+        &mut self,
+        input_output: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        let sub_n = input_output.len().min(self.partition);
+        let contract_violation = input_output.len() > self.partition;
+        if contract_violation && let Some(rt) = rt_status {
+            rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);
+        }
+
+        if self.engine.is_passthrough() {
+            input_output[sub_n..].fill(0.0);
+            return;
+        }
+
+        self.accumulate(input_output, sub_n);
+        self.run_partitions(rt_status);
+        self.deliver(sub_n, input_output);
+    }
+
+    /// Consumes `sub_n` samples from `input` into the input FIFO.
+    #[inline(always)]
+    fn accumulate(&mut self, input: &[f32], sub_n: usize) {
         if sub_n > 0 {
             self.input_buf[self.input_count..self.input_count + sub_n]
                 .copy_from_slice(&input[..sub_n]);
             self.input_count += sub_n;
         }
+    }
 
+    /// Renders every accumulated full partition directly into the free region
+    /// of `self.output_buf`, keeping the output FIFO contiguous via the
+    /// shift-to-front compaction.
+    #[inline(always)]
+    fn run_partitions(&mut self, rt_status: Option<&RtStatusFlags>) {
         while self.input_count >= self.partition {
-            self.engine.process(
-                &self.input_buf[..self.partition],
-                &mut self.output_scratch[..self.partition],
-                rt_status,
-            );
-
             if self.output_read > 0 {
                 let remaining = self.output_write - self.output_read;
                 if remaining > 0 {
@@ -186,8 +236,17 @@ impl CabSimAdapter {
                 self.output_read = 0;
             }
 
-            self.output_buf[self.output_write..self.output_write + self.partition]
-                .copy_from_slice(&self.output_scratch[..self.partition]);
+            // P-04 / T5.1: render straight into the output-FIFO partitions. The
+            // compaction above guarantees at most `partition` samples remain
+            // queued at the front, so the write region
+            // `[output_write, output_write + partition)` never overflows the
+            // `2 * partition` pre-allocated queue.
+            debug_assert!(self.output_write + self.partition <= self.output_buf.len());
+            self.engine.process(
+                &self.input_buf[..self.partition],
+                &mut self.output_buf[self.output_write..self.output_write + self.partition],
+                rt_status,
+            );
             self.output_write += self.partition;
 
             let remaining = self.input_count - self.partition;
@@ -197,7 +256,12 @@ impl CabSimAdapter {
             }
             self.input_count = remaining;
         }
+    }
 
+    /// Moves up to `sub_n` queued output samples into `output`, filling the
+    /// remainder with silence.
+    #[inline(always)]
+    fn deliver(&mut self, sub_n: usize, output: &mut [f32]) {
         let available = self.output_write - self.output_read;
         let n = sub_n.min(available);
         if n > 0 {

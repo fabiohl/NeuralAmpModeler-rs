@@ -31,6 +31,8 @@ pub fn rdtsc_nanos() -> u64 {
         reason = "Manual bounds check used for RT-predictable assembly over checked_add"
     )]
     if freq_x1000 != 0 {
+        // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no
+        // memory access and has no side effects, so reading it here is sound.
         let cycles = unsafe { core::arch::x86_64::_rdtsc() };
         (cycles * 1000) / freq_x1000
     } else {
@@ -69,6 +71,8 @@ pub fn calibrate_tsc() {
     // 1. WARM-UP:
     // We call the instruction once and wait a bit. This ensures the CPU
     // "wakes up" from low-power states and that data is ready in the caches.
+    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
+    // access and has no side effects, so reading it here is sound.
     let _ = unsafe { core::arch::x86_64::_rdtsc() };
     thread::sleep(Duration::from_millis(10));
 
@@ -76,6 +80,8 @@ pub fn calibrate_tsc() {
     // We simultaneously capture the system clock time (slow but reliable)
     // and the CPU cycle counter value (ultra-fast).
     let start_inst = Instant::now();
+    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
+    // access and has no side effects, so reading it here is sound.
     let start_tsc = unsafe { core::arch::x86_64::_rdtsc() };
 
     // 3. CONTROLLED WAIT:
@@ -86,6 +92,8 @@ pub fn calibrate_tsc() {
     // 4. END POINT:
     // We capture both values again to calculate how much each advanced.
     let end_inst = Instant::now();
+    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
+    // access and has no side effects, so reading it here is sound.
     let end_tsc = unsafe { core::arch::x86_64::_rdtsc() };
 
     let elapsed_nanos = end_inst.duration_since(start_inst).as_nanos() as u64;

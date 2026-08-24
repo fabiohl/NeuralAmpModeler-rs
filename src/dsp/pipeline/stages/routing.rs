@@ -24,6 +24,9 @@ pub(crate) fn run_stereo_or_mono(
     if let Some(model_l) = active_model_l {
         model_l.process(model_in_l, m_out_l);
     } else {
+        // SAFETY: the copy length is `min(model_in_l.len(), m_out_l.len())`, so the
+        // source/destination ranges stay in bounds and hold initialized `f32` values;
+        // `model_in_l` and `m_out_l` are distinct buffers, so they cannot overlap.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 model_in_l.as_ptr(),
@@ -34,6 +37,9 @@ pub(crate) fn run_stereo_or_mono(
     }
 
     if process_mono {
+        // SAFETY: the copy length is `min(m_out_l.len(), m_out_r.len())`; both are
+        // distinct `&mut` output buffers with initialized `f32` contents, so the
+        // copy stays in bounds and never overlaps.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 m_out_l.as_ptr(),
@@ -44,6 +50,8 @@ pub(crate) fn run_stereo_or_mono(
     } else if let Some(model_r) = active_model_r {
         model_r.process(model_in_r, m_out_r);
     } else {
+        // SAFETY: the copy length is `min(model_in_r.len(), m_out_r.len())`; source
+        // and destination are distinct, in-bounds, initialized `f32` ranges.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 model_in_r.as_ptr(),
@@ -117,6 +125,8 @@ pub(crate) fn model_process_stereo_with_os(
 #[inline(always)]
 pub(crate) fn passthru(in_buf: &[f32], out_buf: &mut [f32]) {
     let n = in_buf.len().min(out_buf.len());
+    // SAFETY: `n` is the minimum of the two lengths, so the copy of `n` initialized
+    // `f32` values stays within both ranges; `in_buf`/`out_buf` are distinct buffers.
     unsafe {
         core::ptr::copy_nonoverlapping(in_buf.as_ptr(), out_buf.as_mut_ptr(), n);
     }

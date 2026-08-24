@@ -12,6 +12,14 @@ use core::arch::x86_64::*;
 /// Accumulates src into dest using AVX-512 VL256 with EVEX masked tail.
 ///
 /// Computes `dest[i] += src[i]`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(dest.len(), src.len())`) and
+///   the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn accumulate_head_avx512vl(dest: &mut [f32], src: &[f32]) {
     let len = dest.len().min(src.len());
@@ -44,6 +52,14 @@ pub unsafe fn accumulate_head_avx512vl(dest: &mut [f32], src: &[f32]) {
 ///
 /// Computes `block[i] = tanh(block[i])` and `head_input[i] += block[i]`.
 /// Processes 2 ymm vectors per iteration with masked tail handling.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn tanh_and_accumulate_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
@@ -86,6 +102,14 @@ pub unsafe fn tanh_and_accumulate_block_avx512vl(head_input: &mut [f32], block: 
 /// Applies tanh in-place on block and overwrites head_input using AVX-512 VL256.
 ///
 /// Computes `block[i] = tanh(block[i])` and `head_input[i] = block[i]`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn tanh_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
@@ -121,6 +145,14 @@ pub unsafe fn tanh_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &
 /// Fused Seed + Tanh + Head Accumulate using AVX-512 VL256.
 ///
 /// Computes `head_input[i] = seed[i] + tanh(block[i])` and updates `block[i] = tanh(block[i])`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block, head_input, seed)`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn tanh_and_accumulate_with_seed_avx512vl(
     head_input: &mut [f32],
@@ -167,6 +199,16 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512vl(
 /// Applies gated activation (tanh * sigmoid) in-place on block and accumulates into head_input using AVX-512 VL256.
 ///
 /// Handles arbitrary channel widths `ch` without scalar branches via EVEX opmasks.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - `block.len() >= 2 * ch * (head_input.len() / ch)`: the vector loop
+///   performs unaligned 256-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` is handled (early return).
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn gated_activation_and_accumulate_block_avx512vl(
     head_input: &mut [f32],
@@ -250,6 +292,16 @@ pub unsafe fn gated_activation_and_accumulate_block_avx512vl(
 }
 
 /// Applies gated activation (tanh * sigmoid) in-place on block and overwrites head_input using AVX-512 VL256.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - `block.len() >= 2 * ch * (head_input.len() / ch)`: the vector loop
+///   performs unaligned 256-bit raw-pointer loads/stores at
+///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
+///   bounds (UB). `ch == 0` is handled (early return).
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn gated_activation_and_overwrite_block_avx512vl(
     head_input: &mut [f32],
@@ -314,6 +366,14 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512vl(
 }
 
 /// Applies ReLU in-place on block and accumulates into head_input using AVX-512 VL256.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn relu_and_accumulate_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
@@ -355,6 +415,14 @@ pub unsafe fn relu_and_accumulate_block_avx512vl(head_input: &mut [f32], block: 
 }
 
 /// Applies ReLU in-place on block and overwrites head_input using AVX-512 VL256.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn relu_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
@@ -391,6 +459,14 @@ pub unsafe fn relu_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &
 /// Fused Seed + ReLU + Head Accumulate using AVX-512 VL256.
 ///
 /// Computes `head_input[i] = seed[i] + max(0.0, block[i])` and `block[i] = max(0.0, block[i])`.
+///
+/// # Safety
+///
+/// - The CPU must support AVX-512F, AVX-512VL, AVX-512BW and AVX-512DQ
+///   (guaranteed by the ISA dispatch; never call directly on an unchecked
+///   host).
+/// - Slice geometry is self-clamped (`len = min(block, head_input, seed)`)
+///   and the tail uses fault-suppressing opmasks, so no length contract applies.
 #[target_feature(enable = "avx512f,avx512vl,avx512bw,avx512dq")]
 pub unsafe fn relu_and_accumulate_with_seed_avx512vl(
     head_input: &mut [f32],

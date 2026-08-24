@@ -13,6 +13,13 @@ macro_rules! define_lstm2_process_pipelined {
     ) => {
         #[$target_meta]
         unsafe fn $fn_name(&mut self, input: &[f32], output: &mut [f32]) {
+            // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
+            // `$target_meta` and only reachable under its documented
+            // preconditions (the dispatch path guarantees the SIMD features).
+            // Callers pass `input`/`output` of equal length (clamped in
+            // `process`), so every `input[i]`/`output[i-1]`/`output[len-1]`
+            // index is in bounds; `$layer_proc` is an `unsafe fn` requiring the
+            // same features.
             unsafe {
                 let len = input.len();
                 if len >= 1 {
@@ -25,7 +32,7 @@ macro_rules! define_lstm2_process_pipelined {
                         self.layer2.$layer_proc(&prev_h1);
                         let h_f32 = self.layer2.get_hidden_state();
                         output[i - 1] =
-                            $crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+                            $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                                 h_f32,
                                 &self.head_weights_f32,
                             ) + self.head_bias;
@@ -35,7 +42,7 @@ macro_rules! define_lstm2_process_pipelined {
                     self.layer2.$layer_proc(&prev_h1);
                     let h_f32 = self.layer2.get_hidden_state();
                     output[len - 1] =
-                        $crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+                        $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                             h_f32,
                             &self.head_weights_f32,
                         ) + self.head_bias;
@@ -97,6 +104,11 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
         let n = input.len().min(output.len());
         let input = &input[..n];
         let output = &mut output[..n];
+        // SAFETY: `dispatch_simd!` selects `process_avx512` or `process_avx2`
+        // based on `effective_instruction_set()`, which reflects the CPU's
+        // verified SIMD support, so the chosen `#[target_feature]` kernel's
+        // preconditions hold; `input`/`output` were clamped to the same length
+        // `n` above, matching the kernels' length contract.
         unsafe {
             crate::math::common::dispatch_simd!(
                 @self,
@@ -119,7 +131,7 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
             self.layer2
                 .process_sample_scalar(self.layer1.get_hidden_state());
             let hidden2 = self.layer2.get_hidden_state();
-            let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+            let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                 hidden2,
                 &self.head_weights_f32,
             );

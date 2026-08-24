@@ -257,8 +257,13 @@ impl<T: FftFloat> FftPlanner<T> {
 
         // 1. Bit-reversal permutation
         for i in 0..n {
+            // SAFETY: `i < n` (loop bound) and `self.bit_reverse.len() == n`
+            // (allocated as `vec![0usize; n]` at construction).
             let j = unsafe { *self.bit_reverse.get_unchecked(i) };
             if i < j {
+                // SAFETY: `i < j < n` and `re`/`im` have length `n`
+                // (`process_unchecked` precondition), so both swaps are
+                // in bounds.
                 unsafe {
                     std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
                     std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
@@ -267,6 +272,9 @@ impl<T: FftFloat> FftPlanner<T> {
         }
 
         // 2. Iterative DIT Radix-2 butterflies
+        // SAFETY: `re.len() == im.len() == self.n` and all internal twiddle
+        // tables are initialized for size `self.n` (preconditions established
+        // by the `assert_eq!` in `process`/`process_inverse`).
         unsafe { self.run_butterflies_unchecked(re, im, inverse) };
 
         // 3. Scale by 1/n (inverse only)
@@ -301,9 +309,17 @@ impl<T: FftFloat> FftPlanner<T> {
             if core::mem::size_of::<T>() == core::mem::size_of::<f32>()
                 && half >= Self::AVX2_SIMD_WIDTH
             {
+                // SAFETY: `stage_idx < num_stages == self.stage_offsets.len()`
+                // (one entry per butterfly stage).
                 let tw_offset = unsafe { *self.stage_offsets.get_unchecked(stage_idx) };
+                // SAFETY: `tw_offset + half <= self.stage_twiddle_re.len()`
+                // (each stage's twiddles are laid out contiguously), so the
+                // pointer stays within the allocation.
                 let tw_re_ptr =
                     unsafe { self.stage_twiddle_re.as_ptr().add(tw_offset) as *const f32 };
+                // SAFETY: `tw_offset + half <= self.stage_twiddle_im.len()`
+                // (each stage's twiddles are laid out contiguously), so the
+                // pointer stays within the allocation.
                 let tw_im_ptr =
                     unsafe { self.stage_twiddle_im.as_ptr().add(tw_offset) as *const f32 };
                 let re_ptr = re.as_mut_ptr() as *mut f32;
@@ -318,24 +334,39 @@ impl<T: FftFloat> FftPlanner<T> {
                 for k in (0..n).step_by(len) {
                     for j in 0..half {
                         let w_idx = j * step;
+                        // SAFETY: `w_idx = j * step < n / 2 == self.twiddle_re.len()`
+                        // since `j < half` and `step = n / len`.
                         let w_re = unsafe { *self.twiddle_re.get_unchecked(w_idx) };
                         let w_im = if inverse {
+                            // SAFETY: `w_idx` in bounds as for `w_re` above.
                             unsafe { -*self.twiddle_im.get_unchecked(w_idx) }
                         } else {
+                            // SAFETY: `w_idx` in bounds as for `w_re` above.
                             unsafe { *self.twiddle_im.get_unchecked(w_idx) }
                         };
 
                         let idx1 = k + j;
                         let idx2 = k + j + half;
 
+                        // SAFETY: `idx2 = k + j + half <= n - 1` because
+                        // `k <= n - len` (loop bound) and `j < half`; `re` has
+                        // length `n`.
                         let r2 = unsafe { *re.get_unchecked(idx2) };
+                        // SAFETY: same bound as `r2`: `idx2 <= n - 1`, and
+                        // `im` has length `n`.
                         let i2 = unsafe { *im.get_unchecked(idx2) };
+                        // SAFETY: `idx1 = k + j <= n - 1` (loop bounds); `re`
+                        // has length `n`.
                         let r1 = unsafe { *re.get_unchecked(idx1) };
+                        // SAFETY: same bound as `r1`: `idx1 <= n - 1`, and
+                        // `im` has length `n`.
                         let i1 = unsafe { *im.get_unchecked(idx1) };
 
                         let t_re = w_re.mul_add(r2, -w_im * i2);
                         let t_im = w_re.mul_add(i2, w_im * r2);
 
+                        // SAFETY: `idx1`/`idx2 <= n - 1` (same bounds as the
+                        // reads above), so the unchecked writes stay in bounds.
                         unsafe {
                             *re.get_unchecked_mut(idx2) = r1 - t_re;
                             *im.get_unchecked_mut(idx2) = i1 - t_im;

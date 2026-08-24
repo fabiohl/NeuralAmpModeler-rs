@@ -20,6 +20,9 @@ pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;
 
+    // SAFETY: `len = min(a.len(), b.len())` and the loop guards `i + 32`,
+    // `i + 16`, `i + 8`, and `i < len` keep every 8-lane load and the scalar
+    // tail within both slices.
     unsafe {
         // Prepare 4 "accumulators" (sum buckets) to work in parallel.
         // This allows the processor to do multiple sums at the same time without waiting for each to finish.

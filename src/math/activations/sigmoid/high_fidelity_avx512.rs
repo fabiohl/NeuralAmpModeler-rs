@@ -69,6 +69,9 @@ pub unsafe fn simd_sigmoid_poly_avx512(x: __m512) -> __m512 {
 
     let x = _mm512_max_ps(clamp_lo, _mm512_min_ps(clamp_hi, x));
     let neg_x = _mm512_sub_ps(zero, x);
+    // SAFETY: `simd_exp_poly_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let exp_neg_x = unsafe { simd_exp_poly_avx512(neg_x) };
     let den = _mm512_add_ps(one, exp_neg_x);
     let sig = _mm512_div_ps(one, den);
@@ -85,6 +88,9 @@ pub unsafe fn sigmoid_poly_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         crate::activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(slice.as_ptr().add(i));

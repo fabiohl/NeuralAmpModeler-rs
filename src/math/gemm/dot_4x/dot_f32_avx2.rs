@@ -44,6 +44,9 @@ pub unsafe fn dot_product_4x_f32_avx2(weights: &[[f32; 4]], state: &[f32]) -> [f
     let mut acc3 = _mm_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len().min(weights.len())` (the `dot4x_simd4!`
+    // guard keeps `i + 4`/`i < len`), so `state.get_unchecked(i)` and the
+    // 4-f32 loads at `weights[i]` are in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -121,6 +124,9 @@ pub unsafe fn dot_product_4x_f32_dual_avx2(
     let mut acc3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `dot4x_simd4!` guard keeps `i < len`, so all
+    // unchecked reads and 4-f32 loads stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0_128 = _mm_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -205,6 +211,9 @@ pub unsafe fn dot_product_4x_f32_accumulate_avx2(
     let mut acc3 = _mm_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len().min(weights.len())` (the `dot4x_simd4!`
+    // guard keeps `i + 4`/`i < len`), so `state.get_unchecked(i)` and the
+    // 4-f32 loads at `weights[i]` are in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0 = _mm_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -278,6 +287,9 @@ pub unsafe fn dot_product_4x_f32_dual_accumulate_avx2(
     let mut acc3 = _mm256_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the `dot4x_simd4!` guard keeps `i < len`, so all
+    // unchecked reads and 4-f32 loads stay in bounds.
     unsafe {
         dot4x_simd4!(i, len, {
             let w0_128 = _mm_loadu_ps(weights.as_ptr().add(i) as *const f32);

@@ -31,7 +31,11 @@ fn test_dot_8x_f32_avx2_vs_scalar() {
     ];
     for &len in &sizes {
         let (weights, state) = make_f32_8x_data(len);
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let expected = unsafe { scalar_ref::dot_product_8x_f32_scalar(&weights, &state) };
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_avx2(&weights, &state) };
         for j in 0..8 {
             assert!(
@@ -51,7 +55,11 @@ fn test_dot_8x_f32_avx2_stress() {
     let lengths = [1024, 2048, 4096, 8192];
     for &len in &lengths {
         let (weights, state) = make_f32_8x_data(len);
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let expected = unsafe { scalar_ref::dot_product_8x_f32_scalar(&weights, &state) };
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_avx2(&weights, &state) };
         for j in 0..8 {
             assert!(
@@ -73,11 +81,17 @@ fn test_dot_8x_f32_avx2_decompose_vs_4x() {
     ];
     for &len in &sizes {
         let (weights, state) = make_f32_8x_data(len);
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let result_8x = unsafe { dot_product_8x_f32_avx2(&weights, &state) };
 
         let w0: Vec<[f32; 4]> = weights.iter().map(|w| [w[0], w[1], w[2], w[3]]).collect();
         let w1: Vec<[f32; 4]> = weights.iter().map(|w| [w[4], w[5], w[6], w[7]]).collect();
+        // SAFETY: `w0` was derived from `weights` and has the same length `len` as `state`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let r0 = unsafe { crate::math::gemm::dot_4x::dot_product_4x_f32_avx2(&w0, &state) };
+        // SAFETY: `w1` was derived from `weights` and has the same length `len` as `state`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let r1 = unsafe { crate::math::gemm::dot_4x::dot_product_4x_f32_avx2(&w1, &state) };
         for j in 0..4 {
             assert!(
@@ -116,7 +130,13 @@ fn test_dot_8x_f32_dual_avx2_vs_scalar() {
     for &len in &sizes {
         let (weights, state_f0, state_f1) = make_f32_8x_dual_data(len);
         let expected =
+            // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with
+            // equal length `len`, satisfying `weights.len() >= state_f0.len()` and
+            // `weights.len() >= state_f1.len()`; all buffers outlive the call.
             unsafe { scalar_ref::dot_product_8x_f32_dual_scalar(&weights, &state_f0, &state_f1) };
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with
+        // equal length `len`, satisfying `weights.len() >= state_f0.len()` and
+        // `weights.len() >= state_f1.len()`; all buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_dual_avx2(&weights, &state_f0, &state_f1) };
         for j in 0..8 {
             assert!(
@@ -145,7 +165,13 @@ fn test_dot_8x_f32_dual_avx2_stress() {
     for &len in &lengths {
         let (weights, state_f0, state_f1) = make_f32_8x_dual_data(len);
         let expected =
+            // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with
+            // equal length `len`, satisfying `weights.len() >= state_f0.len()` and
+            // `weights.len() >= state_f1.len()`; all buffers outlive the call.
             unsafe { scalar_ref::dot_product_8x_f32_dual_scalar(&weights, &state_f0, &state_f1) };
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with
+        // equal length `len`, satisfying `weights.len() >= state_f0.len()` and
+        // `weights.len() >= state_f1.len()`; all buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_dual_avx2(&weights, &state_f0, &state_f1) };
         for j in 0..8 {
             assert!(
@@ -175,8 +201,15 @@ fn test_dot_8x_f32_dual_avx2_single_vs_dual_invariance() {
     ];
     for &len in &sizes {
         let (weights, state_f0, state_f1) = make_f32_8x_dual_data(len);
+        // SAFETY: `weights` and `state_f0` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let single_f0 = unsafe { dot_product_8x_f32_avx2(&weights, &state_f0) };
+        // SAFETY: `weights` and `state_f1` were allocated in this test with equal length `len`,
+        // satisfying the kernel contract `weights.len() >= state.len()`; both buffers outlive the call.
         let single_f1 = unsafe { dot_product_8x_f32_avx2(&weights, &state_f1) };
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with
+        // equal length `len`, satisfying `weights.len() >= state_f0.len()` and
+        // `weights.len() >= state_f1.len()`; all buffers outlive the call.
         let dual = unsafe { dot_product_8x_f32_dual_avx2(&weights, &state_f0, &state_f1) };
         for j in 0..8 {
             assert!(
@@ -214,7 +247,13 @@ fn test_dot_8x_f32_accumulate_avx2_vs_scalar() {
     for &len in &sizes {
         let (weights, state) = make_f32_8x_data(len);
         let expected =
+            // SAFETY: `weights` and `state` were allocated in this test with equal length `len`
+            // and `init` is a fixed `[f32; 8]`, satisfying `weights.len() >= state.len()`;
+            // all buffers outlive the call.
             unsafe { scalar_ref::dot_product_8x_f32_accumulate_scalar(&weights, &state, &init) };
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`
+        // and `init` is a fixed `[f32; 8]`, satisfying `weights.len() >= state.len()`;
+        // all buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_accumulate_avx2(&weights, &state, &init) };
         for j in 0..8 {
             assert!(
@@ -236,7 +275,13 @@ fn test_dot_8x_f32_accumulate_avx2_stress() {
     for &len in &lengths {
         let (weights, state) = make_f32_8x_data(len);
         let expected =
+            // SAFETY: `weights` and `state` were allocated in this test with equal length `len`
+            // and `init` is a fixed `[f32; 8]`, satisfying `weights.len() >= state.len()`;
+            // all buffers outlive the call.
             unsafe { scalar_ref::dot_product_8x_f32_accumulate_scalar(&weights, &state, &init) };
+        // SAFETY: `weights` and `state` were allocated in this test with equal length `len`
+        // and `init` is a fixed `[f32; 8]`, satisfying `weights.len() >= state.len()`;
+        // all buffers outlive the call.
         let result = unsafe { dot_product_8x_f32_accumulate_avx2(&weights, &state, &init) };
         for j in 0..8 {
             assert!(
@@ -266,11 +311,19 @@ fn test_dot_8x_f32_dual_accumulate_avx2_vs_scalar() {
     let (init_f0, init_f1) = make_f32_init_dual_8();
     for &len in &sizes {
         let (weights, state_f0, state_f1) = make_f32_8x_dual_data(len);
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with equal
+        // length `len` and `init_f0`/`init_f1` are fixed `[f32; 8]`, satisfying
+        // `weights.len() >= state_f0.len()` and `weights.len() >= state_f1.len()`;
+        // all buffers outlive the call.
         let expected = unsafe {
             scalar_ref::dot_product_8x_f32_dual_accumulate_scalar(
                 &weights, &state_f0, &state_f1, &init_f0, &init_f1,
             )
         };
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with equal
+        // length `len` and `init_f0`/`init_f1` are fixed `[f32; 8]`, satisfying
+        // `weights.len() >= state_f0.len()` and `weights.len() >= state_f1.len()`;
+        // all buffers outlive the call.
         let result = unsafe {
             dot_product_8x_f32_dual_accumulate_avx2(
                 &weights, &state_f0, &state_f1, &init_f0, &init_f1,
@@ -303,11 +356,19 @@ fn test_dot_8x_f32_dual_accumulate_avx2_stress() {
     let (init_f0, init_f1) = make_f32_init_dual_8();
     for &len in &lengths {
         let (weights, state_f0, state_f1) = make_f32_8x_dual_data(len);
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with equal
+        // length `len` and `init_f0`/`init_f1` are fixed `[f32; 8]`, satisfying
+        // `weights.len() >= state_f0.len()` and `weights.len() >= state_f1.len()`;
+        // all buffers outlive the call.
         let expected = unsafe {
             scalar_ref::dot_product_8x_f32_dual_accumulate_scalar(
                 &weights, &state_f0, &state_f1, &init_f0, &init_f1,
             )
         };
+        // SAFETY: `weights`, `state_f0`, and `state_f1` were allocated in this test with equal
+        // length `len` and `init_f0`/`init_f1` are fixed `[f32; 8]`, satisfying
+        // `weights.len() >= state_f0.len()` and `weights.len() >= state_f1.len()`;
+        // all buffers outlive the call.
         let result = unsafe {
             dot_product_8x_f32_dual_accumulate_avx2(
                 &weights, &state_f0, &state_f1, &init_f0, &init_f1,

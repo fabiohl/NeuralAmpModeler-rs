@@ -36,6 +36,9 @@ pub unsafe fn dot_product_16x_f32_avx512(weights: &[[f32; 16]], state: &[f32]) -
     let mut acc1 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
+    // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
+    // 16-f32 `_mm512_loadu_ps` loads from `weights[i]` stay in bounds.
     unsafe {
         while i + 2 <= len {
             let w0 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -97,6 +100,9 @@ pub unsafe fn dot_product_16x_f32_dual_avx512(
     let mut acc_f1_1 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the loop guards `i + 2`/`i < len` bound all unchecked
+    // reads and 16-f32 loads.
     unsafe {
         while i + 2 <= len {
             let w0 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -160,6 +166,9 @@ pub unsafe fn dot_product_16x_f32_accumulate_avx512(
     let mut acc1 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
+    // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
+    // 16-f32 `_mm512_loadu_ps` loads from `weights[i]` stay in bounds.
     unsafe {
         while i + 2 <= len {
             let w0 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);
@@ -221,6 +230,9 @@ pub unsafe fn dot_product_16x_f32_dual_accumulate_avx512(
     let mut acc_f1_1 = _mm512_setzero_ps();
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
+    // `state_f1.len()`; the loop guards `i + 2`/`i < len` bound all unchecked
+    // reads and 16-f32 loads.
     unsafe {
         while i + 2 <= len {
             let w0 = _mm512_loadu_ps(weights.as_ptr().add(i) as *const f32);

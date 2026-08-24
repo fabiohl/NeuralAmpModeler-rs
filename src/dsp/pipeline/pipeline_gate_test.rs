@@ -84,6 +84,9 @@ fn test_hotpath_gate_closed_and_silence() {
         process_mono: &mut process_mono,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
+        // SAFETY: `bridge` is a heap-allocated `Box` kept alive for the whole test
+        // function, outliving `ctx` and the `capture_dsp_pipeline` call, so the raw
+        // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
     };
@@ -210,6 +213,9 @@ fn test_hotpath_gate_fading() {
         process_mono: &mut process_mono,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
+        // SAFETY: `bridge` is a heap-allocated `Box` kept alive for the whole test
+        // function, outliving `ctx` and the `capture_dsp_pipeline` call, so the raw
+        // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
     };
@@ -318,6 +324,9 @@ fn test_hotpath_clipping_detection() {
         process_mono: &mut process_mono,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
+        // SAFETY: `bridge` is a heap-allocated `Box` kept alive for the whole test
+        // function, outliving `ctx` and the `capture_dsp_pipeline` call, so the raw
+        // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
     };
@@ -421,6 +430,9 @@ fn test_hotpath_dropped_frames() {
         process_mono: &mut process_mono,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
+        // SAFETY: `bridge` is a heap-allocated `Box` kept alive for the whole test
+        // function, outliving `ctx` and the `capture_dsp_pipeline` call, so the raw
+        // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
     };
@@ -471,6 +483,9 @@ fn test_hotpath_dropped_frames() {
         process_mono: &mut process_mono2,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
+        // SAFETY: `bridge` is a heap-allocated `Box` kept alive for the whole test
+        // function, outliving `ctx` and the `capture_dsp_pipeline` call, so the raw
+        // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
     };

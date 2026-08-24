@@ -70,6 +70,13 @@ impl LstmModelDyn {
         if self.layers.is_empty() {
             return;
         }
+        // SAFETY: `layers` is non-empty (early return above), so `layers_ptr`
+        // points to a live Vec of `n_layers` elements; the indices 0, `i-1`, `i`
+        // and `n_layers-1` for `i in 1..n_layers` are all in bounds, and each
+        // deref aliases a distinct layer slot. The caller guarantees
+        // `output.len() >= input.len()`, so every `output[s]` write (s <
+        // `input.len()`) is in bounds; `input[s]` is read in bounds by iteration.
+        // AVX2+FMA+F16C are guaranteed by `#[target_feature]`.
         unsafe {
             let n_layers = self.layers.len();
             debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
@@ -86,7 +93,7 @@ impl LstmModelDyn {
 
                 let last = &*layers_ptr.add(n_layers - 1);
                 let h = last.get_hidden_state();
-                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                     h,
                     &self.head_weights_f32,
                 );
@@ -109,6 +116,9 @@ impl LstmModelDyn {
         let n = input.len().min(output.len());
         let input = &input[..n];
         let output = &mut output[..n];
+        // SAFETY: the slices were re-sliced to the common length `n`, so
+        // `input.len() == output.len()`, satisfying `process_avx2`'s length
+        // contract; the AVX2 kernel is reachable only on x86-64-v3 targets.
         unsafe {
             self.process_avx2(input, output);
         }
@@ -128,6 +138,11 @@ impl LstmModelDyn {
         let layers_ptr = self.layers.as_mut_ptr();
 
         for s in 0..n {
+            // SAFETY: `layers` is non-empty (early return above), so `layers_ptr`
+            // points to a live Vec of `n_layers` elements; indices 0, `i-1`, `i`
+            // and `n_layers-1` for `i in 1..n_layers` are in bounds. `s < n <=
+            // input.len() = output.len()` (clamped above), so the reads/writes on
+            // the slice bounds are in bounds.
             unsafe {
                 (*layers_ptr).process_sample_scalar(&[input[s]]);
 
@@ -140,7 +155,7 @@ impl LstmModelDyn {
 
                 let last = &*layers_ptr.add(n_layers - 1);
                 let hidden_last = last.get_hidden_state();
-                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan(
+                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                     hidden_last,
                     &self.head_weights_f32,
                 );

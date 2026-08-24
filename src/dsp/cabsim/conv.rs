@@ -70,10 +70,6 @@ pub struct ConvEngine {
     input_buf: AlignedVec<f32>,
     /// Native RFFT planner (handles both forward RFFT and inverse IRFFT).
     rfft: RfftPlanner<f32>,
-    /// Forward RFFT output: real part (length = `n_bins`).
-    fft_buf_re: AlignedVec<f32>,
-    /// Forward RFFT output: imaginary part (length = `n_bins`).
-    fft_buf_im: AlignedVec<f32>,
     /// Accumulation buffer in frequency domain, real part (length = `n_bins`).
     acc_re: AlignedVec<f32>,
     /// Accumulation buffer imaginary part (length = `n_bins`).
@@ -149,8 +145,6 @@ impl ConvEngine {
 
         // Pre-allocate runtime buffers
         let input_buf = AlignedVec::new(fft_size, 0.0_f32)?;
-        let fft_buf_re = AlignedVec::new(n_bins, 0.0_f32)?;
-        let fft_buf_im = AlignedVec::new(n_bins, 0.0_f32)?;
         let acc_re = AlignedVec::new(n_bins, 0.0_f32)?;
         let acc_im = AlignedVec::new(n_bins, 0.0_f32)?;
         let output_buf = AlignedVec::new(fft_size, 0.0_f32)?;
@@ -182,8 +176,6 @@ impl ConvEngine {
             fdl_idx: 0,
             input_buf,
             rfft,
-            fft_buf_re,
-            fft_buf_im,
             acc_re,
             acc_im,
             output_buf,
@@ -308,18 +300,20 @@ impl ConvEngine {
             );
         }
 
-        // ── Step 2: Forward RFFT of input segment ──
-        self.rfft
-            .process_forward(&self.input_buf, &mut self.fft_buf_re, &mut self.fft_buf_im);
-
-        // ── Step 3: Store in FDL (circular buffer) ──
+        // ── Step 2: Forward RFFT of input segment, written directly into the
+        //            FDL slot (P-05 / T5.2) ──
+        // The FDL write index advances after the MAC step, so the slot
+        // `[fdl_base, fdl_base + n_bins)` is the destination of this block's
+        // spectrum: writing the RFFT output straight into it eliminates the
+        // intermediate `fft_buf_re/im` copy from the hot path.
         let fdl_base = self.fdl_idx * self.n_bins;
-        self.fdl_re[fdl_base..fdl_base + self.n_bins]
-            .copy_from_slice(&self.fft_buf_re[..self.n_bins]);
-        self.fdl_im[fdl_base..fdl_base + self.n_bins]
-            .copy_from_slice(&self.fft_buf_im[..self.n_bins]);
+        self.rfft.process_forward(
+            &self.input_buf,
+            &mut self.fdl_re[fdl_base..fdl_base + self.n_bins],
+            &mut self.fdl_im[fdl_base..fdl_base + self.n_bins],
+        );
 
-        // ── Step 4: Frequency-domain MAC over all partitions ──
+        // ── Step 3: Frequency-domain MAC over all partitions ──
         let p_count = self.num_partitions;
         let n_bins = self.n_bins;
 
@@ -360,14 +354,14 @@ impl ConvEngine {
             }
         }
 
-        // ── Step 5: Inverse RFFT (complex → real) ──
+        // ── Step 4: Inverse RFFT (complex → real) ──
         // process_inverse takes in_re/in_im of length N/2+1 (n_bins) and
         // produces real output of length N (fft_size). The inverse scaling
         // is handled internally by the IRFFT algorithm.
         self.rfft
             .process_inverse(&mut self.acc_re, &mut self.acc_im, &mut self.output_buf);
 
-        // ── Step 6: Extract valid output (overlap-save discard) ──
+        // ── Step 5: Extract valid output (overlap-save discard) ──
         // SAFETY: the buffer contract guard at the top guarantees `output`
         // has at least `self.partition_size` elements. `out_start +
         // partition_size == fft_size`, so the source range is within
@@ -381,7 +375,7 @@ impl ConvEngine {
             );
         }
 
-        // ── Step 7: Advance FDL write index ──
+        // ── Step 6: Advance FDL write index ──
         self.fdl_idx += 1;
         if self.fdl_idx >= p_count {
             self.fdl_idx = 0;

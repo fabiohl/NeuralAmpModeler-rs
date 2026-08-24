@@ -69,6 +69,8 @@ fn test_a2_conv1d_kernel6_parity_single_frame() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -135,6 +137,8 @@ fn test_a2_conv1d_kernel15_parity_single_frame() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -201,6 +205,8 @@ fn test_a2_conv1d_first_layer_in_ch_1() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -275,6 +281,8 @@ fn test_a2_conv1d_with_mixin_kernel6() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements and `mixin` has `out_ch` elements; all outlive the call; AVX2+FMA guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(
             &layer_buffer,
@@ -355,6 +363,8 @@ fn test_a2_conv1d_all_dilations_kernel6() {
         let mut simd_out = vec![0.0f32; out_ch];
         let mut scalar_out = vec![0.0f32; out_ch];
 
+        // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has
+        // `out_ch` elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
         unsafe {
             conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
         }
@@ -423,6 +433,8 @@ fn test_a2_conv1d_block_processing_kernel15() {
         let mut simd_block = vec![0.0f32; num_frames * out_ch];
         let mut scalar_block = vec![0.0f32; num_frames * out_ch];
 
+        // SAFETY: `layer_buffer` covers `buffer_start + num_frames` plus kernel*dilation lookback,
+        // `simd_block` has `num_frames * out_ch` elements; both outlive the call; AVX2+FMA guaranteed by `Avx2Math`.
         unsafe {
             conv.process_block::<crate::math::common::Avx2Math>(
                 &layer_buffer,
@@ -498,6 +510,8 @@ fn test_a2_conv1d_kernel6_non_multiple_of_4_output() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -564,6 +578,8 @@ fn test_a2_conv1d_grouped_groups2_parity() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -630,6 +646,8 @@ fn test_a2_conv1d_grouped_depthwise_parity() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements, both outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut simd_out, frame_idx, None);
     }
@@ -729,6 +747,8 @@ fn test_a2_conv1d_grouped_with_mixin() {
     let mut simd_out = vec![0.0f32; out_ch];
     let mut scalar_out = vec![0.0f32; out_ch];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `simd_out` has `out_ch`
+    // elements and `mixin` has `out_ch` elements; all outlive the call; AVX2+FMA guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_frame::<Avx2Math>(
             &layer_buffer,

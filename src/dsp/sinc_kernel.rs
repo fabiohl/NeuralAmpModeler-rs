@@ -107,6 +107,10 @@ impl PolyphaseBank {
     #[inline]
     pub fn phase_ptr(&self, phase: usize) -> *const f32 {
         debug_assert!(phase < NUM_PHASES);
+        // SAFETY: the fn contract requires `phase < NUM_PHASES`, so the offset
+        // `phase * taps_per_phase` stays within the `NUM_PHASES * taps_per_phase`
+        // element `coeffs` allocation: the largest offset is
+        // `(NUM_PHASES - 1) * taps_per_phase`, still inside the buffer.
         unsafe { self.coeffs.as_ptr().add(phase * self.taps_per_phase) }
     }
 

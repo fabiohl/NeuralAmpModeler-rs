@@ -43,6 +43,9 @@ impl DelayLine {
     pub fn push(&mut self, sample: f32) {
         let pos = self.pos;
         debug_assert!(pos < TAPS_PER_PHASE);
+        // SAFETY: `pos < TAPS_PER_PHASE` (debug_assert above and maintained by the
+        // wrap at the end of this fn), and `buf` has `2 * TAPS_PER_PHASE` elements
+        // (DELAY_LINE_LEN), so both `get_unchecked_mut` indices are in bounds.
         unsafe {
             *self.buf.get_unchecked_mut(pos) = sample;
             *self.buf.get_unchecked_mut(pos + TAPS_PER_PHASE) = sample;
@@ -58,6 +61,8 @@ impl DelayLine {
     pub fn window_ptr(&self) -> *const f32 {
         debug_assert!(self.pos < TAPS_PER_PHASE);
         debug_assert!(self.pos + TAPS_PER_PHASE <= DELAY_LINE_LEN);
+        // SAFETY: `pos + TAPS_PER_PHASE <= buf.len()` (debug_asserts above), so the
+        // pointer is non-null, aligned to f32, and valid for `TAPS_PER_PHASE` reads.
         unsafe { self.buf.as_ptr().add(self.pos) }
     }
 }

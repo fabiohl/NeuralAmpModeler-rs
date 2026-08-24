@@ -81,6 +81,13 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
             ..
         } = ctx;
 
+        // SAFETY: `num_frames` is clamped to `WAVENET_MAX_NUM_FRAMES` (F-10) and the
+        // `debug_assert!`s below bound `num_frames * CH` within `scratch_mixin`/`scratch_conv`
+        // (pre-allocated as `CH * WAVENET_MAX_NUM_FRAMES`), so the `get_unchecked` scratch slices
+        // and the `layer_buffer` residual slice (covered by the caller contract on
+        // `buffer_start`/`num_frames`) are in bounds; the inner `unsafe fn` calls
+        // (`process_block`, dual/single-frame conv, activation and residual kernels) are reached
+        // under those same validated preconditions with `M` dispatched by runtime CPUID checks.
         unsafe {
             // F-10: fail-closed clamp — never panic on an oversized `num_frames`,
             // truncate it to the pre-allocated scratch capacity instead. The

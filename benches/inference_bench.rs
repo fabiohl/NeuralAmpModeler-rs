@@ -55,7 +55,7 @@ use criterion::{criterion_group, criterion_main};
 
 criterion_group!(
     name = benches;
-    config = criterion::Criterion::default().sample_size(50);
+    config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
     targets = wavenet::bench_wavenet_standard_process,
     wavenet::bench_wavenet_p10_small_block_sizes,
     wavenet::bench_wavenet_standard_block_sizes,

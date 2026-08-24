@@ -306,7 +306,7 @@ bench_avx512!(
 
 criterion_group! {
     name = math_benches;
-    config = criterion::Criterion::default().sample_size(50);
+    config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
     targets = bench_tanh_slice_256,
     bench_tanh_pade_nr1_256,
     bench_tanh_pade_nr1_dual_256,

@@ -109,6 +109,9 @@ impl ResamplerCore {
                         samples_written: out_idx,
                     };
                 }
+                // SAFETY: the `in_idx >= n_in` early return above guarantees
+                // `in_idx < n_in = min(in_l.len(), in_r.len())`, so both
+                // `get_unchecked` reads are in bounds.
                 unsafe {
                     self.state_l.push(*in_l.get_unchecked(in_idx));
                     self.state_r.push(*in_r.get_unchecked(in_idx));
@@ -133,6 +136,11 @@ impl ResamplerCore {
 
             // ── Step 4: Convolve with current and next polyphase banks, then
             //    linearly interpolate between the two results for smooth output ──
+            // SAFETY: `phase_idx < NUM_PHASES` (upper 24 bits of `phase_accum`,
+            // maintained < NUM_PHASES by the loop), so both `phase_ptr` calls are
+            // valid for `taps_per_phase` coeffs; `window_ptr()` returns a pointer
+            // to `taps_per_phase` contiguous samples in the double-buffer delay
+            // line; `M` is selected by ISA dispatch matching its target features.
             let (y_l, y_r) = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
@@ -146,6 +154,8 @@ impl ResamplerCore {
             };
 
             // ── Step 5: Write interpolated output and advance phase ──
+            // SAFETY: `out_idx < n_out_max = min(out_l.len(), out_r.len())`
+            // (while condition above), so both writes are in bounds.
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_r;
@@ -188,6 +198,8 @@ impl ResamplerCore {
                         samples_written: out_idx,
                     };
                 }
+                // SAFETY: the `in_idx >= n_in` early return above guarantees
+                // `in_idx < n_in = in_l.len()` on the mono path.
                 unsafe {
                     self.state_l.push(*in_l.get_unchecked(in_idx));
                 }
@@ -208,6 +220,9 @@ impl ResamplerCore {
             };
 
             // ── Step 3: Dual-phase convolution + linear interpolation (mono) ──
+            // SAFETY: `phase_idx < NUM_PHASES` (loop invariant), so both `phase_ptr`
+            // calls are valid for `taps_per_phase` coeffs; `window_ptr()` points to
+            // `taps_per_phase` contiguous samples; `M` is ISA-dispatched.
             let y_l = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
@@ -219,6 +234,8 @@ impl ResamplerCore {
             };
 
             // ── Step 4: Write mono output to both channels and advance phase ──
+            // SAFETY: `out_idx < n_out_max = min(out_l.len(), out_r.len())`
+            // (while condition above), so both writes are in bounds.
             unsafe {
                 *out_l.get_unchecked_mut(out_idx) = y_l;
                 *out_r.get_unchecked_mut(out_idx) = y_l;

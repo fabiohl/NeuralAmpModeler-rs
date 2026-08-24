@@ -62,6 +62,12 @@ impl Conv1dDyn {
             let in_start_f0 = ((idx_f0 as isize) + offset).max(0) as usize * self.in_ch;
             let in_start_f1 = ((idx_f1 as isize) + offset).max(0) as usize * self.in_ch;
 
+            // SAFETY: `k < k_limit <= MAX_KERNEL` so `tap_ptrs_f0[k]`/`tap_ptrs_f1[k]`
+            // are in-bounds of the fixed-size arrays. The offsets are `.max(0)`-clamped
+            // (F-01), so `in_start_*` is never produced by a negative `as usize` wrap;
+            // the caller guarantees `idx_f0`/`idx_f1` are valid frame indices and
+            // `layer_buffer` is large enough for `in_start_* + in_ch`, keeping both
+            // `add` results inside the buffer. Prefetch calls only read hints.
             unsafe {
                 *tap_f0 = layer_buffer.as_ptr().add(in_start_f0);
                 *tap_f1 = layer_buffer.as_ptr().add(in_start_f1);
@@ -128,16 +134,27 @@ impl Conv1dDyn {
                     }
                     for k in 0..kernel {
                         let w_start = b * kernel * in_ch * 16 + k * in_ch * 16;
+                        // SAFETY: `w_start + in_ch*16 <= self.weights.len()` by the
+                        // zero-padded interleaved weights layout (same invariant as the
+                        // single-frame path, F-16 debug_assert); `in_ch` `[f32; 16]`
+                        // chunks are therefore valid and aligned to `[f32; 16]`.
                         let w_slice: &[[f32; 16]] = unsafe {
                             let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                             core::slice::from_raw_parts(ptr, in_ch)
                         };
+                        // SAFETY: `k < kernel`, and `tap_ptrs_f0[k]`/`tap_ptrs_f1[k]`
+                        // were set above to point `in_ch` elements inside `layer_buffer`.
                         let tap_f0 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f0.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: same as `tap_f0` — pointer stored in `tap_ptrs_f1[k]`
+                        // points `in_ch` elements inside `layer_buffer`.
                         let tap_f1 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f1.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: `w_slice`, `tap_f0`, `tap_f1` are valid `in_ch`-element
+                        // slices; the SIMD backend is reached only after dispatch validated
+                        // the required target features for `M`.
                         let (r_f0, r_f1) = unsafe {
                             M::dot_product_16x_f32_dual_accumulate(
                                 w_slice, tap_f0, tap_f1, &acc_f0, &acc_f1,
@@ -146,6 +163,9 @@ impl Conv1dDyn {
                         acc_f0 = r_f0;
                         acc_f1 = r_f1;
                     }
+                    // SAFETY: `out_c + j < self.out_ch` (j < w <= out_ch - out_c) and the
+                    // caller guarantees `out_f0.len()`/`out_f1.len()` >= `out_ch`, so both
+                    // `get_unchecked_mut` indices are in bounds.
                     unsafe {
                         for (j, (&v_f0, &v_f1)) in
                             acc_f0.iter().zip(acc_f1.iter()).enumerate().take(w)
@@ -193,16 +213,24 @@ impl Conv1dDyn {
                     }
                     for k in 0..kernel {
                         let w_start = b * kernel * in_ch * 8 + k * in_ch * 8;
+                        // SAFETY: `w_start + in_ch*8 <= self.weights.len()` by the
+                        // zero-padded interleaved weights layout (F-16 debug_assert);
+                        // `in_ch` `[f32; 8]` chunks are valid.
                         let w_slice: &[[f32; 8]] = unsafe {
                             let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                             core::slice::from_raw_parts(ptr, in_ch)
                         };
+                        // SAFETY: `k < kernel`; `tap_ptrs_f0[k]` points `in_ch` elements
+                        // inside `layer_buffer` (set above with the F-01 clamp).
                         let tap_f0 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f0.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: same as `tap_f0` for the second frame pointer.
                         let tap_f1 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f1.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: `w_slice`, `tap_f0`, `tap_f1` are valid `in_ch`-element
+                        // slices; `M` backend reached only after feature dispatch.
                         let (r_f0, r_f1) = unsafe {
                             M::dot_product_8x_f32_dual_accumulate(
                                 w_slice, tap_f0, tap_f1, &acc_f0, &acc_f1,
@@ -211,6 +239,8 @@ impl Conv1dDyn {
                         acc_f0 = r_f0;
                         acc_f1 = r_f1;
                     }
+                    // SAFETY: `out_c + j < self.out_ch` (j < w) and the caller guarantees
+                    // `out_f0.len()`/`out_f1.len()` >= `out_ch`, so the writes are in bounds.
                     unsafe {
                         for (j, (&v_f0, &v_f1)) in
                             acc_f0.iter().zip(acc_f1.iter()).enumerate().take(w)
@@ -258,16 +288,24 @@ impl Conv1dDyn {
                     }
                     for k in 0..kernel {
                         let w_start = b * kernel * in_ch * 4 + k * in_ch * 4;
+                        // SAFETY: `w_start + in_ch*4 <= self.weights.len()` by the
+                        // zero-padded interleaved weights layout (F-16 debug_assert);
+                        // `in_ch` `[f32; 4]` chunks are valid.
                         let w_slice: &[[f32; 4]] = unsafe {
                             let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                             core::slice::from_raw_parts(ptr, in_ch)
                         };
+                        // SAFETY: `k < kernel`; `tap_ptrs_f0[k]` points `in_ch` elements
+                        // inside `layer_buffer` (set above with the F-01 clamp).
                         let tap_f0 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f0.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: same as `tap_f0` for the second frame pointer.
                         let tap_f1 = unsafe {
                             core::slice::from_raw_parts(*tap_ptrs_f1.get_unchecked(k), in_ch)
                         };
+                        // SAFETY: `w_slice`, `tap_f0`, `tap_f1` are valid `in_ch`-element
+                        // slices; `M` backend reached only after feature dispatch.
                         let (r_f0, r_f1) = unsafe {
                             M::dot_product_4x_f32_dual_accumulate(
                                 w_slice, tap_f0, tap_f1, &acc_f0, &acc_f1,
@@ -276,6 +314,8 @@ impl Conv1dDyn {
                         acc_f0 = r_f0;
                         acc_f1 = r_f1;
                     }
+                    // SAFETY: `out_c + j < self.out_ch` (j < w) and the caller guarantees
+                    // `out_f0.len()`/`out_f1.len()` >= `out_ch`, so the writes are in bounds.
                     unsafe {
                         for (j, (&v_f0, &v_f1)) in
                             acc_f0.iter().zip(acc_f1.iter()).enumerate().take(w)

@@ -62,10 +62,18 @@ serde_json = "1.0.151"
 criterion = { version = "0.8.2", default-features = false }
 # Property-based testing for FastMath kernels and parser fuzzing.
 proptest = "1.11.0"
-# Model-checking for concurrency protocols.
-loom = "0.7"
 # Serialize test execution for global-state side effects.
 serial_test = { version = "4", features = ["async"] }
+
+# Loom model-checking for concurrency protocols.
+#
+# Declared as a target-gated *normal* dependency (not a dev-dependency) so the
+# `#[cfg(loom)]` atomic aliases in `src/common/atomics.rs` can resolve `loom::`
+# from library code when the crate is compiled with `--cfg loom` (see
+# `utils/tests-long.sh` phase 6). Under any normal build (no `--cfg loom`) this
+# entry is inert and `loom` is not even pulled into the dependency graph.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
 
 [[bench]]
 name = "inference_bench"

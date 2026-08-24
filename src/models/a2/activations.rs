@@ -95,18 +95,28 @@ impl ActivationType {
     #[inline(always)]
     pub unsafe fn apply_simd<M: SimdMath>(&self, data: &mut [f32]) {
         match self {
+            // SAFETY: `data` is a valid mutable slice from the caller of this
+            // `unsafe fn` and `M` matches the CPU ISA (top-level `dispatch_simd!`).
             Self::Tanh => unsafe {
                 M::tanh_slice(data);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::HardTanh => unsafe {
                 M::hard_tanh_slice(data);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::FastTanh => unsafe {
                 M::fast_tanh_slice(data);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::ReLU => unsafe {
                 M::relu_slice(data);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::LeakyReLU { negative_slope } => unsafe {
                 let slopes = [*negative_slope];
                 M::prelu_slice(data, &slopes);
@@ -115,13 +125,20 @@ impl ActivationType {
                 if negative_slopes.is_empty() {
                     return;
                 }
+                // SAFETY: `data` and `negative_slopes` are valid slices provided by
+                // the caller of this `unsafe fn`, and `M` matches the CPU ISA
+                // (guaranteed by the top-level `dispatch_simd!`).
                 unsafe {
                     M::prelu_slice(data, negative_slopes);
                 }
             }
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::Sigmoid => unsafe {
                 M::sigmoid_slice(data);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::SiLU => unsafe {
                 if crate::math::activations::activation_precision()
                     == crate::math::activations::ActivationPrecision::Standard
@@ -131,6 +148,8 @@ impl ActivationType {
                     M::silu_slice(data);
                 }
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::HardSwish => unsafe {
                 M::hard_swish_slice(data);
             },
@@ -139,9 +158,13 @@ impl ActivationType {
                 max_val,
                 min_slope,
                 max_slope,
+                // SAFETY: `data` is a valid mutable slice from the caller and `M`
+                // matches the CPU ISA (guaranteed by the top-level `dispatch_simd!`).
             } => unsafe {
                 M::leaky_hard_tanh_slice(data, *min_val, *max_val, *min_slope, *max_slope);
             },
+            // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
+            // (top-level `dispatch_simd!`).
             Self::Softsign => unsafe {
                 M::softsign_slice(data);
             },

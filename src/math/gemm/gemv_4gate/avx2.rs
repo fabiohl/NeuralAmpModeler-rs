@@ -39,6 +39,10 @@ pub unsafe fn gemv_4gate_avx2(
     let out_len = out_frame.len() / 4;
     let in_len = in_frame.len();
 
+    // SAFETY: the macro loops keep `out_c + 8 <= out_len` and `in_c + 2 <=
+    // in_len`; with `out_frame.len() == 4 * out_len`, `bias.len() >= 4 *
+    // out_len` (when `do_bias`), and each `w*.len() >= in_len * out_len`, all
+    // 8-lane loads/stores stay in bounds.
     unsafe {
         let mut out_c = 0;
         gemv_4gate_simd_outer_avx2!(

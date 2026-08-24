@@ -335,6 +335,9 @@ pub unsafe fn layer_forward_ch3_block(
         if let Some(ref mut film) = film.input_mixin_pre_film {
             let orig0 = cond0;
             let orig1 = cond1;
+            // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
+            // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
+            // this one element per lane.
             unsafe {
                 film.process(
                     core::slice::from_mut(&mut cond0),
@@ -512,6 +515,9 @@ pub unsafe fn layer_forward_ch3_block(
         let cond_for_mixin = if let Some(ref mut film) = film.input_mixin_pre_film {
             let mut modulated = cond_val;
             let orig = cond_val;
+            // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
+            // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
+            // this one element.
             unsafe {
                 film.process(
                     core::slice::from_mut(&mut modulated),

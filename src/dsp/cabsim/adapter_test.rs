@@ -579,3 +579,88 @@ fn contract_compliant_sub_blocks_do_not_raise_flag() {
     adapter.process_variable(&signal, &mut out, Some(&rt));
     assert!(!rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
 }
+
+#[test]
+fn in_place_matches_separate_buffer() {
+    // T5.1: `process_in_place` must produce bit-identical output to the
+    // separate-buffer `process_variable` for the same sub-block schedule
+    // (the FIFO paths are shared, so the only difference is the destination).
+    let ir = synth_ir(200, 500.0, 8.0, 48000);
+    let signal: Vec<f32> = (0..384)
+        .map(|i| {
+            let t = i as f32 / 48000.0;
+            (std::f32::consts::TAU * 220.0 * t).sin()
+                + 0.5 * (std::f32::consts::TAU * 660.0 * t).sin()
+        })
+        .collect();
+
+    let partition = 128;
+    let pattern = [17usize, 63, 48];
+
+    let mut adapter_ref = adapter_from_ir(&ir, partition);
+    let mut ref_out = Vec::new();
+    let mut pos = 0;
+    let mut sub_idx = 0;
+    while pos < signal.len() {
+        let sub = pattern[sub_idx % pattern.len()]
+            .min(partition)
+            .min(signal.len() - pos);
+        let mut buf = vec![0.0f32; sub];
+        adapter_ref.process_variable(&signal[pos..pos + sub], &mut buf, None);
+        ref_out.extend_from_slice(&buf);
+        pos += sub;
+        sub_idx += 1;
+    }
+
+    let mut adapter_ip = adapter_from_ir(&ir, partition);
+    let mut ip_out = Vec::new();
+    let mut pos = 0;
+    let mut sub_idx = 0;
+    while pos < signal.len() {
+        let sub = pattern[sub_idx % pattern.len()]
+            .min(partition)
+            .min(signal.len() - pos);
+        let mut buf = vec![0.0f32; sub];
+        buf[..sub].copy_from_slice(&signal[pos..pos + sub]);
+        adapter_ip.process_in_place(&mut buf, None);
+        ip_out.extend_from_slice(&buf);
+        pos += sub;
+        sub_idx += 1;
+    }
+
+    assert_eq!(ref_out.len(), ip_out.len());
+    for (i, (a, b)) in ref_out.iter().zip(ip_out.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "in-place vs separate-buffer mismatch at index {i}"
+        );
+    }
+}
+
+#[test]
+fn in_place_passthrough_identity() {
+    // T5.1: passthrough in-place must preserve the buffer unchanged (identity).
+    let engine = Box::new(ConvEngine::new(&[], 64).expect("construction should succeed"));
+    let mut adapter = CabSimAdapter::new(engine).expect("adapter construction should succeed");
+    assert!(adapter.is_passthrough());
+
+    let mut buf: Vec<f32> = (0..64).map(|i| (i as f32 * 0.01).sin()).collect();
+    let reference = buf.clone();
+    adapter.process_in_place(&mut buf, None);
+    assert_eq!(buf, reference, "passthrough in-place must preserve samples");
+}
+
+#[test]
+fn in_place_oversize_clamps_and_raises_flag() {
+    // T5.1: in-place oversize sub-block must clamp and raise the contract flag
+    // without panicking (same fail-closed contract as `process_variable`).
+    let ir = synth_ir(60, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    let rt = RtStatusFlags::new();
+    let mut buf = vec![0.0f32; 2 * partition];
+    adapter.process_in_place(&mut buf, Some(&rt));
+    assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+}

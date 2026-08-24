@@ -16,6 +16,8 @@ fn test_a2_max_flag_controlled() {
     let json = fs::read_to_string(A2_MAX_FIXTURE).expect("Fixture wavenet_a2_max.nam not found");
     let data = parse_nam_json(&json).expect("Failed to parse fixture");
 
+    // SAFETY: this test runs single-threaded and no other thread reads
+    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
     unsafe {
         std::env::remove_var("NAM_A2_MAX_UNLOCK");
     }
@@ -35,6 +37,8 @@ fn test_a2_max_flag_controlled() {
         Ok(_) => panic!("A2 Max must be rejected by default (no unlock flag set)"),
     }
 
+    // SAFETY: this test runs single-threaded and no other thread reads
+    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
     unsafe {
         std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
     }
@@ -44,6 +48,8 @@ fn test_a2_max_flag_controlled() {
         "Expected WavenetA2Dyn variant under unlock"
     );
 
+    // SAFETY: this test runs single-threaded and no other thread reads
+    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
     unsafe {
         std::env::remove_var("NAM_A2_MAX_UNLOCK");
     }

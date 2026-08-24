@@ -36,6 +36,9 @@ impl DenseLayerDyn {
         output: &mut [f32],
         num_frames: usize,
     ) {
+        // SAFETY: `M::fused_gemm_residual_batch_f32` is called with `input`/`output` sized
+        // `num_frames` frames of `in_ch`/`out_ch` (caller contract), and `M` is selected by the
+        // runtime CPUID dispatch matching its `#[target_feature]` backend.
         unsafe {
             M::fused_gemm_residual_batch_f32(
                 input,
@@ -66,6 +69,9 @@ impl DenseLayerDyn {
         output: &mut [f32],
         num_frames: usize,
     ) {
+        // SAFETY: the GEMV kernels require lane counts satisfied by `input`/`output` (sized per
+        // `in_ch`/`out_ch` and `num_frames` by the caller contract), and `M`'s target features are
+        // validated by the runtime CPUID dispatch that selected it.
         unsafe {
             if self.do_bias {
                 M::gemv_with_bias_f32(input, &self.weights, &self.bias, output, num_frames);

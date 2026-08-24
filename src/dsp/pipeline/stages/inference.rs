@@ -35,6 +35,9 @@ fn process_model_core(
     is_crossfading_wavenet: bool,
 ) {
     if lstm_passthrough {
+        // SAFETY: each copy length is the minimum of the source and destination
+        // lengths, so the copies of initialized `f32` values stay in bounds; input
+        // and output buffers are distinct, so the regions cannot overlap.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 model_in_l.as_ptr(),

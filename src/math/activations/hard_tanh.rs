@@ -18,6 +18,9 @@ pub unsafe fn hard_tanh_slice_avx2(data: &mut [f32]) {
     let pos_one = _mm256_set1_ps(1.0_f32);
     let mut i = 0;
     let len = data.len();
+    // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <= len`
+    // (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`, so every
+    // 8-lane load/store stays within `data`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx2!(
             i,
@@ -59,6 +62,9 @@ pub unsafe fn hard_tanh_slice_avx512(data: &mut [f32]) {
     let pos_one = _mm512_set1_ps(1.0_f32);
     let mut i = 0;
     let len = data.len();
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `data`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(data.as_ptr().add(i));

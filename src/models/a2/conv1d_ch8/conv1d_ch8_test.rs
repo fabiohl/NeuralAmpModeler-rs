@@ -57,6 +57,8 @@ fn test_conv1d_ch8_k6_parity() {
     let mut z_simd = vec![0.0f32; num_frames * 8];
     let mut z_ref = vec![0.0f32; num_frames * 8];
 
+    // SAFETY: `w` (kernel*64), `b` (8), `history` (hist_cols*8) and `z_simd` (num_frames*8) are sized
+    // to the `conv1d_ch8_t8_avx2` contract and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         conv1d_ch8_t8_avx2(
             &w,
@@ -109,6 +111,8 @@ fn test_conv1d_ch8_k15_parity() {
     let mut z_simd = vec![0.0f32; num_frames * 8];
     let mut z_ref = vec![0.0f32; num_frames * 8];
 
+    // SAFETY: `w` (kernel*64), `b` (8), `history` (hist_cols*8) and `z_simd` (num_frames*8) are sized
+    // to the `conv1d_ch8_t8_avx2` contract and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         conv1d_ch8_t8_avx2(
             &w,
@@ -162,6 +166,8 @@ fn test_conv1d_ch8_t8_tail_parity() {
     let mut z_simd = vec![0.0f32; num_frames * 8];
     let mut z_ref = vec![0.0f32; num_frames * 8];
 
+    // SAFETY: `w` (kernel*64), `b` (8), `history` (hist_cols*8) and `z_simd` (num_frames*8) are sized
+    // to the `conv1d_ch8_t8_avx2` contract and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         conv1d_ch8_t8_avx2(
             &w,
@@ -215,6 +221,8 @@ fn test_conv1d_ch8_z_1_frame() {
     let mut z_simd = vec![0.0f32; num_frames * 8];
     let mut z_ref = vec![0.0f32; num_frames * 8];
 
+    // SAFETY: `w` (kernel*64), `b` (8), `history` (hist_cols*8) and `z_simd` (num_frames*8) are sized
+    // to the `conv1d_ch8_t8_avx2` contract and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         conv1d_ch8_t8_avx2(
             &w,
@@ -335,6 +343,9 @@ fn test_layer_forward_ch8_k6_parity() {
     let mut layer_in_ref = vec![0.0f32; num_frames * 8];
     let mut fb = FilmBlock::empty();
 
+    // SAFETY: `history`, `cond`, `head_simd` ((num_frames+1)*8), `layer_in_simd` (num_frames*8),
+    // `mixin_w_vec`, `l1x1_w_vec` and `l1x1_b_vec` are sized to `layer_forward_ch8_block`'s contract
+    // and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch8_block(
             &conv,
@@ -429,6 +440,9 @@ fn test_layer_forward_ch8_k15_last_layer_parity() {
     let mut layer_in_ref = vec![1.0f32; num_frames * 8];
     let mut fb = FilmBlock::empty();
 
+    // SAFETY: `history`, `cond`, `head_simd` ((num_frames+1)*8), `layer_in_simd` (num_frames*8),
+    // `mixin_w_vec`, `l1x1_w_vec` and `l1x1_b_vec` are sized to `layer_forward_ch8_block`'s contract
+    // and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch8_block(
             &conv,
@@ -520,6 +534,9 @@ fn test_layer_forward_ch8_middle_layer_accumulates() {
     let mut layer_in = vec![0.0f32; num_frames * 8];
     let mut fb = FilmBlock::empty();
 
+    // SAFETY: `history`, `cond`, `head` ((num_frames)*8), `layer_in` (num_frames*8),
+    // `mixin_w_vec`, `l1x1_w_vec` and `l1x1_b_vec` are sized to `layer_forward_ch8_block`'s contract
+    // and outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch8_block(
             &conv,
@@ -542,6 +559,9 @@ fn test_layer_forward_ch8_middle_layer_accumulates() {
     head_copy.copy_from_slice(&head);
 
     // Second pass: is_first=false → accumulate. Head values should change.
+    // SAFETY: `history`, `cond`, `head` (num_frames*8), `layer_in` (num_frames*8), `mixin_w_vec`,
+    // `l1x1_w_vec` and `l1x1_b_vec` are sized to `layer_forward_ch8_block`'s contract and outlive
+    // the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch8_block(
             &conv,

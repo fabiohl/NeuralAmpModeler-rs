@@ -226,6 +226,10 @@ impl A2GroupedConv1d {
             self.out_ch
         );
 
+        // SAFETY: the `assert!`s above guarantee the documented preconditions of this
+        // `unsafe fn`: `out_frame.len() >= self.out_ch`, `frame_idx >= lookback`,
+        // `layer_buffer.len() > frame_idx * self.in_ch`, and the `mixin` length check,
+        // keeping the raw pointer arithmetic in the kernels in-bounds.
         unsafe {
             if self.groups == self.in_ch && self.groups == self.out_ch {
                 process_single_frame_depthwise_avx2(self, layer_buffer, out_frame, frame_idx);
@@ -276,6 +280,10 @@ impl A2GroupedConv1d {
         for f in 0..num_frames {
             let out_slice = &mut block[f * self.out_ch..(f + 1) * self.out_ch];
             let m = mixin.map(|full| &full[f * self.out_ch..(f + 1) * self.out_ch]);
+            // SAFETY: the asserts above guarantee `out_slice` has exactly `self.out_ch`
+            // elements and `m` (if present) has at least `self.out_ch`; the kernel
+            // re-asserts the `layer_buffer`/`frame_idx` lookback bounds before any raw
+            // pointer arithmetic.
             unsafe {
                 grouped_conv1d_single_frame_simd(
                     self,

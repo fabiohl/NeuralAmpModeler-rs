@@ -3,6 +3,13 @@
 
 //! Host-agnostic infrastructure shared by engine integrations.
 
+/// Loom-compatible atomic type aliases for lock-free production structures.
+///
+/// All atomics inside concurrency protocols must be routed through this module
+/// so a `--cfg loom` build (long suite phase 6) instruments them for
+/// model-checking. See the module docs for the full rationale.
+pub mod atomics;
+
 /// Branch-hint helper for statistically rare (fail-closed) paths.
 ///
 /// Hints the CPU front-end (via `core::hint::cold_path`) that the branch

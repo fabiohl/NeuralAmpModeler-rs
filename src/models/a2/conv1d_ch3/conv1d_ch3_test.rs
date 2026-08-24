@@ -84,6 +84,8 @@ fn test_ch3_unrolled_k6_parity() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut scalar_out = vec![0.0f32; 3];
 
+    // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
+    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -141,6 +143,8 @@ fn test_ch3_unrolled_k15_parity() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut scalar_out = vec![0.0f32; 3];
 
+    // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
+    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -206,6 +210,8 @@ fn test_ch3_unrolled_k6_with_mixin() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut scalar_out = vec![0.0f32; 3];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has 3 elements
+    // (= out_ch) and `mixin` has 3 elements; all outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, Some(&mixin));
     }
@@ -271,6 +277,8 @@ fn test_ch3_unrolled_k15_with_mixin() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut scalar_out = vec![0.0f32; 3];
 
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has 3 elements
+    // (= out_ch) and `mixin` has 3 elements; all outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, Some(&mixin));
     }
@@ -337,6 +345,8 @@ fn test_ch3_unrolled_k6_all_dilations() {
         let mut ch3_out = vec![0.0f32; 3];
         let mut scalar_out = vec![0.0f32; 3];
 
+        // SAFETY: `layer_buffer` (4096*3) covers `frame_idx`'s kernel*dilation lookback and
+        // `ch3_out` has 3 elements (= out_ch); both outlive the call.
         unsafe {
             conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         }
@@ -396,6 +406,8 @@ fn test_ch3_unrolled_k6_no_bias() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut scalar_out = vec![0.0f32; 3];
 
+    // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
+    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -453,6 +465,8 @@ fn test_ch3_unrolled_k6_deterministic() {
     let mut out1 = vec![0.0f32; 3];
     let mut out2 = vec![0.0f32; 3];
 
+    // SAFETY: `out1`/`out2` each have 3 elements (= out_ch) and `layer_buffer` covers `frame_idx`'s
+    // kernel*dilation lookback; all outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut out1, frame_idx, None);
         conv.process_single_ch3_unrolled(&layer_buffer, &mut out2, frame_idx, None);
@@ -493,6 +507,8 @@ fn test_ch3_unrolled_k6_vs_generic() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut generic_out = vec![0.0f32; 3];
 
+    // SAFETY: `ch3_out`/`generic_out` each have 3 elements (= out_ch) and `layer_buffer` covers
+    // `frame_idx`'s kernel*dilation lookback; all outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut generic_out, frame_idx, None);
@@ -537,6 +553,8 @@ fn test_ch3_unrolled_k15_vs_generic() {
     let mut ch3_out = vec![0.0f32; 3];
     let mut generic_out = vec![0.0f32; 3];
 
+    // SAFETY: `ch3_out`/`generic_out` each have 3 elements (= out_ch) and `layer_buffer` covers
+    // `frame_idx`'s kernel*dilation lookback; all outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut generic_out, frame_idx, None);
@@ -603,6 +621,8 @@ fn test_a2conv1dch3_k6_vs_scalar_ref() {
 
     let mut fast_out = [0.0f32; 4];
     let mut ref_out = [0.0f32; 4];
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `fast_out` has 4 padded
+    // lanes (>= out_ch 3); all outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         super::conv1d_ch3_f32_dispatch(&conv, &layer_buffer, frame_idx, &mut fast_out);
     }
@@ -642,6 +662,8 @@ fn test_a2conv1dch3_k15_vs_scalar_ref() {
 
     let mut fast_out = [0.0f32; 4];
     let mut ref_out = [0.0f32; 4];
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `fast_out` has 4 padded
+    // lanes (>= out_ch 3); all outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         super::conv1d_ch3_f32_dispatch(&conv, &layer_buffer, frame_idx, &mut fast_out);
     }
@@ -679,6 +701,8 @@ fn test_a2conv1dch3_zero_history_gives_bias() {
     let layer_buffer = vec![0.0f32; (kernel + 4) * 3];
     let frame_idx = kernel;
     let mut out = [0.0f32; 4];
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `out` has 4 padded
+    // lanes (>= out_ch 3); all outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         super::conv1d_ch3_f32_dispatch(&conv, &layer_buffer, frame_idx, &mut out);
     }
@@ -718,6 +742,9 @@ fn test_layer_fwd_ch3_k6_even_frames_parity() {
     let mut lin_ref = vec![0.0f32; num_frames * CH];
     let head_col = 8usize;
     let mut fb = FilmBlock::empty();
+    // SAFETY: `layer_buffer`, `input_cond`, `head_fast` (256*CH), `lin_fast` (num_frames*CH),
+    // `mixin_w`, `l1x1_w` and `l1x1_b` are sized to `layer_forward_ch3_block`'s contract and
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch3_block(
             &conv,
@@ -804,6 +831,9 @@ fn test_layer_fwd_ch3_k15_odd_frames_parity() {
     let mut lin_ref = vec![0.0f32; num_frames * CH];
     let head_col = 4usize;
     let mut fb = FilmBlock::empty();
+    // SAFETY: `layer_buffer`, `input_cond`, `head_fast` (256*CH), `lin_fast` (num_frames*CH),
+    // `mixin_w`, `l1x1_w` and `l1x1_b` are sized to `layer_forward_ch3_block`'s contract and
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch3_block(
             &conv,
@@ -877,6 +907,9 @@ fn test_layer_fwd_ch3_is_last_skips_l1x1() {
     let mut head = vec![0.0f32; 64 * CH];
     let mut lin = vec![99.0f32; num_frames * CH];
     let mut fb = FilmBlock::empty();
+    // SAFETY: `layer_buffer`, `input_cond`, `head` (64*CH), `lin` (num_frames*CH), `mixin_w`,
+    // `l1x1_w` and `l1x1_b` are sized to `layer_forward_ch3_block`'s contract and outlive the call;
+    // AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch3_block(
             &conv,
@@ -925,6 +958,9 @@ fn test_layer_fwd_ch3_is_first_assigns_head() {
     let mut head = vec![999.0f32; 64 * CH];
     let mut lin = vec![0.0f32; num_frames * CH];
     let mut fb = FilmBlock::empty();
+    // SAFETY: `layer_buffer`, `input_cond`, `head` (64*CH), `lin` (num_frames*CH), `mixin_w`,
+    // `l1x1_w` and `l1x1_b` are sized to `layer_forward_ch3_block`'s contract and outlive the call;
+    // AVX2+FMA is guaranteed by `#[target_feature]`.
     unsafe {
         layer_forward_ch3_block(
             &conv,
@@ -975,6 +1011,8 @@ fn test_a2conv1dch3_k6_all_dilations() {
         let frame_idx = 3500usize;
         let mut fast_out = [0.0f32; 4];
         let mut ref_out = [0.0f32; 4];
+        // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `fast_out` has 4
+        // padded lanes (>= out_ch 3); all outlive the call; AVX2+FMA guaranteed by `#[target_feature]`.
         unsafe {
             super::conv1d_ch3_f32_dispatch(&conv, &layer_buffer, frame_idx, &mut fast_out);
         }

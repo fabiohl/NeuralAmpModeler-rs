@@ -177,7 +177,9 @@ fn test_hard_tanh_avx2_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::hard_tanh_slice_avx2(&mut simd_data) };
+    // SAFETY: `ref_data` is a valid `&mut [f32]` outliving the call; AVX2 enabled by `#[target_feature]` on `scalar_ref`.
     unsafe { scalar_ref(&mut ref_data) };
 
     for (i, (&s, &r)) in simd_data.iter().zip(ref_data.iter()).enumerate() {
@@ -199,6 +201,7 @@ fn test_hard_tanh_avx2_large_slice() {
         *x = x.clamp(-1.0, 1.0);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::hard_tanh_slice_avx2(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {
@@ -225,7 +228,9 @@ fn test_hard_swish_avx2_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::hard_swish_slice_avx2(&mut simd_data) };
+    // SAFETY: `ref_data` is a valid `&mut [f32]` outliving the call; AVX2 enabled by `#[target_feature]` on `scalar_ref`.
     unsafe { scalar_ref(&mut ref_data) };
 
     for (i, (&s, &r)) in simd_data.iter().zip(ref_data.iter()).enumerate() {
@@ -248,6 +253,7 @@ fn test_hard_swish_avx2_large_slice() {
         *x *= t.clamp(0.0, 6.0) * (1.0 / 6.0);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::hard_swish_slice_avx2(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {
@@ -288,6 +294,7 @@ fn test_leaky_hard_tanh_avx2_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         crate::math::activations::leaky_hard_tanh_slice_avx2(
             &mut simd_data,
@@ -297,6 +304,7 @@ fn test_leaky_hard_tanh_avx2_parity() {
             max_slope,
         )
     };
+    // SAFETY: `ref_data` and the f32 params are valid and outlive the call; AVX2 enabled by `#[target_feature]` on `scalar_ref`.
     unsafe { scalar_ref(&mut ref_data, min_val, max_val, min_slope, max_slope) };
 
     for (i, (&s, &r)) in simd_data.iter().zip(ref_data.iter()).enumerate() {
@@ -327,6 +335,7 @@ fn test_leaky_hard_tanh_avx2_large_slice() {
         }
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         crate::math::activations::leaky_hard_tanh_slice_avx2(
             &mut data, min_val, max_val, min_slope, max_slope,
@@ -368,7 +377,9 @@ fn test_fast_tanh_avx2_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::fast_tanh_slice_avx2(&mut simd_data) };
+    // SAFETY: `ref_data` is a valid `&mut [f32]` outliving the call; AVX2 enabled by `#[target_feature]` on `scalar_ref`.
     unsafe { scalar_ref(&mut ref_data) };
 
     for (i, (&s, &r)) in simd_data.iter().zip(ref_data.iter()).enumerate() {
@@ -403,6 +414,7 @@ fn test_fast_tanh_avx2_large_slice() {
         *x = fast_tanh_scalar(*x);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX2 guaranteed by `#[target_feature]`.
     unsafe { crate::math::activations::fast_tanh_slice_avx2(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {
@@ -428,6 +440,8 @@ fn test_hard_tanh_avx512_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::hard_tanh_slice_avx512(&mut simd_data) };
     for x in ref_data.iter_mut() {
         *x = x.clamp(-1.0, 1.0);
@@ -457,6 +471,8 @@ fn test_hard_tanh_avx512_large_slice() {
         *x = x.clamp(-1.0, 1.0);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::hard_tanh_slice_avx512(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {
@@ -480,6 +496,8 @@ fn test_hard_swish_avx512_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::hard_swish_slice_avx512(&mut simd_data) };
     for x in ref_data.iter_mut() {
         let t = *x + 3.0;
@@ -511,6 +529,8 @@ fn test_hard_swish_avx512_large_slice() {
         *x *= t.clamp(0.0, 6.0) * (1.0 / 6.0);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::hard_swish_slice_avx512(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {
@@ -539,6 +559,8 @@ fn test_leaky_hard_tanh_avx512_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe {
         crate::math::activations::leaky_hard_tanh_slice_avx512(
             &mut simd_data,
@@ -589,6 +611,8 @@ fn test_leaky_hard_tanh_avx512_large_slice() {
         }
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe {
         crate::math::activations::leaky_hard_tanh_slice_avx512(
             &mut data, min_val, max_val, min_slope, max_slope,
@@ -629,6 +653,8 @@ fn test_fast_tanh_avx512_parity() {
     let mut simd_data: Vec<f32> = (-20..21).map(|i| i as f32 * 0.43).collect();
     let mut ref_data = simd_data.clone();
 
+    // SAFETY: `simd_data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::fast_tanh_slice_avx512(&mut simd_data) };
     for x in ref_data.iter_mut() {
         *x = fast_tanh_scalar(*x);
@@ -671,6 +697,8 @@ fn test_fast_tanh_avx512_large_slice() {
         *x = fast_tanh_scalar(*x);
     }
 
+    // SAFETY: `data` is a valid `&mut [f32]` outliving the call; AVX-512F is guaranteed by the
+    // `is_x86_feature_detected!("avx512f")` guard above.
     unsafe { crate::math::activations::fast_tanh_slice_avx512(&mut data) };
 
     for (i, (&a, &b)) in data.iter().zip(expected.iter()).enumerate() {

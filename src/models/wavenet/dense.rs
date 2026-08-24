@@ -32,6 +32,11 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         output: &mut [f32],
         num_frames: usize,
     ) {
+        // SAFETY: the const-generic GEMM kernels are only reached for their matching `IN`/`OUT`
+        // shapes with buffers validated by this wrapper's caller contract, and
+        // `M::fused_gemm_residual_batch_f32` requires lane counts satisfied by `input`/`output`
+        // sized `num_frames` frames of `IN`/`OUT` (caller-guaranteed); `M` is dispatched by
+        // runtime CPUID feature checks matching its `#[target_feature]` backend.
         unsafe {
             // Slots for which we have specialised const-generic kernels
             // (endereçamento imediato — no leaq chains).
@@ -115,6 +120,11 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         output: &mut [f32],
         num_frames: usize,
     ) {
+        // SAFETY: the AVX2 broadcast GEMV kernels are only reached under `#[cfg(target_arch =
+        // "x86_64")]` with the target-feature guarantee of the caller's dispatch path, and the
+        // buffer sizes (`IN`/`OUT` per frame, `num_frames` frames) satisfy the kernel lane counts
+        // per this wrapper's documented contract; the generic `M::gemv_*` paths require the same
+        // sizes plus `M`'s backend features validated by the runtime CPUID dispatch.
         unsafe {
             #[cfg(target_arch = "x86_64")]
             {

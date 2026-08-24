@@ -191,6 +191,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
         // Bit-reversal
         for (i, &j) in self.bit_reverse.iter().enumerate() {
             if i < j {
+                // SAFETY: `re.len() == im.len() == self.n` (asserted above) and
+                // `bit_reverse` holds a permutation of `0..self.n`, so both `i`
+                // and `j` index in bounds.
                 unsafe {
                     std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
                     std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
@@ -201,6 +204,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
         // Radix-4 butterflies
         let mut tw_offset = 0usize;
         for &l in &self.stage_l {
+            // SAFETY: `re.len() == im.len() == self.n` (asserted above); `l`
+            // and `tw_offset` come from the construction-time stage tables, so
+            // `radix4_stage`'s documented preconditions hold.
             unsafe { self.radix4_stage(re, im, l, tw_offset, false) };
             tw_offset += l;
         }
@@ -217,6 +223,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
 
         for (i, &j) in self.bit_reverse.iter().enumerate() {
             if i < j {
+                // SAFETY: `re.len() == im.len() == self.n` (asserted above) and
+                // `bit_reverse` holds a permutation of `0..self.n`, so both `i`
+                // and `j` index in bounds.
                 unsafe {
                     std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
                     std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
@@ -226,6 +235,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
 
         let mut tw_offset = 0usize;
         for &l in &self.stage_l {
+            // SAFETY: `re.len() == im.len() == self.n` (asserted above); `l`
+            // and `tw_offset` come from the construction-time stage tables, so
+            // `radix4_stage`'s documented preconditions hold.
             unsafe { self.radix4_stage(re, im, l, tw_offset, true) };
             tw_offset += l;
         }
@@ -270,25 +282,39 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
                 let idx3 = k + j + 3 * l;
 
                 let tw_idx = tw_offset + j;
+                // SAFETY: `tw_idx = tw_offset + j < tw_offset + l`, and the
+                // caller's `tw_offset`/`l` pair satisfies `tw_offset + l <=
+                // stage_twiddle_re1.len()` (`radix4_stage` precondition).
                 let w1_re = unsafe { *self.stage_twiddle_re1.get_unchecked(tw_idx) };
                 let w1_im = if inverse {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im1.len()`.
                     unsafe { -*self.stage_twiddle_im1.get_unchecked(tw_idx) }
                 } else {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im1.len()`.
                     unsafe { *self.stage_twiddle_im1.get_unchecked(tw_idx) }
                 };
+                // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_re2.len()`.
                 let w2_re = unsafe { *self.stage_twiddle_re2.get_unchecked(tw_idx) };
                 let w2_im = if inverse {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im2.len()`.
                     unsafe { -*self.stage_twiddle_im2.get_unchecked(tw_idx) }
                 } else {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im2.len()`.
                     unsafe { *self.stage_twiddle_im2.get_unchecked(tw_idx) }
                 };
+                // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_re3.len()`.
                 let w3_re = unsafe { *self.stage_twiddle_re3.get_unchecked(tw_idx) };
                 let w3_im = if inverse {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im3.len()`.
                     unsafe { -*self.stage_twiddle_im3.get_unchecked(tw_idx) }
                 } else {
+                    // SAFETY: `tw_idx < tw_offset + l <= stage_twiddle_im3.len()`.
                     unsafe { *self.stage_twiddle_im3.get_unchecked(tw_idx) }
                 };
 
+                // SAFETY: `idx3 = k + j + 3*l <= self.n - 1` because `k` steps
+                // by `4*l` (so `k <= n - 4*l`) and `j < l`; `re`/`im` have
+                // length `self.n` (`radix4_stage` precondition).
                 let (r0, i0, r1, i1, r2, i2, r3, i3) = unsafe {
                     (
                         *re.get_unchecked(idx0),
@@ -309,6 +335,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
                 let y3_re = w3_re.mul_add(r3, -w3_im * i3);
                 let y3_im = w3_re.mul_add(i3, w3_im * r3);
 
+                // SAFETY: all `idx0..idx3` are `< self.n` (same bounds as the
+                // reads above) and `re`/`im` have length `self.n`, so the
+                // unchecked writes stay in bounds.
                 unsafe {
                     *re.get_unchecked_mut(idx0) = (r0 + y1_re) + (y2_re + y3_re);
                     *im.get_unchecked_mut(idx0) = (i0 + y1_im) + (y2_im + y3_im);

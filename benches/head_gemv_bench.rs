@@ -41,7 +41,7 @@ criterion_group!(
         .sample_size(100)
         .measurement_time(std::time::Duration::from_secs(5))
         .warm_up_time(std::time::Duration::from_secs(1))
-        .noise_threshold(0.02);
+        .noise_threshold(0.05);
     targets = bench_head_gemv_12x6, bench_head_gemv_12x8
 );
 

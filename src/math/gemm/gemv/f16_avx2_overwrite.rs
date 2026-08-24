@@ -22,6 +22,10 @@ pub unsafe fn gemv_overwrite_avx2_1x4(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (1, 4) by
+    // `gemv_overwrite_avx2`, so `in_frame` has >= 1 element, `weights` >= 4,
+    // `out_frame` >= 4, and `bias` >= 4 when `do_bias`. AVX2+FMA are guaranteed
+    // by the `#[target_feature]` attribute on this `unsafe fn`.
     unsafe {
         let v_in = _mm256_set1_ps(*in_frame.get_unchecked(0));
         let vw = load_partial_ymm(weights, 4);
@@ -43,6 +47,9 @@ pub unsafe fn gemv_overwrite_avx2_4x4(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (4, 4), so `in_frame` has
+    // >= 4 elements, `weights` >= 16, `out_frame` >= 4, and `bias` >= 4 when
+    // `do_bias`. AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         let mut acc = if do_bias {
             load_partial_ymm(bias, 4)
@@ -79,6 +86,9 @@ pub unsafe fn gemv_overwrite_avx2_4x6(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (4, 6), so `in_frame` has
+    // >= 4 elements, `weights` >= 24, `bias` >= 6 (read when `do_bias`),
+    // `out_frame` >= 6. AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         let mut acc = if do_bias {
             load_partial_ymm(bias, 4)
@@ -132,6 +142,9 @@ pub unsafe fn gemv_overwrite_avx2_8x4(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (8, 4), so `in_frame` has
+    // >= 8 elements, `weights` >= 32, `out_frame` >= 4, and `bias` >= 4 when
+    // `do_bias`. AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         let mut acc = if do_bias {
             load_partial_ymm(bias, 4)
@@ -184,6 +197,9 @@ pub unsafe fn gemv_overwrite_avx2_8x6(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (8, 6), so `in_frame` has
+    // >= 8 elements, `weights` >= 48, `bias` >= 6 (read when `do_bias`),
+    // `out_frame` >= 6. AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         let out_len = 6usize;
         let w_ptr = weights.as_ptr();
@@ -226,6 +242,9 @@ pub unsafe fn gemv_overwrite_avx2_8x8(
     out_frame: &mut [f32],
     do_bias: bool,
 ) {
+    // SAFETY: dispatched only for (in_len, out_len) == (8, 8), so `in_frame` has
+    // >= 8 elements, `weights` >= 64, `bias` >= 8 (read when `do_bias`),
+    // `out_frame` >= 8. AVX2+FMA guaranteed by `#[target_feature]`.
     unsafe {
         let w_ptr = weights.as_ptr();
 

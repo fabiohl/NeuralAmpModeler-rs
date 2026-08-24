@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-// SAFETY: Caller guarantees alignment, bounds, and AVX2+FMA ISA availability for SIMD kernels.
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+// The SIMD kernels and scalar fallback below perform unsafe operations directly
+// inside `#[target_feature]`/raw-pointer functions whose bodies already contain
+// explicit `unsafe {}` blocks; `unsafe_op_in_unsafe_fn` documents that the
+// intrinsic calls are intentional, not accidental double-wrapping.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 //! A2 Head convolution (k=16, bias, head_scale).
 //!
@@ -166,11 +169,15 @@ impl A2HeadConv {
                 let src_off = col * ch;
                 let w_off = t * ch;
 
-                // SAFETY: head_w length is validated in new() (assert_eq), and
-                // head_history length is validated by the debug_assert above.
-                // w_off + c < head_w.len() because t < k and c < ch.
-                // src_off + c < head_history.len() because col <= ring_mask.
+                // SAFETY: `head_w.len()` is validated in `new()` (assert_eq
+                // `kernel_size * num_channels`) and `head_history.len()` by the
+                // `debug_assert!` at the top of `process`; `w_off + c < head_w.len()`
+                // because `t < k` and `c < ch`, and `src_off + c < head_history.len()`
+                // because `col <= ring_mask`.
                 for c in 0..ch {
+                    // SAFETY: `w_off + c < head_w.len()` because `t < k` and `c < ch`
+                    // (lengths validated in `new()`), and `src_off + c < head_history.len()`
+                    // because `col <= ring_mask` (guaranteed by the `debug_assert!` above).
                     unsafe {
                         y += *self.head_w.get_unchecked(w_off + c)
                             * *head_history.get_unchecked(src_off + c);

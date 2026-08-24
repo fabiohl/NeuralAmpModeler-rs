@@ -42,10 +42,16 @@ pub struct ConvNetModel {
 }
 
 /// Simple linear projection head for C++ flat ConvNet format.
+///
+/// The weight matrix is consumed by the batched GEMV kernel
+/// `M::gemv_with_bias_f32`, which expects column-major layout
+/// `weights[in_c * out_ch + out_c]`. For `out_ch == 1` (the only current
+/// construction path — C++ flat ConvNet always serializes a mono head) this
+/// coincides with row-major `weight[o * in_ch + i]`.
 #[derive(Clone)]
 #[repr(align(64))]
 pub struct LinearHead {
-    /// Row-major weight matrix: out_ch × in_ch.
+    /// Column-major weight matrix: `weights[in_c * out_ch + out_c]`.
     pub weight: AlignedVec<f32>,
     /// Bias vector: out_ch.
     pub bias: AlignedVec<f32>,
@@ -74,6 +80,9 @@ impl ConvNetModel {
 
     /// Resolves the full forward pass and produces waveform samples in zero allocation (DSP).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
+        // matching `#[target_feature]` backend; `input`/`output` are the same valid
+        // slices passed to this safe wrapper.
         unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
     }
 
@@ -127,8 +136,11 @@ impl ConvNetModel {
                 let curr_out_ch = curr.conv.out_ch;
 
                 if src_is_a {
-                    let src = &self.scratch_a
-                        [..num_frames * unsafe { (*blocks_ptr.add(i - 1)).conv.out_ch }];
+                    // SAFETY: `i - 1 < num_blocks` (i ∈ 1..num_blocks), so
+                    // `blocks_ptr.add(i - 1)` points to a valid initialized
+                    // ConvNetBlock; reading its `conv.out_ch` is valid.
+                    let prev_out_ch = unsafe { (*blocks_ptr.add(i - 1)).conv.out_ch };
+                    let src = &self.scratch_a[..num_frames * prev_out_ch];
                     let dst = &mut self.scratch_b[..num_frames * curr_out_ch];
                     // SAFETY: curr is valid (see above); src/dst are valid
                     // slices within scratch_a/scratch_b which are separate
@@ -137,8 +149,11 @@ impl ConvNetModel {
                         curr.process_block_internal::<M>(src, dst, num_frames);
                     }
                 } else {
-                    let src = &self.scratch_b
-                        [..num_frames * unsafe { (*blocks_ptr.add(i - 1)).conv.out_ch }];
+                    // SAFETY: `i - 1 < num_blocks` (i ∈ 1..num_blocks), so
+                    // `blocks_ptr.add(i - 1)` points to a valid initialized
+                    // ConvNetBlock; reading its `conv.out_ch` is valid.
+                    let prev_out_ch = unsafe { (*blocks_ptr.add(i - 1)).conv.out_ch };
+                    let src = &self.scratch_b[..num_frames * prev_out_ch];
                     let dst = &mut self.scratch_a[..num_frames * curr_out_ch];
                     // SAFETY: Same invariants as the if branch; src and dst
                     // are reversed between scratch_a/scratch_b.
@@ -163,12 +178,19 @@ impl ConvNetModel {
             if let Some(ref mut head_proc) = self.post_stack_head {
                 let head_out_ch = head_proc.out_channels();
                 let head_scratch = &mut self.head_output_scratch[..num_frames * head_out_ch];
+                // SAFETY: `last_slice` has `num_frames * last_out_ch` elements and
+                // `head_scratch` has `num_frames * head_out_ch`, matching the head's
+                // input/output channel dimensions (validated at construction);
+                // `process_block`'s documented preconditions hold.
                 unsafe {
                     head_proc.process_block(last_slice, head_scratch, num_frames);
                 }
                 let out_start = pos * out_ch;
                 let out_slice = &mut output[out_start..out_start + num_frames * out_ch];
                 out_slice.copy_from_slice(head_scratch);
+                // SAFETY: `out_slice` is a valid mutable slice of `num_frames * out_ch`
+                // elements and `M` matches the CPU ISA; `apply_gain`'s documented
+                // precondition holds.
                 unsafe {
                     M::apply_gain(out_slice, self.head_scale);
                 }
@@ -176,19 +198,24 @@ impl ConvNetModel {
                 let lh_out_ch = linear.out_ch;
                 let out_start = pos * out_ch;
                 let out_slice = &mut output[out_start..out_start + num_frames * lh_out_ch];
-                out_slice.fill(linear.bias[0]);
-                for f in 0..num_frames {
-                    let src = &last_slice[f * linear.in_ch..(f + 1) * linear.in_ch];
-                    let dst = &mut out_slice[f * lh_out_ch..(f + 1) * lh_out_ch];
-                    for (o, dst_val) in dst.iter_mut().enumerate().take(lh_out_ch) {
-                        let mut acc = linear.bias[o];
-                        let row_start = o * linear.in_ch;
-                        for (i, &src_val) in src.iter().enumerate().take(linear.in_ch) {
-                            acc += src_val * linear.weight[row_start + i];
-                        }
-                        *dst_val = acc;
-                    }
+                // SAFETY: `gemv_with_bias_f32`'s documented preconditions hold:
+                // `last_slice` and `out_slice` divide exactly by `num_frames`
+                // (`in_len = last_out_ch`, `out_len = lh_out_ch`), `linear.weight`
+                // has `in_len * out_len` elements and `linear.bias` at least `out_len`
+                // (both validated at construction), `num_frames > 0`, and `M` matches
+                // the CPU ISA.
+                unsafe {
+                    M::gemv_with_bias_f32(
+                        last_slice,
+                        &linear.weight,
+                        &linear.bias,
+                        out_slice,
+                        num_frames,
+                    );
                 }
+                // SAFETY: `out_slice` is a valid mutable slice of `num_frames * lh_out_ch`
+                // elements and `M` matches the CPU ISA; `apply_gain`'s documented
+                // precondition holds.
                 unsafe {
                     M::apply_gain(out_slice, self.head_scale);
                 }
@@ -196,6 +223,9 @@ impl ConvNetModel {
                 let out_start = pos * out_ch;
                 let out_slice = &mut output[out_start..out_start + num_frames * out_ch];
                 out_slice.copy_from_slice(last_slice);
+                // SAFETY: `out_slice` is a valid mutable slice of `num_frames * out_ch`
+                // elements and `M` matches the CPU ISA; `apply_gain`'s documented
+                // precondition holds.
                 unsafe {
                     M::apply_gain(out_slice, self.head_scale);
                 }

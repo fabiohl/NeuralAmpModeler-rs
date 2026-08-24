@@ -5,7 +5,7 @@ use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;
 use crate::models::a2::activations::ActivationType;
 
-use super::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
+use super::common::WaveNetLayerState;
 use super::conv1d_dyn::Conv1dDyn;
 use crate::loader::nam_json::model::HeadConfig;
 
@@ -23,8 +23,6 @@ pub struct PostStackHead {
     pub activation: ActivationType,
     /// Ring buffer state for causal convolution lookback.
     pub state: WaveNetLayerState,
-    /// Scratch buffer for convolution output (out_ch * WAVENET_MAX_NUM_FRAMES).
-    scratch: AlignedVec<f32>,
 }
 
 impl PostStackHead {
@@ -71,14 +69,10 @@ impl PostStackHead {
             kernel,
         };
 
-        let scratch = AlignedVec::new(out_channels * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
-
         Ok(Self {
             conv,
             activation,
             state,
-            scratch,
         })
     }
 
@@ -119,6 +113,9 @@ impl PostStackHead {
     /// sufficient prior processing) to cover the causal receptive field.
     #[inline(always)]
     pub unsafe fn process_block(&mut self, input: &[f32], output: &mut [f32], num_frames: usize) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a matching
+        // `#[target_feature]` backend `M`; `input`/`output`/`num_frames` are the same values
+        // validated by this safe wrapper's documented contract.
         unsafe {
             crate::math::common::dispatch_simd!(
                 self,
@@ -133,7 +130,8 @@ impl PostStackHead {
     /// SIMD-dispatched processing kernel.
     ///
     /// Writes `num_frames` of input into the ring buffer, runs the causal
-    /// Conv1D, applies activation, and writes results to output.
+    /// Conv1D directly into the output slice, applies activation in-place,
+    /// and leaves the results in output.
     ///
     /// Input layout: frame-interleaved `[f0_c0, f0_c1, ..., f1_c0, ...]`.
     /// Output layout: frame-interleaved `[f0_c0, f0_c1, ..., f1_c0, ...]`.
@@ -154,6 +152,10 @@ impl PostStackHead {
         let input_len = num_frames * in_ch;
 
         let buf_start = self.state.buffer_start * in_ch;
+        // SAFETY: `input` has `input_len = num_frames * in_ch` f32s, and the state's ring buffer
+        // is sized for `buffer_start + num_frames` frames (constructor + `advance_frames`
+        // contract), so the destination at `buf_start` fits; the buffers are distinct and
+        // non-null/`f32`-aligned.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 input.as_ptr(),
@@ -162,27 +164,25 @@ impl PostStackHead {
             );
         }
 
-        let scratch_slice = &mut self.scratch[..num_frames * out_ch];
+        let out_slice = &mut output[..num_frames * out_ch];
+        // SAFETY: `process_block` is an `unsafe fn` reached with `out_slice` sized
+        // `num_frames * out_ch`, the layer buffer covering `buffer_start + num_frames` frames
+        // (the copy above), and `M`'s backend features guaranteed by the `dispatch_simd!`
+        // caller.
         unsafe {
             self.conv.process_block::<M>(
                 &self.state.layer_buffer,
-                scratch_slice,
+                out_slice,
                 self.state.buffer_start,
                 num_frames,
                 None,
             );
         }
 
+        // SAFETY: `apply_simd` processes `out_slice` (`num_frames * out_ch` f32s) with `M`'s
+        // instructions, whose availability is guaranteed by the dispatch that selected `M`.
         unsafe {
-            self.activation.apply_simd::<M>(scratch_slice);
-        }
-
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                scratch_slice.as_ptr(),
-                output.as_mut_ptr(),
-                num_frames * out_ch,
-            );
+            self.activation.apply_simd::<M>(out_slice);
         }
 
         self.state.advance_frames(num_frames, in_ch);
@@ -191,6 +191,8 @@ impl PostStackHead {
     /// Public prewarm wrapper with SIMD dispatch.
     #[cold]
     pub fn prewarm(&mut self) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a matching
+        // `#[target_feature]` backend `M`; the prewarm only touches the head's own state buffer.
         unsafe {
             crate::math::common::dispatch_simd!(self, prewarm_internal);
         }
@@ -202,7 +204,6 @@ impl PostStackHead {
     /// # Safety
     /// Must be called via `dispatch_simd!` macro. The state buffer must be
     /// properly allocated and the ring buffer start pointer must be valid.
-    #[inline(always)]
     pub unsafe fn prewarm_internal<M: SimdMath>(&mut self) {
         let in_ch = self.conv.in_ch;
         let out_ch = self.conv.out_ch;
@@ -221,17 +222,22 @@ impl PostStackHead {
                 .copy_within(src_range.clone(), dst_idx);
         }
 
-        let scratch_slice = &mut self.scratch[..out_ch];
+        let mut out_frame = vec![0.0f32; out_ch];
+        // SAFETY: `process_single_frame` is an `unsafe fn` reached with `out_frame` sized
+        // `out_ch`, the state buffer covering `buffer_start`'s receptive field (backfilled above),
+        // and `M` guaranteed by the `dispatch_simd!` caller.
         unsafe {
             self.conv.process_single_frame::<M>(
                 &self.state.layer_buffer,
-                scratch_slice,
+                &mut out_frame,
                 self.state.buffer_start,
                 None,
             );
         }
+        // SAFETY: `out_frame` has `out_ch` f32s and `M`'s instructions are available per the
+        // dispatch that selected it.
         unsafe {
-            self.activation.apply_simd::<M>(scratch_slice);
+            self.activation.apply_simd::<M>(&mut out_frame);
         }
 
         self.state.advance_frames(1, in_ch);

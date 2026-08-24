@@ -54,6 +54,9 @@ impl NamModel for StaticModel {
             Self::Lstm1x40(m) => m.process(input, output),
             Self::Lstm2x24(m) => m.process(input, output),
             Self::LstmDyn(m) => m.process(input, output),
+            // SAFETY: the `Linear` kernel takes a raw pointer that cannot carry a compile-time
+            // lifetime through the enum dispatch; the pointer is derived from the `&[f32]` /
+            // `&mut [f32]` borrows already held by this function (see module docs).
             Self::Linear(m) => unsafe { m.process(input, output) },
             Self::ConvNet(m) => m.process(input, output),
         }

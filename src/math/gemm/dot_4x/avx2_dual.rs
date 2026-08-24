@@ -34,6 +34,9 @@ pub unsafe fn dot_product_4x_interleaved_dual_frame_avx2(
     debug_assert!(weights.len() >= len);
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `state_f0.len()`, `state_f1.len()`, and
+    // `weights.len()` (with `debug_assert!(weights.len() >= len)`); the macro
+    // loops keep `i + 8`/`i + 2 <= len`, so all accesses stay in bounds.
     unsafe {
         let mut sum0_f0 = _mm256_setzero_ps();
         let mut sum1_f0 = _mm256_setzero_ps();
@@ -180,6 +183,10 @@ pub unsafe fn dot_product_batch_4x_avx2(
     debug_assert!(h0.len() >= len && h1.len() >= len && h2.len() >= len && h3.len() >= len);
     let mut i = 0;
 
+    // SAFETY: `len` is the minimum of `weights.len()` and `h0..h3.len()`
+    // (enforced by the `debug_assert!` above); the macro loops guarantee
+    // `i + 16`/`i + 8`/`i < len`, so the 8-lane loads and 16-u16 loads at
+    // offset `i` stay within all five slices.
     unsafe {
         let mut sum0 = _mm256_setzero_ps();
         let mut sum1 = _mm256_setzero_ps();

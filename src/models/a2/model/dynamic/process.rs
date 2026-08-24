@@ -63,6 +63,9 @@ impl WaveNetA2Dyn {
     /// and monomorphizes `process_internal` to the detected ISA (AVX2/AVX-512),
     /// eliminating per-frame `is_x86_feature_detected` branches.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
+        // matching `#[target_feature]` backend; `input`/`output` are the same valid
+        // slices passed to this safe wrapper.
         unsafe {
             crate::math::common::dispatch_simd!(self, process_internal, input, output);
         }
@@ -229,6 +232,11 @@ impl WaveNetA2Dyn {
                 let channels_aligned = channels & !7;
                 for (f, &x) in input[pos..pos + nf].iter().enumerate() {
                     let base = f * channels;
+                    // SAFETY: `channels_aligned = channels & !7` is a multiple of 8, so
+                    // at each `while c < channels_aligned` iteration `c + 8 <= channels_aligned`;
+                    // the 8-lane `loadu`/`storeu` at offsets `c` and `base + c` stay within
+                    // `rechannel_w_f32` (len `channels`) and `layer_in` (`base = f*channels`,
+                    // capacity ≥ `nf*channels`); `loadu`/`storeu` need no alignment.
                     unsafe {
                         let x_vec = _mm256_set1_ps(x);
                         let mut c = 0;
@@ -341,6 +349,10 @@ impl WaveNetA2Dyn {
             for f in 0..nf {
                 if let Some(ref mut film) = self.layers[li].conv_pre_film {
                     let cond_slice = &cond_buf[f * cond_size..(f + 1) * cond_size];
+                    // SAFETY: `cond_slice` has length exactly `cond_size`, matching this
+                    // FiLM layer's `cond_size`, and the input slice is an in-bounds
+                    // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+                    // documented preconditions.
                     unsafe {
                         film.process(
                             &mut buf[bs + f * channels..bs + (f + 1) * channels],
@@ -381,6 +393,10 @@ impl WaveNetA2Dyn {
 
             for f in 0..nf {
                 let bc = blending_config.as_deref_mut();
+                // SAFETY: `process_frame_dyn` is an `unsafe fn`; the caller has verified
+                // its documented preconditions: `li < self.num_layers`, `nf` frames of
+                // valid data, all scratch/ring buffers sized for the model's topology,
+                // and `M` matches the CPU ISA (top-level `dispatch_simd!`).
                 unsafe {
                     process_frame_dyn::<M>(
                         layer,
@@ -481,6 +497,11 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     let mut z_len = z_out_ch;
 
     // 1. Dilated conv → z_scratch.
+    // SAFETY: `process_single_frame::<M>` is an `unsafe fn`; its preconditions hold:
+    // `history` spans `bs - lookback .. bs + nf*channels` (buffer start already
+    // advanced with wrap), `z_scratch[..z_out_ch]` has length ≥ the conv's out channels,
+    // `frame_idx = max_lookback_cols + f` allows the kernel lookback taps, and `M`
+    // matches the CPU ISA (top-level `dispatch_simd!`).
     unsafe {
         layer
             .conv
@@ -489,6 +510,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
 
     // FiLM post-conv + pre-mixin.
     if let Some(ref mut film) = layer.conv_post_film {
+        // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+        // layer's `cond_size`) and `z_scratch[..z_out_ch]` is a valid in-bounds
+        // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+        // documented preconditions.
         unsafe {
             film.process(&mut z_scratch[..z_out_ch], cond_slice);
         }
@@ -511,6 +536,11 @@ unsafe fn process_frame_dyn<M: SimdMath>(
                 cond_scratch.len()
             );
             cond_scratch[..cond_size].copy_from_slice(cond_slice);
+            // SAFETY: `cond_scratch[..cond_size]` is in-bounds by the `debug_assert!`
+            // above (`cond_size <= cond_scratch.len()`), `cond_slice` has length
+            // `cond_size` matching this FiLM layer's `cond_size`, and the input slice
+            // is a valid sub-slice of length ≤ `channels`; all satisfy `film.process`'s
+            // documented preconditions.
             unsafe {
                 film.process(&mut cond_scratch[..cond_size], cond_slice);
             }
@@ -539,6 +569,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
                 let group_base = g * out_per_g * in_pg;
                 let in_start = g * in_pg;
                 let out_start = g * out_per_g;
+                // SAFETY: `while oc + 8 <= out_per_g` keeps the 8-lane `loadu`/`storeu`
+                // at `group_base + ic*out_per_g + oc` within `mixin_w` (len
+                // `num_groups*out_per_g*in_pg`) and at `out_start + oc` within
+                // `mixin_scratch` (len ≥ `z_out_ch`); `loadu`/`storeu` need no alignment.
                 unsafe {
                     let mut oc = 0;
                     while oc + 8 <= out_per_g {
@@ -585,6 +619,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     // FiLM post-mixin + pre-activation.
     // Apply FiLM on the isolated mixin buffer before summing.
     if let Some(ref mut film) = layer.input_mixin_post_film {
+        // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+        // layer's `cond_size`) and `mixin_scratch[..z_out_ch]` is a valid in-bounds
+        // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+        // documented preconditions.
         unsafe {
             film.process(&mut mixin_scratch[..z_out_ch], cond_slice);
         }
@@ -592,6 +630,9 @@ unsafe fn process_frame_dyn<M: SimdMath>(
 
     // Sum mixin output to z_scratch (vectorized 8-wide).
     if z_out_ch >= 8 {
+        // SAFETY: `while c + 8 <= z_out_ch` keeps the 8-lane `loadu`/`storeu` at
+        // offset `c` within both `mixin_scratch` and `z_scratch` (len ≥ `z_out_ch`);
+        // `loadu`/`storeu` need no alignment.
         unsafe {
             let mut c = 0;
             while c + 8 <= z_out_ch {
@@ -611,6 +652,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     }
 
     if let Some(ref mut film) = layer.activation_pre_film {
+        // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+        // layer's `cond_size`) and `z_scratch[..z_out_ch]` is a valid in-bounds
+        // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+        // documented preconditions.
         unsafe {
             film.process(&mut z_scratch[..z_out_ch], cond_slice);
         }
@@ -619,6 +664,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
     // 3. Activation or Gating/Blending.
     if use_gating {
         if let Some(gc) = gating_config {
+            // SAFETY: `M` matches the CPU ISA (top-level `dispatch_simd!`) and
+            // `z_scratch[..z_out_ch]` is a valid in-bounds slice; gating's
+            // `debug_assert!` requires an even length, which holds because
+            // `z_out_ch = bottleneck * 2` when gating is active.
             unsafe {
                 gc.apply_gating_simd::<M>(&mut z_scratch[..z_out_ch]);
             }
@@ -626,12 +675,19 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         z_len = bottleneck;
     } else if use_blending {
         if let Some(bc) = blending_config {
+            // SAFETY: `M` matches the CPU ISA (top-level `dispatch_simd!`) and
+            // `z_scratch[..z_out_ch]` is a valid in-bounds slice; blending's
+            // `debug_assert!`s require an even length and pre-allocated scratch,
+            // which hold because `z_out_ch = bottleneck * 2` when blending is active.
             unsafe {
                 bc.apply_blending_simd::<M>(&mut z_scratch[..z_out_ch]);
             }
         }
         z_len = bottleneck;
     } else {
+        // SAFETY: `M` matches the CPU ISA (top-level `dispatch_simd!`) and
+        // `z_scratch[..bottleneck]` is a valid in-bounds slice (documented
+        // precondition of `apply_simd`).
         unsafe {
             activation.apply_simd::<M>(&mut z_scratch[..bottleneck]);
         }
@@ -640,6 +696,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
 
     // FiLM post-activation.
     if let Some(ref mut film) = layer.activation_post_film {
+        // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+        // layer's `cond_size`) and `z_scratch[..z_len]` is a valid in-bounds
+        // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+        // documented preconditions.
         unsafe {
             film.process(&mut z_scratch[..z_len], cond_slice);
         }
@@ -667,6 +727,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             // sequentially to preserve exact left-to-right accumulation.
             if h1_in >= 8 {
                 for oc in ch_start..ch_end {
+                    // SAFETY: `while ic + 8 <= h1_in` keeps the 8-lane loads at
+                    // `z_off + ic` within `z_scratch` (`z_off + h1_in <= bottleneck`)
+                    // and at `oc*h1_in + ic` within `head1x1_w` (len
+                    // `head_accum_size*h1_in`); `loadu`/`storeu` need no alignment.
                     unsafe {
                         let mut acc = _mm256_setzero_ps();
                         let mut ic = 0;
@@ -705,6 +769,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         }
         // FiLM after head1x1 projection (C++ model.cpp:283-287).
         if let Some(ref mut film) = layer.head1x1_post_film {
+            // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+            // layer's `cond_size`) and `head1x1_scratch[..head_accum_size]` is a valid
+            // in-bounds sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+            // documented preconditions.
             unsafe {
                 film.process(&mut head1x1_scratch[..head_accum_size], cond_slice);
             }
@@ -714,6 +782,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
                 .copy_from_slice(&head1x1_scratch[..head_accum_size]);
         } else {
             // Vectorized accumulation into head ring buffer.
+            // SAFETY: `while c + 8 <= head_accum_size` keeps the 8-lane `loadu`/`storeu`
+            // at `head_off + c` within `head_accum` — `head_off = (head_wp + f)*head_accum_size`
+            // and `advance_head_ring` guarantees `head_wp + nf <= head_cap`, so
+            // `head_off + head_accum_size <= head_accum.len()`; `loadu`/`storeu` need no alignment.
             unsafe {
                 let mut c = 0;
                 while c + 8 <= head_accum_size {
@@ -738,6 +810,11 @@ unsafe fn process_frame_dyn<M: SimdMath>(
         if is_first {
             head_accum[head_off..head_off + bottleneck].copy_from_slice(&z_scratch[..bottleneck]);
         } else {
+            // SAFETY: `while c + 8 <= bottleneck` keeps the 8-lane `loadu`/`storeu`
+            // at `head_off + c` within `head_accum` — `head_off = (head_wp + f)*head_accum_size`
+            // and `advance_head_ring` guarantees `head_wp + nf <= head_cap`; here
+            // `bottleneck == head_accum_size` (debug_assert_eq above), so
+            // `head_off + bottleneck <= head_accum.len()`; `loadu`/`storeu` need no alignment.
             unsafe {
                 let mut c = 0;
                 while c + 8 <= bottleneck {
@@ -767,6 +844,11 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             // 8-wide SIMD across output channels with broadcast input.
             if channels >= 8 {
                 let channels_aligned = channels & !7;
+                // SAFETY: `channels_aligned = channels & !7` is a multiple of 8, so
+                // each `step_by(8)` iteration keeps `oc + 8 <= channels`; the 8-lane
+                // `loadu`/`storeu` at `oc`, `ic*channels + oc`, and `l1x1_scratch`
+                // offset `oc` all stay within buffers of length ≥ `channels`;
+                // `loadu`/`storeu` need no alignment.
                 unsafe {
                     for oc in (0..channels_aligned).step_by(8) {
                         let mut acc = _mm256_loadu_ps(l1x1_b.as_ptr().add(oc));
@@ -805,6 +887,10 @@ unsafe fn process_frame_dyn<M: SimdMath>(
                     let in_start = g * in_pg;
                     let out_start = g * out_per_g;
                     for oc in out_start..out_start + out_per_g {
+                        // SAFETY: `while ic + 8 <= in_pg` keeps the 8-lane loads at
+                        // `in_start + ic` within `z_scratch` (`in_start + in_pg <= bottleneck`)
+                        // and at `oc*in_pg + ic` within `l1x1_w` (row-major len
+                        // `channels*in_pg`); `loadu`/`storeu` need no alignment.
                         unsafe {
                             let mut acc = _mm256_setzero_ps();
                             let mut ic = 0;
@@ -845,12 +931,20 @@ unsafe fn process_frame_dyn<M: SimdMath>(
             }
         }
         if let Some(ref mut film) = layer.layer1x1_post_film.as_mut().filter(|_| use_blending) {
+            // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+            // layer's `cond_size`) and `l1x1_scratch[..channels]` is a valid in-bounds
+            // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+            // documented preconditions.
             unsafe {
                 film.process(&mut l1x1_scratch[..channels], cond_slice);
             }
         }
         // Vectorized accumulation into layer_in.
         if channels >= 8 {
+            // SAFETY: `while oc + 8 <= channels` keeps the 8-lane `loadu`/`storeu` at
+            // `base + oc` within `layer_in` (`base = f*channels` with `f < nf`, capacity
+            // ≥ `nf*channels`) and at `oc` within `l1x1_scratch` (len ≥ `channels`);
+            // `loadu`/`storeu` need no alignment.
             unsafe {
                 let mut oc = 0;
                 while oc + 8 <= channels {

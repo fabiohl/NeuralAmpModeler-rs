@@ -57,6 +57,10 @@ pub unsafe fn fused_add_gemm_batch_avx2(
         debug_assert!(bias.len() >= out_len);
     }
 
+    // SAFETY: the `debug_assert!`s above establish `weights.len() >=
+    // in_len * out_len` and `bias.len() >= out_len` (when `do_bias`), and the
+    // frame boundaries; the batch macros' loop guards keep every indexed
+    // access inside `in_frames`/`out_frames`/`weights`/`bias`.
     unsafe {
         let mut f = 0;
         gemm_batch_frame_loop_avx2!(

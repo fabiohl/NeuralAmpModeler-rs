@@ -16,8 +16,9 @@
 //! shutdown concern, not permission to drop heap-owned values on the audio
 //! thread.
 
+use crate::common::atomics::AtomicU64;
+use core::sync::atomic::Ordering;
 use rtrb::Consumer;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Unified declaration of GcItem variants and their dispatch methods.
 ///
@@ -86,6 +87,9 @@ macro_rules! define_gc_item {
                 match type_id {
                     $(
                         $(#[$attr])*
+                        // SAFETY: `ptr` was produced by `Box::into_raw` of a
+                        // live `Box<$inner>` and the caller validated `type_id`,
+                        // so this arm's `$inner` matches the original allocation.
                         $id => Some(GcItem::$variant(unsafe {
                             Box::from_raw(ptr as *mut $inner)
                         })),
@@ -149,6 +153,17 @@ define_gc_item! {
     Oversample(crate::dsp::oversample::OversampleEngine) = 5,
     #[cfg(test)]
     Test(std::sync::Arc<std::sync::atomic::AtomicU32>) = 255,
+    // Loom-model-checking payloads (long suite phase 6, `--cfg loom`): these
+    // are never compiled into any normal build. `LoomProbe` wraps a loom
+    // `UnsafeCell` so the permutation engine can detect a payload data race
+    // (producer write vs. consumer read) across the overflow-buffer AcqRel
+    // slot handoff; `LoomTag` carries a plain id for exactly-once cascade
+    // bookkeeping (the SPSC tier uses `rtrb`, whose std atomics loom cannot
+    // see, so a loom cell there would produce spurious races).
+    #[cfg(loom)]
+    LoomProbe(loom::cell::UnsafeCell<u32>) = 254,
+    #[cfg(loom)]
+    LoomTag(u32) = 253,
 }
 
 impl GcItem {
@@ -183,6 +198,10 @@ impl GcItem {
             return None;
         }
         let ptr = (packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
+        // SAFETY: `ptr` and `type_id` were recovered from a value produced by
+        // `GcItem::into_packed`, which packs the exact `Box::into_raw` pointer
+        // (asserted to fit in 56 bits) with the type_id of that same box;
+        // `from_raw_parts` re-boxes only known type_ids and leaks unknown ones.
         unsafe { Self::from_raw_parts(ptr, type_id) }
     }
 }
@@ -282,6 +301,10 @@ impl GcOverflowBuffer {
             if packed == 0 {
                 continue;
             }
+            // SAFETY: each non-zero slot value was written by `push` via
+            // `GcItem::into_packed` (a `Box::into_raw` pointer packed with its
+            // matching type_id); `swap(0, AcqRel)` hands the slot over exactly
+            // once, and `from_packed` re-boxes only known type_ids.
             unsafe {
                 match GcItem::from_packed(packed) {
                     Some(item) => items.push(item),

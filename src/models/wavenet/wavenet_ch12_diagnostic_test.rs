@@ -29,6 +29,9 @@ fn test_dense_ch12_scalar_vs_simd() {
     let mut scalar_out = [0.0f32; 12];
 
     // SIMD path
+    // SAFETY: `input` (12 elements = `IN` × 1 frame) and `simd_out` (12 elements =
+    // `OUT` × 1 frame) were allocated in this test matching the dense layer's contract;
+    // `Avx2Math` is the CPUID-selected backend whose `#[target_feature]` matches the host ISA.
     unsafe {
         dense.process_block::<crate::math::common::Avx2Math>(&input, &mut simd_out, 1);
     }
@@ -119,6 +122,9 @@ fn test_conv1d_ch12_scalar_vs_simd() {
     let mut scalar_out = [0.0f32; CH];
 
     // SIMD path
+    // SAFETY: `state` (CH × 10 frames) and `simd_out` (CH) were allocated in this test so
+    // the K=3, dilation=1 taps at `frame_idx` 5 stay in bounds; `Avx2Math` matches the CPU
+    // ISA required by `process_single_frame`.
     unsafe {
         conv.process_single_frame::<crate::math::common::Avx2Math>(
             &state,

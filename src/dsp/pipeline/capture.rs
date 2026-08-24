@@ -36,7 +36,7 @@ use super::stages::{
 /// at the start of every processing call via
 /// [`crate::math::common::set_daz_ftz`] — a fixed `stmxcsr`/`ldmxcsr` pair,
 /// outside any sample loop, with no allocation, no lock, and no blocking I/O.
-#[inline(always)]
+#[inline]
 pub fn capture_dsp_pipeline(
     samples_l: &mut [f32],
     samples_r: &mut [f32],
@@ -171,32 +171,20 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 
     // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
     if let Some(ref mut conv) = ctx.conv {
-        conv.process_variable(
-            &bufs.resamp_out_l[..n_pw],
-            &mut bufs.model_out_l[..n_pw],
-            Some(ctx.rt_status),
-        );
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bufs.model_out_l.as_ptr(),
-                bufs.resamp_out_l.as_mut_ptr(),
-                n_pw,
-            );
-        }
+        // P-03 / T5.1: process the resampled buffers in place — the adapter
+        // consumes the sub-block into its input FIFO before writing back the
+        // causal output, so source and destination may alias. This removes the
+        // up-to-32 KiB copy-back per callback (and the destination scratch).
+        conv.process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
         if !*ctx.process_mono {
-            conv.process_variable(
-                &bufs.resamp_out_r[..n_pw],
-                &mut bufs.model_out_r[..n_pw],
-                Some(ctx.rt_status),
-            );
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    bufs.model_out_r.as_ptr(),
-                    bufs.resamp_out_r.as_mut_ptr(),
-                    n_pw,
-                );
-            }
+            conv.process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
         } else {
+            // Mono: cab-sim runs on the left channel only; the right channel
+            // mirrors the processed left signal.
+            // SAFETY: `n_pw <= MAX_RESAMP_BUF` and both `resamp_out_l`/`resamp_out_r`
+            // are at least `MAX_RESAMP_BUF` elements long, so the `n_pw`-element
+            // source and destination ranges are in-bounds; the two buffers are
+            // distinct allocations, hence non-overlapping.
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     bufs.resamp_out_l.as_ptr(),

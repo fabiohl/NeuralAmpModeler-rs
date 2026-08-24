@@ -417,3 +417,149 @@ fn undersized_output_downsample_clamps_and_flags_x2() {
     assert!(n_down <= 8, "clamped to output capacity, got {n_down}");
     assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
 }
+
+#[test]
+fn test_x2_stage_phase_batched_reference_parity() {
+    // T5.3: the phase-batched upsample/downsample must match a naive reference
+    // implementation of the half-band delay-line algorithm across a sweep of
+    // block sizes (even and odd), including the downsample leftover-tail path.
+    //
+    // The comparison is ULP-tolerant: the fused AVX2 8-lane + 4-lane FMA with a
+    // single horizontal reduction reassociates the summation tree, so results
+    // differ from the old sequential `hsum + scalar tail` by at most a few ULP.
+    // The spectral/phase invariant is validated by the quality-dashboard
+    // fidelity phases (aliasing rejection, DC and roundtrip tests below).
+    use crate::dsp::oversample::HB_DELAY;
+    use crate::dsp::stage::X2Stage;
+
+    let n = HB_DELAY;
+    let stage = X2Stage::new().unwrap();
+    let up_coeffs = stage.up_filter.coeffs;
+    let down_coeffs = stage.down_filter.coeffs;
+    let up_center = stage.up_center;
+    let down_center = stage.down_center;
+
+    // ── Reference upsample (original write-then-advance algorithm) ──
+    let ref_upsample = |input: &[f32], ring: &mut Vec<f32>, pos: &mut usize, out: &mut Vec<f32>| {
+        for &x in input {
+            let p = *pos;
+            ring[p] = x;
+            ring[p + n] = x;
+            *pos = (p + 1) % n;
+            let w = *pos;
+            let even = ring[w + 5] * up_center;
+            let mut odd = 0.0f32;
+            for k in 0..up_coeffs.len() {
+                odd += up_coeffs[k] * ring[w + k];
+            }
+            out.push(even);
+            out.push(odd);
+        }
+    };
+
+    // ── Reference downsample (original per-sample parity algorithm) ──
+    let ref_downsample = |input: &[f32],
+                          ring_e: &mut Vec<f32>,
+                          ring_o: &mut Vec<f32>,
+                          pos_e: &mut usize,
+                          pos_o: &mut usize,
+                          total: &mut u64,
+                          out: &mut Vec<f32>| {
+        for &x in input {
+            if (*total & 1) == 0 {
+                ring_e[*pos_e] = x;
+                ring_e[*pos_e + HB_EVEN_LEN] = x;
+                *pos_e = (*pos_e + 1) % HB_EVEN_LEN;
+            } else {
+                ring_o[*pos_o] = x;
+                ring_o[*pos_o + HB_ODD_LEN] = x;
+                *pos_o = (*pos_o + 1) % HB_ODD_LEN;
+            }
+            *total += 1;
+            if *total >= HB_TAPS as u64 && (*total & 1) == 1 {
+                let mut sum = ring_e[*pos_e + 6] * down_center;
+                for k in 0..down_coeffs.len() {
+                    sum += down_coeffs[k] * ring_o[*pos_o + k];
+                }
+                out.push(sum);
+            }
+        }
+    };
+
+    const HB_TAPS: usize = 25;
+    const HB_EVEN_LEN: usize = HB_TAPS.div_ceil(2);
+    const HB_ODD_LEN: usize = HB_TAPS / 2;
+
+    let signal: Vec<f32> = (0..1024)
+        .map(|i| (i as f32 * 0.003).sin() * 0.7 + (i as f32 * 0.0007).cos())
+        .collect();
+
+    // ── Upsample parity across block sizes 1..=37 ──
+    for block in 1..=37usize {
+        let mut s = X2Stage::new().unwrap();
+        let mut up_out = Vec::new();
+        let mut r_ring = vec![0.0f32; 2 * n];
+        let mut r_pos = 0usize;
+        let mut r_out = Vec::new();
+
+        let mut start = 0;
+        while start < signal.len() {
+            let end = (start + block).min(signal.len());
+            let chunk = &signal[start..end];
+            let mut buf = vec![0.0f32; chunk.len() * 2];
+            s.upsample(chunk, &mut buf);
+            up_out.extend_from_slice(&buf[..chunk.len() * 2]);
+            ref_upsample(chunk, &mut r_ring, &mut r_pos, &mut r_out);
+            start = end;
+        }
+
+        assert_eq!(up_out.len(), r_out.len(), "upsample block={block}");
+        for (i, (a, b)) in up_out.iter().zip(r_out.iter()).enumerate() {
+            let err = (a - b).abs();
+            assert!(
+                err < 1e-5,
+                "upsample mismatch at {i} block={block}: {a} vs {b} (err={err})"
+            );
+        }
+    }
+
+    // ── Downsample parity across block sizes 1..=37 ──
+    for block in 1..=37usize {
+        let mut s = X2Stage::new().unwrap();
+        let mut down_out = Vec::new();
+        let mut r_e = vec![0.0f32; HB_EVEN_LEN * 2];
+        let mut r_o = vec![0.0f32; HB_ODD_LEN * 2];
+        let mut r_pe = 0usize;
+        let mut r_po = 0usize;
+        let mut r_total = 0u64;
+        let mut r_out = Vec::new();
+
+        let mut start = 0;
+        while start < signal.len() {
+            let end = (start + block).min(signal.len());
+            let chunk = &signal[start..end];
+            let mut buf = vec![0.0f32; chunk.len()];
+            let written = s.downsample(chunk, &mut buf);
+            down_out.extend_from_slice(&buf[..written]);
+            ref_downsample(
+                chunk,
+                &mut r_e,
+                &mut r_o,
+                &mut r_pe,
+                &mut r_po,
+                &mut r_total,
+                &mut r_out,
+            );
+            start = end;
+        }
+
+        assert_eq!(down_out.len(), r_out.len(), "downsample block={block}");
+        for (i, (a, b)) in down_out.iter().zip(r_out.iter()).enumerate() {
+            let err = (a - b).abs();
+            assert!(
+                err < 1e-5,
+                "downsample mismatch at {i} block={block}: {a} vs {b} (err={err})"
+            );
+        }
+    }
+}

@@ -25,7 +25,11 @@ use core::arch::x86_64::*;
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
+    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
+    // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_avx2`.
     let s = unsafe { simd_sigmoid_avx2(x) };
+    // SAFETY: `simd_relu_avx2` needs the same AVX2+FMA support guaranteed by
+    // this `unsafe fn`'s `#[target_feature]` and caller contract.
     unsafe { simd_relu_avx2(s) }
 }
 
@@ -35,7 +39,11 @@ pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
+    // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let (s1, s2) = unsafe { simd_sigmoid_dual_avx2(x1, x2) };
+    // SAFETY: `simd_relu_dual_avx2` needs the same AVX2+FMA support guaranteed
+    // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     unsafe { simd_relu_dual_avx2(s1, s2) }
 }
 
@@ -47,7 +55,11 @@ pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m2
 /// Requires AVX2 and FMA support.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn simd_tanh_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
+    // SAFETY: `simd_tanh_avx2` requires AVX2+FMA, guaranteed by this `unsafe
+    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
     let t1 = unsafe { simd_tanh_avx2(x1) };
+    // SAFETY: `simd_sigmoid_avx2` needs the same AVX2+FMA support guaranteed by
+    // this `unsafe fn`'s `#[target_feature]` and caller contract.
     let s2 = unsafe { simd_sigmoid_avx2(x2) };
     (t1, s2)
 }
@@ -59,7 +71,12 @@ pub unsafe fn simd_tanh_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_tanh_sigmoid_dual_avx512(x1: __m512, x2: __m512) -> (__m512, __m512) {
+    // SAFETY: `simd_tanh_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let t1 = unsafe { simd_tanh_avx512(x1) };
+    // SAFETY: `simd_sigmoid_avx512` needs the same AVX-512F/VL support
+    // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let s2 = unsafe { simd_sigmoid_avx512(x2) };
     (t1, s2)
 }
@@ -71,7 +88,12 @@ pub unsafe fn simd_tanh_sigmoid_dual_avx512(x1: __m512, x2: __m512) -> (__m512, 
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
+    // SAFETY: `simd_sigmoid_avx512` requires AVX-512F/VL, guaranteed by this
+    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // contract.
     let s = unsafe { simd_sigmoid_avx512(x) };
+    // SAFETY: `simd_relu_avx512` needs the same AVX-512F/VL support guaranteed
+    // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     unsafe { simd_relu_avx512(s) }
 }
 
@@ -84,6 +106,9 @@ pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx2!` runs the dual body while `i + 16 <= len`
+    // (offsets `i`/`i + 8`) and the single body while `i + 8 <= len`, so every
+    // 8-lane load/store stays within `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx2!(
             i,
@@ -122,6 +147,9 @@ pub unsafe fn fused_sigmoid_relu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
 
+    // SAFETY: `activation_simd_avx512!` runs its body while `i + 16 <= len` (it
+    // loads/stores only at offset `i`), so the 16-lane access stays within
+    // `slice`; `loadu`/`storeu` need no alignment.
     unsafe {
         activation_simd_avx512!(i, len, {
             let x = _mm512_loadu_ps(slice.as_ptr().add(i));

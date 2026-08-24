@@ -71,6 +71,12 @@ impl WaveNetLayerDyn {
             self.scratch_mixin.len()
         );
 
+        // SAFETY: the `debug_assert!` above bounds `scratch_len = num_frames * ch` within the
+        // scratch buffers (both pre-allocated to `ch * WAVENET_MAX_NUM_FRAMES`), the
+        // `layer_buffer` residual slice `lb_offset..lb_offset + scratch_len` is covered by the
+        // caller contract on `buffer_start`/`num_frames`, and the inner `unsafe fn` calls
+        // (`process_block`, activation and residual kernels) are reached under those same
+        // validated preconditions with `M` dispatched by runtime CPUID checks.
         unsafe {
             let mixin_out = &mut self.scratch_mixin[..scratch_len];
             self.input_mixin

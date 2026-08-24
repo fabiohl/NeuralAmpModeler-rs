@@ -25,6 +25,9 @@ pub unsafe fn dot_product_4x_interleaved_avx512(weights: &[[u16; 4]], state: &[f
     debug_assert!(weights.len() >= len);
     let mut i = 0;
 
+    // SAFETY: `len = state.len().min(weights.len())` with
+    // `debug_assert!(weights.len() >= len)`; the loop guards `i + 32`,
+    // `i + 16`, `i + 4`, and `i < len` bound every 4-f32/16-u16 load.
     unsafe {
         let perm_idx = _mm512_set_epi32(3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0);
 

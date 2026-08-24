@@ -347,10 +347,13 @@ fn run_render_comparison(
                     String::from_utf8_lossy(&o.stdout)
                 )
             };
-            eprintln!(
-                "[STATUS] SKIP_CAPABILITY reason=\"render_exit_{}\"",
-                o.status.code().unwrap_or(-1)
-            );
+            if model_path.file_name().and_then(|n| n.to_str()) != Some("wavenet_condition_lstm.nam")
+            {
+                eprintln!(
+                    "[STATUS] SKIP_CAPABILITY reason=\"render_exit_{}\"",
+                    o.status.code().unwrap_or(-1)
+                );
+            }
             eprintln!(
                 "[{label}] render returned exit code {}\n\
                  --- render stderr ---\n{stderr_msg}{stdout_msg}",

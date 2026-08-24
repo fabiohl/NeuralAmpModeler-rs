@@ -41,6 +41,17 @@
 //  Tests requiring AVX-512 hardware are `#[ignore]` and only execute in
 //  environments that support those ISA levels (or via `utils/tests-long.sh`).
 //
+//  # Scope: self-consistency vs. real cross-ISA parity (T3.2 / G-02)
+//
+//  The local QA dashboard (`utils/quality-dashboard.sh`) runs only the AVX2-vs-
+//  AVX2 self-consistency cases under the phase name `isa_self_consistency` and
+//  declares the cross-ISA matrix as an explicit `SKIP_CAPABILITY` gap
+//  (`isa_parity_cross_isa` / `cross_isa_matrix_requires_avx512_remote`). The
+//  real inter-ISA matrix (AVX2 vs AVX-512) is restricted to the multi-target
+//  environment via `utils/remote-simd-gate.sh` (`--features avx512 --include-ignored`)
+//  and the long suite — a local `isa_self_consistency: PASS` is internal
+//  determinism (MSE=0 tautology), never a claim of cross-ISA parity.
+//
 //  # ISA Coverage Map
 //
 //  | ISA Pair                   | CI Coverage       | Notes                                                 |
@@ -838,6 +849,10 @@ fn isa_matrix_header_info() {
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║  Cross-ISA Determinism Matrix (P-8 / Task 2.7)               ║");
     println!("║  Reference = AVX2 (x86-64-v3, always available)              ║");
+    println!("║                                                              ║");
+    println!("║  Scope (T3.2): local runner = AVX2 self-consistency only     ║");
+    println!("║  (isa_self_consistency). Cross-ISA matrix = remote gate      ║");
+    println!("║  (utils/remote-simd-gate.sh, --features avx512) / long suite ║");
     println!("║                                                              ║");
     println!("║  Kernel-level scalar-vs-SIMD parity: gemv_test.rs,           ║");
     println!("║  dot_4x_test.rs, dot_8x_test.rs, dot_16x_test.rs,            ║");

@@ -88,8 +88,6 @@ fn build_identity_head() -> PostStackHead {
         },
         activation: ActivationType::Tanh,
         state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
-        scratch: AlignedVec::new(out_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers"),
     }
 }
 
@@ -100,6 +98,9 @@ fn test_process_single_frame_identity() {
     let input = [0.5f32];
     let mut output = [0.0f32];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch` and
+    // `num_frames * out_ch` elements (1 each), and the head state was initialized by its
+    // constructor, satisfying `process_block`'s documented contract.
     unsafe {
         head.process_block(&input, &mut output, 1);
     }
@@ -114,6 +115,9 @@ fn test_process_multi_frame() {
     let input = [0.1f32, -0.2, 0.3, -0.4, 0.5];
     let mut output = [0.0f32; 5];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch` and
+    // `num_frames * out_ch` elements (5 each, in_ch = out_ch = 1), and the head state was
+    // initialized by its constructor, satisfying `process_block`'s documented contract.
     unsafe {
         head.process_block(&input, &mut output, 5);
     }
@@ -135,6 +139,9 @@ fn test_prewarm_no_nan() {
 
     let input = [0.0f32];
     let mut output = [0.0f32];
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch` and
+    // `num_frames * out_ch` elements (1 each), and the head state was prewarmed,
+    // satisfying `process_block`'s documented contract.
     unsafe {
         head.process_block(&input, &mut output, 1);
     }
@@ -154,6 +161,9 @@ fn test_deterministic() {
     let mut out1 = [0.0f32; 5];
     let mut out2 = [0.0f32; 5];
 
+    // SAFETY: `input`/`out1`/`out2` were allocated in this test with `num_frames * in_ch`
+    // and `num_frames * out_ch` elements (5 each), and both heads' states were prewarmed,
+    // satisfying `process_block`'s documented contract.
     unsafe {
         head1.process_block(&input, &mut out1, 5);
         head2.process_block(&input, &mut out2, 5);
@@ -193,8 +203,6 @@ fn test_process_with_weights_and_activation() {
         },
         activation: ActivationType::Tanh,
         state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
-        scratch: AlignedVec::new(out_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers"),
     };
 
     // Frame 0: k=0 reads buf[-2]=0, k=1 reads buf[-1]=0, k=2 reads buf[+0]=1.0
@@ -206,6 +214,9 @@ fn test_process_with_weights_and_activation() {
     let input = [1.0f32, 2.0, 3.0];
     let mut output = [0.0f32; 3];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch` and
+    // `num_frames * out_ch` elements (3 each, in_ch = out_ch = 1); the kernel=3 state is
+    // zero-initialized and the kernel clamps warm-up taps, satisfying `process_block`.
     unsafe {
         head.process_block(&input, &mut output, 3);
     }
@@ -240,6 +251,9 @@ fn test_set_weights_and_bias() {
 
     let input = [0.5f32];
     let mut output = [0.0f32];
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch` and
+    // `num_frames * out_ch` elements (1 each), and the head state was initialized by its
+    // constructor, satisfying `process_block`'s documented contract.
     unsafe {
         head.process_block(&input, &mut output, 1);
     }
@@ -288,8 +302,6 @@ fn test_multi_channel_in_out() {
         },
         activation: ActivationType::Tanh,
         state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
-        scratch: AlignedVec::new(out_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-            .expect("allocation should succeed for test-sized buffers"),
     };
 
     // Frame 0: in=[A=1.0, B=0.5]
@@ -299,6 +311,9 @@ fn test_multi_channel_in_out() {
     let input = [1.0f32, 0.5];
     let mut output = [0.0f32; 3];
 
+    // SAFETY: `input`/`output` were allocated in this test with `num_frames * in_ch`
+    // (1 × 2) and `num_frames * out_ch` (1 × 3) elements, and the head state was
+    // initialized by its constructor, satisfying `process_block`'s documented contract.
     unsafe {
         head.process_block(&input, &mut output, 1);
     }

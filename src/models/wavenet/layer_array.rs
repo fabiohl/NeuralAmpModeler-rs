@@ -76,6 +76,11 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
         debug_assert_eq!(self.layers.len(), self.states.len());
         let states_ptr = self.states.as_mut_ptr();
 
+        // SAFETY: `states_ptr` is derived from `self.states` with `layers.len() == states.len()`
+        // (the `debug_assert_eq!` above), and every index used is `< num_layers <= states.len()`
+        // (`states_ptr.add(0)`, `add(i)`, and `add(i + 1)` guarded by `i + 1 < num_layers`), so
+        // each `&mut *` reborrow is valid and targets a distinct state slot per layer iteration;
+        // the `_mm_prefetch` calls only touch the addresses, not the contents.
         unsafe {
             let state_0 = &mut *states_ptr.add(0);
             let start = state_0.buffer_start * CH;
@@ -196,6 +201,10 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
         condition: &[f32],
         prev_head_outputs: Option<&[f32]>,
     ) {
+        // SAFETY: `prewarm_internal` is an `unsafe fn` only reachable through the `dispatch_simd!`
+        // macro (per its docs), which dispatches on runtime CPUID feature checks to a matching
+        // `#[target_feature]` backend `M`; the buffers are the same validated slices passed to
+        // this safe wrapper.
         unsafe {
             // Unified via shared code: we process 1 frame with the prewarm flag active.
             // [STEP 4.1] inside `process_block_internal` handles the backfill.

@@ -330,3 +330,32 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     assert_eq!(contract.provenance.git_commit, "0e22ea4ec247");
     assert!(contract.provenance.git_dirty);
 }
+
+/// T3.2 drift guard: the dashboard shell emitter keeps mirror variables of the
+/// canonical ISA phase ids/reason defined in `phases.rs`. If they drift, the
+/// report renderer (`render.rs`) would query a phase id the receipt never
+/// emitted (or vice-versa) and silently misreport. This test reads the shell
+/// script and fails on any mismatch.
+#[test]
+fn dashboard_phase_ids_match_rust_constants() {
+    let script = std::fs::read_to_string("utils/quality-dashboard.sh")
+        .expect("utils/quality-dashboard.sh must exist for the drift guard");
+
+    for (name, value) in [
+        (
+            "ISA_SELF_CONSISTENCY_PHASE",
+            phases::ISA_SELF_CONSISTENCY_PHASE,
+        ),
+        (
+            "ISA_PARITY_CROSS_ISA_PHASE",
+            phases::ISA_PARITY_CROSS_ISA_PHASE,
+        ),
+        ("CROSS_ISA_GAP_REASON", phases::CROSS_ISA_GAP_REASON),
+    ] {
+        assert!(
+            script.contains(&format!("{name}=\"{value}\"")),
+            "utils/quality-dashboard.sh defines `{name}=\"{value}\"` but it does not match \
+             src/testing/qa/phases.rs ({value}) — keep the mirror in sync"
+        );
+    }
+}

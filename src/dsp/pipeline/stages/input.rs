@@ -136,6 +136,8 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
     // 3. INPUT VOLUME ADJUSTMENT (GAIN) + DENORMAL SUPPRESSION (FUSED WHEN POSSIBLE)
     // SAFETY: slice is valid; gain and offset are finite f32.
     if (ctx.input_gain_mult - 1.0).abs() >= 1e-6 {
+        // SAFETY: `samples_l[..n_samples]` is in-bounds (`n_samples` clamped to
+        // the slice length by the caller) and gain/offset are finite f32 values.
         unsafe {
             M::apply_gain_then_dither(
                 &mut samples_l[..n_samples],

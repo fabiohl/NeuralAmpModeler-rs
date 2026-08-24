@@ -103,6 +103,8 @@ fn test_film_process_identity_shift() {
     let mut input = vec![2.0f32, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0];
     let expected_input = input.clone();
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     // Identity scale (≈1.0) + zero shift → output ≈ input
@@ -147,6 +149,8 @@ fn test_film_process_scale_only() {
         cond_to_scale_shift_ref(&weights, &bias, &condition, channels, cond_size, false, 1);
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     for c in 0..channels {
@@ -210,6 +214,8 @@ fn test_film_process_groups_shift() {
     );
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     for c in 0..channels {
@@ -252,6 +258,8 @@ fn test_film_process_odd_channels() {
         cond_to_scale_shift_ref(&weights, &bias, &condition, channels, cond_size, true, 1);
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     for c in 0..channels {
@@ -292,6 +300,8 @@ fn test_film_shift_buffer_zeroed_when_shift_false() {
         layer.scale_shift_buf[c] = 999.0;
     }
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     // Shift region must be zero
@@ -329,6 +339,8 @@ fn test_film_process_cond_size_greater_than_1() {
         cond_to_scale_shift_ref(&weights, &bias, &condition, channels, cond_size, true, 1);
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     for c in 0..channels {
@@ -391,6 +403,8 @@ fn test_film_process_cond_size_2_groups_2() {
     );
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     for c in 0..channels {
@@ -449,6 +463,8 @@ fn test_film_process_cond_size_4_groups_4_scale_only() {
     );
     let expected = apply_modulation_ref(&input, &ref_scale_shift);
 
+    // SAFETY: `condition.len() == cond_size` and `input.len() <= channels` as required by
+    // `FiLMLayer::process`'s Safety docs.
     unsafe { layer.process(&mut input, &condition) };
 
     // Shift region must be zero when shift=false

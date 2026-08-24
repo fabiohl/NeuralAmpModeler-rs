@@ -74,6 +74,8 @@ pub fn apply_gain_simd(buffer: &mut [f32], gain_linear: f32) {
     if (gain_linear - 1.0).abs() < 1e-6 {
         return;
     }
+    // SAFETY: `buffer` is a valid `&mut [f32]` (in-bounds, initialized,
+    // aligned), satisfying `apply_gain`'s documented precondition.
     unsafe { apply_gain(buffer, gain_linear) };
 }
 
@@ -86,6 +88,8 @@ pub fn apply_ramp_simd(buffer: &mut [f32], start: f32, step: f32) {
         apply_gain_simd(buffer, start);
         return;
     }
+    // SAFETY: `buffer` is a valid `&mut [f32]` (in-bounds, initialized,
+    // aligned), satisfying `apply_ramp`'s documented precondition.
     unsafe { apply_ramp(buffer, start, step) };
 }
 

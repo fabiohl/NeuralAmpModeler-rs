@@ -51,6 +51,10 @@ pub unsafe fn fused_add_gemv_avx2(
         _ => {}
     }
 
+    // SAFETY: `gemv_kernel!` keeps `in_c + 8 <= in_len` (and the tail
+    // `in_c < in_len`), the `out_c + 8 <= out_len` loop guard bounds the
+    // 8-wide out/bias loads and stores, and the caller contract provides
+    // `weights.len() >= in_len * out_len`.
     unsafe {
         let mut out_c = 0;
         while out_c + 8 <= out_len {
@@ -124,6 +128,10 @@ pub unsafe fn gemv_overwrite_avx2(
         _ => {}
     }
 
+    // SAFETY: `gemv_kernel!` keeps `in_c + 8 <= in_len` (and the tail
+    // `in_c < in_len`), the `out_c + 8 <= out_len` loop guard bounds the
+    // 8-wide out/bias loads and stores, and the caller contract provides
+    // `weights.len() >= in_len * out_len`.
     unsafe {
         let mut out_c = 0;
         while out_c + 8 <= out_len {

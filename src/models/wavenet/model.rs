@@ -87,6 +87,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Production policy is the AVX2 backend; the AVX-512 match arm is not a
     /// promoted product path (see `docs/architecture.md` §1.2).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // SAFETY: `dispatch_simd!` expands to a runtime-CPUID-matched call of
+        // `process_internal::<M>`, guaranteeing `M`'s `#[target_feature]` backend is available on
+        // this host; `input`/`output` are the same validated slices passed to this safe wrapper.
         unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
     }
 
@@ -113,6 +116,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
             let num_frames = (total_frames - pos).min(WAVENET_MAX_NUM_FRAMES);
             let in_slice = &input[pos..pos + num_frames];
 
+            // SAFETY: `num_frames <= WAVENET_MAX_NUM_FRAMES` (chunk loop), so the arrays'
+            // pre-allocated scratch and ring buffers (sized for `WAVENET_MAX_NUM_FRAMES` frames)
+            // cover every access; `in_slice` has exactly `num_frames` frames, and the head/array
+            // output slices (`num_frames * HEAD` / `num_frames * CH`) match the array geometry.
             unsafe {
                 // [STEP 1: Array1 Forward]
                 // Conditioning and Input (1D: 1 channel) -> formatted as blocks of IN frames.
@@ -140,6 +147,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
             // C++ reference: output = head_scale × last_array.head_outputs
             let array2_head = &self.array2.head_outputs[0..num_frames];
             let out_slice = &mut output[pos..pos + num_frames];
+            // SAFETY: `array2_head` and `out_slice` both have exactly `num_frames` f32s, are
+            // non-null/`f32`-aligned, and refer to distinct buffers (`head_outputs` vs `output`,
+            // no overlap).
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     array2_head.as_ptr(),
@@ -147,6 +157,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
                     num_frames,
                 );
             }
+            // SAFETY: `M` is guaranteed by the runtime CPUID dispatch to support the executed
+            // backend's instructions, and `out_slice` has `num_frames` elements as the kernel
+            // requires.
             unsafe {
                 M::apply_gain(out_slice, self.head_scale);
             }
@@ -160,6 +173,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// policy is AVX2; the AVX-512 arm is not a promoted product path.
     #[cold]
     pub fn prewarm(&mut self) {
+        // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a matching
+        // `#[target_feature]` backend `M`; `prewarm_internal` only touches the model's own
+        // pre-allocated buffers.
         unsafe {
             crate::math::common::dispatch_simd!(self, prewarm_internal);
         }
@@ -173,6 +189,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]
     pub unsafe fn prewarm_avx512(&mut self) {
+        // SAFETY: this body runs under `#[target_feature(enable = "avx512f,avx512vl")]` and the fn
+        // is documented to require a supported AVX-512 processor, so the `Avx512Math` kernel
+        // instructions are available; `prewarm_internal` only touches the model's own
+        // pre-allocated buffers.
         unsafe { self.prewarm_internal::<crate::math::common::Avx512Math>() };
     }
 
@@ -182,23 +202,31 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
+        // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
+        // `Avx2Math` is selected only on such hosts, so its instructions are available;
+        // `prewarm_internal` only touches the model's own pre-allocated buffers.
         unsafe { self.prewarm_internal::<crate::math::common::Avx2Math>() };
     }
 
     /// # Safety
     /// Call this via `dispatch_simd!` macro only.
-    #[inline(always)]
     #[cold]
     unsafe fn prewarm_internal<M: SimdMath>(&mut self) {
         let condition = [0.0f32];
         let layer_inputs_1 = [0.0f32];
 
+        // SAFETY: `array1.prewarm_internal` is an `unsafe fn` only reachable via `dispatch_simd!`
+        // (per its docs) with `M`'s features guaranteed by the dispatch; it processes a single
+        // frame against the array's own pre-allocated buffers.
         unsafe {
             self.array1
                 .prewarm_internal::<M>(&layer_inputs_1, &condition, None);
         }
         let array1_outputs = &self.array1.array_outputs[0..CH];
         let array1_head_out = &self.array1.head_outputs[0..HEAD];
+        // SAFETY: same dispatch precondition as the array1 call above; `array1_outputs` and
+        // `array1_head_out` are array1's outputs sized `CH`/`HEAD` for one frame, matching
+        // array2's `IN=CH`/head geometry.
         unsafe {
             self.array2
                 .prewarm_internal::<M>(array1_outputs, &condition, Some(array1_head_out));
