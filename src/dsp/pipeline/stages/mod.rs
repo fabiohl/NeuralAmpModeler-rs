@@ -19,6 +19,8 @@ mod routing;
 pub use bridge::write_bridge;
 /// Dispatches model inference across architecture-specific process methods.
 pub use inference::run_inference;
+/// Streaming inference pass with strict host cardinality (F-PERF-002).
+pub use inference::run_inference_streaming;
 /// Denormal dither offset constant for FTZ/DAZ maintenance on the audio hot path.
 pub use input::DENORMAL_DITHER_OFFSET;
 #[cfg(feature = "testing")]

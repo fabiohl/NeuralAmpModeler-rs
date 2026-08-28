@@ -25,11 +25,11 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 static SYSTEM_SNAPSHOT: OnceLock<SystemSnapshot> = OnceLock::new();
-static SHUTDOWN_IN_PROGRESS: OnceLock<bool> = OnceLock::new();
+static SHUTDOWN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static PANIC_HOOK_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -40,13 +40,21 @@ thread_local! {
 /// This bypasses the panic hook to avoid race conditions or deadlock
 /// during host-initiated cleanup.
 pub fn set_shutdown_in_progress() {
-    let _ = SHUTDOWN_IN_PROGRESS.set(true);
+    SHUTDOWN_IN_PROGRESS.store(true, Ordering::Release);
+}
+
+/// Clears the global shutdown flag when a new plugin instance is initialized.
+///
+/// Ensures multi-instance DAW hosts can safely recycle instances (0 -> 1 -> 0 -> 1)
+/// and retain active crash-reporting for subsequent sessions in the same process.
+pub fn clear_shutdown_in_progress() {
+    SHUTDOWN_IN_PROGRESS.store(false, Ordering::Release);
 }
 
 /// Checks if a shutdown (host-initiated or signal-initiated) is in progress.
 pub fn is_shutdown_in_progress() -> bool {
-    crate::common::spsc::SHUTDOWN.load(std::sync::atomic::Ordering::Acquire)
-        || *SHUTDOWN_IN_PROGRESS.get().unwrap_or(&false)
+    crate::common::spsc::SHUTDOWN.load(Ordering::Acquire)
+        || SHUTDOWN_IN_PROGRESS.load(Ordering::Acquire)
 }
 
 struct LimitWriter<'a> {
@@ -372,3 +380,7 @@ pub fn install_panic_hook(component: &'static str) {
         prev_hook(info);
     }));
 }
+
+#[cfg(test)]
+#[path = "panic_hook_test.rs"]
+mod tests;

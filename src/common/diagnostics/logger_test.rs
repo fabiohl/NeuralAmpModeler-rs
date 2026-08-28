@@ -381,7 +381,7 @@ fn sink_auto_purge_on_drop() {
     {
         let sinks = logger.sinks.lock().unwrap();
         assert_eq!(sinks.len(), 1);
-        assert!(sinks[0].upgrade().is_none());
+        assert!(sinks[0].1.upgrade().is_none());
     }
 
     // Next log dispatch purges the dead Weak
@@ -453,7 +453,7 @@ fn sink_mixed_live_and_dead_purge_correctly() {
     // Dead sink purged, live sink remains
     let sinks = logger.sinks.lock().unwrap();
     assert_eq!(sinks.len(), 1);
-    assert!(sinks[0].upgrade().is_some());
+    assert!(sinks[0].1.upgrade().is_some());
 }
 
 // =========================================================================
@@ -652,4 +652,208 @@ fn test_log_record_timestamp_is_monotonic() {
         r2.timestamp_secs >= r1.timestamp_secs,
         "LogRecord timestamps should be monotonic"
     );
+}
+
+// =========================================================================
+// Multi-instance isolation and routing tests (Task T5.1 / G-ROB-PLUG-03)
+// =========================================================================
+
+#[test]
+fn test_scope_instance_and_current_instance_id() {
+    assert_eq!(current_instance_id(), None);
+    {
+        let _scope = scope_instance(42);
+        assert_eq!(current_instance_id(), Some(42));
+        {
+            let _nested = scope_instance(100);
+            assert_eq!(current_instance_id(), Some(100));
+        }
+        assert_eq!(current_instance_id(), Some(42));
+    }
+    assert_eq!(current_instance_id(), None);
+}
+
+#[test]
+fn test_with_instance_id() {
+    assert_eq!(current_instance_id(), None);
+    let val = with_instance_id(77, || {
+        assert_eq!(current_instance_id(), Some(77));
+        "result"
+    });
+    assert_eq!(val, "result");
+    assert_eq!(current_instance_id(), None);
+}
+
+#[test]
+fn test_log_buffer_instance_filtering() {
+    let buf = LogBuffer::new(64);
+    buf.push(LogRecord::now_with_instance(
+        "INFO",
+        "m1",
+        "msg from inst 1",
+        Some(1),
+    ));
+    buf.push(LogRecord::now_with_instance(
+        "WARN",
+        "m2",
+        "msg from inst 2",
+        Some(2),
+    ));
+    buf.push(LogRecord::now_with_instance(
+        "ERROR",
+        "m1",
+        "another from inst 1",
+        Some(1),
+    ));
+    buf.push(LogRecord::now_with_instance(
+        "INFO",
+        "global",
+        "msg from global",
+        None,
+    ));
+
+    let snap_1 = buf.snapshot_for_instance(1);
+    assert_eq!(snap_1.len(), 2);
+    assert_eq!(snap_1[0].message, "msg from inst 1");
+    assert_eq!(snap_1[1].message, "another from inst 1");
+
+    let snap_2 = buf.snapshot_for_instance(2);
+    assert_eq!(snap_2.len(), 1);
+    assert_eq!(snap_2[0].message, "msg from inst 2");
+
+    let snap_3 = buf.snapshot_for_instance(3);
+    assert!(snap_3.is_empty());
+
+    let trace_1 = buf.render_trace_for_instance(1, 10);
+    assert!(trace_1.contains("msg from inst 1"));
+    assert!(trace_1.contains("another from inst 1"));
+    assert!(!trace_1.contains("msg from inst 2"));
+    assert!(!trace_1.contains("msg from global"));
+
+    let trace_2 = buf.render_trace_for_instance(2, 10);
+    assert!(trace_2.contains("msg from inst 2"));
+    assert!(!trace_2.contains("msg from inst 1"));
+}
+
+#[test]
+fn test_nam_logger_instance_sink_routing() {
+    let logger = new_nam_logger(false, LevelFilter::Trace);
+
+    let logs_inst_1 = Arc::new(Mutex::new(Vec::new()));
+    let logs_inst_2 = Arc::new(Mutex::new(Vec::new()));
+    let logs_global = Arc::new(Mutex::new(Vec::new()));
+
+    let l1 = Arc::clone(&logs_inst_1);
+    let sink_1: Arc<HostLogFn> = Arc::new(move |_sev, msg| {
+        l1.lock().unwrap().push(msg.to_string());
+    });
+
+    let l2 = Arc::clone(&logs_inst_2);
+    let sink_2: Arc<HostLogFn> = Arc::new(move |_sev, msg| {
+        l2.lock().unwrap().push(msg.to_string());
+    });
+
+    let lg = Arc::clone(&logs_global);
+    let sink_g: Arc<HostLogFn> = Arc::new(move |_sev, msg| {
+        lg.lock().unwrap().push(msg.to_string());
+    });
+
+    logger.register_instance_sink(1, &sink_1);
+    logger.register_instance_sink(2, &sink_2);
+    logger.register_sink(&sink_g);
+
+    // Emit log under instance 1 scope
+    with_instance_id(1, || {
+        let record = build_record(log::Level::Info, "test", format_args!("hello from inst 1"));
+        logger.log(&record);
+    });
+
+    // Emit log under instance 2 scope
+    with_instance_id(2, || {
+        let record = build_record(log::Level::Warn, "test", format_args!("hello from inst 2"));
+        logger.log(&record);
+    });
+
+    // Emit log without instance scope (global)
+    {
+        let record = build_record(log::Level::Error, "test", format_args!("unscoped message"));
+        logger.log(&record);
+    }
+
+    let snap_1 = logs_inst_1.lock().unwrap().clone();
+    let snap_2 = logs_inst_2.lock().unwrap().clone();
+    let snap_g = logs_global.lock().unwrap().clone();
+
+    // Instance 1 sink should have received its own message and global unscoped message,
+    // but NEVER instance 2's message.
+    assert!(snap_1.contains(&"hello from inst 1".to_string()));
+    assert!(snap_1.contains(&"unscoped message".to_string()));
+    assert!(!snap_1.contains(&"hello from inst 2".to_string()));
+
+    // Instance 2 sink should have received its own message and global unscoped message,
+    // but NEVER instance 1's message.
+    assert!(snap_2.contains(&"hello from inst 2".to_string()));
+    assert!(snap_2.contains(&"unscoped message".to_string()));
+    assert!(!snap_2.contains(&"hello from inst 1".to_string()));
+
+    // Global sink receives all messages
+    assert_eq!(snap_g.len(), 3);
+}
+
+#[test]
+fn test_concurrent_multi_instance_logging() {
+    let logger = Arc::new(new_nam_logger(false, LevelFilter::Trace));
+    let n_instances = 16;
+    let msgs_per_instance = 20;
+
+    let sink_records: Vec<Arc<Mutex<Vec<String>>>> = (0..n_instances)
+        .map(|_| Arc::new(Mutex::new(Vec::new())))
+        .collect();
+
+    let mut sinks = Vec::new();
+    for (i, rec) in sink_records.iter().enumerate() {
+        let r = Arc::clone(rec);
+        let sink: Arc<HostLogFn> = Arc::new(move |_, msg| {
+            r.lock().unwrap().push(msg.to_string());
+        });
+        logger.register_instance_sink((i + 1) as u64, &sink);
+        sinks.push(sink);
+    }
+
+    let handles: Vec<_> = (0..n_instances)
+        .map(|i| {
+            let inst_id = (i + 1) as u64;
+            let l = Arc::clone(&logger);
+            thread::spawn(move || {
+                let _scope = scope_instance(inst_id);
+                for m in 0..msgs_per_instance {
+                    let msg = format!("inst_{inst_id}_msg_{m}");
+                    let args = format_args!("{}", msg);
+                    let record = build_record(log::Level::Info, "multi_test", args);
+                    l.log(&record);
+                }
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Verify isolation across all 16 instances
+    for (i, rec) in sink_records.iter().enumerate() {
+        let inst_id = (i + 1) as u64;
+        let msgs = rec.lock().unwrap().clone();
+        assert_eq!(
+            msgs.len(),
+            msgs_per_instance,
+            "Instance {inst_id} should have received exactly {msgs_per_instance} messages"
+        );
+        for msg in &msgs {
+            assert!(
+                msg.starts_with(&format!("inst_{inst_id}_")),
+                "Instance {inst_id} sink received message from another instance: {msg}"
+            );
+        }
+    }
 }

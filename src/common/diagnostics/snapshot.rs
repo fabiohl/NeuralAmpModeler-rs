@@ -115,6 +115,19 @@ pub struct TelemetrySnapshot {
     pub input_buffer_miss: u32,
     /// Total host buffer misses on the playback (output) side.
     pub output_buffer_miss: u32,
+    /// Total playback cycles that delivered deterministic silence because the
+    /// bridge produced no new DSP block (G-RB-001 / T4.2).
+    pub playback_bridge_starvation: u32,
+    /// Last sample rate negotiated by the capture stream's `param_changed`
+    /// listener (0 = never negotiated) (G-RB-001 / T4.3).
+    pub capture_negotiated_rate: u32,
+    /// Last sample rate negotiated by the playback stream's `param_changed`
+    /// listener (0 = never negotiated) (G-RB-001 / T4.3).
+    pub playback_negotiated_rate: u32,
+    /// Sticky latch: `false` while the last negotiated SPA format violated the
+    /// strict F32P planar stereo contract (RT mutes until a valid
+    /// renegotiation restores it) (G-RB-001 / T4.3).
+    pub format_contract_ok: bool,
 }
 
 /// Snapshot of the dynamic runtime state, captured on-demand.
@@ -235,6 +248,10 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
         let drains = self.drains.load(Ordering::Relaxed);
         let input_buffer_miss = self.input_buffer_miss.load(Ordering::Relaxed);
         let output_buffer_miss = self.output_buffer_miss.load(Ordering::Relaxed);
+        let playback_bridge_starvation = self.playback_bridge_starvation.load(Ordering::Relaxed);
+        let capture_negotiated_rate = self.capture_negotiated_rate.load(Ordering::Relaxed);
+        let playback_negotiated_rate = self.playback_negotiated_rate.load(Ordering::Relaxed);
+        let format_contract_ok = self.format_contract_ok.load(Ordering::Relaxed) != 0;
 
         TelemetrySnapshot {
             p50_us,
@@ -246,6 +263,10 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
             drains,
             input_buffer_miss,
             output_buffer_miss,
+            playback_bridge_starvation,
+            capture_negotiated_rate,
+            playback_negotiated_rate,
+            format_contract_ok,
         }
     }
 

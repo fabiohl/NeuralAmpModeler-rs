@@ -213,6 +213,26 @@ impl ConvEngine {
         self.num_partitions == 0
     }
 
+    /// Resets the engine to its post-construction state: zeroes the frequency
+    /// delay line, the overlap-save input buffer and every scratch buffer, and
+    /// rewinds the FDL write index.
+    ///
+    /// In-place and zero-alloc (RT-safe). Preserves the pre-FFT'd kernel
+    /// partitions (`h_fdl_re`/`h_fdl_im`) and the RFFT plan; a subsequent
+    /// [`process`](ConvEngine::process) on a delta impulse is bit-identical to
+    /// a freshly constructed engine with the same IR — no tail from previous
+    /// audio survives the reset.
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.fdl_re.fill(0.0);
+        self.fdl_im.fill(0.0);
+        self.fdl_idx = 0;
+        self.input_buf.fill(0.0);
+        self.acc_re.fill(0.0);
+        self.acc_im.fill(0.0);
+        self.output_buf.fill(0.0);
+    }
+
     /// Processes one block of mono audio through the convolution engine.
     ///
     /// ## RT-Safety

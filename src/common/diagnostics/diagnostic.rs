@@ -80,6 +80,7 @@ impl NamDiagnostic {
                 code: self.code,
                 params: self.params.clone(),
             }),
+            instance_id: None,
             full: false,
         }
         .render()

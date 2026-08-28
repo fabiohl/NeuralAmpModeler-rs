@@ -217,6 +217,48 @@ fn test_x2_oversampling_factor_matches() {
 }
 
 #[test]
+fn test_reset_clears_stage_state_and_matches_fresh() {
+    // After driving the engine with a non-trivial signal, `reset()` must make
+    // a subsequent round-trip bit-identical to a freshly constructed engine
+    // (same factor/size) — the delay lines, phase counters and inter-stage
+    // scratch are all cleared in-place (T4.3 / F-CLAP-010).
+    for factor in [OversampleFactor::X2, OversampleFactor::X4] {
+        let mut dirty = OversampleEngine::new(factor, 256).unwrap();
+        let mut fresh = OversampleEngine::new(factor, 256).unwrap();
+
+        // Pollute the dirty engine with a few round-trips of a ramp.
+        let noise: Vec<f32> = (0..64).map(|i| (i as f32 * 0.07).sin() * 0.5).collect();
+        let mut up = vec![0.0f32; 256];
+        let mut down = vec![0.0f32; 64];
+        for _ in 0..4 {
+            let n_up = dirty.upsample(&noise, &mut up, None);
+            dirty.downsample(&up[..n_up], &mut down, None);
+        }
+        // Odd-length input desynchronizes the downsampler phase — good coverage.
+        let odd: Vec<f32> = (0..37).map(|i| (i as f32 * 0.03).cos()).collect();
+        let n_up = dirty.upsample(&odd, &mut up, None);
+        dirty.downsample(&up[..n_up], &mut down, None);
+
+        dirty.reset();
+
+        // Reference: a fresh engine processing the same odd-length input.
+        let n_up_ref = fresh.upsample(&odd, &mut up, None);
+        let mut ref_out = vec![0.0f32; 64];
+        fresh.downsample(&up[..n_up_ref], &mut ref_out, None);
+
+        let n_up = dirty.upsample(&odd, &mut up, None);
+        let mut out = vec![0.0f32; 64];
+        dirty.downsample(&up[..n_up], &mut out, None);
+
+        assert_eq!(n_up, n_up_ref, "factor {factor:?}: upsample count mismatch");
+        assert_eq!(
+            out, ref_out,
+            "factor {factor:?}: reset not bit-identical to fresh"
+        );
+    }
+}
+
+#[test]
 fn test_back_to_back_roundtrips_x2() {
     // Multiple round-trips through the same engine should remain stable
     // (memoryless nonlinearity check).

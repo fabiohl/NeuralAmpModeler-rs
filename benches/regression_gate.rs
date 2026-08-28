@@ -45,8 +45,8 @@ use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
 use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
 use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
 use neural_amp_modeler_rs::dsp::pipeline::{
-    BridgeBuffer, DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext, MAX_BRIDGE_BUF,
-    MAX_RESAMP_BUF, capture_dsp_pipeline,
+    BridgeBuffer, DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext, MAX_RESAMP_BUF,
+    capture_dsp_pipeline,
 };
 use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 use neural_amp_modeler_rs::models::NamModel;
@@ -232,18 +232,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
 
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
-        buffers: [
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-            },
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-            },
-        ],
+        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
         active_read_idx: std::sync::atomic::AtomicUsize::new(0),
         generation: std::sync::atomic::AtomicU64::new(0),
         consumed_gen: std::sync::atomic::AtomicU64::new(0),
@@ -297,6 +286,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
             adaptive: &mut adaptive,
             bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
             conv: None,
+            conv_pair: None,
         };
         let bufs = DspBuffers {
             resamp_mid_l: &mut resamp_mid_l,
@@ -339,6 +329,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
                     Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
                 },
                 conv: None,
+                conv_pair: None,
             };
             let bufs = DspBuffers {
                 resamp_mid_l: &mut resamp_mid_l,

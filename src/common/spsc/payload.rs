@@ -3,6 +3,50 @@
 
 use crate::dsp::adaptive::SlimOverride;
 
+/// Versioned envelope for a pre-built `NamResampler` transported over the
+/// dedicated Main→RT SPSC channel (F-RB-004).
+///
+/// `generation` is the `requested_rate_generation` captured by the main thread
+/// at build time. The RT drain installs the payload only when its generation
+/// still matches the current request; stale envelopes are sent to the GC
+/// cascade without unmuting the callback, so a rate renegotiation published
+/// during a rebuild can never be silently lost.
+pub struct ResamplerSwapPayload {
+    /// Request generation this resampler was built for.
+    pub generation: u64,
+    /// The freshly built resampler (owned; transferred to the RT side).
+    pub resampler: Box<crate::dsp::resampler::NamResampler>,
+}
+
+/// Versioned envelope for a pre-built `CabSimPair` (or bypass `None`) transported over the
+/// dedicated Main→RT SPSC channel (F-RB-004 / T7.1).
+pub struct CabSimSwapPayload {
+    /// Request generation this cabsim pair was built for (from `RtStatusFlags::requested_cabsim_generation`).
+    pub generation: u64,
+    /// Cabsim pair (Left and Right adapters) or `None` to bypass/clear cabsim.
+    pub pair: Option<Box<crate::dsp::cabsim::adapter::CabSimPair>>,
+}
+
+/// Atomic stereo/mono bundle of slimmable WaveNet channel models transported
+/// over the dedicated Main→RT SPSC channel (F-RB-005).
+///
+/// L and R are sliced, prewarmed, and pushed **together** in a single envelope
+/// so the RT drain can perform an all-or-nothing swap: `active_model_l` and
+/// `active_model_r` always belong to the same generation and channel count.
+/// `r` is `None` for mono configurations. If the channel is full, neither
+/// channel is delivered and the rebuild flag stays armed for a full retry.
+pub struct SlimModelPair {
+    /// Slim rebuild generation this pair was built for (from
+    /// `RtStatusFlags::requested_slimmable_generation`).
+    pub generation: u64,
+    /// Channel count the L/R models were sliced to.
+    pub channels: usize,
+    /// Left-channel model (always present).
+    pub l: Box<crate::models::StaticModel>,
+    /// Right-channel model (`None` for mono configurations).
+    pub r: Option<Box<crate::models::StaticModel>>,
+}
+
 /// SPSC payload sent from the Host (CLI/UI) to the DSP Thread.
 /// Aligned to 128 bytes to mitigate False Sharing.
 #[repr(align(128))]

@@ -37,6 +37,8 @@ pub struct DiagnosticBundle {
     pub runtime: RuntimeSnapshot,
     /// Error context if captured due to an error.
     pub error: Option<ErrorContext>,
+    /// Optional instance identifier for multi-instance isolation.
+    pub instance_id: Option<u64>,
     /// Whether to print absolute paths unredacted.
     pub full: bool,
 }
@@ -48,6 +50,18 @@ impl DiagnosticBundle {
             system: SystemSnapshot::capture(),
             runtime: RuntimeSnapshot::default(),
             error: None,
+            instance_id: None,
+            full: false,
+        }
+    }
+
+    /// Captures a nominal diagnostic bundle for a specific instance.
+    pub fn capture_for_instance(instance_id: u64) -> Self {
+        Self {
+            system: SystemSnapshot::capture(),
+            runtime: RuntimeSnapshot::default(),
+            error: None,
+            instance_id: Some(instance_id),
             full: false,
         }
     }
@@ -61,6 +75,22 @@ impl DiagnosticBundle {
             system: SystemSnapshot::capture(),
             runtime: RuntimeSnapshot::capture(provider, consumer),
             error: None,
+            instance_id: None,
+            full: false,
+        }
+    }
+
+    /// Captures a diagnostic bundle for a specific instance with dynamic runtime provider.
+    pub fn capture_for_instance_with_runtime(
+        instance_id: u64,
+        provider: &impl super::snapshot::HasRuntimeSnapshot,
+        consumer: &super::snapshot::AudioMetadata,
+    ) -> Self {
+        Self {
+            system: SystemSnapshot::capture(),
+            runtime: RuntimeSnapshot::capture(provider, consumer),
+            error: None,
+            instance_id: Some(instance_id),
             full: false,
         }
     }
@@ -71,6 +101,7 @@ impl DiagnosticBundle {
             system: SystemSnapshot::capture(),
             runtime: RuntimeSnapshot::default(),
             error: Some(ErrorContext { code, params }),
+            instance_id: None,
             full: false,
         }
     }
@@ -86,8 +117,15 @@ impl DiagnosticBundle {
             system: SystemSnapshot::capture(),
             runtime: RuntimeSnapshot::capture(provider, consumer),
             error: Some(ErrorContext { code, params }),
+            instance_id: None,
             full: false,
         }
+    }
+
+    /// Builder method to specify an instance ID for isolation.
+    pub fn with_instance_id(mut self, instance_id: u64) -> Self {
+        self.instance_id = Some(instance_id);
+        self
     }
 
     /// Builder method to specify whether to use full (unredacted) paths.
@@ -138,20 +176,21 @@ impl DiagnosticBundle {
         }
 
         // Runtime State
-        let model_name_raw = ACTIVE_MODEL_NAME
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let model_name = if model_name_raw.is_empty() {
-            self.runtime
-                .model
-                .as_ref()
-                .map(|m| m.path_basename.clone())
-                .unwrap_or_default()
+        let model_name = self
+            .runtime
+            .model
+            .as_ref()
+            .map(|m| m.path_basename.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| {
+                ACTIVE_MODEL_NAME
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            });
+        let active_rate = if self.runtime.audio.sample_rate != 0 {
+            self.runtime.audio.sample_rate
         } else {
-            model_name_raw
-        };
-        let active_rate = {
             let r = ACTIVE_SAMPLE_RATE.load(Ordering::Relaxed);
             if r == 0 {
                 self.runtime.audio.sample_rate
@@ -161,6 +200,9 @@ impl DiagnosticBundle {
         };
 
         block.push_str("──── Runtime State ─────────────────────────────\n");
+        if let Some(inst_id) = self.instance_id {
+            block.push_str(&format!("instance_id={}\n", inst_id));
+        }
         let mut model_printed = false;
         if !model_name.is_empty() {
             let formatted = format_model_path(&model_name, self.full);
@@ -267,7 +309,11 @@ impl DiagnosticBundle {
 
         // Recent Log Trace
         if let Some(buffer) = NamLogger::log_buffer() {
-            let trace = buffer.render_trace(50);
+            let trace = if let Some(id) = self.instance_id {
+                buffer.render_trace_for_instance(id, 50)
+            } else {
+                buffer.render_trace(50)
+            };
             if !trace.is_empty() {
                 let trace_formatted = redact_text(&trace, self.full);
                 block.push_str("──── Recent Log Trace ─────────────────────────\n");

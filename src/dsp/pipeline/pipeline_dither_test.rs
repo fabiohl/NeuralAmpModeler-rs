@@ -47,6 +47,7 @@ fn test_denormal_dither_mono_symmetry() {
         adaptive: &mut adaptive,
         bridge_writer: None,
         conv: None,
+        conv_pair: None,
     };
 
     // 1. Run input stage (under mono mode, R shouldn't get dither)

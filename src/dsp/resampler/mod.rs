@@ -194,6 +194,21 @@ impl NamResampler {
         self.inner.is_none()
     }
 
+    /// Resets both resampler engines (input + output) to their post-construction
+    /// state: phase accumulators and delay lines are cleared.
+    ///
+    /// RT-safe: zero allocations. Useful for stream resets and resource-swap
+    /// protocols where pending filter state must be discarded.
+    #[inline]
+    pub fn reset(&mut self) {
+        if let Some(ref mut core) = self.inner {
+            core.reset_state();
+        }
+        if let Some(ref mut core) = self.outer {
+            core.reset_state();
+        }
+    }
+
     /// Returns the host sample rate.
     #[inline]
     pub fn host_rate(&self) -> u32 {

@@ -201,6 +201,21 @@ impl X2Stage {
         })
     }
 
+    /// Resets the stage to its post-construction state: zeroes both mirrored
+    /// delay lines and restores the phase/position counters.
+    ///
+    /// RT-safe: zero allocations (in-place buffer zero-fill only).
+    #[inline(always)]
+    pub(crate) fn reset(&mut self) {
+        self.up_ring.fill(0.0);
+        self.up_pos = 0;
+        self.down_ring_even.fill(0.0);
+        self.down_ring_odd.fill(0.0);
+        self.down_pos_even = 0;
+        self.down_pos_odd = 0;
+        self.down_total = 0;
+    }
+
     /// Upsamples `input` by 2× using the half-band FIR kernel.
     ///
     /// Produces interleaved even/odd output samples. Even samples use the

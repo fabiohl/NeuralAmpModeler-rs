@@ -116,6 +116,12 @@ pub enum NamErrorCode {
     CpuAffinityFailed,
     /// Audio processing exceeded the deadline budget.
     ProcessingOverload,
+    /// The audio host renegotiated a SPA format diverging from the strict
+    /// contract (F32P planar stereo, 2 channels).
+    SpaFormatContractViolation,
+    /// The audio backend lost fatal connectivity (stream error or post-streaming
+    /// disconnect) and the host is terminating observably — fail-fast.
+    BackendFailure,
 
     // E3xxx — SPSC / Communication
     // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts):
@@ -187,6 +193,8 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "E2300",
             Self::CpuAffinityFailed => "E2301",
             Self::ProcessingOverload => "E2001",
+            Self::SpaFormatContractViolation => "E2304",
+            Self::BackendFailure => "E2302",
             Self::ParamChannelFull => "E3100",
             Self::GcOverflow => "E3101",
             Self::GcCorrupted => "E3102",
@@ -248,6 +256,10 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "Real-time priority denied",
             Self::CpuAffinityFailed => "CPU affinity setting failed",
             Self::ProcessingOverload => "Processing deadline exceeded",
+            Self::SpaFormatContractViolation => {
+                "SPA audio format contract violation (expected F32P planar stereo, 2 channels)"
+            }
+            Self::BackendFailure => "Audio backend failure",
             Self::ParamChannelFull => "Parameter channel full",
             Self::GcOverflow => "Garbage collection overflow",
             Self::GcCorrupted => "Garbage collection corruption",
@@ -301,6 +313,8 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "RT_PRIORITY_DENIED",
             Self::CpuAffinityFailed => "CPU_AFFINITY_FAILED",
             Self::ProcessingOverload => "PROCESSING_OVERLOAD",
+            Self::SpaFormatContractViolation => "SPA_FORMAT_CONTRACT_VIOLATION",
+            Self::BackendFailure => "BACKEND_FAILURE",
             Self::ParamChannelFull => "PARAM_CHANNEL_FULL",
             Self::GcOverflow => "GC_OVERFLOW",
             Self::GcCorrupted => "GC_CORRUPTED",

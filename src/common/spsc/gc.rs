@@ -151,6 +151,8 @@ define_gc_item! {
     CabSimIr(crate::dsp::cabsim::loader::CabSimIr) = 3,
     CabConvAdapter(crate::dsp::cabsim::adapter::CabSimAdapter) = 4,
     Oversample(crate::dsp::oversample::OversampleEngine) = 5,
+    Streaming(crate::dsp::resampling::StreamingResampleBuffer) = 6,
+    CabSimPair(crate::dsp::cabsim::adapter::CabSimPair) = 7,
     #[cfg(test)]
     Test(std::sync::Arc<std::sync::atomic::AtomicU32>) = 255,
     // Loom-model-checking payloads (long suite phase 6, `--cfg loom`): these

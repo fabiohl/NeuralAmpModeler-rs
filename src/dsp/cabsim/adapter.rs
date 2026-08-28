@@ -110,6 +110,24 @@ impl CabSimAdapter {
         self.input_count > 0 || self.output_read < self.output_write
     }
 
+    /// Resets the adapter to its post-construction state: clears the input
+    /// accumulator and output queue, rewinds both counters, and resets the
+    /// underlying [`ConvEngine`] (zeroes its FDL so no tail from previous
+    /// audio survives).
+    ///
+    /// In-place and zero-alloc (RT-safe) — preserves the loaded IR and the
+    /// RFFT plan; a subsequent `process_variable` is bit-identical to a
+    /// freshly constructed adapter with the same IR.
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.input_buf.fill(0.0);
+        self.output_buf.fill(0.0);
+        self.input_count = 0;
+        self.output_read = 0;
+        self.output_write = 0;
+        self.engine.reset();
+    }
+
     /// Returns the estimated number of non-silent output samples remaining
     /// before the IR tail is fully drained. Blocks the round number of
     /// partitions needed to flush the FDL plus the accumulated input.
@@ -274,6 +292,42 @@ impl CabSimAdapter {
             self.output_read = 0;
             self.output_write = 0;
         }
+    }
+}
+
+/// Stereo pair of independent cab-sim convolution adapters.
+///
+/// One [`CabSimAdapter`] per channel so that the L and R streams never share
+/// convolucional state (input FIFO, FDL partitions, accumulators). Each
+/// channel's impulse response evolves strictly along its own time axis;
+/// running a single stateful adapter over L and then R would process R as a
+/// temporal continuation of L, corrupting the impulse response and creating
+/// severe artificial crosstalk.
+///
+/// Both adapters are built from the same IR with identical configuration
+/// (partition size, engine layout); only their mutable processing state is
+/// independent.
+///
+/// `sample_rate` records the rate at which both adapters' IRs are
+/// calibrated — the sample rate of the stream point where the pair is
+/// inserted. Consumers compare it against their effective output rate to
+/// detect rate drift and request a recalibrated rebuild: an IR must always
+/// represent the rate where it runs.
+pub struct CabSimPair {
+    /// Left-channel adapter (owns its engine, FIFO, and FDL state).
+    pub l: Box<CabSimAdapter>,
+    /// Right-channel adapter (owns its engine, FIFO, and FDL state).
+    pub r: Box<CabSimAdapter>,
+    /// Sample rate both IRs are calibrated to (insertion-point rate).
+    pub sample_rate: u32,
+}
+
+impl CabSimPair {
+    /// Returns the partition size in samples (identical on both channels by
+    /// construction).
+    #[inline(always)]
+    pub fn partition_size(&self) -> usize {
+        self.l.partition_size()
     }
 }
 

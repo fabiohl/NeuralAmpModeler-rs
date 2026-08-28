@@ -183,6 +183,27 @@ impl AdaptiveCompute {
         }
     }
 
+    /// Resets the FSM to its initial Full state: zeroes the hysteresis
+    /// counters and aborts any in-flight crossfade, preserving the user
+    /// configuration (`mode`, `slim_override`, WaveNet slimmable tracking).
+    ///
+    /// The RT status degrade flags are cleared to match the reverted state
+    /// (the main thread uses them to report degradation).
+    ///
+    /// RT-safe: zero allocations.
+    #[inline(always)]
+    pub fn reset(&mut self, rt_status: &RtStatusFlags) {
+        self.state = AdaptiveState::Full;
+        self.prev_state = AdaptiveState::Full;
+        self.overload_counter = 0;
+        self.recovery_counter = 0;
+        self.crossfade = CrossfadePhase::Idle;
+        self.crossfade_total = 0;
+        self.crossfade_elapsed = 0;
+        rt_status.clear_flag(crate::common::spsc::RT_STATUS_DEGRADE_REDUCED);
+        rt_status.clear_flag(crate::common::spsc::RT_STATUS_DEGRADE_MINIMAL);
+    }
+
     /// Sets the user-facing adaptive compute mode.
     #[inline]
     pub fn set_mode(&mut self, mode: AdaptiveComputeMode, rt_status: &RtStatusFlags) {

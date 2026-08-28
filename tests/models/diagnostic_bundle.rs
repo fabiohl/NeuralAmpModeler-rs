@@ -91,6 +91,10 @@ fn test_diagnostic_bundle_with_mock_provider() {
             drains: 5,
             input_buffer_miss: 0,
             output_buffer_miss: 0,
+            playback_bridge_starvation: 0,
+            capture_negotiated_rate: 0,
+            playback_negotiated_rate: 0,
+            format_contract_ok: true,
         },
         flags: 0x1a,
     };
@@ -511,6 +515,10 @@ fn test_diagnostic_bundle_regex_roundtrip() {
             drains: 0,
             input_buffer_miss: 0,
             output_buffer_miss: 0,
+            playback_bridge_starvation: 0,
+            capture_negotiated_rate: 0,
+            playback_negotiated_rate: 0,
+            format_contract_ok: true,
         },
         flags: 0x01,
     };

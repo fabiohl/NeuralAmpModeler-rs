@@ -222,6 +222,63 @@ mod tests {
         assert!(!flags.check_flag(RT_STATUS_DEGRADE_MINIMAL));
     }
 
+    /// T4.3 / F-CLAP-010 — `reset()` reverts the FSM to Full and aborts any
+    /// in-flight crossfade while preserving the user configuration (mode,
+    /// slim override, slimmable tracking).
+    #[test]
+    fn reset_reverts_fsm_preserves_config() {
+        let flags = rt_flags();
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Aggressive);
+        let budget = 1000;
+
+        // Degrade to Minimal (mid-crossfade after the second transition).
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.56), budget, 48000, &flags);
+        }
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.71), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Minimal);
+        assert!(flags.check_flag(RT_STATUS_DEGRADE_REDUCED));
+        assert!(flags.check_flag(RT_STATUS_DEGRADE_MINIMAL));
+
+        // Configure knobs that reset must preserve.
+        adaptive.set_slim_override(SlimOverride::ForceFull);
+        adaptive.set_wavenet_full_ch(16, true);
+
+        adaptive.reset(&flags);
+        assert_eq!(adaptive.state(), AdaptiveState::Full);
+        assert!(!adaptive.is_crossfading(), "reset must abort the crossfade");
+        assert!(!flags.check_flag(RT_STATUS_DEGRADE_REDUCED));
+        assert!(!flags.check_flag(RT_STATUS_DEGRADE_MINIMAL));
+        assert_eq!(
+            adaptive.mode(),
+            AdaptiveComputeMode::Aggressive,
+            "reset must preserve the user mode"
+        );
+        assert_eq!(
+            adaptive.slim_override(),
+            SlimOverride::ForceFull,
+            "reset must preserve the slim override"
+        );
+
+        // State-equivalence: a fresh instance with the same config sees the
+        // same FSM decisions right after reset.
+        let flags2 = rt_flags();
+        let mut fresh = AdaptiveCompute::new(AdaptiveComputeMode::Aggressive);
+        fresh.set_slim_override(SlimOverride::ForceFull);
+        fresh.set_wavenet_full_ch(16, true);
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.56), budget, 48000, &flags);
+            fresh.update(above_threshold(budget, 0.56), budget, 48000, &flags2);
+        }
+        assert_eq!(adaptive.state(), fresh.state());
+        assert_eq!(
+            adaptive.wavenet_effective_layers(8),
+            fresh.wavenet_effective_layers(8)
+        );
+    }
+
     #[test]
     fn wavenet_effective_layers_full() {
         let adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);

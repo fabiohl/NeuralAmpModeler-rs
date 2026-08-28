@@ -165,6 +165,69 @@ fn passthrough_on_empty_ir() {
 }
 
 #[test]
+fn reset_clears_fdl_and_fifos_matches_fresh() {
+    // T4.3 / F-CLAP-010: after `reset()`, processing must be bit-identical to
+    // a freshly constructed adapter with the same IR — no tail or accumulated
+    // sub-block may survive the reset.
+    let partition = 64;
+    let ir = synth_ir(partition * 3, 700.0, 10.0, 48000);
+
+    let mut dirty = adapter_from_ir(&ir, partition);
+    let mut fresh = adapter_from_ir(&ir, partition);
+
+    // Pollute: partial sub-blocks (odd sizes) exercise the input accumulator
+    // and output FIFO, then a full signal fills the engine FDL.
+    let signal: Vec<f32> = (0..200).map(|i| (i as f32 * 0.05).sin()).collect();
+    for &sub in &[13usize, 29, 61, 64] {
+        let mut pos = 0;
+        while pos < signal.len() {
+            let n = sub.min(signal.len() - pos);
+            let mut out = vec![0.0f32; n];
+            dirty.process_variable(&signal[pos..pos + n], &mut out, None);
+            pos += n;
+        }
+    }
+    assert!(dirty.needs_flush(), "adapter must hold state before reset");
+
+    dirty.reset();
+    assert!(
+        !dirty.needs_flush(),
+        "reset must empty the accumulator/output queue"
+    );
+
+    // Draining right after the reset must be silent — no residual tail from the
+    // pre-reset FDL or FIFOs may replay.
+    let z = vec![0.0f32; partition];
+    let mut buf = vec![0.0f32; partition];
+    for _ in 0..=dirty.num_partitions() {
+        dirty.process_variable(&z, &mut buf, None);
+        assert!(
+            buf.iter().all(|&s| s == 0.0),
+            "drain after reset must not replay pre-reset tail"
+        );
+    }
+
+    // Same post-reset signal through both adapters.
+    let probe: Vec<f32> = (0..partition * 4).map(|i| (i % 97) as f32 * 0.01).collect();
+    let run = |adapter: &mut CabSimAdapter| {
+        let mut out = Vec::new();
+        for chunk in probe.chunks(partition) {
+            let mut buf = vec![0.0f32; chunk.len()];
+            adapter.process_variable(chunk, &mut buf, None);
+            out.extend_from_slice(&buf);
+        }
+        out
+    };
+
+    let dirty_out = run(&mut dirty);
+    let fresh_out = run(&mut fresh);
+    assert_eq!(
+        dirty_out, fresh_out,
+        "post-reset processing must be bit-identical to a fresh adapter"
+    );
+}
+
+#[test]
 fn regular_blocks_parity() {
     let ir = synth_ir(200, 500.0, 8.0, 48000);
     let signal: Vec<f32> = (0..384)
@@ -663,4 +726,115 @@ fn in_place_oversize_clamps_and_raises_flag() {
     let mut buf = vec![0.0f32; 2 * partition];
     adapter.process_in_place(&mut buf, Some(&rt));
     assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+}
+
+// ── CabSimPair (T2.3 / F-RB-006): stereo decoupling ─────────────────────────
+
+/// T2.3 acceptance: unit delta on L with absolute silence on R must yield an R
+/// output that is rigorously `0.0` (-inf dB crosstalk) for the entire IR tail.
+#[test]
+fn pair_crosstalk_delta_l_only_r_exactly_silent() {
+    let ir = synth_ir(160, 300.0, 12.0, 48000);
+    let partition = 32;
+    let mut pair = CabSimPair {
+        l: Box::new(adapter_from_ir(&ir, partition)),
+        r: Box::new(adapter_from_ir(&ir, partition)),
+        sample_rate: 48000,
+    };
+    assert_eq!(pair.partition_size(), partition);
+
+    let zeros = vec![0.0f32; partition];
+    let mut delta_block = vec![0.0f32; partition];
+    delta_block[0] = 1.0;
+    let mut out_l = vec![0.0f32; partition];
+    let mut out_r = vec![0.0f32; partition];
+
+    let n_blocks = pair.l.num_partitions() + 6;
+    let mut l_energy = 0.0f32;
+    for block in 0..n_blocks {
+        let input_l: &[f32] = if block == 0 { &delta_block } else { &zeros };
+        pair.l.process_variable(input_l, &mut out_l, None);
+        pair.r.process_variable(&zeros, &mut out_r, None);
+        l_energy += out_l.iter().map(|s| s * s).sum::<f32>();
+        assert!(
+            out_r.iter().all(|&s| s == 0.0),
+            "R output must be rigorously 0.0 with silent input (block {block})"
+        );
+    }
+    assert!(
+        l_energy > 0.0,
+        "L must convolve the delta (test would be vacuous otherwise)"
+    );
+}
+
+/// Deterministic LCG noise — identical sequences must feed both channels so
+/// the bit-exact comparison isolates state coupling from signal differences.
+fn lcg_noise(seed: u64, n: usize) -> Vec<f32> {
+    let mut state = seed;
+    (0..n)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 40) as f32 / 16_777_216.0) - 1.0
+        })
+        .collect()
+}
+
+/// T2.3 acceptance: each pair channel must be bit-identical to an independent
+/// mono `CabSimAdapter` running the same IR and the same signal — no shared
+/// FIFO/FDL state may leak between L and R, under variable sub-block sizes.
+#[test]
+fn pair_bit_exact_vs_two_mono_adapters() {
+    let ir = synth_ir(220, 700.0, 8.0, 48000);
+    let partition = 64;
+    let mut pair = CabSimPair {
+        l: Box::new(adapter_from_ir(&ir, partition)),
+        r: Box::new(adapter_from_ir(&ir, partition)),
+        sample_rate: 48000,
+    };
+    let mut mono_l = adapter_from_ir(&ir, partition);
+    let mut mono_r = adapter_from_ir(&ir, partition);
+
+    let signal_l = lcg_noise(0x5EED_0001, 1024);
+    let signal_r = lcg_noise(0x5EED_0002, 1024);
+    let sub_sizes = [64usize, 13, 37, 64, 1, 51, 64, 29];
+
+    let mut pos_l = 0usize;
+    let mut pos_r = 0usize;
+    let mut block = 0usize;
+    let mut out = vec![0.0f32; partition];
+    let mut ref_out = vec![0.0f32; partition];
+
+    while pos_l < signal_l.len() || pos_r < signal_r.len() {
+        let sub = sub_sizes[block % sub_sizes.len()];
+
+        if pos_l < signal_l.len() {
+            let n = sub.min(partition).min(signal_l.len() - pos_l);
+            pair.l
+                .process_variable(&signal_l[pos_l..pos_l + n], &mut out[..n], None);
+            mono_l.process_variable(&signal_l[pos_l..pos_l + n], &mut ref_out[..n], None);
+            assert_eq!(
+                &out[..n],
+                &ref_out[..n],
+                "pair.l must be bit-exact vs an independent mono adapter (block {block})"
+            );
+            pos_l += n;
+        }
+
+        if pos_r < signal_r.len() {
+            let n = sub.min(partition).min(signal_r.len() - pos_r);
+            pair.r
+                .process_variable(&signal_r[pos_r..pos_r + n], &mut out[..n], None);
+            mono_r.process_variable(&signal_r[pos_r..pos_r + n], &mut ref_out[..n], None);
+            assert_eq!(
+                &out[..n],
+                &ref_out[..n],
+                "pair.r must be bit-exact vs an independent mono adapter (block {block})"
+            );
+            pos_r += n;
+        }
+
+        block += 1;
+    }
 }

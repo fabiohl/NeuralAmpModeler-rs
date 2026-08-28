@@ -80,6 +80,15 @@ impl ResamplerCore {
         self.group_delay
     }
 
+    /// Resets the streaming state (phase accumulator and delay lines) to the
+    /// post-construction initial state. RT-safe: zero allocations.
+    #[inline]
+    pub fn reset_state(&mut self) {
+        self.phase_accum = (NUM_PHASES as u64) << 40;
+        self.state_l.clear();
+        self.state_r.clear();
+    }
+
     /// Processes a stereo block. RT-safe: zero allocations.
     ///
     /// Returns `ResamplerProgress` with samples read and written.

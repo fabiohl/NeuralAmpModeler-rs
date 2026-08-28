@@ -180,6 +180,26 @@ impl OversampleEngine {
         self.factor
     }
 
+    /// Resets the engine to its post-construction state: clears every half-band
+    /// stage delay line, phase counter and the X4 inter-stage scratch buffer.
+    ///
+    /// In-place and zero-alloc (RT-safe) — no instance is rebuilt or dropped.
+    /// Preserves the configured `factor`/`max_samples`; a subsequent
+    /// `upsample`/`downsample` is bit-identical to a freshly constructed
+    /// engine with the same factor.
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.inter_buf.fill(0.0);
+        match &mut self.stages {
+            OsStages::Off => {}
+            OsStages::X2 { stage1 } => stage1.reset(),
+            OsStages::X4 { stage1, stage2 } => {
+                stage1.reset();
+                stage2.reset();
+            }
+        }
+    }
+
     /// Returns `true` when oversampling is bypassed (Off).
     #[inline]
     pub fn is_bypass(&self) -> bool {

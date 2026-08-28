@@ -87,6 +87,37 @@ pub const RT_STATUS_SPSC_DRAIN_TRUNCATED: u64 = 1 << 24;
 /// and never panics.
 pub const RT_STATUS_CABSIM_CONTRACT_VIOLATION: u64 = 1 << 25;
 
+/// Flag indicating that non-finite audio samples (NaN or Inf) were detected on an input buffer.
+/// Set by the RT thread; the callback silences the corrupted block and recovers safely.
+pub const RT_STATUS_NON_FINITE_INPUT_DETECTED: u64 = 1 << 26;
+
+/// Flag indicating that the GUI→host output event queue backpressured: a gesture
+/// (begin/change/end) event could not be pushed to the host in one flush cycle.
+/// The caller must retain the corresponding gesture bit for retry on the next
+/// flush/process; this flag is telemetry for housekeeping/log off-RT so the
+/// saturation is explicit, never an invisible loss.
+pub const RT_STATUS_GUI_EVENT_BACKPRESSURE: u64 = 1 << 27;
+
+/// Flag indicating that a structural command (model load, IR swap, oversample
+/// rebuild, state restore) was deferred to the next audio callback because the
+/// per-callback structural budget (F-RT-007 command budgeting) was exhausted.
+/// Deferral preserves FIFO ordering and never loses the payload; the consumer
+/// parks the command and applies it at the start of the next callback.
+pub const RT_STATUS_STRUCTURAL_DEFERRED: u64 = 1 << 28;
+
+/// Flag indicating that a deferred structural command was superseded by a newer
+/// same-kind command already queued in the SPSC ring (command coalescing). The
+/// superseded command's resources are discarded off-RT through the GC cascade —
+/// never dropped on the audio thread and never applied (latest-wins semantics).
+pub const RT_STATUS_STRUCTURAL_SUPERSEDED: u64 = 1 << 29;
+
+/// Flag indicating that the scalar parameter command queue still held elements
+/// after the per-callback drain budget (`MAX_PARAM_BUDGET`) was exhausted
+/// (F-RB-011 / T2.5). The RT callback consumed its fixed quota for this quantum
+/// and the remainder is processed by the next callback; the flag is telemetry
+/// for the main thread so the saturation is explicit, never an invisible loss.
+pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
+
 /// Atomic status flags for silent RT→Main communication.
 ///
 /// The DSP thread sets atomic flags instead of calling `println!`/`eprintln!`.
@@ -123,6 +154,11 @@ pub const RT_STATUS_CABSIM_CONTRACT_VIOLATION: u64 = 1 << 25;
 /// | 23 | `NEEDS_QUANTUM_LOG` | Host quantum (buffer size in frames) changed |
 /// | 24 | `SPSC_DRAIN_TRUNCATED` | SPSC command queue drain limit reached (64 events) |
 /// | 25 | `CABSIM_CONTRACT_VIOLATION` | CabSim sub-block exceeded partition or input/output mismatch |
+/// | 26 | `NON_FINITE_INPUT_DETECTED` | Non-finite input sample (NaN/Inf) detected and contained |
+/// | 27 | `GUI_EVENT_BACKPRESSURE` | GUI→host output event queue full; gesture bits retained for retry |
+/// | 28 | `STRUCTURAL_DEFERRED` | Structural command deferred to next callback (budget exhausted) |
+/// | 29 | `STRUCTURAL_SUPERSEDED` | Deferred structural command superseded by newer same-kind; discarded off-RT |
+/// | 30 | `PARAM_QUEUE_BACKLOG` | Scalar param queue still non-empty after the per-callback drain budget |
 #[repr(align(128))]
 pub struct RtStatusFlags {
     /// Effective sample rate active on the DSP thread after resampler rebuild.
@@ -140,6 +176,37 @@ pub struct RtStatusFlags {
 
     /// Target rate of the loaded model (NAM). The usual default is 48000.
     pub requested_nam_rate: AtomicU32,
+
+    /// Monotonic generation counter for resampler swap requests (F-RB-004).
+    ///
+    /// Incremented with `Ordering::Release` by the RT thread in `sync_rate`
+    /// every time a rebuild is requested, *after* publishing the new
+    /// `requested_host_rate` / `requested_nam_rate`. The main thread captures it
+    /// as the version of the `ResamplerSwapPayload` it builds, and the RT drain
+    /// installs a payload only while its generation still matches this counter —
+    /// otherwise the envelope is stale and goes to the GC cascade without
+    /// unmuting. This eliminates the lost-wakeup where a rate renegotiation
+    /// arriving during a rebuild was silently erased.
+    pub requested_rate_generation: AtomicU64,
+
+    /// Generation of the resampler currently applied on the DSP thread.
+    ///
+    /// Stored with `Ordering::Release` by the RT thread when it installs a
+    /// `ResamplerSwapPayload` whose generation matches
+    /// [`Self::requested_rate_generation`]. The invariant
+    /// `applied_rate_generation == requested_rate_generation` must hold before
+    /// the callback clears `RT_STATUS_RESAMP_SWAP_PENDING` (unmutes) — a stale
+    /// resampler can never substitute the most recent request.
+    pub applied_rate_generation: AtomicU64,
+
+    /// Request generation of a failed resampler rebuild attempt by the main thread.
+    ///
+    /// Stored with `Ordering::Release` by the main thread when a resampler rebuild
+    /// attempt fails for `requested_rate_generation`. The RT callback checks
+    /// this value against its current `requested_rate_generation` before performing
+    /// a safe fail-open unmute: if a newer generation request B arrived while
+    /// generation A failed, the failure of A is ignored and B remains pending.
+    pub resampler_failed_generation: AtomicU64,
 
     /// Effective RT priority confirmed by `pthread_getschedparam`.
     /// Value `-1` indicates the check has not yet been performed.
@@ -181,9 +248,42 @@ pub struct RtStatusFlags {
     pub drains: AtomicU32,
     /// Requested partition size for cabsim rebuild (set by RT thread).
     pub requested_cabsim_partition_size: AtomicU32,
+    /// Requested host output rate for cabsim rebuild (set by RT thread).
+    ///
+    /// The cab-sim stage runs at the host output rate (after the return
+    /// resampler), so the IR must be recalibrated whenever that rate
+    /// changes. The RT thread publishes the applied host rate here before
+    /// raising `RT_STATUS_NEEDS_CABSIM_REBUILD` (F-RB-006 rate
+    /// calibration); value `0` indicates no request was ever published.
+    pub requested_cabsim_host_rate: AtomicU32,
+    /// Monotonic generation counter for cabsim rebuild requests (F-RB-004
+    /// pattern).
+    ///
+    /// Incremented with `Release` by the RT thread whenever it raises
+    /// `RT_STATUS_NEEDS_CABSIM_REBUILD`, after publishing the requested
+    /// partition size and host rate. The main thread captures it with
+    /// `Acquire` before building and re-arms the flag if the generation
+    /// advanced during the build, so a renegotiation arriving mid-rebuild
+    /// is never erased (lost-wakeup guard).
+    pub requested_cabsim_generation: AtomicU64,
+    /// Generation of the cab-sim pair currently applied on the DSP thread.
+    ///
+    /// Stored with `Ordering::Release` by the RT thread when it installs a
+    /// `CabSimSwapPayload` whose generation matches
+    /// [`Self::requested_cabsim_generation`].
+    pub applied_cabsim_generation: AtomicU64,
     /// Requested slimmable channel count (set by RT thread, read by main thread).
     /// Value `0` indicates no pending request.
     pub requested_slimmable_ch: AtomicU32,
+    /// Slimmable rebuild generation (set by RT thread, read by main thread).
+    ///
+    /// Incremented with `Release` by the RT callback whenever it requests a
+    /// slimmable rebuild (`NEEDS_SLIMMABLE_REBUILD`), mirroring the resampler
+    /// `requested_rate_generation` protocol (F-RB-004). The main thread captures
+    /// the value with `Acquire` before building and stamps the delivered
+    /// [`crate::common::spsc::SlimModelPair`], so the RT drain can discard stale
+    /// pairs and guarantee L/R are always swapped from the latest request.
+    pub requested_slimmable_generation: AtomicU64,
     /// Requested oversampling factor (0=Off, 1=X2, 2=X4) for engine rebuild.
     /// Set by RT thread, read and cleared by main thread after rebuild.
     pub requested_os_factor: AtomicU32,
@@ -203,6 +303,44 @@ pub struct RtStatusFlags {
     /// Incremented by the playback thread when `dequeue_buffer()`
     /// returns `None` — host buffer miss on the output side.
     pub output_buffer_miss: AtomicU32,
+    /// Incremented by the playback callback each time the bridge produced no
+    /// new DSP block (capture paused, resampler rebuild pending, clock drift or
+    /// quantum miss) and the deterministic silence policy delivered a recycled
+    /// output buffer filled with `0.0f32` (G-RB-001 / T4.2). Telemetry only —
+    /// the hardware never repeats stale audio.
+    pub playback_bridge_starvation: AtomicU32,
+
+    /// Last sample rate negotiated by the capture stream's `param_changed`
+    /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
+    /// thread (cold path, not the RT data thread); read by the playback
+    /// listener for the cross-stream rate comparison and by the main loop for
+    /// diagnostics (G-RB-001 / T4.3).
+    pub capture_negotiated_rate: AtomicU32,
+
+    /// Last sample rate negotiated by the playback stream's `param_changed`
+    /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
+    /// thread (cold path, not the RT data thread); read by the capture
+    /// listener for the cross-stream rate comparison and by the main loop for
+    /// diagnostics (G-RB-001 / T4.3).
+    pub playback_negotiated_rate: AtomicU32,
+
+    /// Sticky latch guarding the capture stream SPA format contract.
+    pub capture_format_ok: AtomicU32,
+
+    /// Sticky latch guarding the playback stream SPA format contract.
+    pub playback_format_ok: AtomicU32,
+
+    /// Active state of the capture stream (1 = Streaming, 0 = Paused/Unconnected/Error).
+    pub capture_active: AtomicU32,
+
+    /// Active state of the playback stream (1 = Streaming, 0 = Paused/Unconnected/Error).
+    pub playback_active: AtomicU32,
+
+    /// Aggregate sticky latch guarding the strict SPA format contract (G-RB-001 / T4.3).
+    ///
+    /// `1` = both stream formats are valid (`F32P` planar stereo); `0` = a divergent format
+    /// was negotiated on either stream.
+    pub format_contract_ok: AtomicU32,
 
     /// Host clock `time.now` from the last capture stream time() call (nanoseconds).
     pub capture_host_now: AtomicI64,
@@ -216,6 +354,15 @@ pub struct RtStatusFlags {
     pub playback_host_ticks: AtomicU64,
     /// Host clock `time.delay` from the last playback stream time() call (ticks).
     pub playback_host_delay: AtomicI64,
+
+    /// Total count of structural commands deferred by the audio callback because
+    /// the per-callback structural budget was exhausted (F-RT-007). Monotonic
+    /// telemetry counter — never reset; accompanies `RT_STATUS_STRUCTURAL_DEFERRED`.
+    pub structural_deferred_total: AtomicU32,
+    /// Total count of deferred structural commands superseded by a newer
+    /// same-kind command and discarded off-RT via the GC cascade (command
+    /// coalescing). Accompanies `RT_STATUS_STRUCTURAL_SUPERSEDED`.
+    pub structural_superseded_total: AtomicU32,
 
     /// errno from `pthread_setaffinity_np` (0 = success).
     pub rt_affinity_err: AtomicI32,
@@ -236,6 +383,9 @@ impl RtStatusFlags {
             active_rate_changed: AtomicU32::new(0),
             requested_host_rate: AtomicU32::new(0),
             requested_nam_rate: AtomicU32::new(48_000),
+            requested_rate_generation: AtomicU64::new(0),
+            applied_rate_generation: AtomicU64::new(0),
+            resampler_failed_generation: AtomicU64::new(0),
             rt_priority: AtomicI32::new(-1),
             dsp_overloads: AtomicU32::new(0),
             dsp_cycle_time: AtomicU64::new(0),
@@ -250,23 +400,47 @@ impl RtStatusFlags {
             xruns: AtomicU32::new(0),
             drains: AtomicU32::new(0),
             requested_cabsim_partition_size: AtomicU32::new(0),
+            requested_cabsim_host_rate: AtomicU32::new(0),
+            requested_cabsim_generation: AtomicU64::new(0),
+            applied_cabsim_generation: AtomicU64::new(0),
             requested_slimmable_ch: AtomicU32::new(0),
+            requested_slimmable_generation: AtomicU64::new(0),
             requested_os_factor: AtomicU32::new(0),
             requested_buffer_frames: AtomicU32::new(0),
             previous_buffer_frames: AtomicU32::new(0),
             input_buffer_miss: AtomicU32::new(0),
             output_buffer_miss: AtomicU32::new(0),
+            playback_bridge_starvation: AtomicU32::new(0),
+            capture_negotiated_rate: AtomicU32::new(0),
+            playback_negotiated_rate: AtomicU32::new(0),
+            capture_format_ok: AtomicU32::new(1),
+            playback_format_ok: AtomicU32::new(1),
+            capture_active: AtomicU32::new(1),
+            playback_active: AtomicU32::new(1),
+            format_contract_ok: AtomicU32::new(1),
             capture_host_now: AtomicI64::new(0),
             capture_host_ticks: AtomicU64::new(0),
             capture_host_delay: AtomicI64::new(0),
             playback_host_now: AtomicI64::new(0),
             playback_host_ticks: AtomicU64::new(0),
             playback_host_delay: AtomicI64::new(0),
+            structural_deferred_total: AtomicU32::new(0),
+            structural_superseded_total: AtomicU32::new(0),
             rt_affinity_err: AtomicI32::new(0),
             rt_sched_err: AtomicI32::new(0),
             rt_getsched_err: AtomicI32::new(0),
             rt_target_cpu: AtomicI32::new(-1),
         }
+    }
+
+    /// Whether audio is unmuted across both streams (capture and playback format contracts
+    /// valid AND both streams active).
+    #[inline(always)]
+    pub fn is_audio_unmuted(&self) -> bool {
+        self.capture_format_ok.load(Ordering::Relaxed) != 0
+            && self.playback_format_ok.load(Ordering::Relaxed) != 0
+            && self.capture_active.load(Ordering::Relaxed) != 0
+            && self.playback_active.load(Ordering::Relaxed) != 0
     }
 
     /// Sets one or more flags in the bitmask with `Relaxed` ordering.

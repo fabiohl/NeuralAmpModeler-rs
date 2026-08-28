@@ -48,6 +48,8 @@ pub use stages::apply_output_stage;
 pub use stages::handle_silence_bypass;
 /// Model inference dispatcher: routes to the correct architecture-specific process method.
 pub use stages::run_inference;
+/// Streaming inference pass with strict host cardinality (F-PERF-002).
+pub use stages::run_inference_streaming;
 /// Bridge write-out: copies processed output into the inter-stage bridge buffer.
 pub use stages::write_bridge;
 

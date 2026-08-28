@@ -107,6 +107,13 @@ impl DynamicHysteresis {
         }
     }
 
+    /// Resets the FSM to its initial Open state (multiplier 1.0, no ramp),
+    /// as if freshly constructed. RT-safe: zero allocations.
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
     /// Returns the current state of the FSM.
     pub fn state(&self) -> GateState {
         self.state

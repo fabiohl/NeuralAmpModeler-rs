@@ -26,16 +26,69 @@
 //! triggering `SetLoggerError`.
 
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+thread_local! {
+    static CURRENT_INSTANCE_ID: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Returns the active instance ID on the calling thread, if any.
+#[inline]
+pub fn current_instance_id() -> Option<u64> {
+    CURRENT_INSTANCE_ID.with(|c| c.get())
+}
+
+/// Sets or clears the active instance ID on the calling thread.
+#[inline]
+pub fn set_current_instance_id(id: Option<u64>) {
+    CURRENT_INSTANCE_ID.with(|c| c.set(id));
+}
+
+/// Executes a closure within the context of a specific instance ID,
+/// restoring the previous context upon return (even on panic).
+pub fn with_instance_id<R>(id: u64, f: impl FnOnce() -> R) -> R {
+    let prev = current_instance_id();
+    set_current_instance_id(Some(id));
+    struct Guard(Option<u64>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            set_current_instance_id(self.0);
+        }
+    }
+    let _guard = Guard(prev);
+    f()
+}
+
+/// RAII guard that sets the active instance ID on creation and
+/// restores the previous instance ID when dropped.
+#[derive(Debug)]
+pub struct InstanceLogScope {
+    prev: Option<u64>,
+}
+
+impl Drop for InstanceLogScope {
+    fn drop(&mut self) {
+        set_current_instance_id(self.prev);
+    }
+}
+
+/// Creates a new `InstanceLogScope` on the current thread.
+#[inline]
+pub fn scope_instance(id: u64) -> InstanceLogScope {
+    let prev = current_instance_id();
+    set_current_instance_id(Some(id));
+    InstanceLogScope { prev }
+}
 
 /// Default maximum number of log records held in the ring buffer.
 const DEFAULT_CAPACITY: usize = 256;
 
 /// Callback type for host-log sinks.
 ///
-/// Each host instance registers a sink via `register_sink()`.
+/// Each host instance registers a sink via `register_sink()` or `register_instance_sink()`.
 /// The callback receives (severity-as-string, formatted-message).
 pub type HostLogFn = dyn for<'a, 'b> Fn(&'a str, &'b str) + Send + Sync;
 
@@ -50,10 +103,13 @@ pub struct LogRecord {
     pub target: String,
     /// Formatted log message.
     pub message: String,
+    /// Optional instance identifier for multi-instance isolation.
+    pub instance_id: Option<u64>,
 }
 
 impl LogRecord {
-    /// Creates a new `LogRecord` with the current wall-clock timestamp.
+    /// Creates a new `LogRecord` with the current wall-clock timestamp
+    /// and the caller thread's active `instance_id`.
     pub fn now(
         level: impl Into<String>,
         target: impl Into<String>,
@@ -68,6 +124,27 @@ impl LogRecord {
             level: level.into(),
             target: target.into(),
             message: message.into(),
+            instance_id: current_instance_id(),
+        }
+    }
+
+    /// Creates a new `LogRecord` with an explicit instance ID.
+    pub fn now_with_instance(
+        level: impl Into<String>,
+        target: impl Into<String>,
+        message: impl Into<String>,
+        instance_id: Option<u64>,
+    ) -> Self {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            timestamp_secs: ts,
+            level: level.into(),
+            target: target.into(),
+            message: message.into(),
+            instance_id,
         }
     }
 }
@@ -138,11 +215,34 @@ impl LogBuffer {
             .collect()
     }
 
+    /// Returns a snapshot of log records filtered for a specific `instance_id`.
+    pub fn snapshot_for_instance(&self, instance_id: u64) -> Vec<LogRecord> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|r| r.instance_id == Some(instance_id))
+            .cloned()
+            .collect()
+    }
+
     /// Attempts to take a snapshot without blocking. Returns `None` if the
     /// lock could not be acquired.
     pub fn try_snapshot(&self) -> Option<Vec<LogRecord>> {
         let inner = self.inner.try_lock().ok()?;
         Some(inner.iter().cloned().collect())
+    }
+
+    /// Attempts to take a snapshot for a specific `instance_id` without blocking.
+    pub fn try_snapshot_for_instance(&self, instance_id: u64) -> Option<Vec<LogRecord>> {
+        let inner = self.inner.try_lock().ok()?;
+        Some(
+            inner
+                .iter()
+                .filter(|r| r.instance_id == Some(instance_id))
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Renders up to `limit` most recent log entries as a formatted string
@@ -159,6 +259,29 @@ impl LogBuffer {
         };
         let mut out = String::with_capacity(limit * 128);
         for record in inner.range(start..) {
+            out.push_str(&format!(
+                "[{}] {} {}: {}\n",
+                record.timestamp_secs, record.level, record.target, record.message
+            ));
+        }
+        out
+    }
+
+    /// Renders up to `limit` most recent log entries matching `instance_id`
+    /// as a formatted string suitable for embedding in diagnostic dumps.
+    pub fn render_trace_for_instance(&self, instance_id: u64, limit: usize) -> String {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let filtered: Vec<&LogRecord> = inner
+            .iter()
+            .filter(|r| r.instance_id == Some(instance_id))
+            .collect();
+        let start = if filtered.len() > limit {
+            filtered.len() - limit
+        } else {
+            0
+        };
+        let mut out = String::with_capacity(limit * 128);
+        for record in &filtered[start..] {
             out.push_str(&format!(
                 "[{}] {} {}: {}\n",
                 record.timestamp_secs, record.level, record.target, record.message
@@ -186,6 +309,28 @@ impl LogBuffer {
         Some(out)
     }
 
+    /// Attempts to render a trace for a specific `instance_id` without blocking.
+    pub fn try_render_trace_for_instance(&self, instance_id: u64, limit: usize) -> Option<String> {
+        let inner = self.inner.try_lock().ok()?;
+        let filtered: Vec<&LogRecord> = inner
+            .iter()
+            .filter(|r| r.instance_id == Some(instance_id))
+            .collect();
+        let start = if filtered.len() > limit {
+            filtered.len() - limit
+        } else {
+            0
+        };
+        let mut out = String::with_capacity(limit * 128);
+        for record in &filtered[start..] {
+            out.push_str(&format!(
+                "[{}] {} {}: {}\n",
+                record.timestamp_secs, record.level, record.target, record.message
+            ));
+        }
+        Some(out)
+    }
+
     /// Attempts to render a trace directly into a [`std::fmt::Write`] without
     /// blocking or allocating. Returns the number of records written (0 if the
     /// lock could not be acquired).
@@ -203,6 +348,39 @@ impl LogBuffer {
         };
         let mut count = 0;
         for record in inner.range(start..) {
+            let _ = writeln!(
+                writer,
+                "[{}] {} {}: {}",
+                record.timestamp_secs, record.level, record.target, record.message
+            );
+            count += 1;
+        }
+        count
+    }
+
+    /// Attempts to render a trace for a specific `instance_id` directly into a
+    /// [`std::fmt::Write`] without blocking or allocating.
+    pub fn try_render_trace_for_instance_into(
+        &self,
+        instance_id: u64,
+        writer: &mut impl std::fmt::Write,
+        limit: usize,
+    ) -> usize {
+        let inner = match self.inner.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return 0,
+        };
+        let filtered: Vec<&LogRecord> = inner
+            .iter()
+            .filter(|r| r.instance_id == Some(instance_id))
+            .collect();
+        let start = if filtered.len() > limit {
+            filtered.len() - limit
+        } else {
+            0
+        };
+        let mut count = 0;
+        for record in &filtered[start..] {
             let _ = writeln!(
                 writer,
                 "[{}] {} {}: {}",
@@ -262,11 +440,11 @@ fn format_wall_clock_time() -> String {
 /// Central bridge between the `log` crate facade and NeuralAmpModeler-rs logging infra.
 ///
 /// Implements `log::Log` and routes every log record to:
-/// 1. The global `LogBuffer` ring buffer.
+/// 1. The global `LogBuffer` ring buffer (tagged with `instance_id` when active).
 /// 2. stderr (if configured via `LoggerConfig::emit_stderr`).
-/// 3. All registered host-log sinks (`Weak<HostLogFn>`).
+/// 3. Matching registered host-log sinks (`Weak<HostLogFn>`).
 ///
-/// ## Multi-instance
+/// ## Multi-instance safety
 ///
 /// `NamLogger::init()` installs the global `log` backend exactly once
 /// via `OnceLock`. Subsequent calls are no-ops, so multiple host instances
@@ -274,7 +452,7 @@ fn format_wall_clock_time() -> String {
 #[derive(Debug)]
 pub struct NamLogger {
     buffer: LogBuffer,
-    sinks: Mutex<Vec<Weak<HostLogFn>>>,
+    sinks: Mutex<Vec<(Option<u64>, Weak<HostLogFn>)>>,
     emit_stderr: Mutex<bool>,
     max_level: Mutex<LevelFilter>,
 }
@@ -323,13 +501,21 @@ impl NamLogger {
         NAM_LOGGER.get().map(|l| &l.buffer)
     }
 
-    /// Registers a host-log sink. The sink is stored as a `Weak`
+    /// Registers a global host-log sink. The sink is stored as a `Weak`
     /// reference — when the host instance is destroyed and its `Arc` drops,
     /// the `Weak` becomes dead and is automatically purged on the next log
     /// dispatch.
     pub fn register_sink(&self, sink: &Arc<HostLogFn>) {
         let mut sinks = self.sinks.lock().unwrap_or_else(|e| e.into_inner());
-        sinks.push(Arc::downgrade(sink));
+        sinks.push((None, Arc::downgrade(sink)));
+    }
+
+    /// Registers an instance-specific host-log sink. When log records are
+    /// emitted under that `instance_id`, only this sink (and global sinks)
+    /// receive the dispatched message.
+    pub fn register_instance_sink(&self, instance_id: u64, sink: &Arc<HostLogFn>) {
+        let mut sinks = self.sinks.lock().unwrap_or_else(|e| e.into_inner());
+        sinks.push((Some(instance_id), Arc::downgrade(sink)));
     }
 
     /// Updates the maximum log level filter at runtime.
@@ -353,8 +539,9 @@ impl Log for NamLogger {
         let level = record.level();
         let target = record.target();
         let message = record.args().to_string();
+        let inst_id = current_instance_id();
 
-        let log_record = LogRecord::now(level_str(level), target, &message);
+        let log_record = LogRecord::now_with_instance(level_str(level), target, &message, inst_id);
         self.buffer.push(log_record);
 
         // stderr output if configured
@@ -369,16 +556,31 @@ impl Log for NamLogger {
         }
 
         // Dispatch to registered host-log sinks
-        let mut sinks = self.sinks.lock().unwrap_or_else(|e| e.into_inner());
+        // Contention prevention: Upgrade and filter sinks under the lock, then invoke callbacks outside the lock.
+        let mut to_notify: Vec<Arc<HostLogFn>> = Vec::new();
+        {
+            let mut sinks = self.sinks.lock().unwrap_or_else(|e| e.into_inner());
+            sinks.retain(|(sink_inst_id, weak)| {
+                if let Some(sink) = weak.upgrade() {
+                    let should_deliver = match (inst_id, *sink_inst_id) {
+                        (Some(rec_id), Some(s_id)) => rec_id == s_id,
+                        (Some(_), None) => true,
+                        (None, _) => true,
+                    };
+                    if should_deliver {
+                        to_notify.push(sink);
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+
         let severity = level_str(level);
-        sinks.retain(|weak| {
-            if let Some(sink) = weak.upgrade() {
-                sink(severity, &message);
-                true
-            } else {
-                false
-            }
-        });
+        for sink in to_notify {
+            sink(severity, &message);
+        }
     }
 
     fn flush(&self) {}

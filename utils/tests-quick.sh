@@ -65,8 +65,12 @@ phase "Structural: unit + deterministic integration (debug)"
     # Axis-B: lstm_activation_precision SNR oracles are release-only (Phase 2).
     # Substring skip covers both `..._gain` and `..._gain_stress_v2`; the
     # module's structural checks still run in this phase.
+    # T2.6 / ER-2: cabsim_stereo carries the IR-multirate gates (its stereo
+    # fidelity and heap-audit tests are feature-gated and run when the caller
+    # enables `stereo`/`heap-audit`).
     cargo test --features testing --lib \
         --test models --test perf_soak --test parity --test dsp_core \
+        --test cabsim_stereo \
         --test target_features_compliance_test --test libm_export_guard --test avx512_guard -- \
         --skip golden_vectors:: --skip linear_fft_test:: \
         --skip spectral_fidelity:: --skip reference_oracle_f64:: \
@@ -189,6 +193,8 @@ if [ ${#GAPS[@]} -gt 0 ]; then
         emit "OVERALL: FAIL reason=strict_gaps"
         exit 1
     fi
+    emit "OVERALL: COMPLETED_WITH_GAPS"
+    echo -e "${YELLOW}${BOLD}OVERALL: COMPLETED_WITH_GAPS${NC}"
     exit 0
 fi
 

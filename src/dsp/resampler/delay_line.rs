@@ -56,6 +56,15 @@ impl DelayLine {
         }
     }
 
+    /// Clears all history (zero-fills the double buffer) without deallocating.
+    ///
+    /// RT-safe: zero allocations. Used by resampler reset paths.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.buf.fill(0.0);
+        self.pos = 0;
+    }
+
     /// Returns a pointer to TAPS_PER_PHASE contiguous samples (most recent first).
     #[inline(always)]
     pub fn window_ptr(&self) -> *const f32 {

@@ -47,17 +47,22 @@ pub struct SpscChannels {
     /// Fallback buffer for GC overflow (overwrite).
     pub gc_overflow: Arc<GcOverflowBuffer>,
     /// Resampler producer: main thread builds and sends to the RT callback.
-    pub resampler_producer: Producer<Box<crate::dsp::resampler::NamResampler>>,
+    /// Carries versioned envelopes (`ResamplerSwapPayload`) so the RT side can
+    /// discard stale builds when the host renegotiates the clock mid-rebuild.
+    pub resampler_producer: Producer<Box<ResamplerSwapPayload>>,
     /// Resampler consumer: RT callback drains to replace the active resampler.
-    pub resampler_consumer: Consumer<Box<crate::dsp::resampler::NamResampler>>,
-    /// Cab-sim IR producer: main thread loads and sends to the RT callback.
-    pub cabsim_producer: Producer<Option<crate::dsp::cabsim::adapter::CabSimAdapter>>,
-    /// Cab-sim IR consumer: RT callback drains to replace the active IR.
-    pub cabsim_consumer: Consumer<Option<crate::dsp::cabsim::adapter::CabSimAdapter>>,
-    /// Slimmable model producer: main thread builds and sends slimmed model to RT callback.
-    pub slimmable_producer: Producer<Option<Box<crate::models::StaticModel>>>,
-    /// Slimmable model consumer: RT callback drains to swap the active model.
-    pub slimmable_consumer: Consumer<Option<Box<crate::models::StaticModel>>>,
+    pub resampler_consumer: Consumer<Box<ResamplerSwapPayload>>,
+    /// Cab-sim IR producer: main thread loads and sends a versioned cab-sim
+    /// payload envelope (`CabSimSwapPayload`) to the RT callback (F-RB-004 / T7.1).
+    pub cabsim_producer: Producer<Box<CabSimSwapPayload>>,
+    /// Cab-sim IR consumer: RT callback drains to replace the active pair.
+    pub cabsim_consumer: Consumer<Box<CabSimSwapPayload>>,
+    /// Slimmable model producer: main thread builds and sends an atomic
+    /// L/R pair (`SlimModelPair`) to the RT callback (F-RB-005).
+    pub slimmable_producer: Producer<Box<SlimModelPair>>,
+    /// Slimmable model consumer: RT callback drains atomic pairs to swap the
+    /// active L/R models together.
+    pub slimmable_consumer: Consumer<Box<SlimModelPair>>,
     /// Oversampling engine producer: main thread builds and sends OS engines to RT callback.
     pub os_producer: Producer<Box<crate::dsp::oversample::OsEnginePair>>,
     /// Oversampling engine consumer: RT callback drains to hot-swap OS engines.

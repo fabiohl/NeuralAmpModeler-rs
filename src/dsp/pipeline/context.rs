@@ -5,7 +5,7 @@
 
 use crate::common::spsc::RtStatusFlags;
 use crate::dsp::adaptive::AdaptiveCompute;
-use crate::dsp::cabsim::adapter::CabSimAdapter;
+use crate::dsp::cabsim::adapter::{CabSimAdapter, CabSimPair};
 use crate::dsp::gate::{DynamicHysteresis, GateParams};
 use crate::dsp::resampler::NamResampler;
 use crate::models::StaticModel;
@@ -54,18 +54,28 @@ pub struct DspPipelineContext<'a> {
     pub adaptive: &'a mut AdaptiveCompute,
     /// Reference to the audio monitoring bridge (`None` = no active listener).
     pub bridge_writer: Option<DspBridgeWriter>,
-    /// Active cab-sim convolution adapter (`None` = cab-sim bypass, zero cost).
+    /// Active cab-sim convolution adapter — shared-state path (`None` = not
+    /// attached). Both channels run through this single adapter's mutable
+    /// state, so this path provides no stereo decoupling; prefer
+    /// [`conv_pair`](DspPipelineContext::conv_pair) for stereo content. When
+    /// both are attached, `conv_pair` takes precedence and `conv` is ignored.
     pub conv: Option<&'a mut CabSimAdapter>,
+    /// Active stereo-decoupled cab-sim pair (`None` = not attached, zero
+    /// cost). Independent L/R adapters guarantee no convolucional state is
+    /// shared between channels.
+    pub conv_pair: Option<&'a mut CabSimPair>,
 }
 
 impl<'a> DspPipelineContext<'a> {
     /// Creates the pipeline context from its fifteen mandatory components.
     ///
-    /// The optional [`bridge_writer`](DspPipelineContext::bridge_writer) and
-    /// [`conv`](DspPipelineContext::conv) pointers default to `None` (no
-    /// listener / cab-sim bypass); attach them with the chainable
-    /// [`with_bridge_writer`](Self::with_bridge_writer) and
-    /// [`with_conv`](Self::with_conv) methods.
+    /// The optional [`bridge_writer`](DspPipelineContext::bridge_writer),
+    /// [`conv`](DspPipelineContext::conv) and
+    /// [`conv_pair`](DspPipelineContext::conv_pair) pointers default to
+    /// `None` (no listener / cab-sim bypass); attach them with the chainable
+    /// [`with_bridge_writer`](Self::with_bridge_writer),
+    /// [`with_conv`](Self::with_conv) and
+    /// [`with_conv_pair`](Self::with_conv_pair) methods.
     #[expect(
         clippy::too_many_arguments,
         reason = "DspPipelineContext mirrors the public struct literal; all non-optional components are mandatory"
@@ -105,6 +115,7 @@ impl<'a> DspPipelineContext<'a> {
             adaptive,
             bridge_writer: None,
             conv: None,
+            conv_pair: None,
         }
     }
 
@@ -117,6 +128,12 @@ impl<'a> DspPipelineContext<'a> {
     /// Attaches the active cab-sim convolution adapter (chainable).
     pub fn with_conv(mut self, conv: &'a mut CabSimAdapter) -> Self {
         self.conv = Some(conv);
+        self
+    }
+
+    /// Attaches the active stereo-decoupled cab-sim pair (chainable).
+    pub fn with_conv_pair(mut self, conv_pair: &'a mut CabSimPair) -> Self {
+        self.conv_pair = Some(conv_pair);
         self
     }
 }

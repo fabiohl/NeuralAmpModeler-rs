@@ -73,18 +73,7 @@ mod block_tests {
         // We use Box to guarantee a fixed memory address (heap).
         let mut bridge = Box::new(DspBridge {
             // We create two buffers for the "Double Buffering" technique (prevents readers from disrupting writers).
-            buffers: [
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-            ],
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
             // Atomic counters for safe synchronization between threads without locks.
             active_read_idx: std::sync::atomic::AtomicUsize::new(0),
             generation: std::sync::atomic::AtomicU64::new(0),
@@ -144,6 +133,7 @@ mod block_tests {
                     Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
                 },
                 conv: None,
+                conv_pair: None,
             };
 
             let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
@@ -303,18 +293,7 @@ mod block_tests {
         let rt_status = RtStatusFlags::default();
 
         let mut bridge = Box::new(DspBridge {
-            buffers: [
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-            ],
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
             active_read_idx: std::sync::atomic::AtomicUsize::new(0),
             generation: std::sync::atomic::AtomicU64::new(0),
             consumed_gen: std::sync::atomic::AtomicU64::new(0),
@@ -367,6 +346,7 @@ mod block_tests {
                     Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
                 },
                 conv: None,
+                conv_pair: None,
             };
 
             let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];

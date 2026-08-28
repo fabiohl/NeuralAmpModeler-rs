@@ -135,8 +135,8 @@ fn test_zero_alloc_capture_pipeline() {
     use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
     use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
     use neural_amp_modeler_rs::dsp::pipeline::{
-        BridgeBuffer, DspBridge, DspBridgeWriter, DspPipelineContext, MAX_BRIDGE_BUF,
-        MAX_RESAMP_BUF, capture_dsp_pipeline,
+        BridgeBuffer, DspBridge, DspBridgeWriter, DspPipelineContext, MAX_RESAMP_BUF,
+        capture_dsp_pipeline,
     };
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 
@@ -158,18 +158,7 @@ fn test_zero_alloc_capture_pipeline() {
     let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
-        buffers: [
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-            },
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-            },
-        ],
+        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
         active_read_idx: std::sync::atomic::AtomicUsize::new(0),
         generation: std::sync::atomic::AtomicU64::new(0),
         consumed_gen: std::sync::atomic::AtomicU64::new(0),
@@ -217,6 +206,7 @@ fn test_zero_alloc_capture_pipeline() {
         adaptive: &mut adaptive,
         bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
         conv: None,
+        conv_pair: None,
     };
 
     let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];

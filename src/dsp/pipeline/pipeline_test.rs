@@ -52,18 +52,7 @@ mod tests {
         let mut resampler = NamResampler::new(host_rate, nam_rate, n).unwrap();
 
         let mut bridge = Box::new(DspBridge {
-            buffers: [
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-            ],
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
             active_read_idx: std::sync::atomic::AtomicUsize::new(0),
             generation: std::sync::atomic::AtomicU64::new(0),
             consumed_gen: std::sync::atomic::AtomicU64::new(0),
@@ -115,6 +104,7 @@ mod tests {
             // pointer passed to `DspBridgeWriter::new` stays valid and non-null.
             bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
             conv: None,
+            conv_pair: None,
         };
 
         let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];

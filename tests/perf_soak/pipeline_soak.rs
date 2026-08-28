@@ -20,7 +20,7 @@ mod tests {
     use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
     use neural_amp_modeler_rs::dsp::pipeline::{
         BridgeBuffer, DspBridge, DspBridgeReader, DspBridgeWriter, DspBuffers, DspPipelineContext,
-        MAX_BRIDGE_BUF, MAX_RESAMP_BUF, capture_dsp_pipeline,
+        MAX_RESAMP_BUF, capture_dsp_pipeline,
     };
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
     use neural_amp_modeler_rs::loader::dispatcher::build_model;
@@ -96,18 +96,7 @@ mod tests {
         let rt_status = RtStatusFlags::default();
 
         let mut bridge = Box::new(DspBridge {
-            buffers: [
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-            ],
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
             active_read_idx: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             consumed_gen: AtomicU64::new(0),
@@ -167,6 +156,7 @@ mod tests {
                     Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
                 },
                 conv: None,
+                conv_pair: None,
             };
 
             let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
@@ -250,6 +240,7 @@ mod tests {
                     Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
                 },
                 conv: None,
+                conv_pair: None,
             };
 
             let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
@@ -385,18 +376,7 @@ mod tests {
         use std::time::Duration;
 
         let bridge: &'static DspBridge = Box::leak(Box::new(DspBridge {
-            buffers: [
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-                BridgeBuffer {
-                    buf_l: [0.0; MAX_BRIDGE_BUF],
-                    buf_r: [0.0; MAX_BRIDGE_BUF],
-                    n_samples: 0,
-                },
-            ],
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
             active_read_idx: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             consumed_gen: AtomicU64::new(0),

@@ -363,4 +363,38 @@ mod tests {
             }
         }
     }
+
+    /// T4.3 / F-CLAP-010 — `reset()` must restore the FSM to its initial Open
+    /// state (multiplier 1.0, no ramp), as if freshly constructed.
+    #[test]
+    fn test_reset_restores_initial_open_state() {
+        let params = GateParams::new(-10.0, -20.0, 10, 10, 1e-4);
+        let mut dh = DynamicHysteresis::new();
+
+        // Drive the FSM to Closed (mid-ramp with a residual ramp).
+        dh.update(0.1, 1.0, 0.5, &params, 10);
+        dh.update(0.1, 1.0, 0.5, &params, 5);
+        assert_eq!(dh.state(), GateState::FadingOut);
+        assert!(dh.multiplier() < 1.0);
+
+        dh.reset();
+        assert_eq!(dh.state(), GateState::Open, "reset must reopen the gate");
+        assert_eq!(dh.multiplier(), 1.0, "reset must restore unity multiplier");
+        assert!(dh.is_steady(), "reset must clear any in-flight ramp");
+
+        // A fresh instance driven through the same sequence after reset must
+        // behave identically.
+        let mut fresh = DynamicHysteresis::new();
+        dh.update(0.1, 1.0, 0.5, &params, 10);
+        fresh.update(0.1, 1.0, 0.5, &params, 10);
+        dh.update(0.1, 1.0, 0.5, &params, 5);
+        fresh.update(0.1, 1.0, 0.5, &params, 5);
+        assert_eq!(dh.state(), fresh.state());
+        assert_eq!(dh.multiplier(), fresh.multiplier());
+        let mut buf_a = vec![0.5f32; 16];
+        let mut buf_b = buf_a.clone();
+        dh.apply_gain_rt(&mut buf_a, 16);
+        fresh.apply_gain_rt(&mut buf_b, 16);
+        assert_eq!(buf_a, buf_b, "post-reset gate must match a fresh gate");
+    }
 }

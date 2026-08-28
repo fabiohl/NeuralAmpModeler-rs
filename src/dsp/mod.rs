@@ -20,6 +20,8 @@ pub mod oversample;
 pub mod pipeline;
 /// Synchronous sample-rate converter with linear or sinc-based interpolation.
 pub mod resampler;
+/// Host-agnostic bounded streaming resample adapter with strict cardinality (F-PERF-002).
+pub mod resampling;
 /// Windowed-sinc kernel tables for high-quality FIR filter generation.
 pub mod sinc_kernel;
 /// Exponential parameter smoother: 1-pole IIR envelope for click-free parameter changes.
