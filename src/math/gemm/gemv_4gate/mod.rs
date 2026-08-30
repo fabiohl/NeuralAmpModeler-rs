@@ -14,8 +14,11 @@ mod kernel_macro;
 
 pub use avx2::gemv_4gate_avx2;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512::gemv_4gate_avx512;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512_bf16::gemv_4gate_bf16_avx512;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512vl::gemv_4gate_avx512vl;

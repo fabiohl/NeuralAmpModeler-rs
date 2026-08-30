@@ -19,6 +19,7 @@ use core::arch::x86_64::*;
 /// Processes the linear projection in blocks of 16 output channels, with 8 independent
 /// ZMM accumulators and step 16 in the inner loop (16 BF16 pairs = 32 elements).
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl,avx512bf16")]
 pub unsafe fn gemv_overwrite_bf16_avx512(
     in_frame: &[u16],

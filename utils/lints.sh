@@ -17,8 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
-PHASE_TOTAL=8
+PHASE_TOTAL=9
 source "$SCRIPT_DIR/_lib.sh"
+
 
 if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]; then
     export NAM_LOW_PRIORITY=1
@@ -205,8 +206,38 @@ fi
 ok "All #[allow(clippy::)] suppressions are documented."
 
 # ---------------------------------------------------------------------------
-# [8/8] Binary scan: zero EVEX/ZMM and zero AVX-512 symbols in default release
+# [8/9] Static validation: doc(cfg(feature = "...")) feature names exist in Cargo.toml
 # ---------------------------------------------------------------------------
+phase "Validating doc(cfg) feature names against Cargo.toml..."
+
+doc_cfg_errors=""
+cargo_features=$(python3 -c "
+import tomllib
+with open('Cargo.toml', 'rb') as f:
+    data = tomllib.load(f)
+for k in data.get('features', {}).keys():
+    print(k)
+")
+
+while IFS=: read -r file line match; do
+    [ -n "$file" ] || continue
+    feat=$(echo "$match" | sed -E 's/.*doc\(cfg\(feature = "([^"]+)".*/\1/')
+    if ! echo "$cargo_features" | grep -qx "$feat"; then
+        doc_cfg_errors+="$file:$line: feature '$feat' not found in Cargo.toml [features]"$'\n'
+    fi
+done < <(git grep -n -o -E 'doc\(cfg\(feature = "[^"]+"\)\)' src/)
+
+if [ -n "$doc_cfg_errors" ]; then
+    echo -e "  ${RED}${BOLD}ERROR: Invalid feature name(s) in doc(cfg):${NC}"
+    echo "$doc_cfg_errors" | sed 's/^/    /'
+    exit 1
+fi
+ok "All doc(cfg) feature annotations match declared features in Cargo.toml."
+
+# ---------------------------------------------------------------------------
+# [9/9] Binary scan: zero EVEX/ZMM and zero AVX-512 symbols in default release
+# ---------------------------------------------------------------------------
+
 phase "Validating binary artifact (zero AVX-512 in default release build)..."
 "$SCRIPT_DIR/verify_no_avx512_release.sh"
 ok "Binary artifact is clean of AVX-512 symbols and EVEX instructions."

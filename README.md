@@ -109,8 +109,10 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 | `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics                               |
 | `heap-audit`     | Enables heap-allocation auditing infrastructure                                                        |
 | `long_bench`     | Enables long-form inference benchmarks                                                                 |
-| `dynamic-engine` | Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies |
+| `dynamic-engine` | Test-only: forces dynamic fallback paths instead of static profiles for coverage testing (see note below) |
 | `avx512`         | Enables opt-in AVX-512 upward dispatch and measurement harnesses                                       |
+
+> ⚠️ **Note on `dynamic-engine`:** This flag does **not** enable non-standard topology support — dynamic fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`) are always compiled and unconditionally active. This flag is used exclusively for internal coverage and regression testing to force dynamic execution paths even when optimized static profiles are applicable.
 
 ---
 
@@ -118,7 +120,7 @@ NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
 
 #### 1. Minimal Model Loading & Audio Processing
 
-```rust
+```rust,no_run
 use std::path::Path;
 use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
 use neural_amp_modeler_rs::models::NamModel; // trait providing `process()`
@@ -180,11 +182,20 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 
 Full API documentation:
 
-* **Local Generation:** `cargo doc --open`
-* **Docs.rs Environment Simulation:** `DOCS_RS=1 cargo doc --features "stereo,testing" --no-deps`
+* **Local Generation (Standard):** `cargo doc --open`
+* **Docs.rs Simulation (Preview feature badges):**
+  ```bash
+  # Note: Requires nightly rustc only for rendering experimental doc_cfg feature badges locally.
+  # Production builds, testing, and CI of NeuralAmpModeler-rs remain strictly on stable Rust.
+  RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
+    --no-default-features \
+    --features "stereo,testing,heap-audit,long_bench,avx512" \
+    --no-deps
+  ```
 * **Online Documentation:** [docs.rs/NeuralAmpModeler-rs](https://docs.rs/NeuralAmpModeler-rs)
 
-> **Note on `docs.rs` Builds:** `NeuralAmpModeler-rs/build.rs` detects `DOCS_RS=1` to early-return before `avx2+fma` CPU target feature assertions. This allows `docs.rs` builders (running on baseline x86-64 without AVX2) to document the API successfully. For new `crates.io` releases or manual doc rebuild requests, use the `docs.rs` re-trigger queue at `https://docs.rs/crate/NeuralAmpModeler-rs/latest/builds`.
+> **Note on `docs.rs` Builds and AVX-512:** `NeuralAmpModeler-rs/build.rs` detects `DOCS_RS=1` to early-return before `avx2+fma` CPU target feature assertions. This allows `docs.rs` builders (running on baseline x86-64 without AVX2) to document the API successfully. While the AVX2 baseline already delivers ample headroom for real-time operation (and project benchmarks show AVX-512 yields marginal real-world difference), `avx512` is enabled in `[package.metadata.docs.rs].features` so that the complete API surface remains accessible to users wishing to utilize it. For new `crates.io` releases or manual doc rebuild requests, use the `docs.rs` re-trigger queue at `https://docs.rs/crate/NeuralAmpModeler-rs/latest/builds`.
+
 
 ---
 

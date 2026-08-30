@@ -10,6 +10,7 @@ use crate::models::NamModel;
 use log::{debug, info};
 use std::path::Path;
 
+use super::error::LoadError;
 use super::loaded_model_pair::{
     DEFAULT_INPUT_LEVEL_DBU, DEFAULT_LOUDNESS_DB, DEFAULT_SAMPLE_RATE, LoadedModelPair,
     MAX_MODEL_BYTES, MAX_PLAUSIBLE_DBU, MAX_PLAUSIBLE_HEAD_SCALE, MetadataError,
@@ -26,7 +27,7 @@ use super::loaded_model_pair::{
 fn validate_metadata_floats(
     meta: &crate::loader::nam_json::NamMetadata,
     head_scale: Option<f32>,
-) -> anyhow::Result<()> {
+) -> Result<(), MetadataError> {
     let db_fields: [(&'static str, Option<f32>); 3] = [
         ("input_level_dbu", meta.input_level_dbu),
         ("output_level_dbu", meta.output_level_dbu),
@@ -35,15 +36,14 @@ fn validate_metadata_floats(
     for (field, value) in db_fields {
         if let Some(v) = value {
             if !v.is_finite() {
-                return Err(MetadataError::NonFinite { field, value: v }.into());
+                return Err(MetadataError::NonFinite { field, value: v });
             }
             if v.abs() > MAX_PLAUSIBLE_DBU {
                 return Err(MetadataError::DbOutOfRange {
                     field,
                     value: v,
                     max: MAX_PLAUSIBLE_DBU,
-                }
-                .into());
+                });
             }
         }
     }
@@ -52,15 +52,13 @@ fn validate_metadata_floats(
             return Err(MetadataError::NonFinite {
                 field: "head_scale",
                 value: v,
-            }
-            .into());
+            });
         }
         if v <= 0.0 || v > MAX_PLAUSIBLE_HEAD_SCALE {
             return Err(MetadataError::HeadScaleOutOfRange {
                 value: v,
                 max: MAX_PLAUSIBLE_HEAD_SCALE,
-            }
-            .into());
+            });
         }
     }
     Ok(())
@@ -79,7 +77,7 @@ fn read_and_validate_model_bytes(
     path: &Path,
     path_str: &str,
     sys: &SystemSnapshot,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>, super::error::LoadError> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path).map_err(|e| {
@@ -89,7 +87,7 @@ fn read_and_validate_model_bytes(
             .param("file", path_str)
             .param("io_error", &e)
             .emit();
-        anyhow::Error::from(e)
+        super::error::LoadError::Io(e)
     })?;
 
     // H-04: single open + bounded read. Reading `MAX_MODEL_BYTES + 1` bytes
@@ -105,7 +103,7 @@ fn read_and_validate_model_bytes(
                 .param("file", path_str)
                 .param("io_error", &e)
                 .emit();
-            anyhow::Error::from(e)
+            super::error::LoadError::Io(e)
         })?;
 
     if bytes.len() as u64 > MAX_MODEL_BYTES {
@@ -120,11 +118,7 @@ fn read_and_validate_model_bytes(
             .param("file", path_str)
             .param("size_bytes", bytes.len())
             .emit();
-        return Err(anyhow::anyhow!(
-            "Model file \"{}\" exceeds maximum allowed size of {} MiB.",
-            path_str,
-            MAX_MODEL_BYTES / (1024 * 1024)
-        ));
+        return Err(super::error::LoadError::ModelTooLarge);
     }
     Ok(bytes)
 }
@@ -168,7 +162,7 @@ pub fn load_and_build_model(
     sys: &SystemSnapshot,
     stereo: bool,
     options: crate::loader::LoadOptions,
-) -> anyhow::Result<LoadedModelPair> {
+) -> Result<LoadedModelPair, LoadError> {
     let path_str = path.to_string_lossy();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let ext_lower = ext.to_lowercase();
@@ -178,7 +172,7 @@ pub fn load_and_build_model(
     // 1. Reading and Parsing
     let model_data = if ext_lower == "namb" {
         let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
-        namb::parse_namb(&bytes).inspect_err(|e| {
+        namb::parse_namb(&bytes).map_err(|e| {
             let code = match e.downcast_ref::<namb::NambError>() {
                 Some(namb::NambError::Truncated { .. }) => NamErrorCode::NambTruncated,
                 Some(namb::NambError::InvalidMagic(_)) => NamErrorCode::NambInvalidMagic,
@@ -200,6 +194,31 @@ pub fn load_and_build_model(
                 .message(format!("Invalid \".namb\" file: {}", path_str))
                 .param("detail", e.to_string())
                 .emit();
+            match e.downcast::<namb::NambError>() {
+                Ok(namb_err) => match namb_err {
+                    namb::NambError::Truncated { .. }
+                    | namb::NambError::WeightsOffsetOutOfBounds { .. }
+                    | namb::NambError::InvalidWeightsOffset { .. } => {
+                        LoadError::NambTruncated(namb_err.to_string())
+                    }
+                    namb::NambError::InvalidMagic(m) => {
+                        LoadError::NambInvalidMagic(format!("0x{:08X}", m))
+                    }
+                    namb::NambError::InvalidVersion(v) => LoadError::UnsupportedArchitecture(
+                        format!("unsupported .namb version: {}", v),
+                    ),
+                    namb::NambError::CrcMismatch { .. } => LoadError::NambCrc32Mismatch,
+                    namb::NambError::CrcMissing { .. } | namb::NambError::CrcMissingV1 => {
+                        LoadError::NambCrc32Missing
+                    }
+                    namb::NambError::WeightsTooLarge { .. } => LoadError::ModelTooLarge,
+                    namb::NambError::NonFiniteWeight { .. } => LoadError::NonFiniteWeights,
+                    namb::NambError::InvalidHeaderField { field, .. } => {
+                        LoadError::Internal(format!("invalid header field {}", field))
+                    }
+                },
+                Err(orig_e) => LoadError::Internal(orig_e.to_string()),
+            }
         })?
     } else if ext_lower == "nam" {
         let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
@@ -210,10 +229,10 @@ pub fn load_and_build_model(
                 .param("file", &path_str)
                 .param("utf8_error", &e)
                 .emit();
-            anyhow::Error::from(e)
+            LoadError::InvalidUtf8(e)
         })?;
-        nam_json::parse_nam_json(&json).inspect_err(|e| {
-            let code = match e {
+        nam_json::parse_nam_json(&json).map_err(|e| {
+            let code = match &e {
                 nam_json::JsonError::WeightsExceedLimit { .. } => {
                     NamErrorCode::NamJsonWeightsExceedLimit
                 }
@@ -247,11 +266,31 @@ pub fn load_and_build_model(
             };
             NamDiagnostic::new(code, sys)
                 .message(format!("Error parsing model JSON: {}", path_str))
-                .param("detail", e)
+                .param("detail", &e)
                 .emit();
+            match e {
+                nam_json::JsonError::WeightsExceedLimit { .. }
+                | nam_json::JsonError::TrainingTooLarge { .. } => LoadError::ModelTooLarge,
+                nam_json::JsonError::WeightNotFinite { .. } => LoadError::NonFiniteWeights,
+                nam_json::JsonError::UnsupportedTopology { .. }
+                | nam_json::JsonError::UnsupportedVersion { .. }
+                | nam_json::JsonError::UnsupportedMultiChannel { .. }
+                | nam_json::JsonError::SubmodelsTooDeep { .. }
+                | nam_json::JsonError::TrainingTooDeep { .. }
+                | nam_json::JsonError::SubmodelsExceedLimit { .. } => {
+                    LoadError::UnsupportedArchitecture(e.to_string())
+                }
+                nam_json::JsonError::InvalidVersionFormat { raw } => {
+                    LoadError::UnsupportedArchitecture(format!("Invalid version format: {}", raw))
+                }
+                nam_json::JsonError::InvalidSampleRate { .. } => {
+                    LoadError::UnsupportedArchitecture(e.to_string())
+                }
+                nam_json::JsonError::Serde(serde_err) => LoadError::JsonParse(serde_err),
+            }
         })?
     } else {
-        return Err(anyhow::anyhow!("Unsupported file extension: {}", ext));
+        return Err(LoadError::UnsupportedExtension(ext.to_string()));
     };
 
     let model_version = model_data.version.as_deref().unwrap_or("(unknown)");
@@ -268,11 +307,12 @@ pub fn load_and_build_model(
 
     // 2. Metadata and Calibration Extraction
     let meta = model_data.metadata.clone().unwrap_or_default();
-    validate_metadata_floats(&meta, model_data.config.head_scale).inspect_err(|e| {
+    validate_metadata_floats(&meta, model_data.config.head_scale).map_err(|e| {
         NamDiagnostic::new(NamErrorCode::InvalidMetadata, sys)
             .message(format!("Invalid model metadata in \"{}\"", path_str))
             .param("detail", e.to_string())
             .emit();
+        LoadError::InvalidMetadata(e)
     })?;
     let in_level = meta.input_level_dbu.unwrap_or(DEFAULT_INPUT_LEVEL_DBU);
     let loudness = meta.loudness.unwrap_or(DEFAULT_LOUDNESS_DB);
@@ -297,7 +337,7 @@ pub fn load_and_build_model(
         "[Loader] Dispatching model build: arch=\"{}\", layout={:?}",
         model_data.architecture, model_data.weights_layout
     );
-    let mut model_l = dispatcher::build_model(&model_data).inspect_err(|e| {
+    let mut model_l = dispatcher::build_model(&model_data).map_err(|e| {
         let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
             code
         } else if e.to_string().contains("slimmable") {
@@ -309,12 +349,19 @@ pub fn load_and_build_model(
             .message(format!("Failed to build model (L): {}", path_str))
             .param("detail", e.to_string())
             .emit();
+        if e.to_string().contains("slimmable") {
+            LoadError::UnsupportedArchitecture(e.to_string())
+        } else {
+            LoadError::ModelBuildFailed(e.to_string())
+        }
     })?;
 
     // Size the model for the pipeline's documented maximum block size
     // (`MAX_RESAMP_BUF`), so containers/crossfade scratch and ring buffers
     // are pre-allocated for 8192-sample blocks before processing starts.
-    model_l.set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)?;
+    model_l
+        .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
+        .map_err(|e| LoadError::Internal(e.to_string()))?;
 
     if options.prewarm == Some(false) {
         model_l.set_prewarm_on_reset(false);
@@ -323,7 +370,7 @@ pub fn load_and_build_model(
     }
 
     let model_r = if stereo {
-        let mut model = dispatcher::build_model(&model_data).inspect_err(|e| {
+        let mut model = dispatcher::build_model(&model_data).map_err(|e| {
             let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
                 code
             } else if e.to_string().contains("slimmable") {
@@ -335,8 +382,15 @@ pub fn load_and_build_model(
                 .message(format!("Failed to build model (R): {}", path_str))
                 .param("detail", e.to_string())
                 .emit();
+            if e.to_string().contains("slimmable") {
+                LoadError::UnsupportedArchitecture(e.to_string())
+            } else {
+                LoadError::ModelBuildFailed(e.to_string())
+            }
         })?;
-        model.set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)?;
+        model
+            .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
+            .map_err(|e| LoadError::Internal(e.to_string()))?;
         if options.prewarm == Some(false) {
             model.set_prewarm_on_reset(false);
         } else {

@@ -12,6 +12,7 @@ mod fused_residual_batch;
 mod kernel_macro;
 
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512::fused_add_gemm_batch_avx512;
 pub use fused_add_gemm_batch::fused_add_gemm_batch_avx2;
 pub use fused_residual_batch::*;

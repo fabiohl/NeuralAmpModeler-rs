@@ -17,8 +17,10 @@ pub mod scalar;
 
 pub use avx2::*;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512::*;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use avx512vl::*;
 #[cfg(test)]
 pub use scalar::*;

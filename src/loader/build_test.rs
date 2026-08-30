@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod tests {
     use crate::common::diagnostics::SystemSnapshot;
-    use crate::loader::{LoadOptions, MetadataError, load_and_build_model};
+    use crate::loader::{LoadError, LoadOptions, MetadataError, load_and_build_model};
     use crate::testing::fixtures::model_path;
     use std::path::Path;
     use std::path::PathBuf;
@@ -66,20 +66,22 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let err = res.expect_err("metadata with input_level_dbu=1e39 must be rejected");
-        let meta_err = err
-            .downcast_ref::<MetadataError>()
-            .expect("error must be the typed MetadataError");
-        assert!(
-            matches!(
-                meta_err,
-                MetadataError::NonFinite {
-                    field: "input_level_dbu",
-                    ..
-                }
-            ),
-            "expected MetadataError::NonFinite for input_level_dbu, got: {:?}",
-            meta_err
-        );
+        match err {
+            LoadError::InvalidMetadata(meta_err) => {
+                assert!(
+                    matches!(
+                        meta_err,
+                        MetadataError::NonFinite {
+                            field: "input_level_dbu",
+                            ..
+                        }
+                    ),
+                    "expected MetadataError::NonFinite for input_level_dbu, got: {:?}",
+                    meta_err
+                );
+            }
+            other => panic!("expected LoadError::InvalidMetadata, got: {:?}", other),
+        }
     }
 
     /// Out-of-range dBu metadata (beyond ±60 dBu) is rejected with the typed
@@ -95,20 +97,22 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let err = res.expect_err("loudness beyond ±60 dBu must be rejected");
-        let meta_err = err
-            .downcast_ref::<MetadataError>()
-            .expect("error must be the typed MetadataError");
-        assert!(
-            matches!(
-                meta_err,
-                MetadataError::DbOutOfRange {
-                    field: "loudness",
-                    ..
-                }
-            ),
-            "expected MetadataError::DbOutOfRange for loudness, got: {:?}",
-            meta_err
-        );
+        match err {
+            LoadError::InvalidMetadata(meta_err) => {
+                assert!(
+                    matches!(
+                        meta_err,
+                        MetadataError::DbOutOfRange {
+                            field: "loudness",
+                            ..
+                        }
+                    ),
+                    "expected MetadataError::DbOutOfRange for loudness, got: {:?}",
+                    meta_err
+                );
+            }
+            other => panic!("expected LoadError::InvalidMetadata, got: {:?}", other),
+        }
     }
 
     /// Hostile `head_scale` (negative or beyond the plausible linear range)
@@ -124,14 +128,16 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let err = res.expect_err("head_scale=-0.02 must be rejected");
-        let meta_err = err
-            .downcast_ref::<MetadataError>()
-            .expect("error must be the typed MetadataError");
-        assert!(
-            matches!(meta_err, MetadataError::HeadScaleOutOfRange { .. }),
-            "expected MetadataError::HeadScaleOutOfRange, got: {:?}",
-            meta_err
-        );
+        match err {
+            LoadError::InvalidMetadata(meta_err) => {
+                assert!(
+                    matches!(meta_err, MetadataError::HeadScaleOutOfRange { .. }),
+                    "expected MetadataError::HeadScaleOutOfRange, got: {:?}",
+                    meta_err
+                );
+            }
+            other => panic!("expected LoadError::InvalidMetadata, got: {:?}", other),
+        }
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub mod huge_alloc;
 pub use huge_alloc::HugePageVec;
 /// AVX-512 kernel implementations: activations, DSP/VNNI-BF16, reductions, BF16.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub mod avx512;
 /// Unit tests for the common math infrastructure.
 #[cfg(test)]
@@ -47,6 +48,7 @@ pub use aligned::Aligned64;
 pub use aligned::AlignedVec;
 pub use avx2_impl::Avx2Math;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[expect(deprecated)]
 pub use avx512::{Avx512Math, Avx512VnniBf16Math};
 pub use dispatch::{InstructionSet, SIMD_MATH, SimdMathConfig};
@@ -55,6 +57,7 @@ pub use dispatch::{
     effective_instruction_set, encode_isa_override, set_test_isa_override,
 };
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use dispatch::{has_full_avx512, missing_avx512_features};
 /// Kahan compensated summation types and accumulator.
 pub use kahan::{Kahan4F32, KahanF32, kahan_add};

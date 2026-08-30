@@ -133,7 +133,10 @@ testing = []
 heap-audit = []
 # Enables long-form inference benchmarks.
 long_bench = []
-# Enables generic dynamic-dimension fallback execution paths for arbitrary non-standard model topologies.
+# Forces selection of dynamic execution paths instead of optimized static profiles,
+# even when a static profile would apply. Used exclusively for dynamic fallback
+# test and regression coverage. Support for non-standard topologies (WaveNetModelDyn,
+# LstmModelDyn, WaveNetA2Dyn) is ALREADY ALWAYS ACTIVE regardless of this flag.
 dynamic-engine = []
 # Research and re-measurement only: enables AVX-512 kernels and instruction dispatch (not used in default/production).
 avx512 = []
@@ -248,7 +251,11 @@ opt-level = 0
 incremental = true
 split-debuginfo = "unpacked"
 
+# Tarefa 2.0 (Decisão PO): "avx512" incluído na documentação gerada do docs.rs
+# para disponibilizar a API pública completa aos usuários que desejarem utilizá-la,
+# com a ressalva documentada de que o baseline AVX2 já é extremamente rápido
+# e o ganho prático com AVX-512 é marginal nos benchmarks do projeto.
 [package.metadata.docs.rs]
 no-default-features = true
-features = ["stereo", "testing"]
+features = ["stereo", "testing", "heap-audit", "long_bench", "avx512"]
 rustdoc-args = ["--cfg", "docsrs"]

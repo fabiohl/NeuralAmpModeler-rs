@@ -11,6 +11,8 @@
 pub mod build;
 /// Architecture-specific model dispatcher: routes parsed weights to concrete model builders.
 pub mod dispatcher;
+/// Strongly-typed error definitions for model loading.
+pub mod error;
 /// Struct, constants, and Debug impl for `LoadedModelPair`.
 pub mod loaded_model_pair;
 /// `.nam` (JSON) format parser: schema validation, topology parsing, activation detection.
@@ -23,6 +25,7 @@ pub mod namb_encoder;
 pub mod transpose;
 
 pub use build::load_and_build_model;
+pub use error::LoadError;
 pub use loaded_model_pair::*;
 
 #[cfg(test)]

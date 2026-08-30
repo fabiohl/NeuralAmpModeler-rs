@@ -26,11 +26,13 @@ pub mod f16_avx2_overwrite;
 #[doc = "GEMV AVX2 specialized kernels for fixed dimensions (1×4, 4×4, 4×6, 8×4, 8×6, 8×8)."]
 pub mod f16_avx2_specialized;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[doc = "GEMV kernels using AVX-512 (small, general, batch, fused variants)."]
 pub mod f16_avx512;
 #[doc = "f32 batched GEMV kernels using AVX2 (with_bias, no_bias)."]
 pub mod f32_avx2;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[doc = "f32 batched GEMV kernels using AVX-512 (with_bias, no_bias)."]
 pub mod f32_avx512;
 #[doc = "Internal: the `gemv_f32_inner_loop` macro for batched f32 GEMV."]
@@ -40,9 +42,11 @@ pub mod kernel_macro;
 
 pub use f16_avx2::*;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use f16_avx512::*;
 pub use f32_avx2::*;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use f32_avx512::*;
 
 #[cfg(test)]

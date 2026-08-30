@@ -25,7 +25,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PHASE_TOTAL=3
 source "$SCRIPT_DIR/_lib.sh"
+
+echo -e "${BLUE}${BOLD}================================================================${NC}"
+echo -e "${BLUE}${BOLD}   NeuralAmpModeler-rs Binary Certification (Zero AVX-512)      ${NC}"
+echo -e "${BLUE}${BOLD}================================================================${NC}"
 
 CERT_DIR="$(mktemp -d "$PROJECT_DIR/target/cert-release-XXXXXX")"
 trap 'rm -rf "$CERT_DIR"' EXIT

@@ -30,5 +30,6 @@ pub mod stress;
 pub mod wav;
 
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use isa_guard::ForceAvx512Guard;
 pub use isa_guard::{ForceAvx2Guard, IsaGuard};

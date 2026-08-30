@@ -9,11 +9,13 @@
 
 pub mod dot_f32_avx2;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub mod dot_f32_avx512;
 pub mod scalar;
 
 pub use dot_f32_avx2::*;
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use dot_f32_avx512::*;
 pub use scalar::*;
 
