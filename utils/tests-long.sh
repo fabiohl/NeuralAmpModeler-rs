@@ -697,20 +697,25 @@ emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase4-rt-deadline.log" || true
 # --- Phase 5: RT Jitter Characterization (environmental telemetry) ---
 # Characterizes tail latency under CPU contention. This is diagnostic
 # telemetry — it does NOT assert deadlines under stress. An INCONCLUSIVE
-# result is expected when environment preconditions (CPU pinning,
-# performance governor, low background load) are not met.
+# result is expected when environment preconditions (performance governor,
+# low background load) are not met.
 run_rt_jitter_characterization_phase() {
-    # Same core pin as Phase 4: jitter preflight requires single-CPU affinity.
+    # Unlike Phase 4 (which pins to a single core for isolated deadline gating),
+    # Phase 5 characterizes multi-worker CPU contention and must NOT be confined
+    # to a single core. The process must see all available cores so stress-1,
+    # stress-2, and saturate-N execute real concurrent load across CPUs.
     local status=0
     local flag=$(_test_flag rt_jitter)
-    if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
-        taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
-    else
-        cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
-    fi
+    cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
     return $status
 }
 run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase5-rt-jitter.log" || true
+
+# Guard against regression: if host has multiple cores, Phase 5 must never
+# report 'Single core affinity' bypass.
+if [ "${NUM_CORES:-1}" -ge 2 ] && grep -q "Single core affinity" "target/logs/phase5-rt-jitter.log" 2>/dev/null; then
+    echo -e "  ${RED}${BOLD}❌ REGRESSION: Phase 5 reported 'Single core affinity' on a machine with ${NUM_CORES} cores!${NC}" >&2
+fi
 
 # The Rust test returns exit 0 even when internally bypassed (INCONCLUSIVE
 # or SKIP_CAPABILITY) to avoid false FAIL — the [STATUS] log markers are

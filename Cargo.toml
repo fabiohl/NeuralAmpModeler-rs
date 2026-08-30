@@ -14,22 +14,22 @@ authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
 keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
 categories = ["multimedia::audio", "multimedia"]
 include = [
-    "examples/",
-    "src/bin/",
-    "src/common/",
-    "src/dsp/",
-    "src/loader/",
-    "src/math/",
-    "src/models/",
-    "src/testing/",
-    "src/lib.rs",
-    "Cargo.toml",
+    "/examples/",
+    "/src/bin/",
+    "/src/common/",
+    "/src/dsp/",
+    "/src/loader/",
+    "/src/math/",
+    "/src/models/",
+    "/src/testing/",
+    "/src/lib.rs",
+    "/Cargo.toml",
     "/README.md",
     "/LICENSE.txt",
     "/NOTICE.txt",
     "/docs/",
-    "build.rs",
-    ".cargo/hide-libm-shadow.map",
+    "/build.rs",
+    "/.cargo/hide-libm-shadow.map",
 ]
 
 [lib]

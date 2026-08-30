@@ -113,8 +113,12 @@ impl A2Layer {
             layer1x1_post_film: None,
             head1x1_post_film: None,
             head1x1_active: false,
-            head1x1_w: AlignedVec::new(0, 0.0f32).expect("allocation"),
-            head1x1_b: AlignedVec::new(0, 0.0f32).expect("allocation"),
+            // Pre-allocated empty buffers for the optional 1x1 head projection.
+            // Using `empty()` is infallible (zero heap allocation, zero capacity, dangling pointer)
+            // and avoids panicking `.expect()` in model construction paths, adhering to the
+            // resilience standard of MirroredBuffer. Head weights are populated when configured.
+            head1x1_w: AlignedVec::empty(),
+            head1x1_b: AlignedVec::empty(),
         }
     }
 

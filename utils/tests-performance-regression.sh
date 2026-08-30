@@ -26,8 +26,10 @@
 #
 # Environment variables
 # ----------------------
-#   NAM_BENCH_CORE       CPU core to pin via taskset (default: middle core).
-#   NAM_BASELINE_NAME    Criterion baseline name (default: ci-baseline).
+#   NAM_BENCH_CORE          CPU core to pin via taskset (default: middle core).
+#   NAM_BASELINE_NAME       Criterion baseline name (default: ci-baseline).
+#   NAM_THERMAL_COOLDOWN_S  Seconds to sleep for thermal cooldown before
+#                           benchmarks (default: 180, 0 to bypass).
 #
 # Usage
 # ------
@@ -78,12 +80,29 @@ DASHBOARD_PHASE_RECEIPT="$REGRESSION_RECEIPT"
 NAM_RUN_ID="${NAM_RUN_ID:-$(date +%s%N-$$)}"
 export NAM_RUN_ID
 
+# ── Thermal Cooldown ─────────────────────────────────────────────────────────
+
+apply_thermal_cooldown() {
+    local cooldown="${NAM_THERMAL_COOLDOWN_S:-180}"
+    if [[ "$cooldown" =~ ^[0-9]+$ ]] && [ "$cooldown" -gt 0 ]; then
+        echo -e "\n${BLUE}${BOLD}[INFO] Thermal cooldown: sleeping ${cooldown}s before microbenchmarks...${NC}" >&2
+        sleep "$cooldown"
+    elif [ "$cooldown" = "0" ]; then
+        echo -e "\n${BLUE}${BOLD}[INFO] Thermal cooldown: bypassed (NAM_THERMAL_COOLDOWN_S=0)${NC}" >&2
+    else
+        echo -e "\n${YELLOW}${BOLD}[WARN] Invalid NAM_THERMAL_COOLDOWN_S='${cooldown}', defaulting to 180s${NC}" >&2
+        sleep 180
+    fi
+}
+
 # ── Bootstrap baseline (human-only operation) ──────────────────────────────
 
 bootstrap_baseline() {
     echo -e "\n${GREEN}${BOLD}[BOOTSTRAP] Creating new performance baseline...${NC}" >&2
     echo -e "  ${YELLOW}⚠ This operation must be performed by a human operator.${NC}"
     echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}\n"
+
+    apply_thermal_cooldown
 
     "${TASKSET[@]}" cargo bench --bench regression_gate --features testing -- --save-baseline "$BASELINE_NAME"
 
@@ -120,6 +139,8 @@ bootstrap_baseline() {
 
 check_regression() {
     echo -e "\n${BLUE}${BOLD}[CHECK] Comparing against CI baseline...${NC}" >&2
+
+    apply_thermal_cooldown
 
     mkdir -p "$PROJECT_DIR/target/logs"
     LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"

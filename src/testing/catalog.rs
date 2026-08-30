@@ -402,7 +402,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 8, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 8, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} model (APP-EVH-Stealth100-Dialled-xSTD.nam)",
+        description: "Supported {'channels': 8, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "cddd9e9e8fdeccb9f51b34f4c23f0f0d444c3faed307e962f76db7c6d287e1bf",
@@ -410,7 +410,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 8, 'topology': 'Unknown', 'type': 'SlimmableContainer', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 8, 'topology': 'Unknown', 'type': 'SlimmableContainer', 'weights_layout': 'Original'} model (BOG UU II Gain BAL CAB.nam)",
+        description: "Supported {'channels': 8, 'topology': 'Unknown', 'type': 'SlimmableContainer', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "7ffd11c244664c737363d8d8753c3843f124b76a7afac7f15bcaebe0b6fd59f0",
@@ -418,7 +418,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 9, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 9, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} model (Boss BD-2 H2O Mod T-12_00 G-12_00.nam)",
+        description: "Supported {'channels': 9, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "66a4be684f6599c172d406af8f7206539fde8ffda9fd9eaefe5f3a09f388a0b8",
@@ -426,7 +426,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} model (ChandlerRedd47-Gain34-Standard.nam)",
+        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "4404e56fbe20a30d57735a3294c8023c22a27bc63d0f4994b3d889605c445ad6",
@@ -434,7 +434,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 12, 'topology': 'Lite', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 12, 'topology': 'Lite', 'type': 'WaveNet', 'weights_layout': 'Original'} model (EVH-5150-Lite.nam)",
+        description: "Supported {'channels': 12, 'topology': 'Lite', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "d3f6c9e6f08cdd2a2f99ef910abdd5e37a6e1a83f79f47f40011aefcb7ec1f66",
@@ -442,7 +442,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} model (little-bear-t7_phono-aux-tube-preamp_line-in_Standard.nam)",
+        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "4257fc55a0cf105292613a7ed8864b933f809cc265694e8f14b5b522223697fe",
@@ -450,7 +450,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} model (NEVE1073-Standard.nam)",
+        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "c76c0666945213deb8f43b53690ef64ce72e5b8c562725d75a1b106372e81a61",
@@ -458,7 +458,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 32, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 32, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} model (SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam)",
+        description: "Supported {'channels': 32, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "203fac43316573ecb56e4e060d361d29669084259362b09b6e728e3f3d548a2d",
@@ -466,7 +466,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::Supported,
-        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} model (UA610B-Gain+10-Standard.nam)",
+        description: "Supported {'channels': 16, 'topology': 'Standard', 'type': 'WaveNet', 'weights_layout': 'Original'} non-distributable community model",
     },
     ModelCatalogEntry {
         sha256: "8d5d62626945e079a34a09e91d6ddef575beaea3bc17efdb4dee4afed9be81c7",

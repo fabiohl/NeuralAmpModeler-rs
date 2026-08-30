@@ -26,7 +26,7 @@ pub struct RtPreflightResult {
     pub num_cpus: usize,
 }
 
-fn check_cpu_affinity() -> (bool, Option<usize>) {
+fn check_cpu_affinity(single_core_required: bool) -> (bool, Option<usize>) {
     #[cfg(target_os = "linux")]
     {
         let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
@@ -43,8 +43,18 @@ fn check_cpu_affinity() -> (bool, Option<usize>) {
             }
         }
 
-        if pinned.len() == 1 {
-            (true, Some(pinned[0]))
+        if single_core_required {
+            if pinned.len() == 1 {
+                (true, Some(pinned[0]))
+            } else {
+                (false, None)
+            }
+        } else if !pinned.is_empty() {
+            if pinned.len() == 1 {
+                (true, Some(pinned[0]))
+            } else {
+                (true, None)
+            }
         } else {
             (false, None)
         }
@@ -52,7 +62,11 @@ fn check_cpu_affinity() -> (bool, Option<usize>) {
 
     #[cfg(not(target_os = "linux"))]
     {
-        (false, None)
+        if single_core_required {
+            (false, None)
+        } else {
+            (true, None)
+        }
     }
 }
 
@@ -113,10 +127,25 @@ fn check_background_load(num_cpus: usize) -> (bool, Option<f64>) {
     }
 }
 
+/// Preflight check for deterministic single-core RT deadline verification (`rt_deadline.rs`).
+///
+/// Requires single-core CPU affinity, performance governor, and low background load.
 pub fn rt_preflight() -> RtPreflightResult {
+    rt_preflight_impl(true)
+}
+
+/// Preflight check for multi-threaded RT jitter characterization under contention (`rt_jitter.rs`).
+///
+/// Permits multi-core execution (does not constrain affinity mask to 1 CPU), while still
+/// verifying that the performance governor and low background load conditions are met.
+pub fn rt_preflight_jitter() -> RtPreflightResult {
+    rt_preflight_impl(false)
+}
+
+fn rt_preflight_impl(single_core_required: bool) -> RtPreflightResult {
     let num_cpus = system_cpu_count();
 
-    let (cpu_affinity_ok, pinned_core) = check_cpu_affinity();
+    let (cpu_affinity_ok, pinned_core) = check_cpu_affinity(single_core_required);
     let (governor_ok, governor) = check_governor();
     let (background_load_ok, load_1m) = check_background_load(num_cpus);
 
@@ -166,7 +195,7 @@ pub fn print_preflight(result: &RtPreflightResult) {
     if result.status != RtPreflightStatus::Pass {
         println!("[RT_PREFLIGHT] INCONCLUSIVE — environment preconditions not met:");
         if !result.cpu_affinity_ok {
-            println!("  - CPU affinity not pinned to single core (use taskset -c <core>)");
+            println!("  - CPU affinity check failed (not pinned or affinity mask empty)");
         }
         if !result.governor_ok {
             println!(

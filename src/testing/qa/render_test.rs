@@ -274,3 +274,78 @@ fn parse_routes_every_kind() {
     assert_eq!(report.phase_status("regression_gate"), "PASS");
     assert!(!report.performance_not_verified());
 }
+
+fn sample_report_with_decomp(decomp: Vec<F64Decomp>) -> QualityReport {
+    QualityReport {
+        header: ReportHeader::default(),
+        phases: Vec::new(),
+        fidelity: Vec::new(),
+        latency: Vec::new(),
+        f64_table: Vec::new(),
+        f64_decomp: decomp,
+        activation: Vec::new(),
+        isa: Vec::new(),
+        coverage: None,
+        test_counts: None,
+    }
+}
+
+#[test]
+fn f64_decomp_transient_emits_notice_without_yellow_violation() {
+    let report = sample_report_with_decomp(vec![F64Decomp {
+        label: "WaveNet-official".to_string(),
+        architecture: "WaveNet".to_string(),
+        esr_f32_vs_f64: MetricValue::Raw("2.68e-5".to_string()),
+        esr_quant_f16c: None,
+        esr_quant_bf16: None,
+        esr_activation: Some(MetricValue::Raw("2.12e-13".to_string())),
+        esr_accumulation: Some(MetricValue::Raw("2.21e-13".to_string())),
+        esr_combined: Some(MetricValue::Raw("2.12e-13".to_string())),
+    }]);
+
+    let palette = Palette::new(RenderStyle::Ansi);
+    let rendered = render_f64_decomposition(&report, &palette);
+
+    assert!(
+        rendered.contains("Rule 5 notice:"),
+        "must emit notice for WaveNet cold-start: {rendered}"
+    );
+    assert!(
+        rendered.contains("expected cold-start buffer fill-in transient"),
+        "must explain cold-start buffer fill-in: {rendered}"
+    );
+    assert!(
+        !rendered.contains("violated"),
+        "transient must not say 'violated': {rendered}"
+    );
+    assert!(
+        !rendered.contains("\x1b[1;33m"),
+        "transient must not use yellow alert color: {rendered}"
+    );
+}
+
+#[test]
+fn f64_decomp_steady_state_emits_yellow_violation() {
+    let report = sample_report_with_decomp(vec![F64Decomp {
+        label: "LSTM-1x10".to_string(),
+        architecture: "LSTM".to_string(),
+        esr_f32_vs_f64: MetricValue::Raw("1.0e-5".to_string()),
+        esr_quant_f16c: None,
+        esr_quant_bf16: None,
+        esr_activation: Some(MetricValue::Raw("1.0e-8".to_string())),
+        esr_accumulation: Some(MetricValue::Raw("1.0e-8".to_string())),
+        esr_combined: Some(MetricValue::Raw("1.0e-8".to_string())),
+    }]);
+
+    let palette = Palette::new(RenderStyle::Ansi);
+    let rendered = render_f64_decomposition(&report, &palette);
+
+    assert!(
+        rendered.contains("Rule 5 (Σ sources ≈ total, within 10x) violated:"),
+        "must emit violation for LSTM steady-state discrepancy: {rendered}"
+    );
+    assert!(
+        rendered.contains("\x1b[1;33m"),
+        "violation must use yellow alert color: {rendered}"
+    );
+}

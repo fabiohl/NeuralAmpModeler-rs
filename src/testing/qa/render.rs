@@ -1261,15 +1261,33 @@ fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
         {
             let ratio = (total / combined).abs().max((combined / total).abs());
             if ratio > 10.0 {
-                out.push_str(&p.yellow(&format!(
-                    "    Rule 5 (Σ sources ≈ total, within 10x) violated: total/combined ≈ {ratio:.0}x.\n"
-                )));
-                out.push_str(&p.yellow(
-                    "      Expected for models whose receptive field exceeds the measurement window (cold-start).\n",
-                ));
-                out.push_str(&p.yellow(
-                    "      Do not treat this number as a calibrated precision floor without paired prewarm measurement.\n",
-                ));
+                let arch = block.architecture.to_ascii_lowercase();
+                let label = block.label.to_ascii_lowercase();
+                let is_transient_architecture = arch.contains("wavenet")
+                    || arch.contains("a2")
+                    || arch.contains("convnet")
+                    || label.contains("wavenet")
+                    || label.contains("a2")
+                    || label.contains("convnet");
+
+                if is_transient_architecture {
+                    out.push_str(&format!(
+                        "    Rule 5 notice: total/combined ≈ {ratio:.0}x (expected cold-start buffer fill-in transient).\n"
+                    ));
+                    out.push_str(
+                        "      Do not treat this number as a calibrated precision floor without paired prewarm measurement.\n",
+                    );
+                } else {
+                    out.push_str(&p.yellow(&format!(
+                        "    Rule 5 (Σ sources ≈ total, within 10x) violated: total/combined ≈ {ratio:.0}x.\n"
+                    )));
+                    out.push_str(&p.yellow(
+                        "      Expected for models whose receptive field exceeds the measurement window (cold-start).\n",
+                    ));
+                    out.push_str(&p.yellow(
+                        "      Do not treat this number as a calibrated precision floor without paired prewarm measurement.\n",
+                    ));
+                }
             }
         }
         out.push('\n');

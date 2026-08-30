@@ -118,6 +118,16 @@ impl<T: Copy> AlignedVec<T> {
     /// The default guaranteed alignment (64 bytes).
     pub const ALIGN: usize = 64;
 
+    /// Creates an empty buffer with zero capacity (infallible, does not allocate).
+    #[inline]
+    pub fn empty() -> Self {
+        Self {
+            ptr: NonNull::dangling(),
+            len: 0,
+            cap: 0,
+        }
+    }
+
     /// Allocates a 64-byte aligned block for `capacity` elements.
     ///
     /// Returns the raw pointer and the `Layout` used (for later deallocation).
@@ -356,6 +366,13 @@ impl<T: Copy> Clone for AlignedVec<T> {
         }
         new_vec.len = self.len;
         new_vec
+    }
+}
+
+impl<T: Copy> Default for AlignedVec<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::empty()
     }
 }
 

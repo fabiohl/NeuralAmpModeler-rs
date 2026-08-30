@@ -295,13 +295,13 @@ fn run_jitter_characterization(
 #[test]
 #[ignore]
 fn test_jitter_characterization_baseline_wavenet_standard() {
-    let preflight = rt_helpers::rt_preflight();
+    let preflight = rt_helpers::rt_preflight_jitter();
     rt_helpers::print_preflight(&preflight);
 
     if preflight.status != RtPreflightStatus::Pass {
         println!("[STATUS] INCONCLUSIVE — skipping jitter characterization");
         println!("  Environment preconditions not met; jitter telemetry would be");
-        println!("  invalid without CPU isolation and performance governor.");
+        println!("  invalid without performance governor and low background load.");
         println!(
             "[RECEIPT] status=INCONCLUSIVE reason=\"preflight_failed\" p50_us=N/A p90_us=N/A p99_us=N/A p99.9_us=N/A exact_max_us=N/A violations=N/A"
         );

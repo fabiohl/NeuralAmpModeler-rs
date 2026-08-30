@@ -14,6 +14,19 @@ fn aligned_from_vec_empty_is_safe() {
 }
 
 #[test]
+fn aligned_empty_and_default_are_safe() {
+    let empty: AlignedVec<f32> = AlignedVec::empty();
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.cap(), 0);
+
+    let default_vec: AlignedVec<f32> = AlignedVec::default();
+    assert!(default_vec.is_empty());
+    assert_eq!(default_vec.len(), 0);
+    assert_eq!(default_vec.cap(), 0);
+}
+
+#[test]
 fn aligned_from_vec_preserves_data() {
     let v = vec![1.0f32, 2.0, 3.0];
     let aligned = AlignedVec::from_vec(v).unwrap();
