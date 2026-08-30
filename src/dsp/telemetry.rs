@@ -15,6 +15,10 @@ pub struct LatencyHistogram {
     bins: [AtomicU64; 32],
     /// Exact maximum latency observed (lock-free, via fetch_max).
     exact_max: AtomicU64,
+    /// Exact minimum latency observed (lock-free, via fetch_min).
+    exact_min: AtomicU64,
+    /// Sum of all observations in nanoseconds for computing mean.
+    sum_ns: AtomicU64,
 }
 
 impl Default for LatencyHistogram {
@@ -30,6 +34,8 @@ impl LatencyHistogram {
         Self {
             bins: [const { AtomicU64::new(0) }; 32],
             exact_max: AtomicU64::new(0),
+            exact_min: AtomicU64::new(u64::MAX),
+            sum_ns: AtomicU64::new(0),
         }
     }
 
@@ -40,6 +46,8 @@ impl LatencyHistogram {
     #[inline(always)]
     pub fn record(&self, duration_ns: u64) {
         self.exact_max.fetch_max(duration_ns, Ordering::Relaxed);
+        self.exact_min.fetch_min(duration_ns, Ordering::Relaxed);
+        self.sum_ns.fetch_add(duration_ns, Ordering::Relaxed);
         if duration_ns == 0 {
             self.bins[0].fetch_add(1, Ordering::Relaxed);
             return;
@@ -88,12 +96,31 @@ impl LatencyHistogram {
         0
     }
 
+    /// Returns the minimum observed value (lower edge of the lowest non-empty bin).
+    pub fn get_min(&self) -> u64 {
+        for i in 0..32 {
+            if self.bins[i].load(Ordering::Relaxed) > 0 {
+                return if i == 0 { 0 } else { 1u64 << (i + 4) };
+            }
+        }
+        0
+    }
+
+    /// Returns the mean/average observed latency in nanoseconds.
+    pub fn get_mean(&self) -> u64 {
+        let total = self.total_count();
+        self.sum_ns
+            .load(Ordering::Relaxed)
+            .checked_div(total)
+            .unwrap_or(0)
+    }
+
     /// Returns the total number of observations recorded since the last reset.
     pub fn total_count(&self) -> u64 {
         self.bins.iter().map(|b| b.load(Ordering::Relaxed)).sum()
     }
 
-    /// Zeros all histogram bins.
+    /// Zeros all histogram bins and resets statistics.
     ///
     /// Uses `swap` instead of `store` to guarantee visibility via cache-coherence
     /// (RMW). Best-effort reset: concurrent `fetch_add` records may be lost
@@ -102,6 +129,9 @@ impl LatencyHistogram {
         for bin in &self.bins {
             bin.swap(0, Ordering::Relaxed);
         }
+        self.exact_max.swap(0, Ordering::Relaxed);
+        self.exact_min.swap(u64::MAX, Ordering::Relaxed);
+        self.sum_ns.swap(0, Ordering::Relaxed);
     }
 
     /// Returns the exact maximum latency observed via lock-free fetch_max (in nanoseconds).
@@ -112,6 +142,18 @@ impl LatencyHistogram {
     /// Atomically reads and resets the exact maximum (in nanoseconds).
     pub fn take_exact_max(&self) -> u64 {
         self.exact_max.swap(0, Ordering::Relaxed)
+    }
+
+    /// Returns the exact minimum latency observed via lock-free fetch_min (in nanoseconds).
+    pub fn get_exact_min(&self) -> u64 {
+        let val = self.exact_min.load(Ordering::Relaxed);
+        if val == u64::MAX { 0 } else { val }
+    }
+
+    /// Atomically reads and resets the exact minimum (in nanoseconds).
+    pub fn take_exact_min(&self) -> u64 {
+        let val = self.exact_min.swap(u64::MAX, Ordering::Relaxed);
+        if val == u64::MAX { 0 } else { val }
     }
 }
 
@@ -133,6 +175,9 @@ mod tests {
         assert_eq!(hist.bins[0].load(Ordering::Relaxed), 2);
         assert_eq!(hist.bins[1].load(Ordering::Relaxed), 1);
         assert_eq!(hist.bins[4].load(Ordering::Relaxed), 1);
+        assert_eq!(hist.get_exact_min(), 10);
+        assert_eq!(hist.get_exact_max(), 1000);
+        assert_eq!(hist.get_mean(), (10 + 40 + 100 + 1000) / 4);
     }
 
     #[test]
@@ -155,5 +200,7 @@ mod tests {
         assert!(hist.get_percentile(0.50) <= 64);
         assert!(hist.get_percentile(0.95) <= 512);
         assert!(hist.get_percentile(0.99) <= 16384);
+        assert_eq!(hist.get_exact_min(), 100);
+        assert_eq!(hist.get_exact_max(), 10000);
     }
 }

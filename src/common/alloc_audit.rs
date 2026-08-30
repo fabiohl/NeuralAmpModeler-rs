@@ -4,7 +4,8 @@
 //! Shared allocation audit infrastructure for RT-Safety verification.
 //!
 //! Provides `CountingAllocator` (the "Memory Watchdog") and `TrackingGuard`
-//! used to prove that hot-path DSP code performs zero heap allocations.
+//! used to prove that hot-path DSP code performs zero heap allocations and
+//! deallocations.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -16,6 +17,8 @@ pub static AUDIT_ENABLED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static TRACKING_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static ALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
+    static DEALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
+    static REALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Returns the current thread's heap allocation count.
@@ -26,6 +29,26 @@ pub fn get_alloc_count() -> usize {
 /// Sets the current thread's heap allocation count.
 pub fn set_alloc_count(val: usize) {
     let _ = ALLOC_COUNT_TLS.try_with(|count| count.set(val));
+}
+
+/// Returns the current thread's heap deallocation count.
+pub fn get_dealloc_count() -> usize {
+    DEALLOC_COUNT_TLS.try_with(|count| count.get()).unwrap_or(0)
+}
+
+/// Sets the current thread's heap deallocation count.
+pub fn set_dealloc_count(val: usize) {
+    let _ = DEALLOC_COUNT_TLS.try_with(|count| count.set(val));
+}
+
+/// Returns the current thread's heap reallocation count.
+pub fn get_realloc_count() -> usize {
+    REALLOC_COUNT_TLS.try_with(|count| count.get()).unwrap_or(0)
+}
+
+/// Sets the current thread's heap reallocation count.
+pub fn set_realloc_count(val: usize) {
+    let _ = REALLOC_COUNT_TLS.try_with(|count| count.set(val));
 }
 
 /// Checks if heap allocation tracking is active on the current thread.
@@ -65,24 +88,50 @@ impl CountingAllocator {
         unsafe { System.alloc(layout) }
     }
 
-    /// Delegates deallocation to the system allocator.
+    /// Intercepts deallocation: increments `DEALLOC_COUNT` if on the watched thread,
+    /// then delegates deallocation to the system allocator.
     ///
     /// # Safety
     ///
     /// `ptr` must have been previously allocated via `CountingAllocator::alloc`
     /// with the same `layout`.
     pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
+        if is_tracking_active() {
+            let _ = DEALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+        }
         // SAFETY: `ptr` was returned by a matching `CountingAllocator::alloc`
         // with the same `layout` (documented precondition of this `unsafe fn`);
         // `System.dealloc` is then called with a valid `ptr`/`layout` pair.
         unsafe { System.dealloc(ptr, layout) }
     }
+
+    /// Intercepts reallocation: increments `REALLOC_COUNT` and `ALLOC_COUNT` if on
+    /// the watched thread, then delegates reallocation to the system allocator.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must have been previously allocated via `CountingAllocator::alloc`
+    /// with the same `layout`, and `new_size` must fit alignment requirements.
+    pub unsafe fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if is_tracking_active() {
+            let _ = REALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+            let _ = ALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+        }
+        // SAFETY: `ptr` was allocated with `layout` and `new_size` meets `GlobalAlloc` requirements.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
 }
 
-// SAFETY: every method forwards to `CountingAllocator::alloc`/`dealloc`, which
+// SAFETY: every method forwards to `CountingAllocator::alloc`/`dealloc`/`realloc`, which
 // delegate to `System`'s `GlobalAlloc`; the trait contract is upheld for the
 // documented preconditions (valid `layout` for `alloc`; `ptr`/`layout` pairing
-// for `dealloc`).
+// for `dealloc` and `realloc`).
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: `layout` validity is guaranteed by the `GlobalAlloc` caller;
@@ -93,6 +142,11 @@ unsafe impl GlobalAlloc for CountingAllocator {
         // SAFETY: `ptr` was allocated with the same `layout` (trait contract);
         // `Self::dealloc` forwards it to the system allocator.
         unsafe { Self::dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: `ptr` was allocated with `layout` (trait contract);
+        // `Self::realloc` forwards it to the system allocator.
+        unsafe { Self::realloc(ptr, layout, new_size) }
     }
 }
 
@@ -106,6 +160,8 @@ impl TrackingGuard {
     pub fn new() -> Self {
         set_tracking_active(true);
         set_alloc_count(0);
+        set_dealloc_count(0);
+        set_realloc_count(0);
         Self { _private: () }
     }
 }
@@ -119,6 +175,9 @@ impl Default for TrackingGuard {
 impl Drop for TrackingGuard {
     fn drop(&mut self) {
         set_tracking_active(false);
+        set_alloc_count(0);
+        set_dealloc_count(0);
+        set_realloc_count(0);
     }
 }
 
@@ -130,6 +189,8 @@ mod tests {
     fn fresh_state() {
         set_tracking_active(false);
         set_alloc_count(0);
+        set_dealloc_count(0);
+        set_realloc_count(0);
         AUDIT_ENABLED.store(false, Ordering::Relaxed);
     }
 
@@ -148,24 +209,34 @@ mod tests {
     #[test]
     fn tracking_guard_new_resets_alloc_count() {
         set_alloc_count(42);
+        set_dealloc_count(42);
+        set_realloc_count(42);
 
         let guard = TrackingGuard::new();
 
         assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
 
         drop(guard);
     }
 
     #[test]
-    fn tracking_guard_drop_clears_tracking_active() {
+    fn tracking_guard_drop_clears_tracking_active_and_counts() {
         fresh_state();
 
         let guard = TrackingGuard::new();
         assert!(is_tracking_active());
+        set_alloc_count(10);
+        set_dealloc_count(20);
+        set_realloc_count(30);
 
         drop(guard);
 
         assert!(!is_tracking_active());
+        assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
     }
 
     #[test]
@@ -176,6 +247,8 @@ mod tests {
 
         assert!(is_tracking_active());
         assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
 
         drop(guard);
     }
@@ -203,6 +276,83 @@ mod tests {
 
         let _g = TrackingGuard::new();
         assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
+    }
+
+    #[test]
+    fn box_destruction_increments_dealloc_count() {
+        fresh_state();
+        let ptr = Box::into_raw(Box::new(42u8));
+        let guard = TrackingGuard::new();
+        assert_eq!(get_dealloc_count(), 0);
+
+        // SAFETY: `ptr` was obtained from `Box::into_raw` and is valid for reclamation.
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
+        assert_eq!(get_dealloc_count(), 1);
+
+        drop(guard);
+    }
+
+    #[test]
+    fn tracking_guard_records_alloc_and_dealloc_negative() {
+        fresh_state();
+        let guard = TrackingGuard::new();
+        assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+
+        {
+            let b = Box::new(42u8);
+            assert_eq!(get_alloc_count(), 1);
+            drop(b);
+        }
+        assert_eq!(get_dealloc_count(), 1);
+
+        drop(guard);
+    }
+
+    #[test]
+    fn getters_and_setters_work() {
+        fresh_state();
+        assert_eq!(get_alloc_count(), 0);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
+
+        set_alloc_count(15);
+        set_dealloc_count(25);
+        set_realloc_count(35);
+
+        assert_eq!(get_alloc_count(), 15);
+        assert_eq!(get_dealloc_count(), 25);
+        assert_eq!(get_realloc_count(), 35);
+    }
+
+    #[test]
+    fn counting_allocator_realloc_increments_counts() {
+        fresh_state();
+        set_tracking_active(true);
+
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        // SAFETY: `layout` is valid (non-zero size, alignment ≤ size).
+        let ptr = unsafe { CountingAllocator::alloc(layout) };
+        assert_eq!(get_alloc_count(), 1);
+        assert_eq!(get_dealloc_count(), 0);
+        assert_eq!(get_realloc_count(), 0);
+
+        // SAFETY: `ptr` was allocated with `layout` and `128` fits alignment.
+        let new_ptr = unsafe { CountingAllocator::realloc(ptr, layout, 128) };
+        assert_eq!(get_alloc_count(), 2);
+        assert_eq!(get_realloc_count(), 1);
+        assert_eq!(get_dealloc_count(), 0);
+
+        let new_layout = Layout::from_size_align(128, 8).unwrap();
+        // SAFETY: `new_ptr` was allocated by `realloc` with `new_layout`.
+        unsafe { CountingAllocator::dealloc(new_ptr, new_layout) };
+        assert_eq!(get_dealloc_count(), 1);
+
+        set_tracking_active(false);
     }
 
     #[test]

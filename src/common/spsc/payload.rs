@@ -16,6 +16,8 @@ pub struct ResamplerSwapPayload {
     pub generation: u64,
     /// The freshly built resampler (owned; transferred to the RT side).
     pub resampler: Box<crate::dsp::resampler::NamResampler>,
+    /// Pre-allocated streaming adapter (strict cardinality) built for the target rate.
+    pub stream: Box<crate::dsp::resampling::StreamingResampleBuffer>,
 }
 
 /// Versioned envelope for a pre-built `CabSimPair` (or bypass `None`) transported over the
@@ -41,9 +43,9 @@ pub struct SlimModelPair {
     pub generation: u64,
     /// Channel count the L/R models were sliced to.
     pub channels: usize,
-    /// Left-channel model (always present).
-    pub l: Box<crate::models::StaticModel>,
-    /// Right-channel model (`None` for mono configurations).
+    /// Left-channel model (`None` when retired/drained to GC).
+    pub l: Option<Box<crate::models::StaticModel>>,
+    /// Right-channel model (`None` for mono configurations or when retired/drained to GC).
     pub r: Option<Box<crate::models::StaticModel>>,
 }
 

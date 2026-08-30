@@ -264,6 +264,118 @@ mod tests {
             after
         );
     }
+
+    /// F-PERF-002 / T2.1: `capture_dsp_pipeline_streaming` must return exactly `n_samples`
+    /// across fractional sample rates without any real-time heap allocations.
+    #[test]
+    fn streaming_pipeline_strict_cardinality_and_zero_alloc() {
+        use crate::dsp::resampling::StreamingResampleBuffer;
+
+        let host_rate = 44100;
+        let nam_rate = 48000;
+        let n_samples = 64;
+
+        let mut resampler = NamResampler::new(host_rate, nam_rate, n_samples).unwrap();
+        let mut stream = StreamingResampleBuffer::new(host_rate, nam_rate, MAX_RESAMP_BUF).unwrap();
+
+        let mut bridge = Box::new(DspBridge {
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
+            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
+            generation: std::sync::atomic::AtomicU64::new(0),
+            consumed_gen: std::sync::atomic::AtomicU64::new(0),
+            dropped_frames: std::sync::atomic::AtomicU32::new(0),
+        });
+
+        let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_out_l = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_out_r = [0.0; MAX_RESAMP_BUF];
+        let mut model_out_l = [0.0; MAX_RESAMP_BUF];
+        let mut model_out_r = [0.0; MAX_RESAMP_BUF];
+        let mut os_in_l = [0.0; MAX_RESAMP_BUF];
+        let mut os_in_r = [0.0; MAX_RESAMP_BUF];
+        let mut os_model_l = [0.0; MAX_RESAMP_BUF];
+        let mut os_model_r = [0.0; MAX_RESAMP_BUF];
+        let mut crossfade_scratch_l = [0.0; MAX_RESAMP_BUF];
+        let mut crossfade_scratch_r = [0.0; MAX_RESAMP_BUF];
+
+        let gate_params = GateParams {
+            hold_frames: 0,
+            mono_epsilon: 1.0,
+            ..Default::default()
+        };
+        let mut silence_hysteresis = DynamicHysteresis::new();
+        let mut mono_hysteresis = DynamicHysteresis::new();
+        let mut process_mono = false;
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Off);
+        let mut os_engine_l = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+        let mut os_engine_r = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+        let rt_status = RtStatusFlags::default();
+
+        let mut samples_l = vec![0.05f32; n_samples];
+        let mut samples_r = vec![0.05f32; n_samples];
+
+        // Process several blocks under tracking guard to verify zero heap allocations.
+        for _ in 0..10 {
+            let ctx = DspPipelineContext {
+                resampler: &mut resampler,
+                os_l: &mut os_engine_l,
+                os_r: &mut os_engine_r,
+                active_model_l: &mut None,
+                active_model_r: &mut None,
+                input_gain_mult: 1.0,
+                output_gain_mult: 1.0,
+                gate_params: &gate_params,
+                silence_hysteresis: &mut silence_hysteresis,
+                mono_hysteresis: &mut mono_hysteresis,
+                threshold_open_sq: 0.0,
+                threshold_close_sq: 0.0,
+                process_mono: &mut process_mono,
+                rt_status: &rt_status,
+                adaptive: &mut adaptive,
+                // SAFETY: bridge pointer points to valid Box<DspBridge> allocated above.
+                bridge_writer: unsafe {
+                    Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
+                },
+                conv: None,
+                conv_pair: None,
+            };
+
+            let bufs = DspBuffers {
+                resamp_mid_l: &mut resamp_mid_l,
+                resamp_mid_r: &mut resamp_mid_r,
+                resamp_out_l: &mut resamp_out_l,
+                resamp_out_r: &mut resamp_out_r,
+                model_out_l: &mut model_out_l,
+                model_out_r: &mut model_out_r,
+                os_in_l: &mut os_in_l,
+                os_in_r: &mut os_in_r,
+                os_model_l: &mut os_model_l,
+                os_model_r: &mut os_model_r,
+                crossfade_scratch_l: &mut crossfade_scratch_l,
+                crossfade_scratch_r: &mut crossfade_scratch_r,
+            };
+
+            let _guard = TrackingGuard::new();
+            let start_allocs = get_alloc_count();
+            let n_out = capture_dsp_pipeline_streaming(
+                &mut samples_l,
+                &mut samples_r,
+                n_samples,
+                ctx,
+                &mut stream,
+                bufs,
+                host_rate,
+            );
+            let end_allocs = get_alloc_count();
+
+            assert_eq!(n_out, n_samples, "must return exactly n_samples");
+            assert_eq!(
+                start_allocs, end_allocs,
+                "must not allocate on heap during processing"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

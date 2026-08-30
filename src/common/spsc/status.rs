@@ -221,11 +221,38 @@ pub struct RtStatusFlags {
     /// Read by the main thread and converted to Duration via Anchor.
     pub dsp_cycle_time: AtomicU64,
 
+    /// Duration of the last capture stage (callback start to end of SPA validation) in nanoseconds.
+    pub capture_cycle_time: AtomicU64,
+
+    /// Duration of the last audio recording enqueue stage in nanoseconds.
+    pub record_cycle_time: AtomicU64,
+
+    /// Duration of the last playback stage (callback start to SPA write completion) in nanoseconds.
+    pub playback_cycle_time: AtomicU64,
+
+    /// Duration of the last end-to-end cycle (capture start to playback output) in nanoseconds.
+    pub e2e_cycle_time: AtomicU64,
+
+    /// Starting timestamp of current capture block in nanoseconds (serialized RDTSC).
+    pub capture_start_tsc: AtomicU64,
+
     /// Number of samples processed in the last cycle (for budget calculation).
     pub last_n_samples: AtomicU32,
 
-    /// Latency histogram for statistical analysis (P50, P95, P99).
+    /// Latency histogram for statistical analysis of DSP core execution (P50, P95, P99).
     pub latency_hist: crate::dsp::telemetry::LatencyHistogram,
+
+    /// Latency histogram for capture stage (callback start → end of SPA validation/dequeue).
+    pub capture_hist: crate::dsp::telemetry::LatencyHistogram,
+
+    /// Latency histogram for record enqueue stage (pre-push → post-push).
+    pub record_hist: crate::dsp::telemetry::LatencyHistogram,
+
+    /// Latency histogram for playback stage (callback start → hardware buffer write).
+    pub playback_hist: crate::dsp::telemetry::LatencyHistogram,
+
+    /// Latency histogram for end-to-end processing (capture start → hardware playback).
+    pub e2e_hist: crate::dsp::telemetry::LatencyHistogram,
 
     /// Total degradation transitions that have occurred (Full↔Reduced↔Minimal).
     pub degrade_transitions_total: AtomicU32,
@@ -238,6 +265,10 @@ pub struct RtStatusFlags {
     pub confirmed_priority: AtomicI32,
     /// Confirmed RT scheduling policy.
     pub rt_policy: AtomicI32,
+    /// Thread ID (kernel TID or pthread ID) of the active DSP/data thread.
+    pub rt_tid: AtomicI64,
+    /// Processing time of the very first audio block in ticks (cold start latency).
+    pub first_block_nanos: AtomicU64,
     /// Pinned physical CPU core (or -1 if not pinned).
     pub rt_cpu: AtomicI32,
     /// Accumulated OR of all RT_STATUS_* flags ever seen since startup.
@@ -287,6 +318,20 @@ pub struct RtStatusFlags {
     /// Requested oversampling factor (0=Off, 1=X2, 2=X4) for engine rebuild.
     /// Set by RT thread, read and cleared by main thread after rebuild.
     pub requested_os_factor: AtomicU32,
+    /// Monotonic generation counter for oversampling rebuild requests (F-RB-004
+    /// pattern).
+    ///
+    /// Incremented with `Release` by the RT thread whenever it raises
+    /// `RT_STATUS_NEEDS_OS_REBUILD`, after publishing the requested OS factor.
+    /// The main thread captures it with `Acquire` before building and stamps the
+    /// delivered [`crate::dsp::oversample::OsEnginePair`], so the RT drain can
+    /// discard stale pairs and guarantee L/R are always swapped from the latest request.
+    pub requested_os_generation: AtomicU64,
+    /// Generation of the oversampling pair currently applied on the DSP thread.
+    ///
+    /// Stored with `Ordering::Release` by the RT thread when it installs an
+    /// `OsEnginePair` whose generation matches [`Self::requested_os_generation`].
+    pub applied_os_generation: AtomicU64,
 
     /// Host quantum (buffer size in frames) detected by the RT callback.
     /// Stored by the RT thread whenever `n_samples` differs from the previous cycle.
@@ -389,12 +434,23 @@ impl RtStatusFlags {
             rt_priority: AtomicI32::new(-1),
             dsp_overloads: AtomicU32::new(0),
             dsp_cycle_time: AtomicU64::new(0),
+            capture_cycle_time: AtomicU64::new(0),
+            record_cycle_time: AtomicU64::new(0),
+            playback_cycle_time: AtomicU64::new(0),
+            e2e_cycle_time: AtomicU64::new(0),
+            capture_start_tsc: AtomicU64::new(0),
             last_n_samples: AtomicU32::new(0),
             latency_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+            capture_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+            record_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+            playback_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+            e2e_hist: crate::dsp::telemetry::LatencyHistogram::new(),
             degrade_transitions_total: AtomicU32::new(0),
             status_bits: AtomicU64::new(0),
             confirmed_priority: AtomicI32::new(-1),
             rt_policy: AtomicI32::new(-1),
+            rt_tid: AtomicI64::new(-1),
+            first_block_nanos: AtomicU64::new(0),
             rt_cpu: AtomicI32::new(-1),
             flags_seen: AtomicU64::new(0),
             xruns: AtomicU32::new(0),
@@ -406,6 +462,8 @@ impl RtStatusFlags {
             requested_slimmable_ch: AtomicU32::new(0),
             requested_slimmable_generation: AtomicU64::new(0),
             requested_os_factor: AtomicU32::new(0),
+            requested_os_generation: AtomicU64::new(0),
+            applied_os_generation: AtomicU64::new(0),
             requested_buffer_frames: AtomicU32::new(0),
             previous_buffer_frames: AtomicU32::new(0),
             input_buffer_miss: AtomicU32::new(0),

@@ -5,12 +5,14 @@
 
 use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
 use crate::dsp::gate::GateState;
+use crate::dsp::resampling::StreamingResampleBuffer;
 use crate::math::common::SimdMath;
 use crate::math::common::set_daz_ftz;
 
 use super::context::{DspBuffers, DspPipelineContext};
 use super::stages::{
-    apply_input_stage_inner, apply_output_stage_inner, run_inference, write_bridge,
+    apply_input_stage_inner, apply_output_stage_inner, run_inference, run_inference_streaming,
+    write_bridge,
 };
 
 /// Full DSP Pipeline (Aggregator).
@@ -215,6 +217,194 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 
     // STAGE 4: FINAL ADJUSTMENT AND PROTECTION
     // SAFETY: buffers and context are valid; M corresponds to detected CPU features.
+    unsafe {
+        apply_output_stage_inner::<M>(
+            bufs.resamp_out_l,
+            bufs.resamp_out_r,
+            n_pw,
+            ctx.output_gain_mult,
+            ctx.silence_hysteresis,
+            ctx.rt_status,
+            *ctx.process_mono,
+            ctx.adaptive,
+            sample_rate,
+        );
+    }
+
+    // STAGE 5: FINAL DELIVERY (THE BRIDGE)
+    write_bridge(
+        bufs.resamp_out_l,
+        bufs.resamp_out_r,
+        n_pw,
+        ctx.bridge_writer,
+        *ctx.process_mono,
+    );
+
+    n_pw
+}
+
+/// Full DSP Pipeline with Streaming Resampler Adapter (Strict Host Cardinality).
+///
+/// Drives the multi-stage DSP pipeline through [`run_inference_streaming`],
+/// guaranteeing that **exactly** `n_samples` host samples are consumed and
+/// produced per invocation regardless of fractional sample-rate ratios.
+///
+/// Returns the number of output samples processed (`n_pw == n_samples`). Returns 0 if `bridge_writer` is None or gate is closed.
+#[inline]
+pub fn capture_dsp_pipeline_streaming(
+    samples_l: &mut [f32],
+    samples_r: &mut [f32],
+    n_samples: usize,
+    ctx: DspPipelineContext<'_>,
+    stream: &mut StreamingResampleBuffer,
+    bufs: DspBuffers<'_>,
+    sample_rate: u32,
+) -> usize {
+    #[cfg(feature = "avx512")]
+    use crate::math::common::Avx512Math;
+    use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
+
+    // SAFETY: Setting denormals-as-zero / flush-to-zero is safe on x86_64 targets.
+    unsafe {
+        set_daz_ftz();
+    }
+
+    let n = n_samples
+        .min(samples_l.len())
+        .min(samples_r.len())
+        .min(super::bridge::MAX_RESAMP_BUF);
+    if n != n_samples {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+    }
+
+    #[expect(deprecated)]
+    match effective_instruction_set() {
+        #[cfg(feature = "avx512")]
+        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+            // SAFETY: Target CPU is guaranteed to support AVX-512 when dynamic dispatch returns this branch.
+            unsafe {
+                capture_dsp_pipeline_streaming_inner::<Avx512Math>(
+                    samples_l,
+                    samples_r,
+                    n,
+                    ctx,
+                    stream,
+                    bufs,
+                    sample_rate,
+                )
+            }
+        }
+        #[cfg(not(feature = "avx512"))]
+        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+            // SAFETY: Fallback executes baseline AVX2 kernels supported by x86-64-v3.
+            unsafe {
+                capture_dsp_pipeline_streaming_inner::<Avx2Math>(
+                    samples_l,
+                    samples_r,
+                    n,
+                    ctx,
+                    stream,
+                    bufs,
+                    sample_rate,
+                )
+            }
+        }
+        InstructionSet::Avx2 => {
+            // SAFETY: Target architecture baseline guarantees AVX2 support.
+            unsafe {
+                capture_dsp_pipeline_streaming_inner::<Avx2Math>(
+                    samples_l,
+                    samples_r,
+                    n,
+                    ctx,
+                    stream,
+                    bufs,
+                    sample_rate,
+                )
+            }
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
+    samples_l: &mut [f32],
+    samples_r: &mut [f32],
+    n_samples: usize,
+    mut ctx: DspPipelineContext<'_>,
+    stream: &mut StreamingResampleBuffer,
+    bufs: DspBuffers<'_>,
+    sample_rate: u32,
+) -> usize {
+    if ctx.bridge_writer.is_none() {
+        return 0;
+    }
+
+    // STAGE 1: INPUT AND CLEANUP
+    // SAFETY: Caller guarantees valid pointers and aligned slices within buffer lengths.
+    let gate_state =
+        unsafe { apply_input_stage_inner::<M>(samples_l, samples_r, n_samples, &mut ctx) };
+
+    // STATE MANAGEMENT (SILENCE vs SOUND)
+    crate::dsp::gate_flags::report_gate_flags(ctx.rt_status, gate_state);
+
+    if gate_state == GateState::Closed {
+        stream.reset();
+        if let Some(writer) = ctx.bridge_writer {
+            writer.write_silence();
+        }
+        return 0;
+    }
+
+    // STAGE 2: THE "BRAIN" (AMP/PEDAL SIMULATION WITH STREAMING RESAMPLER)
+    let n_pw = run_inference_streaming(
+        samples_l,
+        samples_r,
+        bufs.resamp_out_l,
+        bufs.resamp_out_r,
+        n_samples,
+        &mut ctx,
+        stream,
+        bufs.os_in_l,
+        bufs.os_in_r,
+        bufs.os_model_l,
+        bufs.os_model_r,
+        bufs.crossfade_scratch_l,
+        bufs.crossfade_scratch_r,
+    );
+
+    // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
+    let convolved = if let Some(ref mut pair) = ctx.conv_pair {
+        pair.l
+            .process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
+        if !*ctx.process_mono {
+            pair.r
+                .process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
+        }
+        true
+    } else if let Some(ref mut conv) = ctx.conv {
+        conv.process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
+        if !*ctx.process_mono {
+            conv.process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
+        }
+        true
+    } else {
+        false
+    };
+
+    if convolved && *ctx.process_mono {
+        // SAFETY: bufs.resamp_out_l and bufs.resamp_out_r are disjoint slices of length >= n_pw.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bufs.resamp_out_l.as_ptr(),
+                bufs.resamp_out_r.as_mut_ptr(),
+                n_pw,
+            );
+        }
+    }
+
+    // STAGE 4: FINAL ADJUSTMENT AND PROTECTION
+    // SAFETY: Slices bufs.resamp_out_l and bufs.resamp_out_r are guaranteed to have length >= n_pw.
     unsafe {
         apply_output_stage_inner::<M>(
             bufs.resamp_out_l,

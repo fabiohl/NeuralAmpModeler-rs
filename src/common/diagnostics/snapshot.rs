@@ -202,8 +202,10 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
         let scheduler_val = self.rt_policy.load(Ordering::Relaxed);
         let scheduler = if scheduler_val == -1 {
             "UNKNOWN".to_string()
-        } else if scheduler_val == libc::SCHED_FIFO || scheduler_val == libc::SCHED_RR {
+        } else if scheduler_val == libc::SCHED_FIFO {
             "FIFO".to_string()
+        } else if scheduler_val == libc::SCHED_RR {
+            "RR".to_string()
         } else if scheduler_val == 6 {
             "DEADLINE".to_string()
         } else {

@@ -335,7 +335,11 @@ impl OversampleEngine {
 ///
 /// L and R engines are built together on the main thread and consumed
 /// together on the RT thread, ensuring they always share the same factor.
+/// The `generation` timestamp guarantees stale envelopes from superseded
+/// rebuilds are discarded before installation.
 pub struct OsEnginePair {
+    /// Request generation this pair was built for (F-RB-004 protocol).
+    pub generation: u64,
     /// Left-channel oversampling engine.
     pub l: Box<OversampleEngine>,
     /// Right-channel oversampling engine.

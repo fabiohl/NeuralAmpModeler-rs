@@ -153,6 +153,10 @@ define_gc_item! {
     Oversample(crate::dsp::oversample::OversampleEngine) = 5,
     Streaming(crate::dsp::resampling::StreamingResampleBuffer) = 6,
     CabSimPair(crate::dsp::cabsim::adapter::CabSimPair) = 7,
+    ResamplerSwap(crate::common::spsc::ResamplerSwapPayload) = 8,
+    CabSimSwap(crate::common::spsc::CabSimSwapPayload) = 9,
+    SlimModelPair(crate::common::spsc::SlimModelPair) = 10,
+    OsEnginePair(crate::dsp::oversample::OsEnginePair) = 11,
     #[cfg(test)]
     Test(std::sync::Arc<std::sync::atomic::AtomicU32>) = 255,
     // Loom-model-checking payloads (long suite phase 6, `--cfg loom`): these

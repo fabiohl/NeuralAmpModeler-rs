@@ -55,6 +55,8 @@ pub use stages::write_bridge;
 
 /// Full DSP pipeline capture: input → processing chain → bridge in a single pass.
 pub use capture::capture_dsp_pipeline;
+/// Full DSP pipeline capture with streaming resampler adapter (strict host cardinality).
+pub use capture::capture_dsp_pipeline_streaming;
 
 #[cfg(any(test, feature = "testing"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]

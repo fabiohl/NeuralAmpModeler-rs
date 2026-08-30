@@ -16,9 +16,32 @@ static TSC_FREQ_GHZ_X1000: AtomicU64 = AtomicU64::new(0);
 /// Time anchor for rdtsc fallback (monotonic).
 static BOOT_TIME: OnceLock<Instant> = OnceLock::new();
 
-/// Returns the current time in nanoseconds using the RDTSC instruction.
+/// Helper to read `CLOCK_MONOTONIC_RAW` on Linux for startup calibration validation.
+#[cfg(target_os = "linux")]
+fn monotonic_raw_nanos() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid, stack-allocated `timespec` passed by mutable reference.
+    // `CLOCK_MONOTONIC_RAW` is a valid POSIX clock ID on Linux. The call returns 0 on
+    // success and -1 on error; we check the return value before reading `ts`.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut ts) } == 0 {
+        Some((ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn monotonic_raw_nanos() -> Option<u64> {
+    None
+}
+
+/// Returns the current time in nanoseconds using the serialized RDTSC instruction.
 ///
-/// Provides ~1ns precision with ~1 cycle cost, avoiding the vDSO clock_gettime syscall.
+/// Serialized with `_mm_lfence` to prevent out-of-order execution reordering.
+/// Provides sub-nanosecond precision with ~15ns cost, avoiding vDSO syscalls.
 /// If the TSC is not calibrated or unavailable, falls back to Instant::now().
 #[inline(always)]
 pub fn rdtsc_nanos() -> u64 {
@@ -31,9 +54,12 @@ pub fn rdtsc_nanos() -> u64 {
         reason = "Manual bounds check used for RT-predictable assembly over checked_add"
     )]
     if freq_x1000 != 0 {
-        // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no
+        // SAFETY: `_mm_lfence` + `_rdtsc` is available on all x86-64 CPUs; it performs no
         // memory access and has no side effects, so reading it here is sound.
-        let cycles = unsafe { core::arch::x86_64::_rdtsc() };
+        let cycles = unsafe {
+            core::arch::x86_64::_mm_lfence();
+            core::arch::x86_64::_rdtsc()
+        };
         (cycles * 1000) / freq_x1000
     } else {
         BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -54,11 +80,8 @@ fn probe_invariant_tsc() {
     }
 }
 
-/// Calibrates the TSC (Time Stamp Counter) frequency against the system clock.
-///
-/// Imagine the CPU has an internal "odometer" that counts every heartbeat (cycle).
-/// Since the CPU speed can vary, we need to figure out how many "ticks"
-/// equal 1 real nanosecond so we can measure time with surgical precision.
+/// Calibrates the TSC (Time Stamp Counter) frequency against the system clock
+/// and validates it against `CLOCK_MONOTONIC_RAW`.
 ///
 /// This function runs only once at program startup (cold-path).
 #[cold]
@@ -69,43 +92,62 @@ pub fn calibrate_tsc() {
     probe_invariant_tsc();
 
     // 1. WARM-UP:
-    // We call the instruction once and wait a bit. This ensures the CPU
-    // "wakes up" from low-power states and that data is ready in the caches.
-    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
-    // access and has no side effects, so reading it here is sound.
-    let _ = unsafe { core::arch::x86_64::_rdtsc() };
+    // Call the serialized instruction once and wait a bit.
+    // SAFETY: `_mm_lfence` and `_rdtsc` are available on all x86-64 CPUs (including
+    // x86-64-v3 baseline). They perform no memory writes and have no side-effects
+    // beyond reading the time-stamp counter; the result is intentionally discarded.
+    let _ = unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    };
     thread::sleep(Duration::from_millis(10));
 
     // 2. ZERO POINT (Start of Measurement):
-    // We simultaneously capture the system clock time (slow but reliable)
-    // and the CPU cycle counter value (ultra-fast).
+    let start_raw = monotonic_raw_nanos();
     let start_inst = Instant::now();
-    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
-    // access and has no side effects, so reading it here is sound.
-    let start_tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    // SAFETY: `_mm_lfence` serializes the instruction stream before `_rdtsc`, ensuring
+    // that no prior loads are reordered past the timestamp read. Both intrinsics are
+    // available unconditionally on the x86-64-v3 baseline enforced by `.cargo/config.toml`.
+    let start_tsc = unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    };
 
     // 3. CONTROLLED WAIT:
-    // We wait 50 milliseconds. It's a short time for a human, but allows
-    // the CPU to run millions of cycles, reducing sampling errors.
     thread::sleep(Duration::from_millis(50));
 
     // 4. END POINT:
-    // We capture both values again to calculate how much each advanced.
+    let end_raw = monotonic_raw_nanos();
     let end_inst = Instant::now();
-    // SAFETY: `_rdtsc` is available on all x86-64 CPUs; it performs no memory
-    // access and has no side effects, so reading it here is sound.
-    let end_tsc = unsafe { core::arch::x86_64::_rdtsc() };
+    // SAFETY: Same contract as `start_tsc` above — `_mm_lfence` + `_rdtsc` on the
+    // unconditional x86-64-v3 baseline; no memory writes, no side-effects.
+    let end_tsc = unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    };
 
     let elapsed_nanos = end_inst.duration_since(start_inst).as_nanos() as u64;
     let elapsed_cycles = end_tsc.wrapping_sub(start_tsc);
 
     // 5. CONVERSION RATE CALCULATION:
-    // We compute the ratio: (Cycles * 1000) / Nanoseconds.
-    // We use the 1000 multiplier to store the result as an integer
-    // while maintaining 3 decimal places of precision without floating point.
     if let Some(freq_x1000) = (elapsed_cycles * 1000).checked_div(elapsed_nanos) {
         TSC_FREQ_GHZ_X1000.store(freq_x1000, Ordering::Release);
 
-        log::info!("TSC calibrated at {:.3} GHz", freq_x1000 as f64 / 1000.0);
+        if let (Some(s_raw), Some(e_raw)) = (start_raw, end_raw) {
+            let raw_delta = e_raw.saturating_sub(s_raw);
+            let tsc_calc_ns = (elapsed_cycles * 1000) / freq_x1000;
+            let drift_ppm = if raw_delta > 0 {
+                ((tsc_calc_ns as i64 - raw_delta as i64).abs() * 1_000_000) / raw_delta as i64
+            } else {
+                0
+            };
+            log::info!(
+                "TSC calibrated at {:.3} GHz (validated against CLOCK_MONOTONIC_RAW, drift: {} ppm)",
+                freq_x1000 as f64 / 1000.0,
+                drift_ppm
+            );
+        } else {
+            log::info!("TSC calibrated at {:.3} GHz", freq_x1000 as f64 / 1000.0);
+        }
     }
 }

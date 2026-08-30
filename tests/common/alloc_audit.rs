@@ -15,6 +15,8 @@ use std::cell::Cell;
 thread_local! {
     static TRACKING_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static ALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
+    static DEALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
+    static REALLOC_COUNT_TLS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn is_tracking_active() -> bool {
@@ -35,6 +37,22 @@ fn set_local_alloc_count(val: usize) {
     let _ = ALLOC_COUNT_TLS.try_with(|count| count.set(val));
 }
 
+fn get_local_dealloc_count() -> usize {
+    DEALLOC_COUNT_TLS.try_with(|count| count.get()).unwrap_or(0)
+}
+
+fn set_local_dealloc_count(val: usize) {
+    let _ = DEALLOC_COUNT_TLS.try_with(|count| count.set(val));
+}
+
+fn get_local_realloc_count() -> usize {
+    REALLOC_COUNT_TLS.try_with(|count| count.get()).unwrap_or(0)
+}
+
+fn set_local_realloc_count(val: usize) {
+    let _ = REALLOC_COUNT_TLS.try_with(|count| count.set(val));
+}
+
 pub struct CountingAllocator;
 
 unsafe impl GlobalAlloc for CountingAllocator {
@@ -47,7 +65,23 @@ unsafe impl GlobalAlloc for CountingAllocator {
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if is_tracking_active() {
+            let _ = DEALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+        }
         unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if is_tracking_active() {
+            let _ = REALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+            let _ = ALLOC_COUNT_TLS.try_with(|count| {
+                count.set(count.get() + 1);
+            });
+        }
+        unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
 
@@ -57,6 +91,8 @@ impl TrackingGuard {
     pub fn new() -> Self {
         set_tracking_active(true);
         set_local_alloc_count(0);
+        set_local_dealloc_count(0);
+        set_local_realloc_count(0);
         Self
     }
 }
@@ -64,9 +100,32 @@ impl TrackingGuard {
 impl Drop for TrackingGuard {
     fn drop(&mut self) {
         set_tracking_active(false);
+        set_local_alloc_count(0);
+        set_local_dealloc_count(0);
+        set_local_realloc_count(0);
     }
 }
 
 pub fn get_alloc_count() -> usize {
     get_local_alloc_count()
+}
+
+pub fn set_alloc_count(val: usize) {
+    set_local_alloc_count(val)
+}
+
+pub fn get_dealloc_count() -> usize {
+    get_local_dealloc_count()
+}
+
+pub fn set_dealloc_count(val: usize) {
+    set_local_dealloc_count(val)
+}
+
+pub fn get_realloc_count() -> usize {
+    get_local_realloc_count()
+}
+
+pub fn set_realloc_count(val: usize) {
+    set_local_realloc_count(val)
 }
