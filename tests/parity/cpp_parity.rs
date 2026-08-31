@@ -1796,17 +1796,14 @@ fn live_cross_validation_v2_hf_wavenet_standard() {
 #[test]
 #[ignore]
 fn live_cross_validation_nondist_models() {
-    let mut nondist_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    nondist_path.push("tests/fixtures/models-nondist");
-
-    if !nondist_path.exists() {
-        println!("[STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"");
-        println!(
-            "Non-distributable models directory {:?} not found.",
-            nondist_path
-        );
-        return;
-    }
+    let nondist_path = match neural_amp_modeler_rs::testing::fixtures::nondist_models_dir() {
+        Some(p) => p,
+        None => {
+            println!("[STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"");
+            println!("Non-distributable models directory not found.");
+            return;
+        }
+    };
 
     let models: Vec<_> = discovery::find_models_in_dir(&nondist_path)
         .into_iter()

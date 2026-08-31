@@ -188,7 +188,7 @@ fn run_under_isa(
     // Also explicitly pin Fast activation precision — this measures ISA
     // parity of the Padé/minimax kernels specifically (the `_hf` sibling
     // function below measures the Standard/exact-grade kernels instead).
-    // Standard-mode tests may have left the global atomic dirty (Tarefa β1.3).
+    // Standard-mode tests may have left the global atomic dirty.
     // T2.3: installs go through the validated crate guard (host capability
     // checked) — a mismatch degrades to a typed skip, never a SIGILL.
     let _guard = match IsaGuard::try_set(isa) {
@@ -741,7 +741,7 @@ fn isa_parity_wavenet_nano_avx2_vs_vnnibf16() {
 // Standard (exact-grade) mode self-consistency (AVX2) — always runs
 // ══════════════════════════════════════════════════════════════════════
 //
-// Tarefa β1.3: verify that the HF activation paths (scalar + SIMD) are
+// Verify that the HF activation paths (scalar + SIMD) are
 // deterministic across repeated runs with the same ISA.
 
 #[test]
@@ -781,7 +781,7 @@ fn isa_hf_self_consistency_lstm_2x8_avx2() {
 // Standard (exact-grade) cross-ISA parity — AVX2 (ref) vs AVX-512 (ignored)
 // ══════════════════════════════════════════════════════════════════════
 //
-// Tarefa β1.3: verify cross-ISA parity in Standard (exact-grade) mode.
+// Verify cross-ISA parity in Standard (exact-grade) mode.
 // HF polynomial kernels use the same mathematical approximation (degree-6
 // Taylor with range reduction) across ISAs, so cross-ISA parity should be
 // comparable to or better than standard mode.

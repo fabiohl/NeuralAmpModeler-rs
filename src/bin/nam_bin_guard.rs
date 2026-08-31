@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! CLI entry point of the fail-closed AVX-512 absence certificate (Sprint 1).
+//! CLI entry point of the fail-closed AVX-512 absence certificate.
 //!
 //! Single Rust scanner reused by the integration guard
 //! (`tests/avx512_guard.rs`) and by the isolated-build release wrapper

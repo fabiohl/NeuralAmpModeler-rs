@@ -176,20 +176,21 @@ pub fn make_wavenet_a2_dyn_data() -> NamModelData {
     }
 }
 
-/// Resolves the path to a model fixture file, preferring the `models-nondist`
-/// directory when present and falling back to `tests/fixtures/models`.
+/// Resolves the path to a model fixture file, preferring `models-nondist`
+/// or `third-party/community_models` when present and falling back to `tests/fixtures/models`.
 pub fn model_path(filename: &str) -> PathBuf {
-    let mut base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut nondist = base.clone();
-    nondist.push("tests/fixtures/models-nondist");
-    nondist.push(filename);
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let nondist = base.join("tests/fixtures/models-nondist").join(filename);
     if nondist.exists() {
-        nondist
-    } else {
-        base.push("tests/fixtures/models");
-        base.push(filename);
-        base
+        return nondist;
     }
+    let community = std::env::var("NAM_THIRD_PARTY_DIR")
+        .map(|d| PathBuf::from(d).join("community_models").join(filename))
+        .unwrap_or_else(|_| base.join("third-party/community_models").join(filename));
+    if community.exists() {
+        return community;
+    }
+    base.join("tests/fixtures/models").join(filename)
 }
 
 /// Loads and prewarms a model fixture (2048 samples). Returns `None` if the

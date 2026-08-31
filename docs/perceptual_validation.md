@@ -694,6 +694,7 @@ Before declaring any gate calibrated, the sum of modeled error sources
 must be consistent with the total measured error within a 10× bound (`Σ ΔESR(sources) ≈ ESR(total)`).
 
 In dashboard reports:
+
 - Models with receptive fields exceeding the measurement window (WaveNet, A2, ConvNet) in cold-start sweeps emit an uncolored informational notice (`Rule 5 notice: total/combined ≈ ...x (expected cold-start buffer fill-in transient)`).
 - Steady-state sweeps or architectures without extended receptive field transients (e.g. LSTM) that deviate beyond 10× emit a yellow warning alert (`Rule 5 (Σ sources ≈ total, within 10x) violated`).
 

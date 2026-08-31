@@ -93,7 +93,8 @@ proptest! {
     #[ignore]
     fn prop_fuzz_nam_json_truncated(cut_idx in 0usize..400_000) {
         // Uses a real fixture as the base for truncation
-        let fixture_content = fs::read_to_string("tests/fixtures/models-nondist/EVH-5150-Lite.nam")
+        let fixture_path = neural_amp_modeler_rs::testing::fixtures::model_path("EVH-5150-Lite.nam");
+        let fixture_content = fs::read_to_string(&fixture_path)
             .unwrap_or_else(|_| "{}".to_string());
 
         let mut idx = cut_idx;

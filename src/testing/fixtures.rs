@@ -78,6 +78,26 @@ pub fn community_models_dir() -> PathBuf {
     third_party_dir().join("community_models")
 }
 
+/// Resolves the directory for non-distributable / community models.
+///
+/// Search order:
+/// 1. `tests/fixtures/models-nondist` under the manifest dir (if exists)
+/// 2. [`community_models_dir`] (if exists)
+///
+/// Returns `None` if neither directory exists on disk.
+pub fn nondist_models_dir() -> Option<PathBuf> {
+    let manifest = manifest_dir();
+    let nondist = manifest.join("tests/fixtures/models-nondist");
+    if nondist.is_dir() {
+        return Some(nondist);
+    }
+    let community = community_models_dir();
+    if community.is_dir() {
+        return Some(community);
+    }
+    None
+}
+
 /// Resolves a path string relative to the crate manifest when present on disk.
 ///
 /// Used for catalog `canonical_path` / `aliases` entries such as

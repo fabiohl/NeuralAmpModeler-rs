@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Synthetic binary fixtures for the EVEX absence guard (Sprint 1 / F-ROB-01).
+//! Synthetic binary fixtures for the EVEX absence guard.
 //!
 //! These helpers build minimal ELF64 relocatable objects and GNU `ar`
 //! archives in-memory so the guard can be mutation-tested without depending

@@ -3,7 +3,7 @@
 
 //! Sanitization regression test for the JSONL metric generator.
 //!
-//! Guards the invariant of Tarefa 1.1: `report_dsp_fidelity*` must never emit
+//! Guards the invariant: `report_dsp_fidelity*` must never emit
 //! JSON `null` in the fundamental numeric metric fields (`esr`, `esr_db`,
 //! `mse`, `mrstft`) and must never write the literal `"inf"` for `snr_db`.
 //! `serde_json` serializes non-finite floats (`f64::INFINITY`, `-inf`, `NaN`)
@@ -18,9 +18,9 @@
 //! floor), so the sink emits JSON `null` (the "measured, non-finite" state)
 //! and the verify engine reads it as a PASS. The literal `"inf"` is never
 //! written for SNR because it trips the `is_finite_num` gate of foreign
-//! consumers (P0.T3).
+//! consumers.
 //!
-//! # Concurrency (S6-T02 / RES-07)
+//! # Concurrency
 //!
 //! The sink is isolated per test thread via [`MetricJsonlGuard`] over a unique
 //! temp path, and the process-global `NAM_METRICS_JSONL` env var is never

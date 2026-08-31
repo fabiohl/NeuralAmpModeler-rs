@@ -60,10 +60,10 @@ guidelines for oversampling around nonlinear stages. The half-band Kaiser-window
 adopted (β=12, 25 taps, >100 dB stopband) follows the design methodology established in this
 paper. Also referenced in the resampler redesign for the HQ polyphase bank.
 
-| Traceability | Reference                                                                          |
-|:------------ |:---------------------------------------------------------------------------------- |
-| Finding      | P-1 (filtros de oversampling)                                                      |
-| Files        | `src/dsp/oversample.rs`, `src/dsp/sinc_kernel.rs`, `docs/audio_fidelity_map.md` §5 |
+| Traceability | Reference                                                                              |
+|:------------ |:-------------------------------------------------------------------------------------- |
+| Finding      | P-1 (filtros de oversampling)                                                          |
+| Files        | `src/dsp/oversample.rs`, `src/dsp/sinc_kernel.rs`, `docs/audio_fidelity_map.md` §4, §6 |
 
 ---
 
@@ -78,12 +78,12 @@ low-cost alternative to oversampling for memoryless nonlinearities. Relevant as 
 baseline against which the oversampling approach was evaluated. ADAA was considered but
 ultimately **not adopted** because it would require per-model modification of the activation dispatch
 (polymorphic dispatch conflict); the decision and rationale are documented in
-`docs/audio_fidelity_map.md` §5 and `docs/architecture.md` §3.3.
+`docs/audio_fidelity_map.md` §6 and `docs/architecture.md` §4.3.
 
 | Traceability | Reference                                                    |
 |:------------ |:------------------------------------------------------------ |
 | Finding      | P-1 (ADAA alternativa de baixo custo)                        |
-| Files        | `docs/audio_fidelity_map.md` §5, `docs/architecture.md` §3.3 |
+| Files        | `docs/audio_fidelity_map.md` §6, `docs/architecture.md` §4.3 |
 
 ---
 
@@ -135,7 +135,7 @@ Guildford, UK, 2024.
 
 **Why relevant to nam-rs.** Addresses the core problem of sample-rate dependency in recurrent
 neural networks — the very mechanism that causes LSTM timbre to change drastically under
-oversampling (documented in `docs/perceptual_validation.md` §3, evaluated across LSTM recurrent state precision). Proposes architectural
+oversampling (documented in `docs/perceptual_validation.md` §Oversampling Characterization, evaluated across LSTM recurrent state precision). Proposes architectural
 modifications to make RNNs sample-rate independent, directly relevant to the observation that
 LSTM feedback delay is fixed in absolute samples. This paper anchors the theoretical
 understanding of why LSTM oversampling changes timbre (β3.1) and provides a potential path
@@ -169,7 +169,7 @@ for LSTM-family models at high sample rates.
 | Traceability | Reference                                           |
 |:------------ |:--------------------------------------------------- |
 | Finding      | I5 (LSTM oversampling trade-off, β3.1); future ADAA |
-| Files        | `docs/audio_fidelity_map.md` §3                     |
+| Files        | `docs/audio_fidelity_map.md` §3.2, §6               |
 
 ---
 
@@ -189,10 +189,10 @@ relevance of approximation error — errors in the presence region (~2–5 kHz) 
 significant than low-frequency errors. The paper also justifies A-weighted ESR as a perceptual
 complement to the standard (flat) ESR metric already implemented in `src/testing/perceptual/mod.rs`.
 
-| Traceability | Reference                                                                                           |
-|:------------ |:--------------------------------------------------------------------------------------------------- |
-| Finding      | P-5 (pré-ênfase A-weighting; ESR perceptual)                                                        |
-| Files        | `src/testing/perceptual/mod.rs`, `docs/perceptual_validation.md`, `docs/fastmath-approximations.md` |
+| Traceability | Reference                                                                                                                                   |
+|:------------ |:------------------------------------------------------------------------------------------------------------------------------------------- |
+| Finding      | P-5 (pré-ênfase A-weighting; ESR perceptual)                                                                                                |
+| Files        | `src/testing/perceptual/mod.rs`, `tests/models/activation_precision.rs`, `docs/perceptual_validation.md`, `docs/fastmath-approximations.md` |
 
 ---
 
@@ -255,10 +255,10 @@ that measures THD, THD+N, IMD, and frequency response per model SKU. Enables ver
 spectral fingerprinting — the mechanism that converts "does it sound right?" into automated,
 reproducible CI gates.
 
-| Traceability | Reference                                                                                                    |
-|:------------ |:------------------------------------------------------------------------------------------------------------ |
-| Finding      | P-3 (suíte de fidelidade espectral — FR, THD por ordem)                                                      |
-| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/farina.rs`, `src/testing/`, `src/math/dsp/fft.rs` |
+| Traceability | Reference                                                                                                                   |
+|:------------ |:--------------------------------------------------------------------------------------------------------------------------- |
+| Finding      | P-3 (suíte de fidelidade espectral — FR, THD por ordem)                                                                     |
+| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/farina.rs`, `src/testing/spectral/mod.rs`, `src/math/dsp/fft.rs` |
 
 ---
 
@@ -274,10 +274,10 @@ standard provides the normative reference for nam-rs's THD+N reporting (P-3), en
 spectral quality metrics are comparable with published amplifier and audio interface
 specifications.
 
-| Traceability | Reference                                                                          |
-|:------------ |:---------------------------------------------------------------------------------- |
-| Finding      | P-3 (THD+N padronizado)                                                            |
-| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/thd.rs`, `src/testing/` |
+| Traceability | Reference                                                                                         |
+|:------------ |:------------------------------------------------------------------------------------------------- |
+| Finding      | P-3 (THD+N padronizado)                                                                           |
+| Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/thd.rs`, `src/testing/spectral/mod.rs` |
 
 ---
 

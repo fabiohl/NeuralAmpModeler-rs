@@ -251,10 +251,6 @@ opt-level = 0
 incremental = true
 split-debuginfo = "unpacked"
 
-# Tarefa 2.0 (Decisão PO): "avx512" incluído na documentação gerada do docs.rs
-# para disponibilizar a API pública completa aos usuários que desejarem utilizá-la,
-# com a ressalva documentada de que o baseline AVX2 já é extremamente rápido
-# e o ganho prático com AVX-512 é marginal nos benchmarks do projeto.
 [package.metadata.docs.rs]
 no-default-features = true
 features = ["stereo", "testing", "heap-audit", "long_bench", "avx512"]

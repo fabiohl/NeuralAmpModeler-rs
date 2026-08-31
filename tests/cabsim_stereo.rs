@@ -2,9 +2,9 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #![allow(dead_code)]
 
-//! ER-2 stereo cab-sim validation harness (T2.6).
+//! ER-2 stereo cab-sim validation harness.
 //!
-//! Engine-level gates for the stereo-decoupled `CabSimPair` (F-RB-006 / T2.3):
+//! Engine-level gates for the stereo-decoupled `CabSimPair`:
 //!
 //! 1. **Full-pipeline stereo fidelity vs dual mono** (`feature = "stereo"`):
 //!    a unified stereo pipeline (independent L/R models + `CabSimPair`) must be
@@ -56,7 +56,7 @@ const SAMPLE_RATE: u32 = 48_000;
 // ── Full-pipeline driver ────────────────────────────────────────────────────
 
 /// Owning stereo/mono pipeline driver for the engine's public
-/// `capture_dsp_pipeline`, mirroring how NAM-Audio-Pipe wires it.
+/// `capture_dsp_pipeline`, mirroring how an audio host pipeline wires it.
 struct CabsimPipeline {
     resampler: NamResampler,
     os_l: OversampleEngine,

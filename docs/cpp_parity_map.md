@@ -26,14 +26,14 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 > §3.5 condition_dsp canonical RF summation, §3.6 fail-closed A1/A2 guards, §7 known-broken ledger.
 > No production code change for Max.
 
-| Architecture                | Status                                                                                                                                      | Section                                   |
-|:--------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------------------- |
-| **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)                |
-| **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)    | [§3](#3-wavenet-a1-architecture)          |
-| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture)          |
-| **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (prewarm fix eliminates 2.54e-5 transient)                                           | [§6](#6-other-architectures-out-of-scope) |
-| Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures-out-of-scope) |
-| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                    | [§6](#6-other-architectures-out-of-scope) |
+| Architecture                | Status                                                                                                                                      | Section                          |
+|:--------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
+| **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)       |
+| **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)    | [§3](#3-wavenet-a1-architecture) |
+| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture) |
+| **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (prewarm fix eliminates 2.54e-5 transient)                                           | [§6](#6-other-architectures)     |
+| Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures)     |
+| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                    | [§6](#6-other-architectures)     |
 
 ## 1. Methodology
 
@@ -1396,38 +1396,37 @@ This is **not a parity gap** for the following reasons:
 parity gap, no audio divergence. Documented here for completeness and to prevent future
 audit cycles from re-discovering and re-investigating it.
 
-## 6. Other Architectures (Out of Scope)
+## 6. Other Architectures
 
 ConvNet, Linear, `SlimmableContainer`, and the IR Cabsim convolution stage complete the model suite:
 
-- **ConvNet — Paridade Total de Inicialização e Aritmética (✅ resolved 2026-07-28).** O vendored
-  NAMcore implementa ConvNet (`NAM/convnet.cpp`), mas usando um formato flat com BatchNorm params
-  brutos. O NAM-rs usa um formato nested por-bloco com BatchNorm pré-fundido scale/offset
-  (`src/loader/dispatcher/convnet/mod.rs`). A divergência de ESR `2.54e-5` (SNR `45.9 dB`)
-  previamente reportada era **exclusivamente um transiente de inicialização de estado (prewarm)**
-  confinado às primeiras 62 amostras — o `ConvNetModel::prewarm()` preenchia zeros literais por
-  bloco isolado, enquanto o NAMcore (`dsp.cpp:67-96`) processa `receptive_field_size + 1` amostras
-  de silêncio através da rede inteira. A correção (`TASK-CONVNET-01`, 2026-07-28) replicou a
-  semântica exata do NAMcore, eliminando o transiente.
+- **ConvNet — Total Initialization and Arithmetic Parity (✅ resolved 2026-07-28).** The vendored
+  NAMcore implements ConvNet (`NAM/convnet.cpp`) using a flat format with raw BatchNorm parameters.
+  NAM-rs uses a nested per-block format with pre-fused scale/offset BatchNorm
+  ([`src/loader/dispatcher/convnet/mod.rs`](../src/loader/dispatcher/convnet/mod.rs)). The previously reported
+  ESR divergence of `2.54e-5` (SNR `45.9 dB`) was **exclusively a state initialization (prewarm) transient**
+  confined to the first 62 samples — `ConvNetModel::prewarm()` previously filled literal zeros per
+  isolated block, whereas NAMcore (`dsp.cpp:67-96`) processes `receptive_field_size + 1` silence samples
+  through the entire network. Replicating NAMcore's full network silence prewarm semantics eliminated
+  the transient entirely.
 
-  - **Métricas de paridade definitivas (pós-fix, 2026-07-28):**
+  - **Definitive Parity Metrics (post-fix, 2026-07-28):**
     - **C++ cross-validation** (`quick_parity_convnet`): ESR = `4.20e-15` (SNR `143.8 dB`), MR-STFT = `1.20e-6`
-    - **Oráculo f64** (`test_oracle_convnet`): ESR = `3.57e-15` (SNR `144.5 dB`, piso f32)
-    - **Oráculo vs NumPy f64** (`test_oracle_vs_python_anchor_convnet`): ESR = `5.23e-33` (bit-exact)
-    - **Self-golden** (`test_golden_vectors_convnet_test`): ESR = `0.00e0` (determinismo total)
-  - **Gates de qualidade recalibrados:** SNR ≥ `120 dB`, ESR ≤ `1.0e-12`, MR-STFT ≤ `1.0e-4`
-    (`TASK-CONVNET-05`).
-  - **Teste de invariante:** `test_convnet_prewarm_fixed_point_invariant()` confirma que o
-    estado pós-prewarm é um ponto fixo estacionário idêntico à convergência explícita.
-  - CPU latency = `10.3 µs` (0.8% of RT budget) — inalterada (prewarm opera em caminho frio).
+    - **F64 Oracle** (`test_oracle_convnet`): ESR = `3.57e-15` (SNR `144.5 dB`, f32 floor)
+    - **Oracle vs NumPy f64** (`test_oracle_vs_python_anchor_convnet`): ESR = `5.23e-33` (bit-exact)
+    - **Self-golden** (`test_golden_vectors_convnet_test`): ESR = `0.00e0` (total determinism)
+  - **Recalibrated Quality Gates:** SNR ≥ `120 dB`, ESR ≤ `1.0e-12`, MR-STFT ≤ `1.0e-4`.
+  - **Invariant Test:** `test_convnet_prewarm_fixed_point_invariant()` verifies that the
+    post-prewarm state is a stationary fixed point identical to explicit convergence.
+  - CPU latency = `10.3 µs` (0.8% of RT budget) — unchanged (prewarm executes strictly on cold path).
 
 - **Linear (RF=2048 / 4096 / 8192).** Affine linear model. Baseline ESR vs NAMcore = `1.70e-14` (SNR `137.7 dB`), CPU latency = `0.3 µs` (0.0% of RT budget).
 
-- **`SlimmableContainer`.** Multi-model crossfade orchestration, implemented and tested (`src/models/container.rs`, `tests/models/container_slimmable.rs`). Baseline A2 Example (CH=3→6) cross-validation vs NAMcore: ESR = `7.28e-14` (SNR `131.4 dB`), ESR vs f64 = `1.82e-14`, MR-STFT = `1.73e-05`.
+- **`SlimmableContainer`.** Multi-model crossfade orchestration, implemented and tested ([`src/models/container.rs`](../src/models/container.rs), `tests/models/container_slimmable.rs`). Baseline A2 Example (CH=3→6) cross-validation vs NAMcore: ESR = `7.28e-14` (SNR `131.4 dB`), ESR vs f64 = `1.82e-14`, MR-STFT = `1.73e-05`.
 
 - **IR Cabsim.** Impulse response convolution stage, cross-validated via `tests/parity/cabsim_cpp_parity.rs`.
 
-- **`SlimmableWavenet`.** Channel-sliceable single-network WaveNet for adaptive compute quality scaling (`src/models/slimmable.rs`). Skeleton is **implemented and loads**: `clone_wavenet_for_slimmable_storage` + `slice_wavenet_model`, breakpoints from `allowed_channels`, and inference checks via `test_loader_gap_slimmable_wavenet` / `test_slimmable_wavenet_inference_and_breakpoints`. The fixture `slimmable_wavenet.nam` is **not** a negative reject mock — it builds successfully. **Inference-only; sem claim de paridade multi-size NAMCore** — NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API; multi-size golden/live C++-adjudicated parity is architecturally infeasible (§7.4).
+- **`SlimmableWavenet`.** Channel-sliceable single-network WaveNet for adaptive compute quality scaling ([`src/models/slimmable.rs`](../src/models/slimmable.rs)). The pipeline is **implemented and loads**: `clone_wavenet_for_slimmable_storage` + `slice_wavenet_model`, breakpoints from `allowed_channels`, and inference checks via `test_loader_gap_slimmable_wavenet` / `test_slimmable_wavenet_inference_and_breakpoints`. The fixture `slimmable_wavenet.nam` is **not** a negative reject mock — it builds successfully. **Inference-only; no multi-size NAMCore parity claim** — NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API; multi-size golden/live C++-adjudicated parity is architecturally infeasible (§7.4).
 
 ---
 

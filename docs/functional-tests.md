@@ -64,7 +64,7 @@ Before executing manual stress scenarios, micro-benchmarking, or pre-release run
 - [ ] **T1.1 Model Loading & Basic Inference:** Load a `.nam` (JSON) and a `.namb` (binary container) model via `load_and_build_model()`. Call `process()` with a 64-sample block of silence. *Expected:* Function returns without panic; output buffer contains finite, non-NaN values.
 - [ ] **T1.2 Static Dispatch Coverage:** Load one model from each supported architecture family (WaveNet A1, WaveNet A2, LSTM, ConvNet, Linear). Run a single block of inference per model. *Expected:* All five architectures instantiate and process successfully.
 - [ ] **T1.3 Dynamic Model Fallback:** Load a model whose geometry does not match compile-time static profiles (e.g., custom LSTM 3×5 or WaveNet CH=7). *Expected:* Dispatches to the appropriate `Dyn` variant and produces valid output.
-- [ ] **T1.4 Corrupted Model Rejection:** Attempt to load a truncated, malformed, or 0-byte `.nam`/`.namb` file. *Expected:* Returns a structured `Err(NamError)` containing a descriptive `NamErrorCode` without panicking.
+- [ ] **T1.4 Corrupted Model Rejection:** Attempt to load a truncated, malformed, or 0-byte `.nam`/`.namb` file. *Expected:* Returns a strongly typed `Err(LoadError)` (see `src/loader/error.rs`) and emits structured diagnostics with a descriptive `NamErrorCode` without panicking.
 - [ ] **T1.5 Sample Rate Adaptation:** Load a 48 kHz model. Execute `model.reset(44100, 64)`, process a block, execute `model.reset(96000, 64)`, and process again. *Expected:* Clean state transition without allocation leaks or audio discontinuities.
 
 ---
@@ -167,7 +167,7 @@ NAM_QUICK_STRICT=1 ./utils/tests-quick.sh
 
 #### Phase Breakdown
 
-- **Phase 1 (Structural & Logic, Debug):** Unit tests, DSP math logic, format parsers, FSM transitions, and lock-free SPSC channels.
+- **Phase 1 (Structural & Logic, Debug):** Unit tests, DSP math logic, format parsers, FSM transitions, and lock-free SPSC channels across `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, and `avx512_guard`.
 - **Phase 2 (Measurement Oracles & Parity, Release):** Validates release float codegen across `golden_vectors`, `reference_oracle_f64`, `spectral_fidelity`, `linear_fft_test`, and canonical C++ parity (`quick_parity`).
 - **Phase 3 (Parser Fuzzing, Release `--ignored`):** Capped `proptest` sweeps on `.nam` and `.namb` format inputs.
 
@@ -195,8 +195,9 @@ Ahead of any timed test phase, the runner executes blocking preflight validation
 
 1. `preflight-render`: Builds or validates the C++ `render` binary via `utils/ensure_namcore_render.sh`.
 2. `preflight-catalog`: Validates fixture presence against `src/testing/catalog.rs`.
-3. `preflight-freshness`: Enforces SHA-256 integrity against `tests/fixtures/.golden_manifest.sha256`.
-4. `preflight-meta`: Asserts catalog↔test metadata coherence via `meta_coherence.rs`.
+3. `preflight-package`: Validates crate packaging hygiene via `cargo package --list`.
+4. `preflight-freshness`: Enforces SHA-256 integrity against `tests/fixtures/.golden_manifest.sha256`.
+5. `preflight-meta`: Asserts catalog↔test metadata coherence via `meta_coherence.rs`.
 
 #### Execution: Modes
 
@@ -245,27 +246,28 @@ cargo run --locked --features testing --bin nam_long_receipt -- validate --out t
 
 All test runners, compilation helpers, and preflight steps persist detailed execution logs on disk under the target directory (`target/logs/`):
 
-| File Path                                     | Generating Component / Phase     | Contents & Diagnostic Value                                                                        |
-|:--------------------------------------------- |:-------------------------------- |:-------------------------------------------------------------------------------------------------- |
-| **`target/logs/quick-receipt.txt`**           | `tests-quick.sh` (Final)         | Summary receipt containing `FIDELITY:`, `GAPS:`, and `OVERALL:` status.                            |
-| **`target/logs/quick-phase1.log`**            | `tests-quick.sh` (Phase 1)       | Stdout/stderr of structural unit tests, DSP logic, and channel checks (Debug profile).             |
-| **`target/logs/quick-phase2.log`**            | `tests-quick.sh` (Phase 2)       | Measurement oracles output, float golden vectors, and `quick_parity` C++ checks (Release profile). |
-| **`target/logs/quick-phase3.log`**            | `tests-quick.sh` (Phase 3)       | Fuzzing logs from capped proptest parser sweeps.                                                   |
-| **`target/logs/long-audit-receipt.jsonl`**    | `tests-long.sh` (Final)          | Single Source of Truth structured audit record (machine-readable per-phase JSON entries).          |
-| **`target/logs/catalog_preflight.log`**       | `tests-long.sh` (Preflight 2)    | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.               |
-| **`target/logs/meta_coherence.log`**          | `tests-long.sh` (Preflight 4)    | Cross-validation between catalog definitions and test module registrations.                        |
-| **`target/logs/package-list.err`**            | `tests-long.sh` (Preflight 3)    | Diagnostics from `cargo package --list` crate packaging validations.                               |
-| **`target/logs/cmake-configure.log`**         | `utils/ensure_namcore_render.sh` | CMake build configuration output when compiling C++ `tools/render`.                                |
-| **`target/logs/cmake-build.log`**             | `utils/ensure_namcore_render.sh` | CMake compilation logs for the C++ reference render binary.                                        |
-| **`target/logs/phase1-soak.log`**             | `tests-long.sh` (Phase 1)        | Continuous numerical soak logs, SPSC buffer sweeps, and endurance metrics.                         |
-| **`target/logs/phase-defense-scripts.log`**   | `tests-long.sh` (Phase 2)        | Structural invariant checks, QA defenses (`tests/qa_defense.rs`).                                  |
-| **`target/logs/phase-libm-exports.log`**      | `tests-long.sh` (Phase 2)        | Dynamic linker symbol export audits (`libm_export_guard`).                                         |
-| **`target/logs/phase2-proptests-parity.log`** | `tests-long.sh` (Phase 3)        | Full live C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                       |
-| **`target/logs/phase3-heap-audit.log`**       | `tests-long.sh` (Phase 4)        | Memory interceptor allocation reports (`CountingAllocator`).                                       |
-| **`target/logs/phase4-rt-deadline.log`**      | `tests-long.sh` (Phase 5)        | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$).                        |
-| **`target/logs/phase5-rt-jitter.log`**        | `tests-long.sh` (Phase 6)        | Real-time jitter telemetry and thread contention profiles.                                         |
-| **`target/logs/phase6-loom.log`**             | `tests-long.sh` (Phase 7)        | Concurrency model checker state-space exploration logs.                                            |
-| **`~/.cache/nam-rs/crash-*.txt`**             | Runtime Panic Hook (DSP/Plugin)  | Stack-safe diagnostic crash reports rendered without heap allocations.                             |
+| File Path                                     | Generating Component / Phase       | Contents & Diagnostic Value                                                                        |
+|:--------------------------------------------- |:---------------------------------- |:-------------------------------------------------------------------------------------------------- |
+| **`target/logs/quick-receipt.txt`**           | `tests-quick.sh` (Final)           | Summary receipt containing `FIDELITY:`, `GAPS:`, and `OVERALL:` status.                            |
+| **`target/logs/quick-phase1.log`**            | `tests-quick.sh` (Phase 1)         | Stdout/stderr of structural unit tests, DSP logic, and channel checks (Debug profile).             |
+| **`target/logs/quick-phase2.log`**            | `tests-quick.sh` (Phase 2)         | Measurement oracles output, float golden vectors, and `quick_parity` C++ checks (Release profile). |
+| **`target/logs/quick-phase3.log`**            | `tests-quick.sh` (Phase 3)         | Fuzzing logs from capped proptest parser sweeps.                                                   |
+| **`target/logs/long-audit-receipt.jsonl`**    | `tests-long.sh` (Final)            | Single Source of Truth structured audit record (machine-readable per-phase JSON entries).          |
+| **`target/logs/catalog_preflight.log`**       | `tests-long.sh` (Preflight 2)      | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.               |
+| **`target/logs/meta_coherence.log`**          | `tests-long.sh` (Preflight 4)      | Cross-validation between catalog definitions and test module registrations.                        |
+| **`target/logs/package-list.err`**            | `tests-long.sh` (Preflight 3)      | Diagnostics from `cargo package --list` crate packaging validations.                               |
+| **`target/logs/cmake-configure.log`**         | `utils/ensure_namcore_render.sh`   | CMake build configuration output when compiling C++ `tools/render`.                                |
+| **`target/logs/cmake-build.log`**             | `utils/ensure_namcore_render.sh`   | CMake compilation logs for the C++ reference render binary.                                        |
+| **`target/logs/phase1-soak.log`**             | `tests-long.sh` (Phase 1)          | Continuous numerical soak logs, SPSC buffer sweeps, and endurance metrics.                         |
+| **`target/logs/phase-defense-scripts.log`**   | `tests-long.sh` (Phase 2)          | Structural invariant checks, QA defenses (`tests/qa_defense.rs`).                                  |
+| **`target/logs/phase-libm-exports.log`**      | `tests-long.sh` (Phase 2)          | Dynamic linker symbol export audits (`libm_export_guard`).                                         |
+| **`target/logs/phase2-proptests-parity.log`** | `tests-long.sh` (Phase 3)          | Full live C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                       |
+| **`target/logs/subphase-isa-parity.log`**     | `tests-long.sh` (Phase 3 Subphase) | Cross-ISA determinism validation logs (`isa_parity`).                                              |
+| **`target/logs/phase3-heap-audit.log`**       | `tests-long.sh` (Phase 4)          | Memory interceptor allocation reports (`CountingAllocator`).                                       |
+| **`target/logs/phase4-rt-deadline.log`**      | `tests-long.sh` (Phase 5)          | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$).                        |
+| **`target/logs/phase5-rt-jitter.log`**        | `tests-long.sh` (Phase 6)          | Real-time jitter telemetry and thread contention profiles.                                         |
+| **`target/logs/phase6-loom.log`**             | `tests-long.sh` (Phase 7)          | Concurrency model checker state-space exploration logs.                                            |
+| **`~/.cache/nam-rs/crash-*.txt`**             | Runtime Panic Hook (DSP/Plugin)    | Stack-safe diagnostic crash reports rendered without heap allocations.                             |
 
 ---
 
@@ -279,13 +281,13 @@ bootstrapped baseline) is *evidence of execution*, never a release certificate.
 
 ### 5.1. The Five Mandatory Receipts
 
-| # | Receipt (record name)  | Command (in `NeuralAmpModeler-rs/`)                                        | Environment / Flags                        | Generated Artifact(s)                                                                               | Blocking Criteria                                                                                                            |
-|:-:|:---------------------- |:-------------------------------------------------------------------------- |:------------------------------------------ |:--------------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------- |
-| 1 | `lints.log`            | `utils/lints.sh`                                                           | `--all-targets --all-features` (script)    | console output — operator must archive `target/logs/lints.log` (`tee`)                             | exit 0; zero compiler/clippy warnings; zero rustdoc warnings; SPDX, anti-pattern and `#[allow]` policies green; binary AVX-512 absence certification green |
-| 2 | `quick-strict.log`     | `utils/tests-quick.sh`                                                     | `NAM_QUICK_STRICT=1`                       | `target/logs/quick-receipt.txt` (+ `quick-phase{1,2,3}.log`)                                       | `FIDELITY: OK` and `OVERALL: PASSED`; zero `GAP:` entries; exit 0                                                             |
-| 3 | `long-strict.log`      | `utils/tests-long.sh --strict-pre-release`                                 | `--strict-pre-release`                     | `target/logs/long-audit-receipt.jsonl`                                                              | `OVERALL: PASSED` with `gaps: []` (validated via `nam_long_receipt validate --strict`); exit 0                                 |
-| 4 | `perf-check.log`       | `utils/tests-performance-regression.sh --check`                            | pre-approved baseline (see §5.2)           | `target/logs/regression_phase_receipt.jsonl` (+ `target/logs/regression-check.log`)                 | statistically valid comparison (two-sample t-test, p < 0.05) against a baseline **produced by an earlier, explicitly approved commit**; exit 0 |
-| 5 | `quality-contract.json`| `utils/quality-dashboard.sh --check docs/quality-contract.json`            | `docs/quality-contract.json` (committed)   | `target/logs/dashboard/report.jsonl` + `target/logs/dashboard/phase_receipt.jsonl`                  | all fidelity envelopes (ESR/SNR/MR-STFT) and f64-oracle checks validated; `regression_gate` must not be `NOT_VERIFIED` (perf receipt #4 must be green first); exit 0 |
+| #   | Receipt (record name)   | Command (in `NeuralAmpModeler-rs/`)                             | Environment / Flags                      | Generated Artifact(s)                                                               | Blocking Criteria                                                                                                                                                    |
+|:---:|:----------------------- |:--------------------------------------------------------------- |:---------------------------------------- |:----------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `lints.log`             | `utils/lints.sh`                                                | `--all-targets --all-features` (script)  | console output — operator must archive `target/logs/lints.log` (`tee`)              | exit 0; zero compiler/clippy warnings; zero rustdoc warnings; SPDX, anti-pattern and `#[allow]` policies green; binary AVX-512 absence certification green           |
+| 2   | `quick-strict.log`      | `utils/tests-quick.sh`                                          | `NAM_QUICK_STRICT=1`                     | `target/logs/quick-receipt.txt` (+ `quick-phase{1,2,3}.log`)                        | `FIDELITY: OK` and `OVERALL: PASSED`; zero `GAP:` entries; exit 0                                                                                                    |
+| 3   | `long-strict.log`       | `utils/tests-long.sh --strict-pre-release`                      | `--strict-pre-release`                   | `target/logs/long-audit-receipt.jsonl`                                              | `OVERALL: PASSED` with `gaps: []` (validated via `nam_long_receipt validate --strict`); exit 0                                                                       |
+| 4   | `perf-check.log`        | `utils/tests-performance-regression.sh --check`                 | pre-approved baseline (see §5.2)         | `target/logs/regression_phase_receipt.jsonl` (+ `target/logs/regression-check.log`) | statistically valid comparison (two-sample t-test, p < 0.05) against a baseline **produced by an earlier, explicitly approved commit**; exit 0                       |
+| 5   | `quality-contract.json` | `utils/quality-dashboard.sh --check docs/quality-contract.json` | `docs/quality-contract.json` (committed) | `target/logs/dashboard/report.jsonl` + `target/logs/dashboard/phase_receipt.jsonl`  | all fidelity envelopes (ESR/SNR/MR-STFT) and f64-oracle checks validated; `regression_gate` must not be `NOT_VERIFIED` (perf receipt #4 must be green first); exit 0 |
 
 > [!IMPORTANT]
 > **Same-commit rule (F-EVID-06).** All five receipts must refer to the *same*

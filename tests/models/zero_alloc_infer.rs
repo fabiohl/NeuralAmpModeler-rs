@@ -407,13 +407,13 @@ fn test_parallel_allocation_tracking_isolation() {
 /// Zero-Allocation Verification Test for Nondist Models
 #[test]
 fn test_zero_alloc_nondist_models() {
-    let mut nondist_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    nondist_path.push("tests/fixtures/models-nondist");
-
-    if !nondist_path.exists() {
-        println!("[STATUS] SKIP_OPTIONAL: models_nondist_absent");
-        return;
-    }
+    let nondist_path = match neural_amp_modeler_rs::testing::fixtures::nondist_models_dir() {
+        Some(p) => p,
+        None => {
+            println!("[STATUS] SKIP_OPTIONAL: models_nondist_absent");
+            return;
+        }
+    };
 
     let mut models = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&nondist_path) {

@@ -219,7 +219,7 @@ at a private archive via either `third-party/community_models/` (recommended sym
 ##### Model Resolution Order (`golden_gen_build.sh`)
 
 `golden_gen_build.sh` resolves every `.nam` model through a shared `resolve_nam_model()` function
-that mirrors the search order of `tests/common/io_helpers.rs::model_path`:
+that mirrors the search order of `src/testing/fixtures.rs::model_path` (re-exported via `tests/common/io_helpers.rs`):
 
 | Step | Location                                                              | Environment override  |
 |:---- |:--------------------------------------------------------------------- |:--------------------- |

@@ -122,12 +122,10 @@ pub fn bench_lstm_dynamic_process(c: &mut Criterion) {
 
 /// Measures inference latency for any present non-distributable models.
 pub fn bench_nondist_models(c: &mut Criterion) {
-    let mut nondist_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    nondist_path.push("tests/fixtures/models-nondist");
-
-    if !nondist_path.exists() {
-        return;
-    }
+    let nondist_path = match neural_amp_modeler_rs::testing::fixtures::nondist_models_dir() {
+        Some(p) => p,
+        None => return,
+    };
 
     let mut models = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&nondist_path) {

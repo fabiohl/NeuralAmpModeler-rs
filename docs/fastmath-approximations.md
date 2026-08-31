@@ -16,17 +16,18 @@ Architectural decisions, performance benchmarks, and normative guidelines for tr
 
 NAM-rs provides a runtime-selectable activation precision switch via the `ActivationPrecision` enum in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs). The mode is configured per thread via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS), accessed via `set_activation_tls()`, `clear_activation_tls()`, and `activation_precision()` (which defaults to `Standard` if unset). The legacy process-wide atomic flag was removed to ensure complete thread safety and isolation across concurrent audio streams.
 
-| Precision Mode | Tanh Strategy                      | Sigmoid Strategy                   | Max Error (vs `f32` ref)      | Throughput (256 elem, AVX2) | Default Status           |
-|:-------------- |:---------------------------------- |:---------------------------------- |:----------------------------- |:--------------------------- |:------------------------ |
-| **`Standard`** | Degree-6 Taylor minimax ($e^{2x}$) | Degree-6 Taylor minimax ($e^{-x}$) | $\le 2.4 \times 10^{-7}$      | ~110 ns                     | **Universal Default**    |
-| **`Fast`**     | Padé [5,4] rational approx.        | Degree-17 Lawson minimax           | $\approx 2.32 \times 10^{-3}$ | **~54 ns**                  | Opt-in (CPU-constrained) |
+| Precision Mode | Tanh Strategy                      | Sigmoid Strategy                   | SiLU Strategy ($x \cdot \sigma(x)$)       | Max Error (vs `f32` ref)      | Throughput (256 elem, AVX2) | Default Status           |
+|:-------------- |:---------------------------------- |:---------------------------------- |:----------------------------------------- |:----------------------------- |:--------------------------- |:------------------------ |
+| **`Standard`** | Degree-6 Taylor minimax ($e^{2x}$) | Degree-6 Taylor minimax ($e^{-x}$) | Polynomial exp sigmoid (`silu_slice_hf`)  | $\le 2.4 \times 10^{-7}$      | ~110 ns                     | **Universal Default**    |
+| **`Fast`**     | Padé [5,4] rational approx.        | Degree-17 Lawson minimax           | Degree-17 Lawson minimax (`silu_slice`)   | $\approx 2.32 \times 10^{-3}$ | **~54 ns**                  | Opt-in (CPU-constrained) |
 
 ### 1.1 Standard Mode (`ActivationPrecision::Standard`, Production Default)
 
-Uses polynomial $\exp$-based kernels with degree-6 Taylor minimax and integer range reduction ($k = \text{round}(x \cdot \log_2 e)$, $r = x - k \cdot \ln 2$). Implemented in [`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs) and [`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs):
+Uses polynomial $\exp$-based kernels with degree-6 Taylor minimax and integer range reduction ($k = \text{round}(x \cdot \log_2 e)$, $r = x - k \cdot \ln 2$). Implemented in [`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs), [`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs), and [`src/math/activations/silu.rs`](../src/math/activations/silu.rs):
 
 - **Tanh formula:** $\text{tanh}(x) = \frac{e^{2x} - 1}{e^{2x} + 1}$
 - **Sigmoid formula:** $\sigma(x) = \frac{1}{1 + e^{-x}}$
+- **SiLU formula:** $\text{silu}(x) = x \cdot \sigma(x) = \frac{x}{1 + e^{-x}}$
 - **Precision:** Precision is ~10,000× higher than `Fast` mode. Hardware division (`_mm256_div_ps`) incurs a throughput cost (~110 ns for 256 elements vs ~54 ns in `Fast` mode), but guarantees exact-grade outputs across all model topologies.
 
 ### 1.2 Fast Mode (`ActivationPrecision::Fast`, Performance Opt-in)
@@ -35,6 +36,7 @@ Designed for ultra-low latency or CPU-constrained setups:
 
 - Uses Padé [5,4] rational approximation for `tanh` (~54 ns for 256 elements, AVX2).
 - Uses direct minimax degree-17 polynomial for `sigmoid`.
+- Dispatches `silu_slice` to degree-17 Lawson minimax sigmoid multiplication ($x \cdot \sigma_{\text{minimax}}(x)$).
 
 > [!WARNING]
 > **Calibration Limits under Fast Mode:** `Fast` mode approximations are optimized over compact domains: `tanh` on $[-4, 4]$ (max absolute error $\approx 2.32 \times 10^{-3}$) and `sigmoid` on $[-8, 8]$ (max absolute error $\approx 4.09 \times 10^{-4}$). In recurrent architectures (LSTM) with large hidden states where gate inputs $|g| > 4$, approximation errors accumulate over time, creating recurrent state drift. Standard mode avoids this drift and is recommended for recurrent models.
@@ -46,7 +48,8 @@ The measured SNR impact of `Fast` vs `Standard` activation precision across LSTM
 ### 1.3 Interaction with Oversampling & Full Topology Coverage
 
 - **Oversampling Interaction:** In HQ mode (4× oversampling, see [`docs/architecture.md`](architecture.md)), half-band filtering eliminates high-frequency aliasing. Residual distortion is then bounded by activation precision, where `Standard` mode achieves SNR $> 120\text{ dB}$.
-- **Full Model Coverage:** Activation precision dispatch is supported across all model families (WaveNet A1/A2, LSTM 1×N / 2×N, ConvNet, and Dynamic models), including fused 4-gate LSTM GEMV kernels ([`src/math/lstm/gates.rs`](../src/math/lstm/gates.rs)).
+- **Full Model Coverage:** Activation precision dispatch is supported across all model families (WaveNet A1/A2, LSTM 1×N / 2×N, ConvNet, and Dynamic models), including fused 4-gate LSTM GEMV kernels ([`src/math/lstm/gates.rs`](../src/math/lstm/gates.rs)) and SIMD trait abstractions ([`src/math/common/traits/mod.rs`](../src/math/common/traits/mod.rs), [`src/math/common/avx2_impl/activations.rs`](../src/math/common/avx2_impl/activations.rs)).
+- **Padé [5,4] vs C++ NAMcore `fast_tanh` Distinction:** `ActivationPrecision::Fast` governs standard activation dispatches for `tanh` and `sigmoid`. In contrast, models explicitly specifying `"FastTanh"` topology activation (e.g. WaveNet A2 or ConvNet) route to [`src/math/activations/fast_tanh.rs`](../src/math/activations/fast_tanh.rs), which reproduces C++ NAMcore's Atkinson rational formula bit-for-bit (see §2.3).
 
 ---
 
@@ -98,6 +101,26 @@ Implemented in [`src/math/activations/sigmoid/production.rs`](../src/math/activa
 |:------------------ |:---------------------------- |:------------------------------------------------ |
 | Max Absolute Error | $\approx 6.8 \times 10^{-4}$ | **$\approx 4.09 \times 10^{-4}$** (1.67× better) |
 | SIMD Operations    | 16 ops                       | **15 ops**                                       |
+
+---
+
+### 2.3 C++ NAMcore Fast Tanh (`fast_tanh`, Atkinson Rational Formula)
+
+Distinct from the Padé [5,4] approximation used by `ActivationPrecision::Fast` on standard models, NAM-rs provides a dedicated kernel for models that explicitly configure `"FastTanh"` activation (such as specific WaveNet A2 or ConvNet layers). This kernel strictly matches upstream C++ NAMcore (`NAM/activations.h:91-98`, `fast_tanh`) line-by-line using Atkinson's rational formula:
+
+$$ax = |x|, \quad x^2 = x \cdot x$$
+
+$$\text{fast\_tanh}(x) = \frac{x \cdot (c_a + c_a \cdot ax + (c_b + c_c \cdot ax) \cdot x^2)}{c_d + (c_d + x^2) \cdot |x + c_e \cdot x \cdot ax|}$$
+
+With empirical constants defined in [`src/math/activations/fast_tanh.rs`](../src/math/activations/fast_tanh.rs):
+
+- $c_a = 2.45550750702956$
+- $c_b = 0.893229853513558$
+- $c_c = 0.821226666969744$
+- $c_d = 2.44506634652299$
+- $c_e = 0.814642734961073$
+
+Implemented in [`src/math/activations/fast_tanh.rs`](../src/math/activations/fast_tanh.rs) via `fast_tanh_slice_avx2`, `fast_tanh_slice_avx512` (behind `#[cfg(feature = "avx512")]`), and scalar `fast_tanh(x)`. This separation ensures that models trained with upstream `FastTanh` achieve bit-exact parity with C++ NAMcore while general models benefit from the higher-fidelity or standardized Padé kernels.
 
 ---
 

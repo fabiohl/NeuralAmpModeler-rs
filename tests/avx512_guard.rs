@@ -4,7 +4,7 @@
 //! Binary surface guard: fail-closed proof of zero EVEX/AVX-512 machine code
 //! in the default (non-`avx512`) build.
 //!
-//! Sprint 1 / F-ROB-01: the guard must prove — without false greens — that no
+//! The guard must prove — without false greens — that no
 //! EVEX-encoded instruction exists in any executable section of the machine
 //! code produced by the default build. The EVEX `0x62` encoding prefix is
 //! detected from the raw instruction bytes emitted by `llvm-objdump -d`,

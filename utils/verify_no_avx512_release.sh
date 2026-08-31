@@ -4,7 +4,7 @@
 #
 # Fail-closed binary certification for the default (non-avx512) release build.
 #
-# Sprint 1 / F-ROB-01 protocol:
+# Verification protocol:
 #   1. Rebuilds the default release artifact in a disposable isolated target
 #      dir (`target/cert-release-XXXXXX`); a stale `target/release` rlib is
 #      never reused.

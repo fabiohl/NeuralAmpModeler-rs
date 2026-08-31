@@ -152,7 +152,7 @@ macro_rules! impl_avx512_dsp {
 
         #[inline(always)]
         // SAFETY: all 6 slices are valid f32 slices of equal length n; AVX-512 implies AVX2.
-        // Delegates to Avx2Math complex MAC routine (Sprint 1.4 low-ROI deduplication).
+        // Delegates to Avx2Math complex MAC routine for deduplication.
         unsafe fn complex_mac_overwrite(
             h_re: &[f32],
             h_im: &[f32],
