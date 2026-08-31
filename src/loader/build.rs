@@ -7,7 +7,7 @@
 use crate::common::diagnostics::{NamDiagnostic, NamErrorCode, SystemSnapshot};
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use std::path::Path;
 
 use super::error::LoadError;
@@ -36,6 +36,13 @@ fn validate_metadata_floats(
     for (field, value) in db_fields {
         if let Some(v) = value {
             if !v.is_finite() {
+                // T5.1: structured rejection diagnostic for off-RT triage.
+                // Metadata floats are validated post-parse (no file byte
+                // offset is tracked for these top-level scalar fields).
+                warn!(
+                    "[Loader] Invalid field rejected: field='{}', value={:?}, offset_bytes={}",
+                    field, v, 0
+                );
                 return Err(MetadataError::NonFinite { field, value: v });
             }
             if v.abs() > MAX_PLAUSIBLE_DBU {
@@ -49,6 +56,10 @@ fn validate_metadata_floats(
     }
     if let Some(v) = head_scale {
         if !v.is_finite() {
+            warn!(
+                "[Loader] Invalid field rejected: field='head_scale', value={:?}, offset_bytes={}",
+                v, 0
+            );
             return Err(MetadataError::NonFinite {
                 field: "head_scale",
                 value: v,
@@ -81,6 +92,13 @@ fn read_and_validate_model_bytes(
     use std::io::Read;
 
     let mut file = std::fs::File::open(path).map_err(|e| {
+        // T5.1: structured failure diagnostic (size unknown at open time → 0).
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str,
+            0,
+            NamErrorCode::FileReadError
+        );
         NamDiagnostic::new(NamErrorCode::FileReadError, sys)
             .message(format!("Failed to open the file \"{}\".", path_str))
             .hint("Please verify file access permissions.")
@@ -97,6 +115,12 @@ fn read_and_validate_model_bytes(
         .take(MAX_MODEL_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| {
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                path_str,
+                bytes.len(),
+                NamErrorCode::FileReadError
+            );
             NamDiagnostic::new(NamErrorCode::FileReadError, sys)
                 .message(format!("Failed to read the file \"{}\".", path_str))
                 .hint("Please verify file access permissions.")
@@ -107,6 +131,12 @@ fn read_and_validate_model_bytes(
         })?;
 
     if bytes.len() as u64 > MAX_MODEL_BYTES {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str,
+            bytes.len(),
+            NamErrorCode::ModelTooLarge
+        );
         NamDiagnostic::new(NamErrorCode::ModelTooLarge, sys)
             .message(format!(
                 "Model file \"{}\" is too large ({} bytes, max is {} bytes).",
@@ -170,9 +200,10 @@ pub fn load_and_build_model(
     info!("[Loader] Loading model from \"{}\"", path_str);
 
     // 1. Reading and Parsing
-    let model_data = if ext_lower == "namb" {
+    let (model_data, file_size) = if ext_lower == "namb" {
         let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
-        namb::parse_namb(&bytes).map_err(|e| {
+        let file_size = bytes.len();
+        let data = namb::parse_namb(&bytes).map_err(|e| {
             let code = match e.downcast_ref::<namb::NambError>() {
                 Some(namb::NambError::Truncated { .. }) => NamErrorCode::NambTruncated,
                 Some(namb::NambError::InvalidMagic(_)) => NamErrorCode::NambInvalidMagic,
@@ -190,6 +221,11 @@ pub fn load_and_build_model(
                 }
                 None => NamErrorCode::ModelBuildFailed,
             };
+            // T5.1: structured failure diagnostic (path + size + code).
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                path_str, file_size, code
+            );
             NamDiagnostic::new(code, sys)
                 .message(format!("Invalid \".namb\" file: {}", path_str))
                 .param("detail", e.to_string())
@@ -219,10 +255,18 @@ pub fn load_and_build_model(
                 },
                 Err(orig_e) => LoadError::Internal(orig_e.to_string()),
             }
-        })?
+        })?;
+        (data, file_size)
     } else if ext_lower == "nam" {
         let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
+        let file_size = bytes.len();
         let json = String::from_utf8(bytes).map_err(|e| {
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                path_str,
+                file_size,
+                NamErrorCode::FileReadError
+            );
             NamDiagnostic::new(NamErrorCode::FileReadError, sys)
                 .message(format!("File \"{}\" contains invalid UTF-8.", path_str))
                 .hint("Only UTF-8 encoded .nam files are supported.")
@@ -231,7 +275,7 @@ pub fn load_and_build_model(
                 .emit();
             LoadError::InvalidUtf8(e)
         })?;
-        nam_json::parse_nam_json(&json).map_err(|e| {
+        let data = nam_json::parse_nam_json(&json).map_err(|e| {
             let code = match &e {
                 nam_json::JsonError::WeightsExceedLimit { .. } => {
                     NamErrorCode::NamJsonWeightsExceedLimit
@@ -264,6 +308,11 @@ pub fn load_and_build_model(
                 }
                 _ => NamErrorCode::NamJsonParseError,
             };
+            // T5.1: structured failure diagnostic (path + size + code).
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                path_str, file_size, code
+            );
             NamDiagnostic::new(code, sys)
                 .message(format!("Error parsing model JSON: {}", path_str))
                 .param("detail", &e)
@@ -288,8 +337,15 @@ pub fn load_and_build_model(
                 }
                 nam_json::JsonError::Serde(serde_err) => LoadError::JsonParse(serde_err),
             }
-        })?
+        })?;
+        (data, file_size)
     } else {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str,
+            0,
+            NamErrorCode::UnknownExtension
+        );
         return Err(LoadError::UnsupportedExtension(ext.to_string()));
     };
 
@@ -308,6 +364,12 @@ pub fn load_and_build_model(
     // 2. Metadata and Calibration Extraction
     let meta = model_data.metadata.clone().unwrap_or_default();
     validate_metadata_floats(&meta, model_data.config.head_scale).map_err(|e| {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str,
+            file_size,
+            NamErrorCode::InvalidMetadata
+        );
         NamDiagnostic::new(NamErrorCode::InvalidMetadata, sys)
             .message(format!("Invalid model metadata in \"{}\"", path_str))
             .param("detail", e.to_string())
@@ -345,6 +407,10 @@ pub fn load_and_build_model(
         } else {
             NamErrorCode::ModelBuildFailed
         };
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str, file_size, code
+        );
         NamDiagnostic::new(code, sys)
             .message(format!("Failed to build model (L): {}", path_str))
             .param("detail", e.to_string())
@@ -378,6 +444,10 @@ pub fn load_and_build_model(
             } else {
                 NamErrorCode::ModelBuildFailed
             };
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                path_str, file_size, code
+            );
             NamDiagnostic::new(code, sys)
                 .message(format!("Failed to build model (R): {}", path_str))
                 .param("detail", e.to_string())

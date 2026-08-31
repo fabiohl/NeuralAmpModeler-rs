@@ -94,8 +94,16 @@ impl ConvEngine {
     /// # Returns
     /// A fully initialized `ConvEngine`. If `ir` is empty, the engine
     /// acts as a passthrough (output = input).
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidCabsimPartitionSize`] (E2202) if
+    /// `partition_size == 0` — the constructor never panics, so a host
+    /// DSP passing a zero partition during transient init or config reset
+    /// gets a structured error instead of a panic on the audio thread.
     pub fn new(ir: &[f32], partition_size: usize) -> Result<Self, NamErrorCode> {
-        assert!(partition_size > 0, "partition_size must be positive");
+        if partition_size == 0 {
+            return Err(NamErrorCode::InvalidCabsimPartitionSize);
+        }
 
         let fft_size = (2 * partition_size).next_power_of_two();
         let n_bins = fft_size / 2 + 1;

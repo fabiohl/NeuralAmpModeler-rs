@@ -79,8 +79,8 @@ proptest! {
         model_scalar.layer.bias.copy_from_slice(&scaled_bias[..32]);
 
         for (i, &w) in scaled_head_weights.iter().enumerate().take(8) {
-            model_simd.head_weights[i] = w;
-            model_scalar.head_weights[i] = w;
+            model_simd.head_weights_f32[i] = w;
+            model_scalar.head_weights_f32[i] = w;
         }
 
         model_simd.head_bias = scaled_head_bias;
@@ -139,8 +139,8 @@ proptest! {
         }
 
         for (i, &w) in head_weights.iter().enumerate().take(40) {
-            model_simd.head_weights[i] = w;
-            model_scalar.head_weights[i] = w;
+            model_simd.head_weights_f32[i] = w;
+            model_scalar.head_weights_f32[i] = w;
         }
 
         model_simd.head_bias = head_bias;
@@ -220,8 +220,8 @@ proptest! {
         }
 
         for (i, &w) in head_weights.iter().enumerate().take(24) {
-            model_simd.head_weights[i] = w;
-            model_scalar.head_weights[i] = w;
+            model_simd.head_weights_f32[i] = w;
+            model_scalar.head_weights_f32[i] = w;
         }
 
         model_simd.head_bias = head_bias;

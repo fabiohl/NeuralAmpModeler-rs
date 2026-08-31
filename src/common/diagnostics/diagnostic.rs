@@ -88,30 +88,22 @@ impl NamDiagnostic {
 
     /// Prints the complete diagnostic to stderr (user-friendly message + support block).
     pub fn emit(&self) {
-        log::error!(
-            "{}\n\n{}\n\n{}",
-            self.user_message,
-            if self.user_hint.is_empty() {
-                ""
-            } else {
-                &self.user_hint
-            },
-            self.support_block()
-        );
+        if self.user_hint.is_empty() {
+            log::error!("{}", self.user_message);
+        } else {
+            log::error!("{}\nHint: {}", self.user_message, self.user_hint);
+        }
+        eprintln!("\n{}", self.support_block());
     }
 
     /// Prints as a warning (non-fatal) with a distinct visual prefix.
     pub fn emit_warning(&self) {
-        log::warn!(
-            "{}\n\n{}\n\n{}",
-            self.user_message,
-            if self.user_hint.is_empty() {
-                ""
-            } else {
-                &self.user_hint
-            },
-            self.support_block()
-        );
+        if self.user_hint.is_empty() {
+            log::warn!("{}", self.user_message);
+        } else {
+            log::warn!("{}\nHint: {}", self.user_message, self.user_hint);
+        }
+        eprintln!("\n{}", self.support_block());
     }
 
     /// Returns the error code associated with the diagnostic.

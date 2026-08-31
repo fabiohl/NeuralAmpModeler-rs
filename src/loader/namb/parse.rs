@@ -84,10 +84,21 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     let crc32_header = header.crc32;
 
     if version >= 2 && hdr_flags & FLAG_HAS_CRC32 == 0 {
+        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        log::warn!(
+            "[Loader] Invalid CRC rejected: field='crc32', value=0 (FLAG_HAS_CRC32 absent, v{}), offset_bytes={}",
+            version,
+            std::mem::offset_of!(NambHeader, crc32)
+        );
         return Err(NambError::CrcMissing { version }.into());
     }
 
     if version == 1 && crc32_header == 0 {
+        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        log::warn!(
+            "[Loader] Invalid CRC rejected: field='crc32', value=0 (v1 sentinel), offset_bytes={}",
+            std::mem::offset_of!(NambHeader, crc32)
+        );
         return Err(NambError::CrcMissingV1.into());
     }
 
@@ -121,6 +132,15 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     for (i, chunk) in pesos_raw.chunks_exact(4).enumerate() {
         let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         if !val.is_finite() {
+            // T5.1: structured rejection diagnostic for off-RT triage. The byte
+            // offset is the absolute file offset of the offending f32 slot
+            // (weights section start + element index × 4).
+            log::warn!(
+                "[Loader] Invalid field rejected: field='weights[{}]', value={:?}, offset_bytes={}",
+                i,
+                val,
+                weights_offset + i * 4
+            );
             return Err(NambError::NonFiniteWeight {
                 index: i,
                 value: val,
@@ -141,6 +161,14 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     );
 
     if !sample_rate_header.is_finite() {
+        // T5.1: structured rejection diagnostic. `offset_of!` yields the byte
+        // offset of the field within the packed header (also the absolute file
+        // offset, since the header starts at file byte 0).
+        log::warn!(
+            "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes={}",
+            sample_rate_header,
+            std::mem::offset_of!(NambHeader, sample_rate)
+        );
         return Err(NambError::InvalidHeaderField {
             field: "sample_rate",
             value: sample_rate_header,
@@ -157,6 +185,11 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
         .into());
     }
     if !input_level_header.is_finite() {
+        log::warn!(
+            "[Loader] Invalid field rejected: field='input_level_dbu', value={:?}, offset_bytes={}",
+            input_level_header,
+            std::mem::offset_of!(NambHeader, input_level_dbu)
+        );
         return Err(NambError::InvalidHeaderField {
             field: "input_level_dbu",
             value: input_level_header,
@@ -165,6 +198,11 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
         .into());
     }
     if !output_level_header.is_finite() {
+        log::warn!(
+            "[Loader] Invalid field rejected: field='output_level_dbu', value={:?}, offset_bytes={}",
+            output_level_header,
+            std::mem::offset_of!(NambHeader, output_level_dbu)
+        );
         return Err(NambError::InvalidHeaderField {
             field: "output_level_dbu",
             value: output_level_header,

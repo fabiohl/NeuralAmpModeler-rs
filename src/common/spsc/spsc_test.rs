@@ -342,3 +342,70 @@ fn test_gc_cascade_flushes_parking_lot_to_spsc() {
     assert!(parking_lot.iter().all(|slot| slot.is_none()));
     assert!(gc_cons.pop().is_ok(), "parked item was not flushed to SPSC");
 }
+
+/// F-07 / T5.2: a Tier 3 overflow must be signaled atomically so the main
+/// thread can consume and log the event instead of losing it silently.
+///
+/// Fills the SPSC (capacity 1), the parking lot (16) and the overflow buffer
+/// (4), then keeps producing — the 22nd item overwrites an overflow slot. The
+/// cascade must set `RT_STATUS_GC_TIER3` (reached the overflow buffer) and
+/// `RT_STATUS_GC_OVERFLOW` (an actual overwrite/leak occurred), and the
+/// main-thread consumption path (`check_and_clear_flag`) must report and
+/// record the event into `flags_seen`.
+#[test]
+fn test_gc_tier3_overflow_sets_status_flag() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
+
+    let (mut gc_prod, mut gc_cons) = RingBuffer::<GcItem>::new(1);
+    let rt_status = RtStatusFlags::new();
+    let overflow = GcOverflowBuffer::new(4);
+    let counter = Arc::new(AtomicU32::new(0));
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+
+    assert!(!rt_status.check_flag(RT_STATUS_GC_TIER3));
+    assert!(!rt_status.check_flag(RT_STATUS_GC_OVERFLOW));
+
+    // 22 items: 1 lands in the SPSC, 16 park, 4 fill the overflow buffer, and
+    // the 22nd overwrites an overflow slot → GC_OVERFLOW is set (the displaced
+    // item is deliberately leaked — the overflow buffer's controlled-leak
+    // contract, never a drop on the RT side).
+    for _ in 0..22 {
+        gc_cascade(
+            Some(GcItem::Test(Box::new(counter.clone()))),
+            &mut gc_prod,
+            &mut parking_lot,
+            &overflow,
+            &rt_status,
+        );
+    }
+
+    // None of the items were dropped on the producer (RT) side.
+    assert_eq!(Arc::strong_count(&counter), 23);
+
+    // Tier 3 entry AND actual overwrite are both signaled.
+    assert!(
+        rt_status.check_flag(RT_STATUS_GC_TIER3),
+        "RT_STATUS_GC_TIER3 must be set when the cascade reaches the overflow buffer"
+    );
+    assert!(
+        rt_status.check_flag(RT_STATUS_GC_OVERFLOW),
+        "RT_STATUS_GC_OVERFLOW must be set when an overflow slot is overwritten"
+    );
+
+    // Main-thread consumption path: check_and_clear_flag reports the event and
+    // preserves it in flags_seen for the off-RT telemetry drain.
+    assert!(rt_status.check_and_clear_flag(RT_STATUS_GC_OVERFLOW));
+    assert!(!rt_status.check_flag(RT_STATUS_GC_OVERFLOW));
+    assert!(
+        rt_status.flags_seen.load(Ordering::Relaxed) & RT_STATUS_GC_OVERFLOW != 0,
+        "flags_seen must retain the overflow flag after consumption"
+    );
+
+    // Release all recoverable items off-RT: 1 (SPSC) + 4 (overflow survivors)
+    // + 16 (parking lot) = 21. The 22nd (overwritten) item is a controlled
+    // leak by design, so one Arc clone remains alive.
+    let drained = drain_gc_channels(&mut gc_cons, &overflow, &mut parking_lot, &rt_status);
+    assert_eq!(drained, 21);
+    assert_eq!(Arc::strong_count(&counter), 2);
+}

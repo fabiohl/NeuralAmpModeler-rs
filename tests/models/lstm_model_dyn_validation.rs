@@ -46,7 +46,6 @@ fn fill_model_dyn(model: &mut LstmModelDyn) {
     }
 
     for i in 0..hidden_size {
-        model.head_weights[i] = 0.1 * (i + num_layers) as f32;
         model.head_weights_f32[i] = 0.1 * (i + num_layers) as f32;
     }
     model.head_bias = 0.25;
@@ -72,9 +71,6 @@ fn assert_model_dyn_parity_inner(num_layers: usize, hidden_size: usize, zero_inp
             .cell_state
             .copy_from_slice(&model_simd.layers[li].cell_state);
     }
-    model_scalar
-        .head_weights
-        .copy_from_slice(&model_simd.head_weights);
     model_scalar
         .head_weights_f32
         .copy_from_slice(&model_simd.head_weights_f32);
@@ -201,7 +197,6 @@ fn test_model_dyn_determinism() {
             .cell_state
             .copy_from_slice(&model_a.layers[li].cell_state);
     }
-    model_b.head_weights.copy_from_slice(&model_a.head_weights);
     model_b
         .head_weights_f32
         .copy_from_slice(&model_a.head_weights_f32);

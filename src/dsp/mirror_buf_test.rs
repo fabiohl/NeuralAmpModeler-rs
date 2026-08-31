@@ -3,6 +3,8 @@
 
 use super::*;
 use libc::sysconf;
+use serial_test::serial;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn test_mirror_buf_page_alignment() -> Result<(), Box<dyn std::error::Error>> {
@@ -81,6 +83,11 @@ fn test_mirror_buf_zst_error() {
 }
 
 #[test]
+fn test_mirror_buf_zero_size_error() {
+    assert!(MirroredBuffer::<f32>::new(0).is_err());
+}
+
+#[test]
 fn test_mirror_buf_large_allocation() -> Result<(), Box<dyn std::error::Error>> {
     // Tests allocation of ~1MB
     let size = 1024 * 1024 / 4;
@@ -118,4 +125,35 @@ fn test_mirror_buf_channel_alignment() -> Result<(), Box<dyn std::error::Error>>
     }
 
     Ok(())
+}
+
+#[test]
+#[serial]
+fn test_hugepage_state_is_monotonic() {
+    let original = MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed);
+
+    // Simula alocação ≥ 2MB bem-sucedida com HugeTLB (estado máximo = 2).
+    MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_HUGETLB, Ordering::Relaxed);
+    assert_eq!(
+        MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
+        HUGEPAGE_STATE_HUGETLB
+    );
+
+    // Alocação pequena THP (estado 1) não pode rebaixar o estado global (2 → 1).
+    MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_THP, Ordering::Relaxed);
+    assert_eq!(
+        MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
+        HUGEPAGE_STATE_HUGETLB,
+        "estado global de Huge Pages foi rebaixado por uma alocação THP"
+    );
+
+    // Alocação padrão (estado 0) também não pode rebaixar.
+    MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_STANDARD, Ordering::Relaxed);
+    assert_eq!(
+        MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
+        HUGEPAGE_STATE_HUGETLB,
+        "estado global de Huge Pages foi rebaixado por uma alocação padrão"
+    );
+
+    MIRROR_BUF_HUGEPAGE_STATE.store(original, Ordering::Relaxed);
 }

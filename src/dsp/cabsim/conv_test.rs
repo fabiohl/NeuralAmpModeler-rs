@@ -103,6 +103,47 @@ fn passthrough_on_empty_ir() {
     }
 }
 
+// ── T4.1 / F-05: structured error instead of panic on partition_size == 0 ──
+
+#[test]
+fn zero_partition_size_returns_structured_error_without_panic() {
+    // R-01 (T4.1): a host DSP passing partition_size == 0 (transient init,
+    // config reset, or API misuse) must get Err(InvalidCabsimPartitionSize)
+    // deterministically — never a panic on the audio thread.
+    let ir = synth_ir(64, 500.0, 10.0, 48000);
+
+    let result = std::panic::catch_unwind(|| ConvEngine::new(&ir, 0));
+    match result {
+        Ok(Err(NamErrorCode::InvalidCabsimPartitionSize)) => {}
+        Ok(Ok(_)) => panic!("partition_size == 0 must be rejected, not built"),
+        Ok(Err(other)) => panic!("unexpected error code: {other:?}"),
+        Err(_) => panic!("ConvEngine::new(partition_size=0) must not panic"),
+    }
+}
+
+#[test]
+fn zero_partition_size_with_empty_ir_is_also_rejected() {
+    // Same invariant with an empty IR: passthrough mode must still require
+    // a positive partition size (zero would break the overlap-save layout).
+    let result = std::panic::catch_unwind(|| ConvEngine::new(&[], 0));
+    match result {
+        Ok(Err(NamErrorCode::InvalidCabsimPartitionSize)) => {}
+        Ok(Ok(_)) => panic!("partition_size == 0 (empty IR) must be rejected"),
+        Ok(Err(other)) => panic!("unexpected error code: {other:?}"),
+        Err(_) => panic!("ConvEngine::new(&[], 0) must not panic"),
+    }
+}
+
+#[test]
+fn minimum_partition_size_one_and_empty_ir_are_valid() {
+    // Extreme-value validation (T4.1): partition_size == 1 and ir == [] must
+    // remain valid — only partition_size == 0 is rejected.
+    let engine = ConvEngine::new(&[], 1).expect("empty IR with partition=1 must be valid");
+    assert!(engine.is_passthrough());
+    assert_eq!(engine.fft_size(), 2);
+    assert_eq!(engine.latency_samples(), 1);
+}
+
 #[test]
 fn short_slices_zero_output_and_raise_flag_without_panic() {
     // R-01: in debug and release, `ConvEngine::process` must never read or

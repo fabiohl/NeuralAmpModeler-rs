@@ -38,8 +38,6 @@ pub struct LstmModel1<const H: usize, const H1_IH: usize, const H_H4: usize> {
     /// The model's single layer.
     pub layer: LstmLayer<1, H, H1_IH, H_H4>,
     /// Output head weights (Linear Projection).
-    pub head_weights: [f32; H],
-    /// Output head weights.
     pub head_weights_f32: [f32; H],
     /// Output head bias.
     pub head_bias: f32,
@@ -54,7 +52,6 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
     pub fn new() -> Self {
         Self {
             layer: LstmLayer::new(),
-            head_weights: [0.0f32; H],
             head_weights_f32: [0.0f32; H],
             head_bias: 0.0,
             prewarm_on_reset: true,

@@ -413,3 +413,89 @@ fn test_unsupported_cpu_architecture_diagnostic() {
     assert!(block.contains("UNSUPPORTED_CPU_ARCHITECTURE"));
     assert!(format!("{}", diag).contains("[E5001] CPU incompatible"));
 }
+
+/// Verifies that `redact_text` preserves multi-byte UTF-8 sequences (emojis, box characters,
+/// accents) without corrupting them into mojibake or modifying non-path content.
+#[test]
+fn test_redact_text_preserves_multibyte_utf8() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let sample = if !home.is_empty() {
+        format!(
+            "🔇 Silent Mode: ──── {}/model.nam ──── 🔊 Resumed! 🎸 Português: ação, café.",
+            home
+        )
+    } else {
+        "🔇 Silent Mode: ──── /tmp/model.nam ──── 🔊 Resumed! 🎸 Português: ação, café.".to_string()
+    };
+
+    let redacted = redact_text(&sample, false);
+    assert!(
+        redacted.contains("🔇"),
+        "Emoji 🔇 must be preserved without mojibake"
+    );
+    assert!(
+        redacted.contains("🔊"),
+        "Emoji 🔊 must be preserved without mojibake"
+    );
+    assert!(
+        redacted.contains("🎸"),
+        "Emoji 🎸 must be preserved without mojibake"
+    );
+    assert!(
+        redacted.contains("────"),
+        "Box drawing horizontal line ──── must be preserved"
+    );
+    assert!(
+        redacted.contains("Português: ação, café."),
+        "UTF-8 accents must be preserved"
+    );
+
+    if !home.is_empty() {
+        assert!(
+            redacted.contains("~/model.nam"),
+            "Path must still be correctly redacted"
+        );
+        assert!(
+            !redacted.contains(&home),
+            "Raw HOME path must not appear in redacted output"
+        );
+    }
+
+    // Verify idempotency across multiple redaction passes (no generational corruption)
+    let second_pass = redact_text(&redacted, false);
+    assert_eq!(
+        redacted, second_pass,
+        "Multiple redact_text passes must be strictly idempotent"
+    );
+}
+
+/// Verifies that `NamDiagnostic::emit` and `emit_warning` do not inject the entire support block
+/// into the `LogBuffer` circular trace, preventing recursive support block nesting.
+#[test]
+fn test_diagnostic_emit_does_not_pollute_log_buffer_recursively() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = NamLogger::init(LoggerConfig {
+        level_filter: log::LevelFilter::Debug,
+        emit_stderr: false,
+    });
+
+    let snap = SystemSnapshot::capture();
+    let diag = NamDiagnostic::new(NamErrorCode::BackendFailure, &snap)
+        .message("Backend connection failed")
+        .hint("Restart service");
+
+    diag.emit();
+
+    if let Some(buf) = NamLogger::log_buffer() {
+        let trace = buf.render_trace(10);
+        assert!(trace.contains("Backend connection failed"));
+        assert!(
+            !trace.contains("Copy the block above when opening a support ticket."),
+            "LogBuffer must not contain the rendered technical support block"
+        );
+        assert!(
+            !trace.contains("──── NeuralAmpModeler-rs Diagnostic"),
+            "LogBuffer must not contain the diagnostic header box"
+        );
+    }
+}

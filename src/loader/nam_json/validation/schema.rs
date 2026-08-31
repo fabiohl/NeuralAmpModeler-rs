@@ -10,6 +10,7 @@
 use serde::{Deserialize, Deserializer};
 
 use super::super::error::JsonError;
+use super::record_last_typed_parse_error;
 
 /// Maximum number of floats in the `weights` array (MAX_MODEL_BYTES / 4).
 const MAX_WEIGHTS: usize = (256 * 1024 * 1024 / 4) as usize; // 64 Mi floats
@@ -56,12 +57,30 @@ impl<'de> serde::de::Visitor<'de> for WeightsVisitor {
             match seq.next_element::<f32>() {
                 Ok(Some(val)) => {
                     if !val.is_finite() {
+                        // T5.1: structured rejection diagnostic for off-RT triage.
+                        // `offset_bytes` is the byte offset of the offending slot
+                        // within the weights section (index × 4), matching the
+                        // coordinate system used by the `.namb` binary weights.
+                        log::warn!(
+                            "[Loader] Invalid field rejected: field='weights[{}]', value={:?}, offset_bytes={}",
+                            index,
+                            val,
+                            index * 4
+                        );
+                        record_last_typed_parse_error(JsonError::WeightNotFinite {
+                            index,
+                            value: val,
+                        });
                         return Err(serde::de::Error::custom(JsonError::WeightNotFinite {
                             index,
                             value: val,
                         }));
                     }
                     if weights.len() >= MAX_WEIGHTS {
+                        record_last_typed_parse_error(JsonError::WeightsExceedLimit {
+                            got: weights.len() + 1,
+                            max: MAX_WEIGHTS,
+                        });
                         return Err(serde::de::Error::custom(JsonError::WeightsExceedLimit {
                             got: weights.len() + 1,
                             max: MAX_WEIGHTS,
@@ -124,6 +143,10 @@ impl LimitedValueVisitor {
         let new = self.current_size.get() + bytes;
         self.current_size.set(new);
         if new > self.max_size {
+            record_last_typed_parse_error(JsonError::TrainingTooLarge {
+                size: new,
+                max_size: self.max_size,
+            });
             return Err(serde::de::Error::custom(JsonError::TrainingTooLarge {
                 size: new,
                 max_size: self.max_size,
@@ -134,6 +157,10 @@ impl LimitedValueVisitor {
 
     fn check_depth(&self) -> Result<(), serde_json::Error> {
         if self.depth > self.max_depth {
+            record_last_typed_parse_error(JsonError::TrainingTooDeep {
+                depth: self.depth,
+                max_depth: self.max_depth,
+            });
             return Err(serde::de::Error::custom(JsonError::TrainingTooDeep {
                 depth: self.depth,
                 max_depth: self.max_depth,
@@ -366,6 +393,10 @@ impl<'de> serde::de::Visitor<'de> for SubmodelsOptionVisitor {
         let arr: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
 
         if arr.len() > MAX_SUBMODELS {
+            record_last_typed_parse_error(JsonError::SubmodelsExceedLimit {
+                got: arr.len(),
+                max: MAX_SUBMODELS,
+            });
             return Err(serde::de::Error::custom(JsonError::SubmodelsExceedLimit {
                 got: arr.len(),
                 max: MAX_SUBMODELS,
@@ -414,6 +445,19 @@ where
         {
             let val = f32::deserialize(deserializer)?;
             if !val.is_finite() {
+                // T5.1: structured rejection diagnostic for off-RT triage.
+                // `sample_rate` is a top-level scalar field, so it has no
+                // per-element offset within a section — `offset_bytes=0`
+                // signals "document-level field" (no array slot index).
+                log::warn!(
+                    "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes={}",
+                    val,
+                    0
+                );
+                record_last_typed_parse_error(JsonError::InvalidSampleRate {
+                    value: val,
+                    reason: "must be finite",
+                });
                 return Err(serde::de::Error::custom(JsonError::InvalidSampleRate {
                     value: val,
                     reason: "must be finite",

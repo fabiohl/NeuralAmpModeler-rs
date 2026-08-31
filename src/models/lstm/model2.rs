@@ -59,8 +59,6 @@ pub struct LstmModel2<const H: usize, const H1_IH: usize, const H2_IH: usize, co
     /// Model layer 2.
     pub layer2: LstmLayer<H, H, H2_IH, H_H4>,
     /// Output head weights.
-    pub head_weights: [f32; H],
-    /// Output head weights.
     pub head_weights_f32: [f32; H],
     /// Output head bias.
     pub head_bias: f32,
@@ -78,7 +76,6 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
         Self {
             layer1: LstmLayer::new(),
             layer2: LstmLayer::new(),
-            head_weights: [0.0f32; H],
             head_weights_f32: [0.0f32; H],
             head_bias: 0.0,
             prewarm_on_reset: true,

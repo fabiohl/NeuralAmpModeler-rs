@@ -2,10 +2,18 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::loader::nam_json::LinearImplementation;
 use crate::models::StaticModel;
+use crate::models::linear::LinearModel;
 
 fn make_lstm() -> Box<StaticModel> {
     Box::new(StaticModel::Lstm1x8(Box::default()))
+}
+
+fn make_linear_dc(bias: f32) -> Box<StaticModel> {
+    Box::new(StaticModel::Linear(Box::new(
+        LinearModel::new(vec![0.0], bias, LinearImplementation::Direct).expect("linear dc"),
+    )))
 }
 
 #[test]
@@ -196,4 +204,70 @@ fn test_oversized_block_aborts_crossfade_without_panic() {
     // The guard must not consume the crossfade state: it stays pending so the
     // transition resumes on a subsequent fitting block.
     assert!(container.is_crossfading());
+}
+
+/// T3.1: 32 ms crossfade must not introduce discontinuities above −80 dBFS
+/// between consecutive samples in the blend region (beyond the block-constant
+/// envelope of `crossfade_blend_mono_simd`).
+#[test]
+fn test_crossfade_32ms_blend_smoothness() {
+    const SR: u32 = 48_000;
+    const BLOCK: usize = 64;
+    const ACTIVE_DC: f32 = 1.0;
+    const PENDING_DC: f32 = 0.0;
+    const MAX_DISCONTINUITY: f32 = 1e-4;
+
+    let duration = (CROSSFADE_DURATION_MS / 1000.0 * SR as f32).round() as usize;
+    assert_eq!(duration, 1536, "32 ms @ 48 kHz must be 1536 samples");
+    assert_eq!(duration % BLOCK, 0);
+
+    let submodels = vec![
+        (0.5, make_linear_dc(PENDING_DC)),
+        (1.0, make_linear_dc(ACTIVE_DC)),
+    ];
+    let mut container = ContainerModel::new(submodels, SR).unwrap();
+    assert_eq!(container.active_index(), 1);
+
+    container.set_slimmable_size(0.0, None);
+    assert!(container.is_crossfading());
+
+    let input = vec![0.0f32; BLOCK];
+    let mut output = vec![0.0f32; BLOCK];
+    let mut actual = Vec::with_capacity(duration);
+    let mut expected = Vec::with_capacity(duration);
+    let mut elapsed = 0usize;
+
+    while container.is_crossfading() {
+        container.process(&input, &mut output);
+        let t = (elapsed as f32 / duration as f32).min(1.0);
+        let env = ACTIVE_DC * (1.0 - t) + PENDING_DC * t;
+        actual.extend_from_slice(&output);
+        expected.extend(std::iter::repeat_n(env, BLOCK));
+        elapsed += BLOCK;
+    }
+
+    assert_eq!(actual.len(), duration);
+    assert!(actual.iter().all(|s| s.is_finite()));
+    assert!(!container.is_crossfading());
+    assert_eq!(container.active_index(), 0);
+
+    let mut max_err = 0.0f32;
+    for (a, e) in actual.iter().zip(expected.iter()) {
+        max_err = max_err.max((a - e).abs());
+    }
+    assert!(
+        max_err < MAX_DISCONTINUITY,
+        "blend envelope error {max_err:.3e} exceeds −80 dBFS ({MAX_DISCONTINUITY})"
+    );
+
+    let mut max_residual_step = 0.0f32;
+    for i in 1..actual.len() {
+        let da = actual[i] - actual[i - 1];
+        let de = expected[i] - expected[i - 1];
+        max_residual_step = max_residual_step.max((da - de).abs());
+    }
+    assert!(
+        max_residual_step < MAX_DISCONTINUITY,
+        "consecutive-sample discontinuity {max_residual_step:.3e} exceeds −80 dBFS ({MAX_DISCONTINUITY})"
+    );
 }

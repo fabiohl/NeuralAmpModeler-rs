@@ -20,6 +20,11 @@
 //! these codes through the same diagnostic engine when wiring the core into
 //! their own host surfaces. Changes to this reservation must be synchronized
 //! with `docs/architecture.md` (§7).
+//!
+//! The **single exception** is [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
+//! (E2202): a DSP constructor-parameter validation error constructed by the
+//! core crate's own `ConvEngine::new` — a pure DSP constructor, not a
+//! host/backend surface.
 
 use std::fmt;
 
@@ -35,7 +40,8 @@ use std::fmt;
 ///
 /// The **E2xxx–E4xxx** ranges are reserved for downstream integrations
 /// (e.g., plugin wrappers, standalone hosts, offline renderers) and are never constructed by this
-/// host-agnostic core crate. See the module documentation.
+/// host-agnostic core crate, except [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
+/// (E2202), which is returned by the core's own `ConvEngine::new`. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamErrorCode {
     // E1xxx — Model Loading
@@ -110,6 +116,15 @@ pub enum NamErrorCode {
     ResamplerBuildFailed,
     /// SPSC resampler channel full (rebuild discarded).
     ResamplerChannelFull,
+    /// Cab-sim partition size must be positive (`ConvEngine::new` invariant).
+    ///
+    /// Unlike every other E2xxx code (which are reserved for downstream
+    /// integrations and never constructed by this core crate), this code is
+    /// the single exception: it is a DSP constructor-parameter validation
+    /// error returned by the core crate's own `ConvEngine::new` when a host
+    /// passes `partition_size == 0` (transient host init, config reset, or
+    /// incorrect public-API usage). See `docs/architecture.md` §7 (F-19).
+    InvalidCabsimPartitionSize,
     /// Permission denied for real-time scheduling (no RT privileges).
     RtPriorityDenied,
     /// Failed to set CPU affinity on the DSP thread.
@@ -190,6 +205,7 @@ impl NamErrorCode {
             Self::StreamError => "E2101",
             Self::ResamplerBuildFailed => "E2200",
             Self::ResamplerChannelFull => "E2201",
+            Self::InvalidCabsimPartitionSize => "E2202",
             Self::RtPriorityDenied => "E2300",
             Self::CpuAffinityFailed => "E2301",
             Self::ProcessingOverload => "E2001",
@@ -253,6 +269,9 @@ impl NamErrorCode {
             Self::StreamError => "Audio stream error",
             Self::ResamplerBuildFailed => "Resampler build failed",
             Self::ResamplerChannelFull => "Resampler channel full",
+            Self::InvalidCabsimPartitionSize => {
+                "Cab-sim partition size must be positive (ConvEngine::new invariant)"
+            }
             Self::RtPriorityDenied => "Real-time priority denied",
             Self::CpuAffinityFailed => "CPU affinity setting failed",
             Self::ProcessingOverload => "Processing deadline exceeded",
@@ -310,6 +329,7 @@ impl NamErrorCode {
             Self::StreamError => "STREAM_ERROR",
             Self::ResamplerBuildFailed => "RESAMPLER_BUILD_FAILED",
             Self::ResamplerChannelFull => "RESAMPLER_CHANNEL_FULL",
+            Self::InvalidCabsimPartitionSize => "INVALID_CABSIM_PARTITION_SIZE",
             Self::RtPriorityDenied => "RT_PRIORITY_DENIED",
             Self::CpuAffinityFailed => "CPU_AFFINITY_FAILED",
             Self::ProcessingOverload => "PROCESSING_OVERLOAD",

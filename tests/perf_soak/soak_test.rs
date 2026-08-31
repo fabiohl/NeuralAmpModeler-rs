@@ -375,7 +375,7 @@ fn test_lstm_noise_soak() {
     }
     model.head_bias = pcg.next_f32() * 0.1;
     for i in 0..16 {
-        model.head_weights[i] = pcg.next_f32() * 0.1 - 0.05;
+        model.head_weights_f32[i] = pcg.next_f32() * 0.1 - 0.05;
     }
 
     let mut input = vec![0.0f32; 64];

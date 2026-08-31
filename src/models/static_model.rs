@@ -214,7 +214,7 @@ impl StaticModel {
             Self::Lstm2x12(_) => "LSTM 2x12".into(),
             Self::Lstm2x16(_) => "LSTM 2x16".into(),
             Self::Lstm2x24(_) => "LSTM 2x24".into(),
-            Self::LstmDyn(m) => format!("LSTM {}x{}", m.layers.len(), m.head_weights.len()),
+            Self::LstmDyn(m) => format!("LSTM {}x{}", m.layers.len(), m.head_weights_f32.len()),
             Self::Linear(_) => "Linear".into(),
             Self::ConvNet(m) => format!("ConvNet (CH={})", m.in_channels()),
         }
@@ -296,7 +296,7 @@ impl StaticModel {
             Self::Lstm1x16(_) | Self::Lstm2x16(_) => 16,
             Self::Lstm1x24(_) | Self::Lstm2x24(_) => 24,
             Self::Lstm1x40(_) => 40,
-            Self::LstmDyn(m) => m.head_weights.len(),
+            Self::LstmDyn(m) => m.head_weights_f32.len(),
             Self::Linear(_) => 1,
             Self::ConvNet(m) => m.in_channels(),
         }

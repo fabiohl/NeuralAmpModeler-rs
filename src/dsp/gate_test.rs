@@ -397,4 +397,210 @@ mod tests {
         fresh.apply_gain_rt(&mut buf_b, 16);
         assert_eq!(buf_a, buf_b, "post-reset gate must match a fresh gate");
     }
+
+    // ── T4.2 / F-05: defensive clamping in apply_gain_rt / apply_gain_rt_stereo ──
+
+    /// Drives a fresh gate into the middle of a FadingOut ramp.
+    /// Returns the gate with `ramp_samples > 0` and a multiplier < 1.0.
+    fn mid_fade_out(params: &GateParams) -> DynamicHysteresis {
+        let mut dh = DynamicHysteresis::new();
+        dh.update(0.0, 1.0, 0.5, params, params.hold_frames.max(1));
+        assert_eq!(dh.state(), GateState::FadingOut);
+        dh.update(0.0, 1.0, 0.5, params, params.fade_frames / 2);
+        assert_eq!(dh.state(), GateState::FadingOut);
+        assert!(dh.multiplier() < 1.0);
+        dh
+    }
+
+    /// Ramp stress: `apply_gain_rt` must never panic for any buffer length —
+    /// including `len == 0` — in steady, closed, and mid-ramp states, and
+    /// `n_samples == 0` must be a strict no-op.
+    #[test]
+    fn test_apply_gain_rt_zero_length_and_zero_samples_no_panic() {
+        let params = GateParams::new(-70.0, -80.0, 10, 100, 1e-4);
+
+        // Steady Open (mult 1.0), steady Closed (mult 0.0), mid-ramp FadingOut.
+        let mut closed = DynamicHysteresis::new();
+        closed.update(0.0, 1.0, 0.5, &params, params.hold_frames.max(1));
+        closed.update(0.0, 1.0, 0.5, &params, params.fade_frames + 1);
+        assert_eq!(closed.state(), GateState::Closed);
+        let cases = [DynamicHysteresis::new(), closed, mid_fade_out(&params)];
+
+        for dh in &cases {
+            // Empty buffer with both n_samples == 0 and n_samples > 0.
+            let mut empty: Vec<f32> = Vec::new();
+            dh.apply_gain_rt(&mut empty, 0);
+            dh.apply_gain_rt(&mut empty, 16);
+
+            // Non-empty buffer with n_samples == 0: strict no-op.
+            let mut buf = vec![0.5f32; 8];
+            dh.apply_gain_rt(&mut buf, 0);
+            assert_eq!(buf, vec![0.5f32; 8], "n_samples == 0 must be a no-op");
+        }
+    }
+
+    /// Ramp stress: buffer shorter than `ramp_samples` must not panic; the
+    /// ramp is clamped to the buffer length and stays a smooth linear ramp.
+    #[test]
+    fn test_apply_gain_rt_ramp_longer_than_buffer() {
+        let params = GateParams::new(-70.0, -80.0, 10, 100, 1e-4);
+        let dh = mid_fade_out(&params);
+        assert_eq!(dh.state(), GateState::FadingOut);
+        assert_eq!(dh.multiplier(), 0.5);
+
+        // Remaining ramp = 50 samples, but the host delivers a 4-sample block.
+        let mut buffer = vec![1.0f32; 4];
+        dh.apply_gain_rt(&mut buffer, 4);
+        let step = (0.5 - 1.0) / 4.0;
+        for (i, &s) in buffer.iter().enumerate() {
+            let expected = 1.0 + i as f32 * step;
+            assert!(
+                (s - expected).abs() < 1e-4,
+                "clamped ramp sample {i}: {s} != {expected}"
+            );
+        }
+
+        // Same ramp, but the caller over-declares n_samples (100) — the clamp
+        // must use the actual buffer length, not the declared block.
+        let mut buffer2 = vec![1.0f32; 4];
+        dh.apply_gain_rt(&mut buffer2, 100);
+        for (i, &s) in buffer2.iter().enumerate() {
+            let expected = 1.0 + i as f32 * step;
+            assert!(
+                (s - expected).abs() < 1e-4,
+                "over-declared ramp sample {i}: {s} != {expected}"
+            );
+        }
+    }
+
+    /// Ramp stress: buffer much larger than `ramp_samples` (normal path) —
+    /// the ramp occupies the first `ramp_samples`, the rest is constant.
+    #[test]
+    fn test_apply_gain_rt_buffer_much_larger_than_ramp() {
+        let params = GateParams::new(-70.0, -80.0, 2048, 256, 1e-4);
+        let mut dh = DynamicHysteresis::new();
+        dh.update(0.0, 1.0, 0.5, &params, 2048);
+        assert_eq!(dh.state(), GateState::FadingOut);
+        dh.update(0.0, 1.0, 0.5, &params, 128);
+        assert_eq!(dh.multiplier(), 0.5);
+
+        let mut buffer = vec![1.0f32; 4096];
+        dh.apply_gain_rt(&mut buffer, 4096);
+        // ramp_samples = 128: smooth linear descent over the first 128 samples.
+        let step = (0.5 - 1.0) / 128.0;
+        for (i, &s) in buffer[..128].iter().enumerate() {
+            let expected = 1.0 + i as f32 * step;
+            assert!((s - expected).abs() < 1e-4, "ramp sample {i}: {s}");
+        }
+        // Constant tail at the stabilized multiplier.
+        assert!(
+            buffer[128..].iter().all(|&s| (s - 0.5).abs() < 1e-4),
+            "tail must hold the end multiplier"
+        );
+    }
+
+    /// Stereo stress: unequal L/R lengths must never panic — only the common
+    /// prefix is processed; the longer channel's tail is left untouched.
+    #[test]
+    fn test_apply_gain_rt_stereo_unequal_lengths_no_panic() {
+        use crate::math::common::Avx2Math;
+
+        let params = GateParams::new(-70.0, -80.0, 10, 100, 1e-4);
+        let dh = mid_fade_out(&params);
+        assert_eq!(dh.multiplier(), 0.5);
+
+        // Mid-ramp with ramp_samples=50 > n=8: Case B over the common prefix.
+        let mut left = vec![1.0f32; 8];
+        let mut right = vec![1.0f32; 16];
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut left, &mut right, 8);
+        let step = (0.5 - 1.0) / 8.0;
+        for i in 0..8 {
+            let expected = 1.0 + i as f32 * step;
+            assert!((left[i] - expected).abs() < 1e-4, "left[{i}]: {}", left[i]);
+            assert!(
+                (right[i] - expected).abs() < 1e-4,
+                "right[{i}]: {}",
+                right[i]
+            );
+        }
+        assert!(
+            right[8..].iter().all(|&s| s == 1.0),
+            "longer channel tail must be untouched"
+        );
+
+        // Swapped lengths.
+        let mut left2 = vec![1.0f32; 16];
+        let mut right2 = vec![1.0f32; 8];
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut left2, &mut right2, 8);
+        for i in 0..8 {
+            let expected = 1.0 + i as f32 * step;
+            assert!(
+                (left2[i] - expected).abs() < 1e-4,
+                "left2[{i}]: {}",
+                left2[i]
+            );
+            assert!(
+                (right2[i] - expected).abs() < 1e-4,
+                "right2[{i}]: {}",
+                right2[i]
+            );
+        }
+        assert!(
+            left2[8..].iter().all(|&s| s == 1.0),
+            "longer channel tail must be untouched"
+        );
+    }
+
+    /// Stereo stress: empty buffers (both or a single channel) must not panic
+    /// and must be a strict no-op.
+    #[test]
+    fn test_apply_gain_rt_stereo_empty_buffers_no_panic() {
+        use crate::math::common::Avx2Math;
+
+        let params = GateParams::new(-70.0, -80.0, 10, 100, 1e-4);
+        let dh = mid_fade_out(&params);
+
+        // Both channels empty.
+        let mut l: Vec<f32> = Vec::new();
+        let mut r: Vec<f32> = Vec::new();
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut l, &mut r, 0);
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut l, &mut r, 16);
+
+        // One empty channel → common prefix empty → no-op on the other.
+        let mut l2: Vec<f32> = Vec::new();
+        let mut r2 = vec![1.0f32; 8];
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut l2, &mut r2, 8);
+        assert_eq!(r2, vec![1.0f32; 8], "empty left must make the call a no-op");
+    }
+
+    /// Stereo stress: buffer much larger than `ramp_samples` (normal path) —
+    /// the residual fade-out ramp renders over the first `ramp_samples`, the
+    /// rest is absolute silence (mirrors the mono `test_sub_block_granularity`).
+    #[test]
+    fn test_apply_gain_rt_stereo_large_buffer_normal_path() {
+        use crate::math::common::Avx2Math;
+
+        let params = GateParams::new(-70.0, -80.0, 2048, 256, 1e-4);
+        let mut dh = DynamicHysteresis::new();
+        dh.update(0.0, 1.0, 0.5, &params, 2048);
+        dh.update(0.0, 1.0, 0.5, &params, 4096);
+        assert_eq!(dh.state(), GateState::Closed);
+        assert_eq!(dh.multiplier(), 0.0);
+
+        let mut left = vec![1.0f32; 4096];
+        let mut right = vec![1.0f32; 4096];
+        dh.apply_gain_rt_stereo::<Avx2Math>(&mut left, &mut right, 4096);
+        // Start of the residual fade-out at full volume...
+        assert!((left[0] - 1.0).abs() < 1e-3, "left start of fade-out");
+        assert!((right[0] - 1.0).abs() < 1e-3, "right start of fade-out");
+        // ...and absolute silence from sample 256 onward.
+        assert!(
+            left[256..].iter().all(|&s| s == 0.0),
+            "closed gate must silence left tail"
+        );
+        assert!(
+            right[256..].iter().all(|&s| s == 0.0),
+            "closed gate must silence right tail"
+        );
+    }
 }

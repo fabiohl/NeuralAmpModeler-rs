@@ -26,6 +26,7 @@ use super::{NamModel, StaticModel};
 use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::spsc::RT_STATUS_SLIMMABLE_RESET_FAILED;
 use crate::dsp::pipeline::MAX_RESAMP_BUF;
+use crate::math::dsp::gain::crossfade_blend_mono_simd;
 
 /// A bundle of pre-trained submodels selected by a quality threshold.
 ///
@@ -188,16 +189,7 @@ impl NamModel for ContainerModel {
                 .process(&input[..n], &mut output[..n]);
 
             let t = (self.crossfade_elapsed as f32 / self.crossfade_duration as f32).min(1.0);
-            // SAFETY: both slices are exactly `n` samples; the guard above
-            // ensures `n <= scratch_buffer.len()`, and `n` is already
-            // `input.len().min(output.len())`.
-            unsafe {
-                crate::math::dsp::gain::crossfade_blend_mono(
-                    &mut output[..n],
-                    &self.scratch_buffer[..n],
-                    t,
-                );
-            }
+            crossfade_blend_mono_simd(&mut output[..n], &self.scratch_buffer[..n], t);
 
             self.crossfade_elapsed += n;
             if self.crossfade_elapsed >= self.crossfade_duration {

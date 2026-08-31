@@ -15,7 +15,7 @@ use crate::math::common::AlignedVec;
 /// Composed of a `Vec<LstmLayerDyn>` chained sequentially:
 ///   - Layer 0 receives the mono audio input (input_size=1).
 ///   - Layers 1..N receive the previous layer's hidden state as input.
-///   - Final output = `dot(hidden_last, head_weights) + head_bias`.
+///   - Final output = `dot(hidden_last, head_weights_f32) + head_bias`.
 ///
 /// ## SIMD
 /// `process()` calls `process_avx2` only. There is no AVX-512 or BF16
@@ -27,8 +27,6 @@ pub struct LstmModelDyn {
     /// `input_size=hidden_size` (stacked recurrent input).
     pub layers: Vec<LstmLayerDyn>,
     /// Output head (linear projection) weights.
-    pub head_weights: AlignedVec<f32>,
-    /// Output head weights.
     pub head_weights_f32: AlignedVec<f32>,
     /// Output head bias.
     pub head_bias: f32,
@@ -43,7 +41,7 @@ impl LstmModelDyn {
     ///
     /// Allocates `num_layers` × `LstmLayerDyn` with the appropriate
     /// input_size (1 for layer 0, `hidden_size` for the rest) and
-    /// pre-allocates `head_weights` / `head_weights_f32`.
+    /// pre-allocates `head_weights_f32`.
     pub fn new(num_layers: usize, hidden_size: usize) -> Result<Self, NamErrorCode> {
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
@@ -53,7 +51,6 @@ impl LstmModelDyn {
 
         Ok(Self {
             layers,
-            head_weights: AlignedVec::new(hidden_size, 0.0f32)?,
             head_weights_f32: AlignedVec::new(hidden_size, 0.0f32)?,
             head_bias: 0.0,
             prewarm_on_reset: true,
@@ -137,20 +134,28 @@ impl LstmModelDyn {
         debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
         let layers_ptr = self.layers.as_mut_ptr();
 
+        let hidden_size = if n_layers > 1 {
+            self.layers[0].hidden_size
+        } else {
+            0
+        };
+        let mut hidden_scratch = vec![0.0f32; hidden_size];
+
         for s in 0..n {
             // SAFETY: `layers` is non-empty (early return above), so `layers_ptr`
             // points to a live Vec of `n_layers` elements; indices 0, `i-1`, `i`
             // and `n_layers-1` for `i in 1..n_layers` are in bounds. `s < n <=
             // input.len() = output.len()` (clamped above), so the reads/writes on
-            // the slice bounds are in bounds.
+            // the slice bounds are in bounds. `hidden_scratch` is sized to layer 0
+            // hidden_size, which equals every subsequent layer's input_size.
             unsafe {
                 (*layers_ptr).process_sample_scalar(&[input[s]]);
 
                 for i in 1..n_layers {
                     let prev = &*layers_ptr.add(i - 1);
                     let hidden = &prev.state[prev.input_size..];
-                    let hidden_copy: Vec<f32> = hidden.to_vec();
-                    (*layers_ptr.add(i)).process_sample_scalar(&hidden_copy);
+                    hidden_scratch[..hidden.len()].copy_from_slice(hidden);
+                    (*layers_ptr.add(i)).process_sample_scalar(&hidden_scratch[..hidden.len()]);
                 }
 
                 let last = &*layers_ptr.add(n_layers - 1);

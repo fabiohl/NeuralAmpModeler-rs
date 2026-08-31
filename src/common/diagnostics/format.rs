@@ -77,16 +77,20 @@ pub(crate) fn redact_text(text: &str, full: bool) -> String {
         return text.to_string();
     }
     let mut result = String::with_capacity(text.len());
+    let mut last_end = 0;
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'/' && (i == 0 || !is_path_byte(bytes[i - 1])) {
+            if i > last_end {
+                result.push_str(&text[last_end..i]);
+            }
             let start = i;
             i += 1;
             while i < bytes.len() && is_path_byte(bytes[i]) {
                 i += 1;
             }
-            let candidate = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
+            let candidate = &text[start..i];
             if candidate.len() > 1 {
                 let path = std::path::Path::new(candidate);
                 let redacted = redact_path(path, false);
@@ -94,10 +98,13 @@ pub(crate) fn redact_text(text: &str, full: bool) -> String {
             } else {
                 result.push_str(candidate);
             }
+            last_end = i;
         } else {
-            result.push(bytes[i] as char);
             i += 1;
         }
+    }
+    if last_end < bytes.len() {
+        result.push_str(&text[last_end..]);
     }
     result
 }

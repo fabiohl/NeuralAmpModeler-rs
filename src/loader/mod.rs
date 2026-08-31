@@ -32,6 +32,10 @@ pub use loaded_model_pair::*;
 #[path = "loader_malformed_test.rs"]
 mod loader_malformed_test;
 
+#[cfg(test)]
+#[path = "loader_log_test.rs"]
+mod loader_log_test;
+
 /// Controls loading behaviour and model initialization.
 ///
 /// Produced by the main/UI thread and consumed by the loader before passing

@@ -31,8 +31,6 @@ pub(crate) fn build_lstm_1layer<const H: usize, const H1_IH: usize, const H_H4: 
 
     // Head: output linear projection weights
     let head_weights_data = cursor.read_slice(H)?;
-    let mut head_weights = [0.0f32; H];
-    head_weights.copy_from_slice(head_weights_data);
     let mut head_weights_f32 = [0.0f32; H];
     head_weights_f32.copy_from_slice(head_weights_data);
     let head_bias = cursor.read_f32_finite()?;
@@ -41,7 +39,6 @@ pub(crate) fn build_lstm_1layer<const H: usize, const H1_IH: usize, const H_H4: 
 
     let model = LstmModel1::<H, H1_IH, H_H4> {
         layer,
-        head_weights,
         head_weights_f32,
         head_bias,
         prewarm_on_reset: true,
@@ -79,8 +76,6 @@ pub(crate) fn build_lstm_2layer<
 
     // Head: final projection weights
     let head_weights_data = cursor.read_slice(H)?;
-    let mut head_weights = [0.0f32; H];
-    head_weights.copy_from_slice(head_weights_data);
     let mut head_weights_f32 = [0.0f32; H];
     head_weights_f32.copy_from_slice(head_weights_data);
     let head_bias = cursor.read_f32_finite()?;
@@ -90,7 +85,6 @@ pub(crate) fn build_lstm_2layer<
     let model = LstmModel2::<H, H1_IH, H2_IH, H_H4> {
         layer1,
         layer2,
-        head_weights,
         head_weights_f32,
         head_bias,
         prewarm_on_reset: true,

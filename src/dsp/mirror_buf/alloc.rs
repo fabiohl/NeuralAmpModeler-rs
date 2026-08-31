@@ -123,7 +123,7 @@ impl<T> MirroredBuffer<T> {
             let huge_res = Self::try_new_huge_aligned(requested_bytes, HUGE_PAGE_2M, elem_stride);
             if let Ok(buf) = huge_res {
                 MIRROR_BUF_HUGEPAGE_STATE
-                    .store(HUGEPAGE_STATE_HUGETLB, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_max(HUGEPAGE_STATE_HUGETLB, std::sync::atomic::Ordering::Relaxed);
                 return Ok(buf);
             }
         }
@@ -147,14 +147,6 @@ impl<T> MirroredBuffer<T> {
             }
         };
         let size_elements = size_bytes / element_size;
-
-        // Attempts HugeTLB (2MB page) allocation backed by `memfd_create` and double `mmap` mirroring.
-        // Returns `Ok(MirrorBuffer)` if 2MB huge page alignment and contiguous virtual memory mapping succeed,
-        // or `Err(io::Error)` if HugeTLB memory is unavailable.
-        assert!(
-            requested_size > 0,
-            "requested_size must be greater than zero"
-        );
 
         // 1. Create backing store (memfd on Linux, stub fallback on other platforms)
         // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
@@ -242,7 +234,7 @@ impl<T> MirroredBuffer<T> {
         };
         if collapse_rc == 0 {
             MIRROR_BUF_HUGEPAGE_STATE
-                .store(HUGEPAGE_STATE_THP, std::sync::atomic::Ordering::Relaxed);
+                .fetch_max(HUGEPAGE_STATE_THP, std::sync::atomic::Ordering::Relaxed);
         }
 
         // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.

@@ -4,7 +4,9 @@
 //! High-level parsing function for the `.nam` format (JSON).
 
 use super::data::{JsonError, NamModelData};
-use super::validation::{MAX_HIDDEN_SIZE, MAX_LAYERS};
+use super::validation::{
+    MAX_HIDDEN_SIZE, MAX_LAYERS, clear_last_typed_parse_error, take_last_typed_parse_error,
+};
 
 /// Raw universal deserialization of the JSON string via `serde_json`.
 ///
@@ -12,8 +14,20 @@ use super::validation::{MAX_HIDDEN_SIZE, MAX_LAYERS};
 /// declared topology: layer count must not exceed [`MAX_LAYERS`] and
 /// `hidden_size` must not exceed [`MAX_HIDDEN_SIZE`]. Returns
 /// `JsonError::UnsupportedTopology` immediately if limits are breached.
+///
+/// Typed-error preservation (T5.1): serde visitors reject hostile fields with
+/// typed `JsonError` variants (e.g. `WeightNotFinite`, `InvalidSampleRate`),
+/// but `serde_json::Error` only preserves their `Display` string. On failure
+/// the typed variant recorded by the visitor is recovered so callers can map
+/// the exact `NamErrorCode` instead of falling back to `JsonError::Serde`.
 pub fn parse_nam_json(json_str: &str) -> Result<NamModelData, JsonError> {
-    let data: NamModelData = serde_json::from_str(json_str)?;
+    clear_last_typed_parse_error();
+    let data: NamModelData = match serde_json::from_str(json_str) {
+        Ok(data) => data,
+        Err(e) => {
+            return Err(take_last_typed_parse_error().unwrap_or(JsonError::Serde(e)));
+        }
+    };
     validate_version(&data)?;
     validate_topology_limits(&data)?;
     Ok(data)

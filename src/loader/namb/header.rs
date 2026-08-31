@@ -42,6 +42,16 @@ pub fn check_crc(
     };
 
     if calculated != expected {
+        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        // `offset_of!` yields the byte offset of the `crc32` field within the
+        // packed header (also the absolute file offset, since the header
+        // starts at file byte 0).
+        log::warn!(
+            "[Loader] Invalid CRC rejected: field='crc32', got=0x{:08X}, expected=0x{:08X}, offset_bytes={}",
+            calculated,
+            expected,
+            std::mem::offset_of!(NambHeader, crc32)
+        );
         return Err(NambError::CrcMismatch {
             got: calculated,
             expected,
