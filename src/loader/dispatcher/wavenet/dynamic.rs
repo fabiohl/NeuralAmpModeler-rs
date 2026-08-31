@@ -23,7 +23,7 @@ use log::info;
 
 /// Builds a `WaveNetLayerArrayDyn` with runtime dimensions.
 ///
-/// Layout por array (C++ `WaveNetLayerArrayT::SetWeights`):
+/// Array weight layout (C++ `WaveNetLayerArrayT::SetWeights`):
 /// ```text
 /// rechannel.weights[IN*CH]
 /// for layer in layers:

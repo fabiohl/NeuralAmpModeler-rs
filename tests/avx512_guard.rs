@@ -268,7 +268,10 @@ fn guard_fails_closed_on_tool_empty_output() {
     let path = fixtures::write_temp(&fixtures::mini_elf(fixtures::CLEAN_VEX), "empty-out.o");
     let fake = fixtures::write_fake_tool("#!/bin/sh\nexit 0\n", "emptyout");
     let err = scan_for_evex(&fake, &path).expect_err("must fail");
-    assert!(matches!(err, BinGuardError::EmptyOutput { .. }));
+    assert!(
+        matches!(err, BinGuardError::EmptyOutput { .. }),
+        "expected EmptyOutput but got: {err:?}"
+    );
     fixtures::cleanup(&path);
     fixtures::cleanup(&fake);
 }

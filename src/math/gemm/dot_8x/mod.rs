@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Kernels de Dot Product 8x (8 canais de saída simultâneos) — AVX2/FMA.
+//! 8x Dot Product Kernels (8 simultaneous output channels) — AVX2/FMA.
 //!
-//! Processa 8 output channels por chamada, reduzindo o número de iterações
-//! do loop externo e melhorando o reuso de registradores.
+//! Processes 8 output channels per invocation, reducing outer loop iteration
+//! count and maximizing register reuse.
 
 pub mod dot_f32_avx2;
 pub mod scalar;

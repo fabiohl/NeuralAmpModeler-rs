@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Adaptive compute: soft-degrade sob CPU pressure (graceful fallback).
+//! Adaptive compute: soft-degrade under CPU pressure (graceful fallback).
 //!
 //! Monitors DSP block latency and gracefully reduces model complexity
 //! when CPU pressure is detected, preventing audible xruns.

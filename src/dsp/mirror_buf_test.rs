@@ -132,27 +132,27 @@ fn test_mirror_buf_channel_alignment() -> Result<(), Box<dyn std::error::Error>>
 fn test_hugepage_state_is_monotonic() {
     let original = MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed);
 
-    // Simula alocação ≥ 2MB bem-sucedida com HugeTLB (estado máximo = 2).
+    // Simulates successful >= 2MB allocation with HugeTLB (max state = 2).
     MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_HUGETLB, Ordering::Relaxed);
     assert_eq!(
         MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
         HUGEPAGE_STATE_HUGETLB
     );
 
-    // Alocação pequena THP (estado 1) não pode rebaixar o estado global (2 → 1).
+    // Small THP allocation (state 1) must not downgrade the global state (2 -> 1).
     MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_THP, Ordering::Relaxed);
     assert_eq!(
         MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
         HUGEPAGE_STATE_HUGETLB,
-        "estado global de Huge Pages foi rebaixado por uma alocação THP"
+        "global Huge Pages state was downgraded by a THP allocation"
     );
 
-    // Alocação padrão (estado 0) também não pode rebaixar.
+    // Standard allocation (state 0) also must not downgrade.
     MIRROR_BUF_HUGEPAGE_STATE.fetch_max(HUGEPAGE_STATE_STANDARD, Ordering::Relaxed);
     assert_eq!(
         MIRROR_BUF_HUGEPAGE_STATE.load(Ordering::Relaxed),
         HUGEPAGE_STATE_HUGETLB,
-        "estado global de Huge Pages foi rebaixado por uma alocação padrão"
+        "global Huge Pages state was downgraded by a standard allocation"
     );
 
     MIRROR_BUF_HUGEPAGE_STATE.store(original, Ordering::Relaxed);

@@ -592,12 +592,12 @@ pub unsafe fn gemv_no_bias_f32_avx2(
     }
 }
 
-/// Produto externo escalar x vetor de pesos, sem bias, para `in_len == 1`.
+/// Outer product: scalar x weight vector, without bias, for `in_len == 1`.
 ///
-/// Para cada frame `n`: `out[n*OUT + oc] = in[n] * weights[oc]`.
+/// For each frame `n`: `out[n*OUT + oc] = in[n] * weights[oc]`.
 ///
-/// Const-generic em `OUT` permite endereçamento imediato no loop interno,
-/// eliminando chains de `leaq` e a divisão `in_len = in_frames.len()/num_frames`.
+/// Const-generic on `OUT` enables immediate addressing in the inner loop,
+/// eliminating `leaq` dependency chains and the `in_len = in_frames.len()/num_frames` division.
 ///
 /// # Safety
 /// `in_frames.len() * OUT == out_frames.len()`
@@ -639,9 +639,9 @@ pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
     }
 }
 
-/// Produto externo escalar x vetor de pesos, com bias, para `in_len == 1`.
+/// Outer product: scalar x weight vector, with bias, for `in_len == 1`.
 ///
-/// Para cada frame `n`: `out[n*OUT + oc] = bias[oc] + in[n] * weights[oc]`.
+/// For each frame `n`: `out[n*OUT + oc] = bias[oc] + in[n] * weights[oc]`.
 ///
 /// # Safety
 /// `in_frames.len() * OUT == out_frames.len()`

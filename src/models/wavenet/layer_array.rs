@@ -114,7 +114,7 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
                             current_state.buffer_start,
                             offset
                         );
-                        // SAFETY: garantido pelo construtor WaveNetLayerState::new que valida buffer_start >= receptive_field_size
+                        // SAFETY: Guaranteed by the WaveNetLayerState::new constructor, which enforces buffer_start >= receptive_field_size.
                         let dst_start = current_state.buffer_start - offset;
                         let dst_idx = dst_start * CH;
                         current_state

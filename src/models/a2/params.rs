@@ -6,24 +6,24 @@
 //! This module contains the structures that describe the topology of a WaveNet A2 model,
 //! enabling construction and validation of the inference layers.
 //!
-//! ## Escopo atual (fast-path A2-Full/Lite — `a2_fast.cpp`)
+//! ## Current Scope (Fast-path A2-Full/Lite — `a2_fast.cpp`)
 //!
-//! Os seguintes campos/structs são necessários ao porte fiel do fast-path:
-//! - Constantes arquiteturais (`A2_NUM_LAYERS`, `A2_KERNEL_SIZES`, `A2_DILATIONS`, etc.)
-//! - `LayerParamsA2` e `LayerArrayParamsA2` com `bottleneck == channels`,
-//!   `groups_* == 1`, `GatingMode::None`, sem `head1x1` e sem FiLM.
+//! The following fields and structs are required for faithful fast-path execution:
+//! - Architectural constants (`A2_NUM_LAYERS`, `A2_KERNEL_SIZES`, `A2_DILATIONS`, etc.)
+//! - `LayerParamsA2` and `LayerArrayParamsA2` with `bottleneck == channels`,
+//!   `groups_* == 1`, `GatingMode::None`, without `head1x1`, and without FiLM.
 //!
-//! ## Reservado p/ motor A2 geral (futuro)
+//! ## Reserved for General A2 Engine (Future Extension)
 //!
-//! Os structs/campos abaixo **não** são exercitados pelo fast-path e estão
-//! preservados para o motor A2 completo (FiLM, gating, grouped conv,
-//! `head1x1`, `bottleneck ≠ channels`, ativações heterogêneas):
+//! The structs and fields below are not exercised by the fast-path and are
+//! preserved for the comprehensive A2 engine (FiLM, gating, grouped conv,
+//! `head1x1`, `bottleneck != channels`, heterogeneous activations):
 //! - `Head1x1Params`, `HeadParams`
-//! - Todos os campos `*_film: FiLMConfig`
+//! - All `*_film: FiLMConfig` fields
 //! - `secondary_activation` / `secondary_activations`
-//! - `groups_input`, `groups_input_mixin`, e `groups` em `Layer1x1Params`/`Head1x1Params`
-//! - Variantes `GatingMode::Gated`/`GatingMode::Blended`
-//! - `ActivationType`s diferentes de `LeakyReLU`
+//! - `groups_input`, `groups_input_mixin`, and `groups` in `Layer1x1Params`/`Head1x1Params`
+//! - `GatingMode::Gated` / `GatingMode::Blended` variants
+//! - `ActivationType`s other than `LeakyReLU`
 
 // =============================================================================
 // A2 Architectural Constants — mirroring github.com/NeuralAmpModelerCore/NAM/wavenet/a2_fast.h
@@ -55,8 +55,8 @@ use super::gating::GatingMode;
 /// Configures an optional 1x1 convolution that sends output directly to the head
 /// (skip connection) instead of using the activation output directly.
 ///
-/// NOTE: reservado p/ motor A2 geral (futuro). O fast-path A2-Full/Lite
-/// não utiliza head 1x1.
+/// NOTE: Reserved for the general A2 engine. The fast-path A2-Full/Lite
+/// does not utilize head 1x1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Head1x1Params {
     /// Whether the head 1x1 convolution is active.
@@ -83,11 +83,11 @@ pub struct Layer1x1Params {
 ///
 /// Contains all configuration needed to instantiate a detailed layer.
 ///
-/// Para o fast-path A2-Full/Lite (`a2_fast.cpp`), os seguintes campos assumem
-/// valores fixos: `bottleneck == channels`, `gating_mode == GatingMode::None`,
-/// `groups_* == 1`, `head1x1.active == false`, todos `*_film.active == false`.
-/// Os campos `secondary_activation`, `head1x1`, `groups_*` e `*_film` estão
-/// reservados p/ motor A2 geral (futuro).
+/// For the fast-path A2-Full/Lite (`a2_fast.cpp`), the following fields take
+/// fixed values: `bottleneck == channels`, `gating_mode == GatingMode::None`,
+/// `groups_* == 1`, `head1x1.active == false`, and all `*_film.active == false`.
+/// Fields `secondary_activation`, `head1x1`, `groups_*`, and `*_film` are
+/// reserved for the general A2 engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerParamsA2 {
     /// Conditioning input size.
@@ -137,11 +137,11 @@ pub struct LayerParamsA2 {
 /// Configures multiple layers that share the same channel count
 /// and kernel size, but can have distinct dilations and activations.
 ///
-/// Para o fast-path A2-Full/Lite (`a2_fast.cpp`), os seguintes campos assumem
-/// valores fixos: `bottleneck == channels`, todos `gating_modes == GatingMode::None`,
-/// `groups_* == 1`, `head1x1.active == false`, todos `*_film.active == false`.
-/// Os campos `secondary_activations`, `head1x1`, `groups_*` e `*_film` estão
-/// reservados p/ motor A2 geral (futuro).
+/// For the fast-path A2-Full/Lite (`a2_fast.cpp`), the following fields take
+/// fixed values: `bottleneck == channels`, all `gating_modes == GatingMode::None`,
+/// `groups_* == 1`, `head1x1.active == false`, and all `*_film.active == false`.
+/// Fields `secondary_activations`, `head1x1`, `groups_*`, and `*_film` are
+/// reserved for the general A2 engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerArrayParamsA2 {
     /// Input size (number of channels).
@@ -198,9 +198,9 @@ pub struct LayerArrayParamsA2 {
 ///
 /// Corresponds to the `Head` component of WaveNet in NAM.
 ///
-/// NOTE: reservado p/ motor A2 geral (futuro). O fast-path A2-Full/Lite
-/// utiliza apenas o *head conv* (`Conv1D(k=16, bias) × head_scale`),
-/// não um post-stack Head multicamada.
+/// NOTE: Reserved for the general A2 engine. The fast-path A2-Full/Lite
+/// utilizes only the *head conv* (`Conv1D(k=16, bias) * head_scale`),
+/// rather than a multi-layer post-stack Head.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HeadParams {
     /// Input channels (usually inherited from the last layer).

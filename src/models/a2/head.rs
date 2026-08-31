@@ -194,21 +194,21 @@ impl A2HeadConv {
 // AVX2+FMA kernel for CH=8
 // =============================================================================
 
-/// Kernel SIMD AVX2+FMA para A2 Head Conv com CH=8.
+/// AVX2+FMA SIMD kernel for A2 Head Conv with CH=8.
 ///
-/// Processa `num_frames` frames usando T=4 frame-tiling:
-/// carrega os K=16 pesos uma vez por tap e acumula
-/// via broadcast FMA em 4 acumuladores `__m256` simultâneos.
+/// Processes `num_frames` frames using T=4 frame-tiling:
+/// loads the K=16 weights once per tap and accumulates
+/// via broadcast FMA across 4 concurrent `__m256` accumulators.
 ///
-/// Ao final de cada tile de 4 frames, `hsum_avx2` reduz cada acumulador,
-/// adiciona `head_b` e multiplica por `head_scale`.
+/// At the end of each 4-frame tile, `hsum_avx2` reduces each accumulator,
+/// adds `head_b`, and multiplies by `head_scale`.
 ///
 /// # Safety
-/// - Requer AVX2+FMA (`target_feature`).
-/// - `head_w` deve ter pelo menos `K * 8` elementos.
-/// - `head_history` deve ter `(ring_mask + 1) * 8` elementos.
-/// - `output` deve ter pelo menos `num_frames` elementos.
-/// - `num_channels` implícito = 8 (chamador deve garantir).
+/// - Requires AVX2+FMA (`target_feature`).
+/// - `head_w` must have at least `K * 8` elements.
+/// - `head_history` must have `(ring_mask + 1) * 8` elements.
+/// - `output` must have at least `num_frames` elements.
+/// - Implicit `num_channels` = 8 (caller must guarantee).
 #[expect(
     clippy::too_many_arguments,
     reason = "FFI design or complex DSP kernel signature required by construction"
@@ -283,22 +283,21 @@ pub unsafe fn head_process_ch8_avx2(
 // SSE+FMA kernel for CH=3
 // =============================================================================
 
-/// Kernel SIMD SSE+FMA para A2 Head Conv com CH=3.
+/// SSE+FMA SIMD kernel for A2 Head Conv with CH=3.
 ///
-/// Processa `num_frames` frames, um por vez (sem frame-tiling),
-/// usando `_mm_setr_ps` para empacotar 3 pesos + 0 e 3 valores
-/// do histórico + 0 em registradores `__m128`, acumulando via
-/// `_mm_fmadd_ps` sobre K=16 taps.
+/// Processes `num_frames` frames, one at a time (without frame-tiling),
+/// using `_mm_setr_ps` to pack 3 weights + 0 and 3 history values + 0
+/// into `__m128` registers, accumulating via `_mm_fmadd_ps` across K=16 taps.
 ///
-/// A redução final usa `_mm_hadd_ps` × 2 + `_mm_cvtss_f32`,
-/// seguida de `(y + head_b) * head_scale`.
+/// Final reduction uses `_mm_hadd_ps` × 2 + `_mm_cvtss_f32`,
+/// followed by `(y + head_b) * head_scale`.
 ///
 /// # Safety
-/// - Requer SSE+FMA (`target_feature`).
-/// - `head_w` deve ter pelo menos `K * 3` elementos.
-/// - `head_history` deve ter `(ring_mask + 1) * 3` elementos.
-/// - `output` deve ter pelo menos `num_frames` elementos.
-/// - `num_channels` implícito = 3 (chamador deve garantir).
+/// - Requires SSE+FMA (`target_feature`).
+/// - `head_w` must have at least `K * 3` elements.
+/// - `head_history` must have `(ring_mask + 1) * 3` elements.
+/// - `output` must have at least `num_frames` elements.
+/// - Implicit `num_channels` = 3 (caller must guarantee).
 #[expect(
     clippy::too_many_arguments,
     reason = "FFI design or complex DSP kernel signature required by construction"

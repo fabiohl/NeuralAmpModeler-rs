@@ -159,10 +159,10 @@ mod tests {
             if idx == 0 {
                 reference_out.copy_from_slice(&out);
                 let max_abs = out.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
-                // Medido: max_abs=0.522 com head_weights_f32=0.5, LSTM 1×8, seno 64 amostras
+                // Measured: max_abs=0.522 with head_weights_f32=0.5, LSTM 1x8, sine 64 samples
                 assert!(
                     max_abs > 1e-6,
-                    "saída identicamente nula — verifique head_weights_f32"
+                    "identically zero output — check head_weights_f32"
                 );
             } else {
                 for i in 0..64 {
@@ -263,12 +263,12 @@ mod tests {
         let max_abs = out_simd.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
         assert!(
             max_abs > 1e-6,
-            "saída identicamente nula — verifique head_weights_f32"
+            "identically zero output — check head_weights_f32"
         );
 
         let snr = crate::testing::perceptual::compute_snr_db(&out_scalar, &out_simd);
-        // Medido: SNR SIMD vs Escalar = 146.2 dB em modelos de 2 camadas, hidden=8, 1024 amostras
-        // Medido: max_abs = 3.096 com head_weights_f32 = 0.5 e entrada senoidal de 440 Hz @ 48 kHz
+        // Measured: SIMD vs Scalar SNR = 146.2 dB on 2-layer models, hidden=8, 1024 samples
+        // Measured: max_abs = 3.096 with head_weights_f32 = 0.5 and 440 Hz sine input @ 48 kHz
         assert!(
             snr >= 120.0,
             "SIMD vs scalar SNR {snr:.2} dB < 120 dB (max_abs={max_abs})"
@@ -355,7 +355,7 @@ mod tests {
                     layer_scalar.cell_state[j],
                     layer_simd.cell_state[j],
                 );
-                // Measured: cell_error ~1e-7 a 1e-6 (8 passos, pesos de teste O(0.1-0.4)); tolerância = 1e-5 (10× margem sobre o pior caso).
+                // Measured: cell_error ~1e-7 to 1e-6 (8 steps, test weights O(0.1-0.4)); tolerance = 1e-5 (10x margin over worst case).
                 assert!(
                     (layer_scalar.cell_error[j] - layer_simd.cell_error[j]).abs() < 1e-5,
                     "Dyn parity H={} step={} cell_error[{}]: {} vs {}",

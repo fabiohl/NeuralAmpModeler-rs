@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 // Every `unsafe` block must carry a `// SAFETY:` justification (T6.1/H-02).
 #![warn(clippy::undocumented_unsafe_blocks)]

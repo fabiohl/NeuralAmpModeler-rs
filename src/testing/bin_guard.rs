@@ -38,6 +38,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 const ELF_MAGIC: &[u8] = b"\x7fELF";
 const AR_MAGIC: &[u8] = b"!<arch>\n";
@@ -258,14 +260,22 @@ fn run_tool_on_path(
     artifact: &Path,
     require_output: bool,
 ) -> Result<String, BinGuardError> {
-    let output = Command::new(tool)
-        .args(args)
-        .arg(artifact)
-        .output()
-        .map_err(|source| BinGuardError::ReadFailed {
-            path: artifact.to_path_buf(),
-            source,
-        })?;
+    let mut attempts = 0;
+    let output = loop {
+        match Command::new(tool).args(args).arg(artifact).output() {
+            Ok(output) => break output,
+            Err(source) if source.raw_os_error() == Some(libc::ETXTBSY) && attempts < 20 => {
+                attempts += 1;
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(source) => {
+                return Err(BinGuardError::ReadFailed {
+                    path: artifact.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    };
     if !output.status.success() {
         return Err(BinGuardError::ToolFailed {
             tool: tool.display().to_string(),
