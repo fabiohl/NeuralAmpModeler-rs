@@ -98,6 +98,30 @@ pub struct NambHeader {
 }
 
 impl NambHeader {
+    /// Parses a `NambHeader` from a byte slice in a fully alignment-safe manner.
+    ///
+    /// The header is copied by value with [`std::ptr::read_unaligned`], so the
+    /// source slice may start at any memory address (including odd addresses),
+    /// and the magic number and supported version are validated before
+    /// returning. This function performs zero heap allocations.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, NambError> {
+        let header_size = std::mem::size_of::<Self>();
+        if bytes.len() < header_size {
+            return Err(NambError::Truncated {
+                got: bytes.len(),
+                need: header_size,
+            });
+        }
+        // SAFETY: `bytes.len() >= size_of::<Self>()` was validated above, so the
+        // pointer is valid for reads of `size_of::<Self>()` bytes. `NambHeader`
+        // is `repr(C, packed)` (no padding, no uninitialized bytes), and
+        // `read_unaligned` tolerates any address alignment. The byte slice
+        // outlives this call.
+        let header = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<Self>()) };
+        header.validate()?;
+        Ok(header)
+    }
+
     /// Validates whether the header has the magic number and a supported version.
     pub fn validate(&self) -> Result<(), NambError> {
         let magic = self.magic;
@@ -122,5 +146,74 @@ impl NambHeader {
             2 => WeightsLayout::Interleaved4WaveNet,
             _ => WeightsLayout::Original,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a byte buffer containing a valid NAMB v2 header (80 bytes,
+    /// native endianness, matching how the encoder writes the header).
+    fn valid_header_bytes() -> Vec<u8> {
+        let mut b = Vec::with_capacity(80);
+        b.extend_from_slice(&0x4E414D42u32.to_ne_bytes()); // magic
+        b.extend_from_slice(&2u16.to_ne_bytes()); // version
+        b.push(0); // layout_type
+        b.push(0); // flags
+        b.extend_from_slice(&[0u8; 4]); // reserved_v2
+        b.extend_from_slice(&80u32.to_ne_bytes()); // weights_offset
+        b.extend_from_slice(&[0u8; 8]); // reserved1
+        b.extend_from_slice(&0xDEADBEEFu32.to_ne_bytes()); // crc32
+        b.extend_from_slice(&[0u8; 4]); // reserved2
+        b.extend_from_slice(b"NAMB 2.0.0"); // version_str (10 bytes)
+        b.extend_from_slice(&[0u8; 22]); // version_str padding to 32
+        b.extend_from_slice(&48000.0f32.to_ne_bytes()); // sample_rate
+        b.extend_from_slice(&12.0f32.to_ne_bytes()); // input_level_dbu
+        b.extend_from_slice(&12.0f32.to_ne_bytes()); // output_level_dbu
+        b.extend_from_slice(&[0u8; 4]); // reserved3
+        debug_assert_eq!(b.len(), std::mem::size_of::<NambHeader>());
+        b
+    }
+
+    #[test]
+    fn from_slice_short_slice_returns_truncated() {
+        let bytes = valid_header_bytes();
+        let short = &bytes[..bytes.len() - 1];
+        let err = NambHeader::from_slice(short).unwrap_err();
+        assert!(matches!(err, NambError::Truncated { got: 79, need: 80 }));
+    }
+
+    #[test]
+    fn from_slice_unaligned_buffer_ok() {
+        // Misalign the header by one byte so the pointer is not 4-byte aligned.
+        let mut data = Vec::with_capacity(81);
+        data.push(0u8);
+        data.extend_from_slice(&valid_header_bytes());
+        let header = NambHeader::from_slice(&data[1..]).unwrap();
+        let magic = header.magic;
+        let version = header.version;
+        let sample_rate = header.sample_rate;
+        let weights_offset = header.weights_offset;
+        assert_eq!(magic, 0x4E414D42);
+        assert_eq!(version, 2);
+        assert_eq!(sample_rate, 48000.0);
+        assert_eq!(weights_offset, 80);
+    }
+
+    #[test]
+    fn from_slice_invalid_magic_returns_invalid_magic() {
+        let mut bytes = valid_header_bytes();
+        bytes[0..4].copy_from_slice(&0xDEADBEEFu32.to_ne_bytes());
+        let err = NambHeader::from_slice(&bytes).unwrap_err();
+        assert!(matches!(err, NambError::InvalidMagic(0xDEADBEEF)));
+    }
+
+    #[test]
+    fn from_slice_invalid_version_returns_invalid_version() {
+        let mut bytes = valid_header_bytes();
+        bytes[4..6].copy_from_slice(&99u16.to_ne_bytes());
+        let err = NambHeader::from_slice(&bytes).unwrap_err();
+        assert!(matches!(err, NambError::InvalidVersion(99)));
     }
 }

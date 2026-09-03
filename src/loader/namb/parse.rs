@@ -13,20 +13,9 @@ use log::{debug, info};
 /// Loads a model in the `.namb` binary format.
 pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     let header_size = std::mem::size_of::<NambHeader>();
-    if data.len() < header_size {
-        return Err(NambError::Truncated {
-            got: data.len(),
-            need: header_size,
-        }
-        .into());
-    }
 
-    // 1. Reads the header
-    // SAFETY: `data.len() >= header_size` was validated in lines 16-22. `NambHeader` is
-    // `Copy` + `repr(C, packed)`, so a byte-level read of the header prefix is well-defined
-    // (no padding, no uninit bytes, correct alignment via `read_unaligned`).
-    let header = unsafe { core::ptr::read_unaligned(data.as_ptr().cast::<NambHeader>()) };
-    header.validate()?;
+    // 1. Reads the header (alignment-safe, validated magic + version)
+    let header = NambHeader::from_slice(data)?;
 
     let hdr_version = header.version;
     let hdr_weights_offset = header.weights_offset as usize;
