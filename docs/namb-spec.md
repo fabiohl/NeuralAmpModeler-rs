@@ -43,6 +43,21 @@ The canonical value is `0x4E414D42` (bytes `42 4D 41 4E` = `"NAMB"` in little-en
 
 Values of `version` other than `1` and `2` are rejected with `NambError::InvalidVersion`.
 
+### 1.3 Alignment-Safe Header Parsing (`NambHeader::from_slice`)
+
+Because `NambHeader` is `#[repr(C, packed)]` without implicit padding, direct pointer references to unaligned fields risk hardware exceptions on architectures sensitive to misaligned access. The canonical constructor in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs) is [`NambHeader::from_slice`](../src/loader/namb/header.rs):
+
+```rust,ignore
+pub fn from_slice(bytes: &[u8]) -> Result<Self, NambError>
+```
+
+It copies the header by value using `std::ptr::read_unaligned`, validating:
+
+- Minimum length requirement (`bytes.len() >= 80`);
+- Magic signature (`0x4E414D42`);
+- Supported version compliance (`version ∈ {1, 2}`);
+- Full safety and zero heap allocation even when the source buffer begins at an odd memory address.
+
 ## 2. Flags
 
 | Bit | Name                       | Value  | Description                                                                                        |

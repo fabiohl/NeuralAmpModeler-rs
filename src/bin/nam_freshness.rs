@@ -61,7 +61,7 @@ fn print_help() {
     println!("Modes:");
     println!("  warn-only       Emit warnings but always exit 0");
     println!("  artifacts-hard  Fail on stale/missing/orphan artifacts (default)");
-    println!("  hard-fail       Fail on any drift, including generators/toolchain");
+    println!("  hard-fail       Fail on artifact integrity or generator provenance drift");
     println!();
     println!("Options:");
     println!("  --root PATH     Root directory containing tests/fixtures (default: current dir)");
@@ -251,16 +251,15 @@ fn main() {
                     );
                 }
             }
-            if !outcome.toolchain_drift.is_empty() && !mode.generator_hard() {
+            if !outcome.toolchain_drift.is_empty() {
                 println!(
-                    "  {}⚠{} toolchain drift (non-blocking in this mode).",
+                    "  {}⚠{} toolchain drift (informational, non-blocking).",
                     s.yellow, s.reset
                 );
             }
 
             let should_fail = mode.artifact_hard() && !outcome.artifact_integrity_ok
-                || mode.generator_hard()
-                    && (!outcome.generator_provenance_ok || !outcome.toolchain_provenance_ok);
+                || mode.generator_hard() && !outcome.generator_provenance_ok;
 
             if should_fail {
                 exit(1);

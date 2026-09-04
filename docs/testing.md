@@ -77,7 +77,7 @@ graph TD
 
 Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp_parity` full matrix and `golden_vectors` v2 multi-SR, compare against pre-committed `.bin` golden files rendered off-line by [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) against pinned reference versions defined in [variables.env](../variables.env).
 
-- **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector.
+- **Golden Freshness Manifest:** [tests/fixtures/golden_gen_build.sh](../tests/fixtures/golden_gen_build.sh) commits a versioned `.golden_manifest.sha256` freshness manifest checked automatically by [utils/tests-quick.sh](../utils/tests-quick.sh) Phase 2. A `sha256sum`-based gate hard-fails if a `.nam` model is modified without regenerating the corresponding golden vector. The freshness verification harness ([src/testing/freshness.rs](../src/testing/freshness.rs)) enforces hard gates on artifact SHA-256 integrity and generator provenance, while compiler toolchain drift (host OS minor updates, compiler point-releases, libc variations parsed from `# TOOLCHAIN:` annotations) is handled as non-blocking informational warnings (`WARN`), ensuring environment stability without sacrificing deterministic artifact verification.
 
 - **Model Resolution Order:** `golden_gen_build.sh` resolves `.nam` models through `resolve_nam_model()`, matching `src/testing/fixtures.rs::model_path`: (1) `$NAM_MODELS_DIR`, (2) `third-party/community_models/` (via `NAM_THIRD_PARTY_DIR`), (3) `tests/fixtures/models-nondist`, (4) `tests/fixtures/models`. See [fixtures.md](fixtures.md) for skip semantics and non-distributable golden handling.
 
@@ -108,6 +108,18 @@ Entry points: [tests/models.rs](../tests/models.rs), [tests/parity.rs](../tests/
 | Full matrix / soak / heap-audit / RT / loom / defense scripts | `#[ignore]` or feature-gated                | `tests-long.sh`                                                                                                |
 
 A module not listed in a runner is an orphan. `#[ignore]` without a long-suite hook is an orphan. Gaps must print `WARN`/`FIDELITY: INCOMPLETE`, never `FIDELITY: OK`.
+
+### 3.1. Unit Test Placement and the 300-Line Rule
+
+Unit tests strictly observe file size and module containment rules:
+
+- **Inline tests (< 300 lines):** Files under 300 source lines (excluding test code) place tests in an inline `#[cfg(test)] mod tests { ... }`.
+- **Sibling test files (≥ 300 lines):** Files with 300 source lines or more extract tests into a dedicated sibling `<module>_test.rs` file, included via `#[cfg(test)] #[path = "<module>_test.rs"] mod tests;`.
+- **Active sibling test extractions:**
+  - [src/testing/receipt_test.rs](../src/testing/receipt_test.rs) (sibling to `src/testing/receipt.rs`)
+  - [src/dsp/pipeline/stages/inference_test.rs](../src/dsp/pipeline/stages/inference_test.rs) (sibling to `src/dsp/pipeline/stages/inference.rs`)
+  - [src/testing/freshness_test.rs](../src/testing/freshness_test.rs) (sibling to `src/testing/freshness.rs`)
+- **Off-RT separation:** Test utilities, golden generators, and off-RT validation helpers live exclusively in `src/testing/` — never in `src/dsp/` or hot-path audio modules.
 
 ---
 
@@ -245,13 +257,13 @@ To align test execution with developer workflows and integration schedules, the 
 The final certification battery is executed **exclusively by a human operator** on a calibrated, isolated machine (governor `performance`, low load, `NAM_BENCH_CORE` pinned) from the `NeuralAmpModeler-rs/` directory. AI agents must **never** run `utils/tests-long.sh`, `utils/tests-performance-regression.sh --bootstrap-baseline`, or `utils/quality-dashboard.sh --save`; the long suite and baseline renewal are delegated to the human by policy.
 
 ```bash
-# No diretório NeuralAmpModeler-rs/ — bateria de certificação final (operador humano)
+# Inside NeuralAmpModeler-rs/ directory — final certification battery (human operator)
 utils/lints.sh | tee target/logs/lints.log                          # Receipt 1
 NAM_QUICK_STRICT=1 utils/tests-quick.sh | tee target/logs/quick-strict.log   # Receipt 2
-# Perf check contra baseline PREVIAMENTE aprovado (cerimônia separada, §5.2 de functional-tests.md):
+# Performance check against PREVIOUSLY approved baseline (separate ceremony, §5.2 of functional-tests.md):
 utils/tests-performance-regression.sh --check | tee target/logs/perf-check.log  # Receipt 4
 utils/quality-dashboard.sh --check docs/quality-contract.json | tee target/logs/quality-check.log  # Receipt 5
-# Execução longa em ambiente isolado (operador humano, ~10 min):
+# Long execution in isolated environment (human operator, ~10 min):
 utils/tests-long.sh --strict-pre-release | tee target/logs/long-strict.log    # Receipt 3
 ```
 
@@ -349,7 +361,7 @@ When executing audit suites ([`utils/tests-long.sh`](../utils/tests-long.sh) or 
 
 ---
 
-## 9. Quality Contract (Contrato de Qualidade)
+## 9. Quality Contract
 
 The **Quality Contract** establishes an immutable baseline freezing quality and performance targets to prevent silent regressions.
 
@@ -357,11 +369,11 @@ The **Quality Contract** establishes an immutable baseline freezing quality and 
 
 The contract is enforced by [utils/quality-dashboard.sh](../utils/quality-dashboard.sh):
 
-| Mode                | Command                                          | Function                                                                                      |
-|:------------------- |:------------------------------------------------ |:--------------------------------------------------------------------------------------------- |
-| **Dashboard**       | `./utils/quality-dashboard.sh`                   | Executes all fidelity and performance phases and displays the interactive dashboard.          |
-| **Save (baseline)** | `./utils/quality-dashboard.sh --save <arquivo>`  | Saves dashboard results as the official JSON baseline contract.                               |
-| **Check (verify)**  | `./utils/quality-dashboard.sh --check <arquivo>` | Executes phases and compares current results against the JSON contract, reporting violations. |
+| Mode                | Command                                       | Function                                                                                      |
+|:------------------- |:--------------------------------------------- |:--------------------------------------------------------------------------------------------- |
+| **Dashboard**       | `./utils/quality-dashboard.sh`                | Executes all fidelity and performance phases and displays the interactive dashboard.          |
+| **Save (baseline)** | `./utils/quality-dashboard.sh --save <file>`  | Saves dashboard results as the official JSON baseline contract.                               |
+| **Check (verify)**  | `./utils/quality-dashboard.sh --check <file>` | Executes phases and compares current results against the JSON contract, reporting violations. |
 
 The dashboard's defense functions (metric sanitization, toolchain fingerprint,
 JSONL parsing, test-execution assertion, and the golden-freshness gate) are

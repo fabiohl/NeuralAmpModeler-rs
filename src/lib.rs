@@ -82,7 +82,7 @@ pub mod prelude {
 /// Off-RT test utilities, perceptual metrics, and signal generators. Requires `testing` feature.
 pub mod testing;
 
-// Backward compatibility with older GLIBC versions (e.g. for Flatpak/Bitwig).
+// Backward compatibility with older GLIBC versions (e.g. for enterprise or containerized Linux environments).
 // Redirects math symbols to the stable GLIBC_2.2.5 version.
 // Since external dependencies use these symbols, we declare global wrappers
 // that intercept calls and jump (jmp) via PLT to the compatible versions.

@@ -91,14 +91,14 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "x.y.z"
+NeuralAmpModeler-rs = "0.7.3"
 ```
 
 For off-RT testing utilities and audio signal generators:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "x.y.z", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "0.7.3", features = ["testing"] }
 ```
 
 ### Feature Flags
@@ -328,7 +328,7 @@ The following technical documents are maintained in the source repository. The p
 
 ## 🤝 Contributing & Feedback
 
-* **Testing, testing, testing!** Go on, "cargo add NeuralAmpModeler-rs" into your own project and make NeuralAmpModeler-rs it live and evolve!
+* **Testing, testing, testing!** Go on, "cargo add NeuralAmpModeler-rs" into your own project and make NeuralAmpModeler-rs live and evolve!
 * **Test Models:** Try your favorite `.nam` models and IR files — share your feedback and performance metrics.
 * **Report Issues:** Submit detailed bug reports or feature suggestions on GitHub.
 * **Code & Docs:** Help me to make NeuralAmpModeler-rs more useful and correct for the community!
@@ -346,7 +346,7 @@ The following technical documents are maintained in the source repository. The p
 
 ### AI Transparency Note
 
-The system architecture, core DSP engineering decisions, mathematical verification framework, and project orchestration are intellectual work (and love) of the maintainer (**Fábio Lima**). The implementation was accelerated through pair programming (*Vibe Coding*) using artificial intelligence models (Gemini, Claude, Grok, DeepSeek and others) within Google Antigravity IDE and Kilo Code. IA is just a tool that make wonder in wise hands.
+The system architecture, core DSP engineering decisions, mathematical verification framework, and project orchestration are the intellectual work (and love) of the maintainer (**Fábio Lima**). The implementation was accelerated through pair programming (*Vibe Coding*) using artificial intelligence models (Gemini, Claude, Grok, DeepSeek and others) within Google Antigravity IDE and Kilo Code. AI is just a tool that works wonders in wise hands.
 
 ### License
 

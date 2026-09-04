@@ -14,9 +14,9 @@ Fixes #
 <!-- Check all that apply -->
 - [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`)
 - [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`)
-- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampling/`, `src/dsp/noise_gate.rs`)
+- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/gate.rs`)
 - [ ] **Model Loading & Formats** (`src/loader/`, `.nam` JSON parser, `.namb` binary loader)
-- [ ] **Concurrency & Telemetry** (`src/dsp/spsc.rs`, `src/common/diagnostics/`)
+- [ ] **Concurrency & Telemetry** (`src/common/spsc/`, `src/common/diagnostics/`)
 - [ ] **Benchmarks & Quality Gates** (`benches/`, `src/testing/`, `docs/quality-contract.json`)
 - [ ] **Documentation & Examples** (`docs/`, `examples/`, `README.md`)
 

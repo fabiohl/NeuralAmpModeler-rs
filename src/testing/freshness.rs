@@ -29,7 +29,7 @@ pub enum FreshnessMode {
     WarnOnly,
     /// Fail on artifact integrity issues; warn on generator drift.
     ArtifactsHard,
-    /// Fail on any drift, including generator/toolchain provenance.
+    /// Fail on artifact integrity or generator provenance drift (toolchain drift remains informational).
     HardFail,
 }
 
@@ -47,7 +47,7 @@ impl FromStr for FreshnessMode {
 }
 
 impl FreshnessMode {
-    /// Whether generator/toolchain drift is a hard failure.
+    /// Whether generator drift is a hard failure.
     pub fn generator_hard(self) -> bool {
         matches!(self, Self::HardFail)
     }
@@ -119,9 +119,12 @@ pub struct FreshnessOutcome {
 }
 
 impl FreshnessOutcome {
-    /// True when the gate passed in every dimension.
+    /// True when the gate passed in every actionable dimension (artifact integrity and generator provenance).
+    ///
+    /// Toolchain drift (e.g. host OS kernel minor updates) is informational and non-blocking,
+    /// though still recorded in `toolchain_provenance_ok` and `toolchain_drift`.
     pub fn is_ok(&self) -> bool {
-        self.artifact_integrity_ok && self.generator_provenance_ok && self.toolchain_provenance_ok
+        self.artifact_integrity_ok && self.generator_provenance_ok
     }
 }
 
@@ -298,14 +301,14 @@ pub fn check_freshness(
         FreshnessReason::MissingFixtures
     } else if !orphans.is_empty() {
         FreshnessReason::OrphanFixture
-    } else if !generator_drift.is_empty() || !toolchain_drift.is_empty() {
+    } else if !generator_drift.is_empty() {
         FreshnessReason::StaleFixtures
     } else {
         FreshnessReason::Ok
     };
 
     let should_fail = mode.artifact_hard() && !artifact_integrity_ok
-        || mode.generator_hard() && (!generator_provenance_ok || !toolchain_provenance_ok);
+        || mode.generator_hard() && !generator_provenance_ok;
 
     let reason = if should_fail {
         natural_reason

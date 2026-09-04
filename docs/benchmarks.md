@@ -294,7 +294,7 @@ The two tools serve complementary roles:
 The contract applies a **10% margin** on median latency:
 
 ```text
-nova_lat > contrato_lat × 1.10  →  VIOLAÇÃO
+new_lat > contract_lat × 1.10  →  VIOLATION
 ```
 
 This is intentionally more conservative than the regression gate's statistical
@@ -841,4 +841,4 @@ To prevent maintenance divergence and unnecessary binary growth, mathematical su
 1. **Gain, Dither, Pan & Stereo Mixing:** Slices are streamed through L1/L2 cache; arithmetic density is $\le 1$ FLOP per 4 bytes loaded. AVX2 FMA instructions already saturate memory bus throughput; AVX-512 provides zero measurable speedup. Exclusively uses the unified `x86-64-v3` baseline.
 2. **CabSim UPOLS Frequency Delay Line:** Complex multiplication and accumulation (`complex_mac_accumulate`) and FFT stages are memory-access dominated. The convolution engine relies exclusively on the unified `x86-64-v3` AVX2 baseline without specialized AVX-512 duplication.
 3. **Dynamic Topology Handlers:** Rare or non-standard geometries are processed through unified dynamic loops with vectorized vector chunks and scalar tails, avoiding explosive combinatorial monomorphization and reusing the `x86-64-v3` baseline.
-4. **Non-DSP Off-RT Operations (Loaders, Parsers, CRC32, Allocation):** File loading (`.nam`/`.namb`), JSON parsing (`serde_json`), CRC32 calculation, and buffer allocation occur exclusively off the real-time audio thread. They are bounded by disk I/O and memory throughput; manual SIMD specialization yields $< 1\%$ end-to-end impact and is explicitly rejected (*"Nenhum candidato"*).
+4. **Non-DSP Off-RT Operations (Loaders, Parsers, CRC32, Allocation):** File loading (`.nam`/`.namb`), JSON parsing (`serde_json`), CRC32 calculation, and buffer allocation occur exclusively off the real-time audio thread. They are bounded by disk I/O and memory throughput; manual SIMD specialization yields $< 1\%$ end-to-end impact and is explicitly rejected (*"No candidate"*).

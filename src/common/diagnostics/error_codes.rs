@@ -143,6 +143,10 @@ pub enum NamErrorCode {
     // this host-agnostic core crate never constructs these variants.
     /// CLI→DSP parameter SPSC channel full.
     ParamChannelFull,
+    /// Overflow detected in the Garbage Collection (GC) channel.
+    GcOverflow,
+    /// Corrupted GC overflow buffer slot (inconsistent type/pointer).
+    GcCorrupted,
 
     // E4xxx — Runtime / CLI
     // Reserved for downstream integrations (e.g., CLI tools, plugin wrappers):
@@ -155,10 +159,8 @@ pub enum NamErrorCode {
     CtrlCHandlerFailed,
     /// Failed to load a cab-sim impulse response (WAV file).
     IrLoadFailed,
-    /// Overflow detected in the Garbage Collection (GC) channel.
-    GcOverflow,
-    /// Corrupted GC overflow buffer slot (inconsistent type/pointer).
-    GcCorrupted,
+
+    // E5xxx — System / Hardware
     /// Memory allocation failed (OOM) — layout overflow or allocator exhaustion.
     OutOfMemory,
     /// Host CPU lacks required x86-64-v3 feature set (AVX2/FMA).

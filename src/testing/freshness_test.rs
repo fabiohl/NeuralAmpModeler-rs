@@ -236,3 +236,26 @@ fn test_mtime_passes_when_artifact_is_fresh() {
     let stale = check_artifact_freshness_mtime(&[src], &[artifact]).unwrap();
     assert!(stale.is_empty());
 }
+
+#[test]
+fn test_toolchain_drift_is_informational_and_passes_hard_fail() {
+    let dir = tempdir();
+    let content = b"model-a\n";
+    let sha = sha_of(content);
+    write_file(&dir, "tests/fixtures/models/model_a.nam", content);
+    make_manifest(
+        &dir,
+        &format!(
+            "# TOOLCHAIN: os: non-existent-os-kernel-99.0.0\n\
+             {sha} 0000000000000000000000000000000000000000000000000000000000000000 model_a.nam golden_a.bin\n\
+             # MODEL-REGISTRY: model_a.nam"
+        ),
+    );
+    let outcome = check_freshness(&dir, FreshnessMode::HardFail).unwrap();
+    assert!(outcome.artifact_integrity_ok);
+    assert!(outcome.generator_provenance_ok);
+    assert!(!outcome.toolchain_provenance_ok);
+    assert!(!outcome.toolchain_drift.is_empty());
+    assert!(outcome.is_ok());
+    assert_eq!(outcome.reason, FreshnessReason::Ok);
+}

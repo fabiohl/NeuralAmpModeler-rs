@@ -62,7 +62,7 @@ paper. Also referenced in the resampler redesign for the HQ polyphase bank.
 
 | Traceability | Reference                                                                              |
 |:------------ |:-------------------------------------------------------------------------------------- |
-| Finding      | P-1 (filtros de oversampling)                                                          |
+| Finding      | P-1 (oversampling filters)                                                             |
 | Files        | `src/dsp/oversample.rs`, `src/dsp/sinc_kernel.rs`, `docs/audio_fidelity_map.md` §4, §6 |
 
 ---
@@ -82,7 +82,7 @@ ultimately **not adopted** because it would require per-model modification of th
 
 | Traceability | Reference                                                    |
 |:------------ |:------------------------------------------------------------ |
-| Finding      | P-1 (ADAA alternativa de baixo custo)                        |
+| Finding      | P-1 (ADAA low-cost alternative)                              |
 | Files        | `docs/audio_fidelity_map.md` §6, `docs/architecture.md` §4.3 |
 
 ---
@@ -101,7 +101,7 @@ analysis are preserved for potential future modes (e.g., embedded/high-performan
 
 | Traceability | Reference                                                    |
 |:------------ |:------------------------------------------------------------ |
-| Finding      | P-1 (ADAA para memoryless — tanh, ReLU)                      |
+| Finding      | P-1 (ADAA for memoryless nonlinearities — tanh, ReLU)        |
 | Files        | `src/math/activations/tanh/`, `src/models/a2/activations.rs` |
 
 ---
@@ -119,10 +119,10 @@ drift (previously documented in finding F-2; the f16c root cause has been remove
 was not implemented, this reference anchors future work should oversampling prove insufficient
 for LSTM-family models at high sample rates.
 
-| Traceability | Reference                                  |
-|:------------ |:------------------------------------------ |
-| Finding      | P-1 (ADAA para sistemas com estado — LSTM) |
-| Files        | `src/models/lstm/`                         |
+| Traceability | Reference                              |
+|:------------ |:-------------------------------------- |
+| Finding      | P-1 (ADAA for stateful systems — LSTM) |
+| Files        | `src/models/lstm/`                     |
 
 ---
 
@@ -212,7 +212,7 @@ live-path design.
 
 | Traceability | Reference                                                                                   |
 |:------------ |:------------------------------------------------------------------------------------------- |
-| Finding      | P-5 (origem da métrica ESR); F-2 (ESR como gate primário)                                   |
+| Finding      | P-5 (origin of ESR metric); F-2 (ESR as primary gate)                                       |
 | Files        | `tests/parity/cpp_parity.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
 
 ---
@@ -235,7 +235,7 @@ errors that single-window ESR cannot detect.
 
 | Traceability | Reference                                                                                                                       |
 |:------------ |:------------------------------------------------------------------------------------------------------------------------------- |
-| Finding      | F-2 (MR-STFT como gate espectral); P-5 (complemento a ESR)                                                                      |
+| Finding      | F-2 (MR-STFT as spectral gate); P-5 (complement to ESR)                                                                         |
 | Files        | `src/testing/perceptual/esr.rs`, `src/testing/perceptual/mod.rs`, `tests/common/validation.rs`, `docs/perceptual_validation.md` |
 
 ---
@@ -257,7 +257,7 @@ reproducible CI gates.
 
 | Traceability | Reference                                                                                                                   |
 |:------------ |:--------------------------------------------------------------------------------------------------------------------------- |
-| Finding      | P-3 (suíte de fidelidade espectral — FR, THD por ordem)                                                                     |
+| Finding      | P-3 (spectral fidelity suite — FR, THD by order)                                                                            |
 | Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/farina.rs`, `src/testing/spectral/mod.rs`, `src/math/dsp/fft.rs` |
 
 ---
@@ -276,7 +276,7 @@ specifications.
 
 | Traceability | Reference                                                                                         |
 |:------------ |:------------------------------------------------------------------------------------------------- |
-| Finding      | P-3 (THD+N padronizado)                                                                           |
+| Finding      | P-3 (standardized THD+N)                                                                          |
 | Files        | `tests/models/spectral_fidelity.rs`, `src/testing/spectral/thd.rs`, `src/testing/spectral/mod.rs` |
 
 ---
@@ -309,22 +309,22 @@ European Broadcasting Union, 2016.
 
 | Traceability | Reference                                                                                                                                                                      |
 |:------------ |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Finding      | P-6 (LUFS BS.1770-4 pleno, LRA); P-3 (true-peak dBTP)                                                                                                                          |
+| Finding      | P-6 (full BS.1770-4 LUFS, LRA); P-3 (true-peak dBTP)                                                                                                                           |
 | Files        | `src/testing/perceptual/lufs.rs`, `src/testing/perceptual/true_peak.rs`, `src/testing/perceptual/lra.rs`, `src/dsp/pipeline/stages/output.rs`, `docs/perceptual_validation.md` |
 
 ---
 
 ## Reference Index by Finding
 
-| Finding                                      | References                                             |
-|:-------------------------------------------- |:------------------------------------------------------ |
-| P-1 (non-linear activation aliasing)         | R1, R2, R3, R4, R5, R6, R7b                            |
-| P-2 (fidelidade do resampler)                | R3                                                     |
-| P-3 (suíte espectral — THD/IMD/FR/true-peak) | R10, R11, R12                                          |
-| P-4 (oráculo f64)                            | — (norma computacional, não referenciada externamente) |
-| P-5 (erro de ativação — precisão)            | R1, R8, R9, R13                                        |
-| P-6 (LUFS/LRA/true-peak)                     | R12                                                    |
-| P-7 (gates de perf/deadline)                 | — (engenharia interna)                                 |
-| P-8 (matriz cross-ISA)                       | — (engenharia interna)                                 |
-| F-2 (ponto cego de fidelidade)               | R9, R13                                                |
-| I5 (oversampling LSTM — timbre, β3.1)        | R7, R7b                                                |
+| Finding                                     | References                                            |
+|:------------------------------------------- |:----------------------------------------------------- |
+| P-1 (non-linear activation aliasing)        | R1, R2, R3, R4, R5, R6, R7b                           |
+| P-2 (resampler fidelity)                    | R3                                                    |
+| P-3 (spectral suite — THD/IMD/FR/true-peak) | R10, R11, R12                                         |
+| P-4 (f64 oracle)                            | — (computational standard, not externally referenced) |
+| P-5 (activation error — precision)          | R1, R8, R9, R13                                       |
+| P-6 (LUFS/LRA/true-peak)                    | R12                                                   |
+| P-7 (perf/deadline gates)                   | — (internal engineering)                              |
+| P-8 (cross-ISA matrix)                      | — (internal engineering)                              |
+| F-2 (fidelity blind spot)                   | R9, R13                                               |
+| I5 (LSTM oversampling — timbre, β3.1)       | R7, R7b                                               |

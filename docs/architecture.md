@@ -92,11 +92,11 @@ NeuralAmpModeler-rs enforces an explicit, deterministic SIMD policy tailored for
 
    - Intel AMX is explicitly excluded from the DSP engine design. AMX introduces significant tile configuration latency (`ldtilecfg`/`sttilecfg`), OS context-switch penalties, and large minimum matrix tile sizes ($16 \times 64$ bytes) fundamentally misaligned with the ultra-low latency, per-frame/small-block requirements of real-time audio DSP.
 
-8. **SIMD Outside DSP / Non-DSP Off-RT Evaluation ("Nenhum candidato"):**
+8. **SIMD Outside DSP / Non-DSP Off-RT Evaluation ("No Candidate"):**
 
    - Non-DSP off-RT routines (such as `.namb` CRC32 checksum calculation in `src/loader/namb/header.rs`, JSON metadata deserialization via `serde_json`, model tensor allocation/zeroing in `AlignedVec`, and CabSim IR WAV loading) were systematically audited against the project's $\ge 12\%$ ROI gate.
    - All evaluated off-RT paths execute outside the real-time audio thread (during model loading or preset switching) and are fundamentally bound by disk I/O (`std::fs::read`) or memory bandwidth.
-   - In accordance with the project's strict ROI policy ("Sem 12% → fechar nenhum candidato"), no manual SIMD specialization is implemented outside the DSP engine. Serializers, parsers, and loaders remain in standard, idiomatic, safe Rust.
+   - In accordance with the project's strict ROI policy ("Without 12% → close as no candidate"), no manual SIMD specialization is implemented outside the DSP engine. Serializers, parsers, and loaders remain in standard, idiomatic, safe Rust.
 
 Key fused/tiled kernels built on top of this dispatch:
 
@@ -120,7 +120,7 @@ The monolithic math implementation was fragmented into domain-specific modules (
 
 - **Single-precision f32 processing:** All neural network backbones and projections operate on native `f32` weights and buffers to guarantee bit-exact interop parity with NAMCore. Full quality/performance rationale: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §1.
 - **Kahan summation:** Used in the interleaved 4× scalar-fallback dot products (`scalar_ref/dot.rs`) to bound relative accumulation error at `O(ε)` instead of `O(N·ε)`. Static conv1d paths use plain `+=` (error for K≤3 taps is below −129 dBFS, inaudible).
-- **Deterministic dither:** A fixed `−220 dBFS` DC offset is added at the input stage ([apply_input_stage](../src/dsp/pipeline/stages/input.rs#L41)) and subtracted at the output ([apply_output_stage](../src/dsp/pipeline/stages/output.rs#L19)), keeping activations out of subnormal ranges during silence without any net signal change. Full analysis: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §6.
+- **Deterministic dither:** A fixed `−220 dBFS` DC offset is added at the input stage ([apply_input_stage](../src/dsp/pipeline/stages/input.rs#L42)) and subtracted at the output ([apply_output_stage](../src/dsp/pipeline/stages/output.rs#L19)), keeping activations out of subnormal ranges during silence without any net signal change. Full analysis: [docs/audio_fidelity_map.md](audio_fidelity_map.md) §6.
 
 ### 1.4 NAMB Binary Format (Native Audio Model Binary)
 
@@ -237,15 +237,19 @@ graph TD
 
 NeuralAmpModeler-rs uses *feature flags* to control optional capabilities:
 
-| Feature               | Compilation Command                    | Description                                                 |
-|:--------------------- |:-------------------------------------- |:----------------------------------------------------------- |
-| **DSP Lib** (default) | `cargo build --lib`                    | Core DSP engine (rlib). No external audio dependencies.     |
-| **testing**           | `cargo build --features testing --lib` | Test utilities, generators, and perceptual metrics enabled. |
-| **stereo**            | `cargo build --features stereo --lib`  | Stereo/multi-channel dual-model loader support.             |
+| Feature               | Compilation Command                           | Description                                                                              |
+|:--------------------- |:--------------------------------------------- |:---------------------------------------------------------------------------------------- |
+| **DSP Lib** (default) | `cargo build --lib`                           | Core DSP engine (rlib) targeting `x86-64-v3`. No external audio dependencies.            |
+| **`stereo`**          | `cargo build --features stereo --lib`         | Multi-channel / stereo dual-model loader and processing support.                         |
+| **`testing`**         | `cargo build --features testing --lib`        | Off-RT test utilities, audio signal generators, and perceptual metrics.                  |
+| **`heap-audit`**      | `cargo build --features heap-audit --lib`     | Memory allocation tracking and zero-heap-allocation verification watchdog.               |
+| **`long_bench`**      | `cargo bench --features long_bench`           | Extended long-form Criterion inference benchmarks (>30s per model).                      |
+| **`dynamic-engine`**  | `cargo build --features dynamic-engine --lib` | Forces selection of dynamic execution paths instead of optimized static profiles (test). |
+| **`avx512`**          | `cargo build --features avx512 --lib`         | Opt-in research/measurement kernels for AVX-512 upward dispatch (not used in default).   |
 
 #### 3.1.1 Feature Flag: `dynamic-engine`
 
-> **Scope:** The `dynamic-engine` feature flag (`Cargo.toml:140`) controls **exclusively** a scalar per-frame fallback path inside the `WaveNetA2` fast-path (`src/models/a2/model/static/process.rs:299-427`). It enables runtime handling of A2 layers whose convolution does not match the CH=3 (A2-Lite) or CH=8 (A2-Full) specialized kernels — e.g., grouped, depthwise, or heterogeneous-channel convolutions within an A2 model.
+> **Scope:** The `dynamic-engine` feature flag (`Cargo.toml:141`) controls **exclusively** a scalar per-frame fallback path inside the `WaveNetA2` fast-path (`src/models/a2/model/static/process.rs:299-427`). It enables runtime handling of A2 layers whose convolution does not match the CH=3 (A2-Lite) or CH=8 (A2-Full) specialized kernels — e.g., grouped, depthwise, or heterogeneous-channel convolutions within an A2 model.
 > **When disabled** (production default), generic A2 convolutions are impossible by construction: the A2 loaders enforce CH∈{3,8} at parse time, and the fallback block compiles to `unreachable!()` with a static invariant message.
 > **When enabled** (testing / scaffolding), the scalar fallback is compiled in, allowing A2 models with non-standard channel geometries to execute inference correctly — at the cost of per-frame scalar processing (no SIMD tile optimization) for those layers.
 > **What this flag does NOT control:** The main dynamic engine variants — `WaveNetModelDyn`, `LstmModelDyn`, and `WaveNetA2Dyn` — are **always compiled** as integral variants of the `StaticModel` enum (§1.1, Structural Dispatch). These engines handle free-shape models (A1 WaveNet, LSTM, and A2 with runtime channel counts) regardless of the `dynamic-engine` flag. The flag is narrowly scoped to the A2 fast-path's internal scalar branch for non-standard convolution geometries.
@@ -308,7 +312,7 @@ Each 2× stage uses a **Kaiser-windowed half-band FIR filter** (25 taps, β=12, 
 
 **RT-Safety:** All filter coefficients, ring buffers, and scratch space are allocated at `OversampleEngine::new()`, outside the audio thread. `process()` only reads/writes pre-allocated buffers — zero allocations, zero heap-drops. Factor changes trigger an off-RT rebuild (host thread constructs new engines → SPSC → audio thread swaps inline).
 
-> **References:** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs) (`model_process_stereo_with_os()`), [`src/common/spsc/status.rs`](../src/common/spsc/status.rs) (`RT_STATUS_NEEDS_OS_REBUILD`).
+> **References:** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs) (invoking `model_process_stereo_with_os()` from [`src/dsp/pipeline/stages/routing.rs`](../src/dsp/pipeline/stages/routing.rs); sibling tests in `inference_test.rs`), [`src/common/spsc/status.rs`](../src/common/spsc/status.rs) (`RT_STATUS_NEEDS_OS_REBUILD`).
 
 ### 4.4 Adaptive Compute: Graceful CPU Fallback
 

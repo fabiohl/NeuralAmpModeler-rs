@@ -151,11 +151,11 @@ The following dynamic models and container architectures are established as perm
 
 These models are protected by:
 
-- **Clone exact regression** (`wavenet_clone_exact_test.rs`) — `test_clone_exact_wavenet_official`, `test_clone_exact_wavenet_condition_dsp`
-- **Loader gap regression** (`golden_vectors.rs`) — `test_loader_gap_slimmable_container` (validates ReLU support)
-- **Golden vectors** (`golden_vectors.rs`) — v1 golden tests for `wavenet_official` and `wavenet_condition_dsp`
-- **Self-consistency** — `test_auto_consistency_wavenet_official`
-- **Live cross-validation** (`cpp_parity.rs`) — `live_cross_validation_wavenet_condition_dsp` (v1+v2), `live_cross_validation_wavenet_official`
+- **Clone exact regression** ([`tests/models/wavenet_clone_exact_test.rs`](../tests/models/wavenet_clone_exact_test.rs)) — `test_clone_exact_wavenet_official`, `test_clone_exact_wavenet_condition_dsp`
+- **Loader gap regression** ([`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)) — `test_loader_gap_slimmable_container` (validates ReLU support)
+- **Golden vectors** ([`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)) — v1 golden tests for `wavenet_official` and `wavenet_condition_dsp`
+- **Self-consistency** ([`tests/models/self_consistency.rs`](../tests/models/self_consistency.rs)) — `test_auto_consistency_wavenet_official`
+- **Live cross-validation** ([`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs)) — `live_cross_validation_wavenet_condition_dsp` (v1+v2), `live_cross_validation_wavenet_official`
 
 ---
 
@@ -186,13 +186,13 @@ These models are protected by:
 
 Every layer in the DSP pipeline is covered by structural invariance tests that verify mathematically defined boundary conditions:
 
-| Domain               | Invariant                                         | Verified By              | Failure Mode Prevented                     |
-|:-------------------- |:------------------------------------------------- |:------------------------ |:------------------------------------------ |
-| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | `pipeline_block_test.rs` | Receptive-field phase drift                |
-| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | `models.rs`              | Historical state contamination             |
-| **SPSC Hot-Swap**    | Seamless model swap during active audio           | `perf_soak.rs`           | RT thread audio click / priority inversion |
-| **Denormal Armor**   | Zero denormal execution penalty                   | `ops.rs`                 | CPU stall from subnormal float microcode   |
-| **Allocation Guard** | 0 heap allocations on audio callback              | `rt_constraints.rs`      | RT deadline breach via OS allocator lock   |
+| Domain               | Invariant                                         | Verified By                                                                             | Failure Mode Prevented                     |
+|:-------------------- |:------------------------------------------------- |:--------------------------------------------------------------------------------------- |:------------------------------------------ |
+| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`src/dsp/pipeline/pipeline_block_test.rs`](../src/dsp/pipeline/pipeline_block_test.rs) | Receptive-field phase drift                |
+| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models.rs`](../tests/models.rs)                                                 | Historical state contamination             |
+| **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                           | RT thread audio click / priority inversion |
+| **Denormal Armor**   | Zero denormal execution penalty                   | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                                   | CPU stall from subnormal float microcode   |
+| **Allocation Guard** | 0 heap allocations on audio callback              | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                                 | RT deadline breach via OS allocator lock   |
 
 ---
 
