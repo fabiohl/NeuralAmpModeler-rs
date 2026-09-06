@@ -535,9 +535,9 @@ parse_golden_vectors() {
     local parsed="$PARSEDIR/golden_vectors.parsed"
     LC_ALL=C awk '
     BEGIN { label=""; rate=""; mode="Live" }
-    /^\[NeuralAmpModelerCore/ && /NAM-rs — / {
+    /^\[NeuralAmpModelerCore/ && /NeuralAmpModeler-rs — / {
         line = $0
-        sub(/^\[NeuralAmpModelerCore.*NAM-rs — /, "", line)
+        sub(/^\[NeuralAmpModelerCore.*NeuralAmpModeler-rs — /, "", line)
         sub(/\]$/, "", line)
         at_pos = index(line, " @ ")
         if (at_pos > 0) {

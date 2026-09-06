@@ -6,16 +6,16 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 # Perceptual Validation & Measurement Framework
 
 This document describes the complete measurement and perceptual validation infrastructure
-for cross-validating `nam-rs` inference quality against precision references (C++
+for cross-validating NeuralAmpModeler-rs inference quality against precision references (C++
 `NeuralAmpModelerCore`, f64 oracle) and for standalone audio fidelity assessment.
 
 ## Measurement Philosophy
 
-`nam-rs` validates inference quality through two independent references:
+NeuralAmpModeler-rs validates inference quality through two independent references:
 
 1. **Parity Reference** — C++ `NeuralAmpModelerCore` (f32): Measures implementation agreement against
    the upstream reference. Both engines use f32 arithmetic and exact-grade activations in their
-   respective default modes (`Standard` in NAM-rs; `using_fast_tanh = false` / libm `tanhf` in
+   respective default modes (`Standard` in NeuralAmpModeler-rs; `using_fast_tanh = false` / libm `tanhf` in
    NAMcore), so ESR targets are orders of magnitude lower (1e-5 to 3e-7) than modeling error
    baselines. See [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs) and
    [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs).
@@ -50,7 +50,7 @@ all parity gates.
 
 **Limitation.** ESR is a global time-domain error metric — it is insensitive to
 aliasing artifacts (Sato & Smith, DAFx 2025) and does not correlate linearly with
-human auditory perception (Wright & Välimäki, ICASSP 2020). This is why `nam-rs`
+human auditory perception (Wright & Välimäki, ICASSP 2020). This is why NeuralAmpModeler-rs
 supplements ESR with spectral metrics (MR-STFT, ASR) that capture frequency-domain
 and aliasing-specific degradation modes that ESR alone cannot detect.
 
@@ -70,7 +70,7 @@ and aliasing-specific degradation modes that ESR alone cannot detect.
 
 ## 3-Tier Gate Hierarchy
 
-`nam-rs` validation uses a three-tier gate system that governs how thresholds evolve from tight per-model
+NeuralAmpModeler-rs validation uses a three-tier gate system that governs how thresholds evolve from tight per-model
 values through sample-rate and stress-signal relaxation, ultimately bounded by absolute sentinels.
 See [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_calibrated_threshold`) and [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs).
 
@@ -559,7 +559,7 @@ exceeding the calibration bounds inject approximation error into `cₜ`, which a
 
 ### Resolution via Standard Precision Mode
 
-When `nam-rs` runs in `Standard` mode (exact-grade polynomial activations, universal production default)
+When NeuralAmpModeler-rs runs in `Standard` mode (exact-grade polynomial activations, universal production default)
 and C++ NAMCore runs in its default mode (`using_fast_tanh = false`), the interop gap collapses
 to near-zero (~1e-11 to ~1e-12). This confirms that interop divergence in `Fast` mode is caused by differing
 approximation algorithms across runtimes, rather than structural engine bugs.

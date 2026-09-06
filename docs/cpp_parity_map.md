@@ -3,10 +3,10 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# C++ ↔ Rust Parity Audit — NeuralAmpModelerCore × NAM-rs
+# C++ ↔ Rust Parity Audit — NeuralAmpModelerCore × NeuralAmpModeler-rs
 
 Ground-truth comparison between the canonical C++ reference, **NeuralAmpModelerCore**
-("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the NAM-rs
+("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the NeuralAmpModeler-rs
 Rust engine (`src/`). Two independent oracles serve complementary roles: **NAMcore**
 preserves market compatibility with existing models (interop parity), while the **f64
 reference oracle** measures fidelity against the mathematical ideal (precision).
@@ -39,13 +39,13 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 
 ### 1.1 Two axes of correctness
 
-1. **Market-compatibility parity** (NAMcore oracle) — does NAM-rs match NAMcore within
+1. **Market-compatibility parity** (NAMcore oracle) — does NeuralAmpModeler-rs match NAMcore within
    float tolerance? Verified with committed golden vectors (`tests/fixtures/*.bin`, generated
    by the C++ `render` tool) and live cross-validation (`tests/parity/cpp_parity.rs`). This
    oracle preserves seamless interop with the existing NAM model ecosystem. All weights are
    native f32 (weight quantization was eliminated; NAMcore never quantized).
 
-2. **Mathematical-ideal fidelity** (f64 oracle) — how far is NAM-rs from the exact
+2. **Mathematical-ideal fidelity** (f64 oracle) — how far is NeuralAmpModeler-rs from the exact
    mathematics? Measured against an independent f64 reference oracle
    (`src/testing/reference_oracle/mod.rs`), itself cross-checked against a third, independent
    NumPy f64 implementation. This oracle isolates the genuine precision floor — quantifying
@@ -54,13 +54,13 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 
 ### 1.2 Two-Oracle Governance Policy
 
-NAM-rs uses two oracles with complementary roles and **equal authority** — neither has
+NeuralAmpModeler-rs uses two oracles with complementary roles and **equal authority** — neither has
 automatic prevalence over the other.
 
-| Oracle      | Question Answered                                                                        | Authority                           |
-|:----------- |:---------------------------------------------------------------------------------------- |:----------------------------------- |
-| **NAMcore** | Does NAM-rs produce audio compatible with the existing model ecosystem? (market interop) | Sole arbiter of interop parity      |
-| **f64**     | What is the mathematical ideal, and how far is NAM-rs from it? (precision floor)         | Sole arbiter of ideal-math fidelity |
+| Oracle      | Question Answered                                                                                     | Authority                           |
+|:----------- |:----------------------------------------------------------------------------------------------------- |:----------------------------------- |
+| **NAMcore** | Does NeuralAmpModeler-rs produce audio compatible with the existing model ecosystem? (market interop) | Sole arbiter of interop parity      |
+| **f64**     | What is the mathematical ideal, and how far is NeuralAmpModeler-rs from it? (precision floor)         | Sole arbiter of ideal-math fidelity |
 
 **Disagreement protocol:**
 
@@ -279,7 +279,7 @@ floats for the declared topology.
 
 ### 2.5 Native f32 backbone weights and activation precision
 
-**Backbone Weight Precision:** NAM-rs uses native `f32` weight storage across all LSTM layers, matching NAMcore's `Eigen::MatrixXf` representation (`NAM/lstm.h:38-39`). Eliminating historical weight quantization removed GEMV dequantization overhead, reducing per-sample latency while ensuring bit-exact interop parity for models such as `BossLSTM-2x8` (ESR = 0.00e0 vs NAMcore).
+**Backbone Weight Precision:** NeuralAmpModeler-rs uses native `f32` weight storage across all LSTM layers, matching NAMcore's `Eigen::MatrixXf` representation (`NAM/lstm.h:38-39`). Eliminating historical weight quantization removed GEMV dequantization overhead, reducing per-sample latency while ensuring bit-exact interop parity for models such as `BossLSTM-2x8` (ESR = 0.00e0 vs NAMcore).
 
 **Measured Interop Results (Standard Mode):**
 
@@ -298,7 +298,7 @@ floats for the declared topology.
 ### 2.6 Scope divergence: mono-only, no zero-layer support
 
 C++ `LSTM` generalizes to arbitrary `in_channels`/`out_channels` and `num_layers == 0`
-(pass-through, `lstm.cpp:139-149`). NAM-rs restricts to mono in/out and rejects degenerate
+(pass-through, `lstm.cpp:139-149`). NeuralAmpModeler-rs restricts to mono in/out and rejects degenerate
 topologies at detection time via `get_lstm_topology` (`src/loader/nam_json/topology/lstm.rs`):
 
 - **Multi-channel `in_channels`/`out_channels` not in `{1, None}`** → `Err(JsonError::UnsupportedMultiChannel { architecture: "LSTM", field, value })`.
@@ -379,7 +379,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
 
 ### 2.9 192 kHz Limitation: LSTM
 
-**Status:** FUNDAMENTAL UPSTREAM LIMITATION — not a NAM-rs bug.
+**Status:** FUNDAMENTAL UPSTREAM LIMITATION — not a NeuralAmpModeler-rs bug.
 
 The C++ NAMcore `render` tool produces **NaN**
 from recurrent-state overflow when processing LSTM models at 192 kHz. The root
@@ -445,12 +445,12 @@ and the corresponding Rust modules (`src/models/wavenet/`, `src/loader/dispatche
 
 The vendored C++ source does not define separate SKU classes for different channel counts. `nam::wavenet::create_config` (`model.cpp:1227-1241`) has exactly two branches: (1) `a2_fast::is_a2_shape()` for the A2 fast path (§4), and (2) a single generic Eigen-based implementation (`detail::Layer` / `detail::LayerArray` / `WaveNet`) for all other WaveNet models regardless of channel count.
 
-"Standard/Lite/Feather/Nano" (16/12/8/4 channels) are a **NAM-rs-side performance
+"Standard/Lite/Feather/Nano" (16/12/8/4 channels) are a **NeuralAmpModeler-rs-side performance
 optimization**: these four channel counts happen to cover the overwhelming majority of
-real-world community WaveNet exports, so NAM-rs const-generic-specializes them
+real-world community WaveNet exports, so NeuralAmpModeler-rs const-generic-specializes them
 (`WaveNetModel<CH, K, HEAD>`) for SIMD throughput, falling back to a heap-allocated
 `WaveNetModelDyn` for everything else. This is a legitimate and effective engineering strategy,
-but it is **NAM-rs's own catalog, not a mirror of any C++-side concept** — the correct framing is
+but it is **NeuralAmpModeler-rs's own catalog, not a mirror of any C++-side concept** — the correct framing is
 "const-generic fast path vs. generic fallback for the single C++ generic WaveNet class," not
 "C++ SKU X maps to Rust SKU X."
 
@@ -488,7 +488,7 @@ classify a model as a catalog SKU:
 | 4                                                                                                | same Lite-shaped dilation pattern, CH=4 ("Nano")     | `WaveNetModel<4, 3, 2>`  |
 | Anything else (any channel count, any array count, gated, `condition_size > 1`, post-stack head) | `WaveNetModelDyn`                                    |                          |
 
-This is a NAM-rs-internal classification only — see §3.1. A `condition_dsp` sub-model is **not**
+This is a NeuralAmpModeler-rs-internal classification only — see §3.1. A `condition_dsp` sub-model is **not**
 checked at all during catalog matching (see §3.6): a hypothetical 2-array, ungated, CH=16,
 Standard-dilation model that also declares a `condition_dsp` JSON key would still match `Known(Standard)`
 and be routed to the fast path, which has **zero `condition_dsp` handling** — it would be silently
@@ -503,7 +503,7 @@ construction (`condition_dsp`'s own prewarm requirement **plus** the **sum** of 
 array's receptive field, plus any post-stack head's receptive field, `model.cpp:615-620`), then
 literally calls `process()` with zero input that many times (`dsp.cpp:67-101`).
 
-NAM-rs's `WaveNetModel`/`WaveNetModelDyn::prewarm()` does **not** iterate. Because a purely
+NeuralAmpModeler-rs's `WaveNetModel`/`WaveNetModelDyn::prewarm()` does **not** iterate. Because a purely
 feedforward causal-conv stack driven by a constant input eventually converges to a constant
 output at every layer, `prewarm_internal()` computes that fixed point **analytically in one pass**:
 process a single zero-input frame through the rechannel (memoryless, exact for a single frame),
@@ -538,7 +538,7 @@ is passed in (`mod.rs:79-83, 107-109`).
 
 **Status:** FIXED — the gap described in previous revisions of this document (A1 `Free`/`Dynamic`
 path silently processing gated/FiLM/head1x1/layer1x1 WaveNet models as if unconfigured) has been
-closed. NAM-rs now **rejects** all such models at topology detection, fail-closed, before any
+closed. NeuralAmpModeler-rs now **rejects** all such models at topology detection, fail-closed, before any
 inference dispatch.
 
 **Mechanism:** `get_wavenet_topology` (`src/loader/nam_json/topology/wavenet.rs`) iterates over
@@ -766,8 +766,8 @@ Rust production code behavior (`src/models/wavenet/model_dyn.rs:236-251`): when
 `condition_size` (`cond`), the production engine **broadcasts** the first channel's
 value across all condition channels. This broadcast is present in both the A1
 dynamic path (`model_dyn.rs:240-247`) and the A2 dynamic/cascade paths (via the
-same `condition_dsp_output` buffer). This is a **NAM-rs-specific behavior** with
-no C++ precedent — it exists because NAM-rs loads models the upstream toolchain
+same `condition_dsp_output` buffer). This is a **NeuralAmpModeler-rs-specific behavior** with
+no C++ precedent — it exists because NeuralAmpModeler-rs loads models the upstream toolchain
 rejects.
 
 **Recommendation for T1.2 (oracle fix):** The f64 oracle's broadcast logic
@@ -779,7 +779,7 @@ here — not a parity claim.
 
 #### 3.9.5 Summary: canonical `condition_dsp` semantics
 
-| Aspect                                 | C++ (NAMcore v0.5.4)                                                        | Python trainer (v0.13.0)                               | Rust production (NAM-rs)                                     |
+| Aspect                                 | C++ (NAMcore v0.5.4)                                                        | Python trainer (v0.13.0)                               | Rust production (NeuralAmpModeler-rs)                        |
 |:-------------------------------------- |:--------------------------------------------------------------------------- |:------------------------------------------------------ |:------------------------------------------------------------ |
 | `condition_dsp` matrix rows            | `condition_dsp->NumOutputChannels()`                                        | `condition_dsp.head.out_channels`                      | `condition_dsp.num_output_channels()`                        |
 | Dimension enforcement                  | Hard assertion: `condition_size == NumOutputChannels()` (throw on mismatch) | Structural match (fails dimension check in forward)    | `assert` on max channels; broadcasts when `dsp_ch < cond`    |
@@ -857,7 +857,7 @@ engine (itself golden-C++-confirmed at ESR 1.11e-14).
 "A2" designates the newer WaveNet variant: `a2_fast.cpp` is C++'s **optimized, shape-restricted**
 fast path (exactly 23 layers, fixed kernel/dilation pattern, CH∈{3,8}, LeakyReLU-only, no
 gating/FiLM/head1x1 — `a2_fast.cpp:754-885`); anything not matching that exact shape falls
-through to the same generic `NAM/wavenet/model.cpp` used by A1 (§3.1). NAM-rs mirrors this split
+through to the same generic `NAM/wavenet/model.cpp` used by A1 (§3.1). NeuralAmpModeler-rs mirrors this split
 faithfully: `WaveNetA2<3>`/`WaveNetA2<8>` (fast path) vs. `WaveNetA2Dyn`/`WaveNetA2Cascade`
 (everything else — FiLM, gating, blending, `condition_dsp`, multi-array cascade, `head1x1`).
 
@@ -1270,7 +1270,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
 
 - **`tests/parity/cpp_parity.rs` (live, `#[ignore]`d)** has no
   `live_cross_validation_wavenet_a2_dyn` test because `WaveNetA2Dyn`'s scalar fallback path is
-  a `nam-rs` internal extension for non-standard geometries not present in upstream C++ NAMcore.
+  a NeuralAmpModeler-rs internal extension for non-standard geometries not present in upstream C++ NAMcore.
   Cross-validation uses the synthetic dynamic builder anchor tests instead.
 
 - **Real, official `.nam` files exercised:**
@@ -1329,11 +1329,11 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
 Applies identically to LSTM, WaveNet A1, and A2 — all route through the common `NamModel` trait
 and the C++ `DSP` base class.
 
-| C++ (`NAM/dsp.h` / `dsp.cpp`)                                                                                              | Rust (`src/`)                                                                                                                                                                                                                        | Verdict                                                                                                                                                                                                                                                                           |
-|:-------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DSP::Reset(sr, maxBuf)` → `SetMaxBufferSize` + `prewarm()` iff `GetPrewarmOnReset()` (default `true`)                     | `NamModel::reset()` → `set_max_buffer_size` + `prewarm()` iff `prewarm_on_reset()` (default `true`)                                                                                                                                  | ✅ Match — verified for LSTM (§2.2) and WaveNet A1 (§3.5); A2 not re-verified this pass                                                                                                                                                                                           |
-| `DSP::GetPrewarmSamples()` base returns `0`; overridden per-model; used by the **iterative** `DSP::prewarm()` loop         | `prewarm_samples()` per-model override                                                                                                                                                                                               | ✅ LSTM verified exact (`0.5 × sr`), load-bearing (drives real iteration). ✅ WaveNet A1 now correctly sums all arrays + condition_dsp + post-stack head (§3.5 FIXED); `prewarm()` discards arg and runs analytical fill. A2 not re-verified this pass.                           |
-| `Activation::using_fast_tanh` default `false` (exact `tanh`/`sigmoid`); only flipped by benchmark tools, never by `render` | Activation precision selected via `ActivationPrecision::{Fast, Standard}`; `Fast` uses Padé/minimax approximations, not exact math. `Standard` (exact-grade polynomial, universal default) matches C++ exact math parity within 2e-7 | ⚠ **Intentional divergence, not a bug.** C++'s reference path used for goldens is exact math; NAM-rs's `Fast` mode trades a small, bounded approximation error for throughput. `Standard` (exact-grade default) narrows this to identical parity within measurement noise (§2.5). |
+| C++ (`NAM/dsp.h` / `dsp.cpp`)                                                                                              | Rust (`src/`)                                                                                                                                                                                                                        | Verdict                                                                                                                                                                                                                                                                                        |
+|:-------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DSP::Reset(sr, maxBuf)` → `SetMaxBufferSize` + `prewarm()` iff `GetPrewarmOnReset()` (default `true`)                     | `NamModel::reset()` → `set_max_buffer_size` + `prewarm()` iff `prewarm_on_reset()` (default `true`)                                                                                                                                  | ✅ Match — verified for LSTM (§2.2) and WaveNet A1 (§3.5); A2 not re-verified this pass                                                                                                                                                                                                        |
+| `DSP::GetPrewarmSamples()` base returns `0`; overridden per-model; used by the **iterative** `DSP::prewarm()` loop         | `prewarm_samples()` per-model override                                                                                                                                                                                               | ✅ LSTM verified exact (`0.5 × sr`), load-bearing (drives real iteration). ✅ WaveNet A1 now correctly sums all arrays + condition_dsp + post-stack head (§3.5 FIXED); `prewarm()` discards arg and runs analytical fill. A2 not re-verified this pass.                                        |
+| `Activation::using_fast_tanh` default `false` (exact `tanh`/`sigmoid`); only flipped by benchmark tools, never by `render` | Activation precision selected via `ActivationPrecision::{Fast, Standard}`; `Fast` uses Padé/minimax approximations, not exact math. `Standard` (exact-grade polynomial, universal default) matches C++ exact math parity within 2e-7 | ⚠ **Intentional divergence, not a bug.** C++'s reference path used for goldens is exact math; NeuralAmpModeler-rs's `Fast` mode trades a small, bounded approximation error for throughput. `Standard` (exact-grade default) narrows this to identical parity within measurement noise (§2.5). |
 
 ### 5.1 Sample Rate Default Policy (F-P3)
 
@@ -1343,7 +1343,7 @@ JSON. When `expected_sample_rate == -1.0`, the LSTM prewarm computation
 (`NAM/lstm.cpp:128`) produces `max(1, (int)(0.5 × -1.0)) = 1` sample — effectively
 disabling prewarm.
 
-**NAM-rs policy:** `sample_rate` absence defaults to **48000 Hz**
+**NeuralAmpModeler-rs policy:** `sample_rate` absence defaults to **48000 Hz**
 (`src/loader/loaded_model_pair.rs:13`, `pub(crate) const DEFAULT_SAMPLE_RATE: f32 = 48000.0`).
 This value drives the real prewarm computation for LSTM (24000 samples at 48 kHz) and the
 sample-rate-dependent logic in `DSP::Reset()` for all architectures.
@@ -1351,13 +1351,13 @@ sample-rate-dependent logic in `DSP::Reset()` for all architectures.
 **Rationale:** the 48000 Hz default produces a correct, functional prewarm rather than the
 C++ sentinel's near-zero prewarm (1 sample). All known production `.nam` models include
 `sample_rate` explicitly, so the default is only exercised by degenerate or hand-crafted
-models. In those cases, NAM-rs's behavior is measurably "more correct" — the model settles
+models. In those cases, NeuralAmpModeler-rs's behavior is measurably "more correct" — the model settles
 to its steady state — while C++'s sentinel produces effectively no prewarm at all.
 
 **Divergence assessment:** This is an **intentional, documented, low-risk divergence**.
 It does not affect any known production model (every real community `.nam` export includes
 `sample_rate`). The behavior affects only the degenerate zero-`sample_rate` case, where
-NAM-rs's prewarm is strictly superior. The C++ sentinel is not emulated, and emulating it
+NeuralAmpModeler-rs's prewarm is strictly superior. The C++ sentinel is not emulated, and emulating it
 has no practical benefit for any real-world use case.
 
 **Verification:** this policy is enforced at two levels:
@@ -1376,7 +1376,7 @@ has no practical benefit for any real-world use case.
 to accelerate inference on systems without fast `expf` hardware. It is controlled by
 `Activation::enable_fast_tanh()` and `Activation::using_fast_tanh`.
 
-**Status in NAM-rs:** `FastLUTActivation` is **not ported** and has no NAM-rs equivalent.
+**Status in NeuralAmpModeler-rs:** `FastLUTActivation` is **not ported** and has no NeuralAmpModeler-rs equivalent.
 This is **not a parity gap** for the following reasons:
 
 - `FastLUTActivation` is a **runtime optimization**, not a format/algorithm feature.
@@ -1388,7 +1388,7 @@ This is **not a parity gap** for the following reasons:
   (`tools/benchmodel*.cpp`), not from `render.cpp`. This is confirmed in the NAMcore
   audited source (`activations.h:14`: `static bool using_fast_tanh = false` is the only
   initialization, and only `benchmodel*.cpp` flips it — verified by grep of all callers).
-- NAM-rs's `ActivationPrecision::Standard` (universal default) already produces exact-grade
+- NeuralAmpModeler-rs's `ActivationPrecision::Standard` (universal default) already produces exact-grade
   `tanh`/`sigmoid` within 2×10⁻⁷ of C++'s exact math, making the LUT precision tradeoff
   irrelevant.
 
@@ -1402,7 +1402,7 @@ ConvNet, Linear, `SlimmableContainer`, and the IR Cabsim convolution stage compl
 
 - **ConvNet — Total Initialization and Arithmetic Parity (✅ resolved 2026-07-28).** The vendored
   NAMcore implements ConvNet (`NAM/convnet.cpp`) using a flat format with raw BatchNorm parameters.
-  NAM-rs uses a nested per-block format with pre-fused scale/offset BatchNorm
+  NeuralAmpModeler-rs uses a nested per-block format with pre-fused scale/offset BatchNorm
   ([`src/loader/dispatcher/convnet/mod.rs`](../src/loader/dispatcher/convnet/mod.rs)). The previously reported
   ESR divergence of `2.54e-5` (SNR `45.9 dB`) was **exclusively a state initialization (prewarm) transient**
   confined to the first 62 samples — `ConvNetModel::prewarm()` previously filled literal zeros per

@@ -5,13 +5,13 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # Audio Fidelity Map — Off-Spec DSP Design Decisions
 
-Every engineering decision in `nam-rs` that lies **outside the strict NAM model specification** and
+Every engineering decision in NeuralAmpModeler-rs that lies **outside the strict NAM model specification** and
 influences audio fidelity, real-time (RT) safety, or user experience is catalogued here. For each factor:
 what it is, whether it is mandatory or optional, the sonic and performance impact, and where to
 find the implementation.
 
 The NAM specification defines only: topology (WaveNet, LSTM, A2, ConvNet), stored weight values,
-and the mathematical forward pass. Everything below is a `nam-rs` implementation choice — not part
+and the mathematical forward pass. Everything below is a NeuralAmpModeler-rs implementation choice — not part
 of the `.nam` / `.namb` file format contract.
 
 ---
@@ -34,7 +34,7 @@ of the `.nam` / `.namb` file format contract.
 
 ## 1. Native f32 Weight Representation & Numerical Error Budgets
 
-**What it is.** All neural model weight matrices in `nam-rs` are stored and processed natively as `f32` vectors, matching the reference NAMCore engine (`Eigen::MatrixXf`/`VectorXf`).
+**What it is.** All neural model weight matrices in NeuralAmpModeler-rs are stored and processed natively as `f32` vectors, matching the reference NAMCore engine (`Eigen::MatrixXf`/`VectorXf`).
 
 **Rationale for removing weight compression (f16c / bfloat16).** An earlier optimization using half-precision (`f16c`/`bf16`) weight compression and hardware dot-product instructions (`vdpbf16ps`) was thoroughly evaluated and removed from production dispatch:
 
@@ -48,7 +48,7 @@ of the `.nam` / `.namb` file format contract.
 
 ## 2. Activation Precision — Standard (exact-grade) vs Fast (Padé)
 
-**What it is.** Neural models rely on non-linear activations (`tanh`, `sigmoid`). `nam-rs` provides two approximation modes controlled via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS) in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs):
+**What it is.** Neural models rely on non-linear activations (`tanh`, `sigmoid`). NeuralAmpModeler-rs provides two approximation modes controlled via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS) in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs):
 
 | Mode                   | Activation Kernel                            | Max Absolute Error      | Approx Error (dBFS) | Compute Impact  |
 |:---------------------- |:-------------------------------------------- |:-----------------------:|:-------------------:|:---------------:|
@@ -88,7 +88,7 @@ Standard mode is most effective when paired with 4× neural stage oversampling (
 
 ## 3. LSTM Recurrent State Precision & Interop Parity
 
-**Measured Interop Parity.** Under `ActivationPrecision::Standard`, recurrent state drift between `nam-rs` and reference NAMCore is eliminated across all LSTM model variants:
+**Measured Interop Parity.** Under `ActivationPrecision::Standard`, recurrent state drift between NeuralAmpModeler-rs and reference NAMCore is eliminated across all LSTM model variants:
 
 | Model                   | ESR vs NAMCore (Standard) | SNR vs NAMCore | ESR vs Ideal (f64 Oracle) | Status                   |
 |:----------------------- |:-------------------------:|:--------------:|:-------------------------:|:------------------------:|
@@ -102,7 +102,7 @@ Standard mode is most effective when paired with 4× neural stage oversampling (
 
 A critical distinction must be drawn between steady-state fidelity and cold-start unit testing:
 
-1. **Canonical Steady-State (Prewarmed):** Measured after a 24,000-sample warmup period. In steady-state regime, `nam-rs` matches NAMCore to float32 precision limits (ESR ≈ 1e-11 to 1e-13, SNR 110–121 dB) and tracks the mathematical `f64` oracle to ESR ≈ 5.7e-13 to 2.7e-12.
+1. **Canonical Steady-State (Prewarmed):** Measured after a 24,000-sample warmup period. In steady-state regime, NeuralAmpModeler-rs matches NAMCore to float32 precision limits (ESR ≈ 1e-11 to 1e-13, SNR 110–121 dB) and tracks the mathematical `f64` oracle to ESR ≈ 5.7e-13 to 2.7e-12.
 2. **Cold-Start Decomposition (256 samples without prewarm):** Short-window tests (`test_decomposition_*` in `tests/parity/reference_oracle_f64.rs`) measure initial buffer-filling transients for architectures whose receptive field or recurrent memory exceeds 256 samples. These transient numbers reflect cold state initialization, not the steady-state precision floor. Consult [`docs/perceptual_validation.md`](perceptual_validation.md) §Decomposition Cold-Start for methodological details.
 
 #### Empirical Cold-Start Error Decomposition (`quality-contract.json`)
@@ -161,7 +161,7 @@ These models are protected by:
 
 ## 4. Host Sample Rate Adaptation (Polyphase Sinc Resampler)
 
-**What it is.** NAM models are trained at 48 kHz. When host DAW software operates at a different sample rate (e.g., 44.1 kHz, 88.2 kHz, 96 kHz, 192 kHz), `nam-rs` performs rate conversion using a native minimum-phase polyphase FIR sinc resampler ([`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs)).
+**What it is.** NAM models are trained at 48 kHz. When host DAW software operates at a different sample rate (e.g., 44.1 kHz, 88.2 kHz, 96 kHz, 192 kHz), NeuralAmpModeler-rs performs rate conversion using a native minimum-phase polyphase FIR sinc resampler ([`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs)).
 
 **Configuration.** 256 phases × 64 taps, Kaiser window ($\beta = 12$), minimum-phase filter by default. A linear-phase variant is available internally for offline processing.
 
@@ -218,7 +218,7 @@ Latency is reported dynamically to the host via `OversampleEngine::latency_sampl
 - Host parameter: Oversampling parameter (stepped enum, state-persisted)
 - Mode changes trigger lock-free SPSC garbage-collected engine rebuilds off the real-time thread.
 
-**ADAA Rejection Rationale.** Antiderivative Anti-Aliasing (ADAA) requires analytical antiderivatives per activation function, conflicting with `nam-rs`'s generic SIMD dispatch macro (`dispatch_simd!`) and multi-architecture model dispatcher. Half-band FIR oversampling is activation-agnostic and universally compatible across all topologies.
+**ADAA Rejection Rationale.** Antiderivative Anti-Aliasing (ADAA) requires analytical antiderivatives per activation function, conflicting with NeuralAmpModeler-rs's generic SIMD dispatch macro (`dispatch_simd!`) and multi-architecture model dispatcher. Half-band FIR oversampling is activation-agnostic and universally compatible across all topologies.
 
 **Implementation.** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs) (`OversampleEngine`), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs), [`tests/models/oversampling_characterization.rs`](../tests/models/oversampling_characterization.rs).
 
@@ -281,7 +281,7 @@ Live dashboard measurements are updated via `utils/quality-dashboard.sh` and rec
 
 ## 10. Architectural Rationale Archive
 
-Key technical trade-offs validated during `nam-rs` development:
+Key technical trade-offs validated during NeuralAmpModeler-rs development:
 
 - **Native f32 Weights & Offline HQ Render:** The entire inference graph operates in 100% unquantized FP32 precision (`f32`) for both weights and activations. Memory bandwidth performance is achieved via 64-byte aligned vectorization (`AlignedVec<f32>`) and continuous strided AVX2 FMA rather than lossy F16/BF16 truncation. In Offline / Studio Master render mode, this guarantees bit-identical reproduction without the −64.9 dB drift floor seen in half-precision quantized engines.
 - **64-Tap Polyphase Resampler:** Benchmark analysis demonstrated that 32-tap filtering saved < 0.1% CPU (~40 ns/block) while causing catastrophic passband SNR degradation (~24 dB vs ≥100 dB).

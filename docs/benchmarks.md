@@ -5,11 +5,11 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # Performance Benchmarks (Criterion)
 
-The `nam-rs` project uses **Criterion.rs** as its official performance benchmarking suite. Given the latency-sensitive nature of a real-time audio engine (DSP), conducting measurements with statistical rigor is essential to avoid being misled by operating system variations (noise, context switches, clock fluctuations).
+The NeuralAmpModeler-rs project uses **Criterion.rs** as its official performance benchmarking suite. Given the latency-sensitive nature of a real-time audio engine (DSP), conducting measurements with statistical rigor is essential to avoid being misled by operating system variations (noise, context switches, clock fluctuations).
 
 > [!NOTE]
 > **Document scope.** This is the authoritative reference for Criterion benchmarking in
-> `nam-rs`: how to run/interpret benches, and the full rationale, workflow, and
+> NeuralAmpModeler-rs: how to run/interpret benches, and the full rationale, workflow, and
 > troubleshooting for the performance regression gate ([`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh)).
 > The functional/correctness `cargo test` suites ([`utils/tests-quick.sh`](../utils/tests-quick.sh), [`utils/tests-long.sh`](../utils/tests-long.sh))
 > and their feature/phase architecture are documented separately in [`testing.md`](testing.md);
@@ -81,7 +81,7 @@ WaveNet_Standard_CH16_64samp_48kHz
    * **Performance has improved / regressed**: The p-value confirmed that the source code change caused a measurable statistical difference (positive or negative).
    * **Change within noise threshold**: The p-value is high, the error margins overlap, or the variation is negligible. The detected change is noise.
 4. **Outliers (Jitter)**
-   Samples are run hundreds of times, and anomalies are reported. In a critical real-time system like `nam-rs`, occurrences of `high severe` are usually linked to *jitter* (processing glitches, audio thread preemption by the OS kernel, cache misses, etc.). Running benchmarks in shielded environments (SCHED_FIFO and CPU affinity enabled) mitigates outliers.
+   Samples are run hundreds of times, and anomalies are reported. In a critical real-time system like NeuralAmpModeler-rs, occurrences of `high severe` are usually linked to *jitter* (processing glitches, audio thread preemption by the OS kernel, cache misses, etc.). Running benchmarks in shielded environments (SCHED_FIFO and CPU affinity enabled) mitigates outliers.
 
 ## Temporal History (Baselines)
 
@@ -105,12 +105,12 @@ All historical tracking metrics are recorded in local files within your project 
 > decisions; their absolute numbers (e.g. WaveNet Std ≈ 92.6 µs) predate later optimizations
 > and are retained only to justify the decisions, not as current performance claims.
 
-*(Note: `nam-rs` intentionally disables HTML report generation with temporal charts in `Cargo.toml` (`default-features = false`) to omit downloading extensive visual dependencies, limiting evaluation to the console).*
+*(Note: NeuralAmpModeler-rs intentionally disables HTML report generation with temporal charts in `Cargo.toml` (`default-features = false`) to omit downloading extensive visual dependencies, limiting evaluation to the console).*
 
 ## Regression Gate — Catching Latency Degradation Before It Ships
 
 [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) is the **canonical home of benchmark-based
-performance defense** in `nam-rs`: the one script whose entire job is to stand as a
+performance defense** in NeuralAmpModeler-rs: the one script whose entire job is to stand as a
 statistical wall against DSP hot-path decay. It acts as a CI guard — it compares the
 current build against a persisted statistical baseline and fails the pipeline if a
 slowdown is detected. This is your primary tool to ensure that no commit silently pushes
@@ -377,7 +377,7 @@ Below is the average percentage distribution of cycles on an x86-64-v3 (AVX2) ar
 
 ### Data Flow Analysis (Array Level)
 
-At the `WaveNetLayerArray` level, the layer cascade dominates processing (**>90% of total time**). Interface stages (input **Rechannel** and output **Head Rechannel**) represent a negligible fixed overhead as the number of layers increases, validating the scalability of the `nam-rs` architecture for complex models.
+At the `WaveNetLayerArray` level, the layer cascade dominates processing (**>90% of total time**). Interface stages (input **Rechannel** and output **Head Rechannel**) represent a negligible fixed overhead as the number of layers increases, validating the scalability of the NeuralAmpModeler-rs architecture for complex models.
 
 > [!TIP]
 > Fusing **Tanh** with **Head Accumulation** was the most impactful optimization, reducing the activation stage budget from ~30% to ~15% by eliminating redundant passes through L1 Cache memory.
@@ -402,7 +402,7 @@ To process two frames in parallel:
 2. Instruction overhead in the frontend (e.g., broadcasts and blends) outweighed the savings on loads.
 3. The compiler was forced to use register spilling or hit execution port bottlenecks for blend/shuffle instructions (Port 5).
 
-**Conclusion:** The primary bottleneck of `Conv1D` in `nam-rs` is not tied to L1 Cache bandwidth, but rather to computational throughput and register contention in the backend (FMA). Because of this, while the kernel implementation has been kept in the `SimdMath` trait for portability and testing on architectures with more registers (e.g., AVX-512 or ARM NEON), the main loop in `WaveNetLayer` continues to use **Single-Frame processing** to ensure the lowest latency and highest real-time stability.
+**Conclusion:** The primary bottleneck of `Conv1D` in NeuralAmpModeler-rs is not tied to L1 Cache bandwidth, but rather to computational throughput and register contention in the backend (FMA). Because of this, while the kernel implementation has been kept in the `SimdMath` trait for portability and testing on architectures with more registers (e.g., AVX-512 or ARM NEON), the main loop in `WaveNetLayer` continues to use **Single-Frame processing** to ensure the lowest latency and highest real-time stability.
 
 ---
 

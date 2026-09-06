@@ -6,7 +6,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 # Research References — Annotated Technical Bibliography
 
 Annotated catalog of the scientific and normative literature that underpins the architectural,
-implementation, and quality-assurance decisions of the nam-rs project.
+implementation, and quality-assurance decisions of the NeuralAmpModeler-rs project.
 
 ---
 
@@ -18,9 +18,9 @@ implementation, and quality-assurance decisions of the nam-rs project.
 *"Aliasing Reduction in Neural Amp Modeling by Smoothing Activations."*
 DAFx 2025. arXiv:2505.04082.
 
-**Why relevant to nam-rs.** Demonstrates that neural amp models (WaveNet/TCN) generate significant
+**Why relevant to NeuralAmpModeler-rs.** Demonstrates that neural amp models (WaveNet/TCN) generate significant
 aliasing from nonlinear activation functions, especially on high fundamentals and high gain. Introduces
-the **ASR (Aliasing-to-Signal Ratio)** metric — the key missing measurement in nam-rs's QA arsenal.
+the **ASR (Aliasing-to-Signal Ratio)** metric — the key missing measurement in NeuralAmpModeler-rs's QA arsenal.
 Shows that smoother activations (tanh, Snake) reduce ASR without significantly increasing ESR, directly
 informing the activation precision analysis (P-5) and the trade-off between Padé tanh (Fast mode approximation) and exact-grade tanh (Standard mode default).
 
@@ -37,7 +37,7 @@ informing the activation precision analysis (P-5) and the trade-off between Pad�
 *"Anti-aliasing of neural distortion effects via model fine tuning."*
 DAFx 2025. arXiv:2505.11375.
 
-**Why relevant to nam-rs.** Shows that fine-tuning for anti-aliasing can outperform 2× oversampling,
+**Why relevant to NeuralAmpModeler-rs.** Shows that fine-tuning for anti-aliasing can outperform 2× oversampling,
 offering an alternative (or complementary) path to reducing aliasing. Motivates the multi-pronged
 approach: oversampling as the primary mechanism (user-controllable), with fine-tuning left as a
 potential future enhancement for shipped `.nam` models.
@@ -55,7 +55,7 @@ potential future enhancement for shipped `.nam` models.
 *"Oversampling for Nonlinear Waveshaping: Choosing the Right Filters."*
 Journal of the Audio Engineering Society, 67(6):440–449, 2019.
 
-**Why relevant to nam-rs.** Provides the theoretical foundation and practical filter design
+**Why relevant to NeuralAmpModeler-rs.** Provides the theoretical foundation and practical filter design
 guidelines for oversampling around nonlinear stages. The half-band Kaiser-window polyphase filter
 adopted (β=12, 25 taps, >100 dB stopband) follows the design methodology established in this
 paper. Also referenced in the resampler redesign for the HQ polyphase bank.
@@ -73,7 +73,7 @@ paper. Also referenced in the resampler redesign for the HQ polyphase bank.
 *"Reducing the Aliasing of Nonlinear Waveshaping Using Continuous-Time Convolution."*
 Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, 2016.
 
-**Why relevant to nam-rs.** Introduces **ADAA (Antiderivative Antialiasing)** of 1st order — a
+**Why relevant to NeuralAmpModeler-rs.** Introduces **ADAA (Antiderivative Antialiasing)** of 1st order — a
 low-cost alternative to oversampling for memoryless nonlinearities. Relevant as the theoretical
 baseline against which the oversampling approach was evaluated. ADAA was considered but
 ultimately **not adopted** because it would require per-model modification of the activation dispatch
@@ -93,9 +93,9 @@ ultimately **not adopted** because it would require per-model modification of th
 *"Antiderivative Antialiasing for Memoryless Nonlinearities."*
 IEEE Signal Processing Letters, 24(7):1049–1053, 2017.
 
-**Why relevant to nam-rs.** Extends ADAA to a rigorous theoretical framework for memoryless
+**Why relevant to NeuralAmpModeler-rs.** Extends ADAA to a rigorous theoretical framework for memoryless
 nonlinearities (tanh, sigmoid, ReLU). This paper provides the antiderivative formulas applicable
-to the activation functions used in nam-rs's WaveNet and LSTM models. Like R4, ADAA was
+to the activation functions used in NeuralAmpModeler-rs's WaveNet and LSTM models. Like R4, ADAA was
 architecturally evaluated and deferred in favor of oversampling; the formulas and feasibility
 analysis are preserved for potential future modes (e.g., embedded/high-performance targets).
 
@@ -112,7 +112,7 @@ analysis are preserved for potential future modes (e.g., embedded/high-performan
 *"Antiderivative Antialiasing for Stateful Systems."*
 Proceedings of the 22nd International Conference on Digital Audio Effects (DAFx-19), Birmingham, 2019.
 
-**Why relevant to nam-rs.** Extends ADAA to systems with internal state — the theoretical bridge to
+**Why relevant to NeuralAmpModeler-rs.** Extends ADAA to systems with internal state — the theoretical bridge to
 applying antialiasing to the LSTM cell itself (stateful recurrent nonlinearity). This paper is
 particularly pertinent because the LSTM head is the primary source of recurrent state quantization
 drift (previously documented in finding F-2; the f16c root cause has been removed). While ADAA for stateful systems
@@ -133,7 +133,7 @@ for LSTM-family models at high sample rates.
 Proceedings of the 27th International Conference on Digital Audio Effects (DAFx-24),
 Guildford, UK, 2024.
 
-**Why relevant to nam-rs.** Addresses the core problem of sample-rate dependency in recurrent
+**Why relevant to NeuralAmpModeler-rs.** Addresses the core problem of sample-rate dependency in recurrent
 neural networks — the very mechanism that causes LSTM timbre to change drastically under
 oversampling (documented in `docs/perceptual_validation.md` §Oversampling Characterization, evaluated across LSTM recurrent state precision). Proposes architectural
 modifications to make RNNs sample-rate independent, directly relevant to the observation that
@@ -155,12 +155,12 @@ for future sample-rate-agnostic LSTM models.
 Proceedings of the 28th International Conference on Digital Audio Effects (DAFx-25),
 Ancona, Italy, 2025.
 
-**Why relevant to nam-rs.** Extends ADAA (Antiderivative Antialiasing) to explicit, computable
+**Why relevant to NeuralAmpModeler-rs.** Extends ADAA (Antiderivative Antialiasing) to explicit, computable
 RNNs — specifically GRU and LSTM cells. Evaluated on pre-trained guitar amplifier models,
 showing that ADAA reduces aliasing considerably across all sample rates while only moderately
 affecting tonality, **without requiring high oversampling factors**. This is the theoretical
 bridge between R4/R5 (ADAA for memoryless nonlinearities) and the LSTM cell — the stateful
-recurrent nonlinearity that nam-rs's oversampling characterization (β3.1) identified as
+recurrent nonlinearity that NeuralAmpModeler-rs's oversampling characterization (β3.1) identified as
 problematic for timbre preservation. While ADAA for LSTM was architecturally evaluated and
 deferred in favor of oversampling + Standard (exact-grade) activations (I6), this paper validates the
 approach and anchors future work should the current mitigation strategy prove insufficient
@@ -182,7 +182,7 @@ for LSTM-family models at high sample rates.
 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), Barcelona, 2020.
 arXiv:1911.08922.
 
-**Why relevant to nam-rs.** Introduces perceptual weighting of the error signal (pre-emphasis
+**Why relevant to NeuralAmpModeler-rs.** Introduces perceptual weighting of the error signal (pre-emphasis
 A-weighting curve) in the loss function used to train NAM models. This directly informs the
 perceptual dimension of the activation precision analysis (P-5): the frequency-dependent
 relevance of approximation error — errors in the presence region (~2–5 kHz) are audibly more
@@ -202,12 +202,12 @@ complement to the standard (flat) ESR metric already implemented in `src/testing
 *"Real-Time Guitar Amplifier Emulation with Deep Learning."*
 Applied Sciences, 10(3):766, 2020.
 
-**Why relevant to nam-rs.** The seminal paper that defines the **ESR (Error-to-Signal Ratio)**
+**Why relevant to NeuralAmpModeler-rs.** The seminal paper that defines the **ESR (Error-to-Signal Ratio)**
 metric — the primary scale-invariant fidelity gate adopted by the NAM ecosystem and by
-nam-rs's cross-validation framework. Introduces the WaveNet-based architecture that became the
+NeuralAmpModeler-rs's cross-validation framework. Introduces the WaveNet-based architecture that became the
 NAM standard. Every parity test in `tests/parity/cpp_parity.rs`, `tests/models/golden_vectors.rs`, and
 `tests/common/validation.rs` uses ESR as the primary hard gate. Also documents
-the real-time feasibility of neural amp modeling, directly validating nam-rs's low-latency
+the real-time feasibility of neural amp modeling, directly validating NeuralAmpModeler-rs's low-latency
 live-path design.
 
 | Traceability | Reference                                                                                   |
@@ -225,12 +225,12 @@ networks with multi-resolution spectrogram."*
 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP), Barcelona, 2020.
 arXiv:1910.11480.
 
-**Why relevant to nam-rs.** Introduces the **Multi-Resolution STFT (MR-STFT) loss** — the composite
+**Why relevant to NeuralAmpModeler-rs.** Introduces the **Multi-Resolution STFT (MR-STFT) loss** — the composite
 spectral metric combining spectral convergence (L1 of log-magnitude difference) and log-magnitude
 loss (L2) across multiple STFT resolutions. This is the exact technique adopted as the spectral
 regression-detection gate in `src/testing/perceptual/mod.rs`, with per-model calibrated thresholds
 (Tier 1) and a dual hard/soft enforcement strategy. The multi-resolution approach (window sizes
-[256, 1024, 4096] in nam-rs) captures both narrow-band spectral artifacts and broadband transient
+[256, 1024, 4096] in NeuralAmpModeler-rs) captures both narrow-band spectral artifacts and broadband transient
 errors that single-window ESR cannot detect.
 
 | Traceability | Reference                                                                                                                       |
@@ -248,7 +248,7 @@ errors that single-window ESR cannot detect.
 *"Simultaneous measurement of impulse response and distortion with a swept-sine technique."*
 Audio Engineering Society Convention 108, Paris, 2000. Preprint 5093.
 
-**Why relevant to nam-rs.** The foundational technique for measuring frequency response and
+**Why relevant to NeuralAmpModeler-rs.** The foundational technique for measuring frequency response and
 harmonic distortion (per order) from a single exponential sine sweep. This method is the
 theoretical backbone of the spectral fidelity test suite (`tests/models/spectral_fidelity.rs`, P-3)
 that measures THD, THD+N, IMD, and frequency response per model SKU. Enables versioned
@@ -268,9 +268,9 @@ reproducible CI gates.
 *"AES standard method for digital audio engineering — Measurement of digital audio equipment."*
 Audio Engineering Society, 2015 (revised 2020).
 
-**Why relevant to nam-rs.** Defines the standardized methodology for **THD+N** measurement:
+**Why relevant to NeuralAmpModeler-rs.** Defines the standardized methodology for **THD+N** measurement:
 sine tone at 997 Hz, notch filter with Q ∈ [1, 5], total energy of residual as THD+N. This
-standard provides the normative reference for nam-rs's THD+N reporting (P-3), ensuring that
+standard provides the normative reference for NeuralAmpModeler-rs's THD+N reporting (P-3), ensuring that
 spectral quality metrics are comparable with published amplifier and audio interface
 specifications.
 
@@ -295,7 +295,7 @@ European Broadcasting Union, 2020.
 *"Loudness Range: A measure to supplement EBU R128 loudness normalisation."*
 European Broadcasting Union, 2016.
 
-**Why relevant to nam-rs.** The normative trilogy for loudness and true-peak measurement:
+**Why relevant to NeuralAmpModeler-rs.** The normative trilogy for loudness and true-peak measurement:
 
 - **ITU-R BS.1770-4 Annex 2** defines **true-peak (dBTP)** via 4× oversampled polyphase FIR peak detection.
   In accordance with real-time safety constraints, sample-peak detection is maintained in the RT hot-path

@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # FastMath Approximations & Activation Precision Modes
 
-Architectural decisions, performance benchmarks, and normative guidelines for transcendental activation functions (`tanh`, `sigmoid`) and precision modes in the NAM-rs DSP hot-path.
+Architectural decisions, performance benchmarks, and normative guidelines for transcendental activation functions (`tanh`, `sigmoid`) and precision modes in the NeuralAmpModeler-rs DSP hot-path.
 
 > [!IMPORTANT]
 > This document records **definitive decisions** validated by benchmarks. Do not alter production choices without running `cargo bench` and confirming there is no statistically significant regression ($p < 0.05$).
@@ -14,7 +14,7 @@ Architectural decisions, performance benchmarks, and normative guidelines for tr
 
 ## 1. Activation Precision Architecture
 
-NAM-rs provides a runtime-selectable activation precision switch via the `ActivationPrecision` enum in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs). The mode is configured per thread via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS), accessed via `set_activation_tls()`, `clear_activation_tls()`, and `activation_precision()` (which defaults to `Standard` if unset). The legacy process-wide atomic flag was removed to ensure complete thread safety and isolation across concurrent audio streams.
+NeuralAmpModeler-rs provides a runtime-selectable activation precision switch via the `ActivationPrecision` enum in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs). The mode is configured per thread via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS), accessed via `set_activation_tls()`, `clear_activation_tls()`, and `activation_precision()` (which defaults to `Standard` if unset). The legacy process-wide atomic flag was removed to ensure complete thread safety and isolation across concurrent audio streams.
 
 | Precision Mode | Tanh Strategy                      | Sigmoid Strategy                   | SiLU Strategy ($x \cdot \sigma(x)$)       | Max Error (vs `f32` ref)      | Throughput (256 elem, AVX2) | Default Status           |
 |:-------------- |:---------------------------------- |:---------------------------------- |:----------------------------------------- |:----------------------------- |:--------------------------- |:------------------------ |
@@ -106,7 +106,7 @@ Implemented in [`src/math/activations/sigmoid/production.rs`](../src/math/activa
 
 ### 2.3 C++ NAMcore Fast Tanh (`fast_tanh`, Atkinson Rational Formula)
 
-Distinct from the Padé [5,4] approximation used by `ActivationPrecision::Fast` on standard models, NAM-rs provides a dedicated kernel for models that explicitly configure `"FastTanh"` activation (such as specific WaveNet A2 or ConvNet layers). This kernel strictly matches upstream C++ NAMcore (`NAM/activations.h:91-98`, `fast_tanh`) line-by-line using Atkinson's rational formula:
+Distinct from the Padé [5,4] approximation used by `ActivationPrecision::Fast` on standard models, NeuralAmpModeler-rs provides a dedicated kernel for models that explicitly configure `"FastTanh"` activation (such as specific WaveNet A2 or ConvNet layers). This kernel strictly matches upstream C++ NAMcore (`NAM/activations.h:91-98`, `fast_tanh`) line-by-line using Atkinson's rational formula:
 
 $$ax = |x|, \quad x^2 = x \cdot x$$
 

@@ -3,7 +3,7 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# Fixture Governance & Golden Vector Reference — NeuralAmpModelerCore ↔ NAM-rs
+# Fixture Governance & Golden Vector Reference — NeuralAmpModelerCore ↔ NeuralAmpModeler-rs
 
 ## Source of Truth
 
@@ -158,7 +158,7 @@ All captures and models in `.nam` and `.json` format located under [`tests/fixtu
 
 #### 1. High-Quality Real Models (Git Versioned)
 
-These models have real trained weights, excellent fidelity, and are certified for authorship/permissive licensing compatible with `nam-rs` distribution:
+These models have real trained weights, excellent fidelity, and are certified for authorship/permissive licensing compatible with NeuralAmpModeler-rs distribution:
 
 | Model / Fixture           | Nature         | Architecture                    | Quality & Confidence                  | License & Provenance                                   | Purpose in Tests                                                                                                                                                         |
 | ------------------------- | -------------- | ------------------------------- | ------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -692,7 +692,7 @@ Real NAM models trained by the Boss Waza Tube Amp Expander community. See
   wav_to_golden --input output.wav --reference tests/fixtures/stress_signal.wav --output golden_lstm_1x16.bin
   ```
 
-- **Validation Verdict:** The current committed fixtures are byte-identical to those newly rendered with commit `e49c93e` (SHA-256 match). They differ from `nam-rs_v2.0.0` only at floating-point precision levels (SNR > 120 dB) due to dynamic C++ compiler/build configurations in the original unpinned `v2.0.0` build.
+- **Validation Verdict:** The current committed fixtures are byte-identical to those newly rendered with commit `e49c93e` (SHA-256 match). They differ from `nam-rs_v2.0.0` (the old project name, pre-fork) only at floating-point precision levels (SNR > 120 dB) due to dynamic C++ compiler/build configurations in the original unpinned `v2.0.0` build.
 
 ### `lstm.nam`
 
@@ -898,7 +898,7 @@ None of these gaps invalidate the *already-committed* golden `.bin` files — th
 
 > **Decision:** The golden vectors validate *functional* parity (MSE + SNR + PSNR + bits within calibrated thresholds) against NeuralAmpModelerCore C++, **not** *bit-for-bit* parity.
 >
-> **Consequence:** NAM-rs produces audio perceptually equivalent to C++, but with measurable numerical differences. These differences are inaudible in any 16-bit or higher audio pipeline.
+> **Consequence:** NeuralAmpModeler-rs produces audio perceptually equivalent to C++, but with measurable numerical differences. These differences are inaudible in any 16-bit or higher audio pipeline.
 >
 > **LSTM divergence:** The LSTM goldens show relatively low SNR
 > (1×16 ≈ 19.8 dB, 2×8 ≈ 25.7 dB, official ≈ 29.7 dB) vs WaveNet's ≥ 100 dB (see the corrected

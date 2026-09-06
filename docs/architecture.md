@@ -3,7 +3,7 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# NAM-rs Architecture: Neural Inference Engine
+# NeuralAmpModeler-rs Architecture: Neural Inference Engine
 
 This is the general architecture reference for the NeuralAmpModeler-rs DSP engine: model dispatch, SIMD microarchitecture, pipeline layout, and cross-cutting design decisions. For domain-specific detail, see the pointers in each section and [docs/](.) as a whole — this file intentionally does not repeat content that already has a dedicated home (fidelity trade-offs, host integration details, testing methodology, NAMB byte layout, etc.).
 
