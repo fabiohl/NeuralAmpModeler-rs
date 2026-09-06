@@ -246,28 +246,28 @@ cargo run --locked --features testing --bin nam_long_receipt -- validate --out t
 
 All test runners, compilation helpers, and preflight steps persist detailed execution logs on disk under the target directory (`target/logs/`):
 
-| File Path                                     | Generating Component / Phase       | Contents & Diagnostic Value                                                                        |
-|:--------------------------------------------- |:---------------------------------- |:-------------------------------------------------------------------------------------------------- |
-| **`target/logs/quick-receipt.txt`**           | `tests-quick.sh` (Final)           | Summary receipt containing `FIDELITY:`, `GAPS:`, and `OVERALL:` status.                            |
-| **`target/logs/quick-phase1.log`**            | `tests-quick.sh` (Phase 1)         | Stdout/stderr of structural unit tests, DSP logic, and channel checks (Debug profile).             |
-| **`target/logs/quick-phase2.log`**            | `tests-quick.sh` (Phase 2)         | Measurement oracles output, float golden vectors, and `quick_parity` C++ checks (Release profile). |
-| **`target/logs/quick-phase3.log`**            | `tests-quick.sh` (Phase 3)         | Fuzzing logs from capped proptest parser sweeps.                                                   |
-| **`target/logs/long-audit-receipt.jsonl`**    | `tests-long.sh` (Final)            | Single Source of Truth structured audit record (machine-readable per-phase JSON entries).          |
-| **`target/logs/catalog_preflight.log`**       | `tests-long.sh` (Preflight 2)      | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.               |
-| **`target/logs/meta_coherence.log`**          | `tests-long.sh` (Preflight 4)      | Cross-validation between catalog definitions and test module registrations.                        |
-| **`target/logs/package-list.err`**            | `tests-long.sh` (Preflight 3)      | Diagnostics from `cargo package --list` crate packaging validations.                               |
-| **`target/logs/cmake-configure.log`**         | `utils/ensure_namcore_render.sh`   | CMake build configuration output when compiling C++ `tools/render`.                                |
-| **`target/logs/cmake-build.log`**             | `utils/ensure_namcore_render.sh`   | CMake compilation logs for the C++ reference render binary.                                        |
-| **`target/logs/phase1-soak.log`**             | `tests-long.sh` (Phase 1)          | Continuous numerical soak logs, SPSC buffer sweeps, and endurance metrics.                         |
-| **`target/logs/phase-defense-scripts.log`**   | `tests-long.sh` (Phase 2)          | Structural invariant checks, QA defenses (`tests/qa_defense.rs`).                                  |
-| **`target/logs/phase-libm-exports.log`**      | `tests-long.sh` (Phase 2)          | Dynamic linker symbol export audits (`libm_export_guard`).                                         |
-| **`target/logs/phase2-proptests-parity.log`** | `tests-long.sh` (Phase 3)          | Full live C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                       |
-| **`target/logs/subphase-isa-parity.log`**     | `tests-long.sh` (Phase 3 Subphase) | Cross-ISA determinism validation logs (`isa_parity`).                                              |
-| **`target/logs/phase3-heap-audit.log`**       | `tests-long.sh` (Phase 4)          | Memory interceptor allocation reports (`CountingAllocator`).                                       |
-| **`target/logs/phase4-rt-deadline.log`**      | `tests-long.sh` (Phase 5)          | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$).                        |
-| **`target/logs/phase5-rt-jitter.log`**        | `tests-long.sh` (Phase 6)          | Real-time jitter telemetry and thread contention profiles.                                         |
-| **`target/logs/phase6-loom.log`**             | `tests-long.sh` (Phase 7)          | Concurrency model checker state-space exploration logs.                                            |
-| **`~/.cache/nam-rs/crash-*.txt`**             | Runtime Panic Hook (DSP/Plugin)    | Stack-safe diagnostic crash reports rendered without heap allocations.                             |
+| File Path                                        | Generating Component / Phase       | Contents & Diagnostic Value                                                                        |
+|:------------------------------------------------ |:---------------------------------- |:-------------------------------------------------------------------------------------------------- |
+| **`target/logs/quick-receipt.txt`**              | `tests-quick.sh` (Final)           | Summary receipt containing `FIDELITY:`, `GAPS:`, and `OVERALL:` status.                            |
+| **`target/logs/quick-phase1.log`**               | `tests-quick.sh` (Phase 1)         | Stdout/stderr of structural unit tests, DSP logic, and channel checks (Debug profile).             |
+| **`target/logs/quick-phase2.log`**               | `tests-quick.sh` (Phase 2)         | Measurement oracles output, float golden vectors, and `quick_parity` C++ checks (Release profile). |
+| **`target/logs/quick-phase3.log`**               | `tests-quick.sh` (Phase 3)         | Fuzzing logs from capped proptest parser sweeps.                                                   |
+| **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)            | Single Source of Truth structured audit record (machine-readable per-phase JSON entries).          |
+| **`target/logs/catalog_preflight.log`**          | `tests-long.sh` (Preflight 2)      | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.               |
+| **`target/logs/meta_coherence.log`**             | `tests-long.sh` (Preflight 4)      | Cross-validation between catalog definitions and test module registrations.                        |
+| **`target/logs/package-list.err`**               | `tests-long.sh` (Preflight 3)      | Diagnostics from `cargo package --list` crate packaging validations.                               |
+| **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`   | CMake build configuration output when compiling C++ `tools/render`.                                |
+| **`target/logs/cmake-build.log`**                | `utils/ensure_namcore_render.sh`   | CMake compilation logs for the C++ reference render binary.                                        |
+| **`target/logs/phase1-soak.log`**                | `tests-long.sh` (Phase 1)          | Continuous numerical soak logs, SPSC buffer sweeps, and endurance metrics.                         |
+| **`target/logs/phase-defense-scripts.log`**      | `tests-long.sh` (Phase 2)          | Structural invariant checks, QA defenses (`tests/qa_defense.rs`).                                  |
+| **`target/logs/phase-libm-exports.log`**         | `tests-long.sh` (Phase 2)          | Dynamic linker symbol export audits (`libm_export_guard`).                                         |
+| **`target/logs/phase2-proptests-parity.log`**    | `tests-long.sh` (Phase 3)          | Full live C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                       |
+| **`target/logs/subphase-isa-parity.log`**        | `tests-long.sh` (Phase 3 Subphase) | Cross-ISA determinism validation logs (`isa_parity`).                                              |
+| **`target/logs/phase3-heap-audit.log`**          | `tests-long.sh` (Phase 4)          | Memory interceptor allocation reports (`CountingAllocator`).                                       |
+| **`target/logs/phase4-rt-deadline.log`**         | `tests-long.sh` (Phase 5)          | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$).                        |
+| **`target/logs/phase5-rt-jitter.log`**           | `tests-long.sh` (Phase 6)          | Real-time jitter telemetry and thread contention profiles.                                         |
+| **`target/logs/phase6-loom.log`**                | `tests-long.sh` (Phase 7)          | Concurrency model checker state-space exploration logs.                                            |
+| **`~/.cache/neural-amp-modeler-rs/crash-*.txt`** | Runtime Panic Hook (DSP/Plugin)    | Stack-safe diagnostic crash reports rendered without heap allocations.                             |
 
 ---
 

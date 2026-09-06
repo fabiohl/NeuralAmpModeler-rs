@@ -478,7 +478,7 @@ ESR baselines from published data (`A2Esr.tsx:19-38`, t3k-mushra):
 - A2-Full median: 0.00334 (−24.8 dB)
 - A2-Lite median: 0.00500 (−23.0 dB)
 
-Nam-rs vs C++ parity target: ESR < 1e-3 (−30 dB conservative gate); actual expected < 1e-5.
+NeuralAmpModeler-rs vs C++ parity target: ESR < 1e-3 (−30 dB conservative gate); actual expected < 1e-5.
 See [perceptual_validation.md](perceptual_validation.md) for methodology.
 
 ## Parity Thresholds

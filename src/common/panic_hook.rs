@@ -7,7 +7,7 @@
 //! pre-captured at `install_panic_hook` time, the report is formatted into a
 //! stack-allocated `[u8; 16384]` buffer via `LimitWriter`, and `RwLock` reads
 //! use `try_read()` with fallback to avoid deadlocks. Remaining heap
-//! allocations (`var_os`, `PathBuf`) only occur when a writable `~/.cache/nam-rs`
+//! allocations (`var_os`, `PathBuf`) only occur when a writable `~/.cache/neural-amp-modeler-rs`
 //! directory is found.
 //!
 //! Crash files are automatically pruned: when the total number of `crash-*.txt`
@@ -79,10 +79,10 @@ impl FmtWrite for LimitWriter<'_> {
     }
 }
 
-/// Maximum number of crash report files retained in `~/.cache/nam-rs/`.
+/// Maximum number of crash report files retained in `~/.cache/neural-amp-modeler-rs/`.
 const MAX_CRASH_FILES: usize = 10;
 
-/// Prunes old crash files from `~/.cache/nam-rs/` if the total exceeds
+/// Prunes old crash files from `~/.cache/neural-amp-modeler-rs/` if the total exceeds
 /// [`MAX_CRASH_FILES`]. Crash files are identified by the `crash-*.txt` pattern
 /// and sorted by modification time (oldest first, excluding `.tmp` files).
 ///
@@ -261,7 +261,7 @@ pub fn format_panic_report_for_audit_test(
 }
 
 /// Installs a panic hook that writes a zero-alloc crash report to
-/// `~/.cache/nam-rs/crash-<unix_ts>-<component>.txt`.
+/// `~/.cache/neural-amp-modeler-rs/crash-<unix_ts>-<component>.txt`.
 pub fn install_panic_hook(component: &'static str) {
     SYSTEM_SNAPSHOT.get_or_init(SystemSnapshot::capture);
 
@@ -318,7 +318,7 @@ pub fn install_panic_hook(component: &'static str) {
 
         if let Some(home_dir) = std::env::var_os("HOME") {
             let mut cache_dir = PathBuf::from(home_dir);
-            cache_dir.push(".cache/nam-rs");
+            cache_dir.push(".cache/neural-amp-modeler-rs");
 
             if std::fs::create_dir_all(&cache_dir).is_ok() {
                 #[cfg(unix)]

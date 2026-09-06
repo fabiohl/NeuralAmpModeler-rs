@@ -202,7 +202,7 @@ fn test_panic_hook_behavior() {
         Some(h) => PathBuf::from(h),
         None => return,
     };
-    let cache_dir = home.join(".cache/nam-rs");
+    let cache_dir = home.join(".cache/neural-amp-modeler-rs");
     let _ = fs::create_dir_all(&cache_dir);
 
     // Part 1: Test persistence when shutdown is NOT in progress.
