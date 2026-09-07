@@ -11,4 +11,4 @@
 pub(crate) mod dynamic_eval;
 pub(crate) mod static_eval;
 
-pub(crate) use dynamic_eval::oracle_a2_forward;
+pub(crate) use dynamic_eval::{oracle_a2_all_channels, oracle_a2_forward};

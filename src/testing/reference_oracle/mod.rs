@@ -33,7 +33,7 @@
 use crate::loader::nam_json::model::NamModelData;
 use crate::models::a2::weights_layout::FILM_KEYS;
 
-pub(crate) use a2::oracle_a2_forward;
+pub(crate) use a2::{oracle_a2_all_channels, oracle_a2_forward};
 pub(crate) use convnet::oracle_convnet_forward;
 pub(crate) use lstm::oracle_lstm_forward;
 pub(crate) use wavenet::{oracle_wavenet_all_channels, oracle_wavenet_forward};
@@ -41,6 +41,10 @@ pub mod a2;
 pub mod convnet;
 pub mod lstm;
 pub mod wavenet;
+
+#[cfg(test)]
+#[path = "reference_oracle_test.rs"]
+mod reference_oracle_test;
 
 // =============================================================================
 // Condition DSP multi-channel forward
@@ -65,9 +69,7 @@ pub(crate) fn oracle_condition_dsp_channels(
     match sub_model.architecture.as_str() {
         "WaveNet" => {
             if is_a2_model(sub_model) {
-                // A2 condition_dsp: fall back to single-channel oracle_forward
-                // (full A2 multi-channel support tracked in §4.4 of cpp_parity_map.md).
-                oracle_a2_forward(sub_model, input, config)
+                oracle_a2_all_channels(sub_model, input, config)
             } else {
                 oracle_wavenet_all_channels(sub_model, input, config)
             }
@@ -251,6 +253,10 @@ impl<'a> Cursor<'a> {
         let v = weight_f32_to_f64(self.data[self.pos], self.weight_mode);
         self.pos += 1;
         v
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
     }
 }
 

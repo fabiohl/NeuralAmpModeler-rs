@@ -92,6 +92,8 @@ pub struct WaveNetA2Dyn {
     pub head_rechannel_b: AlignedVec<f32>,
     /// Head rechannel per-output-channel scale. Size: `head_size`.
     pub head_rechannel_scale: AlignedVec<f32>,
+    /// Whether head rechannel convolution has a bias term.
+    pub head_bias: bool,
 
     /// Head accumulator ring buffer (channels-wide, pow2 size).
     pub head_accum: AlignedVec<f32>,
@@ -144,6 +146,9 @@ pub struct WaveNetA2Dyn {
     /// Number of groups for the layer1x1 projection across all layers
     /// (C++ `layer1x1.groups`). Per-array config, default 1.
     pub l1x1_groups: u32,
+    /// Number of groups for the input convolution across all layers
+    /// (C++ `groups_input`). Per-array config, default 1.
+    pub groups_input: u32,
     /// Dimension size of the head accumulator (output size of head1x1 projection).
     pub head_accum_size: usize,
     /// Scratch buffer for head1x1 projection output (channels elements).
@@ -348,6 +353,7 @@ impl WaveNetA2Dyn {
             )?,
             head_rechannel_b: AlignedVec::new(head_size.max(1), 0.0f32)?,
             head_rechannel_scale: AlignedVec::new(head_size.max(1), 0.0f32)?,
+            head_bias: true,
             head_accum: AlignedVec::new(head_ring_size * head_accum_size, 0.0f32)?,
             head_write_pos: rf,
             head_ring_mask,
@@ -367,6 +373,7 @@ impl WaveNetA2Dyn {
             head1x1_h1_in,
             mixin_groups: 1,
             l1x1_groups: 1,
+            groups_input: 1,
             receptive_field_size: rf,
             max_buffer_size: max_buf,
             layer_raw: None,

@@ -224,7 +224,7 @@ impl WaveNetA2Dyn {
     /// For mono input (input_channels == 1): `layer_in[c] = rechannel_w_f32[c] * x`.
     /// For multi-channel input (input_channels > 1): matrix multiply per frame.
     #[inline(always)]
-    fn rechannel_prescale(&mut self, input: &[f32], pos: usize, nf: usize) {
+    pub(crate) fn rechannel_prescale(&mut self, input: &[f32], pos: usize, nf: usize) {
         let channels = self.channels;
         let in_ch = self.input_channels;
         if in_ch == 1 {
@@ -268,7 +268,7 @@ impl WaveNetA2Dyn {
                 for c in 0..channels {
                     let mut sum = 0.0f32;
                     for ic in 0..in_ch {
-                        sum += input[in_base + ic] * self.rechannel_w_f32[ic * channels + c];
+                        sum += input[in_base + ic] * self.rechannel_w_f32[c * in_ch + ic];
                     }
                     self.layer_in[base + c] = sum;
                 }

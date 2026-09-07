@@ -49,6 +49,8 @@ pub struct WaveNetA2Cascade {
     max_head_size: usize,
     /// Maximum frames per processing block.
     max_buffer_size: usize,
+    /// Model-level head scale multiplier applied to final output (C++ NAMCore `WaveNet::_head_scale`).
+    pub head_scale: f32,
 }
 
 impl WaveNetA2Cascade {
@@ -101,6 +103,7 @@ impl WaveNetA2Cascade {
             max_channels: max_ch,
             max_head_size: max_hs,
             max_buffer_size: WAVENET_MAX_NUM_FRAMES,
+            head_scale: 1.0f32,
         })
     }
 
@@ -134,7 +137,7 @@ impl WaveNetA2Cascade {
             return;
         }
 
-        output[..total].fill(0.0);
+        output[..total * out_per_frame].fill(0.0);
         let nf_total = total.min(self.max_buffer_size);
 
         let cond_size = self.condition_size;
@@ -246,7 +249,14 @@ impl WaveNetA2Cascade {
             // Finalize head on the last array.
             let last_idx = num_arrays - 1;
             let last = &mut self.arrays[last_idx];
-            last.cascade_head_finalize(nf, &mut output[pos..pos + nf * last.head_size]);
+            let out_start = pos * last.head_size;
+            let out_end = out_start + nf * last.head_size;
+            last.cascade_head_finalize(nf, &mut output[out_start..out_end]);
+            if self.head_scale != 1.0f32 {
+                for s in &mut output[out_start..out_end] {
+                    *s *= self.head_scale;
+                }
+            }
 
             pos += nf;
         }
@@ -291,3 +301,7 @@ impl WaveNetA2Cascade {
         self.process(&zeros, &mut dummy);
     }
 }
+
+#[cfg(test)]
+#[path = "../cascade_test.rs"]
+mod tests;

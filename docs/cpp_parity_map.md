@@ -30,7 +30,7 @@ when. **For a single-page triage of what is actually broken vs. what is under co
 |:--------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
 | **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)       |
 | **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6 FIXED)    | [§3](#3-wavenet-a1-architecture) |
-| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **0.23 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture) |
+| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed TR1.1; prod×C++ **1.69 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture) |
 | **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (prewarm fix eliminates 2.54e-5 transient)                                           | [§6](#6-other-architectures)     |
 | Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures)     |
 | **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                    | [§6](#6-other-architectures)     |
@@ -926,16 +926,16 @@ All dynamic path variants achieve near-bit-exact parity or expected approximatio
 
 The fail-closed dispatch guard (`reject_wavenet_a2_max_class`, TR1.1) rejects `build_model` with `Err` citing **KB-A2-MAX**. No production f32 instance of this topology enters the public hot path.
 
-**Authoritative metrics (HEAD H1+H2 tree, 2026-08-09):**
+**Authoritative metrics (Post-Sprint 1–3, 2026-09-07):**
 
-| Pair                  | Metric                           | Notes                                        |
-|:--------------------- |:-------------------------------- |:-------------------------------------------- |
-| prod f32 × C++ golden | **SNR = 0.23 dB**, ESR ≈ 9.49e-1 | `test_measure_a2_max_snr_vs_golden` + unlock |
-| prod f32 × f64 oracle | ESR ≈ 10³–10⁴                    | paired FAILED — **prod ≉ f64**               |
-| f64 × C++ golden      | ESR ≈ 1.0                        | H0 **Case D** — oracle also ≉ C++            |
-| f64 × F32-sim (self)  | ~−134 dB                         | internal consistency only                    |
+| Pair                  | Metric                           | Notes                                                              |
+|:--------------------- |:-------------------------------- |:------------------------------------------------------------------ |
+| prod f32 × C++ golden | **SNR = 1.69 dB**, ESR ≈ 6.78e-1 | `test_measure_a2_max_snr_vs_golden` + unlock (measured 2026-09-07) |
+| prod f32 × f64 oracle | ESR ≈ 2.14 (SNR ≈ -3.30 dB)      | paired FAILED — **prod ≉ f64** (improved from ESR ≈ 4.60e3)        |
+| f64 × C++ golden      | ESR ≈ 8.85e-1 (SNR ≈ 0.53 dB)    | H0 **Case D** — oracle also ≉ C++                                  |
+| f64 × F32-sim (self)  | ~−134 dB                         | internal consistency only                                          |
 
-Historical: pre-R3 baseline 1.35 dB; H1-only peak 2.31 dB; H1+H2 tree **0.23 dB**. Weight budget **818 + 1052** exact. Neighbors green (A2-Full ~128 dB, condition_dsp ~139 dB, A2 matrix 103–140 dB).
+Historical: pre-R3 baseline 1.35 dB; H1-only peak 2.31 dB; H1+H2 tree 0.23 dB; post-Sprint 1–3 **1.69 dB** (ESR ≈ 6.78e-1). Weight budget **818 + 1052** exact. Neighbors green (A2-Full ~128 dB, condition_dsp ~139 dB, A2 matrix 103–140 dB).
 
 **Investigation closed as residual work:** H1–H4 exhausted as dominant (§4.4.1); H6 FiLM slots excluded; H0 Case D; H5 nested cascade **candidate only** — secondary investigation “pre→post rechannel” was **rejected as next step** because production cascade already seeds post-rechannel (`cascade_head_finalize` → `cascade_seed_head_from_output`). Further work requires intermediate C++ dumps (§4.4.3), not residual hypothesis PRs.
 
@@ -1098,19 +1098,20 @@ if nested `condition_dsp` reports `dsp_ch == condition_size == 8`.
 
 **Secondary hypothesis matrix:**
 
-**H0 triple decomposition results (TR2b.1, 2026-08-09):**
+**H0 triple decomposition results (TR2b.1, re-measured 2026-09-07):**
 
 Measured on `golden_wavenet_a2_max.bin` (n=2048, block=64, prewarm=2048, 48 kHz),
 f64 oracle with `PrecisionConfig::default()` (F64Exact weights, Exact activations, Neumaier acc):
 
 | Pair                  | ESR (linear) | ESR (dB) | SNR (dB) |
 |:--------------------- |:------------ |:-------- |:-------- |
-| prod f32 × C++ golden | 9.49e-1      | -0.2     | 0.23     |
-| prod f32 × f64 oracle | 4.60e3       | +36.6    | -36.6    |
-| f64 oracle × C++      | 1.00e0       | +0.0     | -0.00    |
+| prod f32 × C++ golden | 6.78e-1      | -1.69    | 1.69     |
+| prod f32 × f64 oracle | 2.14e0       | +3.30    | -3.30    |
+| f64 oracle × C++      | 8.85e-1      | -0.53    | 0.53     |
 
-**Classification: Case D** — all three pairs diverge significantly. prod×C++ (ESR≈0.95)
-confirms the known gap. prod×f64 (ESR≈4600) confirms TR3.4's "prod≉f64". f64×C++ (ESR≈1.00)
+**Classification: Case D** — all three pairs diverge significantly. prod×C++ (ESR≈0.68, SNR≈1.69 dB)
+confirms the known gap (improved from 0.23 dB after Sprint 1–3 cascade/parser fixes, but far from 90 dB).
+prod×f64 (ESR≈2.14, SNR≈-3.30 dB, improved from ESR≈4600) confirms prod ≉ f64. f64×C++ (ESR≈0.89)
 indicates the f64 oracle output is essentially uncorrelated with the C++ golden —
 the divergence is NOT solely a production f32 approximation error; the f64 oracle itself
 diverges from the C++ reference. Multiple fault sources are active; prioritize
@@ -1193,21 +1194,23 @@ H1–H4 remain excluded. H6 is excluded. Secondary investigation closed without 
 
 **What was proven fixed / healthy (do not reopen without regression):**
 
-| Asset                                                            | Evidence                           |
-|:---------------------------------------------------------------- |:---------------------------------- |
-| A2 Full / Lite / FiLM / Gated / Blended / Chaos                  | SNR ~103–140 dB vs NAMCore         |
-| `wavenet_condition_dsp.nam` (standalone nested-ish cond)         | ~139 dB                            |
-| Heterogeneous clone (condition_dsp, dyn_free, official, SLAMMIN) | PASS                               |
-| Loader atomic Err (F1), clone (F2), ReLU container (F3)          | PASS                               |
-| Budget A2 Max weights                                            | 818 + 1052 exact                   |
-| H1 head1x1 group layout                                          | Correct (ΔSNR small; not dominant) |
-| H6 FiLM per-slot cursor                                          | 16/16 formulas; no overlap         |
-| Fail-closed + no smoke-green                                     | TR1.1 + TR1.2                      |
+| Asset                                                            | Evidence                                              |
+|:---------------------------------------------------------------- |:----------------------------------------------------- |
+| A2 Full / Lite / FiLM / Gated / Blended / Chaos                  | SNR ~103–140 dB vs NAMCore                            |
+| `wavenet_condition_dsp.nam` (standalone nested-ish cond)         | ~139 dB                                               |
+| Heterogeneous clone (condition_dsp, dyn_free, official, SLAMMIN) | PASS                                                  |
+| Loader atomic Err (F1), clone (F2), ReLU container (F3)          | PASS                                                  |
+| Budget A2 Max weights                                            | 818 + 1052 exact (Array0=617, Array1=434)             |
+| Cascade kernel row-major & stride                                | Bit-exact chunk invariance (`max_diff=0.0`)           |
+| f64 oracle multichannel expansion                                | 8-ch dispersion $7.60\cdot 10^{-3}$, prod×f64 −3.3 dB |
+| H1 head1x1 group layout                                          | Correct (ΔSNR small; not dominant)                    |
+| H6 FiLM per-slot cursor                                          | 16/16 formulas; no overlap                            |
+| Fail-closed + no smoke-green                                     | TR1.1 + TR1.2                                         |
 
 **What remains unknown (future investigation only):**
 
 1. Root structural mismatch in nested multi-array condition_dsp and/or multi-head finalize vs C++ (needs **C++ intermediate tensors**, not f64 alone).
-2. Whether oracle f64 graph matches C++ for cascade head_size&gt;1 (H0 f64×C++ ESR≈1).
+2. Whether oracle f64 graph matches C++ for cascade head_size>1 (H0 f64×C++ ESR≈1).
 3. Any residual main-net interaction after cond is bit-exact (only after 1–2).
 
 **Reopening criteria (all required before removing guard):**
@@ -1218,6 +1221,38 @@ H1–H4 remain excluded. H6 is excluded. Secondary investigation closed without 
 4. Same merge (or golden-first): un-ignore golden + live; flip catalog off `KNOWN_GAP`; remove guard.
 
 **Non-goals while frozen:** residual “try cascade.rs seed”, regenerate golden/anchor to pass, claim parity via f64 self-check, relax neighbor thresholds.
+
+#### 4.4.4 Empirical Investigation & Post-Mortem Learnings (2026-09-07)
+
+During the dedicated 4-sprint investigation into KB-A2-MAX, an end-to-end structural audit and correction effort was undertaken covering the cascade DSP kernel, weight parsing, and reference oracle modeling:
+
+1. **Sprint 1 (Cascade Multichannel Kernel & Stride Correction):**
+
+   - **Intervention:** Corrected the inter-array residual projection matrix (`rechannel_w_f32`) in `process_cascade.rs:128` and `process.rs:105` from column-major (`ic * channels + c`) to canonical row-major (`c * src_channels + ic`), aligning with C++ `_weight(c, ic) * x[ic]`. Corrected multi-channel buffer clearing (`total * out_per_frame`) and chunk destination slicing stride (`pos * last.head_size .. (pos + nf) * last.head_size`) in `cascade/mod.rs`.
+   - **Validated Result:** Synthetic 2-array cascade tests (`cascade_test.rs`) demonstrated exact bit-level equivalence (`max_diff = 0.0`) between unchunked 256-sample passes and 64-sample chunked passes. Destructive temporal channel overwrite was completely eliminated.
+
+2. **Sprint 2 (Weight Parser Alignment & FiLM Dynamism):**
+
+   - **Intervention:** Propagated `head_bias: bool` to `WaveNetA2Dyn`, preventing phantom bias reads when `head_bias == false` in intermediate cascade arrays. Corrected `groups_input` dimensioning in `A2GroupedConv1d` (`(out_ch * in_ch / groups) * kernel`). Handled dynamic FiLM slot offsets and consumed the trailing cascade `head_scale`.
+   - **Validated Result:** Weight consumption reached exact mathematical budget: 818 weights in the main network and 1052 weights in `condition_dsp` (Array 0 = 617, Array 1 = 434, head_scale = 1). Zero orphan or truncated weights.
+
+3. **Sprint 3 (f64 Reference Oracle Multichannel Expansion):**
+
+   - **Intervention:** Identified that `reference_oracle/mod.rs` was collapsing multi-channel conditioning into a single mono scalar replicated across all 8 channels. Implemented `oracle_a2_all_channels` with interleaved row-major tensor layout for all 8 distinct acoustic channels.
+   - **Validated Result:** The f64 oracle multichannel output achieved significant spatial/statistical dispersion ($7.60\cdot 10^{-3} > 1\cdot 10^{-4}$). The discrepancy between Rust production f32 and the f64 oracle collapsed by over three orders of magnitude: from $ESR \approx 4.60\cdot 10^3$ ($-36.6\text{ dB}$) down to $ESR = 2.14$ ($-3.30\text{ dB}$).
+
+4. **Sprint 4 (Empirical Release Audit & Rollback Governance):**
+
+   - **Intervention:** Evaluated `golden_wavenet_a2_max.bin` under unlock against the Release Protocol (§4.4.3).
+   - **Measured Outcome:** Parity improved from $0.23\text{ dB}$ to **$1.69\text{ dB}$** ($ESR = 6.78\cdot 10^{-1}$). However, because $1.69\text{ dB} \ll 90.0\text{ dB}$ and `f64 × C++` remained divergent ($ESR = 8.85\cdot 10^{-1}$ / $SNR = 0.53\text{ dB}$, confirming Case D), the release gates (Gate 1 & Gate 2) failed.
+   - **Governance Action:** In accordance with the mandatory rollback invariant, the fail-closed dispatch guard `reject_wavenet_a2_max_class` and catalog `ApplicableOracle::KNOWN_GAP` were strictly retained.
+
+##### Core Architectural Learnings
+
+- **Exact weight budgets do not imply state alignment:** Consuming exactly 818 + 1052 weights is a prerequisite, but in complex multi-layer topologies with 16 FiLM modulation points, internal tensor orientation and receptive field history buffers (ring buffers / dilations) can produce radical output divergence even with identical weights.
+- **The f64 Oracle cannot arbitrate Case D:** Because `f64 × C++` diverges ($ESR \approx 0.89$), the f64 oracle itself differs from C++ NAMCore's execution graph for multi-array cascades. Comparing Rust against f64 only measures internal consistency within Rust, not market parity against C++.
+- **Speculative hypothesis PRs are exhausted:** Attempting further modifications to the Rust engine blindly without C++ ground-truth layer dumps produces negligible gains (e.g. $+1.46\text{ dB}$).
+- **Mandatory Path to Resolution:** The only deterministic path forward to close KB-A2-MAX is to instrument `NeuralAmpModelerCore` (or `namcore_render`) to dump intermediate tensors per frame (Array 0 output, residual projection output, Array 1 / condition_dsp 8-channel output, and individual layer FiLM outputs) and compare them frame-by-frame against the Rust intermediate tensors.
 
 ### 4.5 Known history — do not repeat
 
@@ -1442,11 +1477,11 @@ Fail-closed TR1.1 remains **active**. T8.1 / R3 / secondary investigations do **
 
 | Model                | Symptom                                                                                                        | Status                                               |
 |:-------------------- |:-------------------------------------------------------------------------------------------------------------- |:---------------------------------------------------- |
-| `wavenet_a2_max.nam` | prod×C++ **0.23 dB**; H0 Case D (prod/f64/C++ all diverge); budget exact; H1–H4/H6 exhausted as dominant fixes | **KB-A2-MAX.** Guard active. Reopen only via §4.4.3. |
+| `wavenet_a2_max.nam` | prod×C++ **1.69 dB**; H0 Case D (prod/f64/C++ all diverge); budget exact; H1–H4/H6 exhausted as dominant fixes | **KB-A2-MAX.** Guard active. Reopen only via §4.4.3. |
 
 **Contract (frozen):**
 
-- Guard `reject_wavenet_a2_max_class` — message cites **KB-A2-MAX** + fail-closed + SNR≈0.23 dB.
+- Guard `reject_wavenet_a2_max_class` — message cites **KB-A2-MAX** + fail-closed + SNR≈1.69 dB.
 - Catalog `KNOWN_GAP`; unlock only `NAM_A2_MAX_UNLOCK=1` under test/testing.
 - Active CI: `test_wavenet_a2_max_dispatch_rejected` (must pass).
 - Ignored (not gates): golden, meter, paired f64, live v1/v2 — reasons cite KB-A2-MAX.

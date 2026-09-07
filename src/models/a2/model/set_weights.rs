@@ -307,10 +307,12 @@ pub(crate) fn film_bias_count_cfg(config: &FiLMConfig, channels: usize) -> usize
     clippy::too_many_arguments,
     reason = "A2 model weight-setter requiring many dimension parameters to safely map weight slices to layer buffers"
 )]
-pub(crate) fn load_film_for_layer(
+pub(crate) fn load_film_for_layer_dynamic(
     layer: &mut A2Layer,
     configs: &[FiLMConfig; 8],
     channels: usize,
+    bottleneck: usize,
+    conv_out: usize,
     cond_size: usize,
     head_channels: usize,
     weights: &[f32],
@@ -323,7 +325,13 @@ pub(crate) fn load_film_for_layer(
             continue;
         }
         let film_channels = match idx {
+            0 => channels,
+            1 => conv_out,
             2 => cond_size,
+            3 => conv_out,
+            4 => conv_out,
+            5 => bottleneck,
+            6 => channels,
             7 => head_channels,
             _ => channels,
         };
@@ -367,6 +375,36 @@ pub(crate) fn load_film_for_layer(
         set_layer_film(layer, config, idx, film_layer)?;
     }
     Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A2 model weight-setter requiring many dimension parameters to safely map weight slices to layer buffers"
+)]
+pub(crate) fn load_film_for_layer(
+    layer: &mut A2Layer,
+    configs: &[FiLMConfig; 8],
+    channels: usize,
+    cond_size: usize,
+    head_channels: usize,
+    weights: &[f32],
+    pos: &mut usize,
+    total: usize,
+    layer_idx: usize,
+) -> Result<(), String> {
+    load_film_for_layer_dynamic(
+        layer,
+        configs,
+        channels,
+        channels,
+        channels,
+        cond_size,
+        head_channels,
+        weights,
+        pos,
+        total,
+        layer_idx,
+    )
 }
 
 #[cfg(test)]

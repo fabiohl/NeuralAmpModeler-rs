@@ -114,14 +114,16 @@ impl A2GroupedConv1d {
             out_ch,
             groups
         );
+        let expected_weights = (out_ch * in_ch / groups) * kernel;
         assert_eq!(
             raw_weights.len(),
-            out_ch * in_ch * kernel,
-            "raw_weights len {} != expected {} (out_ch={} * in_ch={} * kernel={})",
+            expected_weights,
+            "raw_weights len {} != expected {} ((out_ch={} * in_ch={} / groups={}) * kernel={})",
             raw_weights.len(),
-            out_ch * in_ch * kernel,
+            expected_weights,
             out_ch,
             in_ch,
+            groups,
             kernel
         );
 
@@ -135,16 +137,15 @@ impl A2GroupedConv1d {
         let bias = AlignedVec::from_vec(raw_bias.to_vec())?;
 
         for g in 0..groups {
-            let group_in_start = g * in_per_group;
-            let group_out_start = g * out_per_group;
             for b in 0..num_blocks_per_group {
                 for k in 0..kernel {
                     for ic in 0..in_per_group {
                         for lane in 0..4 {
                             let out_idx = b * 4 + lane;
                             if out_idx < out_per_group {
-                                let src = (group_out_start + out_idx) * in_ch * kernel
-                                    + (group_in_start + ic) * kernel
+                                let src = g * (out_per_group * in_per_group * kernel)
+                                    + out_idx * (in_per_group * kernel)
+                                    + ic * kernel
                                     + k;
                                 let dst = g * (num_blocks_per_group * kernel * in_per_group * 4)
                                     + b * (kernel * in_per_group * 4)
@@ -302,10 +303,10 @@ pub(crate) fn make_test_weights_grouped(
     in_ch: usize,
     out_ch: usize,
     kernel: usize,
-    _groups: usize,
+    groups: usize,
     seed: u32,
 ) -> (Vec<f32>, Vec<f32>) {
-    let total_w = out_ch * in_ch * kernel;
+    let total_w = (out_ch * in_ch / groups) * kernel;
     let mut raw_weights = Vec::with_capacity(total_w);
     let mut state = seed;
     for _ in 0..total_w {

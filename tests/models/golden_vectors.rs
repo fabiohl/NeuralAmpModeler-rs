@@ -1004,7 +1004,7 @@ fn test_golden_vectors_a2_example_slimmable() {
 
 /// Test 8k: `wavenet_a2_max.nam` dispatch is fail-closed (TR1.1 / KB-A2-MAX).
 ///
-/// Known bug: prod×C++ SNR ≈ 0.23 dB (structural). `build_model` must
+/// Known bug: prod×C++ SNR ≈ 1.69 dB (structural). `build_model` must
 /// return `Err` — no production f32 instance of this topology enters
 /// the public hot path.
 #[test]
@@ -1215,11 +1215,46 @@ fn test_a2_max_weight_budget_818_1052() {
         );
     }
 
-    // --- condition_dsp built ---
+    // --- condition_dsp built and verified bit-exact ---
     assert!(
         wad.condition_dsp.is_some(),
         "A2 Max condition_dsp must be built"
     );
+    let cond_dsp = wad.condition_dsp.as_ref().unwrap();
+    let cond_cascade = match &**cond_dsp {
+        StaticModel::WavenetA2Cascade(casc) => casc,
+        _ => panic!("Expected condition_dsp to be WavenetA2Cascade"),
+    };
+    assert_eq!(
+        cond_cascade.arrays.len(),
+        2,
+        "condition_dsp must have 2 arrays"
+    );
+    assert!(
+        (cond_cascade.head_scale - 0.7339618f32).abs() < 1e-6,
+        "condition_dsp head_scale mismatch: {}",
+        cond_cascade.head_scale
+    );
+
+    // Array 0: channels=3, head_size=4, head_bias=false
+    assert_eq!(cond_cascade.arrays[0].channels, 3);
+    assert_eq!(cond_cascade.arrays[0].head_size, 4);
+    assert!(!cond_cascade.arrays[0].head_bias);
+    assert_eq!(
+        &cond_cascade.arrays[0].head_rechannel_b[..],
+        &[0.0, 0.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        &cond_cascade.arrays[0].head_rechannel_scale[..],
+        &[1.0, 1.0, 1.0, 1.0]
+    );
+
+    // Array 1: channels=4, head_size=8, head_bias=false
+    assert_eq!(cond_cascade.arrays[1].channels, 4);
+    assert_eq!(cond_cascade.arrays[1].head_size, 8);
+    assert!(!cond_cascade.arrays[1].head_bias);
+    assert_eq!(&cond_cascade.arrays[1].head_rechannel_b[..], &[0.0; 8]);
+    assert_eq!(&cond_cascade.arrays[1].head_rechannel_scale[..], &[1.0; 8]);
 }
 
 /// Checkpoints FiLM por slot (H6).
@@ -3209,7 +3244,7 @@ fn test_golden_vectors_convnet_test() {
 /// meeting §4.4.3 (SNR≥90 dB + intermediate C++ dumps).
 // on-demand: KB-A2-MAX golden compare; known bug until §4.4.3 reopen; not a nightly gate
 #[test]
-#[ignore = "KB-A2-MAX known bug: prod×C++ ~0.23 dB; guard TR1.1 — not a CI parity gate"]
+#[ignore = "KB-A2-MAX known bug: prod×C++ ~1.69 dB; guard TR1.1 — not a CI parity gate"]
 fn test_golden_vectors_wavenet_a2_max() {
     // Permanent known bug until docs/cpp_parity_map.md §4.4.3.
     // Default path (no unlock): assert fail-closed and return — never a red gate.
@@ -3289,7 +3324,7 @@ fn test_golden_vectors_wavenet_a2_max() {
 /// Fail-closed guard remains active; unlock via `NAM_A2_MAX_UNLOCK=1` inside the test.
 // on-demand: KB-A2-MAX SNR/ESR meter vs C++ golden; diagnostic only, not a nightly gate
 #[test]
-#[ignore = "KB-A2-MAX meter only: prod×C++ ~0.23 dB; unlock diagnostics — not a CI gate"]
+#[ignore = "KB-A2-MAX meter only: prod×C++ ~1.69 dB; unlock diagnostics — not a CI gate"]
 fn test_measure_a2_max_snr_vs_golden() {
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
@@ -3327,9 +3362,10 @@ fn test_measure_a2_max_snr_vs_golden() {
 
     // Measured history (f32 production vs C++ NAMcore golden_wavenet_a2_max.bin,
     // n=2048, block=64, prewarm=2048, 48 kHz):
-    //   TR2.5 pre-R3:     SNR ≈ 1.35 dB, ESR ≈ 7.4e-1
-    //   TR3.1 H1-only:    SNR ≈ 2.31 dB
-    //   HEAD H1+H2 tree:  SNR ≈ 0.23 dB, ESR ≈ 9.49e-1  (re-audit 2026-08-09)
+    //   TR2.5 pre-R3:      SNR ≈ 1.35 dB, ESR ≈ 7.4e-1
+    //   TR3.1 H1-only:     SNR ≈ 2.31 dB
+    //   HEAD H1+H2 tree:   SNR ≈ 0.23 dB, ESR ≈ 9.49e-1  (re-audit 2026-08-09)
+    //   Sprint 1–3 post-fix: SNR ≈ 1.69 dB, ESR ≈ 6.78e-1 (measured 2026-09-07)
     println!(
         "// Measured: SNR = {snr_db:.2} dB, ESR = {esr:.2e} | \
          n={} block=64 prewarm=2048 48kHz | HEAD meter (see history in test docs)",

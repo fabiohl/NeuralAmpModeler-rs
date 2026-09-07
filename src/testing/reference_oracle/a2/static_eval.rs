@@ -315,11 +315,11 @@ pub(crate) struct ArrayState {
     pub bottleneck: usize,
     pub cond_size: usize,
     pub head_size: usize,
-    pub head_is_rechannel: bool,
     pub rechannel_w: Vec<f64>,
     pub lws: Vec<A2OracleLayerWeights>,
     pub head_w: Vec<f64>,
     pub head_b: Vec<f64>,
+    pub head_scale: f64,
     pub head_kernel_size: usize,
     pub fwd_bufs: Vec<Vec<f64>>,
 }
@@ -566,16 +566,26 @@ pub(crate) fn build_a2_arrays(
             .and_then(|k| k.as_u64())
             .unwrap_or(1) as usize;
 
-        let (head_w, head_b) = if head_is_rechannel {
-            let hw_count = head_accum_size * head_size;
-            let head_w = cursor.read_f64(hw_count);
+        let (head_w, head_b, head_scale) = if head_is_rechannel {
+            let per_oc_w_count = head_k * head_accum_size;
+            let hw_count = head_size * per_oc_w_count;
+            let head_w_raw = cursor.read_f64(hw_count);
+            let mut head_w = vec![0.0f64; hw_count];
+            for oc in 0..head_size {
+                for tap in 0..head_k {
+                    for c in 0..head_accum_size {
+                        head_w[oc * per_oc_w_count + tap * head_accum_size + c] =
+                            head_w_raw[oc * per_oc_w_count + c * head_k + tap];
+                    }
+                }
+            }
             let head_bias = layer_cfg.head_bias.unwrap_or(false);
             let head_b = if head_bias {
                 cursor.read_f64(head_size)
             } else {
                 vec![0.0f64; head_size]
             };
-            (head_w, head_b)
+            (head_w, head_b, 1.0f64)
         } else {
             let head_w_raw = cursor.read_f64(head_k * head_accum_size);
             let mut head_w = vec![0.0f64; head_k * head_accum_size];
@@ -585,8 +595,8 @@ pub(crate) fn build_a2_arrays(
                 }
             }
             let head_b = vec![cursor.read_one_f64()];
-            let _head_scale_val = cursor.read_one_f64();
-            (head_w, head_b)
+            let head_scale_val = cursor.read_one_f64();
+            (head_w, head_b, head_scale_val)
         };
 
         arrays.push(ArrayState {
@@ -595,11 +605,11 @@ pub(crate) fn build_a2_arrays(
             bottleneck,
             cond_size,
             head_size,
-            head_is_rechannel,
             rechannel_w,
             lws,
             head_w,
             head_b,
+            head_scale,
             head_kernel_size: head_k,
             fwd_bufs: vec![],
         });

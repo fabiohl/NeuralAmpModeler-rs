@@ -125,7 +125,7 @@ impl WaveNetA2Dyn {
             for c in 0..channels {
                 let mut sum = 0.0f32;
                 for ic in 0..src_channels {
-                    sum += residual[rbase + ic] * self.rechannel_w_f32[ic * channels + c];
+                    sum += residual[rbase + ic] * self.rechannel_w_f32[c * src_channels + ic];
                 }
                 self.layer_in[base + c] = sum;
             }

@@ -8,18 +8,39 @@ use crate::loader::nam_json::model::NamModelData;
 use super::super::*;
 use super::static_eval::*;
 
-/// High-precision f64 reference oracle for A2 architecture forward pass.
+/// High-precision f64 reference oracle for A2 architecture forward pass (mono output).
 ///
 /// Evaluates A2 model arrays sample-by-sample, applying FiLM modulations (Slots 0-7),
 /// dilated 1D convolutions, activation/gating functions, and head accumulation.
-#[expect(
-    clippy::needless_range_loop,
-    reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
-)]
 pub(crate) fn oracle_a2_forward(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
+) -> Vec<f64> {
+    oracle_a2_forward_internal(model_data, input, config, false)
+}
+
+/// High-precision f64 reference oracle for A2 architecture returning all head channels interleaved.
+///
+/// Returns `[f0_ch0, ..., f0_chN, f1_ch0, ...]` matching the layout used by
+/// the Rust production engine (`condition_dsp_output`) and C++ NAMcore (`_condition_dsp_output_buffers`).
+pub(crate) fn oracle_a2_all_channels(
+    model_data: &NamModelData,
+    input: &[f64],
+    config: &PrecisionConfig,
+) -> Vec<f64> {
+    oracle_a2_forward_internal(model_data, input, config, true)
+}
+
+#[expect(
+    clippy::needless_range_loop,
+    reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
+)]
+fn oracle_a2_forward_internal(
+    model_data: &NamModelData,
+    input: &[f64],
+    config: &PrecisionConfig,
+    all_channels: bool,
 ) -> Vec<f64> {
     let num_frames = input.len();
     if num_frames == 0 {
@@ -40,15 +61,15 @@ pub(crate) fn oracle_a2_forward(
         oracle_condition_dsp_channels(&cond_model, input, config)
     });
 
-    // Broadcast single-channel condition_dsp output (e.g. LSTM) to condition_size channels.
+    // Broadcast condition_dsp output if dsp_ch < cond_size_oracle.
     let cond_size_oracle = layers.first().and_then(|l| l.condition_size).unwrap_or(1);
     let cond_output: Option<Vec<f64>> = cond_output.map(|raw_out| {
-        if cond_size_oracle > 1 && raw_out.len() == num_frames {
+        let dsp_ch = raw_out.len().checked_div(num_frames).unwrap_or(1);
+        if cond_size_oracle > dsp_ch && num_frames > 0 {
             let mut broadcasted = vec![0.0f64; num_frames * cond_size_oracle];
             for f in 0..num_frames {
-                let val = raw_out[f];
                 for c in 0..cond_size_oracle {
-                    broadcasted[f * cond_size_oracle + c] = val;
+                    broadcasted[f * cond_size_oracle + c] = raw_out[f * dsp_ch + (c % dsp_ch)];
                 }
             }
             broadcasted
@@ -57,16 +78,31 @@ pub(crate) fn oracle_a2_forward(
         }
     });
 
-    let head_scale = model_data.config.head_scale.unwrap_or(1.0) as f64;
     let mut cursor = Cursor::new(&model_data.weights, config.weight_precision);
     let acc_mode = config.accumulation;
 
     let mut arrays = match build_a2_arrays(model_data, &mut cursor) {
         Some(arrs) => arrs,
-        None => return vec![0.0; num_frames],
+        None => {
+            let out_channels = if all_channels {
+                layers.last().and_then(|l| l.head_size).unwrap_or(1)
+            } else {
+                1
+            };
+            return vec![0.0; num_frames * out_channels];
+        }
+    };
+
+    let cascade_head_scale = if cursor.remaining() == 1 {
+        cursor.read_one_f64()
+    } else {
+        1.0f64
     };
 
     let num_arrays = arrays.len();
+    if num_arrays == 0 {
+        return vec![0.0; if all_channels { 0 } else { num_frames }];
+    }
 
     // Allocate history buffers per array (largest across arrays).
     let mut max_rf: usize = 0;
@@ -86,36 +122,39 @@ pub(crate) fn oracle_a2_forward(
             .collect();
     }
 
-    // Head accumulator (shared across arrays, per-channel).
+    // Head accumulators (dedicated per array, sized to array's head_accum_size).
     let hr_len = (max_rf + num_frames + 64).next_power_of_two();
     let ring_mask = hr_len - 1;
-    let max_ch = arrays.iter().map(|a| a.ch).max().unwrap_or(8);
-    let mut head_acc = vec![0.0f64; hr_len * max_ch];
-    let mut head_wp = 0usize;
+    let mut head_accs: Vec<Vec<f64>> = arrays
+        .iter()
+        .map(|a| vec![0.0f64; hr_len * a.head_accum_size])
+        .collect();
 
     // Pre-compute channel counts for cascade residual flow.
     let array_channels: Vec<usize> = arrays.iter().map(|a| a.ch).collect();
+    let max_ch = array_channels.iter().copied().max().unwrap_or(8);
 
     // Reserve cascade residual buffer (multi-channel between arrays).
     let mut cascade_residual = vec![0.0f64; hist_size * max_ch];
 
-    let mut output = vec![0.0f64; num_frames];
+    let last_head_size = arrays[num_arrays - 1].head_size;
+    let out_channels = if all_channels { last_head_size } else { 1 };
+    let mut output = vec![0.0f64; num_frames * out_channels];
 
-    #[expect(
-        clippy::explicit_counter_loop,
-        reason = "Explicit index required to synchronize progress across multiple arrays simultaneously"
-    )]
-    for (f, out_val) in output.iter_mut().enumerate() {
+    for f in 0..num_frames {
         let fi = bs + f;
         let x = input[f];
-        let head_col = head_wp;
-        head_wp += 1;
+        let head_col = f;
+
+        let mut prev_head_out: Vec<f64> = Vec::new();
 
         // ── Cascade: process each array ──
-        for (ai, arr) in arrays.iter_mut().enumerate() {
+        for ai in 0..num_arrays {
+            let arr = &mut arrays[ai];
             let ch = arr.ch;
             let bottleneck = arr.bottleneck;
             let cond_size = arr.cond_size;
+            let head_accum_size = arr.head_accum_size;
 
             // Condition vector: from condition_dsp or raw input.
             let condition: &[f64] = if cond_size == 1 {
@@ -134,7 +173,7 @@ pub(crate) fn oracle_a2_forward(
             // Per-array history buffers.
             let num_layers = arr.lws.len();
             let mut head1x1_scratch = if arr.lws.iter().any(|lw| lw.head1x1_active) {
-                vec![0.0f64; arr.head_accum_size]
+                vec![0.0f64; head_accum_size]
             } else {
                 vec![]
             };
@@ -152,18 +191,25 @@ pub(crate) fn oracle_a2_forward(
                 for nc in 0..ch {
                     let mut sum = 0.0;
                     for ic in 0..prev_ch {
-                        sum += cascade_residual[fi * max_ch + ic] * rw[ic * ch + nc];
+                        sum += cascade_residual[fi * max_ch + ic] * rw[nc * prev_ch + ic];
                     }
                     layer_in[nc] = sum;
                 }
             }
 
-            // Per-layer history buffers
-            let fwd_bufs = &mut arr.fwd_bufs;
-
             // Write input to first layer's history
+            let fwd_bufs = &mut arr.fwd_bufs;
             for c in 0..ch {
                 fwd_bufs[0][fi * ch + c] = layer_in[c];
+            }
+
+            // Seed head accumulator for ai > 0 from prev_head_out
+            let head_off = (head_col & ring_mask) * head_accum_size;
+            if ai > 0 {
+                let copy_ch = prev_head_out.len().min(head_accum_size);
+                head_accs[ai][head_off..head_off + copy_ch]
+                    .copy_from_slice(&prev_head_out[..copy_ch]);
+                head_accs[ai][head_off + copy_ch..head_off + head_accum_size].fill(0.0);
             }
 
             for (li, lw) in arr.lws.iter_mut().enumerate() {
@@ -296,15 +342,14 @@ pub(crate) fn oracle_a2_forward(
                 }
 
                 // Head accumulate
-                let head_off = head_col * max_ch;
                 if lw.head1x1_active {
                     let h1_in = if lw.head1x1_w.is_empty() {
                         0
                     } else {
-                        lw.head1x1_w.len() / arr.head_accum_size
+                        lw.head1x1_w.len() / head_accum_size
                     };
                     let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
-                    let ch_per_group = arr.head_accum_size / h1_groups;
+                    let ch_per_group = head_accum_size / h1_groups;
                     head1x1_scratch.fill(0.0);
                     for grp in 0..h1_groups {
                         for oc in grp * ch_per_group..(grp + 1) * ch_per_group {
@@ -324,21 +369,25 @@ pub(crate) fn oracle_a2_forward(
                         film.apply(&mut head1x1_scratch, condition);
                     }
                     if li == 0 && ai == 0 {
-                        head_acc[head_off..head_off + arr.head_accum_size]
-                            .copy_from_slice(&head1x1_scratch[..arr.head_accum_size]);
+                        head_accs[0][head_off..head_off + head_accum_size]
+                            .copy_from_slice(&head1x1_scratch[..head_accum_size]);
                     } else {
-                        for c in 0..arr.head_accum_size {
-                            head_acc[head_off + c] =
-                                accum_f64(head_acc[head_off + c], head1x1_scratch[c], acc_mode);
+                        for c in 0..head_accum_size {
+                            head_accs[ai][head_off + c] = accum_f64(
+                                head_accs[ai][head_off + c],
+                                head1x1_scratch[c],
+                                acc_mode,
+                            );
                         }
                     }
                 } else {
                     if li == 0 && ai == 0 {
-                        head_acc[head_off..head_off + z_len].copy_from_slice(&z_scratch[..z_len]);
+                        head_accs[0][head_off..head_off + z_len]
+                            .copy_from_slice(&z_scratch[..z_len]);
                     } else {
                         for c in 0..z_len {
-                            head_acc[head_off + c] =
-                                accum_f64(head_acc[head_off + c], z_scratch[c], acc_mode);
+                            head_accs[ai][head_off + c] =
+                                accum_f64(head_accs[ai][head_off + c], z_scratch[c], acc_mode);
                         }
                     }
                 }
@@ -401,31 +450,39 @@ pub(crate) fn oracle_a2_forward(
                     cascade_residual[fi * max_ch + c] = layer_in[c];
                 }
             }
-        }
 
-        // ── Head finalize (last array only) ──
-        let last_arr = &arrays[num_arrays - 1];
-        let lch = last_arr.head_accum_size;
-        let k = if last_arr.head_is_rechannel {
-            last_arr.head_size
-        } else {
-            if last_arr.head_size == 1 {
-                last_arr.head_kernel_size
-            } else {
-                last_arr.head_size
+            // Finalize head for this array
+            let hs = arr.head_size;
+            let k = arr.head_kernel_size;
+            let hw = &arr.head_w;
+            let hb = &arr.head_b;
+            let channels = arr.head_accum_size;
+            let mut cur_head_out = vec![0.0f64; hs];
+            for oc in 0..hs {
+                let w_base = oc * k * channels;
+                let mut y = hb[oc];
+                for t in 0..k {
+                    let col = head_col.wrapping_sub(k - 1 - t) & ring_mask;
+                    let ha_off = col * channels;
+                    let w_off = w_base + t * channels;
+                    for ic in 0..channels {
+                        y = mul_add_f64(hw[w_off + ic], head_accs[ai][ha_off + ic], y, acc_mode);
+                    }
+                }
+                cur_head_out[oc] = y * arr.head_scale;
             }
-        };
-        let cb = head_col.wrapping_sub(k - 1);
-        let mut y = last_arr.head_b[0];
-        for t in 0..k {
-            let col = cb.wrapping_add(t) & ring_mask;
-            let so = col * max_ch;
-            let wo = t * lch;
-            for c in 0..last_arr.head_accum_size {
-                y = mul_add_f64(last_arr.head_w[wo + c], head_acc[so + c], y, acc_mode);
+
+            if ai + 1 < num_arrays {
+                prev_head_out = cur_head_out;
+            } else if all_channels {
+                let out_base = f * hs;
+                for oc in 0..hs {
+                    output[out_base + oc] = cur_head_out[oc] * cascade_head_scale;
+                }
+            } else {
+                output[f] = cur_head_out[0] * cascade_head_scale;
             }
         }
-        *out_val = y * head_scale;
     }
 
     output

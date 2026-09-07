@@ -100,9 +100,9 @@ impl WaveNetA2Dyn {
             bottleneck
         };
 
-        // 2a. Dilated conv weights — interleave-4-wide.
-        let conv_w_count = channels * conv_out * ksize;
-        let conv_w_padded = conv_out.div_ceil(4) * 4 * channels * ksize;
+        // 2a. Dilated conv weights — interleave-4-wide (standard) or grouped-interleaved-4-wide.
+        let groups_in = self.groups_input.max(1) as usize;
+        let conv_w_count = (channels * conv_out / groups_in) * ksize;
         let conv_w_f32 = super::super::set_weights::read_slice(
             weights,
             pos,
@@ -110,9 +110,6 @@ impl WaveNetA2Dyn {
             total,
             &format!("layer[{i}].conv_w"),
         )?;
-        let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
-            .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
-        transpose_conv1d_interleaved_4wide(conv_w_f32, &mut conv_w, channels, conv_out, ksize);
 
         // 2b. Conv bias.
         let conv_b_f32 = super::super::set_weights::read_slice(
@@ -125,9 +122,20 @@ impl WaveNetA2Dyn {
         let conv_b = AlignedVec::from_vec(conv_b_f32.to_vec())
             .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
-        let conv = crate::models::a2::conv1d::A2Conv1d::new(
-            conv_w, conv_b, true, dilation, channels, conv_out, ksize,
-        );
+        let conv = if groups_in > 1 {
+            crate::models::a2::conv1d::A2Conv1d::new_grouped(
+                conv_w_f32, conv_b_f32, true, dilation, channels, conv_out, ksize, groups_in,
+            )
+            .map_err(|e| format!("A2 grouped conv creation failed: {e:?}"))?
+        } else {
+            let conv_w_padded = conv_out.div_ceil(4) * 4 * channels * ksize;
+            let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
+                .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
+            transpose_conv1d_interleaved_4wide(conv_w_f32, &mut conv_w, channels, conv_out, ksize);
+            crate::models::a2::conv1d::A2Conv1d::new(
+                conv_w, conv_b, true, dilation, channels, conv_out, ksize,
+            )
+        };
 
         // 2c. Mixin (group-aware).
         // C++ Conv1x1 with groups: the weight stream stores only block-diagonal
@@ -276,10 +284,12 @@ impl WaveNetA2Dyn {
         // FiLM layers (if active in layer_raw JSON) — read weights after l1x1 bias.
         if let Some(ref raw) = self.layer_raw {
             let configs = super::super::set_weights::parse_film_configs(raw);
-            super::super::set_weights::load_film_for_layer(
+            super::super::set_weights::load_film_for_layer_dynamic(
                 &mut layer,
                 &configs,
                 channels,
+                bottleneck,
+                conv_out,
                 self.condition_size,
                 self.head_accum_size.max(1),
                 weights,
@@ -441,43 +451,32 @@ impl WaveNetA2Dyn {
                 transpose_head_w(src, dst, channels, head_k);
             }
 
-            let head_b_f32 = super::super::set_weights::read_slice(
-                weights,
-                pos,
-                head_size,
-                total,
-                "head_rechannel_b",
-            )?;
-            for &b in head_b_f32 {
-                if !b.is_finite() {
-                    return Err(format!(
-                        "set_weights: head_rechannel_b contains non-finite value (value: {:e})",
-                        b
-                    ));
-                }
-            }
             let mut head_b = AlignedVec::new(head_size, 0.0f32)
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
-            head_b.copy_from_slice(head_b_f32);
-
-            let head_scale_f32 = super::super::set_weights::read_slice(
-                weights,
-                pos,
-                head_size,
-                total,
-                "head_rechannel_scale",
-            )?;
-            for &s in head_scale_f32 {
-                if !s.is_finite() {
-                    return Err(format!(
-                        "set_weights: head_rechannel_scale contains non-finite value (value: {:e})",
-                        s
-                    ));
+            if self.head_bias {
+                let head_b_f32 = super::super::set_weights::read_slice(
+                    weights,
+                    pos,
+                    head_size,
+                    total,
+                    "head_rechannel_b",
+                )?;
+                for &b in head_b_f32 {
+                    if !b.is_finite() {
+                        return Err(format!(
+                            "set_weights: head_rechannel_b contains non-finite value (value: {:e})",
+                            b
+                        ));
+                    }
                 }
+                head_b.copy_from_slice(head_b_f32);
             }
-            let mut head_scale = AlignedVec::new(head_size, 0.0f32)
+
+            // Head scale is a model-level scalar in C++ NAMCore WaveNet::_head_scale,
+            // NOT a per-channel array consumed during head rechannel. Allocate 1.0f32
+            // without consuming floats from weights.
+            let head_scale = AlignedVec::new(head_size, 1.0f32)
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
-            head_scale.copy_from_slice(head_scale_f32);
 
             self.head_rechannel_w = head_w;
             self.head_rechannel_b = head_b;

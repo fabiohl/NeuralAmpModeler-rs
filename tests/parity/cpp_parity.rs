@@ -1594,7 +1594,7 @@ fn live_cross_validation_wavenet_a2_film_chaos_stress() {
 }
 
 // wavenet_a2_max — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
-// (prod f32×C++ SNR≈0.23 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
+// (prod f32×C++ SNR≈1.69 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
 // #[test]
 // #[ignore]
 // fn live_cross_validation_wavenet_a2_max() {
@@ -1675,7 +1675,7 @@ fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
 }
 
 // wavenet_a2_max v2 — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
-// (prod f32×C++ SNR≈0.23 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
+// (prod f32×C++ SNR≈1.69 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
 // #[test]
 // #[ignore]
 // fn live_cross_validation_v2_wavenet_a2_max() {

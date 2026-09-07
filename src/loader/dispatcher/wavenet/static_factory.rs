@@ -230,7 +230,7 @@ fn reject_wavenet_a2_max_class(data: &NamModelData) -> anyhow::Result<()> {
         bail!(
             "A2 Max flagship topology is not supported (known bug KB-A2-MAX) — \
              production f32 diverges from the NAMCore C++ golden (measured \
-             SNR ≈ 0.23 dB; structural parity gap). fail-closed until a future \
+             SNR ≈ 1.69 dB; structural parity gap). fail-closed until a future \
              investigation meets the reopening criteria in docs/cpp_parity_map.md \
              §4.4.3. Neighbors (A2 Full/Lite/FiLM, condition_dsp standalone) remain supported."
         );
@@ -404,6 +404,19 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         model.head1x1_active = head1x1_active;
         model.head1x1_h1_in = h1_in_size;
 
+        let head_bias = layer_cfg
+            .head_bias
+            .or_else(|| {
+                layer_cfg
+                    .layer_raw
+                    .as_ref()
+                    .and_then(|raw| raw.get("head"))
+                    .and_then(|h| h.get("bias"))
+                    .and_then(|b| b.as_bool())
+            })
+            .unwrap_or(ai == num_arrays - 1);
+        model.head_bias = head_bias;
+
         // Group configs (per-array, uniform across layers inside the array).
         model.mixin_groups = parse_groups_field(
             layer_cfg
@@ -420,6 +433,14 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 .and_then(|raw| raw.get("layer1x1"))
                 .and_then(|l| l.get("groups")),
             "layer1x1.groups",
+            ai,
+        )?;
+        model.groups_input = parse_groups_field(
+            layer_cfg
+                .layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("groups_input")),
+            "groups_input",
             ai,
         )?;
 
@@ -439,14 +460,19 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         arrays.push(model);
     }
 
-    if weight_pos != total_weights {
+    let mut cascade_head_scale = 1.0f32;
+    if weight_pos < total_weights && total_weights - weight_pos == 1 {
+        cascade_head_scale = data.weights[weight_pos];
+        weight_pos += 1;
         info!(
-            "[Dispatcher] A2-Dynamic: {} unconsumed weights after loading {} arrays (consumed {}, total {}). \
-             Allowed for hybrid condition_dsp sub-models.",
-            total_weights - weight_pos,
-            num_arrays,
-            weight_pos,
-            total_weights
+            "[Dispatcher] A2-Dynamic: consumed trailing model-level head_scale={cascade_head_scale} (pos {weight_pos}/{total_weights})"
+        );
+    }
+
+    if weight_pos != total_weights {
+        bail!(
+            "A2-Dynamic weight count mismatch: consumed {weight_pos}, but {total_weights} provided (remaining: {})",
+            total_weights - weight_pos
         );
     }
 
@@ -487,9 +513,10 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         return Ok(Box::new(StaticModel::WavenetA2Dyn(Box::new(model))));
     }
 
-    let cascade = WaveNetA2Cascade::try_new(arrays, condition_dsp, condition_size)?;
+    let mut cascade = WaveNetA2Cascade::try_new(arrays, condition_dsp, condition_size)?;
+    cascade.head_scale = cascade_head_scale;
     info!(
-        "[Dispatcher] WaveNet A2-Cascade built — {} arrays, CH=[{}], weights={}",
+        "[Dispatcher] WaveNet A2-Cascade built — {} arrays, CH=[{}], head_scale={}, weights={}",
         num_arrays,
         cascade
             .arrays
@@ -497,6 +524,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             .map(|a| a.channels.to_string())
             .collect::<Vec<_>>()
             .join(", "),
+        cascade.head_scale,
         data.weights.len()
     );
     Ok(Box::new(StaticModel::WavenetA2Cascade(Box::new(cascade))))
