@@ -768,21 +768,33 @@ All specialization candidates are evaluated on end-to-end model execution (`NamM
 ### 2. Domain & Model Topology ROI Matrix (Empirical Hardware Receipt)
 
 > [!NOTE]
-> **Empirical Hardware Measurement (2026-08-22 Remote Audit Receipt):** `NamModel::process()` on **Intel Xeon Platinum 8488C** (Sapphire Rapids, AWS EC2 `c7i.xlarge` 2c/4t, rustc 1.98.0, git `75ceac1` dirty). Cross-ISA f32 parity on the gate harness passed. Numbers below are from `target/logs-remoto/remote-simd-receipt.json` (also summarized in-tree as the operator copy). **Policy = Scenario 2 DROP** (do not promote). In default builds, `detect()` and `dispatch_simd!` unconditionally execute `Avx2Math`, with AVX-512 kernels cfg-gated out of default `.text`. A2-Full N=1 was +50% AVX-512; that does not pass the N=64 gate.
+> **Empirical Hardware Measurement (2026-09-09 Canonical Audit Receipt):** `NamModel::process()` on **Intel Xeon Platinum 8488C** (Sapphire Rapids, AWS EC2, 1 physical core, 2 vCPUs, Linux 7.0.0-1006-aws, rustc 1.98.1, git commit `75b0f50`/`838be61`). Cross-ISA mathematical parity passed on 100% of the 23 test suites (`ESR < 1e-11`, `MSE < 1e-12`). Numbers below reflect the canonical Criterion runs saved in `target/logs/remote-simd-receipt.json`. **Policy = Scenario B DROP** (overall gate verdict: FAIL). In default builds, `detect()` and `dispatch_simd!` unconditionally execute `Avx2Math`, with AVX-512 kernels cfg-gated out of default `.text`.
+
+#### Canonical 64-Sample Audio Block Latencies (N=64 @ 48 kHz)
 
 | Kernel / Domain                  | Target Model Family                                     | AVX2 Baseline (v3)     | AVX-512 Measured Latency       | Speedup $\Delta\%$   | Statistical Gate ($p$) | Verdict (policy) vs code status                                                             |
 |:-------------------------------- |:------------------------------------------------------- |:---------------------- |:------------------------------ |:-------------------- |:---------------------- |:------------------------------------------------------------------------------------------- |
-| **LSTM 2x16**                    | `LSTM_2x16_64samp_48kHz`                                | 14.77 µs (YMM FMA)     | 18.04 µs (VL256+ZMM mix)       | **−22.10%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **LSTM 1x16**                    | `LSTM_1x16_64samp_48kHz`                                | 7.31 µs (YMM FMA)      | 10.40 µs (VL256+ZMM mix)       | **−42.20%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in. Small $H=16$ GEMV. |
-| **A2-Full (CH=8)**               | `A2Full_CH8_64samp_48kHz`                               | 22.58 µs (YMM FMA)     | 29.74 µs (VL256)               | **−31.74%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **A2-Lite (CH=3)**               | `A2Lite_CH3_64samp_48kHz`                               | 20.37 µs (YMM FMA)     | 21.43 µs (VL256)               | **−5.20%**           | $p < 0.0001$           | **DROP** (below 12%; at the $<5\%$ line). Default builds dispatch AVX2.                     |
-| **WaveNet Standard (CH=16)**     | `WaveNet_Standard_CH16_64samp_48kHz`                    | 43.36 µs (YMM FMA)     | 44.22 µs (VL256+`dot_16x` ZMM) | **−1.98%**           | $p = 0.0121$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
+| **LSTM 2x16**                    | `LSTM_2x16_64samp_48kHz`                                | 13.72 µs (YMM FMA)     | 15.49 µs (VL256+ZMM mix)       | **−12.87%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
+| **LSTM 1x16**                    | `LSTM_1x16_64samp_48kHz`                                | 6.55 µs (YMM FMA)      | 7.67 µs (VL256+ZMM mix)        | **−17.18%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in. Small $H=16$ GEMV. |
+| **A2-Full (CH=8)**               | `A2Full_CH8_64samp_48kHz`                               | 23.47 µs (YMM FMA)     | 31.29 µs (VL256)               | **−33.31%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
+| **A2-Lite (CH=3)**               | `A2Lite_CH3_64samp_48kHz`                               | 20.28 µs (YMM FMA)     | 21.30 µs (VL256)               | **−5.05%**           | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
+| **WaveNet Standard (CH=16)**     | `WaveNet_Standard_CH16_64samp_48kHz`                    | 42.05 µs (YMM FMA)     | 42.98 µs (VL256+`dot_16x` ZMM) | **−2.21%**           | $p = 0.0009$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
 | **WaveNet `dot_8x`**             | WaveNet CH=8 Layers                                     | 10 YMM registers       | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse in `Avx512Math` (true).**                                                      |
 | **WaveNet `dot_16x`**            | WaveNet CH=16 Layers                                    | 2× YMM                 | dedicated `__m512`             | not separately gated | —                      | **Dedicated ZMM kernel** (`dot_product_16x_f32_avx512` under `--features avx512`).          |
 | **Linear / Gain / Dither / Pan** | DSP Pipeline Stages                                     | Streaming FMA          | wraps AVX2                     | **< 2%**             | —                      | **AVX2 reuse (true)** for gain/dither/ramp.                                                 |
 | **CabSim UPOLS FFT**             | CabSim IR Convolver                                     | Radix-4 / Radix-2 AVX2 | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse (true)** for MAC/FFT butterflies. Stereo FIR has `convolve_*_avx512` opt-in.   |
 | **Dynamic Topologies**           | `LstmModelDyn` `WaveNetModelDyn` `WaveNetA2Dyn` ConvNet | AVX2 only              | not selected                   | —                    | —                      | **AVX2 in default builds.** All dynamic and ConvNet paths dispatch `Avx2Math`.              |
 | **Non-DSP Off-RT Paths**         | Loaders (`.namb`, `serde_json`, IR WAV, Alloc)          | Standard Rust / libc   | none                           | **< 1%**             | —                      | **NO DUPLICATION.** Off-RT, I/O-bound.                                                      |
+
+#### Multi-Buffer Latency Sweep Across All Geometries (Audit Receipt Summary)
+
+| SKU ID | N=64 AVX2 / AVX512 | N=64 $\Delta\%$ | N=8 AVX2 / AVX512 | N=8 $\Delta\%$ | N=1 AVX2 / AVX512 | N=1 $\Delta\%$ | Overall Verdict |
+|:-------|:-------------------|:----------------|:------------------|:---------------|:------------------|:---------------|:----------------|
+| **LSTM 2x16** | 13.72 µs / 15.49 µs | **−12.87%** (FAIL) | 1.70 µs / 1.94 µs | **−14.02%** (FAIL) | 0.22 µs / 0.27 µs | **−23.41%** (FAIL) | **REJECT** |
+| **LSTM 1x16** | 6.55 µs / 7.67 µs | **−17.18%** (FAIL) | 0.81 µs / 0.97 µs | **−18.75%** (FAIL) | 0.10 µs / 0.12 µs | **−21.13%** (FAIL) | **REJECT** |
+| **A2-Full (CH=8)** | 23.47 µs / 31.29 µs | **−33.31%** (FAIL) | 3.92 µs / 4.87 µs | **−24.21%** (FAIL) | 2.75 µs / 1.66 µs | **+39.41%** (PASS) | **REJECT** |
+| **A2-Lite (CH=3)** | 20.28 µs / 21.30 µs | **−5.05%** (FAIL) | 3.14 µs / 3.22 µs | **−2.34%** (FAIL) | 0.94 µs / 1.01 µs | **−7.99%** (FAIL) | **REJECT** |
+| **WaveNet Standard** | 42.05 µs / 42.98 µs | **−2.21%** (FAIL) | 5.64 µs / 5.84 µs | **−3.59%** (FAIL) | 1.42 µs / 1.62 µs | **−14.37%** (FAIL) | **REJECT** |
 
 ### 3. Why ZMM 512-bit Loses in Small Geometries
 
@@ -791,6 +803,15 @@ In low-latency neural audio, network dimensions are compact ($C=3, 4, 8, 12, 16$
 1. **Register Underutilization:** Padding 3 or 8 channels to 16 lanes introduces zero-masking overhead and false dependency tracking.
 2. **Frequency Downclocking (License Throttling):** On Intel Skylake-SP and Ice Lake architectures, executing 512-bit ZMM instructions drops core turbo frequencies across all threads sharing the core.
 3. **Register File Advantage in VL256:** AVX-512 VL256 provides access to all 32 vector registers (`YMM0`..`YMM31`) in 256-bit width, entirely eliminating stack register spilling in 4-gate GEMV and Conv1D without triggering frequency penalties.
+
+### 4. Role of the `--features avx512` Cargo Flag & Production Policy
+
+The existence of the `avx512` Cargo feature flag in `NeuralAmpModeler-rs` is governed by two clear architectural principles:
+
+1. **Preservation of Engineering Investment & Multiversioning Foundation:**
+   The specialized AVX-512 kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`), the dynamic dispatch table (`dispatch_simd!`), the diagnostic probe CLI (`simd_probe`), and the cross-ISA mathematical parity harness (`isa_parity.rs`) represent substantial engineering effort. Retaining this infrastructure validates the project's ability to host multiple ISA targets simultaneously and serves as the reference implementation for future instruction set additions (such as AVX10 or ARM SVE/Neon).
+2. **Production Usage Is Actively Discouraged:**
+   Enabling `--features avx512` in production builds, release packaging (Flatpak, VST3/CLAP plugins, standalone audio pipe), or daily audio workloads is **actively discouraged**. The empirical benchmarks prove that AVX2 (`x86-64-v3`) is strictly faster and more predictable in 14 of 15 test configurations. The baseline AVX2 path represents the optimal balance of throughput, instruction cache density, and thermal stability for real-time neural audio processing.
 
 ---
 
