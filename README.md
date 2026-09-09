@@ -110,9 +110,15 @@ NeuralAmpModeler-rs = { version = "0.7.3", features = ["testing"] }
 | `heap-audit`     | Enables heap-allocation auditing infrastructure                                                           |
 | `long_bench`     | Enables long-form inference benchmarks                                                                    |
 | `dynamic-engine` | Test-only: forces dynamic fallback paths instead of static profiles for coverage testing (see note below) |
-| `avx512`         | Enables opt-in AVX-512 upward dispatch and measurement harnesses                                          |
+| `avx512`         | Enables opt-in AVX-512 upward dispatch and measurement harnesses (discouraged in production; see note below) |
 
 > ⚠️ **Note on `dynamic-engine`:** This flag does **not** enable non-standard topology support — dynamic fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`) are always compiled and unconditionally active. This flag is used exclusively for internal coverage and regression testing to force dynamic execution paths even when optimized static profiles are applicable.
+
+> ⚠️ **Note on `avx512` (Usage Discouraged in Production):** This flag enables upward runtime dispatch to specialized AVX-512 kernels (`Avx512Math`). However, its use in production builds, release packaging, and live audio processing is **actively discouraged**. Empirical hardware benchmarks (canonical 2026-09-09 audit receipt on Sapphire Rapids) demonstrate that the default `x86-64-v3` baseline (AVX2 + FMA) yields superior throughput and lower latency across canonical NAM models (AVX-512 introduced 2% to 33% latency regressions across 14 of 15 configurations due to vector zero-masking and packaging overhead in compact channel geometries $C \le 16$).
+>
+> The `avx512` flag is retained strictly to:
+> 1. **Preserve engineering investment:** Retain the substantial work invested in specialized vector kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`).
+> 2. **Validate multiversioning architecture:** Exercise runtime SIMD multiversioning mechanics (`dispatch_simd!`, `simd_probe`, cross-ISA parity tests) as an architectural template for future instruction set additions and alternative CPU targets (e.g. AVX10, ARM Neon/SVE).
 
 ---
 
@@ -222,7 +228,7 @@ Full API documentation:
   * **Full DSP Pipeline HQ (4× OS):** **150.6 µs** (**11.3%**)
   * **DSP Resampler (44.1k→48k):** **1.3 µs** | **CabSim IR Medium (512):** **1.3 µs**
 * **Stress Coverage:** Soak, concurrency, heap-audit, deadline, and model-checking suites exercise long-running and real-time invariants; skipped coverage and failed audit phases must be reviewed separately from passing checks.
-* **SIMD Acceleration:** Production math is the AVX2 (`x86-64-v3`) baseline. All production models execute native `f32` (BF16/VNNI retired). The ≥12% `process()` N=64 ROI rule is a **promotion policy**, not a passed measurement: the 2026-08 remote receipt failed every canonical SKU, so AVX-512 is not advertised and default builds dispatch `Avx2` (`detect_best_simd()` returns `Avx2` in default builds, with AVX-512 kernels `cfg`-gated behind the opt-in `avx512` feature; see [`docs/architecture.md`](docs/architecture.md) §1.2). FastMath activations (tanh, sigmoid) via Padé/minimax, with exact-grade `Standard` mode as default.
+* **SIMD Acceleration:** Production math is the AVX2 (`x86-64-v3`) baseline. All production models execute native `f32` (BF16/VNNI retired). The ≥12% `process()` N=64 ROI rule is a **promotion policy**, not a passed measurement: the canonical 2026-09 remote audit receipt on Sapphire Rapids failed every canonical SKU at N=64 (demonstrating that AVX2 is 2% to 33% faster), so AVX-512 is not advertised, its production use is discouraged, and default builds dispatch `Avx2` (`detect_best_simd()` returns `Avx2` in default builds, with AVX-512 kernels `cfg`-gated behind the opt-in `avx512` feature; see [`docs/architecture.md`](docs/architecture.md) §1.2 and [`docs/benchmarks.md`](docs/benchmarks.md) §4). FastMath activations (tanh, sigmoid) via Padé/minimax, with exact-grade `Standard` mode as default.
 
 ---
 

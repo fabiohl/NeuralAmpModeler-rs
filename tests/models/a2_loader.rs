@@ -1205,3 +1205,64 @@ fn test_a2_rejects_massive_layer_count_without_allocations() {
         "error should describe the layer cap, got: {err}"
     );
 }
+
+/// Regression test: synthetic A2 Dynamic model with head kernel size 16 must build
+/// and process without weight count mismatch.
+#[test]
+fn test_a2_dynamic_synthetic_model_with_head_kernel_size_16_builds() {
+    let channels = 4usize;
+    let bottleneck = 4usize;
+    let head_k = 16usize;
+
+    let mut total_weights = channels;
+    for &ksize in A2_KERNEL_SIZES.iter() {
+        total_weights += channels * bottleneck * ksize;
+        total_weights += bottleneck;
+        total_weights += bottleneck;
+        total_weights += bottleneck * channels;
+        total_weights += channels;
+    }
+    total_weights += head_k * channels;
+    total_weights += 1;
+    total_weights += 1;
+
+    let data = NamModelData {
+        version: Some("0.5.4".to_string()),
+        architecture: "WaveNet".to_string(),
+        config: NamConfig {
+            layers: vec![NamLayerConfig {
+                input_size: Some(1),
+                condition_size: Some(1),
+                channels: Some(channels),
+                bottleneck: Some(bottleneck),
+                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+                dilations: Some(A2_DILATIONS.to_vec()),
+                activation: Some("LeakyReLU".to_string()),
+                gated: Some(true),
+                head_bias: Some(true),
+                layer_raw: Some(serde_json::json!({
+                    "head": {
+                        "out_channels": 1,
+                        "kernel_size": head_k,
+                        "bias": true
+                    }
+                })),
+                ..Default::default()
+            }],
+            head: None,
+            head_scale: Some(0.02),
+            ..Default::default()
+        },
+        weights: vec![0.01; total_weights],
+        weights_layout: WeightsLayout::Original,
+        sample_rate: Some(48000.0),
+        metadata: None,
+    };
+
+    let mut model = build_model(&data).expect("Synthetic A2-Dynamic model build must succeed");
+    model.prewarm(64);
+    let input = vec![0.1f32; 64];
+    let mut output = vec![0.0f32; 64];
+    model.process(&input, &mut output);
+    assert!(output[0].is_finite());
+}
