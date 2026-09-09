@@ -578,15 +578,17 @@ impl LongPhaseReceipt {
 
 /// Canonical preflight step identifiers emitted by `utils/tests-long.sh`
 /// ahead of Phase 1 (S6-T03 / RES-08): render binary, fixture/V1/V2 catalog,
-/// package exclusion, freshness, catalog↔test coherence. An abort in any of
-/// them exits the suite before a single timed phase, so each step must still
-/// leave a machine-readable `preflight-*` line (plus the `overall` verdict).
-pub const PREFLIGHT_PHASE_IDS: [&str; 5] = [
+/// package exclusion, freshness, catalog↔test coherence, SIMD capability
+/// probe. An abort in any of them exits the suite before a single timed
+/// phase, so each step must still leave a machine-readable `preflight-*` line
+/// (plus the `overall` verdict).
+pub const PREFLIGHT_PHASE_IDS: [&str; 6] = [
     "preflight-render",
     "preflight-catalog",
     "preflight-package",
     "preflight-freshness",
     "preflight-meta",
+    "preflight-simd-probe",
 ];
 
 /// `true` when `phase_id` belongs to the preflight namespace (`preflight-*`).

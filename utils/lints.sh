@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
-PHASE_TOTAL=9
+PHASE_TOTAL=8
 source "$SCRIPT_DIR/_lib.sh"
 
 
@@ -206,7 +206,7 @@ fi
 ok "All #[allow(clippy::)] suppressions are documented."
 
 # ---------------------------------------------------------------------------
-# [8/9] Static validation: doc(cfg(feature = "...")) feature names exist in Cargo.toml
+# [8/8] Static validation: doc(cfg(feature = "...")) feature names exist in Cargo.toml
 # ---------------------------------------------------------------------------
 phase "Validating doc(cfg) feature names against Cargo.toml..."
 
@@ -233,14 +233,6 @@ if [ -n "$doc_cfg_errors" ]; then
     exit 1
 fi
 ok "All doc(cfg) feature annotations match declared features in Cargo.toml."
-
-# ---------------------------------------------------------------------------
-# [9/9] Binary scan: zero EVEX/ZMM and zero AVX-512 symbols in default release
-# ---------------------------------------------------------------------------
-
-phase "Validating binary artifact (zero AVX-512 in default release build)..."
-"$SCRIPT_DIR/verify_no_avx512_release.sh"
-ok "Binary artifact is clean of AVX-512 symbols and EVEX instructions."
 
 echo -e "${GREEN}${BOLD}================================================================${NC}"
 echo -e "${GREEN}${BOLD} Quality suite completed successfully!                          ${NC}"

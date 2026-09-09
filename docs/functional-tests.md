@@ -167,7 +167,7 @@ NAM_QUICK_STRICT=1 ./utils/tests-quick.sh
 
 #### Phase Breakdown
 
-- **Phase 1 (Structural & Logic, Debug):** Unit tests, DSP math logic, format parsers, FSM transitions, and lock-free SPSC channels across `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, and `avx512_guard`.
+- **Phase 1 (Structural & Logic, Debug):** Unit tests, DSP math logic, format parsers, FSM transitions, and lock-free SPSC channels across `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, and `libm_export_guard`.
 - **Phase 2 (Measurement Oracles & Parity, Release):** Validates release float codegen across `golden_vectors`, `reference_oracle_f64`, `spectral_fidelity`, `linear_fft_test`, and canonical C++ parity (`quick_parity`).
 - **Phase 3 (Parser Fuzzing, Release `--ignored`):** Capped `proptest` sweeps on `.nam` and `.namb` format inputs.
 
@@ -198,6 +198,12 @@ Ahead of any timed test phase, the runner executes blocking preflight validation
 3. `preflight-package`: Validates crate packaging hygiene via `cargo package --list`.
 4. `preflight-freshness`: Enforces SHA-256 integrity against `tests/fixtures/.golden_manifest.sha256`.
 5. `preflight-meta`: Asserts catalog↔test metadata coherence via `meta_coherence.rs`.
+
+Additionally, the **non-gating diagnostic preflight** `preflight-simd-probe`
+(added in Sprint 4.1) runs the `simd_probe` CLI and records the host SIMD
+capability bits, OS AVX-512 context state, the Cargo `avx512` feature state,
+and the effective dispatched backend (see [testing.md](testing.md) — "AVX-512
+Engine Segregation"). Its receipt line is diagnostic: `|| true`, never a gate.
 
 #### Execution: Modes
 
@@ -255,6 +261,7 @@ All test runners, compilation helpers, and preflight steps persist detailed exec
 | **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)            | Single Source of Truth structured audit record (machine-readable per-phase JSON entries).          |
 | **`target/logs/catalog_preflight.log`**          | `tests-long.sh` (Preflight 2)      | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.               |
 | **`target/logs/meta_coherence.log`**             | `tests-long.sh` (Preflight 4)      | Cross-validation between catalog definitions and test module registrations.                        |
+| **`target/logs/simd_probe.log`**                  | `tests-long.sh` (Preflight, diagnostic) | `simd_probe` output: host SIMD feature bits, OS AVX-512 context state, Cargo `avx512` feature state, effective dispatched backend, and inference smoke checksum. |
 | **`target/logs/package-list.err`**               | `tests-long.sh` (Preflight 3)      | Diagnostics from `cargo package --list` crate packaging validations.                               |
 | **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`   | CMake build configuration output when compiling C++ `tools/render`.                                |
 | **`target/logs/cmake-build.log`**                | `utils/ensure_namcore_render.sh`   | CMake compilation logs for the C++ reference render binary.                                        |
@@ -283,7 +290,7 @@ bootstrapped baseline) is *evidence of execution*, never a release certificate.
 
 | #   | Receipt (record name)   | Command (in `NeuralAmpModeler-rs/`)                             | Environment / Flags                      | Generated Artifact(s)                                                               | Blocking Criteria                                                                                                                                                    |
 |:---:|:----------------------- |:--------------------------------------------------------------- |:---------------------------------------- |:----------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `lints.log`             | `utils/lints.sh`                                                | `--all-targets --all-features` (script)  | console output — operator must archive `target/logs/lints.log` (`tee`)              | exit 0; zero compiler/clippy warnings; zero rustdoc warnings; SPDX, anti-pattern and `#[allow]` policies green; binary AVX-512 absence certification green           |
+| 1   | `lints.log`             | `utils/lints.sh`                                                | `--all-targets --all-features` (script)  | console output — operator must archive `target/logs/lints.log` (`tee`)              | exit 0; zero compiler/clippy warnings; zero rustdoc warnings; SPDX, anti-pattern and `#[allow]` policies green; default-release AVX-512 segregation contractual (feature `avx512` opt-in — default feature axes compile no AVX-512 kernels) |
 | 2   | `quick-strict.log`      | `utils/tests-quick.sh`                                          | `NAM_QUICK_STRICT=1`                     | `target/logs/quick-receipt.txt` (+ `quick-phase{1,2,3}.log`)                        | `FIDELITY: OK` and `OVERALL: PASSED`; zero `GAP:` entries; exit 0                                                                                                    |
 | 3   | `long-strict.log`       | `utils/tests-long.sh --strict-pre-release`                      | `--strict-pre-release`                   | `target/logs/long-audit-receipt.jsonl`                                              | `OVERALL: PASSED` with `gaps: []` (validated via `nam_long_receipt validate --strict`); exit 0                                                                       |
 | 4   | `perf-check.log`        | `utils/tests-performance-regression.sh --check`                 | pre-approved baseline (see §5.2)         | `target/logs/regression_phase_receipt.jsonl` (+ `target/logs/regression-check.log`) | statistically valid comparison (two-sample t-test, p < 0.05) against a baseline **produced by an earlier, explicitly approved commit**; exit 0                       |
@@ -322,7 +329,7 @@ baseline) and `utils/quality-dashboard.sh --save` (contract snapshot) are
 - [ ] **Strict RT-Safety:** Zero heap allocations on the audio thread hot-path (Tier 2C.1 and Long Phase 4).
 - [ ] **Determinism & Invariance:** Block-size invariance verified ($< 10^{-7}$ difference) and reset idempotency confirmed.
 - [ ] **Architecture Coverage:** All five model families (WaveNet A1/A2, LSTM, ConvNet, Linear) load and process cleanly.
-- [ ] **Receipt 1 — `lints.log`:** `utils/lints.sh` exit 0, zero warnings (all-features `--all-targets`), formatting/SPDX/anti-pattern/`#[allow]` policies green, binary AVX-512 absence certification green.
+- [ ] **Receipt 1 — `lints.log`:** `utils/lints.sh` exit 0, zero warnings (all-features `--all-targets`), formatting/SPDX/anti-pattern/`#[allow]` policies green, default-release AVX-512 segregation contractual (feature `avx512` opt-in).
 - [ ] **Receipt 2 — `quick-strict.log`:** `NAM_QUICK_STRICT=1 utils/tests-quick.sh` with `FIDELITY: OK` and `OVERALL: PASSED` (zero gaps, exit 0).
 - [ ] **Receipt 3 — `long-strict.log`:** `utils/tests-long.sh --strict-pre-release` with `OVERALL: PASSED` and receipt validated via `nam_long_receipt validate --strict` (`gaps: []`, exit 0).
 - [ ] **Receipt 4 — `perf-check.log`:** `utils/tests-performance-regression.sh --check` passed against a pre-approved baseline from an earlier commit (exit 0).
@@ -348,7 +355,7 @@ When certifying a release candidate or milestone tag, the human operator complet
 - **Baseline Producer Commit (perf):** <commit-sha of the approved --bootstrap-baseline ceremony, §5.2>
 
 #### The Five Mandatory Receipts (same clean commit):
-- [ ] **Receipt 1 — lints:** `target/logs/lints.log` (archived), exit 0, zero warnings, binary AVX-512 absence certification green. Digest: <sha256>
+- [ ] **Receipt 1 — lints:** `target/logs/lints.log` (archived), exit 0, zero warnings, default-release AVX-512 segregation contractual. Digest: <sha256>
 - [ ] **Receipt 2 — quick-strict:** `target/logs/quick-receipt.txt` with `FIDELITY: OK` / `OVERALL: PASSED` (zero gaps). Digest: <sha256>
 - [ ] **Receipt 3 — long-strict:** `target/logs/long-audit-receipt.jsonl` validated via `nam_long_receipt validate --strict` — `OVERALL: PASSED`, `gaps: []`. Digest: <sha256>
 - [ ] **Receipt 4 — perf-check:** `target/logs/regression_phase_receipt.jsonl` (exit 0) against baseline produced by `<baseline producer commit>` — distinct from the certified commit. Digest: <sha256>
@@ -356,7 +363,7 @@ When certifying a release candidate or milestone tag, the human operator complet
 
 #### Verification Checklist:
 - [ ] All five receipts were generated on the **same clean commit** (no dirty-tree or stale-artifact receipts).
-- [ ] `utils/lints.sh` executed cleanly (zero warnings, formatting intact, SPDX headers verified, binary AVX-512 absence certified).
+- [ ] `utils/lints.sh` executed cleanly (zero warnings, formatting intact, SPDX headers verified, AVX-512 segregation confirmed as contractual feature-gating).
 - [ ] `NAM_QUICK_STRICT=1 utils/tests-quick.sh` passed with `FIDELITY: OK` and `OVERALL: PASSED` (zero gaps).
 - [ ] `utils/tests-long.sh --strict-pre-release` executed with `OVERALL: PASSED` (receipt validated via `nam_long_receipt validate --strict`, `gaps: []`).
 - [ ] `utils/tests-performance-regression.sh --check` passed without regression against the pre-approved baseline (producer commit recorded, distinct from the certified commit).

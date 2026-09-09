@@ -10,7 +10,6 @@
 #![allow(unused_imports)]
 
 pub mod alloc_audit;
-pub mod bin_fixtures;
 pub mod constants;
 pub mod conv_helpers;
 pub mod discovery;

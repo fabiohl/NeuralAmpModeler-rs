@@ -30,9 +30,10 @@
 # receipt.jsonl via the Rust emitter `nam_long_receipt append`; the suite-level
 # `overall` line is appended by `nam_long_receipt summary` before the verdict.
 # Preflight steps (preflight-render, preflight-catalog, preflight-package,
-# preflight-freshness, preflight-meta) emit their own lines ahead of Phase 1 —
-# an abort before the first timed phase still leaves its FAILED line plus the
-# derived `overall FAILED` verdict. Shell code never hand-serializes JSON
+# preflight-freshness, preflight-meta, preflight-simd-probe) emit their own
+# lines ahead of Phase 1 — an abort before the first timed phase still leaves
+# its FAILED line plus the derived `overall FAILED` verdict. Shell code never
+# hand-serializes JSON
 # (see src/testing/receipt.rs).
 #
 # Environment variables:
@@ -159,6 +160,7 @@ rm -f target/logs/catalog_preflight.log \
       target/logs/phase-defense-scripts.log \
       target/logs/phase6-loom.log \
       target/logs/subphase-isa-parity.log \
+      target/logs/simd_probe.log \
       target/logs/long-audit-receipt.jsonl
 
 # Cleanup accumulated live-test artifacts from previous runs (41+ MB WAVs)
@@ -383,6 +385,19 @@ fi
 PF_META_DUR=$(( ($(date +%s%N) - PF_META_START) / 1000000 ))
 echo -e "${GREEN}✓ Golden catalog matches tests coherently.${NC}"
 emit_preflight_receipt "preflight-meta" "Catalog↔test coherence preflight" "PASSED" "$PF_META_DUR" --log target/logs/meta_coherence.log || true
+
+# ── SIMD Probe Preflight ──
+# PO directive (Sprint 4.1): register the machine SIMD capability profile and
+# the active engine dispatch backend in every long-suite audit. Diagnostic
+# recording only — never a gate (hardware may legitimately lack AVX-512).
+echo -e "\n${BLUE}${BOLD}→ Preflight: SIMD Hardware & Engine Dispatch Probe (preflight-simd-probe)...${NC}"
+PF_SIMD_START=$(date +%s%N)
+mkdir -p target/logs
+SIMD_PROBE_LOG="target/logs/simd_probe.log"
+cargo run --quiet --bin simd_probe > "$SIMD_PROBE_LOG" 2>&1 || true
+PF_SIMD_DUR=$(( ($(date +%s%N) - PF_SIMD_START) / 1000000 ))
+cat "$SIMD_PROBE_LOG"
+emit_preflight_receipt "preflight-simd-probe" "SIMD Capability & Dispatch Probe" "PASSED" "$PF_SIMD_DUR" --log "$SIMD_PROBE_LOG" || true
 
 # ── Phase classification for fidelity/performance split ──────────────────────
 # run_phase indices: 0 soak, 1 defense, 2 proptests, 3 heap,

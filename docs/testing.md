@@ -48,7 +48,7 @@ graph TD
 ### Phase 1 — Structural (debug, default features)
 
 - **Goal:** logic, parsers, FSM transitions, loaders, SPSC, bitwise determinism.
-- **Scope:** `cargo test --lib` (unit, auto-discovered) + integration entry points ([tests/models.rs](../tests/models.rs), [tests/perf_soak.rs](../tests/perf_soak.rs), [tests/parity.rs](../tests/parity.rs), [tests/dsp_core.rs](../tests/dsp_core.rs), [tests/cabsim_stereo.rs](../tests/cabsim_stereo.rs), [tests/target_features_compliance_test.rs](../tests/target_features_compliance_test.rs), [tests/libm_export_guard.rs](../tests/libm_export_guard.rs), [tests/avx512_guard.rs](../tests/avx512_guard.rs)). `rt_constraints` is compiled only in the long suite (heap-audit / RT timing).
+- **Scope:** `cargo test --lib` (unit, auto-discovered) + integration entry points ([tests/models.rs](../tests/models.rs), [tests/perf_soak.rs](../tests/perf_soak.rs), [tests/parity.rs](../tests/parity.rs), [tests/dsp_core.rs](../tests/dsp_core.rs), [tests/cabsim_stereo.rs](../tests/cabsim_stereo.rs), [tests/target_features_compliance_test.rs](../tests/target_features_compliance_test.rs), [tests/libm_export_guard.rs](../tests/libm_export_guard.rs)). `rt_constraints` is compiled only in the long suite (heap-audit / RT timing).
 - **Excluded by design** (via `--skip <module>::` module-prefix filters — exact module matches):
   - The measurement-oracle modules (→ Phase 2, release): `golden_vectors`, `cpp_parity`, `reference_oracle_f64`, `isa_parity`, `spectral_fidelity`, `linear_fft_test`. Running them in debug would both duplicate Phase 2 and measure a codegen "phantom" (Axis B, §7).
   - `rt_deadline` / `rt_jitter` (timing characterization → deferred to the long suite, Phases 4 and 5, release-only; asserting deadlines in debug is meaningless).
@@ -83,22 +83,42 @@ Phase 2's `golden_vectors` (v1) and `isa_parity` (v2), and the long suite's `cpp
 
 - **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is the canonical, fail-closed ELF surface gate over the *linked* binary, run automatically in `tests-quick.sh` Phase 1 and `tests-long.sh` Defense phase (see [postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md)). The former standalone wrapper `utils/debug/verify_no_libm_exports.sh` was removed: it scanned `.rlib` archives — the wrong surface, since object archives still carry `T` exports before the version script applies — and silently skipped when the artifact was missing.
 
-### Binary AVX-512 Absence Certification (fail-closed)
+### AVX-512 Engine Segregation — Contractual via `cfg(feature = "avx512")`
 
-The default (`not(feature = "avx512")`) release artifact is certified free of EVEX/AVX-512 machine code by a fail-closed protocol. The gate is [utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh) (invoked by `lints.sh`) plus the integration guard [tests/avx512_guard.rs](../tests/avx512_guard.rs):
+The default release ships **no AVX-512 machine code by construction**, not by
+post-link inspection. AVX-512 kernels and the `Avx512Math` dispatch arm are
+compiled only when the opt-in `avx512` Cargo feature is enabled
+(`#[cfg(feature = "avx512")]`); the `dispatch_simd!` macro monomorphizes
+`Avx2Math` alone in default builds, so EVEX/ZMM opcodes cannot reach the
+`.text` segment of a default artifact — there is nothing left to scan for.
 
-- **Isolated build.** The script rebuilds the release rlib inside a disposable `target/cert-release-XXXXXX` directory with `--locked --no-default-features`, never reusing a stale `target/release` artifact. Thin-LTO is disabled for the certification build (`CARGO_PROFILE_RELEASE_LTO=off`) so the `.rlib` archive members are disassemblable ELF objects — thin-LTO rlibs store LLVM IR, which contains no machine code to certify.
-- **SHA-256 provenance.** The digest of the freshly built artifact is computed and logged *before* inspection, so a human can audit which bytes the certificate refers to.
-- **Mandatory tools.** `llvm-objdump` and `llvm-nm` (rustc sysroot preferred) must resolve and exit with status zero. Missing tools, non-zero exits, unexpectedly empty output, unreadable artifacts, unsupported formats and undecodable archive members abort the scan with exit code 1 — never a silent PASS.
-- **EVEX byte scan.** The scanner ([src/testing/bin_guard.rs](../src/testing/bin_guard.rs), exposed as `nam_bin_guard scan`) parses the raw instruction *encoding bytes* emitted by `llvm-objdump -d` for every instruction in every executable section of every ELF member, and flags any instruction whose first byte is the EVEX `0x62` prefix. Register names and mnemonics are not trusted: AVX-512VL can encode EVEX instructions using only low `xmm0..15`/`ymm0..15` registers and opmasks, which register-based patterns miss.
-- **Symbol scan defense-in-depth.** `llvm-nm --demangle` additionally verifies that no AVX-512 kernel/symbol names appear in the artifact. This is a secondary layer, never a substitute for the opcode scan.
-- **Mutation battery.** `tests/avx512_guard.rs` and the unit tests in `bin_guard.rs` reject synthetic EVEX fixtures (VL256 with low registers, opmask, ZMM, `zmm16..31`, EVEX hidden inside an `.rlib`-style archive) and fail closed on corrupted artifacts, missing or errant tools, empty archives and bitcode-only (thin-LTO) archives. The same integration test certifies the *linked* test binary — the real machine-code surface of the build under test.
+- **Segregation is a compile-time contract.** Builds without `--features avx512`
+  never compile the AVX-512 sources, which remain in-tree solely as opt-in
+  research/measurement code (§1.2 of [architecture.md](architecture.md)).
+  `detect_best_simd()` resolves to `Avx2`/`Avx2Math` in default builds; an
+  AVX-512 backend is selected only when the `avx512` feature was explicitly
+  supplied *and* the host exposes the full `F+VL+BW+DQ` capability matrix (§7).
+- **No post-link binary filtering.** The former fail-closed binary scanners
+  were removed — the shell wrapper that rebuilt a default release in an
+  isolated directory to disassemble it, its integration test, and the Rust
+  scanner module behind them. Certifying absence by disassembling release
+  artifacts after the fact is redundant once the engine is feature-gated, and
+  object-archive scanning mis-targeted the real code surface. QA verifies the
+  feature matrix at compile time instead ([`lints.sh`](../utils/lints.sh)
+  feature axes) plus the probe below.
+- **Diagnostic probe.** [`utils/simd-probe.sh`](../utils/simd-probe.sh) (binary
+  `simd_probe`, [src/bin/simd_probe.rs](../src/bin/simd_probe.rs)) reports the
+  host SIMD capability bits, the OS AVX-512 context state, the Cargo `avx512`
+  feature state, and the effective dispatched backend — with a real inference
+  smoke cycle. Run it (default or `--avx512`) to confirm a build's actual ISA
+  surface; the long suite also records it as the non-gating
+  `preflight-simd-probe` line (§4).
 
 ---
 
 ## 3. Placement Rules (source of truth = code)
 
-Entry points: [tests/models.rs](../tests/models.rs), [tests/parity.rs](../tests/parity.rs), [tests/perf_soak.rs](../tests/perf_soak.rs), [tests/rt_constraints.rs](../tests/rt_constraints.rs), [tests/dsp_core.rs](../tests/dsp_core.rs), plus standalones `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `avx512_guard`, `freshness_guard`, `qa_defense`, `loom_tests`.
+Entry points: [tests/models.rs](../tests/models.rs), [tests/parity.rs](../tests/parity.rs), [tests/perf_soak.rs](../tests/perf_soak.rs), [tests/rt_constraints.rs](../tests/rt_constraints.rs), [tests/dsp_core.rs](../tests/dsp_core.rs), plus standalones `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `freshness_guard`, `qa_defense`, `loom_tests`.
 
 | Axis                                                          | Rule                                        | Runner                                                                                                         |
 |:------------------------------------------------------------- |:------------------------------------------- |:-------------------------------------------------------------------------------------------------------------- |
@@ -209,7 +229,9 @@ demonstrate skips or gaps.
 **Preflight trace:** every preflight step that runs
 ahead of Phase 1 also appends its own line (`preflight-render`,
 `preflight-catalog`, `preflight-package`, `preflight-freshness`,
-`preflight-meta`) with the same schema. When a preflight aborts, the suite
+`preflight-meta`) with the same schema; `preflight-simd-probe` (see the
+AVX-512 Engine Segregation section above) is the diagnostic, non-gating member
+of that set. When a preflight aborts, the suite
 emits its `FAILED` line (plus any auto-detected log markers, e.g.
 `missing_required` for a missing RequiredLocal golden), derives and appends the
 `overall FAILED` verdict, and only then exits 1 — a failure before the first
@@ -276,7 +298,7 @@ utils/tests-long.sh --strict-pre-release | tee target/logs/long-strict.log    # 
 
 **Log validation checklist (visual inspection before any crates.io publication):**
 
-- [ ] `lints.log`: exit 0; zero compiler/clippy/rustdoc warnings; binary AVX-512 absence certification green (no EVEX in default release).
+- [ ] `lints.log`: exit 0; zero compiler/clippy/rustdoc warnings; default-release AVX-512 segregation contractual and verified at compile time (feature `avx512` is opt-in; default feature axes compile no AVX-512 kernels).
 - [ ] `quick-strict.log`: `NAM_QUICK_STRICT=1`; `FIDELITY: OK`; `OVERALL: PASSED`; zero `GAP:` entries.
 - [ ] `long-strict.log`: `--strict-pre-release`; `OVERALL: PASSED`; every phase `PASSED`; `gaps: []` (no `AVX512_OPT_IN: NOT_RUN`, no `SKIP_*`, no `KNOWN_GAP`, no `phase<N>:ZERO_TESTS`); `nam_long_receipt validate --strict` exit 0.
 - [ ] `perf-check.log`: exit 0; comparison against a baseline whose **producer commit is recorded and distinct** from the certified commit; no `NOT_VERIFIED`/missing-coverage fallback.
@@ -484,7 +506,7 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 | **[utils/lints.sh](../utils/lints.sh)**                                               | Static analysis & quality defense          | Immediate in-place formatting (`cargo fmt --all`); maximum compilation and clippy matrix across 7 feature axes (`all-features`, `no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`) with `--locked` and `-D warnings`; docs validation; SPDX header validation; anti-pattern check; and documentation policy enforcement for `#[allow(clippy::)]` (`allow_attributes = "warn"`).                                                                                |
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                                                                                                      |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                                                                                                       |
-| **[utils/verify_no_avx512_release.sh](../utils/verify_no_avx512_release.sh)**         | Fail-closed binary certification           | Rebuilds the default release in an isolated `target/cert-release-*` dir (thin-LTO off), logs the artifact SHA-256, requires `llvm-objdump`/`llvm-nm` with status zero, and delegates to `nam_bin_guard scan` — a single Rust scanner that flags any instruction whose `llvm-objdump -d` encoding bytes start with the EVEX `0x62` prefix across every ELF member and executable section, plus a defensive `llvm-nm` symbol scan. Any tool/format failure exits 1 (never a silent PASS). |
+| **[utils/simd-probe.sh](../utils/simd-probe.sh)**                                     | SIMD diagnostic probe                     | Wraps the `simd_probe` CLI (`cargo run [--features avx512] --bin simd_probe`) for rapid hardware/dispatch diagnosis; deterministic inference smoke cycle with a checksum; emits the non-gating `preflight-simd-probe` receipt in `tests-long.sh`.                                                                                                                                                                                                                                           |
 | **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                                                                                                          |
 
 ---
