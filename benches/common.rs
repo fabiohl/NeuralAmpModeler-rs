@@ -163,6 +163,13 @@ pub fn make_wavenet_a2_dyn_data() -> NamModelData {
                 activation: Some("LeakyReLU".to_string()),
                 gated: Some(true),
                 head_bias: Some(true),
+                layer_raw: Some(serde_json::json!({
+                    "head": {
+                        "out_channels": 1,
+                        "kernel_size": head_k,
+                        "bias": true
+                    }
+                })),
                 ..Default::default()
             }],
             head: None,
