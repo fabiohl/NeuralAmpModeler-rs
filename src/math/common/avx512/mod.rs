@@ -36,6 +36,13 @@ use core::arch::x86_64::*;
 
 /// SIMD implementation via AVX-512.
 /// This struct groups all mathematical functions optimized for processors that support AVX-512.
+///
+/// # Production Usage Notice
+///
+/// **AVX-512 is discouraged in production.**
+/// While supported for benchmarking and experimental research, AVX2 remains the recommended
+/// baseline for live real-time audio workloads due to frequency throttling on certain Intel microarchitectures
+/// and broader deployment stability. See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 pub struct Avx512Math;
 
 /// Static implementation for AVX-512 with VNNI and BF16 (Brain Float 16) support.

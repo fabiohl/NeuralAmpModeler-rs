@@ -38,6 +38,29 @@ pub struct WavenetProcessContext<'a> {
 
 /// Manages the buffer memory of a WaveNet cell.
 ///
+/// **Release-stable invariant (R-2 / A4 owner):** `buffer_start` is a
+/// construction-validated counter that always satisfies
+/// `buffer_start >= receptive_field_size`:
+/// - [`WaveNetLayerState::new`] returns `Err` when the initial
+///   `buffer_start < receptive_field_size`, and sizes the mirrored buffer to at
+///   least `receptive_field_size + (LAYER_ARRAY_BUFFER_PADDING + 1) * WAVENET_MAX_NUM_FRAMES`
+///   frames (page-rounded up by `MirroredBuffer`), so the wrap in
+///   [`WaveNetLayerState::advance_frames`] lands at
+///   `buffer_frames - 63 >= receptive_field_size + 1537`;
+/// - [`WaveNetLayerState::advance_frames`] only increases `buffer_start` (or
+///   subtracts a full `buffer_frames` at the wrap margin, keeping the pointer in
+///   the second half of the 2N mapping), preserving the inequality.
+///
+/// The wavenet array builders pass the *array-level* receptive field — the sum
+/// `Σ (K - 1) * dilation_i` — to every layer state, so
+/// `receptive_field_size >= (K - 1) * dilation` holds for each layer of the
+/// array. Together with `buffer_start >= receptive_field_size`, this is the
+/// release-stable owner of the causal tap-read invariant
+/// `frame_idx >= dilation * (K - 1)` that the `conv1d*` kernels document as
+/// their correctness precondition (`conv1d.rs` / `conv1d_dual.rs`; the kernels
+/// also carry an F-01 `.max(0)` clamp so even a violating caller cannot read
+/// out of bounds in release).
+///
 /// 64B (cache line) alignment is sufficient because this struct lives exclusively
 /// on the DSP thread — there is no inter-thread sharing that would require 128B anti-false-sharing.
 #[repr(align(64))]
@@ -106,6 +129,20 @@ impl WaveNetLayerState {
         self.buffer_start += num_frames;
         let buffer_frames = self.layer_buffer.size() / channels;
 
+        // SAFETY: the construction-time invariant (see the struct docs) guarantees
+        // `buffer_start >= receptive_field_size` before and after the wrap below:
+        // the mirrored buffer holds `buffer_frames >= receptive_field_size + 1600`
+        // frames and the wrap only fires when `buffer_start + 64 > 2 * buffer_frames`,
+        // landing at `buffer_start - buffer_frames >= buffer_frames - 63 >=
+        // receptive_field_size + 1537`. This debug net is a redundant tripwire for
+        // struct-literal misuse that bypasses `WaveNetLayerState::new`.
+        debug_assert!(
+            self.buffer_start >= self.receptive_field_size,
+            "advance_frames underflow: buffer_start ({}) < receptive_field_size ({})",
+            self.buffer_start,
+            self.receptive_field_size
+        );
+
         // [MIRRORED BUFFER]
         // If the next max-size block (64) could overflow the 2N mapping limit,
         // we rewind the pointer to the first half (maintaining virtual address parity).
@@ -113,5 +150,11 @@ impl WaveNetLayerState {
         if self.buffer_start + WAVENET_MAX_NUM_FRAMES > buffer_frames * 2 {
             self.buffer_start -= buffer_frames;
         }
+        debug_assert!(
+            self.buffer_start >= self.receptive_field_size,
+            "advance_frames post-wrap underflow: buffer_start ({}) < receptive_field_size ({})",
+            self.buffer_start,
+            self.receptive_field_size
+        );
     }
 }

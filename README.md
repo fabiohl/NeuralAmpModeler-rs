@@ -22,7 +22,7 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 ## ⚡ Key Strengths & Architectural Highlights
 
 * **Pure Rust & Strict Zero-Allocation RT Safety:** Engineered from the ground up for absolute real-time audio determinism — zero heap allocations, zero mutex locks, and zero blocking syscalls on the audio processing thread (verified via `CountingAllocator` in heap audit suites). Parameter updates and model swaps pass through lock-free SPSC channels, while a 3-tier GC cascade (*SPSC queue → 16-slot thread-local parking lot → overwrite ring*) guarantees safe off-RT resource disposal without audio glitches.
-* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Mandatory `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. The `SimdMath` / `dispatch_simd!` engine is a static match with zero function pointers or vtables. Production inference is native `f32` on the AVX2 kernels (`sum0..sum3` ILP, tap-major tiling). AVX-512 / VL256 / BF16 / VNNI were evaluated against a $\ge 12\%$ end-to-end `process()` N=64 gate and **are not a production acceleration** (2026-08 Sapphire Rapids receipt: all canonical SKUs failed; see [`docs/architecture.md`](docs/architecture.md) §1.2). The dispatch engine is kept for a possible future backend (e.g. ARM/NEON); AVX-512 sources stay in-tree as test/research, not as a marketed feature.
+* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Mandatory `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. The `SimdMath` / `dispatch_simd!` engine is a static match with zero function pointers or vtables. Production inference is native `f32` on the AVX2 kernels (`sum0..sum3` ILP, tap-major tiling). AVX-512 / VL256 / BF16 / VNNI were evaluated against a $\ge 12\%$ end-to-end `process()` N=64 gate and **are not a production acceleration** (2026-08 Sapphire Rapids receipt: all canonical SKUs failed; see [`docs/architecture.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md) §1.2). The dispatch engine is kept for a possible future backend (e.g. ARM/NEON); AVX-512 sources stay in-tree as test/research, not as a marketed feature.
 * **Uncompromising Dual-Oracle Audio Parity:** Validated against two independent co-equal test oracles: canonical C++ NAMCore f32 (market interop) and double-precision f64 reference oracle (mathematical ideality). Grounded in `docs/quality-contract.json`, BossWN Standard measures `2.31e-14` ESR against NAMCore and `9.05e-15` against the f64 oracle (SNR `136.4 dB`, MR-STFT `6.46e-6`), with ConvNet reaching `4.23e-15` ESR (SNR `143.7 dB`).
 * **Const-Generic Optimization & Dynamic Topology Fallback:** 23 static model profiles leverage Rust const generics so kernel sizes, receptive fields, and channel counts (`CH=16, 12, 8, 4, 3`) are known at compile time, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies gracefully fallback to zero-allocation dynamic engines (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`, `WaveNetA2Cascade`).
 * **Complete Native DSP Stack (Zero External Audio Crates):** Integrated native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, >105 dB stopband, zero pre-ringing cepstrum, 0.7–1.3 µs latency, replacing external libraries like `rubato`), UPOLS Partitioned FFT CabSim IR convolution (1.3 µs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, >100 dB attenuation, Kahles et al. JAES 2019).
@@ -91,21 +91,38 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "0.7.3"
+NeuralAmpModeler-rs = "0.7"
 ```
 
 For off-RT testing utilities and audio signal generators:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "0.7.3", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "0.7", features = ["testing"] }
+```
+
+### ⚠️ Consumer Build Requirement (`x86-64-v3`)
+
+`NeuralAmpModeler-rs` enforces `x86-64-v3` (AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE) baseline vectorization. Because Cargo does not propagate dependency target configurations or `.cargo/config.toml` flags to consuming crates, downstream applications and libraries **must** instruct rustc to target `x86-64-v3` during compilation. Otherwise, compilation halts immediately via `compile_error!` in `src/lib.rs:12-29`.
+
+Build with environment variable:
+
+```bash
+RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
+```
+
+Or configure your consumer crate's `.cargo/config.toml`:
+
+```toml
+[build]
+rustflags = ["-Ctarget-cpu=x86-64-v3"]
 ```
 
 ### Feature Flags
 
 | Feature          | Description                                                                                               |
 |:---------------- |:--------------------------------------------------------------------------------------------------------- |
-| `stereo`         | Enables multi-channel / stereo dual-model loader support                                                  |
+| `stereo`         | Internal stereo path in the DSP pipeline (input stage; does not gate dual-model loading)                 |
 | `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics                                  |
 | `heap-audit`     | Enables heap-allocation auditing infrastructure                                                           |
 | `long_bench`     | Enables long-form inference benchmarks                                                                    |
@@ -128,9 +145,7 @@ NeuralAmpModeler-rs = { version = "0.7.3", features = ["testing"] }
 
 ```rust,no_run
 use std::path::Path;
-use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
-use neural_amp_modeler_rs::models::NamModel; // trait providing `process()`
-use neural_amp_modeler_rs::SystemSnapshot;
+use neural_amp_modeler_rs::prelude::*;
 
 fn main() {
     // 1. Capture system hardware capabilities (SIMD features, CPU topology)
@@ -157,7 +172,7 @@ fn main() {
 #### 2. Full DSP Engine Pipeline (Model + Cab IR + Polyphase Oversampling)
 
 For the complete pipeline — model, cabinet IR, and 4× polyphase oversampling — see the
-[`offline_render`](examples/offline_render.rs) example (`cargo run --example offline_render -- <path/to/model.nam>`).
+[`offline_render`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/offline_render.rs) example (`cargo run --example offline_render -- <path/to/model.nam>`).
 The API surface used there is documented in the [crate docs](https://docs.rs/NeuralAmpModeler-rs).
 
 #### 3. Executable Examples
@@ -166,12 +181,12 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 
 | Example                                            | Description                                                                     | Run Command                                                 |
 |:-------------------------------------------------- |:------------------------------------------------------------------------------- |:----------------------------------------------------------- |
-| [`load_model`](examples/load_model.rs)             | Off-RT `.nam`/`.namb` model file loading & SIMD prewarming                      | `cargo run --example load_model -- <path/to/model.nam>`     |
-| [`inspect_model`](examples/inspect_model.rs)       | Detailed inspection & metadata report of `.nam`/`.namb` files (Text/JSON/Batch) | `cargo run --example inspect_model -- <path/to/model.nam>`  |
-| [`offline_render`](examples/offline_render.rs)     | Offline audio rendering with 4× polyphase oversampling (HQ mode)                | `cargo run --example offline_render -- <path/to/model.nam>` |
-| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling               | `cargo run --example cabsim -- <path/to/ir.wav>`            |
-| [`diagnostics`](examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export  | `cargo run --example diagnostics`                           |
-| [`math_activations`](examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`                      |
+| [`load_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/load_model.rs)             | Off-RT `.nam`/`.namb` model file loading & SIMD prewarming                      | `cargo run --example load_model -- <path/to/model.nam>`     |
+| [`inspect_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/inspect_model.rs)       | Detailed inspection & metadata report of `.nam`/`.namb` files (Text/JSON/Batch) | `cargo run --example inspect_model -- <path/to/model.nam>`  |
+| [`offline_render`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/offline_render.rs)     | Offline audio rendering with 4× polyphase oversampling (HQ mode)                | `cargo run --example offline_render -- <path/to/model.nam>` |
+| [`cabsim`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling               | `cargo run --example cabsim -- <path/to/ir.wav>`            |
+| [`diagnostics`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export  | `cargo run --example diagnostics`                           |
+| [`math_activations`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`                      |
 
 ---
 
@@ -179,11 +194,11 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 
 | Module                  | Purpose                                                      |
 |:----------------------- |:------------------------------------------------------------ |
-| [`loader`](src/loader/) | Model deserialization & construction (`.nam`, `.namb`)       |
-| [`math`](src/math/)     | SIMD math primitives, activation approximations, DSP kernels |
-| [`models`](src/models/) | Neural network architectures & `StaticModel` dispatch        |
-| [`dsp`](src/dsp/)       | DSP engine: resampling, gating, oversampling, pipeline       |
-| [`common`](src/common/) | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
+| [`loader`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/loader) | Model deserialization & construction (`.nam`, `.namb`)       |
+| [`math`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/math)     | SIMD math primitives, activation approximations, DSP kernels |
+| [`models`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/models) | Neural network architectures & `StaticModel` dispatch        |
+| [`dsp`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/dsp)       | DSP engine: resampling, gating, oversampling, pipeline       |
+| [`common`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/common) | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
 | `testing`               | Off-RT test utilities & perceptual metrics (feature-gated)   |
 
 Full API documentation:
@@ -228,7 +243,7 @@ Full API documentation:
   * **Full DSP Pipeline HQ (4× OS):** **150.6 µs** (**11.3%**)
   * **DSP Resampler (44.1k→48k):** **1.3 µs** | **CabSim IR Medium (512):** **1.3 µs**
 * **Stress Coverage:** Soak, concurrency, heap-audit, deadline, and model-checking suites exercise long-running and real-time invariants; skipped coverage and failed audit phases must be reviewed separately from passing checks.
-* **SIMD Acceleration:** Production math is the AVX2 (`x86-64-v3`) baseline. All production models execute native `f32` (BF16/VNNI retired). The ≥12% `process()` N=64 ROI rule is a **promotion policy**, not a passed measurement: the canonical 2026-09 remote audit receipt on Sapphire Rapids failed every canonical SKU at N=64 (demonstrating that AVX2 is 2% to 33% faster), so AVX-512 is not advertised, its production use is discouraged, and default builds dispatch `Avx2` (`detect_best_simd()` returns `Avx2` in default builds, with AVX-512 kernels `cfg`-gated behind the opt-in `avx512` feature; see [`docs/architecture.md`](docs/architecture.md) §1.2 and [`docs/benchmarks.md`](docs/benchmarks.md) §4). FastMath activations (tanh, sigmoid) via Padé/minimax, with exact-grade `Standard` mode as default.
+* **SIMD Acceleration:** Production math is the AVX2 (`x86-64-v3`) baseline. All production models execute native `f32` (BF16/VNNI retired). The ≥12% `process()` N=64 ROI rule is a **promotion policy**, not a passed measurement: the canonical 2026-09 remote audit receipt on Sapphire Rapids failed every canonical SKU at N=64 (demonstrating that AVX2 is 2% to 33% faster), so AVX-512 is not advertised, its production use is discouraged, and default builds dispatch `Avx2` (`detect_best_simd()` returns `Avx2` in default builds, with AVX-512 kernels `cfg`-gated behind the opt-in `avx512` feature; see [`docs/architecture.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md) §1.2 and [`docs/benchmarks.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md) §4). FastMath activations (tanh, sigmoid) via Padé/minimax, with exact-grade `Standard` mode as default.
 
 ---
 
@@ -254,7 +269,7 @@ NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models ./utils/setup-third-party.sh
 | `third-party/NeuralAmpModelerCore/`   | Pinned C++ NAMCore mirror (render / parity)                      |
 | `third-party/NeuralAmpModelerPlugin/` | Pinned C++ plugin mirror (IR / cabsim xref)                      |
 | `third-party/community_models/`       | Optional symlink to local community models (not redistributable) |
-| `variables.env`                       | Version-controlled pin file (tags/commits/URLs)                  |
+| [`variables.env`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/variables.env) | Version-controlled pin file (tags/commits/URLs)                  |
 
 Tests and scripts **skip gracefully with a declared gap** when these artifacts are missing:
 the quick suite records `GAP:` lines in `target/logs/quick-receipt.txt`, prints
@@ -263,7 +278,7 @@ fidelity seal for skipped oracles** — `NAM_QUICK_STRICT=1` promotes those gaps
 (exit 1). The long suite requires the NAMcore mirror outright (hard abort if absent).
 Override locations with `NAM_THIRD_PARTY_DIR`, `NAM_CORE_DIR`, `NAM_PLUGIN_DIR`, or
 `NAM_MODELS_DIR` if needed.
-See [`docs/fixtures.md`](docs/fixtures.md) for the full model search order.
+See [`docs/fixtures.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/fixtures.md) for the full model search order.
 
 Rust dependency supply-chain updates remain separate: `./utils/mod-update.sh`.
 
@@ -275,15 +290,15 @@ The `./utils/` directory contains maintainer tools and standard scripts for code
 
 | Script                                                                   | Purpose & Execution Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 |:------------------------------------------------------------------------ |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`utils/setup-third-party.sh`](utils/setup-third-party.sh)               | **Local env bootstrap:** Clones/syncs pinned NAMCore + Plugin mirrors into `third-party/` and optionally links `community_models`. Required for full parity/golden work; not needed by crate consumers.                                                                                                                                                                                                                                                                                       |
-| [`utils/mod-update.sh`](utils/mod-update.sh)                             | **Rust supply chain:** Updates rustup toolchain, `cargo upgrade`, and `Cargo.lock` (does **not** manage vendor mirrors).                                                                                                                                                                                                                                                                                                                                                                      |
-| [`utils/lints.sh`](utils/lints.sh)                                       | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                                                                                                                                                                                                                                          |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)                           | **Agile 1st Line QA:** 3 phases — structural tests (debug), measurement oracles + C++ parity `quick_parity` (release), capped parser fuzzing (`NAM_QUICK_PROPTEST_CASES`). Oracle skips are fail-closed: missing fixtures/toolchain print `FIDELITY: INCOMPLETE` + `OVERALL: PASSED_WITH_GAPS` (exit 0) and write the receipt `target/logs/quick-receipt.txt`; `NAM_QUICK_STRICT=1` promotes gaps to FAIL (exit 1). Re-executes itself at low CPU/IO priority unless `NAM_NO_LOW_PRIORITY=1`. |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)               | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.json`.                                                                                                                                                                                                                                                                                                                                                                |
-| [`utils/remote-simd-gate.sh`](utils/remote-simd-gate.sh)                 | **Remote SIMD re-measurement harness** (not a product feature). Same-VM AVX2 vs AVX-512 `process()` gate; writes `target/logs/remote-simd-receipt.json`. Latest receipt (2026-08-22, Xeon 8488C): overall `FAIL` — do not treat a green skip on Zen 2 as a pass.                                                                                                                                                                                                                              |
-| [`utils/check-model.sh`](utils/check-model.sh)                           | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                                                                                                                                                                                                                              |
-| [`utils/simd-probe.sh`](utils/simd-probe.sh)                             | **SIMD Diagnostic Probe:** Runs the `simd_probe` CLI for rapid capability & dispatch diagnosis — host feature bits (`avx2`, `fma`, `avx512f/vl/bw/dq` via `is_x86_feature_detected!`), OS AVX-512 context state (CPUID.1:ECX.OSXSAVE + `xgetbv(0)`), the Cargo `avx512` feature state, `effective_instruction_set()`, and a real inference smoke cycle with a deterministic checksum. Default runs the standard build; `./utils/simd-probe.sh --avx512` re-runs under `--features avx512`. Also emitted as the non-gating `preflight-simd-probe` in `tests-long.sh`. |
-| [`utils/tests-long.sh`](utils/tests-long.sh)                             | **Nightly / Pre-Release Suite:** Rust-gated pre-flight (`catalog_preflight` V1/V2 golden catalogs fail-closed + `check_freshness` manifest; no bash golden lists), soak, full proptest/fuzz, full C++ parity matrix, cross-ISA, RT-safety and heap-audits. Exits `OVERALL: FAILED` (1) / `COMPLETED_WITH_GAPS` (0) / `PASSED` (0); `--strict-pre-release` turns declared gaps into failure. *(AI agents must not run this script directly due to runtime length; ask the human operator.)*    |
+| [`utils/setup-third-party.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/setup-third-party.sh)               | **Local env bootstrap:** Clones/syncs pinned NAMCore + Plugin mirrors into `third-party/` and optionally links `community_models`. Required for full parity/golden work; not needed by crate consumers.                                                                                                                                                                                                                                                                                       |
+| [`utils/mod-update.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/mod-update.sh)                             | **Rust supply chain:** Updates rustup toolchain, `cargo upgrade`, and `Cargo.lock` (does **not** manage vendor mirrors).                                                                                                                                                                                                                                                                                                                                                                      |
+| [`utils/lints.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/lints.sh)                                       | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                                                                                                                                                                                                                                          |
+| [`utils/tests-quick.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/tests-quick.sh)                           | **Agile 1st Line QA:** 3 phases — structural tests (debug), measurement oracles + C++ parity `quick_parity` (release), capped parser fuzzing (`NAM_QUICK_PROPTEST_CASES`). Oracle skips are fail-closed: missing fixtures/toolchain print `FIDELITY: INCOMPLETE` + `OVERALL: PASSED_WITH_GAPS` (exit 0) and write the receipt `target/logs/quick-receipt.txt`; `NAM_QUICK_STRICT=1` promotes gaps to FAIL (exit 1). Re-executes itself at low CPU/IO priority unless `NAM_NO_LOW_PRIORITY=1`. |
+| [`utils/quality-dashboard.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/quality-dashboard.sh)               | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.json`.                                                                                                                                                                                                                                                                                                                                                                |
+| [`utils/remote-simd-gate.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/remote-simd-gate.sh)                 | **Remote SIMD re-measurement harness** (not a product feature). Same-VM AVX2 vs AVX-512 `process()` gate; writes `target/logs/remote-simd-receipt.json`. Latest receipt (2026-08-22, Xeon 8488C): overall `FAIL` — do not treat a green skip on Zen 2 as a pass.                                                                                                                                                                                                                              |
+| [`utils/check-model.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/check-model.sh)                           | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                                                                                                                                                                                                                              |
+| [`utils/simd-probe.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/simd-probe.sh)                             | **SIMD Diagnostic Probe:** Runs the `simd_probe` CLI for rapid capability & dispatch diagnosis — host feature bits (`avx2`, `fma`, `avx512f/vl/bw/dq` via `is_x86_feature_detected!`), OS AVX-512 context state (CPUID.1:ECX.OSXSAVE + `xgetbv(0)`), the Cargo `avx512` feature state, `effective_instruction_set()`, and a real inference smoke cycle with a deterministic checksum. Default runs the standard build; `./utils/simd-probe.sh --avx512` re-runs under `--features avx512`. Also emitted as the non-gating `preflight-simd-probe` in `tests-long.sh`. |
+| [`utils/tests-long.sh`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/utils/tests-long.sh)                             | **Nightly / Pre-Release Suite:** Rust-gated pre-flight (`catalog_preflight` V1/V2 golden catalogs fail-closed + `check_freshness` manifest; no bash golden lists), soak, full proptest/fuzz, full C++ parity matrix, cross-ISA, RT-safety and heap-audits. Exits `OVERALL: FAILED` (1) / `COMPLETED_WITH_GAPS` (0) / `PASSED` (0); `--strict-pre-release` turns declared gaps into failure. *(AI agents must not run this script directly due to runtime length; ask the human operator.)*    |
 
 Exact QA commands:
 
@@ -316,19 +331,19 @@ The following technical documents are maintained in the source repository. The p
 
 | Document                                                                                       | Primary Focus & Topic Coverage                                                               |
 |:---------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md)                                                 | Engine architecture, SIMD microarchitecture, mixed precision math, and `.namb` format design |
-| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)                                     | DSP decision quality trade-off matrix and frequency response analysis                        |
-| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md)                           | Activation function approximations (Padé / minimax polynomials) and error bound benchmarks   |
-| [`docs/namb-spec.md`](docs/namb-spec.md)                                                       | Binary `.namb` multi-profile container specification, metadata schema, and CRC32 layout      |
-| [`docs/testing.md`](docs/testing.md)                                                           | Test suite layout, verification phases, oracle hierarchy, and testing policies               |
-| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)                               | Perceptual measurement framework (ESR, MR-STFT, ASR, LUFS) and auditory distance metrics     |
-| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                                             | Bit-exact and float-exact parity audit against canonical C++ NeuralAmpModelerCore            |
-| [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates       |
-| [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research       |
-| [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Engine functional test matrix, runner execution protocols, and human certification record    |
-| [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers        |
-| [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Quality contract: benchmark and audio fidelity regression baseline thresholds (JSON)         |
-| [`docs/fixtures.md`](docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures   |
+| [`docs/architecture.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md)                                                 | Engine architecture, SIMD microarchitecture, mixed precision math, and `.namb` format design |
+| [`docs/audio_fidelity_map.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/audio_fidelity_map.md)                                     | DSP decision quality trade-off matrix and frequency response analysis                        |
+| [`docs/fastmath-approximations.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/fastmath-approximations.md)                           | Activation function approximations (Padé / minimax polynomials) and error bound benchmarks   |
+| [`docs/namb-spec.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/namb-spec.md)                                                       | Binary `.namb` multi-profile container specification, metadata schema, and CRC32 layout      |
+| [`docs/testing.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/testing.md)                                                           | Test suite layout, verification phases, oracle hierarchy, and testing policies               |
+| [`docs/perceptual_validation.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/perceptual_validation.md)                               | Perceptual measurement framework (ESR, MR-STFT, ASR, LUFS) and auditory distance metrics     |
+| [`docs/cpp_parity_map.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/cpp_parity_map.md)                                             | Bit-exact and float-exact parity audit against canonical C++ NeuralAmpModelerCore            |
+| [`docs/benchmarks.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates       |
+| [`docs/research-references.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research       |
+| [`docs/functional-tests.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/functional-tests.md)                                         | Engine functional test matrix, runner execution protocols, and human certification record    |
+| [`docs/postmortem-libm-symbol-interposition.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers        |
+| [`docs/quality-contract.json`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/quality-contract.json)                                     | Quality contract: benchmark and audio fidelity regression baseline thresholds (JSON)         |
+| [`docs/fixtures.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures   |
 
 ---
 

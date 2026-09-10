@@ -132,9 +132,9 @@ impl WaveNetA2Dyn {
             let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_conv1d_interleaved_4wide(conv_w_f32, &mut conv_w, channels, conv_out, ksize);
-            crate::models::a2::conv1d::A2Conv1d::new(
+            crate::models::a2::conv1d::A2Conv1d::try_new(
                 conv_w, conv_b, true, dilation, channels, conv_out, ksize,
-            )
+            )?
         };
 
         // 2c. Mixin (group-aware).

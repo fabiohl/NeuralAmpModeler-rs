@@ -174,17 +174,21 @@ pub fn slice_conv1d(
     let mut new_bias = AlignedVec::new(new_out_ch, 0.0f32)?;
     new_bias.copy_from_slice(&conv.bias[..new_out_ch]);
 
-    Ok(Conv1dDyn {
-        weights: new_weights,
-        bias: new_bias,
-        do_bias: conv.do_bias,
-        dilation: conv.dilation,
-        in_ch: new_in_ch,
-        out_ch: new_out_ch,
-        num_blocks: new_num_blocks,
-        interleave_width: dst_width,
+    // Release-stable padding/bounds proof (R-2): `new_weights` is allocated to
+    // exactly the SIMD-padded total for `dst_width`, so the validated
+    // constructor re-check below cannot fail for the sizes computed above
+    // (a panic here would indicate a slicing-layout regression, not an OOB).
+    Ok(Conv1dDyn::try_from_parts(
+        new_weights,
+        new_bias,
+        conv.do_bias,
+        conv.dilation,
+        new_in_ch,
+        new_out_ch,
         kernel,
-    })
+        dst_width,
+    )
+    .expect("slice_conv1d output buffer is exactly SIMD-padded by construction"))
 }
 
 /// Slices a `DenseLayerDyn` to a reduced channel configuration.

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::diagnostics::NamErrorCode;
 use crate::loader::nam_json::LinearImplementation;
 use crate::models::StaticModel;
 use crate::models::linear::LinearModel;
@@ -270,4 +271,43 @@ fn test_crossfade_32ms_blend_smoothness() {
         max_residual_step < MAX_DISCONTINUITY,
         "consecutive-sample discontinuity {max_residual_step:.3e} exceeds −80 dBFS ({MAX_DISCONTINUITY})"
     );
+}
+
+#[test]
+fn test_new_typed_rejects_invalid_topology() {
+    // Empty list.
+    assert_eq!(
+        ContainerModel::new_typed(Vec::new(), 48000).err(),
+        Some(NamErrorCode::InvalidModelTopology)
+    );
+    // Non-finite max_value.
+    assert_eq!(
+        ContainerModel::new_typed(vec![(f32::NAN, make_lstm())], 48000).err(),
+        Some(NamErrorCode::InvalidModelTopology)
+    );
+    // Negative max_value.
+    assert_eq!(
+        ContainerModel::new_typed(vec![(-0.5, make_lstm()), (1.0, make_lstm())], 48000).err(),
+        Some(NamErrorCode::InvalidModelTopology)
+    );
+    // Duplicate values are not strictly ascending.
+    assert_eq!(
+        ContainerModel::new_typed(vec![(0.5, make_lstm()), (0.5, make_lstm())], 48000).err(),
+        Some(NamErrorCode::InvalidModelTopology)
+    );
+    // Last max_value below unity.
+    assert_eq!(
+        ContainerModel::new_typed(vec![(0.5, make_lstm())], 48000).err(),
+        Some(NamErrorCode::InvalidModelTopology)
+    );
+}
+
+#[test]
+fn test_new_typed_accepts_valid_and_matches_anyhow() {
+    let make = || vec![(0.5, make_lstm()), (1.0, make_lstm())];
+    let typed = ContainerModel::new_typed(make(), 48000).expect("typed container");
+    let legacy = ContainerModel::new(make(), 48000).expect("anyhow container");
+    assert_eq!(typed.submodels().len(), legacy.submodels().len());
+    assert_eq!(typed.active_index(), legacy.active_index());
+    assert_eq!(typed.sample_rate(), legacy.sample_rate());
 }

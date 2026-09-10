@@ -21,10 +21,14 @@
 //! their own host surfaces. Changes to this reservation must be synchronized
 //! with `docs/architecture.md` (§7).
 //!
-//! The **single exception** is [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
-//! (E2202): a DSP constructor-parameter validation error constructed by the
-//! core crate's own `ConvEngine::new` — a pure DSP constructor, not a
-//! host/backend surface.
+//! The **exceptions** to this rule are the DSP-constructor validation codes
+//! constructed by the core crate itself:
+//! [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
+//! (E2202, `ConvEngine::new` with `partition_size == 0`) and
+//! [`ResamplerBuildFailed`](NamErrorCode::ResamplerBuildFailed) (E2200, the
+//! typed `NamResampler::new_typed` / `new_linear_typed` constructors when a
+//! sample rate is outside `4_000..=384_000` Hz). Both are pure DSP
+//! constructor-parameter validation errors, not host/backend surfaces.
 
 use std::fmt;
 
@@ -40,8 +44,9 @@ use std::fmt;
 ///
 /// The **E2xxx–E4xxx** ranges are reserved for downstream integrations
 /// (e.g., plugin wrappers, standalone hosts, offline renderers) and are never constructed by this
-/// host-agnostic core crate, except [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
-/// (E2202), which is returned by the core's own `ConvEngine::new`. See the module documentation.
+/// host-agnostic core crate, except [`ResamplerBuildFailed`](NamErrorCode::ResamplerBuildFailed)
+/// (E2200) and [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize) (E2202),
+/// both DSP constructor-parameter validation errors. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamErrorCode {
     // E1xxx — Model Loading
@@ -106,13 +111,22 @@ pub enum NamErrorCode {
     InvalidModelTopology,
 
     // E2xxx — Audio Backend / Processing
-    // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts):
-    // this host-agnostic core crate never constructs these variants.
+    // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts).
+    // This host-agnostic core crate constructs only the two DSP constructor-validation
+    // exceptions documented on `ResamplerBuildFailed` (E2200) and
+    // `InvalidCabsimPartitionSize` (E2202).
     /// Failed to initialize the audio backend (context/core).
     AudioInitFailed,
     /// Failed to connect the audio stream.
     StreamError,
     /// Failed to build the NamResampler (native Polyphase Sinc).
+    ///
+    /// Constructed by the core crate's own typed `NamResampler::new_typed` /
+    /// `new_linear_typed` constructors (E2200) when a sample rate is outside
+    /// the supported `4_000..=384_000` Hz window; allocation failures surface
+    /// separately as [`OutOfMemory`](Self::OutOfMemory). Downstream host
+    /// integrations also emit this code for their own generic rebuild
+    /// failures. See `docs/architecture.md` §7 (F-19).
     ResamplerBuildFailed,
     /// SPSC resampler channel full (rebuild discarded).
     ResamplerChannelFull,
@@ -120,7 +134,7 @@ pub enum NamErrorCode {
     ///
     /// Unlike every other E2xxx code (which are reserved for downstream
     /// integrations and never constructed by this core crate), this code is
-    /// the single exception: it is a DSP constructor-parameter validation
+    /// one of two exceptions: it is a DSP constructor-parameter validation
     /// error returned by the core crate's own `ConvEngine::new` when a host
     /// passes `partition_size == 0` (transient host init, config reset, or
     /// incorrect public-API usage). See `docs/architecture.md` §7 (F-19).

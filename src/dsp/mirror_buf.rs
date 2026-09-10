@@ -112,6 +112,40 @@ pub fn huge_page_status() -> MirrorHugePageStatus {
 /// to be performed linearly and contiguously, eliminating the need for "rewind"
 /// or "copy_within" operations in the DSP hot-path.
 ///
+/// # Half-aliasing contract
+///
+/// The virtual extent exposed by `Deref`/`DerefMut` is `2N` elements (`N =
+/// size()`), but the **two halves are NOT independent storage**: they map the
+/// same physical pages twice (`MAP_SHARED` on the same fd/offset in
+/// `mirror_buf/alloc.rs`). Consequences:
+///
+/// - A write to `buf[i]` for `i < N` is observable at `buf[N + i]`, and vice
+///   versa — both addresses alias the same physical location. The mirror exists
+///   precisely so linear reads/writes that cross the `N` boundary behave as a
+///   wrap-around on the same physical buffer.
+/// - The second half exists so a window that crosses the end of the first half
+///   (a ring wrap) can be read — and, in the ring write pattern, written —
+///   linearly through a single `&[T]`/`&mut [T]` borrow. Such a wrap write is
+///   *intended* to mutate the physical start of the buffer.
+/// - Do **not** treat the two halves as disjoint regions you can own
+///   simultaneously. `split_at_mut(size())` yields two `&mut [T]` slices that
+///   are disjoint in *virtual address space* but physically alias the same
+///   pages; using both as if they were independent buffers (e.g. writing
+///   different data through each) is not a sound way to create two independent
+///   `&mut` views of the same physical data. The supported pattern is a single
+///   mutable borrow over the full `2N` view, or a borrow confined to one side
+///   of a linear operation that crosses the boundary as a wrap.
+/// - Element reads/writes of `T` are `Copy` (f32/f64/i32/…) in every in-crate
+///   instantiation, so no `Drop` runs through the aliased mapping; `T` must
+///   remain `Copy`-like (`Deref` requires no `Drop` of an aliased slot).
+///
+/// # Alignment
+///
+/// `from_raw_parts` requires the base pointer to be aligned to
+/// `align_of::<T>()`. The `mmap` base is page-aligned, so construction proves
+/// `align_of::<T>() <= page_size` (runtime assert in `mirror_buf/alloc.rs`) on
+/// top of the compile-time `const { assert!(align_of::<T>() <= 64) }`.
+///
 /// Struct layout (16 bytes): optimized for cache — the hot-path Deref
 /// accesses only the first two fields.
 pub struct MirroredBuffer<T> {
@@ -150,9 +184,14 @@ impl<T> Deref for MirroredBuffer<T> {
     fn deref(&self) -> &Self::Target {
         // SAFETY: self.ptr points to a valid virtual mapping of size_elements*2 elements.
         // The allocation reserves contiguous virtual space for the two mirrored halves,
-        // mapping the same physical pages twice. ptr is initialized by mmap/ftruncate
-        // (or std heap fallback validated by the alloc module) and remains valid for the
-        // full virtual extent until Drop.
+        // mapping the same physical pages twice. Page alignment (>= 4096 bytes) satisfies
+        // align_of::<T>() <= 64 guaranteed at compile time by const assertions in constructors,
+        // and align_of::<T>() <= page_size guaranteed at construction by the runtime assert
+        // in mirror_buf/alloc.rs (A7 / R-5). The two halves physically alias (half-aliasing
+        // contract, see the struct docs), which is sound for the Copy element types used in
+        // the crate and for shared reads. ptr is initialized by mmap/ftruncate (or std heap
+        // fallback validated by the alloc module) and remains valid for the full virtual
+        // extent until Drop.
         unsafe { std::slice::from_raw_parts(self.ptr, self.size_elements * 2) }
     }
 }
@@ -161,8 +200,13 @@ impl<T> DerefMut for MirroredBuffer<T> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         // SAFETY: Same invariants as Deref: ptr covers size_elements*2 valid virtual elements
-        // (two mirrored halves mapping the same physical pages). The &mut self reference
-        // guarantees exclusive access, so no aliasing of the underlying memory occurs.
+        // (two mirrored halves mapping the same physical pages). Page alignment satisfies
+        // align_of::<T>() <= 64 (const assert) and align_of::<T>() <= page_size (runtime
+        // assert in mirror_buf/alloc.rs, A7 / R-5). The &mut self reference guarantees exclusive
+        // access through a single &mut [T] over the whole 2N view — callers must not split it
+        // into two independently-mutated halves (see the half-aliasing contract in the struct
+        // docs); a wrap write crossing the N boundary through this single view is the supported
+        // pattern and intentionally aliases the physical start of the buffer.
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size_elements * 2) }
     }
 }

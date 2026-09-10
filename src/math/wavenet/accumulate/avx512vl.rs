@@ -24,27 +24,30 @@ use core::arch::x86_64::*;
 pub unsafe fn accumulate_head_avx512vl(dest: &mut [f32], src: &[f32]) {
     let len = dest.len().min(src.len());
     let mut i = 0;
-    while i + 16 <= len {
-        let vs0 = _mm256_loadu_ps(src.as_ptr().add(i));
-        let vs1 = _mm256_loadu_ps(src.as_ptr().add(i + 8));
-        let vd0 = _mm256_loadu_ps(dest.as_ptr().add(i));
-        let vd1 = _mm256_loadu_ps(dest.as_ptr().add(i + 8));
-        _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd0, vs0));
-        _mm256_storeu_ps(dest.as_mut_ptr().add(i + 8), _mm256_add_ps(vd1, vs1));
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vs = _mm256_loadu_ps(src.as_ptr().add(i));
-        let vd = _mm256_loadu_ps(dest.as_ptr().add(i));
-        _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd, vs));
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vs = _mm256_maskz_loadu_ps(mask, src.as_ptr().add(i));
-        let vd = _mm256_maskz_loadu_ps(mask, dest.as_ptr().add(i));
-        _mm256_mask_storeu_ps(dest.as_mut_ptr().add(i), mask, _mm256_add_ps(vd, vs));
+    // SAFETY: Slice geometry is self-clamped (`len = min(dest.len(), src.len())`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vs0 = _mm256_loadu_ps(src.as_ptr().add(i));
+            let vs1 = _mm256_loadu_ps(src.as_ptr().add(i + 8));
+            let vd0 = _mm256_loadu_ps(dest.as_ptr().add(i));
+            let vd1 = _mm256_loadu_ps(dest.as_ptr().add(i + 8));
+            _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd0, vs0));
+            _mm256_storeu_ps(dest.as_mut_ptr().add(i + 8), _mm256_add_ps(vd1, vs1));
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vs = _mm256_loadu_ps(src.as_ptr().add(i));
+            let vd = _mm256_loadu_ps(dest.as_ptr().add(i));
+            _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd, vs));
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vs = _mm256_maskz_loadu_ps(mask, src.as_ptr().add(i));
+            let vd = _mm256_maskz_loadu_ps(mask, dest.as_ptr().add(i));
+            _mm256_mask_storeu_ps(dest.as_mut_ptr().add(i), mask, _mm256_add_ps(vd, vs));
+        }
     }
 }
 
@@ -64,38 +67,41 @@ pub unsafe fn accumulate_head_avx512vl(dest: &mut [f32], src: &[f32]) {
 pub unsafe fn tanh_and_accumulate_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vh, vt));
+            let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vh, vt));
+        }
     }
 }
 
@@ -114,31 +120,34 @@ pub unsafe fn tanh_and_accumulate_block_avx512vl(head_input: &mut [f32], block: 
 pub unsafe fn tanh_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+        }
     }
 }
 
@@ -161,38 +170,41 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512vl(
 ) {
     let len = block.len().min(head_input.len()).min(seed.len());
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block, head_input, seed)`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
-        let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
+            let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vs = _mm256_maskz_loadu_ps(mask, seed.as_ptr().add(i));
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vs, vt));
+            let vs = _mm256_maskz_loadu_ps(mask, seed.as_ptr().add(i));
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vs, vt));
+        }
     }
 }
 
@@ -223,70 +235,73 @@ pub unsafe fn gated_activation_and_accumulate_block_avx512vl(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        while c + 16 <= ch {
-            let z1_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
-            let z1_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c + 8));
-            let z2_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c + 8));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards and masked tails ensure in-bounds access.
+        unsafe {
+            while c + 16 <= ch {
+                let z1_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+                let z1_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c + 8));
+                let z2_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c + 8));
 
-            let (tanh_z1_0, sig_z2_0) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_0, z2_0);
-            let (tanh_z1_1, sig_z2_1) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_1, z2_1);
+                let (tanh_z1_0, sig_z2_0) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_0, z2_0);
+                let (tanh_z1_1, sig_z2_1) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_1, z2_1);
 
-            let act0 = _mm256_mul_ps(tanh_z1_0, sig_z2_0);
-            let act1 = _mm256_mul_ps(tanh_z1_1, sig_z2_1);
+                let act0 = _mm256_mul_ps(tanh_z1_0, sig_z2_0);
+                let act1 = _mm256_mul_ps(tanh_z1_1, sig_z2_1);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act0);
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c + 8), act1);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act0);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c + 8), act1);
 
-            let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
-            let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c + 8));
-            _mm256_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c),
-                _mm256_add_ps(vh0, act0),
-            );
-            _mm256_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c + 8),
-                _mm256_add_ps(vh1, act1),
-            );
-            c += 16;
-        }
-        if c + 8 <= ch {
-            let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+                let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
+                let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c + 8));
+                _mm256_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    _mm256_add_ps(vh0, act0),
+                );
+                _mm256_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c + 8),
+                    _mm256_add_ps(vh1, act1),
+                );
+                c += 16;
+            }
+            if c + 8 <= ch {
+                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let act = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let act = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act);
 
-            let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
-            _mm256_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c),
-                _mm256_add_ps(vh, act),
-            );
-            c += 8;
-        }
-        if c < ch {
-            let rem = ch - c;
-            let mask = _cvtu32_mask8((1u32 << rem) - 1);
-            let z1 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + ch + c));
+                let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
+                _mm256_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    _mm256_add_ps(vh, act),
+                );
+                c += 8;
+            }
+            if c < ch {
+                let rem = ch - c;
+                let mask = _cvtu32_mask8((1u32 << rem) - 1);
+                let z1 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let act = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let act = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_mask_storeu_ps(block.as_mut_ptr().add(block_offset + c), mask, act);
+                _mm256_mask_storeu_ps(block.as_mut_ptr().add(block_offset + c), mask, act);
 
-            let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(head_offset + c));
-            _mm256_mask_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c),
-                mask,
-                _mm256_add_ps(vh, act),
-            );
+                let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(head_offset + c));
+                _mm256_mask_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    mask,
+                    _mm256_add_ps(vh, act),
+                );
+            }
         }
     }
 }
@@ -316,51 +331,54 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512vl(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        while c + 16 <= ch {
-            let z1_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
-            let z1_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c + 8));
-            let z2_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c + 8));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards and masked tails ensure in-bounds access.
+        unsafe {
+            while c + 16 <= ch {
+                let z1_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2_0 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+                let z1_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c + 8));
+                let z2_1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c + 8));
 
-            let (tanh_z1_0, sig_z2_0) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_0, z2_0);
-            let (tanh_z1_1, sig_z2_1) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_1, z2_1);
+                let (tanh_z1_0, sig_z2_0) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_0, z2_0);
+                let (tanh_z1_1, sig_z2_1) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1_1, z2_1);
 
-            let act0 = _mm256_mul_ps(tanh_z1_0, sig_z2_0);
-            let act1 = _mm256_mul_ps(tanh_z1_1, sig_z2_1);
+                let act0 = _mm256_mul_ps(tanh_z1_0, sig_z2_0);
+                let act1 = _mm256_mul_ps(tanh_z1_1, sig_z2_1);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act0);
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c + 8), act1);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act0);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c + 8), act1);
 
-            _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), act0);
-            _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c + 8), act1);
-            c += 16;
-        }
-        if c + 8 <= ch {
-            let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), act0);
+                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c + 8), act1);
+                c += 16;
+            }
+            if c + 8 <= ch {
+                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let act = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let act = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act);
-            _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), act);
-            c += 8;
-        }
-        if c < ch {
-            let rem = ch - c;
-            let mask = _cvtu32_mask8((1u32 << rem) - 1);
-            let z1 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + ch + c));
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), act);
+                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), act);
+                c += 8;
+            }
+            if c < ch {
+                let rem = ch - c;
+                let mask = _cvtu32_mask8((1u32 << rem) - 1);
+                let z1 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let act = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let act = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_mask_storeu_ps(block.as_mut_ptr().add(block_offset + c), mask, act);
-            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), mask, act);
+                _mm256_mask_storeu_ps(block.as_mut_ptr().add(block_offset + c), mask, act);
+                _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), mask, act);
+            }
         }
     }
 }
@@ -378,39 +396,42 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512vl(
 pub unsafe fn relu_and_accumulate_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vh, vt));
+            let vh = _mm256_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vh, vt));
+        }
     }
 }
 
@@ -427,32 +448,35 @@ pub unsafe fn relu_and_accumulate_block_avx512vl(head_input: &mut [f32], block: 
 pub unsafe fn relu_and_overwrite_block_avx512vl(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len().min(head_input.len());
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block.len(), head_input.len())`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+        }
     }
 }
 
@@ -475,38 +499,41 @@ pub unsafe fn relu_and_accumulate_with_seed_avx512vl(
 ) {
     let len = block.len().min(head_input.len()).min(seed.len());
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: Slice geometry is self-clamped (`len = min(block, head_input, seed)`), loop guards and masked tails ensure in-bounds access.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
-        let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
-        i += 16;
-    }
-    if i + 8 <= len {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
+            let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
+            i += 16;
+        }
+        if i + 8 <= len {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
-        i += 8;
-    }
-    if i < len {
-        let rem = len - i;
-        let mask = _cvtu32_mask8((1u32 << rem) - 1);
-        let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
+            i += 8;
+        }
+        if i < len {
+            let rem = len - i;
+            let mask = _cvtu32_mask8((1u32 << rem) - 1);
+            let vb = _mm256_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vs = _mm256_maskz_loadu_ps(mask, seed.as_ptr().add(i));
-        _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vs, vt));
+            let vs = _mm256_maskz_loadu_ps(mask, seed.as_ptr().add(i));
+            _mm256_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm256_add_ps(vs, vt));
+        }
     }
 }

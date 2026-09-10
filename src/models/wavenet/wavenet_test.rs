@@ -251,3 +251,25 @@ fn wavenet_ringbuffer_alignment() {
         );
     }
 }
+
+/// A4 / R-2 evidence — processing **before** prewarm must never read the causal
+/// taps out of bounds in release builds.
+///
+/// `WaveNetLayerState::new` positions `buffer_start` at or beyond the receptive
+/// field at construction (validated, returns `Err` otherwise) and `advance_frames`
+/// preserves that invariant, so every `frame_idx = buffer_start + i` honors
+/// `frame_idx >= dilation*(K-1)` for each layer even with a zeroed history — the
+/// cold-start transient is just silence, never an out-of-bounds tap read (the
+/// kernels additionally clamp under-threshold taps, F-01). Runs in both debug and
+/// release; the loop covers the static dual/single-frame kernels through the model.
+#[test]
+fn wavenet_process_before_prewarm_no_oob() {
+    let mut model = build_tiny_wavenet();
+    // Deliberately never call `prewarm`/`reset` — the ring history stays zeroed.
+
+    let input = vec![0.0f32; 64];
+    let mut output = vec![0.0f32; 64];
+    model.process(&input, &mut output);
+
+    assert!(output.iter().all(|v| v.is_finite()));
+}

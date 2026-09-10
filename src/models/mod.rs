@@ -145,6 +145,12 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Resets internal model states with a new sample rate and maximum block size.
     ///
     /// Default implementation calls `prewarm(max_buffer_size)` if `prewarm_on_reset()` is `true`.
+    ///
+    /// # Errors
+    ///
+    /// Implementations may return an error if internal state buffers cannot be
+    /// (re)allocated for `max_buffer_size` (out of memory). The default
+    /// implementation never fails.
     fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         if self.prewarm_on_reset() {
             self.prewarm(max_buffer_size);
@@ -155,6 +161,12 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Reallocates internal scratch buffers to support up to `max_buf` samples.
     ///
     /// Default: no-op (suitable for static models and LSTM).
+    ///
+    /// # Errors
+    ///
+    /// Implementations may return an error if the scratch buffer cannot be
+    /// (re)allocated for `max_buf` (out of memory). The default implementation
+    /// (no-op) never fails.
     fn set_max_buffer_size(&mut self, _max_buf: usize) -> anyhow::Result<()> {
         Ok(())
     }
@@ -185,8 +197,30 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
 /// Wrapper enum for trained model variants.
 /// Enables static dispatch of DSP calls to the concrete variant, avoiding vtable overhead.
 ///
-/// Named `StaticModel` because all variants are compile-time-fixed geometries.
-/// The legacy "Dynamic" mode (arbitrary geometry at runtime) has been retired.
+/// Contains optimized static variants with compile-time fixed geometries (enabling
+/// auto-vectorization and loop unrolling), alongside zero-allocation dynamic fallback variants
+/// (`WavenetDyn`, `WavenetA2Dyn`, `WavenetA2Cascade`, `LstmDyn`) for arbitrary architectures.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// use neural_amp_modeler_rs::prelude::*;
+///
+/// let sys = SystemSnapshot::capture();
+/// let pair = load_and_build_model(
+///     Path::new("models/amp.nam"),
+///     &sys,
+///     false,
+///     LoadOptions::default(),
+/// ).expect("failed to load model");
+///
+/// if let Some(mut model) = pair.model_l {
+///     let input = [0.0f32; 64];
+///     let mut output = [0.0f32; 64];
+///     model.process(&input, &mut output);
+/// }
+/// ```
 pub enum StaticModel {
     /// WaveNet Standard (16 channels, kernel 3, dilation 8).
     WavenetStandard(Box<wavenet::WaveNetModel<16, 3, 8>>),

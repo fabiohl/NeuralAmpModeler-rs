@@ -415,7 +415,7 @@ The `--check` mode separates measurement noise from real regressions:
 | **Fidelity — SNR (dB)**        | `new_snr < contract_snr − 6.0`                                                                                                                      | Quantization / scheduling margin                                             |
 | **Fidelity — MR-STFT**         | Envelope / relative ceiling vs contract                                                                                                             | Spectral variance margin                                                     |
 | **Oracle divergence**          | `REVIEW_REQUIRED` when NAMCore and f64 move in opposite directions beyond calibrated ratios                                                         | Neither oracle auto-wins                                                     |
-| **Performance — Latency (µs)** | Contract: `new_lat > contract_lat × 1.10`. Primary gate: Criterion t-test via `tests-performance-regression.sh`                                     | 10% contract margin absorbs OS noise; Criterion is the statistical authority |
+| **Performance — Latency (µs)** | Contract: `new_lat > contract_lat × 1.10`. Primary gate: machine Criterion change-CI verdict via `tests-performance-regression.sh`                 | 10% contract margin absorbs OS noise; Criterion's persisted comparison JSON is the statistical authority |
 
 > [!NOTE]
 > Fields with value `N/A` in the contract file are skipped during check.
@@ -423,7 +423,7 @@ The `--check` mode separates measurement noise from real regressions:
 > and refuses to certify contract performance metrics (fail-closed; no stale log reuse).
 >
 > [!IMPORTANT]
-> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the **primary statistical authority** for performance regressions (two-sample t-test vs Criterion baseline under `.performance-baselines/`, p < 0.05). The quality contract is the integrated second line (fidelity + median latency snapshot).
+> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the **primary statistical authority** for performance regressions: `nam_perf_gate verdict` reads Criterion's persisted `change/estimates.json` (relative mean-change CI vs the ±5% noise band) from the baseline under `.performance-baselines/`, never the human `has regressed` wording. The quality contract is the integrated second line (fidelity + median latency snapshot).
 
 ### 9.3. Performance Regression vs. Fidelity Violation
 
@@ -440,7 +440,7 @@ QA scripts report these domains independently:
 - **SIMD policy:** production performance claims are AVX2 (`x86-64-v3`) only. The remote AVX-512 receipt (`utils/remote-simd-gate.sh`) is a promotion gate, not a fidelity oracle. A FAIL receipt means “do not promote”, not “audio is wrong”. See [`architecture.md`](architecture.md) §1.2.
 
 > [!NOTE]
-> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the primary statistical authority for performance regressions (two-sample t-test, p < 0.05); the quality contract acts as an integrated second line of defense.
+> [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) remains the primary statistical authority for performance regressions (machine Criterion change-CI verdict vs the ±5% noise band); the quality contract acts as an integrated second line of defense.
 
 ### 9.4. Daily Workflow
 
@@ -507,7 +507,7 @@ The `utils/` directory houses defense tools, build aids, and inspection utilitie
 | **[utils/check-model.sh](../utils/check-model.sh)**                                   | Official model inspector CLI               | Atomic execution via `cargo run --locked --example inspect_model`; native `.nam` (JSON) and `.namb` (binary) inspection, topology analysis, gain staging, and metadata extraction.                                                                                                                                                                                                                                                                                                      |
 | **[utils/setup-third-party.sh](../utils/setup-third-party.sh)**                       | Upstream git mirror provisioner            | Verifies `git` availability; clones pinned tags (`variables.env`); fallback fetch for shallow pins; deterministic directory inspection for submodules (`eigen`, `AudioDSPTools`).                                                                                                                                                                                                                                                                                                       |
 | **[utils/simd-probe.sh](../utils/simd-probe.sh)**                                     | SIMD diagnostic probe                     | Wraps the `simd_probe` CLI (`cargo run [--features avx512] --bin simd_probe`) for rapid hardware/dispatch diagnosis; deterministic inference smoke cycle with a checksum; emits the non-gating `preflight-simd-probe` receipt in `tests-long.sh`.                                                                                                                                                                                                                                           |
-| **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection.                                                                                                                                                                                                                                                                                          |
+| **[utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh)** | Baseline-gated performance regression wall | Delimiter-safe Criterion ID extraction (`sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`); hardware & compiler fingerprinting; nested baseline sanitation; fail-closed missing coverage detection; machine regression verdict from Criterion `change/estimates.json` (`nam_perf_gate verdict`, `REGRESSION_DETECTED`/`REGRESSION_BLIND`).                                                                                                                                                                                                                                                                                          |
 
 ---
 

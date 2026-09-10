@@ -10,8 +10,25 @@ use super::header::{FLAG_HAS_CRC32, NambHeader, check_crc};
 use anyhow::Result;
 use log::{debug, info};
 
-/// Loads a model in the `.namb` binary format.
-pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
+/// Loads a model in the `.namb` binary format, returning a typed [`NambError`]
+/// directly — no `downcast` required.
+///
+/// This is the **preferred** entry point: every failure is an inspectable
+/// [`NambError`] variant (see [`NambError`] for the full list).
+///
+/// # Errors
+///
+/// Returns [`NambError::Truncated`] for files shorter than the header or with
+/// a weight section not aligned to 4 bytes, [`NambError::InvalidMagic`] for a
+/// bad signature, [`NambError::InvalidVersion`] for unsupported versions,
+/// [`NambError::WeightsOffsetOutOfBounds`] / [`NambError::InvalidWeightsOffset`]
+/// for invalid weight offsets, [`NambError::CrcMismatch`] /
+/// [`NambError::CrcMissing`] / [`NambError::CrcMissingV1`] for CRC integrity
+/// failures, [`NambError::WeightsTooLarge`] / [`NambError::NonFiniteWeight`] /
+/// [`NambError::InvalidHeaderField`] for invalid weight/header data, and
+/// [`NambError::MetadataNotUtf8`] / [`NambError::MetadataJson`] for a malformed
+/// optional JSON metadata section.
+pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambError> {
     let header_size = std::mem::size_of::<NambHeader>();
 
     // 1. Reads the header (alignment-safe, validated magic + version)
@@ -33,15 +50,13 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
         return Err(NambError::WeightsOffsetOutOfBounds {
             offset: weights_offset,
             file_len: data.len(),
-        }
-        .into());
+        });
     }
     if weights_offset < header_size {
         return Err(NambError::InvalidWeightsOffset {
             offset: weights_offset,
             header_size,
-        }
-        .into());
+        });
     }
 
     let mut model_data = if weights_offset > header_size {
@@ -58,7 +73,12 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
                 "[Loader] .namb JSON metadata section: {} bytes",
                 actual_json.len()
             );
-            crate::loader::nam_json::parse_nam_json(std::str::from_utf8(actual_json)?)?
+            let json_str =
+                std::str::from_utf8(actual_json).map_err(|_| NambError::MetadataNotUtf8 {
+                    offset: header_size,
+                    len: actual_json.len(),
+                })?;
+            crate::loader::nam_json::parse_nam_json(json_str).map_err(NambError::MetadataJson)?
         } else {
             debug!("[Loader] .namb has no JSON metadata — using fallback defaults");
             make_fallback_model_data()
@@ -79,7 +99,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             version,
             std::mem::offset_of!(NambHeader, crc32)
         );
-        return Err(NambError::CrcMissing { version }.into());
+        return Err(NambError::CrcMissing { version });
     }
 
     if version == 1 && crc32_header == 0 {
@@ -88,7 +108,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             "[Loader] Invalid CRC rejected: field='crc32', value=0 (v1 sentinel), offset_bytes={}",
             std::mem::offset_of!(NambHeader, crc32)
         );
-        return Err(NambError::CrcMissingV1.into());
+        return Err(NambError::CrcMissingV1);
     }
 
     check_crc(data, version, weights_offset, crc32_header)?;
@@ -104,8 +124,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
         return Err(NambError::Truncated {
             got: data.len(),
             need: expected_len,
-        }
-        .into());
+        });
     }
     let float_count = pesos_raw.len() / 4;
     // Defense-in-depth: cap to MAX_MODEL_BYTES / 4 (already protected by build.rs, duplicated here)
@@ -113,8 +132,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
         return Err(NambError::WeightsTooLarge {
             got: float_count,
             max: super::MAX_FLOAT_COUNT,
-        }
-        .into());
+        });
     }
     let mut weights = Vec::with_capacity(float_count);
 
@@ -133,8 +151,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             return Err(NambError::NonFiniteWeight {
                 index: i,
                 value: val,
-            }
-            .into());
+            });
         }
         weights.push(val);
     }
@@ -162,16 +179,14 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             field: "sample_rate",
             value: sample_rate_header,
             reason: "must be finite",
-        }
-        .into());
+        });
     }
     if sample_rate_header <= 0.0 {
         return Err(NambError::InvalidHeaderField {
             field: "sample_rate",
             value: sample_rate_header,
             reason: "must be > 0.0",
-        }
-        .into());
+        });
     }
     if !input_level_header.is_finite() {
         log::warn!(
@@ -183,8 +198,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             field: "input_level_dbu",
             value: input_level_header,
             reason: "must be finite",
-        }
-        .into());
+        });
     }
     if !output_level_header.is_finite() {
         log::warn!(
@@ -196,8 +210,7 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
             field: "output_level_dbu",
             value: output_level_header,
             reason: "must be finite",
-        }
-        .into());
+        });
     }
     let version_header = header.version;
 
@@ -243,4 +256,14 @@ pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
     );
 
     Ok(model_data)
+}
+
+/// Loads a model in the `.namb` binary format.
+///
+/// Legacy wrapper that erases the typed [`NambError`] into an `anyhow::Error`
+/// (the error type is preserved as the innermost source, so it remains
+/// recoverable via `downcast_ref::<NambError>()`). Prefer [`parse_namb_typed`]
+/// for inspectable typed errors without downcast.
+pub fn parse_namb(data: &[u8]) -> Result<NamModelData> {
+    parse_namb_typed(data).map_err(Into::into)
 }

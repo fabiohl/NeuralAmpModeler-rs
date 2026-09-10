@@ -12,15 +12,20 @@
 # statistical baseline. A regressing commit exits non-zero — protecting real-time
 # DSP budgets with strict fail-closed safety.
 #
-# All logic (fingerprint, coverage, persist/restore, receipt) is delegated to
-# `nam_perf_gate` (S3.T3). This script only orchestrates: taskset, cargo bench,
-# and calls to the bin.
+# All logic (fingerprint, coverage, machine regression verdict, persist/restore,
+# receipt) is delegated to `nam_perf_gate` (S3.T3). This script only
+# orchestrates: taskset, cargo bench, and calls to the bin.
 #
 # Modes
 # -----
 #   --check (default)    Compare current build against saved baseline (read-only).
 #                        Fails with MISSING_BASELINE if no baseline exists.
 #                        Fails with BASELINE_COVERAGE_GAP if any bench lacks baseline.
+#                        Fails with REGRESSION_DETECTED on a machine regression
+#                        (Criterion change/estimates.json) and with
+#                        REGRESSION_BLIND when a compared bench has no readable
+#                        comparison artifact. The verdict never comes from the
+#                        human 'has regressed' console wording (R-3).
 #   --bootstrap-baseline Create a new baseline and environment fingerprint.
 #                        Must be executed by a human operator.
 #
@@ -104,7 +109,12 @@ bootstrap_baseline() {
 
     apply_thermal_cooldown
 
+    local bench_start bench_end bench_dur_ms bench_dur_str
+    bench_start=$(date +%s%N)
     "${TASKSET[@]}" cargo bench --bench regression_gate --features testing -- --save-baseline "$BASELINE_NAME"
+    bench_end=$(date +%s%N)
+    bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))
+    bench_dur_str=$(format_duration_ms "$bench_dur_ms")
 
     "$NAM_PERF_GATE" persist-baseline \
         --baseline-dir "$BASELINE_DIR" \
@@ -126,7 +136,7 @@ bootstrap_baseline() {
         --run-id "$NAM_RUN_ID" \
         --out "$REGRESSION_RECEIPT" >&2
 
-    echo -e "  ${GREEN}✓${NC} Baseline '${BASELINE_NAME}' created and persisted." >&2
+    echo -e "  ${GREEN}✓${NC} Baseline '${BASELINE_NAME}' created and persisted in ${bench_dur_str}." >&2
     echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
     echo -e "  ${BOLD}Performance Bootstrap Artifacts saved:${NC}"
     echo -e "    - Fingerprint:   ${CYAN}${FINGERPRINT_FILE}${NC}"
@@ -188,27 +198,22 @@ check_regression() {
     mkdir -p target/logs
     LOG_FILE="target/logs/regression-check.log"
 
+    local bench_start bench_end bench_dur_ms bench_dur_str
+    bench_start=$(date +%s%N)
     set +e
     "${TASKSET[@]}" cargo bench --bench regression_gate --features testing \
         -- --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
     BENCH_STATUS=$?
+    bench_end=$(date +%s%N)
+    bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))
+    bench_dur_str=$(format_duration_ms "$bench_dur_ms")
     set -e
 
+    # Diagnostic only (R-3/B2): Criterion's human wording is NOT the verdict.
+    # The machine verdict below parses the persisted Criterion estimates JSON,
+    # so a truncated or redacted log can never turn the gate green.
     if grep -qiE 'has regressed' "$LOG_FILE" 2>/dev/null; then
-        echo -e "\n${RED}${BOLD}❌ PERFORMANCE REGRESSION DETECTED${NC}"
-        echo -e "  Review $LOG_FILE for details." >&2
-        echo -e "  If the regression is intentional, re-save the baseline with:" >&2
-        echo -e "    ${YELLOW}utils/tests-performance-regression.sh --bootstrap-baseline${NC}" >&2
-        "$NAM_PERF_GATE" receipt append \
-            --phase-id "regression_check" \
-            --status "FAIL" \
-            --exit-code 1 \
-            --observed-records 0 \
-            --expected-records 1 \
-            --reason "REGRESSION_DETECTED" \
-            --run-id "$NAM_RUN_ID" \
-            --out "$REGRESSION_RECEIPT" >&2
-        exit 1
+        echo -e "\n${YELLOW}${BOLD}[DIAGNOSTIC] Criterion console reports 'has regressed' — machine verdict follows.${NC}" >&2
     fi
 
     if [ $BENCH_STATUS -ne 0 ]; then
@@ -250,9 +255,64 @@ check_regression() {
     fi
     rm -f "$LOG_FILE.coverage"
 
-    # Audit trail: record verified benchmark set
+    # ── Machine regression verdict (R-3/B2) ─────────────────────────────────
+    # `nam_perf_gate verdict` is the single source of the regression verdict:
+    # it parses Criterion's persisted `change/estimates.json` (the bootstrapped
+    # relative mean-change confidence interval), never the human
+    # 'has regressed' text. An executed benchmark without a readable comparison
+    # artifact is fail-closed `REGRESSION_BLIND` — nothing passes unverified.
+    set +e
+    "$NAM_PERF_GATE" verdict \
+        --log "$LOG_FILE" \
+        --root "$CRITERION_BASELINE_TARGET" > "$LOG_FILE.verdict" 2>&1
+    VERDICT_STATUS=$?
+    set -e
+
+    if [ $VERDICT_STATUS -ne 0 ]; then
+        cat "$LOG_FILE.verdict"
+        if grep -q '^REGRESSION_BLIND' "$LOG_FILE.verdict" 2>/dev/null; then
+            VERDICT_REASON="REGRESSION_BLIND"
+            echo -e "\n${RED}${BOLD}❌ REGRESSION VERDICT BLIND — Criterion comparison artifacts missing/unreadable${NC}"
+        else
+            VERDICT_REASON="REGRESSION_DETECTED"
+            echo -e "\n${RED}${BOLD}❌ PERFORMANCE REGRESSION DETECTED${NC}"
+        fi
+        echo -e "  Review $LOG_FILE for details." >&2
+        echo -e "  If the regression is intentional, re-save the baseline with:" >&2
+        echo -e "    ${YELLOW}utils/tests-performance-regression.sh --bootstrap-baseline${NC}" >&2
+        "$NAM_PERF_GATE" receipt append \
+            --phase-id "regression_check" \
+            --status "FAIL" \
+            --exit-code 1 \
+            --observed-records 0 \
+            --expected-records 1 \
+            --reason "$VERDICT_REASON" \
+            --run-id "$NAM_RUN_ID" \
+            --out "$REGRESSION_RECEIPT" >&2
+        rm -f "$LOG_FILE.verdict"
+        exit 1
+    fi
+    rm -f "$LOG_FILE.verdict"
+
+    # Audit trail: record verified benchmark set. Coverage and verdict above
+    # already fail-closed on a blind log; the explicit `>= 1` guard keeps
+    # `observed == expected` from ever certifying zero executed benches (R-3).
     local executed_count
-    executed_count=$(grep -c "^Benchmarking " "$LOG_FILE" 2>/dev/null || echo 0)
+    executed_count=$(grep -c "^Benchmarking " "$LOG_FILE" 2>/dev/null || true)
+    executed_count="${executed_count:-0}"
+    if [ "$executed_count" -lt 1 ]; then
+        echo -e "\n${RED}${BOLD}❌ NO BENCHMARK EXECUTED — refusing to certify observed==expected${NC}"
+        "$NAM_PERF_GATE" receipt append \
+            --phase-id "regression_check" \
+            --status "FAIL" \
+            --exit-code 1 \
+            --observed-records 0 \
+            --expected-records 1 \
+            --reason "NO_BENCHMARK_EXECUTED" \
+            --run-id "$NAM_RUN_ID" \
+            --out "$REGRESSION_RECEIPT" >&2
+        exit 1
+    fi
     "$NAM_PERF_GATE" receipt append \
         --phase-id "regression_baseline_coverage" \
         --status "PASS" \
@@ -264,7 +324,7 @@ check_regression() {
         --out "$REGRESSION_RECEIPT" >&2
 
     echo -e "  ${GREEN}✓${NC} Coverage cross-check: all ${executed_count} executed benchmark(s) have baseline series." >&2
-    echo -e "  ${GREEN}✓${NC} No performance regression detected." >&2
+    echo -e "  ${GREEN}✓${NC} No performance regression detected in ${bench_dur_str} (machine verdict)." >&2
     "$NAM_PERF_GATE" receipt append \
         --phase-id "regression_check" \
         --status "PASS" \

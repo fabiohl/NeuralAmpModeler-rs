@@ -8,7 +8,7 @@
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{WeightsLayout, parse_nam_json};
-use neural_amp_modeler_rs::loader::namb::parse_namb;
+use neural_amp_modeler_rs::loader::namb::parse_namb_typed;
 use neural_amp_modeler_rs::loader::namb_encoder::encode_namb;
 use neural_amp_modeler_rs::math::activations::ActivationPrecision;
 use neural_amp_modeler_rs::models::NamModel;
@@ -61,8 +61,8 @@ fn test_lstm_v2_gate_major_parity() {
     // 2. Encode to NAMB v2 using Gate-Major layout
     let namb_v2 = encode_namb(&original_data, 2, WeightsLayout::GateMajorLstm).unwrap();
 
-    // 3. Decode the v2 binary and verify the layout was preserved
-    let v2_data = parse_namb(&namb_v2).unwrap();
+    // 3. Decode the v2 binary via the typed entry point and verify the layout was preserved
+    let v2_data = parse_namb_typed(&namb_v2).unwrap();
     assert_eq!(v2_data.weights_layout, WeightsLayout::GateMajorLstm);
 
     // 4. Build the v2 model (direct loading, no transposition)
@@ -111,8 +111,8 @@ fn test_wavenet_v2_interleaved4_parity() {
     // 2. Encode to NAMB v2 with 4-float interleaving (AVX2 tiling factor)
     let namb_v2 = encode_namb(&original_data, 2, WeightsLayout::Interleaved4WaveNet).unwrap();
 
-    // 3. Load the v2 binary
-    let v2_data = parse_namb(&namb_v2).unwrap();
+    // 3. Load the v2 binary via the typed entry point
+    let v2_data = parse_namb_typed(&namb_v2).unwrap();
     assert_eq!(v2_data.weights_layout, WeightsLayout::Interleaved4WaveNet);
 
     let mut model_v2 = build_model(&v2_data).unwrap();

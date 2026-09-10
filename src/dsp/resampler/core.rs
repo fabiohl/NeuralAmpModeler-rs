@@ -149,7 +149,9 @@ impl ResamplerCore {
             // maintained < NUM_PHASES by the loop), so both `phase_ptr` calls are
             // valid for `taps_per_phase` coeffs; `window_ptr()` returns a pointer
             // to `taps_per_phase` contiguous samples in the double-buffer delay
-            // line; `M` is selected by ISA dispatch matching its target features.
+            // line, in-bounds release-stable by the module-owned `pos` invariant
+            // (see `delay_line::window_ptr`); `M` is selected by ISA dispatch
+            // matching its target features.
             let (y_l, y_r) = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);
@@ -231,7 +233,9 @@ impl ResamplerCore {
             // ── Step 3: Dual-phase convolution + linear interpolation (mono) ──
             // SAFETY: `phase_idx < NUM_PHASES` (loop invariant), so both `phase_ptr`
             // calls are valid for `taps_per_phase` coeffs; `window_ptr()` points to
-            // `taps_per_phase` contiguous samples; `M` is ISA-dispatched.
+            // `taps_per_phase` contiguous samples, in-bounds release-stable by the
+            // module-owned `pos` invariant (see `delay_line::window_ptr`); `M` is
+            // ISA-dispatched.
             let y_l = unsafe {
                 let c0 = self.bank.phase_ptr(phase_idx);
                 let c1 = self.bank.phase_ptr(phase_next);

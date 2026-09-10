@@ -788,3 +788,70 @@ fn test_a2_conv1d_grouped_with_mixin() {
         );
     }
 }
+
+#[test]
+fn test_a2_conv1d_try_new_valid() {
+    let in_ch = 3;
+    let out_ch = 8;
+    let kernel = 6;
+    let dilation = 1;
+    let (weights, bias) = make_test_weights(in_ch, out_ch, kernel, 123);
+
+    let res = A2Conv1d::try_new(weights, bias, true, dilation, in_ch, out_ch, kernel);
+    assert!(res.is_ok(), "expected valid A2Conv1d creation");
+}
+
+#[test]
+fn test_a2_conv1d_try_new_invalid_kernel() {
+    let (weights, bias) = make_test_weights(4, 4, 1, 1);
+    let res = A2Conv1d::try_new(weights, bias, true, 1, 4, 4, 0);
+    let Err(err) = res else {
+        panic!("expected Err")
+    };
+    assert!(err.contains("A2 kernel size must be >= 1"));
+}
+
+#[test]
+fn test_a2_conv1d_try_new_zero_channels() {
+    let (weights, bias) = make_test_weights(4, 4, 1, 1);
+    let res_in0 = A2Conv1d::try_new(weights.clone(), bias.clone(), true, 1, 0, 4, 1);
+    let Err(err_in0) = res_in0 else {
+        panic!("expected Err")
+    };
+    assert!(err_in0.contains("channels must be > 0"));
+
+    let res_out0 = A2Conv1d::try_new(weights, bias, true, 1, 4, 0, 1);
+    let Err(err_out0) = res_out0 else {
+        panic!("expected Err")
+    };
+    assert!(err_out0.contains("channels must be > 0"));
+}
+
+#[test]
+fn test_a2_conv1d_try_new_undersized_bias() {
+    let (weights, _) = make_test_weights(4, 8, 1, 1);
+    let bias_short = AlignedVec::new(4, 0.0f32).unwrap(); // expects 8
+    let res = A2Conv1d::try_new(weights, bias_short, true, 1, 4, 8, 1);
+    let Err(err) = res else {
+        panic!("expected Err")
+    };
+    assert!(err.contains("bias buffer length"));
+}
+
+#[test]
+fn test_a2_conv1d_try_new_undersized_weights() {
+    let weights_short = AlignedVec::new(4, 0.0f32).unwrap(); // far too small
+    let bias = AlignedVec::new(8, 0.0f32).unwrap();
+    let res = A2Conv1d::try_new(weights_short, bias, true, 1, 4, 8, 1);
+    let Err(err) = res else {
+        panic!("expected Err")
+    };
+    assert!(err.contains("A2 fallback Conv1dDyn validation failed"));
+}
+
+#[test]
+#[should_panic(expected = "A2Conv1d::new: invalid conv parameters or undersized buffer")]
+fn test_a2_conv1d_deprecated_new_panics_on_invalid() {
+    let (weights, bias) = make_test_weights(4, 4, 1, 1);
+    let _ = A2Conv1d::new(weights, bias, true, 1, 0, 4, 1);
+}

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
-
 //! DSP operations for stereo processing and signal metering.
 
 mod conv_kernels;

@@ -266,7 +266,9 @@ fn parse_groups_field(
 
 fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     reject_wavenet_a2_max_class(data)?;
-    use crate::loader::nam_json::validation::{MAX_A2_DYN_BOTTLENECK, MAX_A2_DYN_CHANNELS};
+    use crate::loader::nam_json::validation::{
+        MAX_A2_DYN_BOTTLENECK, MAX_A2_DYN_CHANNELS, MAX_A2_HEAD_CHANNELS, MAX_HEAD_SIZE,
+    };
 
     let num_arrays = data.config.layers.len();
     let total_weights = data.weights.len();
@@ -278,18 +280,40 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         Vec::with_capacity(num_arrays);
     for (ai, layer_cfg) in data.config.layers.iter().enumerate() {
         let ch = layer_cfg.channels.unwrap_or(0);
-        let bn = layer_cfg.bottleneck.unwrap_or(ch);
-        if ch > MAX_A2_DYN_CHANNELS {
+        if ch == 0 || ch > MAX_A2_DYN_CHANNELS {
             bail!(
-                "A2-Dynamic array[{}] channels ({}) exceeds maximum {} (OOM/DoS protection)",
+                "A2-Dynamic array[{}] channels ({}) must be between 1 and {} (OOM/DoS protection)",
                 ai,
                 ch,
                 MAX_A2_DYN_CHANNELS
             );
         }
-        if bn > MAX_A2_DYN_BOTTLENECK {
+        let in_ch = if ai == 0 {
+            layer_cfg.input_size.unwrap_or(1)
+        } else {
+            data.config.layers[ai - 1].channels.unwrap_or(1)
+        };
+        if in_ch == 0 || in_ch > MAX_A2_DYN_CHANNELS {
             bail!(
-                "A2-Dynamic array[{}] bottleneck ({}) exceeds maximum {} (OOM/DoS protection)",
+                "A2-Dynamic array[{}] input_channels ({}) must be between 1 and {} (OOM/DoS protection)",
+                ai,
+                in_ch,
+                MAX_A2_DYN_CHANNELS
+            );
+        }
+        let head_sz = layer_cfg.head_size.unwrap_or(1);
+        if head_sz == 0 || head_sz > MAX_HEAD_SIZE {
+            bail!(
+                "A2-Dynamic array[{}] head_size ({}) must be between 1 and {} (OOM/DoS protection)",
+                ai,
+                head_sz,
+                MAX_HEAD_SIZE
+            );
+        }
+        let bn = layer_cfg.bottleneck.unwrap_or(ch);
+        if bn == 0 || bn > MAX_A2_DYN_BOTTLENECK {
+            bail!(
+                "A2-Dynamic array[{}] bottleneck ({}) must be between 1 and {} (OOM/DoS protection)",
                 ai,
                 bn,
                 MAX_A2_DYN_BOTTLENECK
@@ -302,6 +326,21 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 ai,
                 cond,
                 MAX_CONDITION_SIZE
+            );
+        }
+        let head1x1_out_channels = layer_cfg
+            .layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("head1x1"))
+            .and_then(|h| h.get("out_channels"))
+            .and_then(|a| a.as_u64())
+            .unwrap_or(bn as u64) as usize;
+        if head1x1_out_channels == 0 || head1x1_out_channels > MAX_A2_HEAD_CHANNELS {
+            bail!(
+                "A2-Dynamic array[{}] head1x1_out_channels ({}) must be between 1 and {} (OOM/DoS protection)",
+                ai,
+                head1x1_out_channels,
+                MAX_A2_HEAD_CHANNELS
             );
         }
         resolved_topos.push(

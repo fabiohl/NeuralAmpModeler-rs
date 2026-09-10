@@ -344,24 +344,43 @@ impl WaveNetA2Dyn {
             bottleneck,
             num_layers,
             layers: Vec::with_capacity(num_layers),
-            rechannel_w_f32: AlignedVec::new(input_channels * channels, 0.0f32)?,
+            rechannel_w_f32: AlignedVec::new(
+                input_channels
+                    .checked_mul(channels)
+                    .ok_or_else(|| anyhow::anyhow!("Overflow calculating rechannel_w size"))?,
+                0.0f32,
+            )?,
             head_conv: None,
             head_kernel_size,
             head_rechannel_w: AlignedVec::new(
-                head_size.max(1) * head_kernel_size * head_accum_size,
+                head_size
+                    .max(1)
+                    .checked_mul(head_kernel_size)
+                    .and_then(|s| s.checked_mul(head_accum_size))
+                    .ok_or_else(|| anyhow::anyhow!("Overflow calculating head_rechannel_w size"))?,
                 0.0f32,
             )?,
             head_rechannel_b: AlignedVec::new(head_size.max(1), 0.0f32)?,
             head_rechannel_scale: AlignedVec::new(head_size.max(1), 0.0f32)?,
             head_bias: true,
-            head_accum: AlignedVec::new(head_ring_size * head_accum_size, 0.0f32)?,
+            head_accum: AlignedVec::new(
+                head_ring_size
+                    .checked_mul(head_accum_size)
+                    .ok_or_else(|| anyhow::anyhow!("Overflow calculating head_accum size"))?,
+                0.0f32,
+            )?,
             head_write_pos: rf,
             head_ring_mask,
             layer_buffers,
             layer_ring_sizes,
             layer_lookbacks,
             layer_buffer_starts,
-            layer_in: AlignedVec::new(channels * max_buf, 0.0f32)?,
+            layer_in: AlignedVec::new(
+                channels
+                    .checked_mul(max_buf)
+                    .ok_or_else(|| anyhow::anyhow!("Overflow calculating layer_in size"))?,
+                0.0f32,
+            )?,
             kernel_sizes: kernel_sizes.to_vec(),
             dilations: dilations.to_vec(),
             activations,

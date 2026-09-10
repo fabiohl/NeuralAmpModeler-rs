@@ -85,6 +85,7 @@ CHECK_ONLY=0
 SKIP_PARITY=0
 SKIP_BENCH=0
 USE_SDE=0
+ALLOW_EMPTY=0
 
 print_usage() {
     echo "Usage: utils/remote-simd-gate.sh [OPTIONS]"
@@ -96,6 +97,7 @@ print_usage() {
     echo "  --cooldown <SECS>    Specify custom thermal cooldown in seconds (default: 180)"
     echo "  --skip-parity        Skip Phase 1 (mathematical parity test)"
     echo "  --skip-bench         Skip Phase 2 (Criterion ISA comparison bench)"
+    echo "  --allow-empty        Acknowledge a zero-phase receipt (only with --skip-parity/--skip-bench; never a pass)"
     echo "  --out <FILE>         Destination path for receipt JSON (default: target/logs/remote-simd-receipt.json)"
     echo "  --help, -h           Show this usage summary"
 }
@@ -132,6 +134,10 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-bench)
             SKIP_BENCH=1
+            shift
+            ;;
+        --allow-empty)
+            ALLOW_EMPTY=1
             shift
             ;;
         --out)
@@ -205,6 +211,12 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     ok "Preflight check completed successfully (--check-only requested)."
     exit 0
 fi
+
+# R-3 / B3: start every gate run from an empty receipt stream. Phase emission
+# appends, so a stale JSONL from a previous run would otherwise satisfy the
+# zero-phase guard below and let `--skip-parity --skip-bench` certify a run
+# that executed nothing.
+: > "$REMOTE_RECEIPT_JSONL"
 
 # ---------------------------------------------------------------------------
 # [1/4] Phase 1: Cross-Mathematical Parity
@@ -297,17 +309,47 @@ fi
 # run) is validated fail-closed: every line must match the LongPhaseReceipt
 # schema, and the derived overall verdict is printed by `summary`. A corrupt
 # or missing receipt fails the gate.
+#
+# R-3 / B3: schema validation alone accepts a zero-line stream, so an explicit
+# emptiness guard is required — "passed all criteria" must never be printed
+# without at least one recorded phase. `--allow-empty` downgrades a deliberate
+# all-skipped run (never a pass) only when a skip is actually in effect.
+REMOTE_RECEIPT_EMPTY=0
 if ensure_long_receipt_bin; then
     if ! "$LONG_RECEIPT_BIN" validate --out "$REMOTE_RECEIPT_JSONL"; then
         echo -e "${RED}${BOLD}❌ Remote SIMD receipt validation FAILED (target/logs/remote-simd-receipt.jsonl).${NC}"
         exit 1
     fi
+    REMOTE_RECEIPT_LINES="$(count_jsonl_records "$REMOTE_RECEIPT_JSONL")"
+    if [ "${REMOTE_RECEIPT_LINES:-0}" -eq 0 ]; then
+        if [ "$ALLOW_EMPTY" -eq 1 ] && { [ "$SKIP_PARITY" -eq 1 ] || [ "$SKIP_BENCH" -eq 1 ]; }; then
+            REMOTE_RECEIPT_EMPTY=1
+            warn "Remote SIMD receipt is EMPTY (0 phase lines) — acknowledged via --allow-empty (skips active)."
+        else
+            echo -e "${RED}${BOLD}❌ Remote SIMD receipt is EMPTY (0 phase lines) — gate fails closed (R-3/B3).${NC}" >&2
+            if [ "$ALLOW_EMPTY" -eq 1 ]; then
+                echo -e "   --allow-empty requires --skip-parity and/or --skip-bench; without skips the receipt must record phases." >&2
+            else
+                echo -e "   Record at least one phase, or pass --allow-empty together with --skip-parity/--skip-bench." >&2
+            fi
+            exit 1
+        fi
+    fi
     echo -e "  ${GREEN}✓ Remote SIMD receipt validated (target/logs/remote-simd-receipt.jsonl)${NC}"
-    SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$REMOTE_RECEIPT_JSONL")"
-    printf '%s\n' "$SUMMARY_TEXT" | sed 's/^/    /'
+    if [ "$REMOTE_RECEIPT_EMPTY" -eq 0 ]; then
+        SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out "$REMOTE_RECEIPT_JSONL")"
+        printf '%s\n' "$SUMMARY_TEXT" | sed 's/^/    /'
+    fi
 else
     echo -e "${RED}${BOLD}❌ nam_long_receipt unavailable — remote SIMD receipt NOT emitted (fail-closed).${NC}"
     exit 1
+fi
+
+if [ "$REMOTE_RECEIPT_EMPTY" -eq 1 ]; then
+    echo -e "\n${YELLOW}${BOLD}================================================================================${NC}"
+    echo -e "${YELLOW}${BOLD}⚠ Remote SIMD Gate: EMPTY receipt (0 phases) acknowledged via --allow-empty — NOT a pass.${NC}"
+    echo -e "${YELLOW}${BOLD}================================================================================${NC}\n"
+    exit 0
 fi
 
 echo -e "\n${GREEN}${BOLD}================================================================================${NC}"

@@ -31,6 +31,8 @@ mod diagnostic_bundle;
 mod doc_inventory;
 #[path = "models/ebu_lufs_compliance.rs"]
 mod ebu_lufs_compliance;
+#[path = "models/hostile_models_test.rs"]
+mod hostile_models_test;
 #[path = "models/receipt_test.rs"]
 mod receipt_test;
 #[path = "models/wavenet_clone_exact_test.rs"]

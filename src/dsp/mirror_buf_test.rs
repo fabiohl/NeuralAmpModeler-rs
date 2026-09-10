@@ -157,3 +157,27 @@ fn test_hugepage_state_is_monotonic() {
 
     MIRROR_BUF_HUGEPAGE_STATE.store(original, Ordering::Relaxed);
 }
+
+#[test]
+fn test_mirror_buf_alignment_invariants_r8() -> Result<(), Box<dyn std::error::Error>> {
+    #[repr(align(64))]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Align64([u8; 64]);
+
+    // Types with align <= 64 compile and instantiate cleanly
+    let buf_u8 = MirroredBuffer::<u8>::new(1)?;
+    assert!(!buf_u8.is_empty());
+
+    let buf_f64 = MirroredBuffer::<f64>::new(1)?;
+    assert!(!buf_f64.is_empty());
+
+    let buf_a64 = MirroredBuffer::<Align64>::new(1)?;
+    assert!(!buf_a64.is_empty());
+    assert_eq!(buf_a64.as_ptr() as usize % 64, 0);
+
+    let buf_a64_aligned = MirroredBuffer::<Align64>::new_aligned(2, 2)?;
+    assert_eq!(buf_a64_aligned.size() % 2, 0);
+    assert_eq!(buf_a64_aligned.as_ptr() as usize % 64, 0);
+
+    Ok(())
+}

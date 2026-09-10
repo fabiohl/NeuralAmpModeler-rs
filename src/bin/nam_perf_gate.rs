@@ -16,6 +16,10 @@
 //! - `coverage`: fail-closed baseline coverage cross-check (F-24): every
 //!   `Benchmarking <id>:` line of the Criterion log must have a persisted
 //!   `…/<id>/<baseline>/` series.
+//! - `verdict`: the machine regression verdict (R-3/B2) — parses Criterion's
+//!   persisted `…/<id>/change/estimates.json` comparison artifacts, never the
+//!   human console wording. `REGRESSION_DETECTED` / `REGRESSION_BLIND` fail
+//!   with exit 1.
 //! - `persist-baseline`: replace-copy `target/criterion/**/<baseline>` into
 //!   `.performance-baselines/` (nested sanitized).
 //! - `restore-baseline`: replace-copy the store back into the criterion root.
@@ -25,7 +29,8 @@
 //!
 //! Exit codes:
 //! - 0: success;
-//! - 1: run-time failure (missing/incomparable baseline, coverage gap, I/O);
+//! - 1: run-time failure (missing/incomparable baseline, coverage gap,
+//!   machine regression / blind verdict, I/O);
 //! - 2: usage error (unknown subcommand/flag, malformed argument).
 
 use std::collections::HashMap;
@@ -46,6 +51,9 @@ use neural_amp_modeler_rs::testing::qa::coverage::{
 };
 use neural_amp_modeler_rs::testing::qa::fingerprint::Fingerprint;
 use neural_amp_modeler_rs::testing::qa::fingerprint::FingerprintError;
+use neural_amp_modeler_rs::testing::qa::verdict::{
+    DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, regression_verdict,
+};
 
 /// Store directory of persisted baselines (gitignored).
 const DEFAULT_BASELINE_DIR: &str = ".performance-baselines";
@@ -84,6 +92,7 @@ fn main() {
         "probe" => cmd_probe(&args[1..]),
         "compare" => cmd_compare(&args[1..]),
         "coverage" => cmd_coverage(&args[1..]),
+        "verdict" => cmd_verdict(&args[1..]),
         "persist-baseline" => cmd_persist_baseline(&args[1..]),
         "restore-baseline" => cmd_restore_baseline(&args[1..]),
         "receipt" => cmd_receipt(&args[1..]),
@@ -108,6 +117,7 @@ fn print_help() {
     println!("  nam_perf_gate compare [--baseline <path>] [--bench-core <core>]");
     println!("                        [--baseline-dir <dir>]");
     println!("  nam_perf_gate coverage --log <path> [--root <dir>] [--baseline <name>]");
+    println!("  nam_perf_gate verdict --log <path> [--root <dir>] [--noise <fraction>]");
     println!("  nam_perf_gate persist-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
     println!("                                 [--baseline <name>]");
     println!("  nam_perf_gate restore-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
@@ -121,11 +131,12 @@ fn print_help() {
     println!();
     println!("Defaults: baseline dir .performance-baselines/, criterion root");
     println!("target/criterion/, baseline name ci-baseline (NAM_BASELINE_NAME),");
-    println!("bench core NAM_BENCH_CORE (empty = unpinned), receipt");
-    println!("target/logs/regression_phase_receipt.jsonl.");
+    println!("bench core NAM_BENCH_CORE (empty = unpinned), verdict noise band");
+    println!("0.05, receipt target/logs/regression_phase_receipt.jsonl.");
     println!();
     println!("Exit codes: 0 success, 1 run-time failure (MISSING_BASELINE,");
-    println!("INCOMPARABLE_ENVIRONMENT, BASELINE_COVERAGE_GAP, I/O), 2 usage error.");
+    println!("INCOMPARABLE_ENVIRONMENT, BASELINE_COVERAGE_GAP, REGRESSION_DETECTED,");
+    println!("REGRESSION_BLIND, I/O), 2 usage error.");
 }
 
 // ── Strict flag parsing (fail-closed: unknown flag ⇒ exit 2) ─────────────────
@@ -205,6 +216,21 @@ fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
                 ),
             }
         }
+    }
+}
+
+/// Parses the verdict noise-band flag (a positive fraction, e.g. `0.05`),
+/// defaulting to [`DEFAULT_NOISE_THRESHOLD`] when absent.
+fn parse_noise(flags: &Flags, name: &str, context: &str) -> f64 {
+    match flags.get(name) {
+        None => DEFAULT_NOISE_THRESHOLD,
+        Some(v) => match v.trim().parse::<f64>() {
+            Ok(n) if n.is_finite() && n > 0.0 => n,
+            _ => usage_error(
+                context,
+                &format!("--{name} must be a positive fraction (got '{v}')"),
+            ),
+        },
     }
 }
 
@@ -348,6 +374,85 @@ fn cmd_coverage(args: &[String]) {
                  under {criterion_root}/<id>/{name}/"
             );
             exit(0);
+        }
+    }
+}
+
+// ── verdict ──────────────────────────────────────────────────────────────────
+
+/// Prints the machine regression verdict over Criterion's persisted
+/// `change/estimates.json` artifacts (R-3/B2).
+///
+/// Fail-closed: a log with no executed benchmark, or an executed benchmark
+/// without a readable comparison artifact, prints `REGRESSION_BLIND` and exits
+/// 1 — a truncated/empty log or a redacted Criterion wording can never turn
+/// green. A significant machine regression prints `REGRESSION_DETECTED` and
+/// exits 1.
+fn cmd_verdict(args: &[String]) {
+    let flags = match parse_flags(args, &["log", "root", "noise"]) {
+        Ok(f) => f,
+        Err(e) if e == HELP_REQUEST => {
+            print_help();
+            exit(0);
+        }
+        Err(e) => usage_error("verdict", &e),
+    };
+    let log_path = match required(&flags, "log") {
+        Ok(v) => v,
+        Err(e) => usage_error("verdict", &e),
+    };
+    let criterion_root = flags
+        .get("root")
+        .unwrap_or(DEFAULT_CRITERION_ROOT)
+        .to_string();
+    let noise = parse_noise(&flags, "noise", "verdict");
+
+    // An absent/unreadable log maps to empty text — the same blind gate as
+    // the bash `grep` on a missing file (fail-closed, R-3).
+    let log_text = fs::read_to_string(log_path).unwrap_or_default();
+    match regression_verdict(&log_text, Path::new(&criterion_root), noise) {
+        Err(VerdictBlind) => {
+            println!("REGRESSION_BLIND no executed benchmark could be parsed from {log_path}");
+            println!("The machine regression verdict is blind: nothing passes unverified.");
+            exit(1);
+        }
+        Ok(outcome) if outcome.findings.is_empty() => {
+            println!(
+                "verdict ok: no machine regression among {} executed benchmark(s) \
+                 (noise band ±{:.2}%)",
+                outcome.executed,
+                noise * 100.0
+            );
+            exit(0);
+        }
+        Ok(outcome) => {
+            for finding in &outcome.findings {
+                match finding {
+                    VerdictFinding::MissingEstimates { id } => {
+                        println!(
+                            "REGRESSION_BLIND {id} has no readable Criterion comparison \
+                             artifact at {criterion_root}/{id}/change/estimates.json"
+                        );
+                    }
+                    VerdictFinding::Regression {
+                        id,
+                        point_estimate,
+                        lower_bound,
+                        upper_bound,
+                        noise,
+                    } => {
+                        println!(
+                            "REGRESSION_DETECTED {id} relative mean {:+}% \
+                             (CI [{:+}%, {:+}%]) lies entirely above the +{}% noise band",
+                            point_estimate * 100.0,
+                            lower_bound * 100.0,
+                            upper_bound * 100.0,
+                            noise * 100.0
+                        );
+                    }
+                }
+            }
+            exit(1);
         }
     }
 }

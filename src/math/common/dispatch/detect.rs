@@ -114,6 +114,10 @@ pub const fn avx512_capability_complete(f: bool, vl: bool, bw: bool, dq: bool) -
 
 /// Returns `true` when the current host CPU supports the full AVX-512
 /// capability set required by the reachable kernels (F+VL+BW+DQ).
+///
+/// # Production Usage Notice
+///
+/// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 #[cfg(feature = "avx512")]
 pub fn has_full_avx512() -> bool {
     avx512_capability_complete(
@@ -128,6 +132,10 @@ pub fn has_full_avx512() -> bool {
 ///
 /// Returns an empty slice when the full capability set is present. Used to
 /// build the structured error of [`IsaOverrideError::UnsupportedIsa`].
+///
+/// # Production Usage Notice
+///
+/// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 #[cfg(feature = "avx512")]
 pub fn missing_avx512_features() -> Vec<&'static str> {
     let mut missing = Vec::with_capacity(4);

@@ -16,12 +16,12 @@ use anyhow::{Context, Result};
 ///
 /// Reorders Conv1D and mixing weights into 4-wide SIMD vector blocks to allow parallel
 /// multi-channel execution during WaveNet dilated convolution inference.
-pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
+pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
     if data.architecture != "WaveNet" {
         anyhow::bail!("Layout Interleaved4WaveNet requires WaveNet architecture");
     }
 
-    let mut cursor = 0;
+    let mut cursor: usize = 0;
     let mut out_weights = Vec::with_capacity(data.weights.len());
 
     for (li, layer_cfg) in data.config.layers.iter().enumerate() {
@@ -35,10 +35,18 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
             .as_ref()
             .context("WaveNet without dilations")?;
         let gated = layer_cfg.gated.unwrap_or(false);
-        let conv_out_ch = if gated { 2 * ch } else { ch };
+        let conv_out_ch = if gated {
+            ch.checked_mul(2).ok_or_else(|| {
+                anyhow::anyhow!("Layer channels overflow for gated conv in layer {li}")
+            })?
+        } else {
+            ch
+        };
 
         // 1. Rechannel projection: Transposes [Output Channels][Input Channels] -> [Input][Output].
-        let size = ch * in_ch;
+        let size = ch
+            .checked_mul(in_ch)
+            .ok_or_else(|| anyhow::anyhow!("Rechannel weights size overflow in layer {li}"))?;
         ensure_capacity(
             &data.weights,
             cursor,
@@ -51,12 +59,19 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                 out_weights.push(raw[out_c * in_ch + in_c]);
             }
         }
-        cursor += size;
+        cursor = cursor.checked_add(size).ok_or_else(|| {
+            anyhow::anyhow!("Cursor overflow after rechannel weights in layer {li}")
+        })?;
 
         // 2. Dilated Conv1D Layers & Interleaved-4 Reordering
         for (di, _) in dilations.iter().enumerate() {
             // Re-indexes Conv1D weights into Interleaved-4 channel blocks (4-wide SIMD vectors).
-            let size = conv_out_ch * ch * k;
+            let size = conv_out_ch
+                .checked_mul(ch)
+                .and_then(|x| x.checked_mul(k))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Conv1D weights size overflow in layer {li} dilation {di}")
+                })?;
             ensure_capacity(
                 &data.weights,
                 cursor,
@@ -79,7 +94,9 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                     }
                 }
             }
-            cursor += size;
+            cursor = cursor.checked_add(size).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Conv1D weights in layer {li} dilation {di}")
+            })?;
 
             // Conv1D filter additive bias vector.
             ensure_capacity(
@@ -89,10 +106,14 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                 format!("Array {} Layer {} Conv1D Bias", li, di),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + conv_out_ch]);
-            cursor += conv_out_ch;
+            cursor = cursor.checked_add(conv_out_ch).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Conv1D bias in layer {li} dilation {di}")
+            })?;
 
             // Input Mixin projection: Linear mapping from conditioning state to channel dimension.
-            let size = ch * cond_ch;
+            let size = ch.checked_mul(cond_ch).ok_or_else(|| {
+                anyhow::anyhow!("Input Mixin weights size overflow in layer {li} dilation {di}")
+            })?;
             ensure_capacity(
                 &data.weights,
                 cursor,
@@ -105,10 +126,14 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                     out_weights.push(raw[out_c * cond_ch + in_c]);
                 }
             }
-            cursor += size;
+            cursor = cursor.checked_add(size).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Input Mixin in layer {li} dilation {di}")
+            })?;
 
             // 1x1 Pointwise Convolution: Linear channel-mixing matrix across residual features.
-            let size = ch * ch;
+            let size = ch.checked_mul(ch).ok_or_else(|| {
+                anyhow::anyhow!("1x1 weights size overflow in layer {li} dilation {di}")
+            })?;
             ensure_capacity(
                 &data.weights,
                 cursor,
@@ -121,7 +146,9 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                     out_weights.push(raw[out_c * ch + in_c]);
                 }
             }
-            cursor += size;
+            cursor = cursor.checked_add(size).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after 1x1 weights in layer {li} dilation {di}")
+            })?;
 
             // 1x1 Pointwise Convolution additive bias vector.
             ensure_capacity(
@@ -131,11 +158,15 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                 format!("Array {} Layer {} 1x1 Bias", li, di),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + ch]);
-            cursor += ch;
+            cursor = cursor.checked_add(ch).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after 1x1 bias in layer {li} dilation {di}")
+            })?;
         }
 
         // 3. Head Rechannel projection: Linear mapping from residual channels to head dimension.
-        let size = head_ch * ch;
+        let size = head_ch
+            .checked_mul(ch)
+            .ok_or_else(|| anyhow::anyhow!("Head Rechannel weights size overflow in layer {li}"))?;
         ensure_capacity(
             &data.weights,
             cursor,
@@ -148,7 +179,9 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                 out_weights.push(raw[out_c * ch + in_c]);
             }
         }
-        cursor += size;
+        cursor = cursor.checked_add(size).ok_or_else(|| {
+            anyhow::anyhow!("Cursor overflow after Head Rechannel weights in layer {li}")
+        })?;
 
         // Head Rechannel additive bias vector (when enabled in layer topology).
         if layer_cfg.head_bias.unwrap_or(false) {
@@ -159,7 +192,9 @@ pub(crate) fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<
                 format!("Array {} Head Rechannel Bias", li),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + head_ch]);
-            cursor += head_ch;
+            cursor = cursor.checked_add(head_ch).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Head Rechannel bias in layer {li}")
+            })?;
         }
     }
 

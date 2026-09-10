@@ -247,7 +247,11 @@ impl AdaptiveCompute {
     }
 
     /// Returns the crossfade gain (`crossfade_elapsed / total`).
-    /// `sample_rate` is used to compute the crossfade duration in samples.
+    ///
+    /// Note: The `_sample_rate` parameter is currently unused because crossfade
+    /// duration is established internally during state transitions (32 ms window).
+    /// It is retained for API compatibility and scheduled for review in v0.8.
+    ///
     /// Returns the linear multiplier applied to the degradation path.
     /// Call this during the output stage.
     #[inline(always)]

@@ -87,7 +87,7 @@ impl<const CH: usize> WaveNetA2<CH> {
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
 
             // Build the scalar/SIMD fallback conv (interleaved-4-wide f32 weights).
-            let conv = crate::models::a2::conv1d::A2Conv1d::new(
+            let conv = crate::models::a2::conv1d::A2Conv1d::try_new(
                 conv_w,
                 conv_b.clone(),
                 true,
@@ -95,7 +95,7 @@ impl<const CH: usize> WaveNetA2<CH> {
                 CH,
                 CH,
                 ksize,
-            );
+            )?;
 
             // Optional col-major-per-tap f32 conv for CH=3 and CH=8.
             // Uses the original (non-interleaved) f32 weights for SIMD-friendly access.

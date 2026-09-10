@@ -39,6 +39,8 @@ use anyhow::{Result, bail};
 use log::info;
 use std::ptr;
 
+use crate::common::diagnostics::NamErrorCode;
+
 /// Minimum sample rate to guard against catastrophic upsampling (4 kHz).
 const MIN_RATE: u32 = 4_000;
 
@@ -67,6 +69,19 @@ enum PhaseType {
 ///
 /// When `host_rate == nam_rate`, both engines are bypassed (`None`)
 /// and the hot path passes through with zero overhead.
+///
+/// # Examples
+///
+/// ```no_run
+/// use neural_amp_modeler_rs::dsp::resampler::NamResampler;
+///
+/// let host_rate = 44_100;
+/// let nam_rate = 48_000;
+/// let resampler = NamResampler::new_simple(host_rate, nam_rate).expect("valid sample rates");
+///
+/// let latency = resampler.latency_samples(host_rate);
+/// assert!(latency > 0);
+/// ```
 pub struct NamResampler {
     /// Input engine: `host_rate → nam_rate`. `None` = bypass.
     inner: Option<ResamplerCore>,
@@ -79,10 +94,28 @@ pub struct NamResampler {
 }
 
 impl NamResampler {
+    /// Validates the sample-rate window shared by the `anyhow` and typed
+    /// constructors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamErrorCode::ResamplerBuildFailed`] (E2200) when either
+    /// `host_rate` or `nam_rate` falls outside the supported
+    /// `MIN_RATE..=MAX_RATE` window. In this constructor that code is unique
+    /// to rate validation: allocation failures are reported separately as
+    /// [`NamErrorCode::OutOfMemory`] (E5000).
+    #[inline]
+    fn validate_rates(host_rate: u32, nam_rate: u32) -> Result<(), NamErrorCode> {
+        if (MIN_RATE..=MAX_RATE).contains(&host_rate) && (MIN_RATE..=MAX_RATE).contains(&nam_rate) {
+            Ok(())
+        } else {
+            Err(NamErrorCode::ResamplerBuildFailed)
+        }
+    }
+
     #[cold]
     fn new_inner(host_rate: u32, nam_rate: u32, phase: PhaseType) -> Result<Self> {
-        if !(MIN_RATE..=MAX_RATE).contains(&host_rate) || !(MIN_RATE..=MAX_RATE).contains(&nam_rate)
-        {
+        if Self::validate_rates(host_rate, nam_rate).is_err() {
             bail!(
                 "NamResampler: sample rates must be in range {}-{}, got host={} nam={}",
                 MIN_RATE,
@@ -91,7 +124,26 @@ impl NamResampler {
                 nam_rate
             );
         }
+        Self::build_inner(host_rate, nam_rate, phase).map_err(Into::into)
+    }
 
+    #[cold]
+    fn new_typed_inner(
+        host_rate: u32,
+        nam_rate: u32,
+        phase: PhaseType,
+    ) -> Result<Self, NamErrorCode> {
+        Self::validate_rates(host_rate, nam_rate)?;
+        Self::build_inner(host_rate, nam_rate, phase)
+    }
+
+    /// Builds the resampler pair after rate validation has passed.
+    ///
+    /// Every fallible step here is already typed: `generate_polyphase_bank`
+    /// and `ResamplerCore::new` report allocation failure as
+    /// [`NamErrorCode::OutOfMemory`].
+    #[cold]
+    fn build_inner(host_rate: u32, nam_rate: u32, phase: PhaseType) -> Result<Self, NamErrorCode> {
         if host_rate == nam_rate {
             let label = match phase {
                 PhaseType::Minimum => "Bypass",
@@ -114,16 +166,8 @@ impl NamResampler {
             PhaseType::Linear => generate_polyphase_bank_linear,
         };
 
-        let inner = ResamplerCore::new(
-            host_rate,
-            nam_rate,
-            gen_bank(host_rate, nam_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
-        let outer = ResamplerCore::new(
-            nam_rate,
-            host_rate,
-            gen_bank(nam_rate, host_rate).map_err(|e| anyhow::anyhow!("{e}"))?,
-        )?;
+        let inner = ResamplerCore::new(host_rate, nam_rate, gen_bank(host_rate, nam_rate)?)?;
+        let outer = ResamplerCore::new(nam_rate, host_rate, gen_bank(nam_rate, host_rate)?)?;
 
         let label = match phase {
             PhaseType::Minimum => "Minimum-phase",
@@ -153,6 +197,15 @@ impl NamResampler {
     /// - `host_rate`: Host sample rate (e.g., 44100, 48000, 96000).
     /// - `nam_rate`: NAM model rate (e.g., 48000).
     /// - `_chunk_size`: kept for API compatibility (not used internally).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `host_rate` or `nam_rate` is outside the supported
+    /// range `4_000..=384_000` Hz, or if allocation of the polyphase filter
+    /// banks or internal delay lines fails (out of memory).
+    ///
+    /// For a typed-error counterpart (no `anyhow`), see
+    /// [`new_typed`](NamResampler::new_typed).
     #[cold]
     pub fn new(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
         Self::new_inner(host_rate, nam_rate, PhaseType::Minimum)
@@ -161,7 +214,7 @@ impl NamResampler {
     /// Creates the pair of resamplers (input+output) without the unused chunk-size parameter.
     ///
     /// Equivalent to [`new`](NamResampler::new)`(host_rate, nam_rate, 0)`.
-    /// See [`new`](NamResampler::new) for the full parameter documentation.
+    /// See [`new`](NamResampler::new) for the full parameter and error documentation.
     #[cold]
     pub fn new_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
         Self::new(host_rate, nam_rate, 0)
@@ -174,6 +227,15 @@ impl NamResampler {
     /// phase accuracy is paramount.
     ///
     /// If `host_rate == nam_rate`, full bypass with no overhead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `host_rate` or `nam_rate` is outside the supported
+    /// range `4_000..=384_000` Hz, or if allocation of the polyphase filter
+    /// banks or internal delay lines fails (out of memory).
+    ///
+    /// For a typed-error counterpart (no `anyhow`), see
+    /// [`new_linear_typed`](NamResampler::new_linear_typed).
     #[cold]
     pub fn new_linear(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
         Self::new_inner(host_rate, nam_rate, PhaseType::Linear)
@@ -182,10 +244,82 @@ impl NamResampler {
     /// Creates the linear-phase pair of resamplers without the unused chunk-size parameter.
     ///
     /// Equivalent to [`new_linear`](NamResampler::new_linear)`(host_rate, nam_rate, 0)`.
-    /// See [`new_linear`](NamResampler::new_linear) for the full parameter documentation.
+    /// See [`new_linear`](NamResampler::new_linear) for the full parameter and error documentation.
     #[cold]
     pub fn new_linear_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
         Self::new_linear(host_rate, nam_rate, 0)
+    }
+
+    /// Typed-error counterpart of [`new`](NamResampler::new) (minimum-phase).
+    ///
+    /// Identical construction and semantics, but failures are reported as a
+    /// structured [`NamErrorCode`] instead of an opaque `anyhow` error, so a
+    /// consumer can triage the failure without a downcast. The `anyhow`
+    /// constructors remain available; deprecated/replacement is deferred to
+    /// the breaking release (Épico E / E4).
+    ///
+    /// # Errors
+    ///
+    /// - [`NamErrorCode::ResamplerBuildFailed`] (E2200) when `host_rate` or
+    ///   `nam_rate` is outside `4_000..=384_000` Hz.
+    /// - [`NamErrorCode::OutOfMemory`] (E5000) when allocation of the
+    ///   polyphase filter banks or internal delay lines fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::dsp::resampler::NamResampler;
+    /// use neural_amp_modeler_rs::common::diagnostics::NamErrorCode;
+    ///
+    /// assert!(NamResampler::new_typed(44_100, 48_000, 0).is_ok());
+    /// assert_eq!(
+    ///     NamResampler::new_typed(1_000, 48_000, 0).err(),
+    ///     Some(NamErrorCode::ResamplerBuildFailed),
+    /// );
+    /// ```
+    #[cold]
+    pub fn new_typed(
+        host_rate: u32,
+        nam_rate: u32,
+        _chunk_size: usize,
+    ) -> Result<Self, NamErrorCode> {
+        Self::new_typed_inner(host_rate, nam_rate, PhaseType::Minimum)
+    }
+
+    /// Typed-error counterpart of [`new_simple`](NamResampler::new_simple).
+    ///
+    /// Equivalent to [`new_typed`](NamResampler::new_typed)`(host_rate, nam_rate, 0)`.
+    #[cold]
+    pub fn new_simple_typed(host_rate: u32, nam_rate: u32) -> Result<Self, NamErrorCode> {
+        Self::new_typed(host_rate, nam_rate, 0)
+    }
+
+    /// Typed-error counterpart of [`new_linear`](NamResampler::new_linear)
+    /// (linear-phase).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`new_typed`](NamResampler::new_typed):
+    /// [`NamErrorCode::ResamplerBuildFailed`] (E2200) for an out-of-range
+    /// sample rate, [`NamErrorCode::OutOfMemory`] (E5000) on allocation
+    /// failure.
+    #[cold]
+    pub fn new_linear_typed(
+        host_rate: u32,
+        nam_rate: u32,
+        _chunk_size: usize,
+    ) -> Result<Self, NamErrorCode> {
+        Self::new_typed_inner(host_rate, nam_rate, PhaseType::Linear)
+    }
+
+    /// Typed-error counterpart of
+    /// [`new_linear_simple`](NamResampler::new_linear_simple).
+    ///
+    /// Equivalent to
+    /// [`new_linear_typed`](NamResampler::new_linear_typed)`(host_rate, nam_rate, 0)`.
+    #[cold]
+    pub fn new_linear_simple_typed(host_rate: u32, nam_rate: u32) -> Result<Self, NamErrorCode> {
+        Self::new_linear_typed(host_rate, nam_rate, 0)
     }
 
     /// Returns `true` when `host_rate == nam_rate` (bypass).
@@ -230,10 +364,11 @@ impl NamResampler {
     /// The output-stage delay is rate-converted to host-rate samples.
     ///
     /// # Parameters
-    /// - `host_rate`: host sample rate (e.g., 44100, 48000, 96000).
+    /// - `_host_rate`: Host sample rate (ignored in favor of the configured `self.host_rate`;
+    ///   retained for backward compatibility and scheduled for removal in v0.8 / Sprint 5).
     ///
     /// # Returns
-    /// Total latency in samples at `host_rate`.
+    /// Total latency in samples at `self.host_rate()`.
     pub fn latency_samples(&self, _host_rate: u32) -> u32 {
         if self.is_bypass() {
             return 0;
@@ -312,6 +447,12 @@ impl NamResampler {
     /// **Input resampling** (input path): `host_rate → nam_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
+    ///
+    /// **Non-overlap precondition (R-9 / A9):** `in_*` and `out_*` slices must
+    /// not overlap. The bypass path uses `copy_nonoverlapping`, which requires
+    /// disjoint source/destination regions. Safe Rust guarantees this between
+    /// `&[f32]` inputs and distinct `&mut [f32]` outputs; callers that reach the
+    /// buffers through raw pointers (FFI/host) must uphold it themselves.
     pub fn process_input(
         &mut self,
         in_l: &[f32],
@@ -339,6 +480,12 @@ impl NamResampler {
     /// **Output resampling** (output path): `nam_rate → host_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
+    ///
+    /// **Non-overlap precondition (R-9 / A9):** `in_*` and `out_*` slices must
+    /// not overlap. The bypass path uses `copy_nonoverlapping`, which requires
+    /// disjoint source/destination regions. Safe Rust guarantees this between
+    /// `&[f32]` inputs and distinct `&mut [f32]` outputs; callers that reach the
+    /// buffers through raw pointers (FFI/host) must uphold it themselves.
     pub fn process_output(
         &mut self,
         in_l: &[f32],
@@ -366,6 +513,13 @@ impl NamResampler {
     /// **Mono input resampling** (input path): `host_rate → nam_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
+    ///
+    /// **Non-overlap precondition (R-9 / A9):** `in_l`, `out_l` and `out_r`
+    /// must not overlap. The bypass path uses `copy_nonoverlapping`, which
+    /// requires disjoint source/destination regions. Safe Rust guarantees this
+    /// between a `&[f32]` input and distinct `&mut [f32]` outputs; callers that
+    /// reach the buffers through raw pointers (FFI/host) must uphold it
+    /// themselves.
     pub fn process_input_mono(
         &mut self,
         in_l: &[f32],
@@ -392,6 +546,13 @@ impl NamResampler {
     /// **Mono output resampling** (output path): `nam_rate → host_rate`.
     ///
     /// RT-safe: zero allocations. On bypass, copies directly.
+    ///
+    /// **Non-overlap precondition (R-9 / A9):** `in_l`, `out_l` and `out_r`
+    /// must not overlap. The bypass path uses `copy_nonoverlapping`, which
+    /// requires disjoint source/destination regions. Safe Rust guarantees this
+    /// between a `&[f32]` input and distinct `&mut [f32]` outputs; callers that
+    /// reach the buffers through raw pointers (FFI/host) must uphold it
+    /// themselves.
     pub fn process_output_mono(
         &mut self,
         in_l: &[f32],

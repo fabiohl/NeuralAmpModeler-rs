@@ -38,6 +38,32 @@ fn write_file(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+/// Writes one Criterion `change/estimates.json` comparison artifact for `id`.
+fn write_change_estimates(crit: &Path, id: &str, point: f64, lower: f64, upper: f64) {
+    let body = serde_json::json!({
+        "mean": {
+            "confidence_interval": {
+                "confidence_level": 0.95,
+                "lower_bound": lower,
+                "upper_bound": upper
+            },
+            "point_estimate": point,
+            "standard_error": 0.001
+        },
+        "median": {
+            "confidence_interval": {
+                "confidence_level": 0.95,
+                "lower_bound": lower,
+                "upper_bound": upper
+            },
+            "point_estimate": point,
+            "standard_error": 0.001
+        }
+    })
+    .to_string();
+    write_file(&crit.join(id).join("change").join("estimates.json"), &body);
+}
+
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_nam_perf_gate")
 }
@@ -236,6 +262,96 @@ fn coverage_blind_gate_fails_closed() {
     );
 }
 
+/// `verdict` is the single machine source of the regression decision (R-3/B2):
+/// a clean comparison JSON passes, and a mean-change CI entirely above the
+/// noise band fails with the typed `REGRESSION_DETECTED` token naming the id.
+#[test]
+fn verdict_ok_then_detects_machine_regression() {
+    let crit = temp_path("verdict-crit");
+    let log = temp_path("verdict.log");
+    write_file(
+        &log,
+        "Benchmarking RT_A: Warming up for 1.0000 s\n\
+         Benchmarking RT_B: Collecting 100 samples\n",
+    );
+    write_change_estimates(&crit, "RT_A", 0.012, 0.004, 0.020);
+    write_change_estimates(&crit, "RT_B", 0.008, 0.001, 0.015);
+
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(stdout(&out).contains("verdict ok"));
+
+    // RT_B regresses: whole mean-change CI above +5%.
+    write_change_estimates(&crit, "RT_B", 0.080, 0.061, 0.099);
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("REGRESSION_DETECTED"), "unexpected: {text}");
+    assert!(text.contains("RT_B"), "regressed id must be named: {text}");
+}
+
+/// An executed benchmark without a readable comparison artifact makes the
+/// machine verdict blind: exit 1 with `REGRESSION_BLIND` — never green (R-3).
+#[test]
+fn verdict_blind_when_comparison_artifact_missing() {
+    let crit = temp_path("verdict-blind");
+    let log = temp_path("verdict-blind.log");
+    write_file(
+        &log,
+        "Benchmarking RT_A: Warming up for 1.0000 s\n\
+         Benchmarking RT_B: Collecting 100 samples\n",
+    );
+    write_change_estimates(&crit, "RT_A", 0.010, 0.001, 0.020);
+
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("REGRESSION_BLIND"), "unexpected: {text}");
+    assert!(text.contains("RT_B"), "blind id must be named: {text}");
+}
+
+/// An empty/garbage log is the verdict blind gate (nothing passes unverified).
+#[test]
+fn verdict_blind_on_unparseable_log() {
+    let crit = temp_path("verdict-garbage");
+    let log = temp_path("verdict-garbage.log");
+    write_file(&log, "garbage with no Benchmarking lines\n");
+
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("REGRESSION_BLIND"));
+}
+
 /// `persist-baseline` / `restore-baseline` move top-level series between the
 /// criterion root and the store, sanitizing nested dirs (scenario 4 CLI
 /// surface).
@@ -390,6 +506,14 @@ fn usage_errors_exit_2() {
     let missing_log = run(&["coverage"]);
     assert_eq!(missing_log.status.code(), Some(2));
     assert!(stderr(&missing_log).contains("missing required flag --log"));
+
+    let missing_verdict_log = run(&["verdict"]);
+    assert_eq!(missing_verdict_log.status.code(), Some(2));
+    assert!(stderr(&missing_verdict_log).contains("missing required flag --log"));
+
+    let bad_noise = run(&["verdict", "--log", "x.log", "--noise", "not-a-number"]);
+    assert_eq!(bad_noise.status.code(), Some(2));
+    assert!(stderr(&bad_noise).contains("--noise"));
 
     let missing_status = run(&["receipt", "append", "--phase-id", "p"]);
     assert_eq!(missing_status.status.code(), Some(2));

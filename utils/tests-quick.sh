@@ -22,6 +22,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
+ALLOW_GAPS="${NAM_ALLOW_GAPS:-0}"
+for arg in "$@"; do
+    case "$arg" in
+        --allow-gaps)
+            ALLOW_GAPS=1
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--allow-gaps]"
+            exit 0
+            ;;
+    esac
+done
+
 PHASE_TOTAL=3
 source "$SCRIPT_DIR/_lib.sh"
 
@@ -40,6 +53,20 @@ if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]
     fi
 fi
 
+cleanup_receipt() {
+    local rc=$?
+    if [ $rc -ne 0 ] && [ -f "target/logs/quick-receipt.txt" ]; then
+        if ! grep -q "^OVERALL:" target/logs/quick-receipt.txt 2>/dev/null; then
+            if [ "${MISSING_FIXTURES:-0}" = "1" ] && [ "${ALLOW_GAPS:-0}" != "1" ]; then
+                emit "OVERALL: FAILED reason=missing_fixtures"
+            else
+                emit "OVERALL: FAILED reason=early_exit exit_code=$rc"
+            fi
+        fi
+    fi
+}
+trap cleanup_receipt EXIT
+
 trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line $LINENO status $?.${NC}"; exit 1' ERR
 
 mkdir -p target/logs
@@ -55,11 +82,13 @@ emit() {
 echo -e "${BLUE}${BOLD}NeuralAmpModeler-rs Quick QA${NC}"
 emit "SUITE: tests-quick"
 emit "STRICT: ${NAM_QUICK_STRICT:-0}"
+SUITE_START=$(date +%s%N)
 
 # ── Phase 1: Structural (debug) ─────────────────────────────────────────────
 # --lib plus every integration entry that holds non-ignored structural tests.
 # Measurement-oracle modules are skipped here (Axis B: they run --release).
 phase "Structural: unit + deterministic integration (debug)"
+P1_START=$(date +%s%N)
 
 {
     # Axis-B: lstm_activation_precision SNR oracles are release-only (Phase 2).
@@ -80,21 +109,32 @@ phase "Structural: unit + deterministic integration (debug)"
 } 2>&1 | tee target/logs/quick-phase1.log
 
 assert_ran_tests target/logs/quick-phase1.log 1
+P1_DUR_MS=$(( ($(date +%s%N) - P1_START) / 1000000 ))
+P1_DUR_STR=$(format_duration_ms "$P1_DUR_MS")
+ok "Phase 1 (structural) passed (${P1_DUR_STR})"
 emit "PHASE1: PASS log=target/logs/quick-phase1.log"
 
 # ── Phase 2: Measurement oracles (release) ──────────────────────────────────
 phase "Measurement oracles (release — production float gate)"
-
-if ! check_freshness artifacts-hard; then
-    emit "PHASE2: FAIL reason=freshness"
-    echo -e "${RED}FIDELITY: FAIL${NC}"
-    echo -e "${BLUE}PERFORMANCE: N/A${NC}"
-    exit 1
-fi
+P2_START=$(date +%s%N)
 
 GOLDEN_RAN=0
 CPP_PARITY_RAN=0
+MISSING_FIXTURES=0
 declare -a GAPS=()
+
+if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
+    echo -e "  ${YELLOW}${BOLD}⚠ NAM_BYPASS_FRESHNESS=1 — freshness gate bypassed (recorded as gap).${NC}"
+    GAPS+=("freshness:bypassed_by_env")
+else
+    if ! check_freshness artifacts-hard; then
+        emit "PHASE2: FAIL reason=freshness"
+        echo -e "${RED}FIDELITY: FAIL${NC}"
+        echo -e "${BLUE}PERFORMANCE: N/A${NC}"
+        emit "OVERALL: FAILED reason=freshness"
+        exit 1
+    fi
+fi
 
 _cargo_meas() {
     local -a tests=($1)
@@ -126,6 +166,7 @@ if [ -f "tests/fixtures/golden_wavenet_standard.bin" ] \
         --test-threads=1 --nocapture \
         2>&1 | tee target/logs/quick-phase2.log
 else
+    MISSING_FIXTURES=1
     GAPS+=("golden_vectors+isa_parity:missing_fixtures")
     echo -e "${YELLOW}${BOLD}WARN: golden v1/v2 fixtures missing — golden_vectors + isa_parity SKIPPED${NC}"
     echo -e "${YELLOW}  DIAGNOSTIC: run tests/fixtures/golden_gen_build.sh${NC}"
@@ -163,17 +204,27 @@ if [ "$SKIP_CPP" -eq 0 ]; then
     assert_ran_tests target/logs/quick-phase2.log 1
 fi
 
+P2_DUR_MS=$(( ($(date +%s%N) - P2_START) / 1000000 ))
+P2_DUR_STR=$(format_duration_ms "$P2_DUR_MS")
+ok "Phase 2 (measurement oracles) passed (${P2_DUR_STR})"
 emit "PHASE2: PASS golden=${GOLDEN_RAN} cpp_parity=${CPP_PARITY_RAN} log=target/logs/quick-phase2.log"
 
 # ── Phase 3: Parser fuzz (release, capped, --ignored) ───────────────────────
 phase "Agile parser fuzzing (release, PROPTEST_CASES=${NAM_QUICK_PROPTEST_CASES:-1000})"
+P3_START=$(date +%s%N)
 PROPTEST_CASES="${NAM_QUICK_PROPTEST_CASES:-1000}" \
     _cargo_meas "proptest_parsers" --ignored --nocapture \
     2>&1 | tee target/logs/quick-phase3.log
 assert_ran_tests target/logs/quick-phase3.log 1
+P3_DUR_MS=$(( ($(date +%s%N) - P3_START) / 1000000 ))
+P3_DUR_STR=$(format_duration_ms "$P3_DUR_MS")
+ok "Phase 3 (parser fuzzing) passed (${P3_DUR_STR})"
 emit "PHASE3: PASS log=target/logs/quick-phase3.log"
 
 # ── Receipt ─────────────────────────────────────────────────────────────────
+SUITE_DUR_MS=$(( ($(date +%s%N) - SUITE_START) / 1000000 ))
+SUITE_DUR_STR=$(format_duration_ms "$SUITE_DUR_MS")
+
 if [ ${#GAPS[@]} -gt 0 ]; then
     for g in "${GAPS[@]}"; do
         emit "GAP: $g"
@@ -182,12 +233,20 @@ if [ ${#GAPS[@]} -gt 0 ]; then
     echo -e "${YELLOW}FIDELITY: INCOMPLETE${NC}"
     echo -e "${BLUE}PERFORMANCE: N/A${NC}"
     echo -e "\n${YELLOW}${BOLD}================================================================================${NC}"
-    echo -e "  ${BOLD}Artifacts saved:${NC}"
+    echo -e "  ${BOLD}Artifacts saved (${SUITE_DUR_STR}):${NC}"
+    echo -e "    - Phase 1 (structural): ${P1_DUR_STR:-N/A}"
+    echo -e "    - Phase 2 (oracles):    ${P2_DUR_STR:-N/A}"
+    echo -e "    - Phase 3 (fuzzing):    ${P3_DUR_STR:-N/A}"
     echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
     echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
     echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
     echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
     echo -e "${YELLOW}${BOLD}================================================================================${NC}\n"
+    if [ "$MISSING_FIXTURES" -eq 1 ] && [ "$ALLOW_GAPS" -ne 1 ]; then
+        echo -e "${RED}${BOLD}FAIL: golden fixtures missing (use --allow-gaps or NAM_ALLOW_GAPS=1 to permit gaps)${NC}"
+        emit "OVERALL: FAILED reason=missing_fixtures"
+        exit 1
+    fi
     if [ "${NAM_QUICK_STRICT:-0}" = "1" ]; then
         echo -e "${RED}${BOLD}FAIL: NAM_QUICK_STRICT=1 treats gaps as failure${NC}"
         emit "OVERALL: FAIL reason=strict_gaps"
@@ -203,10 +262,14 @@ echo -e "${BLUE}PERFORMANCE: N/A${NC}"
 emit "OVERALL: PASSED"
 
 echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
-echo -e "${GREEN}${BOLD}✓ Quick QA Suite completed successfully!${NC}"
+echo -e "${GREEN}${BOLD}✓ Quick QA Suite completed successfully in ${SUITE_DUR_STR}!${NC}"
+echo -e "  - Phase 1 (structural): ${P1_DUR_STR}"
+echo -e "  - Phase 2 (oracles):    ${P2_DUR_STR}"
+echo -e "  - Phase 3 (fuzzing):    ${P3_DUR_STR}"
 echo -e "  ${BOLD}Artifacts saved:${NC}"
 echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
 echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
 echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
 echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
 echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
+

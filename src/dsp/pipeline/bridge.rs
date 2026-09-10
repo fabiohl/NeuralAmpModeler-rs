@@ -64,6 +64,39 @@ impl Default for BridgeBuffer {
 /// the playback to detect whether new data is available without spin-lock.
 ///
 /// Aligned to 128 bytes to avoid false-sharing between the two RT callbacks.
+///
+/// # RT ordering invariants (R-6 / A8)
+///
+/// The lock-free protocol is sound **only** under the following ordering rules,
+/// which the reader/writer methods below implement and which host callers must
+/// not bypass:
+///
+/// 1. **Skip-if-not-consumed (writer).** `DspBridgeWriter::write_block` /
+///    `write_silence` never overwrite the buffer the reader may still be
+///    reading: they compare `generation` (Relaxed) against `consumed_gen`
+///    (Acquire) and, when the previous block has not been consumed yet,
+///    increment `dropped_frames` and return instead of writing. This converts
+///    a potential race into a deterministic, measurable dropout.
+/// 2. **Back-buffer write exclusivity.** The writer only ever mutates
+///    `buffers[1 - active_read_idx]` (the complement of the buffer the reader
+///    selects via `active_read_idx`), so the reader never observes a torn
+///    payload. The selected back-buffer is published atomically by storing
+///    `active_read_idx` (Release) **after** its `n_samples` / `generation` /
+///    sample fields are written.
+/// 3. **Generation double-load (reader).** `DspBridgeReader::read_block`
+///    loads `generation` with Acquire twice — once before and once after
+///    reading `active_read_idx` — and returns `None` when the two differ. This
+///    rejects a block that was published concurrently with the read (torn
+///    publication window) instead of consuming a partially-written buffer.
+/// 4. **Front-buffer generation check (reader).** After selecting the front
+///    buffer, `read_block` verifies `front_buf.generation == current_gen`
+///    before reading samples. A mismatch means the writer flipped the active
+///    index mid-read; the reader skips rather than consuming stale/partial data.
+/// 5. **Reset is teardown-only.** `DspBridge::reset_to_silence` requires
+///    `&mut self` so it can only be invoked with exclusive access — i.e. after
+///    real-time producer/consumer threads have stopped and no `DspBridgeWriter` /
+///    `DspBridgeReader` / `&DspBridge` is live. Calling it while a callback may
+///    run is a data race on the (non-atomic) `n_samples`/`generation` fields.
 #[repr(align(128))]
 pub struct DspBridge {
     /// The two physical buffers (front/back) for double-buffering.
@@ -90,20 +123,30 @@ impl DspBridge {
 
     /// Resets the bridge state to silence during host teardown or reconnection.
     ///
-    /// Clears buffer lengths to 0, zero-fills sample arrays, and synchronizes
-    /// `generation` and `consumed_gen` so that a newly connected playback reader
-    /// observes silence instead of replaying stale audio from a previous stream session.
-    pub fn reset_to_silence(&self) {
+    /// Clears both buffers' lengths to 0 and synchronizes `generation` and
+    /// `consumed_gen` so that a newly connected playback reader observes
+    /// silence instead of replaying stale audio from a previous stream session
+    /// (readers treat a zero-length block as silence and do not advance their
+    /// generation on it).
+    ///
+    /// # Teardown-only gate (`&mut self`)
+    ///
+    /// This method requires **exclusive access** (`&mut self`), so it can only be
+    /// invoked after real-time producer/consumer threads have stopped and no
+    /// `DspBridgeWriter` / `DspBridgeReader` (or `&DspBridge`) is live — see the
+    /// RT ordering invariants on [`DspBridge`]. The fields it clears are
+    /// non-atomic and shared with callbacks under the release/acquire protocol;
+    /// writing them through `&self` would be a data race if any callback were
+    /// still running. Requiring `&mut` makes the teardown-only contract hold at
+    /// compile time for safe callers (raw-pointer callers retain their existing
+    /// exclusive-access obligation).
+    pub fn reset_to_silence(&mut self) {
         let curr_gen = self.generation.load(Ordering::Relaxed);
         let next_gen = curr_gen.wrapping_add(1);
-        let buf_ptr = self as *const DspBridge as *mut DspBridge;
-        // SAFETY: self.buffers accesses internal mutable buffers under main-thread lifecycle/teardown control.
-        unsafe {
-            (*buf_ptr).buffers[0].n_samples = 0;
-            (*buf_ptr).buffers[0].generation = 0;
-            (*buf_ptr).buffers[1].n_samples = 0;
-            (*buf_ptr).buffers[1].generation = 0;
-        }
+        self.buffers[0].n_samples = 0;
+        self.buffers[0].generation = 0;
+        self.buffers[1].n_samples = 0;
+        self.buffers[1].generation = 0;
         self.active_read_idx.store(0, Ordering::Release);
         self.consumed_gen.store(next_gen, Ordering::Release);
         self.generation.store(next_gen, Ordering::Release);

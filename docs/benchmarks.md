@@ -122,7 +122,14 @@ regressions): its only mandate is baseline-gated performance.
 
 1. **Core pinning** — The script uses `taskset -c <core>` (dynamically defaulting to `nproc / 2` to avoid OS/IRQ noise; configurable via `NAM_BENCH_CORE`) to lock the benchmark to a single CPU core, eliminating scheduler noise and cache-line bouncing between cores.
 2. **Statistical rigor** — The `regression_gate` bench suite runs **19** targets (10 static models + 4 dynamic models + 5 DSP infrastructure benches) with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Dispatch is forced to `InstructionSet::Avx2` via `ForceAvx2Guard` so hosts with AVX-512 still measure the x86-64-v3 contract path.
-3. **Baseline comparison** — Criterion performs a two-sample t-test between the current run and the stored baseline. If it detects a statistically significant regression (p < 0.05 **and** outside the 5% noise band), the script exits with code 1.
+3. **Machine verdict** — after the run, the script calls `nam_perf_gate verdict`,
+   which parses Criterion's persisted `target/criterion/<id>/change/estimates.json`
+   (the bootstrapped relative mean-change confidence interval) and never the human
+   console wording. When the whole CI lies above the `+5%` noise band, the script
+   exits 1 with `REGRESSION_DETECTED`; a compared benchmark with no readable
+   comparison artifact is fail-closed `REGRESSION_BLIND`, so a truncated/empty log
+   can never turn the gate green. Criterion's `Performance has regressed.` line is
+   kept only as a diagnostic hint.
 4. **Baseline storage** — Baselines are persisted under **`.performance-baselines/`** (repo-local, gitignored). `target/criterion/` is only a **transient** Criterion working area restored from `.performance-baselines/` before each run. Persist/restore use **replace-copy of top-level** `…/<bench>/ci-baseline/` only; nested `ci-baseline/ci-baseline/…` paths (historical `cp -a` into an existing dest) are sanitized and never re-copied. An environment fingerprint (`.performance-baselines/baseline-fingerprint.json`) records CPU model, full x86-64-v3 ISA label (`AVX2/FMA/F16C/BMI`, including LZCNT via `lzcnt` or Linux `abm`), rustc, target triple, governor, bench core, and producing commit.
 5. **Immutability** — `--check` is strictly read-only. It never auto-creates a baseline. If no baseline exists, it fails with `MISSING_BASELINE` and exit code 1, directing the operator to run `--bootstrap-baseline` manually.
 6. **Sub-µs DSP micro-benches** — `RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium` process a fixed batch of **64 blocks** per Criterion sample so timer noise stays under the 5% wall. The quality dashboard divides those medians by 64 and reports **per-block** latency (contract units unchanged). Changing the batch size requires a human baseline renewal.
@@ -233,7 +240,7 @@ Run this checklist **before** `--check` or `--bootstrap-baseline`:
 
 | Mode                | Command                                                      | Purpose                                                                                                                                |
 |:------------------- |:------------------------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------- |
-| **Check** (default) | `utils/tests-performance-regression.sh` or `--check`         | Compare against baseline; fail on statistically significant regression (p < 0.05). Strictly read-only — never auto-creates a baseline. |
+| **Check** (default) | `utils/tests-performance-regression.sh` or `--check`         | Compare against baseline; fail on a machine regression (mean-change CI entirely above the +5% noise band, from `change/estimates.json`). Strictly read-only — never auto-creates a baseline. |
 | **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Create a new baseline and environment fingerprint. Human-only operation.                                                               |
 
 ### Environment Variables
@@ -278,13 +285,14 @@ both fidelity and performance metrics into a versioned, machine-readable baselin
 
 | Tool                                                                                | Statistical Rigor                    | Speed    | Scope                                                                                     |
 |:----------------------------------------------------------------------------------- |:------------------------------------ |:-------- |:----------------------------------------------------------------------------------------- |
-| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | Criterion two-sample t-test (p<0.05) | ~5-8 min | **Primary authority** — catches slow regressions within the safe zone (e.g., 100→150 µs). |
+| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | Criterion change-CI machine verdict | ~5-8 min | **Primary authority** — catches slow regressions within the safe zone (e.g., 100→150 µs). |
 | [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) `--check`             | Conservative relative margin         | ~3-5 min | **Second line** — integrated with fidelity checks; +10% latency tolerance.                |
 
 The two tools serve complementary roles:
 
 * **`utils/tests-performance-regression.sh`** is the strict, narrow statistical gate —
-  the definitive answer to "did latency increase with p < 0.05 confidence?"
+  the definitive answer to "did the relative mean latency change land entirely
+  above the ±5% noise band?"
 * **`utils/quality-dashboard.sh --check`** is the broad, integrated check — it answers
   "do fidelity *and* performance both pass, in one command?" with conservative
   margins designed to absorb OS scheduling noise without false positives.
@@ -312,7 +320,7 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 >
 > | Artifact           | Path                                           | Role                                                    |
 > | ------------------ | ---------------------------------------------- | ------------------------------------------------------- |
-> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (t-test, p&lt;0.05)           |
+> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (change CI vs noise band)     |
 > | Quality contract   | `docs/quality-contract.json`                   | Frozen fidelity + median latency snapshot for `--check` |
 >
 > Updating one does **not** update the other. Order is always:

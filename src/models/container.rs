@@ -24,6 +24,7 @@ use std::cmp::Ordering;
 use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
 use crate::common::CROSSFADE_DURATION_MS;
+use crate::common::diagnostics::NamErrorCode;
 use crate::common::spsc::RT_STATUS_SLIMMABLE_RESET_FAILED;
 use crate::dsp::pipeline::MAX_RESAMP_BUF;
 use crate::math::dsp::gain::crossfade_blend_mono_simd;
@@ -50,7 +51,93 @@ pub struct ContainerModel {
     prewarm_on_reset: bool,
 }
 
+/// Structural validation failure for the submodel spec passed to
+/// [`ContainerModel::new`] / [`ContainerModel::new_typed`].
+///
+/// Carries enough detail for the `anyhow` constructor to preserve its
+/// human-readable messages, while the typed constructor collapses every
+/// variant to [`NamErrorCode::InvalidModelTopology`]. Both constructors share
+/// a single validation pass ([`ContainerModel::validate_submodels`]) — no
+/// drift between the two error paths.
+#[derive(Debug)]
+enum SpecError {
+    /// `submodels` was empty.
+    Empty,
+    /// A `max_value` was non-finite or negative.
+    InvalidMaxValue {
+        /// Position of the offending submodel.
+        index: usize,
+        /// The rejected `max_value`.
+        value: f32,
+    },
+    /// `max_value`s were not strictly ascending.
+    NotAscending,
+    /// The last `max_value` was `< 1.0`.
+    LastBelowUnity,
+}
+
+impl SpecError {
+    /// Maps every structural violation to the model-topology error code
+    /// (E1305).
+    fn code(&self) -> NamErrorCode {
+        NamErrorCode::InvalidModelTopology
+    }
+}
+
+impl std::fmt::Display for SpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "ContainerModel: no submodels provided"),
+            Self::InvalidMaxValue { index, value } => write!(
+                f,
+                "ContainerModel: submodel[{}] has invalid max_value={} \
+                 (must be finite and >= 0.0)",
+                index, value
+            ),
+            Self::NotAscending => write!(
+                f,
+                "ContainerModel: submodels must be sorted by ascending max_value"
+            ),
+            Self::LastBelowUnity => {
+                write!(f, "ContainerModel: last submodel max_value must be >= 1.0")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpecError {}
+
 impl ContainerModel {
+    /// Creates a new `ContainerModel` with a structured error type.
+    ///
+    /// Typed-error counterpart of [`new`](Self::new): identical validation and
+    /// construction, but failures are reported as [`NamErrorCode`] instead of
+    /// an opaque `anyhow` error, so a caller can triage them without a
+    /// downcast. The `anyhow` constructor remains available; its replacement
+    /// is deferred to the breaking release (Épico E / E4).
+    ///
+    /// # Requirements (enforced)
+    ///
+    /// - `submodels` must be non-empty.
+    /// - Sorted by `max_value` ascending (the constructor sorts in place).
+    /// - Last `max_value` must be `>= 1.0`.
+    ///
+    /// # Errors
+    ///
+    /// - [`NamErrorCode::InvalidModelTopology`] (E1305) when `submodels` is
+    ///   empty, a `max_value` is non-finite or negative, the `max_value`s are
+    ///   not strictly ascending (duplicate or out-of-order), or the last
+    ///   `max_value` is `< 1.0`.
+    /// - [`NamErrorCode::OutOfMemory`] (E5000) when a submodel cannot allocate
+    ///   its internal buffers (`set_max_buffer_size`).
+    pub fn new_typed(
+        mut submodels: Vec<(f32, Box<StaticModel>)>,
+        sample_rate: u32,
+    ) -> Result<Self, NamErrorCode> {
+        Self::validate_submodels(&mut submodels).map_err(|e| e.code())?;
+        Self::assemble(submodels, sample_rate)
+    }
+
     /// Creates a new `ContainerModel`.
     ///
     /// # Requirements (enforced)
@@ -58,39 +145,73 @@ impl ContainerModel {
     /// - `submodels` must be non-empty.
     /// - Sorted by `max_value` ascending.
     /// - Last `max_value` must be `>= 1.0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any of the enforced requirements above is
+    /// violated, namely:
+    /// - `submodels` is empty;
+    /// - any `max_value` is non-finite or negative;
+    /// - `max_value` values are not strictly ascending (duplicate or
+    ///   out-of-order);
+    /// - the last `max_value` is `< 1.0`.
+    ///
+    /// Also propagates the error from `set_max_buffer_size` when a submodel
+    /// cannot allocate its internal buffers (out of memory).
+    ///
+    /// For a typed-error counterpart (no `anyhow`), see
+    /// [`new_typed`](Self::new_typed).
     pub fn new(
         mut submodels: Vec<(f32, Box<StaticModel>)>,
         sample_rate: u32,
     ) -> anyhow::Result<Self> {
+        Self::validate_submodels(&mut submodels)?;
+        Self::assemble(submodels, sample_rate).map_err(Into::into)
+    }
+
+    /// Validates the submodel ordering/value invariants shared by [`new`] and
+    /// [`new_typed`](Self::new_typed), sorting `submodels` ascending by
+    /// `max_value` in place first.
+    fn validate_submodels(submodels: &mut [(f32, Box<StaticModel>)]) -> Result<(), SpecError> {
         if submodels.is_empty() {
-            anyhow::bail!("ContainerModel: no submodels provided");
+            return Err(SpecError::Empty);
         }
 
         submodels.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
         for (i, (max_value, _)) in submodels.iter().enumerate() {
             if !max_value.is_finite() || *max_value < 0.0 {
-                anyhow::bail!(
-                    "ContainerModel: submodel[{}] has invalid max_value={} \
-                     (must be finite and >= 0.0)",
-                    i,
-                    max_value
-                );
+                return Err(SpecError::InvalidMaxValue {
+                    index: i,
+                    value: *max_value,
+                });
             }
         }
 
         for w in submodels.windows(2) {
             if w[1].0 <= w[0].0 {
-                anyhow::bail!("ContainerModel: submodels must be sorted by ascending max_value");
+                return Err(SpecError::NotAscending);
             }
         }
-        let last = submodels
-            .last()
-            .ok_or_else(|| anyhow::anyhow!("ContainerModel: submodels list is empty"))?;
-        if last.0 < 1.0 {
-            anyhow::bail!("ContainerModel: last submodel max_value must be >= 1.0");
+
+        if let Some((last_max, _)) = submodels.last()
+            && *last_max < 1.0
+        {
+            return Err(SpecError::LastBelowUnity);
         }
 
+        Ok(())
+    }
+
+    /// Builds the container from an already-validated submodel list.
+    ///
+    /// Allocation failures while sizing each submodel's scratch buffers are
+    /// reported as [`NamErrorCode::OutOfMemory`], per the
+    /// `NamModel::set_max_buffer_size` contract.
+    fn assemble(
+        submodels: Vec<(f32, Box<StaticModel>)>,
+        sample_rate: u32,
+    ) -> Result<Self, NamErrorCode> {
         let active_index = submodels.len() - 1;
         let crossfade_duration =
             (CROSSFADE_DURATION_MS / 1000.0 * sample_rate as f32).round() as usize;
@@ -111,7 +232,9 @@ impl ContainerModel {
         };
 
         for (_, model) in &mut container.submodels {
-            model.set_max_buffer_size(default_buf)?;
+            model
+                .set_max_buffer_size(default_buf)
+                .map_err(|_| NamErrorCode::OutOfMemory)?;
         }
 
         container.prewarm(4096);

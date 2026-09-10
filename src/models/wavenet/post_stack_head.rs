@@ -57,17 +57,16 @@ impl PostStackHead {
         let receptive_field = kernel;
         let state = WaveNetLayerState::new(channels, receptive_field, 0)?;
 
-        let conv = Conv1dDyn {
-            weights,
-            bias,
-            do_bias,
-            dilation: 1,
-            in_ch: channels,
-            out_ch: out_channels,
-            num_blocks,
-            interleave_width: 4,
-            kernel,
-        };
+        // Release-stable padding/bounds proof (R-2): weights_len is exactly the
+        // interleaved-4 padded total, validated again by the constructor.
+        let conv =
+            Conv1dDyn::try_from_parts(weights, bias, do_bias, 1, channels, out_channels, kernel, 4)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("PostStackHead conv layout validation failed: {e}"),
+                    )
+                })?;
 
         Ok(Self {
             conv,

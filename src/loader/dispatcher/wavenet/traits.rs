@@ -3,7 +3,7 @@
 
 use crate::math::common::AlignedVec;
 use crate::models::wavenet::Conv1dDyn;
-use crate::models::wavenet::{Conv1d, DenseLayer, DenseLayerDyn, MAX_KERNEL};
+use crate::models::wavenet::{Conv1d, DenseLayer, DenseLayerDyn};
 
 use super::layout::select_interleave_width;
 
@@ -37,19 +37,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> ConvWeightsOutput for Co
         _out_ch: usize,
         _k_size: usize,
     ) -> anyhow::Result<Self> {
-        let interleave_width = select_interleave_width(OUT);
-        let num_blocks = OUT.div_ceil(interleave_width);
-        let padded_total = num_blocks * interleave_width * IN * K;
-        anyhow::ensure!(
-            weights.len() >= padded_total,
-            "Conv1d weights buffer is too small"
-        );
-        Ok(Conv1d {
-            weights,
-            bias,
-            do_bias,
-            dilation,
-        })
+        // The release-stable padding/bounds proof (R-2) lives in the validated
+        // inherent constructor on the model type (`Conv1d::try_from_parts`).
+        Conv1d::try_from_parts(weights, bias, do_bias, dilation)
     }
 }
 
@@ -64,34 +54,19 @@ impl ConvWeightsOutput for Conv1dDyn {
         out_ch: usize,
         k_size: usize,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            k_size > 0,
-            "Conv1dDyn kernel_size must be >= 1, got {k_size}"
-        );
-        anyhow::ensure!(
-            k_size <= MAX_KERNEL,
-            "Conv1dDyn kernel_size ({k_size}) exceeds maximum supported ({MAX_KERNEL}) — \
-             the dynamic convolution hot-path reads taps through a fixed \
-             {MAX_KERNEL}-entry pointer array"
-        );
         let interleave_width = select_interleave_width(out_ch);
-        let num_blocks_effective = out_ch.div_ceil(interleave_width);
-        let padded_total = num_blocks_effective * interleave_width * in_ch * k_size;
-        anyhow::ensure!(
-            weights.len() >= padded_total,
-            "Conv1d weights buffer is too small"
-        );
-        Ok(Conv1dDyn {
+        // The release-stable padding/bounds proof (R-2) lives in the validated
+        // inherent constructor on the model type (`Conv1dDyn::try_from_parts`).
+        Conv1dDyn::try_from_parts(
             weights,
             bias,
             do_bias,
             dilation,
             in_ch,
             out_ch,
-            num_blocks: out_ch.div_ceil(4),
+            k_size,
             interleave_width,
-            kernel: k_size,
-        })
+        )
     }
 }
 

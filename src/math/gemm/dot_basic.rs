@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
-
 //! Dot Product kernels — AVX2 and AVX-512.
 
 use core::arch::x86_64::*;
@@ -15,6 +9,10 @@ use core::arch::x86_64::*;
 /// This function is the "heart" of many neural network models. Instead of multiplying and adding
 /// one number at a time, it processes blocks of data simultaneously (up to 32 numbers at once),
 /// making the most of modern processor power.
+///
+/// # Safety
+///
+/// The caller must ensure that the CPU supports AVX2 and FMA target features.
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
@@ -96,58 +94,78 @@ pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 
 /// Dot product f32 with u16 weights using AVX-512.
 /// Basically: (number_a1 * weight_b1) + (number_a2 * weight_b2) + ...
+///
+/// # Safety
+///
+/// The caller must ensure that the CPU supports AVX-512F and AVX-512VL.
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;
-    let mut sum_v = _mm512_setzero_ps();
-    // Process 16 at a time.
-    while i + 16 <= len {
-        let va = _mm512_loadu_ps(a.as_ptr().add(i));
-        let vb = _mm512_loadu_ps(b.as_ptr().add(i));
-        sum_v = _mm512_fmadd_ps(va, vb, sum_v); // Multiply and accumulate.
-        i += 16;
+
+    // SAFETY: The loop guard `i + 16 <= len` guarantees that reading 16 elements
+    // from `a` and `b` is within bounds of both slices. The scalar tail loop uses
+    // `i < len` guaranteeing `get_unchecked(i)` is within bounds of both slices.
+    unsafe {
+        let mut sum_v = _mm512_setzero_ps();
+        // Process 16 at a time.
+        while i + 16 <= len {
+            let va = _mm512_loadu_ps(a.as_ptr().add(i));
+            let vb = _mm512_loadu_ps(b.as_ptr().add(i));
+            sum_v = _mm512_fmadd_ps(va, vb, sum_v); // Multiply and accumulate.
+            i += 16;
+        }
+        // Sum the results within the register and add the remainder.
+        let mut sum = crate::math::common::utility::hsum_avx512(sum_v);
+        let mut compensation = 0.0f32;
+        while i < len {
+            let term = *a.get_unchecked(i) * *b.get_unchecked(i);
+            (sum, compensation) = crate::math::common::kahan_add(sum, compensation, term);
+            i += 1;
+        }
+        sum
     }
-    // Sum the results within the register and add the remainder.
-    let mut sum = crate::math::common::utility::hsum_avx512(sum_v);
-    let mut compensation = 0.0f32;
-    while i < len {
-        let term = *a.get_unchecked(i) * *b.get_unchecked(i);
-        (sum, compensation) = crate::math::common::kahan_add(sum, compensation, term);
-        i += 1;
-    }
-    sum
 }
 
 /// Dot product BF16 using AVX-512 BF16.
 /// BF16 is a "brain" floating-point format that focuses on what matters for AI.
 /// Here the processor handles 32 numbers at once with a single instruction (dpbf16_ps).
+///
+/// # Safety
+///
+/// The caller must ensure that the CPU supports AVX-512BF16 and AVX-512VL.
 #[cfg(feature = "avx512")]
 #[target_feature(enable = "avx512bf16,avx512vl")]
 pub unsafe fn dot_product_bf16_avx512(a: &[u16], b: &[u16]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;
-    let mut sum_v = _mm512_setzero_ps();
-    while i + 32 <= len {
-        let va = _mm512_loadu_si512(a.as_ptr().add(i) as *const __m512i);
-        let vb = _mm512_loadu_si512(b.as_ptr().add(i) as *const __m512i);
-        // This instruction is magic: it handles the computation for 32 BF16 pairs at once.
-        sum_v = _mm512_dpbf16_ps(
-            sum_v,
-            core::mem::transmute::<__m512i, __m512bh>(va),
-            core::mem::transmute::<__m512i, __m512bh>(vb),
-        );
-        i += 32;
+
+    // SAFETY: The loop guard `i + 32 <= len` guarantees that reading 32 `u16` elements
+    // (512 bits) from `a` and `b` is within bounds of both slices. The scalar tail loop uses
+    // `i < len` guaranteeing `get_unchecked(i)` is within bounds of both slices.
+    unsafe {
+        let mut sum_v = _mm512_setzero_ps();
+        while i + 32 <= len {
+            let va = _mm512_loadu_si512(a.as_ptr().add(i) as *const __m512i);
+            let vb = _mm512_loadu_si512(b.as_ptr().add(i) as *const __m512i);
+            // This instruction is magic: it handles the computation for 32 BF16 pairs at once.
+            sum_v = _mm512_dpbf16_ps(
+                sum_v,
+                core::mem::transmute::<__m512i, __m512bh>(va),
+                core::mem::transmute::<__m512i, __m512bh>(vb),
+            );
+            i += 32;
+        }
+        let mut sum = crate::math::common::utility::hsum_avx512(sum_v);
+        let mut compensation = 0.0f32;
+        // Handle leftovers manually.
+        while i < len {
+            let fa = f32::from_bits((*a.get_unchecked(i) as u32) << 16);
+            let fb = f32::from_bits((*b.get_unchecked(i) as u32) << 16);
+            (sum, compensation) = crate::math::common::kahan_add(sum, compensation, fa * fb);
+            i += 1;
+        }
+        sum
     }
-    let mut sum = crate::math::common::utility::hsum_avx512(sum_v);
-    let mut compensation = 0.0f32;
-    // Handle leftovers manually.
-    while i < len {
-        let fa = f32::from_bits((*a.get_unchecked(i) as u32) << 16);
-        let fb = f32::from_bits((*b.get_unchecked(i) as u32) << 16);
-        (sum, compensation) = crate::math::common::kahan_add(sum, compensation, fa * fb);
-        i += 1;
-    }
-    sum
 }

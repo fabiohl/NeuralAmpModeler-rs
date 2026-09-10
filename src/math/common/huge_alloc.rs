@@ -16,7 +16,7 @@
 //! Callers must use the returned `AllocInfo` to choose the correct deallocation path.
 
 use std::alloc::{Layout, alloc, dealloc};
-use std::ptr;
+use std::ptr::{self, NonNull};
 
 use crate::common::diagnostics::NamErrorCode;
 
@@ -59,8 +59,18 @@ const PAGE_4K: usize = 4096;
 pub const HUGE_PAGE_2M: usize = 2 * 1024 * 1024;
 
 /// Rounds `size` up to the next multiple of `alignment`.
-const fn align_up(size: usize, alignment: usize) -> usize {
-    (size + alignment - 1) & !(alignment - 1)
+///
+/// Returns `None` if `alignment` is zero or if rounding up causes arithmetic overflow.
+pub(crate) const fn align_up(size: usize, alignment: usize) -> Option<usize> {
+    let mask = match alignment.checked_sub(1) {
+        Some(m) => m,
+        None => return None,
+    };
+    let sum = match size.checked_add(mask) {
+        Some(s) => s,
+        None => return None,
+    };
+    Some(sum & !mask)
 }
 
 /// Attempts to allocate `size_bytes` with huge-page preference.
@@ -79,10 +89,17 @@ const fn align_up(size: usize, alignment: usize) -> usize {
 pub fn allocate_huge_pages(
     size_bytes: usize,
 ) -> Result<(*mut u8, AllocInfo, HugePageStatus), NamErrorCode> {
+    if size_bytes == 0 {
+        return Ok((
+            NonNull::dangling().as_ptr(),
+            AllocInfo::Heap,
+            HugePageStatus::Heap,
+        ));
+    }
     if size_bytes < HUGE_PAGE_THRESHOLD {
         let layout =
             Layout::from_size_align(size_bytes, 64).map_err(|_| NamErrorCode::OutOfMemory)?;
-        // SAFETY: standard alloc with valid layout.
+        // SAFETY: standard alloc with valid non-zero layout.
         let ptr = unsafe { alloc(layout) };
         if ptr.is_null() {
             return Err(NamErrorCode::OutOfMemory);
@@ -90,7 +107,7 @@ pub fn allocate_huge_pages(
         return Ok((ptr, AllocInfo::Heap, HugePageStatus::Heap));
     }
 
-    let huge_2m_size = align_up(size_bytes, HUGE_PAGE_2M);
+    let huge_2m_size = align_up(size_bytes, HUGE_PAGE_2M).ok_or(NamErrorCode::OutOfMemory)?;
 
     // Strategy 1: explicit 2 MB huge pages via MAP_HUGETLB.
     // SAFETY: try_mmap_huge with validated size, no aliasing violations.
@@ -107,7 +124,7 @@ pub fn allocate_huge_pages(
     }
 
     // Strategy 2: anonymous mmap + madvise(MADV_HUGEPAGE) + MADV_COLLAPSE for synchronous THP.
-    let thp_size = align_up(size_bytes, PAGE_4K);
+    let thp_size = align_up(size_bytes, PAGE_4K).ok_or(NamErrorCode::OutOfMemory)?;
     // SAFETY: try_mmap_huge with validated size.
     let ptr = unsafe { try_mmap_huge(ptr::null_mut(), thp_size, -1, 0, false) };
 
@@ -153,6 +170,9 @@ pub fn allocate_huge_pages(
 pub unsafe fn deallocate_huge(ptr: *mut u8, info: AllocInfo, size_bytes: usize) {
     match info {
         AllocInfo::Heap => {
+            if size_bytes == 0 {
+                return;
+            }
             // Layout construction cannot fail here: size_bytes was validated
             // during allocation when the same size+align produced a valid layout.
             if let Ok(layout) = Layout::from_size_align(size_bytes, 64) {
@@ -280,7 +300,6 @@ pub(crate) unsafe fn try_mmap_huge(
 // ── HugePageVec: AlignedVec-like wrapper with huge-page deallocation ──────
 
 use std::ops::{Deref, DerefMut};
-use std::ptr::NonNull;
 
 /// A 64-byte aligned buffer backed by huge-page allocation (best-effort).
 ///
@@ -292,22 +311,44 @@ use std::ptr::NonNull;
 /// destructors, so non-`Copy` element types (which may carry `Drop` glue) are
 /// rejected at compile time.
 ///
-/// Layout (24 bytes): larger than `AlignedVec` (16 bytes), but only used for
-/// large allocations where the overhead is negligible.
+/// Layout: pointer + length + capacity + alloc_info. Only used for
+/// large allocations where the metadata overhead is negligible.
 #[derive(Debug)]
 pub struct HugePageVec<T: Copy> {
     ptr: NonNull<T>,
     len: usize,
+    cap: usize,
     alloc_info: AllocInfo,
 }
 
 impl<T: Copy> HugePageVec<T> {
+    /// The default guaranteed alignment (64 bytes).
+    pub const ALIGN: usize = 64;
+
     /// Creates a new huge-page-backed buffer filled with `default`.
     ///
     /// # Errors
-    /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
+    /// Returns `NamErrorCode::OutOfMemory` if allocation fails or if capacity
+    /// calculation overflows.
     pub fn new(len: usize, default: T) -> Result<(Self, HugePageStatus), NamErrorCode> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "HugePageVec element alignment must not exceed 64 bytes"
+            );
+        };
         let (mut vec, status) = Self::with_capacity(len)?;
+        #[cfg(debug_assertions)]
+        {
+            let capacity = len;
+            let size_bytes = match vec.alloc_info {
+                AllocInfo::Heap => capacity * std::mem::size_of::<T>(),
+                AllocInfo::MmapAnon { size_bytes } | AllocInfo::HugeTlb2M { size_bytes } => {
+                    size_bytes
+                }
+            };
+            debug_assert!(size_bytes >= capacity * std::mem::size_of::<T>());
+        }
         // SAFETY: vec.ptr is non-null with capacity ≥ len (from with_capacity).
         // `T: Copy` (struct bound) makes each `ptr.write(default)` a bitwise copy
         // of a valid value; no drop glue is involved.
@@ -323,24 +364,35 @@ impl<T: Copy> HugePageVec<T> {
     /// Reserves capacity with huge-page preference.
     ///
     /// # Errors
-    /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
+    /// Returns `NamErrorCode::OutOfMemory` if allocation fails or if capacity
+    /// calculation overflows.
     pub fn with_capacity(capacity: usize) -> Result<(Self, HugePageStatus), NamErrorCode> {
-        if capacity == 0 {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "HugePageVec element alignment must not exceed 64 bytes"
+            );
+        };
+        if capacity == 0 || std::mem::size_of::<T>() == 0 {
             return Ok((
                 Self {
                     ptr: NonNull::dangling(),
                     len: 0,
+                    cap: 0,
                     alloc_info: AllocInfo::Heap,
                 },
                 HugePageStatus::Heap,
             ));
         }
-        let size_bytes = capacity * std::mem::size_of::<T>();
+        let size_bytes = capacity
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(NamErrorCode::OutOfMemory)?;
         let (ptr, alloc_info, status) = allocate_huge_pages(size_bytes)?;
         Ok((
             Self {
                 ptr: NonNull::new(ptr as *mut T).unwrap(),
                 len: 0,
+                cap: capacity,
                 alloc_info,
             },
             status,
@@ -350,6 +402,12 @@ impl<T: Copy> HugePageVec<T> {
     /// Returns the number of elements.
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Returns the total capacity of the buffer in elements.
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.cap
     }
 
     /// Returns true if empty.
@@ -374,10 +432,9 @@ impl<T: Copy> Deref for HugePageVec<T> {
         if self.len == 0 {
             &[]
         } else {
-            // SAFETY: self.ptr is non-null (allocated via allocate_huge_pages or fallback
-            // alloc; empty case guarded by len==0 above). self.len ≤ capacity, determined
-            // at allocation time, and elements [0..len) are properly initialized by the
-            // HugePageVec construction and push operations.
+            // SAFETY: self.ptr is non-null with 64-byte alignment (guaranteed by allocate_huge_pages
+            // and compile-time assertion align_of::<T>() <= Self::ALIGN). Empty case guarded by
+            // len==0 above. self.len ≤ capacity, and elements [0..len) are properly initialized.
             unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
         }
     }
@@ -388,8 +445,8 @@ impl<T: Copy> DerefMut for HugePageVec<T> {
         if self.len == 0 {
             &mut []
         } else {
-            // SAFETY: Same pointer/size invariants as Deref. &mut self ensures exclusive
-            // access to the allocation, so no aliasing of any element occurs.
+            // SAFETY: Same pointer/size invariants as Deref: ptr is 64-byte aligned (align_of::<T>() <= 64
+            // guaranteed by const assertion). &mut self ensures exclusive access, so no aliasing occurs.
             unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
         }
     }
@@ -397,18 +454,17 @@ impl<T: Copy> DerefMut for HugePageVec<T> {
 
 impl<T: Copy> Drop for HugePageVec<T> {
     fn drop(&mut self) {
-        if self.len > 0 {
+        if self.cap > 0 {
             // SAFETY: self.ptr was allocated via allocate_huge_pages (or the fallback heap
-            // path), tracked by self.alloc_info. The deallocation size self.len * size_of::<T>()
-            // matches the allocation size modulo page alignment rounding (deallocate_huge uses
-            // the stored size_bytes from allocation). Drop consumes self; this is the final
-            // use of the pointer. No per-element destructors need to run: `T: Copy` (struct
-            // bound, F-10) guarantees the elements carry no `Drop` glue.
+            // path) for self.cap elements, tracked by self.alloc_info. Deallocation uses
+            // the full allocated capacity, preventing leaks when len == 0. Drop consumes self;
+            // this is the final use of the pointer. No per-element destructors need to run:
+            // `T: Copy` (struct bound, F-10) guarantees the elements carry no `Drop` glue.
             unsafe {
                 deallocate_huge(
                     self.ptr.as_ptr() as *mut u8,
                     self.alloc_info,
-                    self.len * std::mem::size_of::<T>(),
+                    self.cap.saturating_mul(std::mem::size_of::<T>()),
                 );
             }
         }

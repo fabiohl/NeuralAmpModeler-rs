@@ -24,6 +24,9 @@ pub const MAX_A2_DYN_CHANNELS: usize = 256;
 /// Maximum bottleneck size for A2-Dynamic.
 pub const MAX_A2_DYN_BOTTLENECK: usize = 256;
 
+/// Maximum output channels for A2 head 1x1 projection.
+pub const MAX_A2_HEAD_CHANNELS: usize = 512;
+
 // ── Topology bounds (DoS/OOM prevention — F2) ──
 
 /// Maximum kernel size accepted from model config.

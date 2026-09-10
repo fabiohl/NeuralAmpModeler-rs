@@ -345,6 +345,12 @@ fn extract_layer_metadata(
             ));
         }
         for (j, &d) in dils.iter().enumerate() {
+            if d == 0 {
+                return Err(format!(
+                    "Layer {} dilation[{}] is 0 — must be >= 1 (invalid dilation).",
+                    i, j
+                ));
+            }
             if d > MAX_DILATION {
                 return Err(format!(
                     "Layer {} dilation[{}] ({}) exceeds maximum {} — DoS/OOM protection.",

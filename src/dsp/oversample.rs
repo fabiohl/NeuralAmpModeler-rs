@@ -111,11 +111,11 @@ enum OsStages {
 ///
 /// ```ignore
 /// // 1. Upsample model-rate input to oversampled rate
-/// let n_os = engine.upsample(&input[..n_native], os_up_buf);
+/// let n_os = engine.upsample(&input[..n_native], os_up_buf, None);
 /// // 2. Model processes at oversampled rate
 /// model.process(&os_up_buf[..n_os], &mut os_model_buf[..n_os]);
 /// // 3. Downsample back to native rate
-/// let n_out = engine.downsample(&os_model_buf[..n_os], output);
+/// let n_out = engine.downsample(&os_model_buf[..n_os], output, None);
 /// ```
 pub struct OversampleEngine {
     factor: OversampleFactor,
@@ -224,6 +224,13 @@ impl OversampleEngine {
     /// `output` must have room for `input.len() * factor.multiplier()` samples.
     /// Returns number of oversampled samples written.
     ///
+    /// **Non-overlap precondition (R-9 / A9):** `input` and `output` must not
+    /// overlap. When oversampling is bypassed (`OversampleFactor::Off`), this
+    /// method copies with `copy_nonoverlapping`, whose contract requires the
+    /// source and destination regions to be disjoint. Safe Rust guarantees this
+    /// between a `&[f32]` and a distinct `&mut [f32]`; callers that reach the
+    /// buffers through raw pointers (FFI/host) must uphold it themselves.
+    ///
     /// Fail-closed (F-05): the output capacity contract is enforced in release
     /// builds, not just by `debug_assert!`. When `output` is smaller than
     /// required, the processed input is clamped so the stages never write past
@@ -279,6 +286,13 @@ impl OversampleEngine {
     ///
     /// `output` must have room for `input.len() / factor.multiplier()` samples.
     /// Returns number of native-rate samples written.
+    ///
+    /// **Non-overlap precondition (R-9 / A9):** `input` and `output` must not
+    /// overlap. When oversampling is bypassed (`OversampleFactor::Off`), this
+    /// method copies with `copy_nonoverlapping`, whose contract requires the
+    /// source and destination regions to be disjoint. Safe Rust guarantees this
+    /// between a `&[f32]` and a distinct `&mut [f32]`; callers that reach the
+    /// buffers through raw pointers (FFI/host) must uphold it themselves.
     ///
     /// Fail-closed (F-05): the output capacity contract is enforced in release
     /// builds, not just by `debug_assert!`. When `output` is smaller than

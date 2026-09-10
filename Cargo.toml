@@ -126,7 +126,7 @@ harness = false
 
 [features]
 default = []
-# Enables multi-channel / stereo dual-model loader support.
+# Internal stereo path in the DSP pipeline (input stage); does not gate dual-model loading (controlled via stereo: bool).
 stereo = []
 # Exposes off-RT test utilities, audio signal generators, and perceptual metrics.
 testing = []

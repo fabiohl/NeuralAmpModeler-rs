@@ -102,4 +102,19 @@ pub enum NambError {
         /// Explanation of why the value is rejected.
         reason: &'static str,
     },
+
+    /// The optional JSON metadata section between the header and the weights
+    /// is not valid UTF-8.
+    #[error("NAMB metadata section is not valid UTF-8 (offset {offset}, {len} bytes)")]
+    MetadataNotUtf8 {
+        /// Byte offset of the metadata section within the file.
+        offset: usize,
+        /// Length of the metadata section (excluding trailing null padding).
+        len: usize,
+    },
+
+    /// The optional JSON metadata section between the header and the weights
+    /// failed to parse as a `.nam` JSON model.
+    #[error("NAMB metadata section is not valid .nam JSON: {0}")]
+    MetadataJson(crate::loader::nam_json::JsonError),
 }

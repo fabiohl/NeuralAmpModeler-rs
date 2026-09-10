@@ -954,4 +954,131 @@ mod tests {
 
         Ok(())
     }
+
+    // ── Typed API: parse_namb_typed (D2 / finding D-6) ────────────────────
+
+    /// Builds a .namb v1 file with a JSON metadata gap between the header and
+    /// the weights (the optional metadata section covered by D-6/D2).
+    fn build_namb_v1_with_json_gap(json: &[u8], w_floats: &[f32]) -> Vec<u8> {
+        let header_size = std::mem::size_of::<NambHeader>();
+        let mut data = vec![0u8; header_size + json.len() + w_floats.len() * 4];
+        // SAFETY: `data` is `vec![0u8; ...]` (>= size_of::<NambHeader>()),
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
+        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+
+        header.magic = 0x4E414D42;
+        header.version = 1;
+        header.weights_offset = (header_size + json.len()) as u32;
+        header.sample_rate = 48000.0;
+        header.input_level_dbu = 12.0;
+        header.output_level_dbu = -6.0;
+        header.version_str[0..5].copy_from_slice(b"1.0.0");
+
+        data[header_size..header_size + json.len()].copy_from_slice(json);
+
+        for (i, &f) in w_floats.iter().enumerate() {
+            let offset = header_size + json.len() + i * 4;
+            data[offset..offset + 4].copy_from_slice(&f.to_le_bytes());
+        }
+
+        // v1 CRC32 covers only the weights section.
+        header.crc32 = crc32_ieee(&data[(header_size + json.len())..]);
+        data
+    }
+
+    #[test]
+    fn test_parse_namb_typed_error_without_downcast() {
+        // D2: the typed entry point exposes `NambError` directly — no `downcast_ref`.
+        let header_size = std::mem::size_of::<NambHeader>();
+        let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
+        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+
+        header.magic = 0x4E414D42;
+        header.version = 2;
+        header.layout_type = 1;
+        header.flags = 0; // FLAG_HAS_CRC32 NOT set
+        header.weights_offset = header_size as u32;
+        header.crc32 = 0xDEADBEEF;
+
+        let err = parse_namb_typed(&data).unwrap_err();
+        assert!(
+            matches!(err, NambError::CrcMissing { version: 2 }),
+            "Expected typed NambError::CrcMissing, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_namb_typed_parity_with_legacy() -> Result<()> {
+        // D2: typed and legacy entry points must agree on valid input.
+        let w = [0.1f32, -0.5f32, 1.0f32];
+        let data = build_valid_namb_v1(&w);
+
+        let legacy = parse_namb(&data)?;
+        let typed = parse_namb_typed(&data)?;
+
+        assert_eq!(legacy.weights, typed.weights);
+        assert_eq!(legacy.weights_layout, typed.weights_layout);
+        assert_eq!(legacy.sample_rate, typed.sample_rate);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_namb_typed_metadata_not_utf8() {
+        // D2: malformed (non-UTF-8) metadata section → typed MetadataNotUtf8.
+        let data = build_namb_v1_with_json_gap(&[0xFF, 0xFE, 0x80], &[0.5f32]);
+        let err = parse_namb_typed(&data).unwrap_err();
+        let header_size = std::mem::size_of::<NambHeader>();
+        assert!(
+            matches!(
+                err,
+                NambError::MetadataNotUtf8 {
+                    offset,
+                    len: 3
+                } if offset == header_size
+            ),
+            "Expected typed NambError::MetadataNotUtf8, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_namb_typed_metadata_invalid_json() {
+        // D2: valid UTF-8 but invalid JSON in the metadata section → typed MetadataJson.
+        let data = build_namb_v1_with_json_gap(b"this is not json", &[0.5f32]);
+        let err = parse_namb_typed(&data).unwrap_err();
+        assert!(
+            matches!(err, NambError::MetadataJson(_)),
+            "Expected typed NambError::MetadataJson, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_namb_legacy_still_downcastable() {
+        // D2: the legacy anyhow wrapper preserves the typed error as source.
+        let header_size = std::mem::size_of::<NambHeader>();
+        let mut data = vec![0u8; header_size];
+        // SAFETY: `data` is `vec![0u8; header_size]` where `header_size = size_of::<NambHeader>()`,
+        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
+        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+
+        header.magic = 0x4E414D42;
+        header.version = 2;
+        header.flags = 0;
+        header.weights_offset = header_size as u32;
+        header.crc32 = 0xDEADBEEF;
+
+        let err = parse_namb(&data).unwrap_err();
+        let namb_err = err
+            .downcast_ref::<NambError>()
+            .expect("Error should be NambError::CrcMissing");
+        assert!(
+            matches!(namb_err, NambError::CrcMissing { version: 2 }),
+            "Expected CrcMissing, got: {:?}",
+            namb_err
+        );
+    }
 }

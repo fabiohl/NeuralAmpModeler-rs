@@ -60,6 +60,13 @@ pub fn get_lstm_topology(data: &NamModelData) -> Result<Option<(usize, usize)>, 
             limit: 0,
         });
     }
+    if hidden_size == 0 {
+        return Err(JsonError::UnsupportedTopology {
+            architecture: data.architecture.clone(),
+            issue: "hidden_size=0 (no valid model can have zero hidden units)".into(),
+            limit: 0,
+        });
+    }
     if num_layers > MAX_LSTM_LAYERS {
         return Err(JsonError::UnsupportedTopology {
             architecture: data.architecture.clone(),

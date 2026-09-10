@@ -207,6 +207,10 @@ pub mod classify;
 /// `missing_baseline_coverage` ported from the perf-gate bash.
 pub mod coverage;
 
+/// Machine regression verdict over Criterion's persisted comparison JSON
+/// (R-3 / B2) — the replacement for the perf-gate bash text-marker grep.
+pub mod verdict;
+
 /// Single environment probe (R-09) — canonical ISA string + cpuinfo /
 /// toolchain / governor / git state for receipts and fingerprints.
 pub mod env;

@@ -52,21 +52,21 @@ impl ConvNetBlock {
         let num_blocks = out_ch.div_ceil(4);
         let weights_len = num_blocks * kernel * in_ch * 4;
 
-        let conv = Conv1dDyn {
-            weights: AlignedVec::new(weights_len, 0.0f32).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}"))
-            })?,
-            bias: AlignedVec::new(out_ch, 0.0f32).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}"))
-            })?,
-            do_bias,
-            dilation,
-            in_ch,
-            out_ch,
-            num_blocks,
-            interleave_width: 4,
-            kernel,
-        };
+        let weights = AlignedVec::new(weights_len, 0.0f32)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+        let bias = AlignedVec::new(out_ch, 0.0f32)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+
+        // Release-stable padding/bounds proof (R-2): weights_len is exactly the
+        // interleaved-4 padded total, validated again by the constructor.
+        let conv =
+            Conv1dDyn::try_from_parts(weights, bias, do_bias, dilation, in_ch, out_ch, kernel, 4)
+                .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("ConvNet block conv layout validation failed: {e}"),
+                )
+            })?;
 
         let bn = BatchNorm1D::from_fused(out_ch, &vec![0.0f32; out_ch], &vec![0.0f32; out_ch])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;

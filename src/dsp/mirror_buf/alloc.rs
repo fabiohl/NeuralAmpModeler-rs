@@ -48,6 +48,12 @@ impl<T> MirroredBuffer<T> {
     /// Equivalent to `new_aligned(requested_size, 1)`.
     #[cold]
     pub fn new(requested_size: usize) -> std::io::Result<Self> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= 64,
+                "MirroredBuffer element alignment must not exceed 64 bytes"
+            );
+        };
         Self::new_aligned(requested_size, 1)
     }
 
@@ -64,8 +70,26 @@ impl<T> MirroredBuffer<T> {
     /// pages, or up to 6 MiB on huge pages — all cold, during model load.
     #[cold]
     pub fn new_aligned(requested_size: usize, elem_multiple: usize) -> std::io::Result<Self> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= 64,
+                "MirroredBuffer element alignment must not exceed 64 bytes"
+            );
+        };
         // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
         let page_size = unsafe { sysconf(libc::_SC_PAGESIZE) } as usize;
+        // R-5 / A7: the `mmap` base (and therefore every element address produced
+        // by `Deref`/`DerefMut` over the 2N virtual extent) is aligned only to the
+        // system page size. `from_raw_parts` additionally requires alignment to
+        // `align_of::<T>()`, so construction must prove `align_of::<T>() <=
+        // page_size`. This is a runtime net on top of the compile-time
+        // `align_of::<T>() <= 64` const assert (both are satisfied on every
+        // supported platform, where page_size >= 4096).
+        let align = std::mem::align_of::<T>();
+        assert!(
+            align <= page_size,
+            "MirroredBuffer element alignment {align} exceeds the system page size {page_size}"
+        );
         let element_size = std::mem::size_of::<T>();
 
         if element_size == 0 {

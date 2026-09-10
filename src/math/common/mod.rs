@@ -25,6 +25,8 @@ pub mod half;
 pub mod huge_alloc;
 pub use huge_alloc::HugePageVec;
 /// AVX-512 kernel implementations: activations, DSP/VNNI-BF16, reductions, BF16.
+///
+/// **Notice:** AVX-512 is discouraged in production. See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub mod avx512;

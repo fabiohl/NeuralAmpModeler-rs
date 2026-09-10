@@ -28,11 +28,14 @@ fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
 pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
     let mut i = 0;
-    wavenet_simd_avx2!(i, len, {
-        let vs = _mm256_loadu_ps(src.as_ptr().add(i));
-        let vd = _mm256_loadu_ps(dest.as_ptr().add(i));
-        _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd, vs));
-    });
+    // SAFETY: caller guarantees `src.len() >= dest.len()`, loop guard `i + 8 <= len` keeps all 8-lane loads/stores in bounds.
+    unsafe {
+        wavenet_simd_avx2!(i, len, {
+            let vs = _mm256_loadu_ps(src.as_ptr().add(i));
+            let vd = _mm256_loadu_ps(dest.as_ptr().add(i));
+            _mm256_storeu_ps(dest.as_mut_ptr().add(i), _mm256_add_ps(vd, vs));
+        });
+    }
     if i < len {
         accumulate_head_avx2_tail(&mut dest[i..], &src[i..]);
     }
@@ -62,28 +65,31 @@ fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]
 pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()`, loop guards keep all unaligned 256-bit loads/stores in bounds.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
-        i += 16;
+            let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+            let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-
-        let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
-    });
     if i < len {
         tanh_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
     }
@@ -130,22 +136,25 @@ pub unsafe fn gated_activation_and_accumulate_block_avx2(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        wavenet_simd_avx2!(c, ch, {
-            let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards keep loads/stores in bounds.
+        unsafe {
+            wavenet_simd_avx2!(c, ch, {
+                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let activated = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
 
-            let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
-            _mm256_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c),
-                _mm256_add_ps(vh, activated),
-            );
-        });
+                let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
+                _mm256_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    _mm256_add_ps(vh, activated),
+                );
+            });
+        }
         if c < ch {
             gated_activation_and_accumulate_block_avx2_tail(head_input, block, ch, f, c);
         }
@@ -175,23 +184,26 @@ fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32])
 pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
-        i += 16;
+    // SAFETY: `head_input.len() >= block.len()`, loop guards keep loads/stores in bounds.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-    });
     if i < len {
         tanh_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
     }
@@ -233,28 +245,31 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx2(
 ) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
-        let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: `head_input.len() >= block.len()` and `seed.len() >= block.len()`, loop guards keep loads/stores in bounds.
+    unsafe {
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = crate::math::activations::simd_tanh_poly_avx2(vb0);
+            let vt1 = crate::math::activations::simd_tanh_poly_avx2(vb1);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
-        let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
-        i += 16;
+            let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
+            let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+            let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-
-        let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
-    });
     if i < len {
         tanh_and_accumulate_with_seed_avx2_tail(&mut head_input[i..], &mut block[i..], &seed[i..]);
     }
@@ -283,29 +298,32 @@ fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]
 pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: `head_input.len() >= block.len()`, loop guards keep loads/stores in bounds.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
-        i += 16;
+            let vh0 = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            let vh1 = _mm256_loadu_ps(head_input.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vh1, vt1));
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+            let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-
-        let vh = _mm256_loadu_ps(head_input.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vh, vt));
-    });
     if i < len {
         relu_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
     }
@@ -333,24 +351,27 @@ fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32])
 pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
-        i += 16;
+    // SAFETY: `head_input.len() >= block.len()`, loop guards keep loads/stores in bounds.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), vt1);
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-    });
     if i < len {
         relu_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
     }
@@ -390,29 +411,32 @@ pub unsafe fn relu_and_accumulate_with_seed_avx2(
 ) {
     let len = block.len();
     let mut i = 0;
-    let zero = _mm256_setzero_ps();
-    while i + 16 <= len {
-        let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
-        let vt0 = _mm256_max_ps(vb0, zero);
-        let vt1 = _mm256_max_ps(vb1, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
+    // SAFETY: `head_input.len() >= block.len()` and `seed.len() >= block.len()`, loop guards keep loads/stores in bounds.
+    unsafe {
+        let zero = _mm256_setzero_ps();
+        while i + 16 <= len {
+            let vb0 = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vb1 = _mm256_loadu_ps(block.as_ptr().add(i + 8));
+            let vt0 = _mm256_max_ps(vb0, zero);
+            let vt1 = _mm256_max_ps(vb1, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt0);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i + 8), vt1);
 
-        let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
-        let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
-        i += 16;
+            let vs0 = _mm256_loadu_ps(seed.as_ptr().add(i));
+            let vs1 = _mm256_loadu_ps(seed.as_ptr().add(i + 8));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs0, vt0));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i + 8), _mm256_add_ps(vs1, vt1));
+            i += 16;
+        }
+        wavenet_simd_avx2!(i, len, {
+            let vb = _mm256_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm256_max_ps(vb, zero);
+            _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
+
+            let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
+            _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
+        });
     }
-    wavenet_simd_avx2!(i, len, {
-        let vb = _mm256_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm256_max_ps(vb, zero);
-        _mm256_storeu_ps(block.as_mut_ptr().add(i), vt);
-
-        let vs = _mm256_loadu_ps(seed.as_ptr().add(i));
-        _mm256_storeu_ps(head_input.as_mut_ptr().add(i), _mm256_add_ps(vs, vt));
-    });
     if i < len {
         relu_and_accumulate_with_seed_avx2_tail(&mut head_input[i..], &mut block[i..], &seed[i..]);
     }
@@ -458,17 +482,20 @@ pub unsafe fn gated_activation_and_overwrite_block_avx2(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        wavenet_simd_avx2!(c, ch, {
-            let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards keep loads/stores in bounds.
+        unsafe {
+            wavenet_simd_avx2!(c, ch, {
+                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-            let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+                let activated = _mm256_mul_ps(tanh_z1, sig_z2);
 
-            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
-            _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
-        });
+                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
+                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
+            });
+        }
         if c < ch {
             gated_activation_and_overwrite_block_avx2_tail(head_input, block, ch, f, c);
         }

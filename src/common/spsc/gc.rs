@@ -101,6 +101,16 @@ macro_rules! define_gc_item {
             /// Converts this GcItem into a packed 64-bit representation for the
             /// overflow buffer.
             ///
+            /// Returns `None` when the pointer **cannot** be represented — i.e. a
+            /// heap address of 56 bits or more. In that case the raw allocation
+            /// is **intentionally leaked** (never re-boxed via `Box::from_raw`
+            /// and never freed): the RT thread must not perform a heap drop
+            /// (Zero-Heap-Drop), and a truncated pack would corrupt the
+            /// `type_id` and later dispatch `Box::from_raw` with a mismatched
+            /// type — UB. See the [`GcItem`] docs and `GcOverflowBuffer::new`
+            /// for the setup-time probe that makes this path unreachable on
+            /// conforming systems (H-01 deterministic fail-fast, off-RT).
+            ///
             /// Layout (little-endian):
             ///   Bits 0-55:  user-space pointer (≤ 56 bits)
             ///   Bits 56-63: type ID
@@ -115,12 +125,13 @@ macro_rules! define_gc_item {
             /// within 56 bits, and repurposing bits 56–63 for the type ID is safe.
             ///
             /// Should a future x86-64 extension widen the canonical address range
-            /// beyond 57 bits or a non-Linux kernel violate this convention, the
-            /// `assert!` below fires deterministically (H-01): a silent truncation
-            /// would corrupt the `type_id` and later dispatch `Box::from_raw` with
-            /// a mismatched type — UB. `GcOverflowBuffer::new` also runs an
-            /// initialization probe so the failure surfaces at setup time.
-            pub(crate) fn into_packed(self) -> u64 {
+            /// beyond 57 bits or a non-Linux kernel violate this convention, this
+            /// method returns `None` instead of panicking on the audio thread —
+            /// the raw allocation is leaked (RT-safe, no heap drop, no unwinding)
+            /// and `GcOverflowBuffer::new` fails deterministically at setup (H-01).
+            /// A silent truncation would corrupt the `type_id` and later dispatch
+            /// `Box::from_raw` with a mismatched type — UB — so it must never happen.
+            pub(crate) fn into_packed(self) -> Option<u64> {
                 let type_id = self.type_id();
                 let ptr = match self {
                     $(
@@ -129,17 +140,20 @@ macro_rules! define_gc_item {
                     )*
                 };
 
-                // H-01: explicit release check (previously `debug_assert!`,
-                // which was compiled out of release builds — a 57-bit+ address
-                // would then collide with the type_id silently).
-                assert!(
-                    (ptr as u64) < (1u64 << 56),
-                    "GC pointer 0x{:016X} exceeds 56 bits — packing scheme is unsafe \
-                     on this system (requires LA57 with 57-bit canonical addresses or less).",
-                    ptr as u64
-                );
+                // H-01: fail-fast without unwinding on the RT thread. Previously an
+                // `assert!` (release check replacing a `debug_assert!`); the `assert!`
+                // could panic across the host callback. A 57-bit+ address is unreachable
+                // after `GcOverflowBuffer::new`'s setup probe on conforming systems, so
+                // the defensive action is: leak the raw pointer (no `Box::from_raw`, no
+                // heap drop on RT) and signal via `None` instead of aborting the thread.
+                if (ptr as u64) >= (1u64 << 56) {
+                    // Intentional leak: `ptr` is dropped without `Box::from_raw`, so the
+                    // allocation is never freed on the RT thread (Zero-Heap-Drop preserved).
+                    // Deterministic fail-fast is owned by the `GcOverflowBuffer::new` probe.
+                    return None;
+                }
 
-                ((type_id as u64) << 56) | (ptr as u64 & 0x00FF_FFFF_FFFF_FFFF)
+                Some(((type_id as u64) << 56) | (ptr as u64 & 0x00FF_FFFF_FFFF_FFFF))
             }
         }
     };
@@ -179,17 +193,19 @@ impl GcItem {
     /// raw pointer (bits 0–55) and type ID (bits 56–63) and dispatches via
     /// [`from_raw_parts`](Self::from_raw_parts).
     ///
-    /// Returns `None` if the packed value is zero (empty slot) or the type
-    /// ID is unknown. On unknown type ID, the caller must leak the pointer
-    /// to avoid UB.
+    /// Returns `None` if the packed value is zero (empty slot), the type
+    /// ID is zero, or the type ID is unknown. On unknown/zero type ID, the
+    /// caller must leak the pointer to avoid UB.
     ///
     /// ## Platform dependency
     ///
     /// See [`into_packed`](Self::into_packed) — the same 56-bit canonical
     /// address assumption applies here, as the pointer is extracted via
     /// `packed & 0x00FF_FFFF_FFFF_FFFF`.  If that assumption does not hold,
-    /// `into_packed` aborts deterministically before a truncated pointer can
-    /// reach this function (H-01).
+    /// `into_packed` returns `None` (leaking the raw allocation in place on the
+    /// RT thread — never freed, no heap drop) instead of ever producing a
+    /// truncated pointer that could reach this function; the deterministic
+    /// fail-fast owner is the setup probe in `GcOverflowBuffer::new`.
     ///
     /// # Safety
     /// The pointer embedded in `packed` must be valid for the type encoded
@@ -206,8 +222,9 @@ impl GcItem {
         let ptr = (packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
         // SAFETY: `ptr` and `type_id` were recovered from a value produced by
         // `GcItem::into_packed`, which packs the exact `Box::into_raw` pointer
-        // (asserted to fit in 56 bits) with the type_id of that same box;
-        // `from_raw_parts` re-boxes only known type_ids and leaks unknown ones.
+        // (checked to fit in 56 bits; otherwise it returns `None` and leaks the
+        // raw allocation instead of truncating) with the type_id of that same
+        // box; `from_raw_parts` re-boxes only known type_ids and leaks unknown ones.
         unsafe { Self::from_raw_parts(ptr, type_id) }
     }
 }
@@ -270,6 +287,20 @@ impl GcOverflowBuffer {
     /// If the buffer is full, the oldest item is overwritten (leak).
     /// Returns `true` if an overwrite (controlled leak) occurred.
     ///
+    /// ## Packing-failure path (A10 / R-4)
+    ///
+    /// If `GcItem::into_packed` returns `None` (a heap pointer ≥ 2⁵⁶ on a
+    /// non-conforming platform), `into_packed` has already discarded the item
+    /// **in place**: its raw allocation is intentionally leaked — never
+    /// re-boxed via `Box::from_raw`, so no heap drop occurs on the RT thread
+    /// (Zero-Heap-Drop preserved) and no unwinding crosses the host callback.
+    /// This method then reports a controlled leak (`true`) so the caller raises
+    /// the overflow/leak status flag. The branch is unreachable in practice:
+    /// `GcOverflowBuffer::new` runs an off-RT setup probe that fails
+    /// deterministically on any system whose heap addresses exceed 56 bits
+    /// (H-01), keeping the fail-fast guarantee without panicking on the audio
+    /// thread.
+    ///
     /// ## Concurrency note
     ///
     /// `write_idx` uses `Relaxed` because this is an SPSC overflow buffer:
@@ -284,7 +315,12 @@ impl GcOverflowBuffer {
     /// double-free or leak can occur because the consumer always replaces
     /// the slot value with 0.
     pub fn push(&self, item: GcItem) -> bool {
-        let packed = item.into_packed();
+        let Some(packed) = item.into_packed() else {
+            // Packing failed: into_packed already leaked the raw allocation in
+            // place (never Box::from_raw'd on this thread). Nothing was parked —
+            // signal a controlled leak so gc_cascade raises the status flag.
+            return true;
+        };
 
         let len = self.slots.len() as u64;
         let idx = (self.write_idx.fetch_add(1, Ordering::Relaxed) % len) as usize; // Relaxed safe: SPSC — only producer touches write_idx; happens-before via slot swap(AcqRel)

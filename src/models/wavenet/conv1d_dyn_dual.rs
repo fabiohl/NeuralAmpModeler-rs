@@ -64,10 +64,13 @@ impl Conv1dDyn {
 
             // SAFETY: `k < k_limit <= MAX_KERNEL` so `tap_ptrs_f0[k]`/`tap_ptrs_f1[k]`
             // are in-bounds of the fixed-size arrays. The offsets are `.max(0)`-clamped
-            // (F-01), so `in_start_*` is never produced by a negative `as usize` wrap;
-            // the caller guarantees `idx_f0`/`idx_f1` are valid frame indices and
-            // `layer_buffer` is large enough for `in_start_* + in_ch`, keeping both
-            // `add` results inside the buffer. Prefetch calls only read hints.
+            // (F-01), so `in_start_*` is never produced by a negative `as usize` wrap.
+            // The warm-up invariant (`idx_* >= (kernel-1) * dilation`) is owned
+            // release-stable by the layer-state construction (`WaveNetLayerState::new`
+            // enforces `buffer_start >= receptive_field_size >= (kernel-1) * dilation`;
+            // see `common.rs`), keeping the clamp inactive on the model path; the caller
+            // guarantees `layer_buffer` is large enough for `in_start_* + in_ch`, keeping
+            // both `add` results inside the buffer. Prefetch calls only read hints.
             unsafe {
                 *tap_f0 = layer_buffer.as_ptr().add(in_start_f0);
                 *tap_f1 = layer_buffer.as_ptr().add(in_start_f1);

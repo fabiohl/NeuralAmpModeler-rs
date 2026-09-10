@@ -131,3 +131,31 @@ fn with_capacity_oom_on_layout_overflow() {
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), NamErrorCode::OutOfMemory);
 }
+
+#[test]
+fn test_aligned_vec_alignment_invariants_r8() {
+    #[repr(align(64))]
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Align64([u8; 64]);
+
+    // SAFETY: Align64 is a byte array where all-zero bit pattern represents a valid zero state.
+    unsafe impl super::Zeroable for Align64 {
+        fn is_zero(&self) -> bool {
+            self.0.iter().all(|&b| b == 0)
+        }
+    }
+
+    // Types with align <= 64 compile and instantiate cleanly
+    let v_u8 = AlignedVec::<u8>::with_capacity(16).unwrap();
+    assert_eq!(v_u8.cap(), 16);
+
+    let v_f64 = AlignedVec::<f64>::with_capacity(8).unwrap();
+    assert_eq!(v_f64.cap(), 8);
+
+    let v_a64 = AlignedVec::<Align64>::new(2, Align64([0u8; 64])).unwrap();
+    assert_eq!(v_a64.len(), 2);
+    assert_eq!(v_a64.as_ptr() as usize % 64, 0);
+
+    let empty = AlignedVec::<Align64>::empty();
+    assert_eq!(empty.len(), 0);
+}

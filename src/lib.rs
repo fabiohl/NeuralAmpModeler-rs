@@ -70,7 +70,9 @@ pub mod models;
 /// available and unchanged; this module is purely additive.
 pub mod prelude {
     pub use crate::common::diagnostics::SystemSnapshot;
+    pub use crate::common::params::{ActivationPrecision, ProcessingParams, RtProcessingParams};
     pub use crate::dsp::cabsim::loader::CabSimIr;
+    pub use crate::dsp::gate::GateParams;
     pub use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
     pub use crate::dsp::resampler::NamResampler;
     pub use crate::loader::{LoadError, LoadOptions, load_and_build_model};

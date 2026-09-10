@@ -33,9 +33,66 @@ pub enum A2Conv1d {
 impl A2Conv1d {
     /// Builds an A2 conv1d with pre-validated A2 parameters (groups=1).
     ///
+    /// The A2 loader always stores the fallback `Conv1dDyn` weights in
+    /// interleaved-4-wide layout (`transpose_conv1d_interleaved_4wide`), so the
+    /// validated constructor is invoked with `interleave_width = 4`.
+    ///
+    /// Attempts to build an A2 conv1d with pre-validated A2 parameters (groups=1).
+    ///
+    /// The A2 loader always stores the fallback `Conv1dDyn` weights in
+    /// interleaved-4-wide layout (`transpose_conv1d_interleaved_4wide`), so the
+    /// validated constructor is invoked with `interleave_width = 4`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - `kernel_size` is 0;
+    /// - `in_ch` or `out_ch` is 0;
+    /// - `bias.len() < out_ch`;
+    /// - weights buffer size is insufficient for interleaved-4 SIMD padding.
+    pub fn try_new(
+        weights: AlignedVec<f32>,
+        bias: AlignedVec<f32>,
+        do_bias: bool,
+        dilation: usize,
+        in_ch: usize,
+        out_ch: usize,
+        kernel_size: usize,
+    ) -> Result<Self, String> {
+        if kernel_size < 1 {
+            return Err("A2 kernel size must be >= 1".to_string());
+        }
+        if in_ch == 0 || out_ch == 0 {
+            return Err("channels must be > 0".to_string());
+        }
+        if bias.len() < out_ch {
+            return Err("bias buffer length is smaller than out_ch".to_string());
+        }
+
+        let conv = Conv1dDyn::try_from_parts(
+            weights,
+            bias,
+            do_bias,
+            dilation,
+            in_ch,
+            out_ch,
+            kernel_size,
+            4,
+        )
+        .map_err(|e| {
+            let mut msg = String::from("A2 fallback Conv1dDyn validation failed: ");
+            msg.push_str(&e.to_string());
+            msg
+        })?;
+
+        Ok(Self::Standard(conv))
+    }
+
+    /// Builds an A2 conv1d with pre-validated A2 parameters (groups=1).
+    ///
     /// # Panics
-    /// Panics if `kernel_size` is not 6 or 15 (debug builds).
-    /// In release, the assert is compiled out for performance.
+    /// Panics if the weights buffer is sub-dimensioned for the interleaved-4
+    /// padded layout or the kernel/channel parameters are invalid.
+    /// Prefer [`try_new`](Self::try_new) in fallible/hostile model loading paths.
     pub fn new(
         weights: AlignedVec<f32>,
         bias: AlignedVec<f32>,
@@ -45,42 +102,8 @@ impl A2Conv1d {
         out_ch: usize,
         kernel_size: usize,
     ) -> Self {
-        // A2 generic (S13.2, S14.1): arbitrary kernel sizes are valid
-        // for the dynamic engine. Fast-path const-generic kernels (CH=3,8)
-        // use specialized tile sizes for 6 and 15.
-        debug_assert!(
-            kernel_size >= 1,
-            "A2 kernel size must be >= 1; got {}",
-            kernel_size
-        );
-        debug_assert!(
-            in_ch > 0 && out_ch > 0,
-            "channels must be > 0, got in_ch={} out_ch={}",
-            in_ch,
-            out_ch
-        );
-
-        let num_blocks = out_ch.div_ceil(4);
-        let total_padded = num_blocks * 4 * in_ch * kernel_size;
-        debug_assert!(
-            weights.len() >= total_padded,
-            "weights too short: expected >= {}, got {}",
-            total_padded,
-            weights.len()
-        );
-        debug_assert!(bias.len() >= out_ch);
-
-        Self::Standard(Conv1dDyn {
-            weights,
-            bias,
-            do_bias,
-            dilation,
-            in_ch,
-            out_ch,
-            num_blocks,
-            interleave_width: 4,
-            kernel: kernel_size,
-        })
+        Self::try_new(weights, bias, do_bias, dilation, in_ch, out_ch, kernel_size)
+            .expect("A2Conv1d::new: invalid conv parameters or undersized buffer")
     }
 
     /// Builds a grouped A2 conv1d from raw NAM JSON row-major weights.

@@ -121,6 +121,12 @@ impl<T: Copy> AlignedVec<T> {
     /// Creates an empty buffer with zero capacity (infallible, does not allocate).
     #[inline]
     pub fn empty() -> Self {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "AlignedVec element alignment must not exceed 64 bytes"
+            );
+        };
         Self {
             ptr: NonNull::dangling(),
             len: 0,
@@ -133,6 +139,12 @@ impl<T: Copy> AlignedVec<T> {
     /// Returns the raw pointer and the `Layout` used (for later deallocation).
     /// This is the single allocation entry-point; all constructors route through it.
     fn alloc_slot(capacity: usize) -> Result<(*mut T, Layout), NamErrorCode> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "AlignedVec element alignment must not exceed 64 bytes"
+            );
+        };
         if capacity == 0 {
             return Ok((NonNull::dangling().as_ptr(), Layout::new::<()>()));
         }
@@ -168,6 +180,12 @@ impl<T: Copy> AlignedVec<T> {
     where
         T: Zeroable,
     {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "AlignedVec element alignment must not exceed 64 bytes"
+            );
+        };
         let mut vec = Self::with_capacity(len)?;
         // SAFETY: ptr is non-null with cap ≥ len (from with_capacity).
         // write_bytes sets raw memory — Zeroable guarantees all-zero bits is a valid T.
@@ -197,6 +215,12 @@ impl<T: Copy> AlignedVec<T> {
     /// # Errors
     /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
     pub fn with_capacity(capacity: usize) -> Result<Self, NamErrorCode> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "AlignedVec element alignment must not exceed 64 bytes"
+            );
+        };
         let (ptr, _layout) = Self::alloc_slot(capacity)?;
         Ok(Self {
             ptr: NonNull::new(ptr).unwrap_or(NonNull::dangling()),
@@ -268,6 +292,12 @@ impl<T: Copy> AlignedVec<T> {
     /// # Errors
     /// Returns `NamErrorCode::OutOfMemory` if allocation fails.
     pub fn from_vec(v: Vec<T>) -> Result<Self, NamErrorCode> {
+        const {
+            assert!(
+                std::mem::align_of::<T>() <= Self::ALIGN,
+                "AlignedVec element alignment must not exceed 64 bytes"
+            );
+        };
         if v.is_empty() {
             return Self::with_capacity(0);
         }
@@ -294,8 +324,9 @@ impl<T: Copy> Deref for AlignedVec<T> {
         if self.len == 0 {
             &[]
         } else {
-            // SAFETY: self.ptr is non-null from with_capacity (or dangling for zero-cap which is guarded
-            // by the len==0 branch above). self.len ≤ self.cap and all elements [0..len) are initialized.
+            // SAFETY: self.ptr is non-null with 64-byte alignment, satisfying align_of::<T>() <= 64
+            // guaranteed at compile time by const assertion. Zero-cap dangling pointers are guarded
+            // by the len==0 branch above. self.len ≤ self.cap and all elements [0..len) are initialized.
             unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
         }
     }
@@ -309,7 +340,8 @@ impl<T: Copy> DerefMut for AlignedVec<T> {
         if self.len == 0 {
             &mut []
         } else {
-            // SAFETY: self.ptr is non-null with cap > 0. self.len ≤ self.cap, all elements in [0..len)
+            // SAFETY: self.ptr is non-null with cap > 0 and 64-byte alignment (align_of::<T>() <= 64
+            // guaranteed by const assertion). self.len ≤ self.cap, all elements in [0..len)
             // are initialized. &mut self guarantees exclusive access — no aliasing possible.
             unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
         }

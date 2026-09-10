@@ -410,6 +410,7 @@ emit_preflight_receipt "preflight-simd-probe" "SIMD Capability & Dispatch Probe"
 declare -a PHASE_NAMES
 declare -a PHASE_STATUS
 declare -a PHASE_DURATIONS
+declare -a PHASE_DURATIONS_MS
 PHASE_COUNT=0
 
 # timed_cargo_test — runs a cargo test invocation, propagates its status.
@@ -435,17 +436,20 @@ run_phase() {
     echo -e "Executing: ${YELLOW}$cmd${NC}"
     echo -e "Log at: ${YELLOW}target/logs/$log_file${NC}"
 
-    local start_time=$(date +%s)
+    local start_time=$(date +%s%N)
 
     # Run command and capture output/status
     eval "$cmd" > "target/logs/$log_file" 2>&1
     local status=$?
 
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
+    local end_time=$(date +%s%N)
+    local duration_ms=$(( (end_time - start_time) / 1000000 ))
+    local duration_str
+    duration_str=$(format_duration_ms "$duration_ms")
 
     PHASE_NAMES[$PHASE_COUNT]="$name"
-    PHASE_DURATIONS[$PHASE_COUNT]="$duration"
+    PHASE_DURATIONS_MS[$PHASE_COUNT]="$duration_ms"
+    PHASE_DURATIONS[$PHASE_COUNT]="$duration_ms"
 
     # T2.4: the legacy exit-code 77 skip convention is dead — skips are now
     # conveyed exclusively by typed `[STATUS]` log markers, picked up by
@@ -455,17 +459,17 @@ run_phase() {
     # but its typed markers downgrade the suite verdict to
     # COMPLETED_WITH_GAPS — never a clean PASSED.
     if [ $status -eq 0 ]; then
-        echo -e "${GREEN}✓ Success (${duration}s)${NC}"
+        echo -e "${GREEN}✓ Success (${duration_str})${NC}"
         PHASE_STATUS[$PHASE_COUNT]="PASSED"
 
         if ! assert_phase_ran "$log_file"; then
-            echo -e "${RED}❌ Gate \"≥1 executed\" failed (${duration}s) — status promoted to FAILED.${NC}"
+            echo -e "${RED}❌ Gate \"≥1 executed\" failed (${duration_str}) — status promoted to FAILED.${NC}"
             PHASE_STATUS[$PHASE_COUNT]="FAILED"
             PHASE_COUNT=$((PHASE_COUNT + 1))
             return 1
         fi
     else
-        echo -e "${RED}❌ Failure (${duration}s) - Status: $status${NC}"
+        echo -e "${RED}❌ Failure (${duration_str}) - Status: $status${NC}"
         PHASE_STATUS[$PHASE_COUNT]="FAILED"
     fi
 
@@ -495,7 +499,7 @@ emit_long_phase_receipt() {
         --phase-id "phase$((idx + 1))" \
         --name "${PHASE_NAMES[$idx]}" \
         --status "${PHASE_STATUS[$idx]}" \
-        --duration-ms "$(( PHASE_DURATIONS[$idx] * 1000 ))" \
+        --duration-ms "${PHASE_DURATIONS_MS[$idx]}" \
         --log "target/logs/$log_file" \
         --out "$LONG_RECEIPT_FILE" || rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -730,6 +734,14 @@ run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "p
 # report 'Single core affinity' bypass.
 if [ "${NUM_CORES:-1}" -ge 2 ] && grep -q "Single core affinity" "target/logs/phase5-rt-jitter.log" 2>/dev/null; then
     echo -e "  ${RED}${BOLD}❌ REGRESSION: Phase 5 reported 'Single core affinity' on a machine with ${NUM_CORES} cores!${NC}" >&2
+    # R-3/B1 fail-closed: a single-core-affinity regression on a multi-core
+    # host must NEVER end in OVERALL: PASSED / exit 0. Bash never reclassifies
+    # logs — the typed receipt line drives the verdict — so promote the
+    # just-completed RT Jitter phase (receipt id phase6, index PHASE_COUNT - 1)
+    # to FAILED before its `nam_long_receipt append` below; the final
+    # `nam_long_receipt summary` then derives OVERALL: FAILED and the verdict
+    # block maps it to exit 1.
+    PHASE_STATUS[$((PHASE_COUNT - 1))]="FAILED"
 fi
 
 # The Rust test returns exit 0 even when internally bypassed (INCONCLUSIVE
@@ -789,9 +801,9 @@ echo -e "    - Phase Logs:    ${CYAN}target/logs/phase*.log${NC}"
 echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
 
 case "$SUMMARY_TEXT" in
-    *"OVERALL: FAILED"*)
-        echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check target/logs/long-audit-receipt.jsonl${NC}"
-        exit 1
+    *"OVERALL: PASSED"*)
+        echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
+        exit 0
         ;;
     *"OVERALL: COMPLETED_WITH_GAPS"*)
         echo -e "${YELLOW}${BOLD}⚠ Audit completed with declared gaps (inconclusive / skipped / unexecuted stages).${NC}"
@@ -801,8 +813,12 @@ case "$SUMMARY_TEXT" in
         fi
         exit 0
         ;;
+    *"OVERALL: FAILED"*)
+        echo -e "${RED}${BOLD}❌ One or more audit stages failed. Check target/logs/long-audit-receipt.jsonl${NC}"
+        exit 1
+        ;;
     *)
-        echo -e "${GREEN}${BOLD}✓ All audit stages completed successfully!${NC}"
-        exit 0
+        echo -e "${RED}${BOLD}❌ Unknown, truncated or missing overall verdict: '$SUMMARY_TEXT'. Failing closed.${NC}"
+        exit 1
         ;;
 esac

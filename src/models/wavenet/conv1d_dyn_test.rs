@@ -255,3 +255,178 @@ fn test_conv1d_dyn_warmup_underflow_clamped() {
     }
     assert!(block.iter().all(|v| v.is_finite()));
 }
+
+/// A3 / R-2 regression: the release-stable model-side builder
+/// (`Conv1dDyn::try_from_parts`) rejects non-SIMD-padded weight buffers for
+/// every interleave width (16/8/4) and accepts the exact padded total. The
+/// check is `anyhow::ensure!`, i.e. it stays compiled and enforced in release.
+#[test]
+fn test_conv1d_dyn_try_from_parts_rejects_unpadded_weights_all_widths() {
+    use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
+
+    fn run(in_ch: usize, out_ch: usize, kernel: usize) {
+        let width = select_interleave_width(out_ch);
+        let padded_total = out_ch.div_ceil(width) * width * in_ch * kernel;
+        // Raw row-major weight count with no SIMD tail padding.
+        let natural_total = out_ch * in_ch * kernel;
+
+        let bias = AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed in tests");
+
+        // One element short of the padded total must be rejected.
+        let short =
+            AlignedVec::new(padded_total - 1, 0.0f32).expect("allocation should succeed in tests");
+        let err = match Conv1dDyn::try_from_parts(
+            short,
+            bias.clone(),
+            false,
+            1,
+            in_ch,
+            out_ch,
+            kernel,
+            width,
+        ) {
+            Ok(_) => panic!("sub-padded weights must be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("weights buffer is too small"),
+            "unexpected error: {err}"
+        );
+
+        // Where SIMD padding is required (out_ch not an exact multiple of the
+        // block width), the natural unpadded buffer must also be rejected.
+        if natural_total < padded_total {
+            let natural =
+                AlignedVec::new(natural_total, 0.0f32).expect("allocation should succeed in tests");
+            let err = match Conv1dDyn::try_from_parts(
+                natural,
+                bias.clone(),
+                false,
+                1,
+                in_ch,
+                out_ch,
+                kernel,
+                width,
+            ) {
+                Ok(_) => panic!("unpadded (natural-size) weights must be rejected"),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                err.contains("weights buffer is too small"),
+                "unexpected error: {err}"
+            );
+        }
+
+        // The exact padded total must be accepted.
+        let padded =
+            AlignedVec::new(padded_total, 0.0f32).expect("allocation should succeed in tests");
+        let conv = Conv1dDyn::try_from_parts(padded, bias, false, 1, in_ch, out_ch, kernel, width)
+            .expect("exact padded buffer must be accepted");
+        assert_eq!(conv.interleave_width, width);
+        assert_eq!(conv.weights.len(), padded_total);
+    }
+
+    run(2, 12, 3); // out_ch = 12 → interleave width 16 (padded from 12 to 16)
+    run(2, 8, 3); //  out_ch = 8  → interleave width 8  (exact multiple)
+    run(2, 6, 3); //  out_ch = 6  → interleave width 4  (padded from 6 to 8)
+}
+
+/// A3 / R-2 regression: an `interleave_width` outside {4, 8, 16} cannot be
+/// smuggled through the validated constructor (it would corrupt the hot-path
+/// weight slicing).
+#[test]
+fn test_conv1d_dyn_try_from_parts_rejects_invalid_interleave_width() {
+    let weights = AlignedVec::new(4 * 2 * 3 * 4, 0.0f32).expect("allocation should succeed");
+    let bias = AlignedVec::new(4, 0.0f32).expect("allocation should succeed");
+
+    let err = match Conv1dDyn::try_from_parts(weights, bias, false, 1, 2, 4, 3, 5) {
+        Ok(_) => panic!("interleave_width 5 must be rejected"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string()
+            .contains("interleave_width must be 4, 8 or 16"),
+        "unexpected error: {err}"
+    );
+}
+
+/// A6 / R-7 regression: `process_block` with an odd frame count reaches the
+/// single-frame remainder path, whose mixin segment `[i*out_ch..(i+1)*out_ch]`
+/// used to be sliced unguarded — a `mixin` shorter than `num_frames*out_ch`
+/// (caller-contract violation) would panic on the audio thread. The segment is
+/// now bounds-clamped like the dual-frame path, so a short mixin must behave
+/// exactly as if the caller had zero-padded it up to the full block length.
+#[test]
+fn test_conv1d_dyn_process_block_short_mixin_remainder_clamped() {
+    let in_ch = 2;
+    let out_ch: usize = 4;
+    let kernel = 3;
+    let dilation = 1;
+    let interleave_width = 4;
+
+    let num_blocks = out_ch.div_ceil(interleave_width);
+    let total_padded = num_blocks * interleave_width * in_ch * kernel;
+    let weights = AlignedVec::new(total_padded, 1.0f32)
+        .expect("allocation should succeed for test-sized buffers");
+    let bias =
+        AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
+
+    let conv = Conv1dDyn::try_from_parts(
+        weights,
+        bias,
+        false,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        interleave_width,
+    )
+    .expect("valid padded weights must be accepted");
+
+    // 3 frames (odd -> one 2-frame chunk + one single-frame remainder), warm-up
+    // threshold (kernel-1)*dilation = 2, so `buffer_start = 2` keeps every tap at
+    // frame index >= 0 and <= buffer_start + num_frames - 1 = 4.
+    let num_frames = 3;
+    let buffer_start = 2;
+    let layer_buffer = vec![1.0f32; (buffer_start + num_frames) * in_ch];
+    let mut short_out = vec![0.0f32; num_frames * out_ch];
+
+    // Covers the first frame segment fully, the second only partially, and
+    // nothing beyond — the remainder frame's segment start (`2*out_ch`) is past
+    // the end, which panicked before the R-7 clamp.
+    let short_mixin = vec![2.0f32, 2.0, 2.0, 2.0, 3.0, 4.0];
+
+    // SAFETY: `layer_buffer` (5 frames x `in_ch`) covers the K=3, dilation=1 taps of the
+    // processed frames 2..=4, `block` holds `num_frames * out_ch` elements, and `short_mixin`
+    // is a caller-contract violation that the R-7 clamp must absorb without panicking or
+    // reading out of bounds; `Avx2Math` matches the CPU ISA required by the kernels.
+    unsafe {
+        conv.process_block::<Avx2Math>(
+            &layer_buffer,
+            &mut short_out,
+            buffer_start,
+            num_frames,
+            Some(&short_mixin),
+        );
+    }
+
+    // Reference: the same call with the short mixin zero-padded to the full block
+    // length must produce bit-identical output (missing mixin lanes read as zero).
+    let mut full_mixin = short_mixin.clone();
+    full_mixin.resize(num_frames * out_ch, 0.0f32);
+    let mut padded_out = vec![0.0f32; num_frames * out_ch];
+
+    // SAFETY: same preconditions as the previous call, now with a full-length mixin.
+    unsafe {
+        conv.process_block::<Avx2Math>(
+            &layer_buffer,
+            &mut padded_out,
+            buffer_start,
+            num_frames,
+            Some(&full_mixin),
+        );
+    }
+
+    assert_eq!(short_out, padded_out);
+    assert!(short_out.iter().all(|v| v.is_finite()));
+}

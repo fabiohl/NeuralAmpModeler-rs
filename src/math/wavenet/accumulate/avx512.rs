@@ -29,22 +29,25 @@ pub unsafe fn gated_activation_and_accumulate_block_avx512(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        while c + 16 <= ch {
-            let z1 = _mm512_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm512_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guard `c + 16 <= ch` ensures in-bounds loads/stores.
+        unsafe {
+            while c + 16 <= ch {
+                let z1 = _mm512_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm512_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx512(z1, z2);
-            let activated = _mm512_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx512(z1, z2);
+                let activated = _mm512_mul_ps(tanh_z1, sig_z2);
 
-            _mm512_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
+                _mm512_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
 
-            let vh = _mm512_loadu_ps(head_input.as_ptr().add(head_offset + c));
-            _mm512_storeu_ps(
-                head_input.as_mut_ptr().add(head_offset + c),
-                _mm512_add_ps(vh, activated),
-            );
-            c += 16;
+                let vh = _mm512_loadu_ps(head_input.as_ptr().add(head_offset + c));
+                _mm512_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    _mm512_add_ps(vh, activated),
+                );
+                c += 16;
+            }
         }
         while c < ch {
             let z1 = block[block_offset + c];
@@ -81,17 +84,20 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512(
         let block_offset = f * 2 * ch;
         let head_offset = f * ch;
         let mut c = 0;
-        while c + 16 <= ch {
-            let z1 = _mm512_loadu_ps(block.as_ptr().add(block_offset + c));
-            let z2 = _mm512_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guard `c + 16 <= ch` ensures in-bounds loads/stores.
+        unsafe {
+            while c + 16 <= ch {
+                let z1 = _mm512_loadu_ps(block.as_ptr().add(block_offset + c));
+                let z2 = _mm512_loadu_ps(block.as_ptr().add(block_offset + ch + c));
 
-            let (tanh_z1, sig_z2) =
-                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx512(z1, z2);
-            let activated = _mm512_mul_ps(tanh_z1, sig_z2);
+                let (tanh_z1, sig_z2) =
+                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx512(z1, z2);
+                let activated = _mm512_mul_ps(tanh_z1, sig_z2);
 
-            _mm512_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
-            _mm512_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
-            c += 16;
+                _mm512_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
+                _mm512_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
+                c += 16;
+            }
         }
         while c < ch {
             let z1 = block[block_offset + c];
@@ -119,17 +125,20 @@ pub unsafe fn gated_activation_and_overwrite_block_avx512(
 pub unsafe fn accumulate_head_avx512(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vs = _mm512_loadu_ps(src.as_ptr().add(i));
-        let vd = _mm512_loadu_ps(dest.as_ptr().add(i));
-        _mm512_storeu_ps(dest.as_mut_ptr().add(i), _mm512_add_ps(vd, vs));
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vs = _mm512_maskz_loadu_ps(mask, src.as_ptr().add(i));
-        let vd = _mm512_maskz_loadu_ps(mask, dest.as_ptr().add(i));
-        _mm512_mask_storeu_ps(dest.as_mut_ptr().add(i), mask, _mm512_add_ps(vd, vs));
+    // SAFETY: caller guarantees `src.len() >= dest.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vs = _mm512_loadu_ps(src.as_ptr().add(i));
+            let vd = _mm512_loadu_ps(dest.as_ptr().add(i));
+            _mm512_storeu_ps(dest.as_mut_ptr().add(i), _mm512_add_ps(vd, vs));
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vs = _mm512_maskz_loadu_ps(mask, src.as_ptr().add(i));
+            let vd = _mm512_maskz_loadu_ps(mask, dest.as_ptr().add(i));
+            _mm512_mask_storeu_ps(dest.as_mut_ptr().add(i), mask, _mm512_add_ps(vd, vs));
+        }
     }
 }
 
@@ -147,23 +156,26 @@ pub unsafe fn accumulate_head_avx512(dest: &mut [f32], src: &[f32]) {
 pub unsafe fn tanh_and_accumulate_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vh = _mm512_loadu_ps(head_input.as_ptr().add(i));
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vh, vt));
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vh = _mm512_loadu_ps(head_input.as_ptr().add(i));
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vh, vt));
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vh = _mm512_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vh, vt));
+            let vh = _mm512_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vh, vt));
+        }
     }
 }
 
@@ -181,19 +193,22 @@ pub unsafe fn tanh_and_accumulate_block_avx512(head_input: &mut [f32], block: &m
 pub unsafe fn tanh_and_overwrite_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+        }
     }
 }
 
@@ -219,23 +234,26 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512(
 ) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` and `seed.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vs = _mm512_loadu_ps(seed.as_ptr().add(i));
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vs, vt));
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vs = _mm512_loadu_ps(seed.as_ptr().add(i));
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vs, vt));
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = crate::math::activations::simd_tanh_poly_avx512(vb);
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vs = _mm512_maskz_loadu_ps(mask, seed.as_ptr().add(i));
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
+            let vs = _mm512_maskz_loadu_ps(mask, seed.as_ptr().add(i));
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
+        }
     }
 }
 
@@ -253,23 +271,26 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx512(
 pub unsafe fn relu_and_accumulate_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vh = _mm512_loadu_ps(head_input.as_ptr().add(i));
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vh, vt));
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vh = _mm512_loadu_ps(head_input.as_ptr().add(i));
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vh, vt));
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vh = _mm512_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vh, vt));
+            let vh = _mm512_maskz_loadu_ps(mask, head_input.as_ptr().add(i));
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vh, vt));
+        }
     }
 }
 
@@ -287,19 +308,22 @@ pub unsafe fn relu_and_accumulate_block_avx512(head_input: &mut [f32], block: &m
 pub unsafe fn relu_and_overwrite_block_avx512(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), vt);
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), vt);
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, vt);
+        }
     }
 }
 
@@ -322,22 +346,25 @@ pub unsafe fn relu_and_accumulate_with_seed_avx512(
 ) {
     let len = block.len();
     let mut i = 0;
-    while i + 16 <= len {
-        let vb = _mm512_loadu_ps(block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` and `seed.len() >= block.len()`, loop guard `i + 16 <= len` and masked tail ensure in-bounds access.
+    unsafe {
+        while i + 16 <= len {
+            let vb = _mm512_loadu_ps(block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_storeu_ps(block.as_mut_ptr().add(i), vt);
 
-        let vs = _mm512_loadu_ps(seed.as_ptr().add(i));
-        _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vs, vt));
-        i += 16;
-    }
-    if i < len {
-        let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
-        let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
-        let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
-        _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
+            let vs = _mm512_loadu_ps(seed.as_ptr().add(i));
+            _mm512_storeu_ps(head_input.as_mut_ptr().add(i), _mm512_add_ps(vs, vt));
+            i += 16;
+        }
+        if i < len {
+            let mask = _cvtu32_mask16((1u32 << (len - i)) - 1);
+            let vb = _mm512_maskz_loadu_ps(mask, block.as_ptr().add(i));
+            let vt = _mm512_max_ps(vb, _mm512_setzero_ps());
+            _mm512_mask_storeu_ps(block.as_mut_ptr().add(i), mask, vt);
 
-        let vs = _mm512_maskz_loadu_ps(mask, seed.as_ptr().add(i));
-        _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
+            let vs = _mm512_maskz_loadu_ps(mask, seed.as_ptr().add(i));
+            _mm512_mask_storeu_ps(head_input.as_mut_ptr().add(i), mask, _mm512_add_ps(vs, vt));
+        }
     }
 }

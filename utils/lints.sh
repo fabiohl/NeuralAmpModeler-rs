@@ -39,16 +39,17 @@ fi
 echo -e "${BLUE}${BOLD}================================================================${NC}"
 echo -e "${BLUE}${BOLD}                 NeuralAmpModeler-rs Linting & Quality Suite                 ${NC}"
 echo -e "${BLUE}${BOLD}================================================================${NC}"
+SUITE_START=$(date +%s%N)
 
 # ---------------------------------------------------------------------------
-# [1/7] Code formatting (cargo fmt — applies in-place formatting immediately)
+# [1/8] Code formatting (cargo fmt — applies in-place formatting immediately)
 # ---------------------------------------------------------------------------
 phase "Applying code formatting (cargo fmt in-place)..."
 cargo fmt --all
-ok "Code formatting applied."
+ok "Code formatting applied ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [2/7] Compilation checks (cargo check) — maximum feature & target matrix
+# [2/8] Compilation checks (cargo check) — maximum feature & target matrix
 # ---------------------------------------------------------------------------
 phase "Executing compilation checks (cargo check)..."
 
@@ -73,10 +74,10 @@ cargo check --locked --all-targets --no-default-features --features testing
 echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (heap-audit)...${NC}"
 cargo check --locked --all-targets --no-default-features --features heap-audit
 
-ok "All compilation check permutations passed."
+ok "All compilation check permutations passed ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [3/7] Static analysis (cargo clippy) — strict, maximum feature matrix
+# [3/8] Static analysis (cargo clippy) — strict, maximum feature matrix
 # ---------------------------------------------------------------------------
 phase "Executing strict static analysis (cargo clippy)..."
 
@@ -95,10 +96,10 @@ cargo clippy --locked --all-targets --no-default-features --features dynamic-eng
 echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (stereo)...${NC}"
 cargo clippy --locked --all-targets --no-default-features --features stereo -- -D warnings
 
-ok "All static analysis permutations passed cleanly with zero warnings."
+ok "All static analysis permutations passed cleanly with zero warnings ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [4/7] Documentation validation (cargo doc + cargo test --doc)
+# [4/8] Documentation validation (cargo doc + cargo test --doc)
 # ---------------------------------------------------------------------------
 phase "Validating documentation (cargo doc + cargo test --doc)..."
 
@@ -108,10 +109,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features
 echo -e "  ${YELLOW}${BOLD}Running doc-tests (all features)...${NC}"
 cargo test --locked --doc --all-features
 
-ok "Documentation and doc-tests validated."
+ok "Documentation and doc-tests validated ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [5/7] SPDX license header validation (deterministic, no external tooling)
+# [5/8] SPDX license header validation (deterministic, no external tooling)
 # ---------------------------------------------------------------------------
 phase "Validating SPDX license headers..."
 
@@ -162,21 +163,25 @@ if [ -n "$invalid" ]; then
     echo "$invalid" | sed 's/^/    /'
     exit 1
 fi
-ok "All files have valid SPDX headers (Apache-2.0, MIT)."
+ok "All files have valid SPDX headers (Apache-2.0, MIT) ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [6/7] Anti-pattern check: #[test] in tests/common/
+# [6/8] Anti-pattern check: #[test] in tests/common/
 # ---------------------------------------------------------------------------
 phase "Checking anti-pattern #[test] in tests/common/..."
-if [ -d "tests/common" ] && grep -rnF "#[test]" tests/common/ >/dev/null 2>&1; then
+if [ ! -d "tests/common" ]; then
+    echo -e "  ${RED}${BOLD}ERROR: Directory tests/common/ is missing. Cannot verify anti-patterns.${NC}"
+    exit 1
+fi
+if grep -rnF "#[test]" tests/common/ >/dev/null 2>&1; then
     echo -e "  ${RED}${BOLD}ERROR: '#[test]' found in tests/common/ (redundant executions):${NC}"
     grep -rnF "#[test]" tests/common/ | sed 's/^/    /'
     exit 1
 fi
-ok "No '#[test]' in tests/common/."
+ok "No '#[test]' in tests/common/ ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [7/7] Undocumented #[allow(clippy::)] check (enforce allow_attributes policy)
+# [7/8] Undocumented #[allow(clippy::)] check (enforce allow_attributes policy)
 # ---------------------------------------------------------------------------
 phase "Checking for undocumented #[allow(clippy::)] suppressions..."
 
@@ -203,7 +208,7 @@ if [ -n "$undocumented_allows" ]; then
     echo "$undocumented_allows" | sed 's/^/    /'
     exit 1
 fi
-ok "All #[allow(clippy::)] suppressions are documented."
+ok "All #[allow(clippy::)] suppressions are documented ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
 # [8/8] Static validation: doc(cfg(feature = "...")) feature names exist in Cargo.toml
@@ -232,8 +237,12 @@ if [ -n "$doc_cfg_errors" ]; then
     echo "$doc_cfg_errors" | sed 's/^/    /'
     exit 1
 fi
-ok "All doc(cfg) feature annotations match declared features in Cargo.toml."
+ok "All doc(cfg) feature annotations match declared features in Cargo.toml ($(phase_elapsed_str))."
+
+SUITE_END=$(date +%s%N)
+TOTAL_DUR_MS=$(( (SUITE_END - SUITE_START) / 1000000 ))
+TOTAL_DUR_STR=$(format_duration_ms "$TOTAL_DUR_MS")
 
 echo -e "${GREEN}${BOLD}================================================================${NC}"
-echo -e "${GREEN}${BOLD} Quality suite completed successfully!                          ${NC}"
+echo -e "${GREEN}${BOLD} Quality suite completed successfully in ${TOTAL_DUR_STR}!         ${NC}"
 echo -e "${GREEN}${BOLD}================================================================${NC}"

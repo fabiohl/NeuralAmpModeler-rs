@@ -219,6 +219,8 @@ pub fn load_and_build_model(
                 Some(namb::NambError::InvalidHeaderField { .. }) => {
                     NamErrorCode::NambInvalidHeaderField
                 }
+                Some(namb::NambError::MetadataNotUtf8 { .. })
+                | Some(namb::NambError::MetadataJson(_)) => NamErrorCode::ModelBuildFailed,
                 None => NamErrorCode::ModelBuildFailed,
             };
             // T5.1: structured failure diagnostic (path + size + code).
@@ -251,6 +253,9 @@ pub fn load_and_build_model(
                     namb::NambError::NonFiniteWeight { .. } => LoadError::NonFiniteWeights,
                     namb::NambError::InvalidHeaderField { field, .. } => {
                         LoadError::Internal(format!("invalid header field {}", field))
+                    }
+                    namb::NambError::MetadataNotUtf8 { .. } | namb::NambError::MetadataJson(_) => {
+                        LoadError::Internal(namb_err.to_string())
                     }
                 },
                 Err(orig_e) => LoadError::Internal(orig_e.to_string()),

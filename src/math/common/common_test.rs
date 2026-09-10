@@ -973,5 +973,100 @@ mod huge_alloc_tests {
         assert!(result.is_ok());
         let (vec, _status) = result.unwrap();
         assert_eq!(vec.len(), 0);
+        assert_eq!(vec.capacity(), 128);
+        assert!(vec.is_empty());
+    }
+
+    #[test]
+    fn test_huge_page_vec_with_capacity_zero_len_no_leak_r15() {
+        // Finding R-15: with_capacity must allocate with recorded cap,
+        // and Drop must release the mapped memory even when len == 0.
+        let result = HugePageVec::<f32>::with_capacity(1024);
+        assert!(result.is_ok());
+        let (vec, _status) = result.unwrap();
+        assert_eq!(vec.len(), 0);
+        assert_eq!(vec.capacity(), 1024);
+        assert!(vec.is_empty());
+        // Dropping with len == 0 must deallocate cleanly without leaking memory or file mappings
+        drop(vec);
+
+        // Also test with capacity == 0
+        let (v_zero, _status) = HugePageVec::<f32>::with_capacity(0).unwrap();
+        assert_eq!(v_zero.len(), 0);
+        assert_eq!(v_zero.capacity(), 0);
+        assert!(v_zero.is_empty());
+        drop(v_zero);
+
+        // Also test with new() confirming cap == len
+        let (v_new, _status) = HugePageVec::<f32>::new(1024, 0.5).unwrap();
+        assert_eq!(v_new.len(), 1024);
+        assert_eq!(v_new.capacity(), 1024);
+        assert!(!v_new.is_empty());
+        assert_eq!(v_new[0], 0.5);
+        assert_eq!(v_new[1023], 0.5);
+        drop(v_new);
+
+        // Large allocation (≥ 1 MiB) hitting mmap/THP path, dropped with len == 0
+        let large_cap = 2 * 1024 * 1024 / std::mem::size_of::<f32>();
+        let (v_large, _status) = HugePageVec::<f32>::with_capacity(large_cap).unwrap();
+        assert_eq!(v_large.len(), 0);
+        assert_eq!(v_large.capacity(), large_cap);
+        drop(v_large);
+    }
+
+    #[test]
+    fn test_huge_page_vec_overflow_protection_r1() {
+        use crate::common::diagnostics::NamErrorCode;
+        use crate::math::common::huge_alloc::align_up;
+
+        // align_up boundary and overflow checks
+        assert_eq!(align_up(0, 4096), Some(0));
+        assert_eq!(align_up(1, 4096), Some(4096));
+        assert_eq!(align_up(4096, 4096), Some(4096));
+        assert_eq!(align_up(4097, 4096), Some(8192));
+        assert_eq!(align_up(usize::MAX, 4096), None);
+        assert_eq!(align_up(usize::MAX - 10, 4096), None);
+        assert_eq!(align_up(100, 0), None);
+
+        // HugePageVec::with_capacity(usize::MAX) returns Err(OutOfMemory) without allocating
+        let cap_max = HugePageVec::<f32>::with_capacity(usize::MAX);
+        assert_eq!(cap_max.err(), Some(NamErrorCode::OutOfMemory));
+
+        // Multiplication overflow with size_of::<f32>() == 4
+        let cap_half_max = HugePageVec::<f32>::with_capacity(usize::MAX / 2);
+        assert_eq!(cap_half_max.err(), Some(NamErrorCode::OutOfMemory));
+
+        // Even with size_of::<u8>() == 1, alignment overflow in allocate_huge_pages triggers OutOfMemory
+        let cap_u8_max = HugePageVec::<u8>::with_capacity(usize::MAX);
+        assert_eq!(cap_u8_max.err(), Some(NamErrorCode::OutOfMemory));
+
+        // HugePageVec::new(usize::MAX, 0.0) returns Err(OutOfMemory) without allocating
+        let new_max = HugePageVec::<f32>::new(usize::MAX, 0.0);
+        assert_eq!(new_max.err(), Some(NamErrorCode::OutOfMemory));
+
+        let new_half_max = HugePageVec::<f32>::new(usize::MAX / 2, 0.0);
+        assert_eq!(new_half_max.err(), Some(NamErrorCode::OutOfMemory));
+
+        // allocate_huge_pages direct call with usize::MAX returns Err(OutOfMemory)
+        let alloc_max = allocate_huge_pages(usize::MAX);
+        assert_eq!(alloc_max.err(), Some(NamErrorCode::OutOfMemory));
+    }
+
+    #[test]
+    fn test_huge_page_vec_alignment_invariants_r8() {
+        #[repr(align(64))]
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Align64([u8; 64]);
+
+        // Types with align <= 64 compile and instantiate cleanly
+        let (v_u8, _status) = HugePageVec::<u8>::with_capacity(16).unwrap();
+        assert_eq!(v_u8.len(), 0);
+
+        let (v_f64, _status) = HugePageVec::<f64>::with_capacity(8).unwrap();
+        assert_eq!(v_f64.len(), 0);
+
+        let (v_a64, _status) = HugePageVec::<Align64>::new(2, Align64([0u8; 64])).unwrap();
+        assert_eq!(v_a64.len(), 2);
+        assert_eq!(v_a64.as_ptr() as usize % 64, 0);
     }
 }

@@ -79,6 +79,10 @@ pub fn get_convnet_topology(data: &NamModelData) -> Option<ConvNetTopology> {
             return None;
         }
         for (j, &d) in dils.iter().enumerate() {
+            if d == 0 {
+                log::warn!("ConvNet flat format dilation[{j}] is 0 — invalid dilation");
+                return None;
+            }
             if d > MAX_DILATION {
                 log::warn!(
                     "ConvNet flat format dilation[{j}] ({d}) exceeds maximum \
@@ -162,6 +166,10 @@ pub fn get_convnet_topology(data: &NamModelData) -> Option<ConvNetTopology> {
                     return None;
                 }
                 for (j, &dil) in d.iter().enumerate() {
+                    if dil == 0 {
+                        log::warn!("ConvNet block {i} dilation[{j}] is 0 — invalid dilation");
+                        return None;
+                    }
                     if dil > MAX_DILATION {
                         log::warn!(
                             "ConvNet block {i} dilation[{j}] ({dil}) exceeds maximum \

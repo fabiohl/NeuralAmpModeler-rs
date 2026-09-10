@@ -134,18 +134,16 @@ fn transpose_weights(data: &NamModelData, layout: WeightsLayout) -> Result<Vec<f
 
 /// Safety function: ensures we won't try to read data beyond what exists in the file.
 /// If the model is corrupted or incomplete, the program warns instead of crashing.
-pub(crate) fn ensure_capacity(
-    weights: &[f32],
-    cursor: usize,
-    needed: usize,
-    label: String,
-) -> Result<()> {
-    if cursor + needed > weights.len() {
+pub fn ensure_capacity(weights: &[f32], cursor: usize, needed: usize, label: String) -> Result<()> {
+    let end = cursor
+        .checked_add(needed)
+        .ok_or_else(|| anyhow::anyhow!("Overflow calculating weight buffer bounds for {label}"))?;
+    if end > weights.len() {
         anyhow::bail!(
             "Insufficient weights for {}: needs index {}..{}, but total length is {}",
             label,
             cursor,
-            cursor + needed,
+            end,
             weights.len()
         );
     }

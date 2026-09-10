@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
-
 //! Fused kernels for LSTM gates (AVX2 and AVX-512).
 //!
 //! Extracted from `activations/fused.rs` and `simd/avx2.rs`/`simd/avx512.rs`.
@@ -55,16 +49,19 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
     // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_poly_avx2(gg) };
 
-    let f_cs = _mm256_mul_ps(sig_f, cs);
-    let f_err = _mm256_mul_ps(sig_f, cs_err);
-    let i_g = _mm256_mul_ps(sig_i, tanh_g);
-    let y = _mm256_sub_ps(i_g, f_err);
-    let new_cs = _mm256_add_ps(f_cs, y);
-    let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
+    let (new_cs, new_cs_err) = {
+        let f_cs = _mm256_mul_ps(sig_f, cs);
+        let f_err = _mm256_mul_ps(sig_f, cs_err);
+        let i_g = _mm256_mul_ps(sig_i, tanh_g);
+        let y = _mm256_sub_ps(i_g, f_err);
+        let new_cs = _mm256_add_ps(f_cs, y);
+        let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
+        (new_cs, new_cs_err)
+    };
 
-    // SAFETY: `simd_tanh_poly_avx2` requires AVX2+FMA, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
-    let hidden = _mm256_mul_ps(sig_o, unsafe { simd_tanh_poly_avx2(new_cs) });
+    // SAFETY: `simd_tanh_poly_avx2` and `_mm256_mul_ps` require AVX2+FMA, guaranteed
+    // by this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    let hidden = unsafe { _mm256_mul_ps(sig_o, simd_tanh_poly_avx2(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
 }
@@ -95,16 +92,19 @@ pub unsafe fn fused_lstm_gates_avx2_std(
     // this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_avx2(gg) };
 
-    let f_cs = _mm256_mul_ps(sig_f, cs);
-    let f_err = _mm256_mul_ps(sig_f, cs_err);
-    let i_g = _mm256_mul_ps(sig_i, tanh_g);
-    let y = _mm256_sub_ps(i_g, f_err);
-    let new_cs = _mm256_add_ps(f_cs, y);
-    let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
+    let (new_cs, new_cs_err) = {
+        let f_cs = _mm256_mul_ps(sig_f, cs);
+        let f_err = _mm256_mul_ps(sig_f, cs_err);
+        let i_g = _mm256_mul_ps(sig_i, tanh_g);
+        let y = _mm256_sub_ps(i_g, f_err);
+        let new_cs = _mm256_add_ps(f_cs, y);
+        let new_cs_err = _mm256_sub_ps(_mm256_sub_ps(new_cs, f_cs), y);
+        (new_cs, new_cs_err)
+    };
 
-    // SAFETY: `simd_tanh_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
-    let hidden = _mm256_mul_ps(sig_o, unsafe { simd_tanh_avx2(new_cs) });
+    // SAFETY: `simd_tanh_avx2` and `_mm256_mul_ps` require AVX2+FMA, guaranteed
+    // by this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    let hidden = unsafe { _mm256_mul_ps(sig_o, simd_tanh_avx2(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
 }
@@ -167,17 +167,20 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
     // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_poly_avx512(gg) };
 
-    let f_cs = _mm512_mul_ps(sig_f, cs);
-    let f_err = _mm512_mul_ps(sig_f, cs_err);
-    let i_g = _mm512_mul_ps(sig_i, tanh_g);
-    let y = _mm512_sub_ps(i_g, f_err);
-    let new_cs = _mm512_add_ps(f_cs, y);
-    let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
+    let (new_cs, new_cs_err) = {
+        let f_cs = _mm512_mul_ps(sig_f, cs);
+        let f_err = _mm512_mul_ps(sig_f, cs_err);
+        let i_g = _mm512_mul_ps(sig_i, tanh_g);
+        let y = _mm512_sub_ps(i_g, f_err);
+        let new_cs = _mm512_add_ps(f_cs, y);
+        let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
+        (new_cs, new_cs_err)
+    };
 
-    // SAFETY: `simd_tanh_poly_avx512` requires AVX-512F/VL, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // SAFETY: `simd_tanh_poly_avx512` and `_mm512_mul_ps` require AVX-512F/VL,
+    // guaranteed by this `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
     // contract.
-    let hidden = _mm512_mul_ps(sig_o, unsafe { simd_tanh_poly_avx512(new_cs) });
+    let hidden = unsafe { _mm512_mul_ps(sig_o, simd_tanh_poly_avx512(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
 }
@@ -212,17 +215,20 @@ pub unsafe fn fused_lstm_gates_avx512_std(
     // by this `unsafe fn`'s `#[target_feature]` and caller contract.
     let tanh_g = unsafe { simd_tanh_avx512(gg) };
 
-    let f_cs = _mm512_mul_ps(sig_f, cs);
-    let f_err = _mm512_mul_ps(sig_f, cs_err);
-    let i_g = _mm512_mul_ps(sig_i, tanh_g);
-    let y = _mm512_sub_ps(i_g, f_err);
-    let new_cs = _mm512_add_ps(f_cs, y);
-    let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
+    let (new_cs, new_cs_err) = {
+        let f_cs = _mm512_mul_ps(sig_f, cs);
+        let f_err = _mm512_mul_ps(sig_f, cs_err);
+        let i_g = _mm512_mul_ps(sig_i, tanh_g);
+        let y = _mm512_sub_ps(i_g, f_err);
+        let new_cs = _mm512_add_ps(f_cs, y);
+        let new_cs_err = _mm512_sub_ps(_mm512_sub_ps(new_cs, f_cs), y);
+        (new_cs, new_cs_err)
+    };
 
-    // SAFETY: `simd_tanh_avx512` requires AVX-512F/VL, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
+    // SAFETY: `simd_tanh_avx512` and `_mm512_mul_ps` require AVX-512F/VL,
+    // guaranteed by this `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
     // contract.
-    let hidden = _mm512_mul_ps(sig_o, unsafe { simd_tanh_avx512(new_cs) });
+    let hidden = unsafe { _mm512_mul_ps(sig_o, simd_tanh_avx512(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
 }
@@ -257,6 +263,11 @@ pub unsafe fn fused_lstm_gates_avx512(
 }
 
 /// Fused kernel for dynamic LSTM gate processing via AVX2.
+///
+/// # Safety
+/// Requires AVX2 and FMA support. `gates` must have length at least `4 * hidden_size`.
+/// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
+/// Output buffers must not alias `gates`.
 #[inline]
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn fused_lstm_gates_dyn_avx2(
@@ -269,22 +280,29 @@ pub unsafe fn fused_lstm_gates_dyn_avx2(
     let is_hf = activation_precision() == ActivationPrecision::Standard;
     let mut j = 0;
     while j + 8 <= hidden_size {
-        let gi = _mm256_loadu_ps(gates.as_ptr().add(j));
-        let gf = _mm256_loadu_ps(gates.as_ptr().add(j + hidden_size));
-        let gg = _mm256_loadu_ps(gates.as_ptr().add(j + 2 * hidden_size));
-        let go = _mm256_loadu_ps(gates.as_ptr().add(j + 3 * hidden_size));
-        let cs = _mm256_loadu_ps(cell_state.as_ptr().add(j));
-        let cs_err = _mm256_loadu_ps(cell_error.as_ptr().add(j));
+        // SAFETY: Pointer offsets `j + 8 <= hidden_size` ensure all raw pointer reads
+        // and writes stay within `gates` (length >= 4 * hidden_size), `cell_state`,
+        // `cell_error`, and `hidden_state` (length >= hidden_size). `_mm256_loadu_ps`
+        // and `_mm256_storeu_ps` perform unaligned 32-byte accesses, so 32-byte alignment
+        // is not required. Slices do not alias. AVX2+FMA are guaranteed by caller contract.
+        unsafe {
+            let gi = _mm256_loadu_ps(gates.as_ptr().add(j));
+            let gf = _mm256_loadu_ps(gates.as_ptr().add(j + hidden_size));
+            let gg = _mm256_loadu_ps(gates.as_ptr().add(j + 2 * hidden_size));
+            let go = _mm256_loadu_ps(gates.as_ptr().add(j + 3 * hidden_size));
+            let cs = _mm256_loadu_ps(cell_state.as_ptr().add(j));
+            let cs_err = _mm256_loadu_ps(cell_error.as_ptr().add(j));
 
-        let (new_cs, new_cs_err, hidden) = if is_hf {
-            fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err)
-        } else {
-            fused_lstm_gates_avx2_std(gf, gi, gg, go, cs, cs_err)
-        };
+            let (new_cs, new_cs_err, hidden) = if is_hf {
+                fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err)
+            } else {
+                fused_lstm_gates_avx2_std(gf, gi, gg, go, cs, cs_err)
+            };
 
-        _mm256_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
-        _mm256_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
-        _mm256_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+            _mm256_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
+            _mm256_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
+            _mm256_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+        }
 
         j += 8;
     }
@@ -328,22 +346,28 @@ unsafe fn fused_lstm_gates_dyn_tail(
     let ep = cell_error.as_ptr();
 
     while j + 8 <= hidden_size {
-        let gi = _mm256_loadu_ps(gp.add(j));
-        let gf = _mm256_loadu_ps(gp.add(j + hidden_size));
-        let gg = _mm256_loadu_ps(gp.add(j + 2 * hidden_size));
-        let go = _mm256_loadu_ps(gp.add(j + 3 * hidden_size));
-        let cs = _mm256_loadu_ps(cp.add(j));
-        let cs_err = _mm256_loadu_ps(ep.add(j));
+        // SAFETY: Pointer offsets `j + 8 <= hidden_size` ensure all raw pointer reads
+        // and writes stay within `gates` (stride >= 4 * hidden_size) and state buffers.
+        // `_mm256_loadu_ps` and `_mm256_storeu_ps` handle unaligned 32-byte transfers.
+        // AVX2+FMA are guaranteed by `#[target_feature(enable = "avx2,fma")]` and caller contract.
+        unsafe {
+            let gi = _mm256_loadu_ps(gp.add(j));
+            let gf = _mm256_loadu_ps(gp.add(j + hidden_size));
+            let gg = _mm256_loadu_ps(gp.add(j + 2 * hidden_size));
+            let go = _mm256_loadu_ps(gp.add(j + 3 * hidden_size));
+            let cs = _mm256_loadu_ps(cp.add(j));
+            let cs_err = _mm256_loadu_ps(ep.add(j));
 
-        let (new_cs, new_cs_err, hidden) = if is_hf {
-            fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err)
-        } else {
-            fused_lstm_gates_avx2_std(gf, gi, gg, go, cs, cs_err)
-        };
+            let (new_cs, new_cs_err, hidden) = if is_hf {
+                fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err)
+            } else {
+                fused_lstm_gates_avx2_std(gf, gi, gg, go, cs, cs_err)
+            };
 
-        _mm256_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
-        _mm256_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
-        _mm256_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+            _mm256_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
+            _mm256_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
+            _mm256_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+        }
 
         j += 8;
     }
@@ -357,42 +381,56 @@ unsafe fn fused_lstm_gates_dyn_tail(
         let mut temp_cs = [0.0f32; 8];
         let mut temp_ce = [0.0f32; 8];
 
-        for k in 0..tail_len {
-            temp_gf[k] = *gp.add(j + k + hidden_size);
-            temp_gi[k] = *gp.add(j + k);
-            temp_gg[k] = *gp.add(j + k + 2 * hidden_size);
-            temp_go[k] = *gp.add(j + k + 3 * hidden_size);
-            temp_cs[k] = *cp.add(j + k);
-            temp_ce[k] = *ep.add(j + k);
+        // SAFETY: `k < tail_len = hidden_size - j`, so `j + k < hidden_size`.
+        // All offsets stay strictly within `gates` (size >= 4 * hidden_size) and state buffers.
+        unsafe {
+            for k in 0..tail_len {
+                temp_gf[k] = *gp.add(j + k + hidden_size);
+                temp_gi[k] = *gp.add(j + k);
+                temp_gg[k] = *gp.add(j + k + 2 * hidden_size);
+                temp_go[k] = *gp.add(j + k + 3 * hidden_size);
+                temp_cs[k] = *cp.add(j + k);
+                temp_ce[k] = *ep.add(j + k);
+            }
         }
-
-        let gf_v = _mm256_loadu_ps(temp_gf.as_ptr());
-        let gi_v = _mm256_loadu_ps(temp_gi.as_ptr());
-        let gg_v = _mm256_loadu_ps(temp_gg.as_ptr());
-        let go_v = _mm256_loadu_ps(temp_go.as_ptr());
-        let cs_v = _mm256_loadu_ps(temp_cs.as_ptr());
-        let ce_v = _mm256_loadu_ps(temp_ce.as_ptr());
-
-        let (new_cs_v, new_ce_v, hidden_v) = if is_hf {
-            fused_lstm_gates_avx2_hf(gf_v, gi_v, gg_v, go_v, cs_v, ce_v)
-        } else {
-            fused_lstm_gates_avx2_std(gf_v, gi_v, gg_v, go_v, cs_v, ce_v)
-        };
 
         let mut out_cs = [0.0f32; 8];
         let mut out_ce = [0.0f32; 8];
         let mut out_hs = [0.0f32; 8];
-        _mm256_storeu_ps(out_cs.as_mut_ptr(), new_cs_v);
-        _mm256_storeu_ps(out_ce.as_mut_ptr(), new_ce_v);
-        _mm256_storeu_ps(out_hs.as_mut_ptr(), hidden_v);
+
+        // SAFETY: `temp_*` and `out_*` are stack buffers of 8 elements;
+        // `_mm256_loadu_ps` and `_mm256_storeu_ps` access exactly 8 floats.
+        // AVX2+FMA are guaranteed by `#[target_feature(enable = "avx2,fma")]` and caller contract.
+        unsafe {
+            let gf_v = _mm256_loadu_ps(temp_gf.as_ptr());
+            let gi_v = _mm256_loadu_ps(temp_gi.as_ptr());
+            let gg_v = _mm256_loadu_ps(temp_gg.as_ptr());
+            let go_v = _mm256_loadu_ps(temp_go.as_ptr());
+            let cs_v = _mm256_loadu_ps(temp_cs.as_ptr());
+            let ce_v = _mm256_loadu_ps(temp_ce.as_ptr());
+
+            let (new_cs_v, new_ce_v, hidden_v) = if is_hf {
+                fused_lstm_gates_avx2_hf(gf_v, gi_v, gg_v, go_v, cs_v, ce_v)
+            } else {
+                fused_lstm_gates_avx2_std(gf_v, gi_v, gg_v, go_v, cs_v, ce_v)
+            };
+
+            _mm256_storeu_ps(out_cs.as_mut_ptr(), new_cs_v);
+            _mm256_storeu_ps(out_ce.as_mut_ptr(), new_ce_v);
+            _mm256_storeu_ps(out_hs.as_mut_ptr(), hidden_v);
+        }
 
         let cp_mut = cell_state.as_mut_ptr();
         let ep_mut = cell_error.as_mut_ptr();
         let hp_mut = hidden_state.as_mut_ptr();
-        for k in 0..tail_len {
-            *cp_mut.add(j + k) = out_cs[k];
-            *ep_mut.add(j + k) = out_ce[k];
-            *hp_mut.add(j + k) = out_hs[k];
+        // SAFETY: `k < tail_len = hidden_size - j`, so `j + k < hidden_size`.
+        // Writes stay within bounds of valid mutable slice pointers.
+        unsafe {
+            for k in 0..tail_len {
+                *cp_mut.add(j + k) = out_cs[k];
+                *ep_mut.add(j + k) = out_ce[k];
+                *hp_mut.add(j + k) = out_hs[k];
+            }
         }
     }
 }
@@ -400,6 +438,11 @@ unsafe fn fused_lstm_gates_dyn_tail(
 /// Fused kernel to update the memory (state) of an LSTM network.
 /// This function decides what the network should "forget" from the past and what to "learn" from the present,
 /// updating the values all at once for 16 memory cells.
+///
+/// # Safety
+/// Requires AVX-512F and AVX-512VL support. `gates` must have length at least `4 * hidden_size`.
+/// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
+/// Output buffers must not alias `gates`.
 #[cfg(feature = "avx512")]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
@@ -413,24 +456,31 @@ pub unsafe fn fused_lstm_gates_dyn_avx512(
     let is_hf = activation_precision() == ActivationPrecision::Standard;
     let mut j = 0;
     while j + 16 <= hidden_size {
-        // Load the 4 decisions (forget, learn, etc.) for 16 cells.
-        let gi = _mm512_loadu_ps(gates.as_ptr().add(j));
-        let gf = _mm512_loadu_ps(gates.as_ptr().add(j + hidden_size));
-        let gg = _mm512_loadu_ps(gates.as_ptr().add(j + 2 * hidden_size));
-        let go = _mm512_loadu_ps(gates.as_ptr().add(j + 3 * hidden_size));
-        let cs = _mm512_loadu_ps(cell_state.as_ptr().add(j));
-        let cs_err = _mm512_loadu_ps(cell_error.as_ptr().add(j));
+        // SAFETY: Pointer offsets `j + 16 <= hidden_size` ensure all raw pointer reads
+        // and writes stay within `gates` (length >= 4 * hidden_size), `cell_state`,
+        // `cell_error`, and `hidden_state` (length >= hidden_size). `_mm512_loadu_ps`
+        // and `_mm512_storeu_ps` perform unaligned 64-byte accesses, so 64-byte alignment
+        // is not required. Slices do not alias. AVX-512F/VL are guaranteed by caller contract.
+        unsafe {
+            // Load the 4 decisions (forget, learn, etc.) for 16 cells.
+            let gi = _mm512_loadu_ps(gates.as_ptr().add(j));
+            let gf = _mm512_loadu_ps(gates.as_ptr().add(j + hidden_size));
+            let gg = _mm512_loadu_ps(gates.as_ptr().add(j + 2 * hidden_size));
+            let go = _mm512_loadu_ps(gates.as_ptr().add(j + 3 * hidden_size));
+            let cs = _mm512_loadu_ps(cell_state.as_ptr().add(j));
+            let cs_err = _mm512_loadu_ps(cell_error.as_ptr().add(j));
 
-        // Perform the memory computation in a fused manner.
-        let (new_cs, new_cs_err, hidden) = if is_hf {
-            fused_lstm_gates_avx512_hf(gf, gi, gg, go, cs, cs_err)
-        } else {
-            fused_lstm_gates_avx512_std(gf, gi, gg, go, cs, cs_err)
-        };
+            // Perform the memory computation in a fused manner.
+            let (new_cs, new_cs_err, hidden) = if is_hf {
+                fused_lstm_gates_avx512_hf(gf, gi, gg, go, cs, cs_err)
+            } else {
+                fused_lstm_gates_avx512_std(gf, gi, gg, go, cs, cs_err)
+            };
 
-        _mm512_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
-        _mm512_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
-        _mm512_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+            _mm512_storeu_ps(cell_state.as_mut_ptr().add(j), new_cs);
+            _mm512_storeu_ps(cell_error.as_mut_ptr().add(j), new_cs_err);
+            _mm512_storeu_ps(hidden_state.as_mut_ptr().add(j), hidden);
+        }
 
         j += 16;
     }

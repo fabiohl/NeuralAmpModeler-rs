@@ -132,7 +132,9 @@ fn test_gc_corrupted_slot_unknown_type() {
 
     // Create a valid packed value to extract a real pointer from
     let valid_item = GcItem::Test(Box::new(counter.clone()));
-    let valid_packed = valid_item.into_packed();
+    let valid_packed = valid_item
+        .into_packed()
+        .expect("56-bit packing must succeed on x86-64 (GcOverflowBuffer::new probe passed)");
     let ptr = (valid_packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
 
     // Push 3 valid items (slots 0, 1, 2 — write_idx reaches 2)
@@ -176,7 +178,9 @@ fn test_gc_corrupted_slot_null_type_non_null_ptr() {
 
     // Create a valid packed value to extract a real pointer from
     let valid_item = GcItem::Test(Box::new(counter.clone()));
-    let packed = valid_item.into_packed();
+    let packed = valid_item
+        .into_packed()
+        .expect("56-bit packing must succeed on x86-64 (GcOverflowBuffer::new probe passed)");
     let ptr = (packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
 
     // Push 2 valid items (slots 0, 1)

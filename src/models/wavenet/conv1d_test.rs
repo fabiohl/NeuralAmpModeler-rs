@@ -510,3 +510,209 @@ fn test_conv1d_from_parts_subdimensioned_weights() {
         "unexpected error: {err}"
     );
 }
+
+/// A3 / R-2 regression: the release-stable model-side builder
+/// (`Conv1d::try_from_parts`) rejects non-SIMD-padded weight buffers for every
+/// interleave width (16/8/4) and accepts the exact padded total. The check is
+/// `anyhow::ensure!`, i.e. it stays compiled and enforced in release builds.
+#[test]
+fn test_conv1d_try_from_parts_rejects_unpadded_weights_all_widths() {
+    use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
+    use crate::math::common::AlignedVec;
+
+    fn run<const IN: usize, const OUT: usize, const K: usize>() {
+        let width = select_interleave_width(OUT);
+        let padded_total = OUT.div_ceil(width) * width * IN * K;
+        // Raw row-major weight count with no SIMD tail padding.
+        let natural_total = OUT * IN * K;
+
+        let bias = AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed in tests");
+
+        // One element short of the padded total must be rejected.
+        let short =
+            AlignedVec::new(padded_total - 1, 0.0f32).expect("allocation should succeed in tests");
+        let err = match Conv1d::<IN, OUT, K>::try_from_parts(short, bias.clone(), false, 1) {
+            Ok(_) => panic!("sub-padded weights must be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("weights buffer is too small"),
+            "unexpected error: {err}"
+        );
+
+        // Where SIMD padding is required (OUT not an exact multiple of the
+        // block width), the natural unpadded buffer must also be rejected.
+        if natural_total < padded_total {
+            let natural =
+                AlignedVec::new(natural_total, 0.0f32).expect("allocation should succeed in tests");
+            let err = match Conv1d::<IN, OUT, K>::try_from_parts(natural, bias.clone(), false, 1) {
+                Ok(_) => panic!("unpadded (natural-size) weights must be rejected"),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                err.contains("weights buffer is too small"),
+                "unexpected error: {err}"
+            );
+        }
+
+        // The exact padded total must be accepted.
+        let padded =
+            AlignedVec::new(padded_total, 0.0f32).expect("allocation should succeed in tests");
+        let conv = Conv1d::<IN, OUT, K>::try_from_parts(padded, bias, false, 1)
+            .expect("exact padded buffer must be accepted");
+        assert_eq!(conv.weights.len(), padded_total);
+    }
+
+    run::<2, 12, 3>(); // OUT = 12 → interleave width 16 (padded from 12 to 16)
+    run::<2, 8, 3>(); //  OUT = 8  → interleave width 8  (exact multiple)
+    run::<2, 6, 3>(); //  OUT = 6  → interleave width 4  (padded from 6 to 8)
+}
+
+/// A4 / R-2 regression — release-stable clamp of the causal tap read.
+///
+/// A frame index below the warm-up threshold (`frame_idx < dilation*(K-1)`)
+/// previously wrapped through `((frame_idx as isize) + offset) as usize` into a
+/// huge offset, turning the `copy_nonoverlapping(layer_buffer.as_ptr().add(..))`
+/// into an out-of-bounds read in release builds (UB). The kernel now clamps the
+/// signed offset to 0 (F-01), reading the buffer start instead. This test must
+/// run in release: with `debug_assert!`s active the debug tripwire fires first
+/// (see `test_conv1d_warmup_underflow_debug_tripwire`).
+#[cfg(not(debug_assertions))]
+#[test]
+fn test_conv1d_warmup_underflow_clamped_release() {
+    use crate::math::common::Avx2Math;
+
+    const IN: usize = 2;
+    const OUT: usize = 4;
+    const K: usize = 3;
+    let dilation = 2usize; // warm-up threshold = dilation*(K-1) = 4
+
+    // Weights padded for interleave width 4 (OUT = 4): num_blocks * 4 * IN * K.
+    let weights = AlignedVec::new(4 * IN * K, 1.0f32).expect("allocation should succeed in tests");
+    let bias = AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed in tests");
+    let conv = Conv1d::<IN, OUT, K>::try_from_parts(weights, bias, true, dilation)
+        .expect("validated construction must succeed");
+
+    // Frame index 0 is below the threshold (4); the buffer is sized beyond the
+    // threshold so every clamped tap (all reading frame 0) stays in bounds.
+    let layer_buffer = vec![1.0f32; 48 * IN];
+    let mixin = vec![0.0f32; OUT];
+    let mut block = [0.0f32; OUT];
+
+    // SAFETY: `layer_buffer` (48 frames × IN), `block` (OUT) and `mixin` (OUT) are sized
+    // per the kernel contract; `frame_idx` 0 deliberately violates the warm-up invariant to
+    // exercise the release-stable clamp (F-01), and `Avx2Math` matches the CPU ISA of the
+    // `#[target_feature]` backend.
+    unsafe {
+        conv.process_single_frame_with_mixin::<Avx2Math>(&layer_buffer, &mut block, 0, &mixin);
+    }
+    assert!(block.iter().all(|v| v.is_finite()));
+}
+
+/// A4 / R-2 regression — release-stable clamp on the dual-frame kernel (the main
+/// static WaveNet hot path). Same violating-caller scenario as the single-frame
+/// test: both frame indices sit below `dilation*(K-1)` and must read the buffer
+/// start instead of wrapping through `as usize`.
+#[cfg(not(debug_assertions))]
+#[test]
+fn test_conv1d_dual_warmup_underflow_clamped_release() {
+    use crate::math::common::Avx2Math;
+
+    const IN: usize = 2;
+    const OUT: usize = 4;
+    const K: usize = 3;
+    let dilation = 2usize; // warm-up threshold = dilation*(K-1) = 4
+
+    let weights = AlignedVec::new(4 * IN * K, 1.0f32).expect("allocation should succeed in tests");
+    let bias = AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed in tests");
+    let conv = Conv1d::<IN, OUT, K>::try_from_parts(weights, bias, true, dilation)
+        .expect("validated construction must succeed");
+
+    let layer_buffer = vec![1.0f32; 48 * IN];
+    let mixin_f0 = vec![0.0f32; OUT];
+    let mixin_f1 = vec![0.0f32; OUT];
+    let mut out_f0 = [0.0f32; OUT];
+    let mut out_f1 = [0.0f32; OUT];
+
+    // SAFETY: buffers sized per the kernel contract; `frame_idx` 0/1 deliberately violate
+    // the warm-up threshold (4) to exercise the release-stable clamp (F-01), and `Avx2Math`
+    // matches the CPU ISA of the `#[target_feature]` backend.
+    unsafe {
+        conv.process_dual_frame_with_mixin::<Avx2Math>(
+            &layer_buffer,
+            &mut out_f0,
+            &mut out_f1,
+            0,
+            1,
+            &mixin_f0,
+            &mixin_f1,
+        );
+    }
+    assert!(out_f0.iter().all(|v| v.is_finite()));
+    assert!(out_f1.iter().all(|v| v.is_finite()));
+}
+
+/// A4 / R-2 — debug tripwire: the `debug_assert!` still fires when the warm-up
+/// invariant is violated in debug builds. In release the same violation is
+/// handled by the F-01 clamp (see the `_release` tests above), so the contract
+/// is signaled in debug and structurally safe in release.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "frame_idx 0 must be >= dilation*K_minus_1 = 4")]
+fn test_conv1d_warmup_underflow_debug_tripwire() {
+    use crate::math::common::Avx2Math;
+
+    const IN: usize = 2;
+    const OUT: usize = 4;
+    const K: usize = 3;
+
+    let weights = AlignedVec::new(4 * IN * K, 1.0f32).expect("allocation should succeed in tests");
+    let bias = AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed in tests");
+    let conv = Conv1d::<IN, OUT, K>::try_from_parts(weights, bias, true, 2)
+        .expect("validated construction must succeed");
+
+    let layer_buffer = vec![1.0f32; 48 * IN];
+    let mixin = vec![0.0f32; OUT];
+    let mut block = [0.0f32; OUT];
+    // SAFETY: buffers sized per the kernel contract; `frame_idx` 0 violates the warm-up
+    // threshold (4) on purpose — the `debug_assert!` tripwire must fire.
+    unsafe {
+        conv.process_single_frame_with_mixin::<Avx2Math>(&layer_buffer, &mut block, 0, &mixin);
+    }
+}
+
+/// A4 / R-2 — dual-frame debug tripwire (see single-frame variant above).
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "must be >= dilation*K_minus_1")]
+fn test_conv1d_dual_warmup_underflow_debug_tripwire() {
+    use crate::math::common::Avx2Math;
+
+    const IN: usize = 2;
+    const OUT: usize = 4;
+    const K: usize = 3;
+
+    let weights = AlignedVec::new(4 * IN * K, 1.0f32).expect("allocation should succeed in tests");
+    let bias = AlignedVec::new(OUT, 0.0f32).expect("allocation should succeed in tests");
+    let conv = Conv1d::<IN, OUT, K>::try_from_parts(weights, bias, true, 2)
+        .expect("validated construction must succeed");
+
+    let layer_buffer = vec![1.0f32; 48 * IN];
+    let mixin_f0 = vec![0.0f32; OUT];
+    let mixin_f1 = vec![0.0f32; OUT];
+    let mut out_f0 = [0.0f32; OUT];
+    let mut out_f1 = [0.0f32; OUT];
+    // SAFETY: buffers sized per the kernel contract; `frame_idx` 0/1 violate the warm-up
+    // threshold (4) on purpose — the `debug_assert!` tripwire must fire.
+    unsafe {
+        conv.process_dual_frame_with_mixin::<Avx2Math>(
+            &layer_buffer,
+            &mut out_f0,
+            &mut out_f1,
+            0,
+            1,
+            &mixin_f0,
+            &mixin_f1,
+        );
+    }
+}

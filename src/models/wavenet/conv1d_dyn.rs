@@ -14,10 +14,20 @@ use crate::math::common::{
 use super::common::MAX_KERNEL;
 
 /// Structure for causal 1D convolution with dynamic dimensions.
+///
+/// **Layout invariant (F-16 / R-2):** the hot path reinterprets `weights` as
+/// SIMD-interleaved `[f32; W]` blocks (`W == self.interleave_width`, 4/8/16),
+/// reading up to `out_ch.div_ceil(W) * W * in_ch * kernel` f32s. `weights`
+/// must therefore hold **at least** that SIMD-padded total. Prefer
+/// [`Conv1dDyn::try_from_parts`], which validates the padded length in a
+/// release-stable check off the real-time path; direct struct-literal
+/// construction must uphold the invariant manually.
 #[derive(Clone)]
 #[repr(align(64))]
 pub struct Conv1dDyn {
-    /// Full-precision f32 convolution weights `[OUT][KERNEL][IN]` (interleaved).
+    /// Full-precision f32 convolution weights `[num_blocks][KERNEL][IN][W]`
+    /// (lane-interleaved), zero-padded so every `[f32; W]` block is fully
+    /// covered (length >= `out_ch.div_ceil(W) * W * in_ch * kernel`).
     pub weights: AlignedVec<f32>,
     /// Bias vector `[OUT]`.
     pub bias: AlignedVec<f32>,
@@ -38,16 +48,92 @@ pub struct Conv1dDyn {
 }
 
 impl Conv1dDyn {
+    /// Validated constructor (release-stable, off-RT) for a runtime-dimensional
+    /// `Conv1dDyn`.
+    ///
+    /// This is the release-stable owner of the interleaved-weights padding
+    /// invariant (F-16 / R-2). The hot-path kernels derive their `[f32; W]`
+    /// slices from `self.weights` for every output block
+    /// `b < out_ch.div_ceil(W)` and every tap `k < kernel`, whose last element
+    /// ends at `out_ch.div_ceil(W) * W * in_ch * kernel`; rejecting smaller
+    /// buffers here keeps every `from_raw_parts` in the process methods
+    /// structurally in bounds in release builds — no hot-path check is needed
+    /// or performed.
+    ///
+    /// `interleave_width` must be the width used to store `weights` (4, 8 or
+    /// 16; callers such as the loader or the A2/ConvNet builders select it and
+    /// interleave the buffer accordingly).
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - `kernel` is zero or exceeds `MAX_KERNEL` — the hot path reads taps
+    ///   through a fixed `MAX_KERNEL`-entry array;
+    /// - `interleave_width` is not one of 4/8/16;
+    /// - `weights` holds fewer than the SIMD-padded total
+    ///   `out_ch.div_ceil(W) * W * in_ch * kernel` f32s, which would make the
+    ///   interleaved SIMD kernels read out of bounds on the hot path.
+    #[inline]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "validated Conv1dDyn constructor receiving the full runtime-dimensional layout descriptor (weights, bias, do_bias, dilation, in_ch, out_ch, kernel, interleave_width)"
+    )]
+    pub fn try_from_parts(
+        weights: AlignedVec<f32>,
+        bias: AlignedVec<f32>,
+        do_bias: bool,
+        dilation: usize,
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+        interleave_width: usize,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            kernel > 0,
+            "Conv1dDyn kernel_size must be >= 1, got {kernel}"
+        );
+        anyhow::ensure!(
+            kernel <= MAX_KERNEL,
+            "Conv1dDyn kernel_size ({kernel}) exceeds maximum supported ({MAX_KERNEL}) — \
+             the dynamic convolution hot-path reads taps through a fixed \
+             {MAX_KERNEL}-entry pointer array"
+        );
+        anyhow::ensure!(
+            interleave_width == 4 || interleave_width == 8 || interleave_width == 16,
+            "Conv1dDyn interleave_width must be 4, 8 or 16, got {interleave_width}"
+        );
+        let num_blocks = out_ch.div_ceil(interleave_width);
+        let padded_total = num_blocks * interleave_width * in_ch * kernel;
+        anyhow::ensure!(
+            weights.len() >= padded_total,
+            "Conv1d weights buffer is too small: expected >= {padded_total} \
+             (SIMD-padded, interleave width {interleave_width}), got {}",
+            weights.len()
+        );
+        Ok(Conv1dDyn {
+            weights,
+            bias,
+            do_bias,
+            dilation,
+            in_ch,
+            out_ch,
+            num_blocks: out_ch.div_ceil(4),
+            interleave_width,
+            kernel,
+        })
+    }
+
     /// F32-native single-frame convolution (full-precision f32 weights).
     ///
     /// # Safety
     /// The caller must guarantee that `layer_buffer` and `out_frame` have sizes
     /// compatible with the layer dimensions, and that `frame_idx` satisfies the
     /// warm-up invariant `frame_idx >= (kernel - 1) * dilation` — otherwise the
-    /// tap offsets below would be negative. A defensive clamp to the buffer
-    /// start keeps any violation in-bounds (no `usize` wrapping into a wild
-    /// pointer), but only a caller honoring the invariant produces correct
-    /// audio (F-01).
+    /// tap offsets below would be negative. That invariant is owned release-stable
+    /// by the layer-state construction (`WaveNetLayerState::new` enforces
+    /// `buffer_start >= receptive_field_size >= (kernel-1) * dilation`; see
+    /// `common.rs`). A defensive `.max(0)` clamp keeps any residual violation
+    /// in-bounds (no `usize` wrapping into a wild pointer), but only a caller
+    /// honoring the invariant produces correct audio (F-01).
     #[inline(always)]
     pub unsafe fn process_single_frame<M: SimdMath>(
         &self,
@@ -68,9 +154,13 @@ impl Conv1dDyn {
             // wrapping into an out-of-bounds pointer.
             let in_start = ((frame_idx as isize) + offset).max(0) as usize * in_ch;
             // SAFETY: `in_start` is clamped non-negative by the `.max(0)` above (F-01), and the
-            // caller's documented contract guarantees `layer_buffer` is sized so the `in_ch`-wide
-            // tap at that offset is in bounds; the prefetch calls only touch the address, not the
-            // memory contents.
+            // warm-up invariant is owned release-stable by the layer-state construction
+            // (`WaveNetLayerState::new` enforces
+            // `buffer_start >= receptive_field_size >= dilation*(kernel-1)`; see `common.rs`),
+            // so on the model path the clamp is inactive and the tap lands on the causal
+            // receptive field; the caller's documented contract guarantees `layer_buffer` is
+            // sized so the `in_ch`-wide tap at that offset is in bounds; the prefetch calls
+            // only touch the address, not the memory contents.
             unsafe {
                 *tap = layer_buffer.as_ptr().add(in_start);
                 if self.dilation >= 128 {
@@ -150,13 +240,20 @@ impl Conv1dDyn {
                 let w_start = b * kernel * in_ch * 4 + k * in_ch * 4;
                 // F-16: the interleaved-4 slice covers `in_ch` taps of `[f32; 4]`;
                 // it must lie within the zero-padded weights buffer.
+                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
+                // the validated constructors (`Conv1dDyn::try_from_parts` /
+                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
+                // `b < num_blocks`, `k < kernel` imply
+                // `w_start + 4 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
+                // below is a redundant debug-only net.
                 debug_assert!(
                     w_start + 4 * in_ch <= self.weights.len(),
                     "conv1d_dyn: interleave-4 weight slice exceeds padded weights buffer"
                 );
-                // SAFETY: the `debug_assert!` above proves `w_start + 4 * in_ch` lies within the
-                // zero-padded weights buffer, so the slice of `in_ch` `[f32; 4]` blocks is in
-                // bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
+                // SAFETY: the construction-time padding invariant above proves
+                // `w_start + 4 * in_ch` lies within the zero-padded weights buffer, so the
+                // slice of `in_ch` `[f32; 4]` blocks is in bounds; `self.weights` is an
+                // `AlignedVec<f32>` aligned to 64 bytes.
                 let w_slice: &[[f32; 4]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
                     core::slice::from_raw_parts(ptr, in_ch)
@@ -231,13 +328,20 @@ impl Conv1dDyn {
                 let w_start = b * kernel * in_ch * 8 + k * in_ch * 8;
                 // F-16: the interleaved-8 slice covers `in_ch` taps of `[f32; 8]`;
                 // it must lie within the zero-padded weights buffer.
+                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
+                // the validated constructors (`Conv1dDyn::try_from_parts` /
+                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
+                // `b < num_blocks`, `k < kernel` imply
+                // `w_start + 8 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
+                // below is a redundant debug-only net.
                 debug_assert!(
                     w_start + 8 * in_ch <= self.weights.len(),
                     "conv1d_dyn: interleave-8 weight slice exceeds padded weights buffer"
                 );
-                // SAFETY: the `debug_assert!` above proves `w_start + 8 * in_ch` lies within the
-                // zero-padded weights buffer, so the slice of `in_ch` `[f32; 8]` blocks is in
-                // bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
+                // SAFETY: the construction-time padding invariant above proves
+                // `w_start + 8 * in_ch` lies within the zero-padded weights buffer, so the
+                // slice of `in_ch` `[f32; 8]` blocks is in bounds; `self.weights` is an
+                // `AlignedVec<f32>` aligned to 64 bytes.
                 let w_slice: &[[f32; 8]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
                     core::slice::from_raw_parts(ptr, in_ch)
@@ -304,13 +408,20 @@ impl Conv1dDyn {
                 let w_start = b * kernel * in_ch * 16 + k * in_ch * 16;
                 // F-16: the interleaved-16 slice covers `in_ch` taps of `[f32; 16]`;
                 // it must lie within the zero-padded weights buffer.
+                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
+                // the validated constructors (`Conv1dDyn::try_from_parts` /
+                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
+                // `b < num_blocks`, `k < kernel` imply
+                // `w_start + 16 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
+                // below is a redundant debug-only net.
                 debug_assert!(
                     w_start + 16 * in_ch <= self.weights.len(),
                     "conv1d_dyn: interleave-16 weight slice exceeds padded weights buffer"
                 );
-                // SAFETY: the `debug_assert!` above proves `w_start + 16 * in_ch` lies within the
-                // zero-padded weights buffer, so the slice of `in_ch` `[f32; 16]` blocks is in
-                // bounds; `self.weights` is an `AlignedVec<f32>` aligned to 64 bytes.
+                // SAFETY: the construction-time padding invariant above proves
+                // `w_start + 16 * in_ch` lies within the zero-padded weights buffer, so the
+                // slice of `in_ch` `[f32; 16]` blocks is in bounds; `self.weights` is an
+                // `AlignedVec<f32>` aligned to 64 bytes.
                 let w_slice: &[[f32; 16]] = unsafe {
                     let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
                     core::slice::from_raw_parts(ptr, in_ch)
@@ -399,11 +510,27 @@ impl Conv1dDyn {
 
         let rem = chunks.into_remainder();
         if !rem.is_empty() {
-            let m = mixin.map(|m| &m[i * self.out_ch..(i + 1) * self.out_ch]);
+            // R-7: the remainder is the `i`-th frame of this block, so its mixin segment is
+            // `[i*out_ch..(i+1)*out_ch]`; it is bounds-clamped exactly like the dual-frame
+            // slices above — a short (caller-contract-violating) `mixin` yields `None` or a
+            // partial tail instead of panicking on the audio thread, and the guarded mixin
+            // loaders read missing lanes as zero.
+            let m = if let Some(m) = mixin {
+                let start = i * self.out_ch;
+                let end = (start + self.out_ch).min(m.len());
+                if start < m.len() {
+                    Some(&m[start..end])
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             // SAFETY: `process_single_frame` is an `unsafe fn` reached here with `rem` exactly
             // `out_ch` lanes (the remainder of `chunks_exact_mut(2 * self.out_ch)` over a
             // `num_frames * out_ch` block), `layer_buffer` per the caller contract, and the mixin
-            // slice `m` sized `out_ch` when present.
+            // slice `m`, when present, is a bounds-clamped (possibly partial) tail of the caller's
+            // mixin whose missing lanes are read as zero by the guarded mixin loaders.
             unsafe {
                 self.process_single_frame::<M>(layer_buffer, rem, buffer_start + i, m);
             }

@@ -9,8 +9,9 @@
 //! line yields the id up to the first `:` (the same mental
 //! `sed -n 's/^Benchmarking \([^:]*\):.*/\1/p'`), and coverage means that
 //! each executed id has a persisted `…/<id>/<baseline>/` series directory
-//! under the criterion root. Criterion's `has regressed` t-test remains the
-//! statistical signal — this module never re-runs statistics.
+//! under the criterion root. Coverage is a **presence** check only — the
+//! regression signal itself lives in [`crate::testing::qa::verdict`], which
+//! reads Criterion's persisted `change/estimates.json` (B2 / R-3).
 //!
 //! Fail-closed (F-24): a log with no parseable id makes the cross-check
 //! blind, so `missing_baseline_coverage` returns

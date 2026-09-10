@@ -27,6 +27,12 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
     ///
     /// # Safety
     /// `layer_buffer` and `mixin` must have appropriate sizes.
+    ///
+    /// The causal tap read requires `frame_idx_* >= dilation * (K - 1)` for correct
+    /// audio; that invariant is owned release-stable by the layer-state construction
+    /// (`WaveNetLayerState::new`, see `common.rs`), and the kernel clamps the tap
+    /// offsets to the buffer start (F-01) so a violating caller still cannot produce
+    /// an out-of-bounds read in release builds.
     #[inline(always)]
     #[expect(
         clippy::too_many_arguments,
@@ -49,12 +55,30 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         let mut in_taps_f1 = [[0.0f32; IN]; K];
         for k in 0..K {
             let offset = (self.dilation as isize) * ((k as isize) + 1 - (K as isize));
-            let in_start_f0 = ((frame_idx_f0 as isize) + offset) as usize * IN;
-            let in_start_f1 = ((frame_idx_f1 as isize) + offset) as usize * IN;
-            // SAFETY: the caller contract (`process_dual_frame_with_mixin` docs) guarantees
-            // `layer_buffer` is sized for the causal receptive field, so both `in_start_f0` and
-            // `in_start_f1` are non-negative and in bounds; destinations are the `[f32; IN]`
-            // stack arrays `in_taps_f0[k]`/`in_taps_f1[k]`, and the buffers are distinct (no overlap).
+            // SAFETY: Receptive-field invariant: frame_idx >= dilation*(K-1).
+            debug_assert!(
+                frame_idx_f0 >= self.dilation * (K - 1) && frame_idx_f1 >= self.dilation * (K - 1),
+                "frame_idx f0={} f1={} must be >= dilation*K_minus_1 = {}",
+                frame_idx_f0,
+                frame_idx_f1,
+                self.dilation * (K - 1)
+            );
+            // R-2 / A4: release-stable `.max(0)` clamp before the `as usize` conversion
+            // (F-01 pattern, same as the dynamic kernels) — a sub-threshold frame index
+            // reads the buffer start instead of wrapping into an out-of-bounds pointer.
+            // On the model path the clamp is statically inactive: the invariant
+            // `frame_idx >= dilation * (K-1)` is owned by the layer-state construction
+            // (`WaveNetLayerState::new` enforces
+            // `buffer_start >= receptive_field_size >= dilation*(K-1)`; see `common.rs`).
+            let in_start_f0 = (((frame_idx_f0 as isize) + offset).max(0)) as usize * IN;
+            let in_start_f1 = (((frame_idx_f1 as isize) + offset).max(0)) as usize * IN;
+            // SAFETY: both `in_start_*` are non-negative by the `.max(0)` clamp above (F-01)
+            // and bounded above by `frame_idx * IN < layer_buffer.len()` (the mirrored layer
+            // buffer spans `2 * buffer_frames * IN` elements with
+            // `frame_idx <= 2 * buffer_frames - 1` via the wrap margin), and the caller
+            // contract guarantees `layer_buffer` is sized for the causal receptive field, so
+            // both tap copies stay in bounds; destinations are the `[f32; IN]` stack arrays
+            // `in_taps_f0[k]`/`in_taps_f1[k]`, and the buffers are distinct (no overlap).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     layer_buffer.as_ptr().add(in_start_f0),

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::diagnostics::NamErrorCode;
 use crate::dsp::sinc_kernel::NUM_PHASES;
 
 #[test]
@@ -1158,4 +1159,57 @@ fn read_raw_f32(path: &std::path::Path) -> Vec<f32> {
         samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
     samples
+}
+
+#[test]
+fn test_new_typed_rejects_out_of_range_rates() {
+    assert_eq!(
+        NamResampler::new_typed(1_000, 48_000, 0).err(),
+        Some(NamErrorCode::ResamplerBuildFailed),
+        "host rate below MIN_RATE must be rejected with a typed code"
+    );
+    assert_eq!(
+        NamResampler::new_typed(48_000, 1_000, 0).err(),
+        Some(NamErrorCode::ResamplerBuildFailed),
+        "nam rate below MIN_RATE must be rejected with a typed code"
+    );
+    assert_eq!(
+        NamResampler::new_typed(48_000, 400_000, 0).err(),
+        Some(NamErrorCode::ResamplerBuildFailed),
+        "nam rate above MAX_RATE must be rejected with a typed code"
+    );
+    assert_eq!(
+        NamResampler::new_linear_typed(500_000, 48_000, 0).err(),
+        Some(NamErrorCode::ResamplerBuildFailed),
+        "linear-phase typed constructor must share the same validation"
+    );
+}
+
+#[test]
+fn test_new_typed_accepts_valid_rates_and_matches_anyhow() {
+    let typed = NamResampler::new_typed(44_100, 48_000, 0).expect("typed min-phase");
+    let legacy = NamResampler::new(44_100, 48_000, 0).expect("anyhow min-phase");
+    assert!(!typed.is_bypass());
+    assert_eq!(
+        typed.latency_samples(44_100),
+        legacy.latency_samples(44_100),
+        "typed and anyhow constructors must build equivalent engines"
+    );
+
+    let typed_lin = NamResampler::new_linear_typed(48_000, 44_100, 0).expect("typed linear");
+    let legacy_lin = NamResampler::new_linear(48_000, 44_100, 0).expect("anyhow linear");
+    assert_eq!(
+        typed_lin.latency_samples(48_000),
+        legacy_lin.latency_samples(48_000)
+    );
+}
+
+#[test]
+fn test_new_typed_simple_variants_and_bypass() {
+    let bypass = NamResampler::new_simple_typed(48_000, 48_000).expect("typed bypass");
+    assert!(bypass.is_bypass());
+
+    let linear_bypass =
+        NamResampler::new_linear_simple_typed(96_000, 96_000).expect("typed linear bypass");
+    assert!(linear_bypass.is_bypass());
 }

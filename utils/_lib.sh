@@ -87,9 +87,11 @@ NC='\033[0m'
 # Standard output & control helpers
 # ---------------------------------------------------------------------------
 PHASE_NUM=0
+PHASE_START_NS=0
 
 phase() {
     PHASE_NUM=$((PHASE_NUM + 1))
+    PHASE_START_NS=$(date +%s%N 2>/dev/null || echo 0)
     echo -e "\n${BLUE}${BOLD}[${PHASE_NUM}/${PHASE_TOTAL:-?}]${NC} $*"
 }
 
@@ -104,6 +106,41 @@ warn() {
 die() {
     echo -e "${RED}${BOLD}[FATAL]${NC} $*" >&2
     exit 1
+}
+
+# format_duration_ms <milliseconds>
+#   Formats an interval in ms to human-readable scale:
+#   < 1000 ms: "Xms" (e.g. 790ms, 45ms)
+#   < 10000 ms: "X.YYs" (e.g. 1.35s)
+#   >= 10000 ms: "X.Ys" (e.g. 65.2s)
+format_duration_ms() {
+    local ms="${1:-0}"
+    if [ "$ms" -lt 1000 ]; then
+        echo "${ms}ms"
+    elif [ "$ms" -lt 10000 ]; then
+        local sec=$(( ms / 1000 ))
+        local dec=$(( (ms % 1000) / 10 ))
+        printf "%d.%02ds\n" "$sec" "$dec"
+    else
+        local sec=$(( ms / 1000 ))
+        local dec=$(( (ms % 1000) / 100 ))
+        printf "%d.%ds\n" "$sec" "$dec"
+    fi
+}
+
+# phase_elapsed_str
+#   Returns the formatted duration elapsed since the last phase() call.
+phase_elapsed_str() {
+    if [ "${PHASE_START_NS:-0}" -ne 0 ]; then
+        local now_ns dur_ms
+        now_ns=$(date +%s%N 2>/dev/null || echo 0)
+        if [ "$now_ns" -ge "$PHASE_START_NS" ]; then
+            dur_ms=$(( (now_ns - PHASE_START_NS) / 1000000 ))
+            format_duration_ms "$dur_ms"
+            return 0
+        fi
+    fi
+    echo "0ms"
 }
 
 # ── Phase receipt machinery (fail-closed foundation) ──────────────────────────
@@ -237,8 +274,9 @@ run_dashboard_phase() {
     set -e
 
     end_t=$(date +%s%N)
-    local dur_s
-    dur_s=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
+    local dur_ms=$(( (end_t - start_t) / 1000000 ))
+    local dur_str
+    dur_str=$(format_duration_ms "$dur_ms")
 
     local observed=0
     if [ -f "$log_path" ]; then
@@ -249,15 +287,15 @@ run_dashboard_phase() {
     if [ "$exit_code" -ne 0 ]; then
         status="FAIL"
         reason="subprocess exited with code ${exit_code}"
-        echo -e "  ${RED}✗${NC} ${phase_id} failed (exit_code=${exit_code}, ${dur_s}s, ${observed} lines)"
+        echo -e "  ${RED}✗${NC} ${phase_id} failed (exit_code=${exit_code}, ${dur_str}, ${observed} lines)"
     elif [ "$observed" -lt "$min_records" ] && [ "$min_records" -gt 0 ]; then
         status="FAIL"
         reason="min_records=${min_records} not met (observed=${observed})"
-        echo -e "  ${RED}✗${NC} ${phase_id} insufficient records: ${observed}/${min_records} (${dur_s}s)"
+        echo -e "  ${RED}✗${NC} ${phase_id} insufficient records: ${observed}/${min_records} (${dur_str})"
     elif ! assert_ran_tests "$log_path" 1; then
         status="FAIL"
         reason="no tests/benchmarks actually executed (empty selection or 100% skip)"
-        echo -e "  ${RED}✗${NC} ${phase_id} asserted 0 executed tests/benchmarks (${dur_s}s)"
+        echo -e "  ${RED}✗${NC} ${phase_id} asserted 0 executed tests/benchmarks (${dur_str})"
     elif [ "$min_jsonl" -gt 0 ]; then
         local jsonl_after jsonl_delta
         jsonl_after=$(count_jsonl_records "${NAM_METRICS_JSONL:-}")
@@ -265,12 +303,12 @@ run_dashboard_phase() {
         if [ "$jsonl_delta" -lt "$min_jsonl" ]; then
             status="FAIL"
             reason="jsonl_records=${jsonl_delta} below minimum ${min_jsonl} (phase emitted no measurement)"
-            echo -e "  ${RED}✗${NC} ${phase_id} emitted ${jsonl_delta} JSONL metric record(s), minimum ${min_jsonl} (${dur_s}s)"
+            echo -e "  ${RED}✗${NC} ${phase_id} emitted ${jsonl_delta} JSONL metric record(s), minimum ${min_jsonl} (${dur_str})"
         else
-            echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_s}s, ${observed} lines, ${jsonl_delta} metric record(s))"
+            echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_str}, ${observed} lines, ${jsonl_delta} metric record(s))"
         fi
     else
-        echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_s}s, ${observed} lines)"
+        echo -e "  ${GREEN}ok${NC} ${phase_id} completed (${dur_str}, ${observed} lines)"
     fi
 
     dashboard_phase_receipt "$phase_id" "$status" "$exit_code" "$observed" "$min_records" "$reason"
@@ -470,15 +508,17 @@ ensure_namcore_render() {
     return 0
 }
 
-# ── Centralized freshness gate (F-X4 / S3-T03) ───────────────────────────────
+# ── Centralized freshness gate (F-X4 / S3-T03 / S7-G3) ───────────────────────
 # Validates golden manifest integrity against models, fixtures and generators.
 # The heavy lifting now lives in Rust (src/testing/freshness.rs, incl. the
 # `# TOOLCHAIN:` drift check that replaced the bash check_toolchain_fingerprint,
 # F-02) so the shell wrapper is just a thin, portable adapter.
+# Note on NAM_BYPASS_FRESHNESS=1: Callers (utils/tests-quick.sh, utils/quality-dashboard.sh)
+# record an explicit typed gap (e.g. freshness:bypassed_by_env) in their receipts.
 check_freshness() {
     local mode="${1:-hard-fail}"
     if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
-        echo -e "  ${YELLOW}⚠ NAM_BYPASS_FRESHNESS=1 — freshness check skipped${NC}"
+        echo -e "  ${YELLOW}⚠ NAM_BYPASS_FRESHNESS=1 — freshness check skipped (gap recorded by caller)${NC}"
         return 0
     fi
     local bin="${NAM_FRESHNESS_BIN:-$PROJECT_DIR/target/debug/nam_freshness}"
