@@ -45,6 +45,8 @@ pub mod prewarm;
 pub mod process;
 /// Cascade pipeline methods (shared with `WaveNetA2Cascade` orchestrator).
 pub mod process_cascade;
+/// Per-frame dynamic processing kernel (`process_frame_dyn`).
+pub mod process_frame;
 
 /// Runtime-dimensioned WaveNet A2 model.
 ///

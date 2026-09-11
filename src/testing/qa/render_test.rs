@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Tests for the human-facing dashboard renderer (S6.T1).
+//! Tests for the human-facing dashboard renderer.
 //!
 //! - `render_plain_matches_golden`: snapshot test — the plain render of
 //!   `tests/fixtures/qa/report.jsonl` must match
@@ -11,7 +11,7 @@
 //! - `regenerate_render_fixture_and_golden` (`#[ignore]`): dev tool — rebuilds
 //!   both files from the committed contract. Run with:
 //!   `cargo test --features testing --lib qa::render -- --ignored --nocapture`.
-//! - `performance_not_verified_is_never_green`: the S6 invariant — a
+//! - `performance_not_verified_is_never_green`: invariant check — a
 //!   `regression_gate != PASS` report renders the performance section without
 //!   any green escape sequence.
 
@@ -73,7 +73,7 @@ fn build_report_fixture() -> String {
     );
 
     // All mandatory phases PASS (performance verified — green allowed).
-    // T3.2: the local ISA phase is `isa_self_consistency` (AVX2 vs AVX2) and the
+    // The local ISA phase is `isa_self_consistency` (AVX2 vs AVX2) and the
     // cross-ISA matrix is a declared SKIP_CAPABILITY gap on the local runner.
     for (phase, status) in [
         ("golden_vectors", "PASS"),
@@ -210,7 +210,7 @@ fn regenerate_render_fixture_and_golden() {
     );
 }
 
-// ── S6 invariants ───────────────────────────────────────────────────────────
+// ── Verification invariants ───────────────────────────────────────────────────
 
 #[test]
 fn performance_not_verified_is_never_green() {

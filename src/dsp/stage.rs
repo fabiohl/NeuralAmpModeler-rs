@@ -21,7 +21,7 @@ const DOWN_ODD_LEN: usize = HB_TAPS / 2;
 const DOWN_EVEN_DELAY_LINE_LEN: usize = DOWN_EVEN_LEN * 2;
 const DOWN_ODD_DELAY_LINE_LEN: usize = DOWN_ODD_LEN * 2;
 
-// ── Compile-time invariant proofs (F-09 / T4.1) ────────────────────────────
+// ── Compile-time invariant proofs (Stage layout and alignment) ───────────────
 //
 // The 16 `assert_unchecked` calls below eliminate runtime bounds checks on the
 // AVX2/FMA hot path. Each one is *only* sound because of a specific arithmetic
@@ -239,7 +239,7 @@ impl X2Stage {
         let n = HB_DELAY;
         let n_in = input.len().min(output.len() / 2);
 
-        // Phase batching (P-08 / T5.3): process samples in contiguous runs that
+        // Phase batching: process samples in contiguous runs that
         // never wrap the write head, amortizing the `% n` modulo to once per run
         // instead of once per sample. Within a run the head advances
         // monotonically (`p = up_pos + j`), keeping the mirrored double-buffer
@@ -335,7 +335,7 @@ impl X2Stage {
         let center = self.down_center;
         let mut out_idx = 0;
 
-        // Phase batching (P-08 / T5.3): consume input in even/odd phase pairs so
+        // Phase batching: consume input in even/odd phase pairs so
         // the per-sample demux parity branch is eliminated. The phase at the
         // start of each call is derived from the persistent `down_total`, so
         // odd-length calls never desynchronize the batch loop (an odd total
@@ -406,7 +406,7 @@ impl X2Stage {
 
     /// Computes one downsampled sample from the current even/odd delay-line
     /// heads using a fused AVX2 8-lane + 4-lane FMA dot (single reduction,
-    /// P-08 / T5.3), and appends it to `output`.
+    /// phase batching), and appends it to `output`.
     #[inline(always)]
     fn emit_downsample_output(
         &mut self,

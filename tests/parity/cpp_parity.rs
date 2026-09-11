@@ -147,7 +147,7 @@ fn ensure_render_compiled() -> bool {
         if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
             panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: {msg}");
         }
-        // T3.2: typed machine-parseable marker (the detailed message follows
+        // Typed machine-parseable marker (the detailed message follows
         // as free-form diagnostic text).
         eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
         eprintln!("{msg}");
@@ -182,7 +182,7 @@ fn ensure_render_compiled() -> bool {
         }
     }
 
-    // Single unified build entry point (S3-T01): all C++ render builds in the
+    // Single unified build entry point: all C++ render builds in the
     // repo (quick/long runners, golden generation, this fallback) delegate to
     // utils/ensure_namcore_render.sh, which is idempotent and logs to
     // target/logs/cmake-{configure,build}.log.
@@ -832,7 +832,7 @@ fn quick_parity_a2_full_v2_48k() {
 }
 
 /// Quick v2 parity: SlimmableContainer A2 Example with 5-second stress signal at 48 kHz.
-/// Promoted to v2 alongside the 48k_only scope change (S4-T3).
+/// Promoted to v2 alongside the 48k_only scope change.
 #[test]
 fn quick_parity_a2_example_slimmable_v2_48k() {
     let outcome = run_render_comparison(

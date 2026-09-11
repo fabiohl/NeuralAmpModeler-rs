@@ -155,7 +155,7 @@ fn test_default_scratch_sized_for_max_resamp_buf() {
     );
 }
 
-/// S3.T1 acceptance: an 8192-sample block processed while a tier switch is in
+/// Verifies that an 8192-sample block processed while a tier switch is in
 /// progress must not panic nor slice the scratch out of bounds — in debug and
 /// in `--release`.
 #[test]
@@ -178,7 +178,7 @@ fn test_8192_block_with_pending_switch_no_panic() {
     assert!(container.is_crossfading() || container.pending_index().is_none());
 }
 
-/// S3.T1 acceptance: when the input block exceeds the scratch capacity, the
+/// Verifies that when the input block exceeds the scratch capacity, the
 /// crossfade must abort gracefully (process the active submodel only) without
 /// panicking and without slicing the scratch beyond its length.
 #[test]
@@ -207,7 +207,7 @@ fn test_oversized_block_aborts_crossfade_without_panic() {
     assert!(container.is_crossfading());
 }
 
-/// T3.1: 32 ms crossfade must not introduce discontinuities above −80 dBFS
+/// A 32 ms crossfade must not introduce discontinuities above −80 dBFS
 /// between consecutive samples in the blend region (beyond the block-constant
 /// envelope of `crossfade_blend_mono_simd`).
 #[test]

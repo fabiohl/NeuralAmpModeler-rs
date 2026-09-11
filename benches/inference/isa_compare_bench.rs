@@ -4,7 +4,7 @@
 //! Cross-ISA comparison benchmarks (`isa_compare`): measures the latency delta
 //! between AVX2 baseline and AVX-512 upward dispatch on the same hardware.
 //!
-//! # Purpose & Gate Criteria (Epic C / Task C2.T3)
+//! # Purpose & Gate Criteria
 //!
 //! To justify adding or retaining dedicated AVX-512 / VL256 kernel implementations,
 //! the full end-to-end `NamModel::process()` inference must demonstrate a statistically

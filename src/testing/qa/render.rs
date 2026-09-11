@@ -315,7 +315,7 @@ pub fn parse_quality_report(input: &str) -> Result<QualityReport, ReportError> {
             }
             _ => {
                 // Fidelity (kind "fidelity" or absent, label-bearing) plus the
-                // `median_latency_us`-only latency shape of the S2.T2 fixtures.
+                // `median_latency_us`-only latency shape of legacy fixtures.
                 if value.get("median_latency_us").is_some() {
                     if let Some(record) = latency_from_json(&value) {
                         report.latency.push(record);
@@ -1065,7 +1065,7 @@ fn render_performance(report: &QualityReport, p: &Palette) -> String {
 }
 
 fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
-    // T3.2 (G-02): the QA report must distinguish *self-consistency* (the local
+    // The QA report must distinguish *self-consistency* (the local
     // dashboard phase `isa_self_consistency`, AVX2 vs AVX2, MSE=0 tautology)
     // from *real cross-ISA parity* (the remote gate `remote-simd-gate.sh`,
     // tracked as phase `isa_parity_cross_isa`). The local runner declares the

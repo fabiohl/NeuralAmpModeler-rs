@@ -94,7 +94,7 @@ P1_START=$(date +%s%N)
     # Axis-B: lstm_activation_precision SNR oracles are release-only (Phase 2).
     # Substring skip covers both `..._gain` and `..._gain_stress_v2`; the
     # module's structural checks still run in this phase.
-    # T2.6 / ER-2: cabsim_stereo carries the IR-multirate gates (its stereo
+    # cabsim_stereo carries the IR-multirate gates (its stereo
     # fidelity and heap-audit tests are feature-gated and run when the caller
     # enables `stereo`/`heap-audit`).
     cargo test --features testing --lib \

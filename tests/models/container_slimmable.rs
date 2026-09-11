@@ -452,7 +452,7 @@ fn test_container_crossfade_continuity() {
 // Selective Reset Verification
 // =============================================================================
 
-/// Test T6.1: `ContainerModel::reset` resets only the active submodel,
+/// `ContainerModel::reset` resets only the active submodel,
 /// not all submodels (selective reset via `set_max_buffer_size` on all,
 /// full `reset`+`prewarm` only on the active one).
 ///
@@ -560,7 +560,7 @@ fn test_container_reset_only_active_submodel() {
     }
 }
 
-/// Test T6.2: `ContainerModel::set_slimmable_size` resets the target submodel
+/// `ContainerModel::set_slimmable_size` resets the target submodel
 /// before setting it as pending (reset-before-activation).
 ///
 /// Verifies that when `set_slimmable_size(val)` triggers a submodel transition,

@@ -113,7 +113,7 @@ pub const RT_STATUS_STRUCTURAL_SUPERSEDED: u64 = 1 << 29;
 
 /// Flag indicating that the scalar parameter command queue still held elements
 /// after the per-callback drain budget (`MAX_PARAM_BUDGET`) was exhausted
-/// (F-RB-011 / T2.5). The RT callback consumed its fixed quota for this quantum
+/// (F-RB-011). The RT callback consumed its fixed quota for this quantum
 /// and the remainder is processed by the next callback; the flag is telemetry
 /// for the main thread so the saturation is explicit, never an invisible loss.
 pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
@@ -351,7 +351,7 @@ pub struct RtStatusFlags {
     /// Incremented by the playback callback each time the bridge produced no
     /// new DSP block (capture paused, resampler rebuild pending, clock drift or
     /// quantum miss) and the deterministic silence policy delivered a recycled
-    /// output buffer filled with `0.0f32` (G-RB-001 / T4.2). Telemetry only —
+    /// output buffer filled with `0.0f32` (G-RB-001). Telemetry only —
     /// the hardware never repeats stale audio.
     pub playback_bridge_starvation: AtomicU32,
 
@@ -359,14 +359,14 @@ pub struct RtStatusFlags {
     /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
     /// thread (cold path, not the RT data thread); read by the playback
     /// listener for the cross-stream rate comparison and by the main loop for
-    /// diagnostics (G-RB-001 / T4.3).
+    /// diagnostics (G-RB-001).
     pub capture_negotiated_rate: AtomicU32,
 
     /// Last sample rate negotiated by the playback stream's `param_changed`
     /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
     /// thread (cold path, not the RT data thread); read by the capture
     /// listener for the cross-stream rate comparison and by the main loop for
-    /// diagnostics (G-RB-001 / T4.3).
+    /// diagnostics (G-RB-001).
     pub playback_negotiated_rate: AtomicU32,
 
     /// Sticky latch guarding the capture stream SPA format contract.
@@ -381,7 +381,7 @@ pub struct RtStatusFlags {
     /// Active state of the playback stream (1 = Streaming, 0 = Paused/Unconnected/Error).
     pub playback_active: AtomicU32,
 
-    /// Aggregate sticky latch guarding the strict SPA format contract (G-RB-001 / T4.3).
+    /// Aggregate sticky latch guarding the strict SPA format contract (G-RB-001).
     ///
     /// `1` = both stream formats are valid (`F32P` planar stereo); `0` = a divergent format
     /// was negotiated on either stream.

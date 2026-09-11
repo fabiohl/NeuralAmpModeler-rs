@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Tests for the baseline coverage cross-check (S3.T2) — the acceptance
-//! cases of `utils/tests-long.sh:869-899` mirrored verbatim (F-24), plus the
+//! Tests for the baseline coverage cross-check — the acceptance
+//! cases of `utils/tests-long.sh:869-899` mirrored verbatim, plus the
 //! sed-parity corners.
 
 use std::fs;
@@ -27,7 +27,7 @@ fn crit_log() -> &'static str {
      Benchmarking RT_C: Warming up for 1.0000 s\n"
 }
 
-/// The acceptance cases of `utils/tests-long.sh:869-899`, verbatim (F-24).
+/// The acceptance cases of `utils/tests-long.sh:869-899`, verbatim.
 #[test]
 fn tests_long_f24_cases_are_mirrored() {
     let crit = temp_root();

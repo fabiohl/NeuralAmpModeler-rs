@@ -221,7 +221,7 @@ fn test_reset_clears_stage_state_and_matches_fresh() {
     // After driving the engine with a non-trivial signal, `reset()` must make
     // a subsequent round-trip bit-identical to a freshly constructed engine
     // (same factor/size) — the delay lines, phase counters and inter-stage
-    // scratch are all cleared in-place (T4.3 / F-CLAP-010).
+    // scratch are all cleared in-place.
     for factor in [OversampleFactor::X2, OversampleFactor::X4] {
         let mut dirty = OversampleEngine::new(factor, 256).unwrap();
         let mut fresh = OversampleEngine::new(factor, 256).unwrap();
@@ -370,7 +370,7 @@ fn test_oversized_downsample_clamped_x2() {
 
 #[test]
 fn truncation_raises_host_contract_flag_upsample() {
-    // F-12 / T2.4: input blocks larger than `max_samples` are clamped — the
+    // Input blocks larger than `max_samples` are clamped — the
     // truncation must raise RT_STATUS_HOST_CONTRACT_VIOLATION (no more silent
     // truncation).
     let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
@@ -386,7 +386,7 @@ fn truncation_raises_host_contract_flag_upsample() {
 
 #[test]
 fn truncation_raises_host_contract_flag_downsample() {
-    // F-12 / T2.4: input blocks larger than max_samples × multiplier are
+    // Input blocks larger than max_samples × multiplier are
     // clamped — the truncation must raise RT_STATUS_HOST_CONTRACT_VIOLATION.
     let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
     let rt = RtStatusFlags::new();
@@ -403,7 +403,7 @@ fn truncation_raises_host_contract_flag_downsample() {
 
 #[test]
 fn contract_compliant_blocks_do_not_raise_flag() {
-    // F-12 / T2.4: blocks within the negotiated maxima must not raise the flag.
+    // Blocks within the negotiated maxima must not raise the flag.
     let mut engine = OversampleEngine::new(OversampleFactor::X2, 64).unwrap();
     let rt = RtStatusFlags::new();
 
@@ -462,7 +462,7 @@ fn undersized_output_downsample_clamps_and_flags_x2() {
 
 #[test]
 fn test_x2_stage_phase_batched_reference_parity() {
-    // T5.3: the phase-batched upsample/downsample must match a naive reference
+    // The phase-batched upsample/downsample must match a naive reference
     // implementation of the half-band delay-line algorithm across a sweep of
     // block sizes (even and odd), including the downsample leftover-tail path.
     //

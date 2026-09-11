@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #
-# SIMD Diagnostic & Capability Probe wrapper (Sprint 4.1).
+# SIMD Diagnostic & Capability Probe wrapper.
 # Runs the `simd_probe` CLI with or without the opt-in `avx512` feature.
 # See src/bin/simd_probe.rs for the full probe semantics.
 set -euo pipefail

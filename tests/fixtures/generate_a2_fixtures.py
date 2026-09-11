@@ -10,7 +10,7 @@ Produces wavenet_a2_full.nam and wavenet_a2_lite.nam with the fixed
 A2 skeleton (23 layers, canonical kernels/dilations, LeakyReLU, head_scale).
 
 Also produces dynamic A2 models with gating/blending for WaveNetA2Dyn parity
-validation (Task 3.3: Golden Vectors e C++ Parity).
+validation (Golden Vectors and C++ Parity).
 
 Source of truth: NAM/wavenet/a2_fast.h:30-43
 Weight stream order mirrors C++ WaveNet::set_weights_() as consumed by
@@ -48,8 +48,8 @@ SEED_DYNAMIC = 123
 NUM_LAYERS = 23
 
 
-# T2.5: Weight scales tuned so that A2 output lands in realistic audio regime
-# (pico ≈ 0.3, LUFS ≈ −18 to −23) instead of near-silence (pico ≈ 2e-3, LUFS ≈ −68).
+# Weight scales tuned so that A2 output lands in realistic audio regime
+# (peak ≈ 0.3, LUFS ≈ −18 to −23) instead of near-silence (peak ≈ 2e-3, LUFS ≈ −68).
 # Output grows super-linearly with CH count (more internal channels = more gain
 # accumulation across 23 layers). Lite (CH=3) needs higher scale than Full (CH=8).
 SCALES = {
@@ -438,7 +438,7 @@ def main() -> None:
         json.dump(container_doc, f, indent=2)
     print(f"Written {out_path} (Container)")
 
-    # ── Dynamic A2 models (Task 3.3: Golden Vectors e C++ Parity) ──────────
+    # ── Dynamic A2 models (Golden Vectors and C++ Parity) ──────────────────
     rng_d = random.Random(SEED_DYNAMIC)
 
     # Model 1: A2-Dynamic-Gated CH=8 — gating on 3 layers (early, mid, late)
@@ -489,7 +489,7 @@ def main() -> None:
         json.dump(doc_blended, f, indent=2)
     print(f"Written {out_path}  ({len(w_blended)} weights)")
 
-    # ── A2-FiLM model (Tarefa B.1.1: FiLM routing policy) ──────────────────
+    # ── A2-FiLM model (FiLM routing policy) ──────────────────────────────
     FILM_KEYS_ACTIVE = [
         "conv_post_film",
         "input_mixin_post_film",
@@ -527,7 +527,7 @@ def main() -> None:
         json.dump(doc_ip, f, indent=2)
     print(f"Written {out_path}  ({len(w_ip)} weights)")
 
-    # ── WaveNet with LSTM condition_dsp (Task T4.1) ───────────────────────
+    # ── WaveNet with LSTM condition_dsp ───────────────────────────────────
     # Condition DSP LSTM: 1 layer, 3 hidden units, input_size=1.
     # Weight count from Rust lstm_weight_count(1, 3) = 4*3*(1+3) + 7*3 + 1 = 70
     LSTH_HIDDEN = 3

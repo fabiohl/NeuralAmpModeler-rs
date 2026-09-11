@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Meta-Testes de Inventário de Documentação e Scripts
+//! Documentation and Script Inventory Meta-Tests
 //!
-//! Garante que a documentação (`docs/`) e os scripts (`utils/`) estejam
-//! mutuamente sincronizados e que comandos, features e paths referenciados
-//! nos documentos reflitam a implementação real.
+//! Ensures that documentation (`docs/`) and scripts (`utils/`) remain
+//! synchronized and that commands, features, and paths referenced in
+//! the documents accurately reflect the real implementation.
 //!
-//! Qualquer divergência entre comandos documentados e a implementação
-//! resulta em falha do meta-teste.
+//! Any divergence between documented commands and the implementation
+//! results in a meta-test failure.
 
 use std::collections::HashSet;
 use std::fs;

@@ -364,7 +364,7 @@ mod tests {
         }
     }
 
-    /// T4.3 / F-CLAP-010 — `reset()` must restore the FSM to its initial Open
+    /// Verifies `reset()` restores the FSM to its initial Open
     /// state (multiplier 1.0, no ramp), as if freshly constructed.
     #[test]
     fn test_reset_restores_initial_open_state() {
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(buf_a, buf_b, "post-reset gate must match a fresh gate");
     }
 
-    // ── T4.2 / F-05: defensive clamping in apply_gain_rt / apply_gain_rt_stereo ──
+    // ── Defensive clamping in apply_gain_rt / apply_gain_rt_stereo ──
 
     /// Drives a fresh gate into the middle of a FadingOut ramp.
     /// Returns the gate with `ramp_samples > 0` and a multiplier < 1.0.

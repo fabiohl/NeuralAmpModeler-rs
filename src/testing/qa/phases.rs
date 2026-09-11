@@ -4,7 +4,7 @@
 //! Canonical QA phase-identifier constants shared by the report renderer, the
 //! verify engine docs and the dashboard receipt emitter.
 //!
-//! T3.2 (G-02) introduced two distinct ISA phase records so the QA report can
+//! Two distinct ISA phase records are maintained so the QA report can
 //! never mistake internal consistency for inter-ISA parity:
 //!
 //! - `ISA_SELF_CONSISTENCY_PHASE` — the local dashboard subphase (AVX2 vs

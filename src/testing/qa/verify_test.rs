@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Tests for the contract verify engine (S2.T2 literal port).
+//! Tests for the contract verify engine.
 //!
 //! The acceptance fixtures use the real `docs/quality-contract.json` (51
 //! fidelity + 19 performance entries) with a report generated from it, so
@@ -251,9 +251,9 @@ fn non_mandatory_phase_fail_still_counts_as_fidelity_violation() {
     );
 }
 
-// ── T3.2: ISA self-consistency vs. cross-ISA gap ────────────────────────────
+// ── ISA self-consistency vs. cross-ISA gap ────────────────────────────
 
-/// T3.2 (G-02): a declared `SKIP_CAPABILITY` gap on `isa_parity_cross_isa` is
+/// A declared `SKIP_CAPABILITY` gap on `isa_parity_cross_isa` is
 /// not a fidelity failure and never implies inter-ISA parity — while a FAIL on
 /// the local `isa_self_consistency` phase is a real fidelity violation.
 #[test]

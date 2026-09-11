@@ -53,7 +53,7 @@ pub struct SpscChannels {
     /// Resampler consumer: RT callback drains to replace the active resampler.
     pub resampler_consumer: Consumer<Box<ResamplerSwapPayload>>,
     /// Cab-sim IR producer: main thread loads and sends a versioned cab-sim
-    /// payload envelope (`CabSimSwapPayload`) to the RT callback (F-RB-004 / T7.1).
+    /// payload envelope (`CabSimSwapPayload`) to the RT callback (F-RB-004).
     pub cabsim_producer: Producer<Box<CabSimSwapPayload>>,
     /// Cab-sim IR consumer: RT callback drains to replace the active pair.
     pub cabsim_consumer: Consumer<Box<CabSimSwapPayload>>,

@@ -722,7 +722,7 @@ fn test_fixed_point_drift_random_ratios() {
 }
 
 // =============================================================================
-// Edge-Case Tests — T2.1.3
+// Edge-Case Tests — Buffer Size and Cardinality
 // =============================================================================
 
 #[test]

@@ -105,7 +105,7 @@ fn measure_rt_deadline(
     let hist = LatencyHistogram::new();
     let mut violations: u64 = 0;
 
-    // T2.5 (G-04): `black_box` around the process call and the output
+    // `black_box` around the process call and the output
     // consumption certifies the loop really exercises the buffers and
     // coefficients — the compiler can never elide the measurement. The
     // `Linear` SKU legitimately reports ~0 µs (the `linear_test.nam` fixture

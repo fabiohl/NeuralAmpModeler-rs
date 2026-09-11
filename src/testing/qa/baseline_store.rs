@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Performance-baseline persistence (S3.T3) — literal port of
+//! Performance-baseline persistence — literal port of
 //! `list_top_level_baselines` / `sanitize_nested_baselines` /
 //! `replace_copy_dir` / `persist_baseline` / `restore_baseline`
 //! (`tests-performance-regression.sh:219-318`).

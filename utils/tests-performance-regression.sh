@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #
 # =============================================================================
-# Performance Regression Gate — thin wrapper over nam_perf_gate (S3.T4)
+# Performance Regression Gate — thin wrapper over nam_perf_gate
 # =============================================================================
 #
 # Canonical home of benchmark-based performance defense for NeuralAmpModeler-rs:
@@ -13,7 +13,7 @@
 # DSP budgets with strict fail-closed safety.
 #
 # All logic (fingerprint, coverage, machine regression verdict, persist/restore,
-# receipt) is delegated to `nam_perf_gate` (S3.T3). This script only
+# receipt) is delegated to `nam_perf_gate`. This script only
 # orchestrates: taskset, cargo bench, and calls to the bin.
 #
 # Modes

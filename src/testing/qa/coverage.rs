@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Baseline coverage cross-check (F-24, S3.T2) — literal port of
+//! Baseline coverage cross-check — literal port of
 //! `executed_bench_ids` / `missing_baseline_coverage`
 //! (`tests-performance-regression.sh:229-249`).
 //!
@@ -13,7 +13,7 @@
 //! regression signal itself lives in [`crate::testing::qa::verdict`], which
 //! reads Criterion's persisted `change/estimates.json` (B2 / R-3).
 //!
-//! Fail-closed (F-24): a log with no parseable id makes the cross-check
+//! Fail-closed: a log with no parseable id makes the cross-check
 //! blind, so `missing_baseline_coverage` returns
 //! [`crate::testing::qa::coverage::BaselineCoverageGap`] — nothing passes
 //! unverified. Word splitting mirrors the bash `for id in $ids`

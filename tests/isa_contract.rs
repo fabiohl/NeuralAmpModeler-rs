@@ -13,20 +13,20 @@ use neural_amp_modeler_rs::math::common::{InstructionSet, effective_instruction_
 fn contract_default_build_never_dispatches_avx512() {
     #[cfg(not(feature = "avx512"))]
     {
-        // Mesmo que a CPU física suporte AVX-512, o dispatch padrão do motor
-        // é contratualmente restrito a AVX2 (x86-64-v3 baseline).
+        // Even if the physical CPU supports AVX-512, the default engine dispatch
+        // is contractually restricted to AVX2 (x86-64-v3 baseline).
         let effective = effective_instruction_set();
         assert_eq!(
             effective,
             InstructionSet::Avx2,
-            "Violação de contrato: build padrão não pode despachar acima de AVX2"
+            "Contract violation: default build cannot dispatch above AVX2"
         );
     }
 
     #[cfg(feature = "avx512")]
     {
-        // Se compilado explicitamente com --features avx512, seleciona AVX-512
-        // apenas se o hardware físico tiver a matriz F+VL+BW+DQ completa.
+        // When explicitly compiled with --features avx512, select AVX-512
+        // only if physical hardware provides the complete F+VL+BW+DQ matrix.
         let effective = effective_instruction_set();
         if neural_amp_modeler_rs::math::common::has_full_avx512() {
             assert_eq!(effective, InstructionSet::Avx512);

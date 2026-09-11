@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Tests for the performance-baseline fingerprint (S3.T1): serde roundtrip
+//! Tests for the performance-baseline fingerprint: serde roundtrip
 //! with hostile quoting, the typed field-by-field comparison, the bash
 //! byte-compatible JSON schema, and file I/O.
 
@@ -56,7 +56,7 @@ fn assert_mismatch(
     }
 }
 
-/// Acceptance (S3.T1): a rustc banner or `RUSTFLAGS` containing `"` must be
+/// Verifies that a rustc banner or `RUSTFLAGS` containing `\"` must be
 /// JSON-escaped and round-trip — serde replaces the fragile heredoc/`sed`
 /// pair that corrupted the file on such values.
 #[test]
@@ -83,7 +83,7 @@ fn quoted_rustc_and_rustflags_roundtrip_without_corrupting_json() {
     assert_eq!(value["rustflags"], f.rustflags);
 }
 
-/// Acceptance (S3.T1): a current governor != `performance` is incomparable
+/// Verifies that a current governor != `performance` is incomparable
 /// even when the baseline recorded the same non-performance governor.
 #[test]
 fn non_performance_governor_is_incomparable() {

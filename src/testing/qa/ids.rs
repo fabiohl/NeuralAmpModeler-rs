@@ -9,14 +9,14 @@
 //! `parse_jsonl_fidelity`). The verify engine resolves those aliases **only**
 //! through this table — never with ad-hoc string matching in `verify.rs`.
 //!
-//! S2.T3 grew this module with the catalog label↔fixture map (projection of
+//! This module includes the catalog label↔fixture map (projection of
 //! `catalog.rs` `GOLDEN_GEN_CATALOG` — the bash `ESR_F64_MODEL_MAP` is **not**
 //! a source) and the explicit `RT_*` benchmark table of
 //! `benches/regression_gate.rs` (bench label → contract performance id +
 //! fixture). Both tables are guarded by consistency tests against their Rust
 //! sources, so they can never silently drift from the catalog or the bench.
 //!
-//! S3 added the contract-label-family → f64-oracle fixture table: the ingest
+//! Additionally, the contract-label-family → f64-oracle fixture table provides: the ingest
 //! join of `esr_f64` onto the fidelity records that `verify_contract` reads.
 //! Unlike the catalog table, this one **is** a port of the legacy bash
 //! `ESR_F64_MODEL_MAP` (pre-`nam_quality` `verify_contract`), because no Rust

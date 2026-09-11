@@ -244,7 +244,7 @@ fn test_topology_accepts_f2_multi_condition_as_free() {
 }
 
 /// Catalog Feather model with `condition_dsp` sub-model must NOT match the catalog
-/// SKU (Finding 7.2.4 / Task T2.2). The static const-generic fast-path does not
+/// SKU. The static const-generic fast-path does not
 /// process condition_dsp, so the model must be routed to the dynamic engine.
 #[test]
 fn test_topology_feather_with_condition_dsp_routes_to_free() {
@@ -1248,7 +1248,7 @@ fn test_lstm_rejects_num_layers_too_high() {
 
 #[test]
 fn test_lstm_rejects_hidden_size_too_high() {
-    // Now caught at parse time by the universal MAX_HIDDEN_SIZE=512 check (Epic 1.1)
+    // Now caught at parse time by the universal MAX_HIDDEN_SIZE=512 check
     let json = format!(
         r#"{{"version": "0.5.4", "architecture": "LSTM", "config": {{"num_layers": 2, "hidden_size": {}, "layers": []}}, "weights": [0.0]}}"#,
         crate::loader::nam_json::MAX_HIDDEN_SIZE + 1
@@ -1258,7 +1258,7 @@ fn test_lstm_rejects_hidden_size_too_high() {
 
 #[test]
 fn test_lstm_accepts_max_bounds() {
-    // MAX_HIDDEN_SIZE = 512 is the universal parse-time cap (Epic 1.1)
+    // MAX_HIDDEN_SIZE = 512 is the universal parse-time cap
     let json = format!(
         r#"{{"version": "0.5.4", "architecture": "LSTM", "config": {{"num_layers": {}, "hidden_size": {}, "layers": []}}, "weights": [0.0]}}"#,
         MAX_LSTM_LAYERS, MAX_HIDDEN_SIZE
@@ -1359,7 +1359,7 @@ fn test_wavenet_free_accepts_max_channels() {
     );
 }
 
-// ── Fail-Closed: A2 features rejected in A1 WaveNet (T4.6) ──
+// ── Fail-Closed: A2 features rejected in A1 WaveNet ──
 
 fn make_a1_wavenet_base_json() -> String {
     r#"{
@@ -1958,7 +1958,7 @@ fn test_linear_implementation_invalid_falls_back_to_auto() {
 
 #[test]
 fn test_reject_object_activation_fail_closed() {
-    // Object activation is now accepted (S13.2: A2 generic models use per-layer
+    // Object activation is now accepted (A2 generic models use per-layer
     // activation objects like {"type": "Softsign"}). The activation string is
     // None, and the raw JSON is preserved in layer_raw for downstream dispatch.
     let json = r#"{
@@ -1978,7 +1978,7 @@ fn test_reject_object_activation_fail_closed() {
         "weights": [0.0, 0.0],
         "sample_rate": 48000
     }"#;
-    let parsed = parse_nam_json(json).expect("object activation must be accepted (S13.2)");
+    let parsed = parse_nam_json(json).expect("object activation must be accepted");
     assert_eq!(parsed.config.layers[0].activation, None);
     assert!(parsed.config.layers[0].layer_raw.is_some());
 }

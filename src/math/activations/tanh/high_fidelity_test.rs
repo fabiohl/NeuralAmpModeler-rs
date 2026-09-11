@@ -410,7 +410,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx2() {
 }
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_tanh_poly_nr1_vs_div_avx2() {
     let sweep: Vec<f32> = (0..DENSE_SWEEP_POINTS)
         .map(|i| -20.0_f32 + i as f32 * 0.01_f32)
@@ -463,7 +463,7 @@ fn test_tanh_poly_nr1_vs_div_avx2() {
 }
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_tanh_poly_nr2_vs_div_avx2() {
     let sweep: Vec<f32> = (0..DENSE_SWEEP_POINTS)
         .map(|i| -20.0_f32 + i as f32 * 0.01_f32)
@@ -647,7 +647,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_tanh_poly_nr1_vs_div_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;
@@ -705,7 +705,7 @@ fn test_tanh_poly_nr1_vs_div_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_tanh_poly_nr2_vs_div_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;

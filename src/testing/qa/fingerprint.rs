@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Performance-baseline environment fingerprint (S3.T1, R-09) — serde JSON
+//! Performance-baseline environment fingerprint — serde JSON
 //! replacing the bash heredoc + `sed` pair of
 //! `tests-performance-regression.sh::generate_fingerprint` /
 //! `compare_fingerprint` (`:81-215`).
@@ -24,7 +24,7 @@
 //!
 //! The first mismatch wins, in the bash comparison order, with a typed
 //! reason: `IncomparableEnvironment { field, baseline, current }` — the
-//! future receipt `reason` of the perf gate (S3.T3, classified `NOT_VERIFIED`
+//! future receipt `reason` of the perf gate (classified `NOT_VERIFIED`
 //! by [`crate::testing::qa::classify`]). A missing baseline file yields
 //! `MissingBaseline`.
 
@@ -86,7 +86,7 @@ pub struct Fingerprint {
     pub bench_core: String,
 }
 
-/// Typed failure of fingerprint I/O and comparison (S3.T1).
+/// Typed failure of fingerprint I/O and comparison.
 ///
 /// The variant names map 1:1 to the perf-gate reason strings of the bash
 /// (`MISSING_BASELINE` / `INCOMPARABLE_ENVIRONMENT`), which

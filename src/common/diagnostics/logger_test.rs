@@ -655,7 +655,7 @@ fn test_log_record_timestamp_is_monotonic() {
 }
 
 // =========================================================================
-// Multi-instance isolation and routing tests (Task T5.1 / G-ROB-PLUG-03)
+// Multi-instance isolation and routing tests
 // =========================================================================
 
 #[test]

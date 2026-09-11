@@ -699,7 +699,7 @@ fn test_equivalence_ir_512_extended_tail() {
     );
 }
 
-/// S3.T2 acceptance: with `prewarm_on_reset = false`, `NamModel::reset` must
+/// Verifies that with `prewarm_on_reset = false`, `NamModel::reset` must
 /// still zero the FIR history and FFT tail. After feeding energy, resetting and
 /// processing silence must yield only the bias — no residual FIR energy.
 #[test]

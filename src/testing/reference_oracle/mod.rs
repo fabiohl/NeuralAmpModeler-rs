@@ -363,7 +363,7 @@ fn is_a2_model(model_data: &NamModelData) -> bool {
     {
         return false;
     }
-    // S16.4 (T5.1): condition_dsp models with Tanh activation route through
+    // Condition_dsp models with Tanh activation route through
     // the A1 WaveNet oracle path, matching the production builder's is_a2_shape
     // routing. The A2 path would try to read A2-specific weights (FiLM, head1x1)
     // that don't exist in A1-style models. The A1 oracle supports condition_dsp

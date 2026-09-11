@@ -28,7 +28,7 @@ pub static SIMD_MATH: LazyLock<SimdMathConfig> = LazyLock::new(detect_best_simd)
 /// This is a `#[doc(hidden)]` test-only facility. Writing an ISA that the host
 /// CPU does not support will cause `SIGILL` (illegal instruction) as soon as a
 /// kernel is dispatched. All *install* operations MUST go through the validated
-/// helpers [`set_test_isa_override`] / [`clear_test_isa_override`] (T2.3); the
+/// Helpers [`set_test_isa_override`] / [`clear_test_isa_override`]; the
 /// static is `pub(crate)` so external crates cannot bypass capability checks.
 /// Restores of a previously validated raw byte (from the `Ok` value of
 /// [`set_test_isa_override`]) are the only sanctioned raw stores.
@@ -102,7 +102,7 @@ pub enum IsaOverrideError {
 
 /// `true` when the complete AVX-512 capability matrix (`F + VL + BW + DQ`)
 /// is present. This is the pure decision function behind runtime detection
-/// and the validated overrides; unit-testable without hardware (T2.1).
+/// And the validated overrides; unit-testable without hardware.
 ///
 /// The reachable AVX-512 kernels require the full set: `avx512f` (foundation),
 /// `avx512vl` (VL256/xmm-ymm EVEX lowering), `avx512bw` (byte/word) and
@@ -155,7 +155,7 @@ pub fn missing_avx512_features() -> Vec<&'static str> {
 /// Installs a validated test ISA override.
 ///
 /// This is the single sanctioned *install* path for `TEST_ISA_OVERRIDE`
-/// (T2.3). The requested ISA is validated against the host CPU capabilities
+/// The requested ISA is validated against the host CPU capabilities
 /// (and the active Cargo features) BEFORE the atomic is written, so safe Rust
 /// can never force dispatch towards instructions that would `SIGILL`.
 ///
@@ -226,7 +226,7 @@ pub fn clear_test_isa_override() -> u8 {
 /// Detection checks supported hardware features using the compiler macro `is_x86_feature_detected!`.
 /// AVX-512 is selected only when the full `F+VL+BW+DQ` capability matrix
 /// (`avx512f` + `avx512vl` + `avx512bw` + `avx512dq`) is supported by the
-/// processor and the `avx512` Cargo feature is enabled (T2.1). A partial
+/// Processor and the `avx512` Cargo feature is enabled. A partial
 /// subset (e.g. F+VL without BW/DQ) deterministically falls back to
 /// [`InstructionSet::Avx2`] — the reachable kernels require byte/word and
 /// doubleword/quadword instructions that a partial subset cannot execute.
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(decode_isa_override(255), None);
     }
 
-    // ── T2.1: capability matrix (pure, hardware-independent) ────────────────
+    // ── Capability matrix (pure, hardware-independent) ───────────────────────
 
     #[test]
     fn avx512_capability_matrix_requires_all_four_flags() {
@@ -336,7 +336,7 @@ mod tests {
     fn detect_falls_back_to_avx2_without_full_capability() {
         // Deterministic per-host: with the avx512 feature on, runtime
         // detection must return Avx512 only when ALL of F+VL+BW+DQ are
-        // present; any partial subset yields the Avx2 fallback (T2.1).
+        // Present; any partial subset yields the Avx2 fallback.
         let detected = detect_best_simd().instruction_set;
         if has_full_avx512() {
             assert_eq!(
@@ -382,7 +382,7 @@ mod tests {
         }
     }
 
-    // ── T2.3: validated override install + atomic/concurrency safety ────────
+    // ── Validated override install and atomic concurrency safety ──────────────
 
     #[test]
     #[serial]
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     #[serial]
     fn concurrent_override_installs_never_produce_invalid_state() {
-        // T2.3: reads via effective_instruction_set() stay lock-free (Relaxed)
+        // Reads via effective_instruction_set() stay lock-free (Relaxed)
         // and concurrent installs/clears (SeqCst swap) must never leave the
         // atomic in a state that decodes to an invalid ISA or panics.
         let handles: Vec<_> = (0..8)

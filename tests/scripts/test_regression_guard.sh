@@ -24,7 +24,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 cd "$PROJECT_DIR"
 
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
-echo -e "${BLUE}${BOLD}    Regression Guard Shell Test Suite (Automated T0.5)         ${NC}"
+echo -e "${BLUE}${BOLD}    Regression Guard Shell Test Suite                          ${NC}"
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
 
 START_TIME=$(date +%s%N)
@@ -67,8 +67,8 @@ if ! echo "$SCENARIO1_OUT" | grep -q "MISSING_BASELINE"; then
 fi
 echo -e "  ${GREEN}✓ Scenario 1 passed: exit code 1 and MISSING_BASELINE confirmed.${NC}"
 
-# ── Scenario 2: JSON-only --check (S2.T7); NOT_VERIFIED verdicts via fixture ─
-echo -e "\n${BLUE}[2/${TOTAL_SCENARIOS}] Testing Scenario 2: JSON-only --check (S2.T7)${NC}"
+# ── Scenario 2: JSON-only --check; NOT_VERIFIED verdicts via fixture ─────────
+echo -e "\n${BLUE}[2/${TOTAL_SCENARIOS}] Testing Scenario 2: JSON-only --check${NC}"
 
 # 2a: ASCII .txt contracts are rejected fail-closed (ERROR + exit 2) BEFORE
 # any phase runs — the dashboard is not invoked for oracle execution.

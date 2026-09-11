@@ -6,11 +6,32 @@
 //! Implements real-time convolution of an audio stream with an impulse response
 //! using the Uniform-Partitioned Overlap-Save method in the frequency domain.
 //!
-//! ## Design
+//! ## Mathematical Principle (UPOLS)
+//!
+//! 1. **Partitioning**: Given an impulse response `h[n]` of length `L`, it is partitioned
+//!    into `P = ceil(L / B)` uniform blocks of size `B` (partition size):
+//!    `h_p[n] = h[n + p*B]` for `n` in `0..B`.
+//! 2. **Zero-padding & Pre-FFT**: Each partition is padded with `B` zeros to FFT size
+//!    `N = 2*B` (rounded to next power of two) and pre-transformed into the frequency domain:
+//!    `H_p[k] = FFT([h_p[0], ..., h_p[B-1], 0, ..., 0])`.
+//! 3. **Overlap-Save Streaming**: For incoming audio block `m` of length `B`, the current
+//!    input segment is concatenated with the previous block:
+//!    `x_m[n] = [x[m-1], x[m]]` (length `N`).
+//!    The forward RFFT yields `X_m[k] = FFT(x_m[n])`, stored in the circular
+//!    Frequency Delay Line (FDL).
+//! 4. **Frequency-Domain MAC**:
+//!    `Y_m[k] = sum_{p=0..P-1} H_p[k] * X_{m-p}[k]`.
+//! 5. **Inverse Transform & Discard**: Time-domain output is computed via IRFFT:
+//!    `y_m[n] = IFFT(Y_m[k])`.
+//!    The first `N - B` samples contain circular time-aliasing and are discarded;
+//!    the trailing `B` samples `[N-B..N]` constitute the mathematically exact linear
+//!    convolution result.
+//! 6. **Fixed Latency**: Algorithmic latency is strictly `B` samples (one processing block),
+//!    regardless of whether the impulse response has 512 or 50,000 taps.
+//!
+//! ## Design Highlights
 //!
 //! - **Partition size** equals the audio block size (typically 64–2048 samples).
-//!   Latency is exactly `partition_size` samples.
-//! - **FFT size** is `2 × partition_size` (rounded up to next power of two).
 //! - **Kernel pre-FFT**: all IR partitions are transformed to the frequency domain
 //!   at construction time via native `RfftPlanner`, outside the audio thread.
 //! - **FDL (Frequency Delay Line)** is pre-allocated as contiguous SoA buffers
@@ -329,7 +350,7 @@ impl ConvEngine {
         }
 
         // ── Step 2: Forward RFFT of input segment, written directly into the
-        //            FDL slot (P-05 / T5.2) ──
+        //            FDL slot (zero intermediate copy) ──
         // The FDL write index advances after the MAC step, so the slot
         // `[fdl_base, fdl_base + n_bins)` is the destination of this block's
         // spectrum: writing the RFFT output straight into it eliminates the

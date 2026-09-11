@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Hostile model parsing and DoS hardening integration tests (Sprint 6 / Epic F).
+//! Hostile model parsing and DoS hardening integration tests.
 //!
 //! Verifies fail-closed resilience against adversarial model payloads:
-//! - F1 (R-10): Integer overflow & panic-free transposer and buffer allocation.
-//! - F2 (R-11): DoS bounds enforcement on A2 dynamic allocations (head channels, layer channels, head size).
-//! - F3 (R-12): Rejection of degenerate topologies (`hidden_size == 0`, `dilation == 0`).
-//! - F4 (R-13): Fail-closed `A2Conv1d::try_new` constructor and caller integration.
+//! - Arithmetic Hardening: Integer overflow & panic-free transposer and buffer allocation.
+//! - DoS Bounds Enforcement: Bounds validation on A2 dynamic allocations (head channels, layer channels, head size).
+//! - Degenerate Topologies: Rejection of invalid topologies (`hidden_size == 0`, `dilation == 0`).
+//! - Fail-Closed Constructors: Safe `A2Conv1d::try_new` constructor and caller integration.
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{
@@ -19,7 +19,7 @@ use neural_amp_modeler_rs::loader::transpose::wavenet::transpose_wavenet_interle
 use neural_amp_modeler_rs::math::common::AlignedVec;
 use neural_amp_modeler_rs::models::a2::conv1d::A2Conv1d;
 
-// ── F1: Arithmetic Hardening & Integer Overflow Protection ───────────────────
+// ── Arithmetic Hardening & Integer Overflow Protection ────────────────────────
 
 #[test]
 fn test_namb_ensure_capacity_overflow_rejected() {
@@ -88,7 +88,7 @@ fn test_wavenet_transpose_truncated_weights_rejected() {
     );
 }
 
-// ── F2: DoS Hardening & Allocation Caps (A2 Dynamic) ─────────────────────────
+// ── DoS Hardening & Allocation Caps (A2 Dynamic) ──────────────────────────────
 
 #[test]
 fn test_hostile_a2_oversized_head_channels_rejected() {
@@ -231,7 +231,7 @@ fn test_hostile_a2_oversized_head_size_rejected() {
     );
 }
 
-// ── F3: Degenerate Topology Validation (LSTM, ConvNet, WaveNet) ──────────────
+// ── Degenerate Topology Validation (LSTM, ConvNet, WaveNet) ───────────────────
 
 #[test]
 fn test_degenerate_lstm_zero_hidden_size_rejected() {
@@ -357,7 +357,7 @@ fn test_degenerate_wavenet_zero_dilation_rejected() {
     );
 }
 
-// ── F4: A2Conv1d::try_new Fail-Closed Invariants ─────────────────────────────
+// ── A2Conv1d::try_new Fail-Closed Invariants ──────────────────────────────────
 
 #[test]
 fn test_a2_conv1d_try_new_fail_closed_validation() {

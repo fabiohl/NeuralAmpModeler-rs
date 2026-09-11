@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Investigation [T5.5]: LSTM activation precision — SNR gain analysis.
+//  Investigation: LSTM activation precision — SNR gain analysis.
 //
 //  Measures the SNR gain from using exact `f32::tanh` (libm) vs the production
 //  Padé [5,4] rational approximant in LSTM fused gates.  Runs the same golden
 //  vector input through both paths and reports the SNR delta.
 //
-//  ## Axis-B split (contract [S2-T01])
+//  ## Axis-B split
 //
 //  - **Structural** (Phase 1, debug): model loading, geometry dispatch and
 //    buffer allocation — cheap, deterministic, codegen-agnostic.
@@ -55,7 +55,7 @@ fn lstm_variant_name(model: &neural_amp_modeler_rs::models::StaticModel) -> &'st
     }
 }
 
-/// [S2-T01] Axis-B structural LSTM checks (Phase 1 — debug).
+/// Structural LSTM checks (Phase 1 — debug).
 ///
 /// Loads the three distributed LSTM fixtures (RequiredLocal), validates their
 /// declared geometry (`architecture` / `num_layers` / `hidden_size`) against
@@ -204,7 +204,7 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
         gain = snr_exact - snr_fast,
     );
 
-    // S2.T6: forensic JSONL sink (kind `activation`) — human log unchanged.
+    // Forensic JSONL sink (kind `activation`) — human log unchanged.
     // Only finite pairs are reported; skips stay human-log-only.
     if snr_fast.is_finite() && snr_exact.is_finite() {
         common::report_activation(label, snr_fast, snr_exact);
@@ -213,7 +213,7 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
     (snr_fast, snr_exact)
 }
 
-/// [T5.5] Precision investigation: measure SNR gain of exact tanh vs FastMath Padé.
+/// Precision investigation: measure SNR gain of exact tanh vs FastMath Padé.
 ///
 /// Runs the 3 LSTM golden vectors through both SIMD (FastMath) and scalar
 /// (exact `f32::tanh`) paths, computing SNR against the C++ reference.
@@ -225,7 +225,7 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
 fn test_lstm_activation_precision_gain() {
     eprintln!();
     eprintln!("══════════════════════════════════════════════════════════════════");
-    eprintln!("  [T5.5] LSTM Activation Precision Investigation");
+    eprintln!("  LSTM Activation Precision Investigation");
     eprintln!("  Comparing FastMath (Padé tanh) vs Exact tanh (libm f32::tanh)");
     eprintln!("  SNR vs C++ golden vectors (NeuralAmpModelerCore)");
     eprintln!("══════════════════════════════════════════════════════════════════");
@@ -308,7 +308,7 @@ fn test_lstm_activation_precision_gain() {
     eprintln!();
 }
 
-/// [T5.5] Precision investigation: measure SNR gain of exact-grade `Standard` vs `Fast` Padé on full stress v2.
+/// Precision investigation: measure SNR gain of exact-grade `Standard` vs `Fast` Padé on full stress v2.
 ///
 /// Runs the 3 LSTM models through both SIMD (`Fast`) and SIMD (`Standard`)
 /// paths, computing SNR against the f64 exact reference oracle on the stress v2 signal.
@@ -320,7 +320,7 @@ fn test_lstm_activation_precision_gain() {
 fn test_lstm_activation_precision_gain_stress_v2() {
     eprintln!();
     eprintln!("══════════════════════════════════════════════════════════════════");
-    eprintln!("  [T5.5] LSTM Activation Precision Investigation (STRESS V2)");
+    eprintln!("  LSTM Activation Precision Investigation (STRESS V2)");
     eprintln!("  Comparing Fast (Padé tanh) vs Standard (exp-based, exact-grade)");
     eprintln!("  SNR vs f64 Exact Reference Oracle");
     eprintln!("══════════════════════════════════════════════════════════════════");
@@ -465,7 +465,7 @@ fn measure_lstm_snr_stress_v2(model_filename: &str, label: &str) -> (f64, f64) {
         gain = snr_exact - snr_fast,
     );
 
-    // S2.T6: forensic JSONL sink (kind `activation`) — human log unchanged.
+    // Forensic JSONL sink (kind `activation`) — human log unchanged.
     if snr_fast.is_finite() && snr_exact.is_finite() {
         common::report_activation(label, snr_fast, snr_exact);
     }

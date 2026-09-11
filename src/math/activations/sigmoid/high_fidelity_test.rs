@@ -17,7 +17,7 @@ const DENSE_SWEEP_POINTS: usize = 4001; // 0.01 step on [-20, 20]
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_sigmoid_poly_avx2_sweep() {
     let sweep: Vec<f32> = (0..DENSE_SWEEP_POINTS)
         .map(|i| -20.0_f32 + i as f32 * 0.01_f32)
@@ -143,7 +143,7 @@ fn test_sigmoid_poly_saturation() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_sigmoid_poly_avx512_sweep() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;

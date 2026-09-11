@@ -59,7 +59,7 @@ impl ForceAvx512Guard {
     /// Fallibly creates a new guard, forcing [`InstructionSet::Avx512`] SIMD
     /// dispatch — but ONLY after validating that the host CPU supports the
     /// complete AVX-512 capability matrix (`F+VL+BW+DQ`) required by the
-    /// reachable kernels (T2.2 / F-ROB-03).
+    /// Reachable kernels.
     ///
     /// On a host with a partial AVX-512 subset (e.g. F+VL without BW/DQ —
     /// common under VMs/hypervisors) the override is NOT installed and a
@@ -135,7 +135,7 @@ pub struct IsaGuard {
 
 impl IsaGuard {
     /// Fallibly creates a new guard, forcing the specified ISA for SIMD
-    /// dispatch after validating host CPU capability (T2.3).
+    /// Dispatch after validating host CPU capability.
     ///
     /// Returns [`IsaOverrideError`] when the requested ISA cannot be executed
     /// on the current host (e.g. AVX-512 on a CPU with a partial subset) so
@@ -209,7 +209,7 @@ mod tests {
     #[serial]
     #[cfg(feature = "avx512")]
     fn test_force_avx512_guard_try_new_requires_full_capability() {
-        // T2.2 acceptance: try_new() on a host without the full F+VL+BW+DQ
+        // Acceptance: try_new() on a host without the full F+VL+BW+DQ
         // matrix returns a structured error — never a crash/SIGILL.
         let initial_isa = effective_instruction_set();
         match ForceAvx512Guard::try_new() {

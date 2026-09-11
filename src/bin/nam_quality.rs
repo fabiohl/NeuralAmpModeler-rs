@@ -191,7 +191,7 @@ fn required<'a>(flags: &'a Flags, name: &str) -> Result<&'a str, String> {
 
 /// Parses a non-negative integer flag value.
 ///
-/// T2.3: values produced by shell `grep -c` pipelines may carry multiple
+/// Values produced by shell `grep -c` pipelines may carry multiple
 /// lines. The FIRST non-empty, trimmed line must be the plain count — the
 /// embedded newline is tolerated instead of failing the whole receipt. A
 /// non-numeric value (including the `file:count` form of a multi-file grep,
@@ -250,7 +250,7 @@ fn cmd_ingest(args: &[String]) {
             )),
         };
         // Lines carrying `phase_id` must have a string `status`; provenance
-        // records (`kind: build_metadata`, T0.4) have no `phase_id` and pass
+        // records (`kind: build_metadata`) have no `phase_id` and pass
         // through — the verify parser skips them.
         if value.get("phase_id").is_some()
             && (value.get("phase_id").and_then(Value::as_str).is_none()
@@ -760,7 +760,7 @@ fn cmd_classify(args: &[String]) {
     };
     let reason = flags.get("reason").unwrap_or("");
 
-    // T2.3: fresh-run classification — `--reg-exit <n>` and
+    // Fresh-run classification — `--reg-exit <n>` and
     // `--run-id-match <0|1>` make the classifier stale-receipt-proof. When
     // omitted (legacy callers) the 3-way F-08 classifier is used.
     let reg_exit = flags.get("reg-exit");
@@ -798,7 +798,7 @@ fn print_classify_help() {
     println!("  --status <STATUS>  receipt status (e.g. PASS, FAIL, NOT_RUN).");
     println!("  --reason <text>    receipt reason (e.g. MISSING_BASELINE,");
     println!("                      INCOMPARABLE_ENVIRONMENT, REGRESSION_DETECTED).");
-    println!("  --reg-exit <n>     exit code of the regression runner (T2.3).");
+    println!("  --reg-exit <n>     exit code of the regression runner.");
     println!("  --run-id-match     whether the receipt's run_id equals the current");
     println!("                     RUN_ID (0|1). Together they make the classifier");
     println!("                     stale-receipt-proof: a PASS from a previous run");
@@ -976,7 +976,7 @@ fn cmd_save(args: &[String]) {
                 i + 1
             )),
         };
-        // Provenance records (`kind: build_metadata`, T0.4) carry no
+        // Provenance records (`kind: build_metadata`) carry no
         // `phase_id` and are irrelevant to the fidelity gate.
         let Some(phase_id) = value.get("phase_id").and_then(Value::as_str) else {
             continue;

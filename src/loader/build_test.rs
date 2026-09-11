@@ -32,7 +32,7 @@ mod tests {
         path
     }
 
-    /// Acceptance (T6.2): JSON with `input_level_dbu: 1e999` returns a typed `Err`.
+    /// Acceptance: JSON with `input_level_dbu: 1e999` returns a typed `Err`.
     ///
     /// serde_json rejects `1e999` as "number out of range" at parse time
     /// (`JsonError::Serde`). Defense-in-depth: if a future serde version

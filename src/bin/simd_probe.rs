@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! `simd_probe` — SIMD Diagnostic & Capability Probe CLI (Sprint 4.1).
+//! `simd_probe` — SIMD Diagnostic & Capability Probe CLI.
 //!
 //! Inspects the x86-64 hardware SIMD flags via `is_x86_feature_detected!`,
 //! validates the OS context save of the ZMM registers via `xgetbv` (when the
@@ -56,22 +56,22 @@ fn print_hardware_flags() {
     let zmm_os_context = os_saves_zmm_context();
 
     println!("[CPU Hardware Flags]");
-    println!("  - avx2:        {}", sim_label(avx2, " (presente)"));
-    println!("  - fma:         {}", sim_label(fma, " (presente)"));
-    println!("  - avx512f:     {}", sim_label(avx512f, ""));
-    println!("  - avx512vl:    {}", sim_label(avx512vl, ""));
-    println!("  - avx512bw:    {}", sim_label(avx512bw, ""));
-    println!("  - avx512dq:    {}", sim_label(avx512dq, ""));
-    println!("  - osxsave:     {}", sim_label(osxsave, ""));
-    println!("  - xgetbv ZMM:  {}", sim_label(zmm_os_context, ""));
+    println!("  - avx2:        {}", bool_label(avx2, " (present)"));
+    println!("  - fma:         {}", bool_label(fma, " (present)"));
+    println!("  - avx512f:     {}", bool_label(avx512f, ""));
+    println!("  - avx512vl:    {}", bool_label(avx512vl, ""));
+    println!("  - avx512bw:    {}", bool_label(avx512bw, ""));
+    println!("  - avx512dq:    {}", bool_label(avx512dq, ""));
+    println!("  - osxsave:     {}", bool_label(osxsave, ""));
+    println!("  - xgetbv ZMM:  {}", bool_label(zmm_os_context, ""));
 
     let compatible = avx512_capability_complete(avx512f, avx512vl, avx512bw, avx512dq);
     println!(
-        "  -> Status do Hardware: [{}]",
+        "  -> Hardware Status: [{}]",
         if compatible {
-            "COMPATÍVEL"
+            "COMPLIANT"
         } else {
-            "NÃO COMPATÍVEL"
+            "NON-COMPLIANT"
         }
     );
 }
@@ -82,9 +82,9 @@ fn print_compilation_flags() {
     println!(
         "  - feature \"avx512\": [{}]",
         if cfg!(feature = "avx512") {
-            "ATIVA"
+            "ACTIVE"
         } else {
-            "INATIVA"
+            "INACTIVE"
         }
     );
 }
@@ -105,12 +105,12 @@ fn print_dispatch_resolution() {
     match run_inference_smoke_test() {
         Ok(checksum) => {
             println!(
-                "  - Inference Smoke Test: {PROBE_BLOCK} amostras, checksum={checksum:.6} (finito)"
+                "  - Inference Smoke Test: {PROBE_BLOCK} samples, checksum={checksum:.6} (finite)"
             );
-            println!("  - Dispatch Status: OPERANDO DETERMINISTICAMENTE");
+            println!("  - Dispatch Status: OPERATING DETERMINISTICALLY");
         }
         Err(e) => {
-            eprintln!("  - Dispatch Status: FALHA ({e})");
+            eprintln!("  - Dispatch Status: FAILED ({e})");
             std::process::exit(1);
         }
     }
@@ -136,7 +136,7 @@ fn run_inference_smoke_test() -> Result<f32, String> {
     model.process(&input, &mut output);
 
     if !output.iter().all(|x| x.is_finite()) {
-        return Err("saída não finita".to_string());
+        return Err("Non-finite output detected".to_string());
     }
     Ok(output.iter().sum())
 }
@@ -166,11 +166,11 @@ fn has_osxsave() -> bool {
     (cpuid.ecx >> 27) & 1 == 1
 }
 
-/// Renders a boolean flag as `SIM`/`NÃO` with an optional suffix.
-fn sim_label(value: bool, suffix: &str) -> String {
+/// Renders a boolean flag as `YES`/`NO` with an optional suffix.
+fn bool_label(value: bool, suffix: &str) -> String {
     if value {
-        format!("SIM{suffix}")
+        format!("YES{suffix}")
     } else {
-        "NÃO".to_string()
+        "NO".to_string()
     }
 }

@@ -151,7 +151,7 @@ fn test_nondist_models_validation() {
 
         // 4. Block Size Invariance.
         // All architectures re-chunk internally in sub-blocks of ≤
-        // `WAVENET_MAX_NUM_FRAMES` (64 frames). A2 gained internal chunking in T2.1,
+        // `WAVENET_MAX_NUM_FRAMES` (64 frames). A2 features internal chunking,
         // so block sizes > 64 are safe across the board and fully exercise streaming
         // invariance.
         let block_sizes = [1, 16, 32, 64, 128, 256, 512];

@@ -10,7 +10,7 @@
 //!
 //! Canonical gate: wired into `tests-quick.sh` Phase 1 and `tests-long.sh`
 //! Defense phase. The former standalone wrapper
-//! `utils/debug/verify_no_libm_exports.sh` was removed (S4-T03).
+//! `utils/debug/verify_no_libm_exports.sh` was consolidated into this test.
 
 use std::env;
 use std::path::PathBuf;

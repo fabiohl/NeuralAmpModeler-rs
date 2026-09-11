@@ -103,7 +103,7 @@ impl PolyphaseBank {
     /// Returns the pointer to the start of phase `phase` coefficients.
     ///
     /// # Safety
-    /// `phase` deve ser < `NUM_PHASES`.
+    /// `phase` must be < `NUM_PHASES`.
     #[inline]
     pub fn phase_ptr(&self, phase: usize) -> *const f32 {
         debug_assert!(phase < NUM_PHASES);

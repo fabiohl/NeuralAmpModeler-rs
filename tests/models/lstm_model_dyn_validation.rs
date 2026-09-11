@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Exhaustive validation tests for `LstmModelDyn` (Task D.1.3 / D.2.4).
+//  Exhaustive validation tests for `LstmModelDyn`.
 //
 //  Covers arbitrary (num_layers, hidden_size) topologies not matched by the
 //  10 static const-generic profiles.
 //
-//  Post-consolidation (D.1.3): no-panic and zero-input finitude assertions
+//  Consolidated validation: no-panic and zero-input finitude assertions
 //  merged into strict SIMD-vs-scalar parity gates, eliminating weak
 //  `is_finite()` placebo tests.
 

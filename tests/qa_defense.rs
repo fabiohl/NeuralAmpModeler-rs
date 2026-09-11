@@ -504,7 +504,7 @@ fn f27_canonical_jsonl_parse() {
     assert_eq!(model_c.mrstft, MetricValue::Raw("0.001".into()));
 }
 
-// ── S3-T01: unified C++ render build (subprocess, no extract_define) ─────────
+// ── Unified C++ render build (subprocess, no extract_define) ─────────────────
 
 /// Fake `cmake`: logs every invocation to `CMAKE_CALL_LOG` and fabricates a
 /// render binary at `tools/render` (the Makefiles-generator layout). Unlike
@@ -556,7 +556,7 @@ fn render_script() -> PathBuf {
     project_root().join("utils/ensure_namcore_render.sh")
 }
 
-/// Absolute `bash` path: some S3-T01 scenarios replace `PATH` entirely, so
+/// Absolute `bash` path: some isolated test scenarios replace `PATH` entirely, so
 /// the interpreter itself must not be resolved through it.
 fn bash_abs() -> String {
     let out = Command::new("bash")
@@ -569,13 +569,13 @@ fn bash_abs() -> String {
     path
 }
 
-/// Exit-code contract of `ensure_namcore_render` (S3-T01), asserted through
+/// Exit-code contract of `ensure_namcore_render`, asserted through
 /// `utils/ensure_namcore_render.sh` so the script wrapper itself stays
 /// certified without `extract_define`:
 /// 0 = binary ensured, 1 = no C++ compiler, 2 = cmake not found,
 /// 3 = NAMCore vendor tree missing.
 #[test]
-fn s3t01_ensure_namcore_render_exit_codes() {
+fn ensure_namcore_render_exit_codes() {
     let work = temp_dir();
     let script = render_script();
     let bash = bash_abs();
@@ -635,11 +635,11 @@ fn s3t01_ensure_namcore_render_exit_codes() {
     );
 }
 
-/// The fake-toolchain build flows of the removed bash block (S3-T01):
+/// The fake-toolchain build flows of the subprocess render builder:
 /// cold build, warm idempotency, compiler switch, `NAM_RENDER_FORCE`,
 /// build-type change — all deterministic, no real C++ toolchain needed.
 #[test]
-fn s3t01_ensure_namcore_render_fake_toolchain_flows() {
+fn ensure_namcore_render_fake_toolchain_flows() {
     let work = temp_dir();
     let script = render_script();
     let bash = bash_abs();

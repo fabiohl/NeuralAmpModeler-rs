@@ -267,7 +267,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// S13.T02 — Shrinking strategy for NamModelData (via strategy functions)
+// Shrinking strategy for NamModelData (via strategy functions)
 // ---------------------------------------------------------------------------
 
 /// Strategy for `NamLayerConfig` with shrinking.
@@ -517,7 +517,7 @@ pub fn arbitrary_nam_model_data() -> impl Strategy<Value = NamModelData> {
 }
 
 // ---------------------------------------------------------------------------
-// S16.T03 — JSON serialization roundtrip for NamModelData
+// JSON serialization roundtrip for NamModelData
 // ---------------------------------------------------------------------------
 //
 // prop_model_data_serialization_roundtrip is executed in Fase 3
@@ -554,7 +554,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// S13.T02 — 100k iterations: valid NAMB header + random body
+// 100k iterations: valid NAMB header + random body
 // ---------------------------------------------------------------------------
 
 /// Generates a byte-array with a syntactically valid NAMB v2 header
@@ -781,7 +781,7 @@ fn adversarial_linear_json_strategy() -> impl Strategy<Value = String> {
 }
 
 // ---------------------------------------------------------------------------
-// T23.2 — Adversarial A2-Dynamic dimensions: channels, bottleneck, kernel
+// Adversarial A2-Dynamic dimensions: channels, bottleneck, kernel
 //         sizes, dilations, multi-array cascades — exercise A2 shape detection
 //         under stress, never abort/panic.
 // ---------------------------------------------------------------------------
@@ -1104,7 +1104,7 @@ fn adversarial_a2_dynamic_json_strategy() -> impl Strategy<Value = String> {
 }
 
 // ---------------------------------------------------------------------------
-// T23.3 — Adversarial SlimmableContainer: exercises submodel count, recursion
+// Adversarial SlimmableContainer: exercises submodel count, recursion
 //         depth, top-level topology overflows, missing fields, and version
 //         bounds — never abort/panic.
 // ---------------------------------------------------------------------------
@@ -1426,7 +1426,7 @@ fn adversarial_state_budget_strategy() -> impl Strategy<Value = String> {
 }
 
 // ---------------------------------------------------------------------------
-// T23.1 — Adversarial LSTM dimensions: hidden_size, num_layers, channels,
+// Adversarial LSTM dimensions: hidden_size, num_layers, channels,
 //         weight count, missing fields — ensure Err/None, never abort/panic.
 // ---------------------------------------------------------------------------
 
@@ -1670,7 +1670,7 @@ proptest! {
         }
     }
 
-    /// T23.1 — Adversarial LSTM dimensions: ensures topology detection rejects
+    /// Adversarial LSTM dimensions: ensures topology detection rejects
     /// models with hidden_size, num_layers, channels, layers count, missing
     /// fields, or weight mismatches exceeding safe bounds (never abort/panic).
     #[test]
@@ -1696,7 +1696,7 @@ proptest! {
         }
     }
 
-    /// T23.2 — Adversarial A2-Dynamic dimensions: ensures A2 shape detection
+    /// Adversarial A2-Dynamic dimensions: ensures A2 shape detection
     /// handles WaveNet models with adversarial channel, bottleneck, kernel,
     /// dilation, multi-array, and gating dimensions (never abort/panic).
     #[test]
@@ -1720,7 +1720,7 @@ proptest! {
         }
     }
 
-    /// T23.3 — Adversarial SlimmableContainer: ensures submodel count,
+    /// Adversarial SlimmableContainer: ensures submodel count,
     /// recursion depth, topology overflow, version, and structural
     /// properties are rejected or handled without panic/abort.
     #[test]

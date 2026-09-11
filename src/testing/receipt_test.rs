@@ -146,7 +146,7 @@ fn tests_executed_falls_back_to_benchmark_lines() {
     assert_eq!(count_tests_executed_from_log(&missing), 0);
 }
 
-// F-21 acceptance cases ported from `utils/tests-long.sh:700-723` (S4.T2):
+// Test execution counting cases ported from `utils/tests-long.sh:700-723`:
 // `_lib.sh::assert_ran_tests` now delegates to this function, so the shell
 // asserts exercise the same inputs.
 #[test]
@@ -166,7 +166,7 @@ fn f21_cases_from_long_suite() {
 
 #[test]
 fn gap_markers_are_detected_in_canonical_order() {
-    // T3.2/T3.3: all structured markers recognized; details (`reason=`,
+    // All structured markers recognized; details (`reason=`,
     // trailing text after `MISSING-REQUIRED:`) are attached to the gap
     // entry so the receipt carries WHY the phase deviated.
     let log = write_temp(
@@ -198,7 +198,7 @@ fn gap_markers_are_detected_in_canonical_order() {
 
 #[test]
 fn unreadable_log_is_fail_closed() {
-    // T3.3: a missing/unreadable phase log must surface as a gap, never be
+    // A missing/unreadable phase log must surface as a gap, never be
     // silently promoted to a clean PASSED with `gaps: []`.
     let missing = temp_path();
     assert_eq!(detect_gap_markers(&missing), vec!["log_unreadable"]);
@@ -206,7 +206,7 @@ fn unreadable_log_is_fail_closed() {
 
 #[test]
 fn all_skip_occurrences_accumulate_per_phase() {
-    // T2.1: every distinct skip of a phase log is accumulated — the
+    // Every distinct skip of a phase log is accumulated — the
     // detector never collapses a family to its first line.
     let log = write_temp(
         "[STATUS] SKIP_OPTIONAL: models_nondist_absent\n\
@@ -231,7 +231,7 @@ fn all_skip_occurrences_accumulate_per_phase() {
 
 #[test]
 fn colon_form_skip_markers_are_recognized() {
-    // T2.1 canonical grammar `[STATUS] SKIP_<MOTIVO>: <detalhes>` — the
+    // Canonical grammar `[STATUS] SKIP_<MOTIVO>: <detalhes>` — the
     // colon dialect and the attribute dialect parse to the same gap ids.
     let log = write_temp(
         "[STATUS] SKIP_CAPABILITY: avx512_cpu_unsupported:Zen1\n\
@@ -265,7 +265,7 @@ fn colon_form_skip_markers_are_recognized() {
 
 #[test]
 fn typed_skip_changes_receipt_verdict_to_completed_with_gaps() {
-    // T2.1 regression: ANY typed skip emission alters the phase receipt
+    // Regression guard: ANY typed skip emission alters the phase receipt
     // so the suite-level verdict is COMPLETED_WITH_GAPS — never a clean
     // PASSED with `gaps: []`.
     let log = write_temp(
@@ -299,7 +299,7 @@ fn typed_skip_changes_receipt_verdict_to_completed_with_gaps() {
 
 #[test]
 fn avx512_opt_in_declaration_counts_as_declared_gap() {
-    // T2.4: a default local long-suite run compiles without `avx512`, so
+    // A default local long-suite run compiles without `avx512`, so
     // the isa_parity subphase executes zero cross-ISA cases. The explicit
     // `AVX512_OPT_IN: NOT_RUN` declaration must surface as a typed gap —
     // the suite verdict becomes COMPLETED_WITH_GAPS, never a clean PASSED.
@@ -641,7 +641,7 @@ fn preflight_failure_drives_overall_failed_verdict() {
         gaps: vec![],
         timestamp: "t".to_string(),
     };
-    // S6-T03 acceptance: an aborted preflight leaves its FAILED line and
+    // Preflight failure acceptance: an aborted preflight leaves its FAILED line and
     // the summary derives `overall FAILED` — even with all timed phases
     // green, because the suite never reached them.
     let aborted = LongAuditReceipt {
@@ -667,7 +667,7 @@ fn preflight_failure_drives_overall_failed_verdict() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// T3.4 — fixture-based tests: synthetic logs drive the marker parser and
+// Fixture-based tests: synthetic logs drive the marker parser and
 // the receipt classifier through every status/gap branch.
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -793,7 +793,7 @@ fn zero_test_pass_is_detected_as_inconsistency() {
 
 #[test]
 fn legacy_skip_lines_surface_as_transitional_gap() {
-    // T3.2 rollback: during the transition, unconverted free-form
+    // Transitional fallback: unconverted free-form
     // `SKIP:` prints are still recognized — never masked into a PASSED.
     let log = write_temp(
         "SKIP: Model file not found\n\
@@ -820,7 +820,7 @@ fn legacy_skip_lines_surface_as_transitional_gap() {
 
 #[test]
 fn strict_verdict_rejects_every_gap_condition() {
-    // T3.3 acceptance: strict mode fails on each gap family and passes
+    // Strict mode fails on each gap family and passes
     // only on a fully clean receipt.
     let cases: Vec<Vec<LongPhaseReceipt>> = vec![
         // gap status
@@ -862,7 +862,7 @@ fn strict_verdict_rejects_every_gap_condition() {
 
 #[test]
 fn gap_family_prefix_matching_survives_details() {
-    // T3.3: verdict helpers match the canonical family even when the gap
+    // Verdict helpers match the canonical family even when the gap
     // entry carries a `:detail` suffix from the marker grammar.
     let with_detail = LongAuditReceipt {
         phases: vec![mk_phase(

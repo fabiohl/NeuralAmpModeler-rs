@@ -35,7 +35,7 @@
 /// * `mixin` — optional conditioning vector of length `out_ch`.
 #[expect(
     clippy::too_many_arguments,
-    reason = "A2 dilated convolution fallback kernel requiring many shape/stride parameters when SIMD path is unavailable"
+    reason = "A2 dilated convolution scalar reference oracle requiring many shape/stride parameters for numerical parity validation"
 )]
 pub fn a2_conv1d_single_frame_fallback(
     weights: &[f32],
@@ -145,7 +145,7 @@ pub fn a2_conv1d_single_frame_fallback(
 /// Iterates the single-frame fallback for each consecutive frame index.
 #[expect(
     clippy::too_many_arguments,
-    reason = "A2 dilated convolution fallback kernel requiring many shape/stride parameters when SIMD path is unavailable"
+    reason = "A2 dilated convolution scalar reference oracle requiring many shape/stride parameters for numerical parity validation"
 )]
 pub fn a2_conv1d_block_fallback(
     weights: &[f32],

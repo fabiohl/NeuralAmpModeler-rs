@@ -394,7 +394,7 @@ fn test_quality_contract_uniqueness() {
                 !a.starts_with(*b),
                 "Label collision by prefix: '{}' is a prefix of '{}'.\n\
                  This causes false-green contract verification.\n\
-                 Regenerate docs/quality-contract.json via the S1.T3 transcription test.",
+                 Regenerate docs/quality-contract.json via the transcription test.",
                 b,
                 a,
             );

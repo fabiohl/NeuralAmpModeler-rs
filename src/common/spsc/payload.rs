@@ -21,7 +21,7 @@ pub struct ResamplerSwapPayload {
 }
 
 /// Versioned envelope for a pre-built `CabSimPair` (or bypass `None`) transported over the
-/// dedicated Main→RT SPSC channel (F-RB-004 / T7.1).
+/// dedicated Main→RT SPSC channel (F-RB-004).
 pub struct CabSimSwapPayload {
     /// Request generation this cabsim pair was built for (from `RtStatusFlags::requested_cabsim_generation`).
     pub generation: u64,

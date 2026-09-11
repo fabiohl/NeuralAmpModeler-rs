@@ -416,7 +416,7 @@ pub struct A2TopologyVectors {
 
 /// Validates the A2 layer-array topology *before any allocation*.
 ///
-/// Fail-closed hardening (T1.2):
+/// Fail-closed hardening:
 /// - F-02: diverging `kernel_sizes`/`dilations`/activation-array lengths are
 ///   rejected here instead of panicking on `assert_eq!` in `WaveNetA2Dyn::new`
 ///   or silently falling back to default activations.

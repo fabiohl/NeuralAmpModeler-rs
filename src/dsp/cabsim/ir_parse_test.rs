@@ -40,7 +40,7 @@ fn build_synthetic_wav(junk_chunks: usize) -> Vec<u8> {
 
 #[test]
 fn junk_zero_size_chunk_flood_aborts_scan() {
-    // F-20 / T2.6: 10,000 zero-sized junk chunks must abort the scan at
+    // F-20: 10,000 zero-sized junk chunks must abort the scan at
     // MAX_CHUNKS_SCANNED — a typed error, in bounded time, never a hang.
     let wav = build_synthetic_wav(10_000);
     let result = parse_wav(&wav);
@@ -54,7 +54,7 @@ fn junk_zero_size_chunk_flood_aborts_scan() {
 
 #[test]
 fn find_chunk_returns_none_after_scan_cap() {
-    // F-20 / T2.6: the cap aborts exactly after MAX_CHUNKS_SCANNED chunks.
+    // F-20: the cap aborts exactly after MAX_CHUNKS_SCANNED chunks.
     let junk_id = *b"JUNK";
     let mut data = Vec::new();
     data.extend_from_slice(b"RIFF");
@@ -71,7 +71,7 @@ fn find_chunk_returns_none_after_scan_cap() {
 
 #[test]
 fn junk_chunks_within_cap_still_parse() {
-    // F-20 / T2.6: a valid WAV with 100 junk chunks (well within the cap)
+    // F-20: a valid WAV with 100 junk chunks (well within the cap)
     // must parse normally — the guard must not reject legitimate files.
     let wav = build_synthetic_wav(100);
     let (samples, rate) = parse_wav(&wav).expect("valid WAV with junk must parse");
@@ -81,7 +81,7 @@ fn junk_chunks_within_cap_still_parse() {
 
 #[test]
 fn scan_cap_boundary_exact() {
-    // F-20 / T2.6: each chunk scan (fmt, then data) restarts the counter.
+    // F-20: each chunk scan (fmt, then data) restarts the counter.
     // A file with N junk chunks requires N + 2 iterations to find `data`
     // (junk × N, fmt, data), so N = MAX - 2 is the largest parseable junk
     // count; N = MAX - 1 finds `fmt` but aborts before `data`.

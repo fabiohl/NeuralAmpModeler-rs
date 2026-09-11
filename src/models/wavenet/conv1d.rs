@@ -104,6 +104,11 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         let interleave_width = select_interleave_width(OUT);
         let num_blocks = OUT.div_ceil(interleave_width);
 
+        // Causal dilated convolution temporal taps:
+        // For kernel size K and dilation factor d, the tap at index k in 0..K corresponds to:
+        //   t_k = t - d * (K - 1 - k)
+        // With k = K - 1 being the current frame (offset = 0) and k = 0 being the oldest
+        // causal history tap in the receptive field (offset = -d * (K - 1)).
         let mut in_taps = [[0.0f32; IN]; K];
         for (k, in_tap) in in_taps.iter_mut().enumerate() {
             let offset = (self.dilation as isize) * ((k as isize) + 1 - (K as isize));

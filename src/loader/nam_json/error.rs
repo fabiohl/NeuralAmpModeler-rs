@@ -287,7 +287,7 @@ impl From<serde_json::Error> for JsonError {
 mod tests {
     use super::*;
 
-    /// Acceptance (B-10 / S3.T8): `Error::source()` of a `JsonError::Serde`
+    /// Verifies that `Error::source()` of a `JsonError::Serde`
     /// exposes the original `serde_json::Error` (previously discarded).
     #[test]
     fn serde_variant_preserves_source() {

@@ -222,7 +222,7 @@ mod tests {
         assert!(!flags.check_flag(RT_STATUS_DEGRADE_MINIMAL));
     }
 
-    /// T4.3 / F-CLAP-010 — `reset()` reverts the FSM to Full and aborts any
+    /// Verifies that `reset()` reverts the FSM to Full and aborts any
     /// in-flight crossfade while preserving the user configuration (mode,
     /// slim override, slimmable tracking).
     #[test]

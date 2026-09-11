@@ -190,7 +190,7 @@ fn json_snr_db(snr: f64) -> serde_json::Value {
 /// process env `NAM_METRICS_JSONL` fallback, serialized under [`REPORT_LOCK`]
 /// so concurrent reporters never interleave partial lines.
 ///
-/// Shared by the fidelity sink of `report_dsp_fidelity*` and by the S2.T6
+/// Shared by the fidelity sink of `report_dsp_fidelity*` and by the secondary
 /// oracle sinks (`report_f64_table`, `report_f64_decomp`, `report_activation`,
 /// `report_isa`). A missing/closed sink is silently ignored — the JSONL
 /// stream is an enrichment, never a gate.
@@ -213,12 +213,11 @@ fn append_metric_line(obj: serde_json::Value) {
     }
 }
 
-// ── S2.T6 oracle sinks (R-06, slice 1) ───────────────────────────────────────
+// ── Secondary oracle sinks ───────────────────────────────────────────────────
 // Structured JSONL for the f64 oracle, activation precision, and ISA parity
-// tests that today only print human-readable logs. The dashboard keeps
-// scraping the logs until S2.T7; these records are the forensic JSONL stream
-// for agents (`kind` values are ignored by the S2.T1/T2 parsers by design —
-// they extend without touching the fidelity filter).
+// tests that previously only printed human-readable logs. These records form
+// the forensic JSONL stream (`kind` values are ignored by default metric
+// parsers by design — they extend without touching the fidelity filter).
 
 /// `f64_table` — one row of the f64-oracle summary table
 /// (`tests/parity/reference_oracle_f64.rs::test_summary_table`), mirroring
@@ -1039,7 +1038,7 @@ pub fn get_calibrated_threshold(
             let snr_db = 90.0;
             Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-9), Some(0.05)))
         }
-        // --- WaveNet A2 Dynamic Gated CH=8 (Task 3.3) ---
+        // --- WaveNet A2 Dynamic Gated CH=8 ---
         // Gating doubles conv output (channels × 2*bottleneck) and applies
         // Sigmoid gate + LeakyReLU main activation. C++ uses Eigen-based generic
         // WaveNet, Rust uses WaveNetA2Dyn per-frame.
@@ -1050,7 +1049,7 @@ pub fn get_calibrated_threshold(
             let snr_db = 85.0;
             Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-9), Some(0.05)))
         }
-        // --- WaveNet A2 Dynamic Blended CH=3 (Task 3.3) ---
+        // --- WaveNet A2 Dynamic Blended CH=3 ---
         // Blending mixes main activation (LeakyReLU) with Tanh gate via linear
         // interpolation. C++ uses Eigen-based generic WaveNet, Rust uses
         // WaveNetA2Dyn per-frame.
@@ -1241,11 +1240,11 @@ pub fn topology_thresholds(
 
 /// Computes MSE/SNR/ESR thresholds for live C++ cross-validation (`cpp_parity.rs`).
 ///
-/// Uses aggressive floors reflecting post-T16.1 live SNR measurements.
+/// Uses aggressive floors reflecting empirical live SNR measurements.
 /// LSTM formula targets 50–97 dB live SNR with ~10–15 dB margin
 /// (v2 stress signal relaxation applied separately in `cpp_parity.rs`).
 ///
-/// T16.4: ESR gate added as primary threshold (robust to scale mismatch).
+/// ESR gate added as primary threshold (robust to scale mismatch).
 ///
 /// Returns `(mse_limit, min_snr_db, max_esr, mrstft_max)`.
 /// mrstft_max asserted as hard gate at 44.1/48 kHz.

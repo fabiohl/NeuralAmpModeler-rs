@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #
 # =============================================================================
-# Remote SIMD Gate & Receipt Generator (AVX-512 / AVX10) — T4.1.1
+# Remote SIMD Gate & Receipt Generator (AVX-512 / AVX10)
 # =============================================================================
 #
 # Automated harness for executing cross-ISA parity validation and latency
@@ -34,7 +34,7 @@ mkdir -p target/logs
 
 trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line $LINENO status $?.${NC}"; exit 1' ERR
 
-# ── Structured receipt emitter (T2.4: cross-ISA matrix registered in a
+# ── Structured receipt emitter (Cross-ISA matrix registered in a
 # dedicated receipt and validated end-to-end, fail-closed) ───────────────────
 # The remote gate appends machine-readable lines (phase_id, name, status,
 # duration_ms, tests_executed, gaps, timestamp) to target/logs/
@@ -183,7 +183,7 @@ if [ "$USE_SDE" -eq 1 ] || [[ "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER:-}
     fi
 elif [ -f /proc/cpuinfo ]; then
     CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//' || echo "unknown")
-    # T2.1/T2.4: the reachable AVX-512 kernels require the full capability
+    # the reachable AVX-512 kernels require the full capability
     # matrix — F + VL + BW + DQ (a partial subset can SIGILL).
     if grep -qw "avx512f" /proc/cpuinfo && grep -qw "avx512vl" /proc/cpuinfo \
         && grep -qw "avx512bw" /proc/cpuinfo && grep -qw "avx512dq" /proc/cpuinfo; then
@@ -238,7 +238,7 @@ else
     cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture 2>&1 | tee -a "$PARITY_LOG" || parity_rc=$?
     parity_dur=$(( ($(date +%s%N) - parity_start) / 1000000 ))
 
-    # T2.4 mandatory-subphase gate: the cross-ISA matrix must prove real
+    # Mandatory-subphase gate: the cross-ISA matrix must prove real
     # execution (≥1 test) — never a silent zero-case PASS from a filter/compile
     # mismatch. Under the AVX-512 opt-in build the matrix always has cases.
     assert_subphase_ran "remote_simd_isa_parity" "$PARITY_LOG" 1 || parity_rc=1
@@ -304,7 +304,7 @@ else
     ok "Remote SIMD audit receipt saved to: $RECEIPT_OUT"
 fi
 
-# ── End-to-end receipt validation (T2.4) ────────────────────────────────────
+# ── End-to-end receipt validation ────────────────────────────────────
 # The dedicated remote-simd JSONL receipt (parity matrix + ROI check, when
 # run) is validated fail-closed: every line must match the LongPhaseReceipt
 # schema, and the derived overall verdict is printed by `summary`. A corrupt

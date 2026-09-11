@@ -13,7 +13,7 @@ fn cpuinfo_fixture(name: &str) -> String {
         .expect("cpuinfo fixture must exist under tests/fixtures/qa/")
 }
 
-/// Acceptance (S2.T4): the Ryzen-like fixture classifies as the canonical
+/// Verifies that the Ryzen-like fixture classifies as the canonical
 /// v3 string, with model and physical cores extracted.
 #[test]
 fn ryzen_like_fixture_classifies_x86_64_v3() {

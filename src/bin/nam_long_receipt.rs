@@ -301,7 +301,7 @@ fn cmd_validate(args: &[String]) {
     println!("{summary}");
 
     if strict {
-        // T3.3: fail-closed strict-pre-release — any declared gap (or failure)
+        // Fail-closed strict-pre-release — any declared gap (or failure)
         // rejects the receipt with a non-zero exit code.
         match audit.strict_verdict() {
             Ok(()) => {

@@ -204,7 +204,7 @@ _is_numeric_esr() {
 
 # ── Data storage (global associative arrays) ────────────────────────────────
 
-# Canonical ISA QA phase identifiers (T3.2). These mirror the Rust constants in
+# Canonical ISA QA phase identifiers. These mirror the Rust constants in
 # `src/testing/qa/phases.rs` (single source of truth); `qa_test::qa_test::dashboard_phase_ids_match_rust_constants`
 # fails the build if they drift. Never rename here without updating that module.
 ISA_SELF_CONSISTENCY_PHASE="isa_self_consistency"
@@ -225,7 +225,7 @@ SPECTRAL_PASSED_COUNT=0
 # ── Mandatory dashboard phases ──────────────────────────────────────────────
 # The authoritative mandatory-phase list lives in Rust
 # (`src/testing/qa/verify.rs::MANDATORY_FIDELITY_PHASES`) — the old bash
-# `PHASE_MANDATORY` associative table was dead code and is gone (T2.2).
+# `PHASE_MANDATORY` associative table was dead code and is gone.
 
 # ── Coverage matrix axes (coverage governance) ─────────────────────────────
 # Tracks per-axis coverage info for the coverage matrix summary.
@@ -254,7 +254,7 @@ BENCH_DURATION_S=0
 run_phase0_freshness() {
     local freshness_log="$LOGDIR/freshness.log"
 
-    # NAM_BYPASS_FRESHNESS=1 is an explicit, receipt-visible gap (T2.2):
+    # NAM_BYPASS_FRESHNESS=1 is an explicit, receipt-visible gap:
     # recorded as NOT_RUN + reason `bypass:freshness` with observed=0/expected=1
     # (the record shortfall fails `nam_quality verify`) — never a clean PASS.
     if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
@@ -343,7 +343,7 @@ run_reference_oracle() {
 }
 
 # ── Run: isa_self_consistency ──────────────────────────────────────────────
-# T3.2 (G-02): the *local* runner executes only the AVX2-vs-AVX2 internal
+# ISA phase split: the *local* runner executes only the AVX2-vs-AVX2 internal
 # consistency subset of the isa_parity suite (`#[ignore]`d cross-ISA cases are
 # compiled out without the `avx512` feature). The receipt therefore names the
 # phase `isa_self_consistency`, never `isa_parity`, and a companion
@@ -362,7 +362,7 @@ run_isa_self_consistency() {
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
     FIDELITY_DURATION_S=$(awk -v a="$FIDELITY_DURATION_S" -v b="$dur" 'BEGIN { printf "%.1f", a + b }')
 
-    # T3.2: explicit gap — the local runner never executes the cross-ISA
+    # Explicit gap — the local runner never executes the cross-ISA
     # matrix. Declared as a typed SKIP_CAPABILITY phase record (observed=0,
     # expected=0) so the QA report distinguishes self-consistency from real
     # cross-ISA parity without failing the fidelity domain.
@@ -452,7 +452,7 @@ run_benchmarks() {
         fi
 
         # The single performance-status classifier lives in
-        # `qa::classify` (F-08/T2.3) — delegated via `nam_quality classify`
+        # `qa::classify` (F-08) — delegated via `nam_quality classify`
         # with the stale-receipt guards: `--reg-exit` and `--run-id-match`.
         # A non-zero benchmark exit is an immediate FAIL unless a FRESH
         # receipt from THIS run declares the typed NOT_VERIFIED reasons; a
@@ -661,7 +661,7 @@ parse_oracle_f64() {
 }
 
 # ── Parse: isa_self_consistency ─────────────────────────────────────────────
-# T3.2: the local phase log is `isa_self_consistency.log` (self-consistency
+# The local phase log is `isa_self_consistency.log` (self-consistency
 # rows only — cross-ISA rows are never emitted by the local runner).
 
 parse_isa_self_consistency() {

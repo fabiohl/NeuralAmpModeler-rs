@@ -75,7 +75,7 @@ proptest! {
 
                 // Sanity boundary: proptest sweeps [-10, 10] (beyond the optimized [-8, 8] range).
                 // At extreme tails |x| > 8, the degree-7 Minimax polynomial may have larger error
-                // (though the clamp at ±15.0 mitigates this). For the [-8, 8] range, the T7.2 sweep
+                // (though the clamp at ±15.0 mitigates this). For the [-8, 8] range, the validation sweep
                 // confirmed max_error < 2e-5 (much tighter threshold).
             assert!(
                 error <= 5e-3,

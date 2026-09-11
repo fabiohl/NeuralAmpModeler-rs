@@ -194,7 +194,7 @@ fn required<'a>(flags: &'a Flags, name: &str) -> Result<&'a str, String> {
 
 /// Parses a non-negative integer flag value.
 ///
-/// T2.3: values produced by shell `grep -c` pipelines may carry multiple
+/// Values produced by shell `grep -c` pipelines may carry multiple
 /// lines. The FIRST non-empty, trimmed line must be the plain count — the
 /// embedded newline is tolerated instead of failing the whole gate. A
 /// non-numeric value (including the `file:count` form of a multi-file grep,
@@ -661,7 +661,7 @@ fn cmd_receipt_summary(args: &[String]) {
                 idx + 1
             )),
         };
-        // Provenance records (`kind: build_metadata`, T0.4) have no
+        // Provenance records (`kind: build_metadata`) have no
         // `phase_id` and are not phases.
         if value.get("phase_id").is_none() {
             continue;

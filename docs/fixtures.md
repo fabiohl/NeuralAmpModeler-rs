@@ -483,9 +483,7 @@ See [perceptual_validation.md](perceptual_validation.md) for methodology.
 
 ## Parity Thresholds
 
-Catalog / headline models (audited 2026-07-02 against `tests/common/validation.rs::topology_thresholds()`
-— corrected this pass; the previous revision of this table had drifted from the current, much
-tighter calibrated gates on every WaveNet catalog row and two of the three LSTM rows):
+Catalog / headline models calibrated against `tests/common/validation.rs::get_calibrated_threshold()`:
 
 | Model                       | SNR threshold | ESR threshold | Measured (comment in `validation.rs`) |
 | --------------------------- |:-------------:|:-------------:| ------------------------------------- |
@@ -901,22 +899,17 @@ None of these gaps invalidate the *already-committed* golden `.bin` files — th
 > **Consequence:** NeuralAmpModeler-rs produces audio perceptually equivalent to C++, but with measurable numerical differences. These differences are inaudible in any 16-bit or higher audio pipeline.
 >
 > **LSTM divergence:** The LSTM goldens show relatively low SNR
-> (1×16 ≈ 19.8 dB, 2×8 ≈ 25.7 dB, official ≈ 29.7 dB) vs WaveNet's ≥ 100 dB (see the corrected
-> WaveNet divergence note below — the previous revision of this note said "vs WaveNet 52–68 dB",
-> which was stale by the same ~2 orders of magnitude). The hypothesis that
+> (1×16 ≈ 19.8 dB, 2×8 ≈ 25.7 dB, official ≈ 29.7 dB) vs WaveNet's ≥ 100 dB (see the WaveNet divergence note below). The hypothesis that
 > FastMath Padé [5,4] tanh is the cause was **refuted**: using exact `f32::tanh` (libm) yields
 > identical SNR (Δ ≈ 0.0 dB). The actual bottleneck is likely BF16 weight quantization or GEMV
 > rounding — **not** the activation approximations. FastMath is adequate for LSTM.
 >
-> **WaveNet divergence — corrected 2026-07-02, the previous revision of this note was
-> stale by ~2 orders of magnitude:** WaveNet's `Standard`-precision `tanh`/`sigmoid`
+> **WaveNet divergence:** WaveNet's `Standard`-precision `tanh`/`sigmoid`
 > approximations are a small, bounded, and *intentional* divergence from C++'s exact math (see
-> ADR-001, [architecture.md](architecture.md) §2, and [cpp_parity_map.md](cpp_parity_map.md) §2.5/§5) — they do **not**
-> degrade SNR anywhere near what an earlier draft of this note claimed. Current measured SNR
+> ADR-001, [architecture.md](architecture.md) §2, and [cpp_parity_map.md](cpp_parity_map.md) §2.5/§5). Current measured SNR
 > against the C++ golden is **≥ 100 dB across every WaveNet catalog SKU** (Standard 134.6 dB,
 > Feather 133.1 dB, Nano 132.0 dB, Lite 122.3 dB, A1 Standard 123.4 dB — see the Parity Thresholds
-> table above, sourced from `tests/common/validation.rs`), not the "~10 dB" figure this note used
-> to state. Do not resurrect that figure without a fresh, reproducible measurement.
+> table above, sourced from `tests/common/validation.rs`).
 
 ## EBU Tech 3341 / R 128 Compliance Sequences
 

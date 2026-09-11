@@ -95,16 +95,18 @@ macro_rules! define_lstm_process_impl {
             // stack buffers first); `$gemv_4gate`/`$fused_gates` share the same
             // `# Safety` SIMD requirement.
             unsafe {
-                // 1. Feed the model's 'memory' with the new audio fragment.
+                // 1. Ingest input: copy current audio sample x_t into the input slot of the state buffer.
+                // State buffer layout: [x_t (size I) | h_{t-1} (size H)].
                 self.state[..I].copy_from_slice(&input[..I]);
 
-                // 2. 'Prefetch': Notify the processor to fetch the weights from RAM
-                // slightly ahead of when they're needed, preventing the computation from stalling for data.
+                // 2. Prefetch state buffer to L1 cache for subsequent SIMD operations.
                 _mm_prefetch::<{ _MM_HINT_T0 }>(self.state.as_ptr().cast::<i8>());
 
-                // 3. Matrix-Vector Multiplication (GEMV):
-                // Here we multiply the input and previous state by the weights (the trained 'brain').
-                // The result activates the 4 'gates' of the LSTM: Forget, Input, Candidate, and Output.
+                // 3. Affine Gate Pre-activations (GEMV):
+                // Multiplies concatenated state [x_t, h_{t-1}] by the 4 gate weight matrices plus bias:
+                //   z = [x_t, h_{t-1}] * W^T + b
+                // yielding pre-activation vectors for the 4 LSTM gates:
+                //   i (input gate), f (forget gate), g (cell candidate), o (output gate).
                 $gemv_4gate(
                     &self.state.0,
                     self.input_hidden_weights[0].as_flattened(),
@@ -116,16 +118,28 @@ macro_rules! define_lstm_process_impl {
                     true,
                 );
 
-                // 4. Map where each of the 4 gates starts in our calculation buffer.
-                let f_offset = H; // Forget Gate
-                let g_offset = 2 * H; // Update Gate (Cell Candidate)
-                let o_offset = 3 * H; // Output Gate
-                let h_offset = I; // Where we store the final result for the next step
+                // 4. Memory offsets for the four gate pre-activations in the flattened gate buffer:
+                //   - Input gate (i): index 0..H
+                //   - Forget gate (f): offset H..2H
+                //   - Cell candidate gate (g): offset 2H..3H
+                //   - Output gate (o): offset 3H..4H
+                //   - Recurrent hidden state destination (h): offset I in self.state
+                let f_offset = H; // Forget Gate (f)
+                let g_offset = 2 * H; // Cell Candidate (g)
+                let o_offset = 3 * H; // Output Gate (o)
+                let h_offset = I; // Hidden state destination (h) in state buffer
 
                 let mut i = 0;
-                // 5. Main Loop (SIMD): Process several neurons in parallel (8 or 16 at a time).
+                // 5. Vectorized Recurrence & Cell State Update:
+                // Evaluates the standard LSTM non-linearities and state recurrence in SIMD lanes:
+                //   f_t = σ(z_f)
+                //   i_t = σ(z_i)
+                //   g_t = tanh(z_g)
+                //   o_t = σ(z_o)
+                //   c_t = f_t ⊙ c_{t-1} + i_t ⊙ g_t   (with Kahan compensated summation)
+                //   h_t = o_t ⊙ tanh(c_t)
                 while i + $step <= H {
-                    // Load the pre-computed values of the 4 gates and current memory (cell state).
+                    // Load pre-activations and persistent cell state / error accumulator.
                     let g_f = $load(self.gates.as_ptr().add(i + f_offset));
                     let g_i = $load(self.gates.as_ptr().add(i));
                     let g_g = $load(self.gates.as_ptr().add(i + g_offset));
@@ -133,11 +147,11 @@ macro_rules! define_lstm_process_impl {
                     let c_s = $load(self.cell_state.as_ptr().add(i));
                     let c_err = $load(self.cell_error.as_ptr().add(i));
 
-                    // 'Fused Gates': The LSTM magic happens here.
-                    // We decide what to forget from old memory and what to learn from the new input.
+                    // Fused gate evaluation: non-linear activations, elementwise gate products,
+                    // and Kahan-compensated cell state recurrence (new_c_s, new_c_err, h_s).
                     let (new_c_s, new_c_err, h_s) = $fused_gates(g_f, g_i, g_g, g_o, c_s, c_err);
 
-                    // Save the new memory (long-term) and the new output (short-term).
+                    // Commit updated cell state c_t, Kahan error e_t, and recurrent hidden state h_t.
                     $store(self.cell_state.as_mut_ptr().add(i), new_c_s);
                     $store(self.cell_error.as_mut_ptr().add(i), new_c_err);
                     $store(self.state.as_mut_ptr().add(h_offset + i), h_s);
@@ -229,17 +243,20 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         crate::math::lstm::fused_lstm_gates_avx512_std,
     );
 
-    /// Scalar processing (fallback) for tests and benchmarks.
+    /// Scalar processing (fallback) for tests, reference oracles, and validation.
     ///
-    /// This is the 'manual' and slow version, used only as a reference to ensure
-    /// the ultra-fast versions above have no mathematical errors.
+    /// Reference implementation expressing the exact mathematical LSTM formulation
+    /// without vectorization, used as an oracle to verify bit-level parity with
+    /// the SIMD-accelerated kernels.
     #[inline(always)]
     pub fn process_sample_scalar(&mut self, input: &[f32]) {
         let ih = I + H;
         let h = H;
         self.state[..I].copy_from_slice(&input[..I]);
 
-        // Manual weight-input multiplication (4 gates).
+        // 1. Affine Projection (GEMV):
+        //   z_k = [x_t, h_{t-1}] * W_k^T + b_k  for gate index k in {0, 1, 2, 3}
+        // Computes linear combinations of current input and prior hidden state.
         for k in 0..4 {
             let target_gate_offset = k * h;
             for i in 0..h {
@@ -252,7 +269,22 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
             }
         }
 
-        // Manual activation of the LSTM gates.
+        // 2. Non-linear Gate Activations and State Recurrence:
+        //   f_t = σ(z_f)
+        //   i_t = σ(z_i)
+        //   g_t = tanh(z_g)
+        //   o_t = σ(z_o)
+        //
+        // Cell state update with Kahan compensated summation to eliminate f32 numerical drift:
+        //   f_cs  = f_t * c_{t-1}
+        //   f_err = f_t * e_{t-1}
+        //   i_g   = i_t * g_t
+        //   y     = i_g - f_err
+        //   c_t   = f_cs + y
+        //   e_t   = (c_t - f_cs) - y
+        //
+        // Recurrent hidden state output:
+        //   h_t   = o_t * tanh(c_t)
         let is_hf = activation_precision() == ActivationPrecision::Standard;
         for j in 0..h {
             let gf = self.gates[j + h];

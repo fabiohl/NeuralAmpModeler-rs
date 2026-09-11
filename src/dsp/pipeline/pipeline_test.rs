@@ -38,7 +38,7 @@ mod tests {
 
     /// Same as [`run_pipeline_test`], but with an explicit `n_samples` and a
     /// caller-provided [`RtStatusFlags`] handle — used by the host-contract
-    /// fault-injection tests (F-12 / T2.4).
+    /// fault-injection tests (F-12).
     pub(super) fn run_pipeline_test_with_status(
         host_rate: u32,
         nam_rate: u32,
@@ -154,7 +154,7 @@ mod tests {
         )
     }
 
-    /// F-12 / T2.4: a host passing `n_samples` beyond the slice lengths must
+    /// Host contract guard (F-12): a host passing `n_samples` beyond the slice lengths must
     /// be clamped defensively — no slice OOB panic on the pipeline entry — and
     /// the `RT_STATUS_HOST_CONTRACT_VIOLATION` flag must be raised.
     #[test]
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(out_r.len(), 64, "pipeline clamps to the slice length");
     }
 
-    /// F-12 / T2.4: `n_samples` beyond `MAX_RESAMP_BUF` (with longer slices)
+    /// Host contract guard (F-12): `n_samples` beyond `MAX_RESAMP_BUF` (with longer slices)
     /// must be clamped and raise `RT_STATUS_HOST_CONTRACT_VIOLATION`.
     #[test]
     fn over_max_resamp_buf_clamps_and_raises_flag() {
@@ -209,7 +209,7 @@ mod tests {
         );
     }
 
-    /// F-12 / T2.4: compliant `n_samples` must not raise the flag.
+    /// Host contract guard (F-12): compliant `n_samples` must not raise the flag.
     #[test]
     fn contract_compliant_n_samples_does_not_raise_flag() {
         use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
@@ -224,7 +224,7 @@ mod tests {
         assert!(!rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
     }
 
-    /// F-04 / T3.2: the pipeline entry point must reassert FTZ (MXCSR bit 15)
+    /// The pipeline entry point must reassert FTZ (MXCSR bit 15)
     /// and DAZ (MXCSR bit 6) on the audio thread. The test clears both bits
     /// first, runs a full `capture_dsp_pipeline` call, then asserts the bits
     /// are active again — proving the entry point configures the per-thread
@@ -265,7 +265,7 @@ mod tests {
         );
     }
 
-    /// F-PERF-002 / T2.1: `capture_dsp_pipeline_streaming` must return exactly `n_samples`
+    /// Streaming pipeline contract (F-PERF-002): `capture_dsp_pipeline_streaming` must return exactly `n_samples`
     /// across fractional sample rates without any real-time heap allocations.
     #[test]
     fn streaming_pipeline_strict_cardinality_and_zero_alloc() {

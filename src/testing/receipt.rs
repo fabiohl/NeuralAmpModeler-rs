@@ -577,7 +577,7 @@ impl LongPhaseReceipt {
 }
 
 /// Canonical preflight step identifiers emitted by `utils/tests-long.sh`
-/// ahead of Phase 1 (S6-T03 / RES-08): render binary, fixture/V1/V2 catalog,
+/// ahead of Phase 1 (preflight isolation gate): render binary, fixture/V1/V2 catalog,
 /// package exclusion, freshness, catalog↔test coherence, SIMD capability
 /// probe. An abort in any of them exits the suite before a single timed
 /// phase, so each step must still leave a machine-readable `preflight-*` line
@@ -649,7 +649,7 @@ pub struct LongAuditReceipt {
 }
 
 /// `true` when a `gaps` entry belongs to the canonical gap family `id`
-/// (exact match or `id:<detail>` suffix — T3.3 attaches typed details).
+/// (exact match or `id:<detail>` suffix — gap identifiers may carry typed detail suffixes).
 fn gap_has_id(gap: &str, id: &str) -> bool {
     gap == id
         || gap
@@ -658,7 +658,7 @@ fn gap_has_id(gap: &str, id: &str) -> bool {
 }
 
 /// `true` when a timed phase (`phase<N>`) reports `PASSED` while executing zero
-/// tests/benchmarks — a mandatory subphase gate violation (T3.3): a `#[cfg]`
+/// Tests/benchmarks — a mandatory subphase gate violation: a `#[cfg]`
 /// filter mismatch must never be promoted to a clean `PASSED`.
 fn is_zero_test_pass(p: &LongPhaseReceipt) -> bool {
     p.phase_id.starts_with("phase") && p.status == LongPhaseStatus::Passed && p.tests_executed == 0
@@ -717,7 +717,7 @@ impl LongAuditReceipt {
     }
 
     /// Preflight entries (`preflight-*`), in emission order — the steps that
-    /// run ahead of Phase 1 and abort the suite on failure (S6-T03 / RES-08).
+    /// run ahead of Phase 1 and abort the suite on failure (preflight isolation gate).
     pub fn preflight_entries(&self) -> impl Iterator<Item = &LongPhaseReceipt> {
         self.phases.iter().filter(|p| is_preflight_id(&p.phase_id))
     }
@@ -740,14 +740,14 @@ impl LongAuditReceipt {
     /// - otherwise any **declared gap** ⇒ `COMPLETED_WITH_GAPS`. A declared
     ///   gap is a gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
     ///   NOT_RUN), a `PASSED` phase whose `gaps` list is non-empty, or a
-    ///   `PASSED` timed phase that executed zero tests (T3.3 zero-test-pass
-    ///   invariant — the S5 contract: typed log markers
+    ///   `PASSED` timed phase that executed zero tests (zero-test-pass
+    ///   invariant — typed log markers
     ///   (`detect_gap_markers`) are the only carrier of a measurement bypass, and
     ///   "exit-0 with internal bypass" must never be promoted to a clean `PASSED`
     ///   verdict);
     /// - otherwise ⇒ `PASSED`.
     ///
-    /// Preflight entries (`preflight-*`, S6-T03) participate in the verdict
+    /// Preflight entries (`preflight-*`) participate in the verdict
     /// like any other phase: an aborted preflight leaves its `FAILED` line and
     /// the derived `overall FAILED` — a trace that survives the abort because
     /// `utils/tests-long.sh` emits it before exiting. `gaps` lists every
@@ -801,7 +801,7 @@ impl LongAuditReceipt {
     }
 
     /// Timed phases (`phase<N>`) that report `PASSED` with zero executed tests
-    /// (T3.3 zero-test-pass invariant — mandatory subphase gate violations).
+    /// (zero-test-pass invariant — mandatory subphase gate violations).
     pub fn zero_test_passes(&self) -> impl Iterator<Item = &LongPhaseReceipt> {
         self.phase_entries().filter(|p| is_zero_test_pass(p))
     }
@@ -817,7 +817,7 @@ impl LongAuditReceipt {
     }
 
     /// Fail-closed strict-pre-release verdict: `Ok(())` only when the derived
-    /// `overall` status is `PASSED` (no failures and no declared gaps — T3.3).
+    /// `overall` status is `PASSED` (no failures and no declared gaps).
     pub fn strict_verdict(&self) -> Result<(), String> {
         match self.summary_receipt().status {
             LongPhaseStatus::Passed => Ok(()),
@@ -943,13 +943,13 @@ impl LongAuditReceipt {
 /// Canonical typed markers the long suite uses to annotate/override phase
 /// outcomes, mapped to stable gap identifiers for dashboards.
 ///
-/// T3.2/T2.1 grammar (emission side) — every deviation/bypass/skip must be
+/// Structured marker grammar (emission side) — every deviation/bypass/skip must be
 /// emitted as one of the `[STATUS]` markers below, in either of the two
 /// canonical detail forms:
 /// - attribute form:  `[STATUS] SKIP_OPTIONAL reason="models_nondist_absent"`
 /// - colon form:      `[STATUS] SKIP_OPTIONAL: models_nondist_absent`
 ///
-/// The colon form is the canonical skip grammar of T2.1
+/// The colon form is the canonical skip grammar
 /// (`[STATUS] SKIP_<MOTIVO>: <detalhes>`); the attribute form is kept as an
 /// equivalent emission so both dialects share one detection grammar:
 /// - `[STATUS] SKIP_CAPABILITY reason="..."` / `[STATUS] SKIP_CAPABILITY: ...`
@@ -962,7 +962,7 @@ impl LongAuditReceipt {
 ///   → `inconclusive:<reason>`
 ///
 /// The legacy free-form `SKIP:` prefix is still recognized during the
-/// transition (T3.2 rollback / T2.1 safety net) as `legacy_skip:<detail>` so
+/// transition (fallback safety net) as `legacy_skip:<detail>` so
 /// an unconverted print is never silently promoted to a clean `PASSED`.
 const LONG_GAP_MARKERS: &[(&str, &str)] = &[
     ("INCONCLUSIVE_ENVIRONMENT", "inconclusive_environment"),
@@ -971,12 +971,12 @@ const LONG_GAP_MARKERS: &[(&str, &str)] = &[
     ("[STATUS] KNOWN_GAP", "known_gap"),
     ("[STATUS] INCONCLUSIVE", "inconclusive"),
     ("MISSING-REQUIRED:", "missing_required"),
-    // T2.4: the default local runner compiles the long suite without
+    // The default local runner compiles the long suite without
     // `--features avx512`, so the cross-ISA AVX-512 subphase can legitimately
     // execute zero cases. The explicit declaration below prevents that from
     // being silently promoted to a clean PASSED verdict.
     ("AVX512_OPT_IN: NOT_RUN", "avx512_opt_in_not_run"),
-    // T3.2 rollback: legacy free-form `SKIP:` prints still found in suites
+    // Legacy free-form `SKIP:` prints still found in suites
     // outside the converted scope (tests/models, tests/perf_soak, ...) must
     // never be masked — they surface as a typed transitional gap.
     ("SKIP:", "legacy_skip"),
@@ -1000,7 +1000,7 @@ fn detail_after(line: &str, prefix: &str) -> Option<String> {
     (!detail.is_empty()).then(|| detail.to_string())
 }
 
-/// Extracts the T2.1 canonical colon-form detail
+/// Extracts the canonical colon-form detail
 /// (`[STATUS] SKIP_<MOTIVO>: <detalhes>`) immediately after `needle`, if the
 /// marker line uses that dialect. Returns `None` for the attribute form
 /// (`reason="..."`) and for lines without a `: ` suffix.
@@ -1042,13 +1042,13 @@ fn marker_gap_entry(needle: &str, id: &str, line: &str) -> String {
 /// gap identifiers (with detail suffixes, e.g. `skip_optional:model_not_found`)
 /// in canonical order (deduplicated).
 ///
-/// T2.1: **all** occurrences are accumulated per phase — a phase log with
+/// **all** occurrences are accumulated per phase — a phase log with
 /// several distinct skips of the same family yields one gap entry per unique
 /// skip, never just the first line of each marker family. Deduplication keeps
 /// repeated emissions of the same reason from inflating the array while a
 /// second distinct reason is never swallowed.
 ///
-/// Fail-closed (T3.3): an unreadable log is itself a deviation and yields
+/// Fail-closed: an unreadable log is itself a deviation and yields
 /// `log_unreadable` — a missing/corrupt phase log can never be promoted to a
 /// clean `PASSED` with `gaps: []`.
 pub fn detect_gap_markers(path: &Path) -> Vec<String> {
@@ -1099,7 +1099,7 @@ fn is_benchmark_time_line(line: &str) -> bool {
 
 /// Counts tests/benchmarks actually executed by a phase from its log.
 ///
-/// This is the single counter behind `_lib.sh::assert_ran_tests` (S4.T2 — the
+/// This is the single counter behind `_lib.sh::assert_ran_tests` (the
 /// shell delegates to `nam_long_receipt count-log`). It mirrors the bash
 /// semantics: `passed`/`failed` are summed from every `test result:` line (a
 /// FAILED result line still proves execution; the bash port only read the

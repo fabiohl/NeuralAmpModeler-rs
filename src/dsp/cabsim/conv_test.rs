@@ -103,11 +103,11 @@ fn passthrough_on_empty_ir() {
     }
 }
 
-// ── T4.1 / F-05: structured error instead of panic on partition_size == 0 ──
+// ── Structured error instead of panic on partition_size == 0 (F-05) ─────────
 
 #[test]
 fn zero_partition_size_returns_structured_error_without_panic() {
-    // R-01 (T4.1): a host DSP passing partition_size == 0 (transient init,
+    // R-01: a host DSP passing partition_size == 0 (transient init,
     // config reset, or API misuse) must get Err(InvalidCabsimPartitionSize)
     // deterministically — never a panic on the audio thread.
     let ir = synth_ir(64, 500.0, 10.0, 48000);
@@ -136,7 +136,7 @@ fn zero_partition_size_with_empty_ir_is_also_rejected() {
 
 #[test]
 fn minimum_partition_size_one_and_empty_ir_are_valid() {
-    // Extreme-value validation (T4.1): partition_size == 1 and ir == [] must
+    // Extreme-value validation: partition_size == 1 and ir == [] must
     // remain valid — only partition_size == 0 is rejected.
     let engine = ConvEngine::new(&[], 1).expect("empty IR with partition=1 must be valid");
     assert!(engine.is_passthrough());

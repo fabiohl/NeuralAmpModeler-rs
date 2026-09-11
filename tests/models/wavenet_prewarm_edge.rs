@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Stress tests for WaveNet prewarm backfill underflow prevention (S4.T01).
+//  Stress tests for WaveNet prewarm backfill underflow prevention.
 //
 //  Validates that models with large receptive fields (RF up to 2048) execute
 //  `prewarm()` without panics, segfaults, or underflow warnings in the backfill path.

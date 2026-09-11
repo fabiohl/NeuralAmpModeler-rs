@@ -238,10 +238,10 @@ Run this checklist **before** `--check` or `--bootstrap-baseline`:
 
 ### Script Modes
 
-| Mode                | Command                                                      | Purpose                                                                                                                                |
-|:------------------- |:------------------------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------- |
+| Mode                | Command                                                      | Purpose                                                                                                                                                                                      |
+|:------------------- |:------------------------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Check** (default) | `utils/tests-performance-regression.sh` or `--check`         | Compare against baseline; fail on a machine regression (mean-change CI entirely above the +5% noise band, from `change/estimates.json`). Strictly read-only — never auto-creates a baseline. |
-| **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Create a new baseline and environment fingerprint. Human-only operation.                                                               |
+| **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Create a new baseline and environment fingerprint. Human-only operation.                                                                                                                     |
 
 ### Environment Variables
 
@@ -283,10 +283,10 @@ both fidelity and performance metrics into a versioned, machine-readable baselin
 
 ### How It Fits with the Regression Gate
 
-| Tool                                                                                | Statistical Rigor                    | Speed    | Scope                                                                                     |
-|:----------------------------------------------------------------------------------- |:------------------------------------ |:-------- |:----------------------------------------------------------------------------------------- |
+| Tool                                                                                | Statistical Rigor                   | Speed    | Scope                                                                                     |
+|:----------------------------------------------------------------------------------- |:----------------------------------- |:-------- |:----------------------------------------------------------------------------------------- |
 | [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | Criterion change-CI machine verdict | ~5-8 min | **Primary authority** — catches slow regressions within the safe zone (e.g., 100→150 µs). |
-| [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) `--check`             | Conservative relative margin         | ~3-5 min | **Second line** — integrated with fidelity checks; +10% latency tolerance.                |
+| [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) `--check`             | Conservative relative margin        | ~3-5 min | **Second line** — integrated with fidelity checks; +10% latency tolerance.                |
 
 The two tools serve complementary roles:
 
@@ -559,14 +559,14 @@ The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallbac
 
 ### Implemented Vectorization Architecture
 
-**Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process.rs`](../src/models/a2/model/dynamic/process.rs)):
+**Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process_frame.rs`](../src/models/a2/model/dynamic/process_frame.rs)):
 
 * **Head 1×1**: 8-wide `_mm256_fmadd_ps` over the `h1_in` dimension per output channel. Lane extraction preserves exact left-to-right accumulation order for bit-identical golden vector output.
 * **L1×1 Dense**: 8-wide `_mm256_set1_ps` (broadcast) + `_mm256_fmadd_ps` over contiguous col-major weight rows (`bottleneck × channels`).
 * **L1×1 Grouped**: 8-wide SIMD dot product for `in_pg ≥ 8`, scalar fallback otherwise.
 * **Accumulation loops** (`head_accum += scratch`, `layer_in += scratch`): `_mm256_add_ps` with scalar tail.
 
-**Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`process.rs`](../src/models/a2/model/dynamic/process.rs)):
+**Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`src/models/a2/model/dynamic/process_frame.rs`](../src/models/a2/model/dynamic/process_frame.rs)):
 
 * **Builder**: One-time per-group transposition from row-major `[out_per_g][in_pg]` to col-major `[in_pg][out_per_g]` during `set_weights`. No transposition in the hot path.
 * **Hot Path**: `_mm256_set1_ps` (broadcast condition) + `_mm256_loadu_ps` (8 contiguous weights) + `_mm256_fmadd_ps` per input channel. Unified flat (groups=1) and grouped (groups>1) paths.
@@ -749,7 +749,7 @@ Upon successful execution on real hardware, the harness invokes `nam_remote_simd
 
 The gating suite evaluates performance using rigorous statistical thresholds:
 
-* **Phase 0 (Hardware Preflight):** Verifies presence of the full AVX-512 capability matrix `avx512f` + `avx512vl` + `avx512bw` + `avx512dq` (or Intel SDE emulation) — the reachable kernels require all four sub-features (T2.1/F-ROB-03). If absent, exits cleanly with **code 2** (`Clean skip`).
+* **Phase 0 (Hardware Preflight):** Verifies presence of the full AVX-512 capability matrix `avx512f` + `avx512vl` + `avx512bw` + `avx512dq` (or Intel SDE emulation) — the reachable kernels require all four sub-features (F-ROB-03). If absent, exits cleanly with **code 2** (`Clean skip`).
 * **Phase 1 (Mathematical Parity):** All monomorphized kernels must maintain exact mathematical parity against the baseline and f64 reference oracle (`isa_parity.rs`).
 * **Phase 2 (Criterion Latency Sweeps):** Executes multi-sample inference benchmarks for block sizes $N=1, 8, 64$.
 * **Phase 3 (Welch's t-test Gating):**
@@ -796,13 +796,13 @@ All specialization candidates are evaluated on end-to-end model execution (`NamM
 
 #### Multi-Buffer Latency Sweep Across All Geometries (Audit Receipt Summary)
 
-| SKU ID | N=64 AVX2 / AVX512 | N=64 $\Delta\%$ | N=8 AVX2 / AVX512 | N=8 $\Delta\%$ | N=1 AVX2 / AVX512 | N=1 $\Delta\%$ | Overall Verdict |
-|:-------|:-------------------|:----------------|:------------------|:---------------|:------------------|:---------------|:----------------|
-| **LSTM 2x16** | 13.72 µs / 15.49 µs | **−12.87%** (FAIL) | 1.70 µs / 1.94 µs | **−14.02%** (FAIL) | 0.22 µs / 0.27 µs | **−23.41%** (FAIL) | **REJECT** |
-| **LSTM 1x16** | 6.55 µs / 7.67 µs | **−17.18%** (FAIL) | 0.81 µs / 0.97 µs | **−18.75%** (FAIL) | 0.10 µs / 0.12 µs | **−21.13%** (FAIL) | **REJECT** |
-| **A2-Full (CH=8)** | 23.47 µs / 31.29 µs | **−33.31%** (FAIL) | 3.92 µs / 4.87 µs | **−24.21%** (FAIL) | 2.75 µs / 1.66 µs | **+39.41%** (PASS) | **REJECT** |
-| **A2-Lite (CH=3)** | 20.28 µs / 21.30 µs | **−5.05%** (FAIL) | 3.14 µs / 3.22 µs | **−2.34%** (FAIL) | 0.94 µs / 1.01 µs | **−7.99%** (FAIL) | **REJECT** |
-| **WaveNet Standard** | 42.05 µs / 42.98 µs | **−2.21%** (FAIL) | 5.64 µs / 5.84 µs | **−3.59%** (FAIL) | 1.42 µs / 1.62 µs | **−14.37%** (FAIL) | **REJECT** |
+| SKU ID               | N=64 AVX2 / AVX512  | N=64 $\Delta\%$    | N=8 AVX2 / AVX512 | N=8 $\Delta\%$     | N=1 AVX2 / AVX512 | N=1 $\Delta\%$     | Overall Verdict |
+|:-------------------- |:------------------- |:------------------ |:----------------- |:------------------ |:----------------- |:------------------ |:--------------- |
+| **LSTM 2x16**        | 13.72 µs / 15.49 µs | **−12.87%** (FAIL) | 1.70 µs / 1.94 µs | **−14.02%** (FAIL) | 0.22 µs / 0.27 µs | **−23.41%** (FAIL) | **REJECT**      |
+| **LSTM 1x16**        | 6.55 µs / 7.67 µs   | **−17.18%** (FAIL) | 0.81 µs / 0.97 µs | **−18.75%** (FAIL) | 0.10 µs / 0.12 µs | **−21.13%** (FAIL) | **REJECT**      |
+| **A2-Full (CH=8)**   | 23.47 µs / 31.29 µs | **−33.31%** (FAIL) | 3.92 µs / 4.87 µs | **−24.21%** (FAIL) | 2.75 µs / 1.66 µs | **+39.41%** (PASS) | **REJECT**      |
+| **A2-Lite (CH=3)**   | 20.28 µs / 21.30 µs | **−5.05%** (FAIL)  | 3.14 µs / 3.22 µs | **−2.34%** (FAIL)  | 0.94 µs / 1.01 µs | **−7.99%** (FAIL)  | **REJECT**      |
+| **WaveNet Standard** | 42.05 µs / 42.98 µs | **−2.21%** (FAIL)  | 5.64 µs / 5.84 µs | **−3.59%** (FAIL)  | 1.42 µs / 1.62 µs | **−14.37%** (FAIL) | **REJECT**      |
 
 ### 3. Why ZMM 512-bit Loses in Small Geometries
 

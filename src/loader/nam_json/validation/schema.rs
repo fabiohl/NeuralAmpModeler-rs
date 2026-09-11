@@ -57,7 +57,7 @@ impl<'de> serde::de::Visitor<'de> for WeightsVisitor {
             match seq.next_element::<f32>() {
                 Ok(Some(val)) => {
                     if !val.is_finite() {
-                        // T5.1: structured rejection diagnostic for off-RT triage.
+                        // Structured rejection diagnostic for off-RT triage.
                         // `offset_bytes` is the byte offset of the offending slot
                         // within the weights section (index × 4), matching the
                         // coordinate system used by the `.namb` binary weights.
@@ -445,7 +445,7 @@ where
         {
             let val = f32::deserialize(deserializer)?;
             if !val.is_finite() {
-                // T5.1: structured rejection diagnostic for off-RT triage.
+                // Structured rejection diagnostic for off-RT triage.
                 // `sample_rate` is a top-level scalar field, so it has no
                 // per-element offset within a section — `offset_bytes=0`
                 // signals "document-level field" (no array slot index).

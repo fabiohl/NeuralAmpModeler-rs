@@ -100,7 +100,7 @@ fn test_handshake_relaxed_fails() {
 }
 
 // =============================================================================
-// Production RtStatusFlags handshake (T3.1) — replaces the LoomRtStatus mock
+// Production RtStatusFlags handshake — replaces the LoomRtStatus mock
 // =============================================================================
 //
 // Exercises the *real* `RtStatusFlags` data-handshake protocol: the RT side
@@ -192,7 +192,7 @@ fn test_rt_status_production_relaxed_fails() {
 }
 
 // =============================================================================
-// Production GcOverflowBuffer slot protocol (T3.1) — replaces LoomGcOverflowBuffer
+// Production GcOverflowBuffer slot protocol — replaces LoomGcOverflowBuffer
 // =============================================================================
 //
 // Directly exercises `GcOverflowBuffer::push`/`drain` with the real AcqRel slot
@@ -242,7 +242,7 @@ fn test_gc_overflow_production() {
 }
 
 // =============================================================================
-// Production DspBridge write/read handshake (T3.1) — replaces LoomDspBridge mock
+// Production DspBridge write/read handshake — replaces LoomDspBridge mock
 // =============================================================================
 //
 // Drives the real `DspBridge` double-buffer protocol through the real
@@ -332,7 +332,7 @@ fn test_dsp_bridge_production() {
 }
 
 // =============================================================================
-// Production gc_cascade / drain_gc_channels (T3.1) — replaces LoomSwapMesh mock
+// Production gc_cascade / drain_gc_channels — replaces LoomSwapMesh mock
 // =============================================================================
 //
 // Exercises the real `gc_cascade` (SPSC → 16-slot parking → overflow) and

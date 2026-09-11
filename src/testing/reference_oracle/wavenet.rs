@@ -56,7 +56,7 @@ fn oracle_wavenet_forward_inner(
     let a0_dilations = l0.dilations.clone().unwrap_or_else(|| vec![1, 2, 4, 8]);
     let a0_cond = l0.condition_size.unwrap_or(1);
 
-    // T1.2: Process condition_dsp sub-model to obtain per-frame condition
+    // Process condition_dsp sub-model to obtain per-frame condition
     // vectors. Use oracle_condition_dsp_channels for ALL output channels
     // (matching C++ _condition_dsp_output_buffers), falling back to broadcast
     // only when the sub-model outputs a single channel (e.g. LSTM).
@@ -385,7 +385,7 @@ fn oracle_wavenet_forward_inner(
     }
 
     // Array1 head rechannel → output × head_scale
-    // T1.2: Use oracle_wavenet_head_final for both mono and all-channels output.
+    // Use oracle_wavenet_head_final for both mono and all-channels output.
     oracle_wavenet_head_final(
         &mut output,
         &a1_head_accum,

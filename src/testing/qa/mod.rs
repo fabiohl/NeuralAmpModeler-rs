@@ -225,7 +225,7 @@ pub mod fingerprint;
 pub mod ids;
 
 /// Canonical QA phase-identifier constants shared by renderer, verify docs
-/// and the dashboard receipt emitter (T3.2 ISA phase split).
+/// and the dashboard receipt emitter (maintains distinct self-consistency vs. cross-ISA phase records).
 pub mod phases;
 
 /// Contract verify engine — literal port of the bash `verify_contract`.

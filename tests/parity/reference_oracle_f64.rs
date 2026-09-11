@@ -143,7 +143,7 @@ fn print_decomposition(
             10.0 * v.log10()
         }
     };
-    // S2.T6: forensic JSONL sink (kind `f64_decomp`) — human log unchanged.
+    // Forensic JSONL sink (kind `f64_decomp`) — human log unchanged.
     common::report_f64_decomp(result);
     println!(
         "{} Decomposition:\n\
@@ -1258,20 +1258,20 @@ fn test_combined_simulation_a2_generic() {
 
 /// Standalone oracle-validation for A2 Max — oracle-only, no production dependency.
 ///
-/// T7.1 (Reconciliação) / T7.2 (Calibração de Gates): validates that the f64
-/// oracle correctly processes wavenet_a2_max.nam after the corrected topology
-/// (head1x1 per-layer, grouped projections, K=1 header, FiLM slot 7 dims).
+/// Validates that the f64 oracle correctly processes wavenet_a2_max.nam
+/// under the corrected topology (head1x1 per-layer, grouped projections,
+/// K=1 header, FiLM slot 7 dims).
 ///
-/// **Calibration (T7.2):**
+/// **Calibration:**
 ///   Measured: ESR(f64 vs F32-sim) = 6.00e-15 (SNR = 142.2 dB)
 ///   Gate:     SNR > 120 dB (ESR < 1e-12)
 ///
-/// **Gates (T7.1):**
+/// **Gates:**
 /// - Oracle output is finite (zero NaN/Inf) and non-zero.
 /// - Oracle is deterministic (bit-exact across repeated runs).
 /// - f64 oracle vs F32-simulated oracle SNR > 120 dB (FP32 quantization floor).
 ///
-/// **Note (T7.2):** Triple agreement (Python NumPy, C++ NAMCore, Rust f64) is
+/// **Note:** Triple agreement (Python NumPy, C++ NAMCore, Rust f64) is
 /// pending the condition_dsp A2 multi-channel gap tracked in §4.4 of
 /// docs/cpp_parity_map.md. The Python anchor (validate_oracle_f64.py) has been
 /// updated with grouped projection support but requires further reconciliation
@@ -1470,7 +1470,7 @@ fn test_summary_table() {
             continue;
         }
         let esr = run_oracle_esr_paired(filename, family);
-        // S2.T6: forensic JSONL sink (kind `f64_table`) — human log unchanged.
+        // Forensic JSONL sink (kind `f64_table`) — human log unchanged.
         common::report_f64_table(filename, family, esr, esr_to_db_f64(esr));
         println!(
             "{:<40} {:<20} {:<15.6e} {:<15.1}",
@@ -1488,12 +1488,12 @@ fn test_summary_table() {
 fn print_blockwise_esr_table(esr_blocks: &[f64], block_size: usize, sample_rate: u32) {
     let block_duration = block_size as f64 / sample_rate as f64;
     println!(
-        "\nTabela ESR Blockwise (block_size = {} amostras / {:.3}s):",
+        "\nBlockwise ESR Table (block_size = {} samples / {:.3}s):",
         block_size, block_duration
     );
     println!(
-        "{:<6} | {:<15} | {:<12} | {:<10} | Seção do Sinal",
-        "Bloco", "Janela Tempo", "ESR linear", "ESR (dB)"
+        "{:<6} | {:<15} | {:<12} | {:<10} | Signal Section",
+        "Block", "Time Window", "Linear ESR", "ESR (dB)"
     );
     println!("{}", "-".repeat(85));
 
@@ -1639,8 +1639,8 @@ fn run_paired_drift_diagnostic(
     let stress_signal = generate_stress_signal_v2_default(48000); // 240k samples
     let stress_f64: Vec<f64> = stress_signal.iter().map(|&x| x as f64).collect();
 
-    // Produção: SEM model.prewarm(zeros) — processa o sinal real desde t=0,
-    // igual ao oráculo, eliminando o mismatch de estado inicial.
+    // Production: WITHOUT model.prewarm(zeros) — processes the real signal from t=0,
+    // identical to the oracle, eliminating initial state mismatch.
     let mut model =
         neural_amp_modeler_rs::loader::dispatcher::build_model(&md).expect("build_model");
     let mut output = vec![0.0f32; stress_signal.len()];
@@ -1657,7 +1657,7 @@ fn run_paired_drift_diagnostic(
     const N_WARMUP: usize = 24_000;
     let esr_tail = compute_esr(&oracle_f32[N_WARMUP..], &output[N_WARMUP..]);
     println!(
-        "\n{} (sem mismatch de estado inicial), cauda de {} amostras: ESR={:.6e} ({:.1} dB)",
+        "\n{} (without initial state mismatch), tail of {} samples: ESR={:.6e} ({:.1} dB)",
         label,
         stress_signal.len() - N_WARMUP,
         esr_tail,

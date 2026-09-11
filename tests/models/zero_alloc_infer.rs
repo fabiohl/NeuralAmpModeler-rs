@@ -90,7 +90,7 @@ fn test_zero_alloc_process_lstm() {
 
 /// Zero-Allocation Verification Test for Dynamic WaveNet
 ///
-/// R-06 (S6.T3): this gate is strictly fail-closed — any allocation detected
+/// Real-time safety gate: strictly fail-closed — any allocation detected
 /// in the dynamic WaveNet hot path fails the test unconditionally. A
 /// regression here would otherwise pass CI with only a console warning.
 #[test]

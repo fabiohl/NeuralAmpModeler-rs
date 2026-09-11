@@ -147,13 +147,13 @@ phase_elapsed_str() {
 # Each dashboard phase records a typed outcome in JSONL.
 # Schema: phase_id, status (PASS|FAIL|SKIP_CAPABILITY|SKIP_OPTIONAL_FIXTURE|NOT_RUN|NOT_VERIFIED),
 #         exit_code, observed_records, expected_records, reason, run_id
-# The JSON line is serialized by `nam_quality receipt append` (serde, S2.T5) —
+# The JSON line is serialized by `nam_quality receipt append` (serde) —
 # the shell never hand-serializes.
 DASHBOARD_PHASE_RECEIPT="${DASHBOARD_PHASE_RECEIPT:-}"
 DASHBOARD_PHASE_HAD_FAILURE=0
 
 # Register a phase receipt entry in the JSONL stream (delegates to the bin).
-# T2.2: strictly fail-closed — a receipt-append failure aborts the script (a
+# Strictly fail-closed: a receipt-append failure aborts the script (a
 # run whose receipt stream is lost must never be certified as clean).
 dashboard_phase_receipt() {
     local phase_id="$1" status="$2" exit_code="${3:-0}" \
@@ -179,7 +179,7 @@ dashboard_phase_receipt() {
 }
 
 # Count the number of JSONL metric records currently in a metrics file.
-# POSIX `wc -l` — plain line counting, no PCRE needed (S4.T2).
+# POSIX `wc -l` — plain line counting, no PCRE needed.
 count_jsonl_records() {
     local jsonl="${1:-}"
     [ -n "$jsonl" ] && [ -f "$jsonl" ] || { echo 0; return 0; }
@@ -188,9 +188,9 @@ count_jsonl_records() {
 
 # assert_ran_tests <log_file> [min_count]
 # Verifies that a test/benchmark log proves real execution. The counting
-# (libtest `passed`/`measured` counters + Criterion `time:` fallback, F-21)
+# (libtest `passed`/`measured` counters + Criterion `time:` fallback)
 # lives in src/testing/receipt.rs::count_tests_executed_from_log; this is a
-# thin wrapper over `nam_long_receipt count-log` (S4.T2) — no grep -oP.
+# thin wrapper over `nam_long_receipt count-log` — no grep -oP.
 assert_ran_tests() {
     local log_file="$1" min_count="${2:-1}"
 
@@ -214,12 +214,12 @@ assert_ran_tests() {
 }
 
 # assert_subphase_ran <phase_name> <log_file> [min_count]
-# Per-subphase counterpart of assert_ran_tests (T2.4): proves that ONE
+# Per-subphase counterpart of assert_ran_tests: proves that ONE
 # mandatory subphase of a multi-subphase phase executed at least `min_count`
 # tests/benchmarks. The counting delegates to `nam_long_receipt count-log`
 # (src/testing/receipt.rs::count_tests_executed_from_log); the caller passes
 # a log file that isolates exactly that subphase's invocation.
-# Invariant (T2.4): a phase can never be registered PASSED if a mandatory
+# Invariant: a phase can never be registered PASSED if a mandatory
 # subphase executed zero tests due to `#[cfg]` compilation filters.
 assert_subphase_ran() {
     local phase_name="$1" log_file="$2" min_count="${3:-1}"
@@ -244,7 +244,7 @@ assert_subphase_ran() {
 }
 
 # Run a dashboard phase with strict exit code capture.
-# The command is passed as an ARGUMENT ARRAY (no `eval`, S4.T3); the command's
+# The command is passed as an ARGUMENT ARRAY (no `eval`); the command's
 # stdout+stderr are redirected internally to $LOGDIR/$phase_id.log.
 run_dashboard_phase() {
     local phase_id="$1" min_records="$2"
@@ -358,7 +358,7 @@ ensure_third_party() {
     return 1
 }
 
-# ── C++ render build — single entry point (S3-T01) ──────────────────────────
+# ── C++ render build — single entry point ───────────────────────────────────
 # Compiles/verifies the NAMCore `render` binary used by the cpp_parity tests
 # (quick_parity + full live_cross_validation matrix) and by golden generation.
 # This is THE single implementation of that build: utils/tests-quick.sh,
@@ -508,11 +508,11 @@ ensure_namcore_render() {
     return 0
 }
 
-# ── Centralized freshness gate (F-X4 / S3-T03 / S7-G3) ───────────────────────
+# ── Centralized freshness gate ───────────────────────────────────────────────
 # Validates golden manifest integrity against models, fixtures and generators.
 # The heavy lifting now lives in Rust (src/testing/freshness.rs, incl. the
-# `# TOOLCHAIN:` drift check that replaced the bash check_toolchain_fingerprint,
-# F-02) so the shell wrapper is just a thin, portable adapter.
+# `# TOOLCHAIN:` drift check that replaced the bash check_toolchain_fingerprint)
+# so the shell wrapper is just a thin, portable adapter.
 # Note on NAM_BYPASS_FRESHNESS=1: Callers (utils/tests-quick.sh, utils/quality-dashboard.sh)
 # record an explicit typed gap (e.g. freshness:bypassed_by_env) in their receipts.
 check_freshness() {

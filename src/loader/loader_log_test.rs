@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Fault-injection tests for the enriched structured loader logging (T5.1).
+//! Fault-injection tests for the enriched structured loader logging.
 //!
 //! Feeds synthetically corrupted payloads (NaN/Inf weights, invalid
 //! `sample_rate`, NAMB CRC corruption) through the full `load_and_build_model`

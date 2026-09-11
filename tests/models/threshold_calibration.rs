@@ -14,18 +14,18 @@
 //! below placebo, provenance comment, link to independent measurement,
 //! sanity-check Σ sources ≈ total.
 //
-//  ## Investigation (E2.1 — 2026-06-24)
+//  ## Investigation (2026-06-24)
 //
 //  Fidelity Margin ≤ 0.5 dB in `live_cross_validation_lstm_dyn_1x7 (v2)`
 //  and `live_cross_validation_linear (v2)` was investigated via `git bisect`
-//  between current HEAD and pre-Épico-B commit `ff8a500` ("épico a concluido").
+//  between current HEAD and historical commit `ff8a500`.
 //
 //  **Result: PRE-EXISTENT.** The Fidelity Margin values (0.5, 0.4, -0.9, -0.8 dB)
 //  are bit-identical between commits. They originate from golden_vectors tests
 //  (WaveNet A2-Full/Lite and LSTM models) where SNR(anchor) — the C++ model's
 //  own signal degradation — is close to the Rust/C++ parity SNR. The SIMD
-//  kernel rewrites (Épicos B/C: fused dot-product accumulate, unified GEMV,
-//  1-div tanh) introduced zero regressão in Fidelity Margin.
+//  kernel rewrites (fused dot-product accumulate, unified GEMV,
+//  1-div tanh) introduced zero regression in Fidelity Margin.
 //
 //  The cpp_parity tests originally cited (LSTM-Dyn 1×7 v2, Linear v2) show
 //  Fidelity Margin > 40 dB at both commits. The actual low-margin entries
@@ -272,7 +272,7 @@ fn test_all_calibrated_entries_have_measurement_comments() {
 ///    spectral regressions). MR-STFT is a relative metric bounded [0,1];
 ///    a threshold ≥ 0.5 would allow severe spectral divergence.
 ///
-/// ## Principle: "todo golden pode falhar"
+/// ## Principle: "every golden test can fail"
 ///
 /// A golden test **must** be able to fail — that is the whole point
 /// of a gate. A self-golden (output validated against itself) and a
@@ -362,7 +362,7 @@ fn test_all_thresholds_anti_placebo() {
     );
 }
 
-/// Meta-teste: nenhum gate do oráculo pode ser ≥ linha de placebo.
+/// Meta-test: no oracle gate may be ≥ placebo line.
 ///
 /// Reads the oracle ESR limits (WAVENET_ESR_LIMIT, LSTM_ESR_LIMIT, A2_ESR_LIMIT)
 /// from the shared `tests/common/constants.rs` module and asserts that ALL are
@@ -494,26 +494,26 @@ fn test_structural_tests_contain_no_bin_references() {
     }
 }
 
-/// Meta-teste: limite do soft gate de MR-STFT é calibrado.
+/// Meta-test: MR-STFT soft gate threshold is calibrated.
 ///
-/// Verifica que o `MRSTFT_SOFT_THRESHOLD` (gate brando informacional para taxas
-/// de amostragem não-padrão) é:
+/// Verifies that `MRSTFT_SOFT_THRESHOLD` (informational soft gate for non-standard
+/// sample rates) is:
 ///
-/// 1. **Abaixo do teto anti-placebo:** ≤ 0.5 (Rule 4 do anti-placebo).
-///    MR-STFT é uma métrica limitada em [0, 1]; valores ≥ 0.5 indicam colapso
-///    espectral. O soft gate não pode nunca exceder o teto de placebo.
+/// 1. **Below the anti-placebo ceiling:** ≤ 0.5 (anti-placebo Rule 4).
+///    MR-STFT is a bounded metric in [0, 1]; values ≥ 0.5 indicate spectral
+///    collapse. The soft gate must never exceed the placebo ceiling.
 ///
-/// 2. **Não-zero:** > 0.0. Um soft gate de 0.0 seria inútil — toda divergência
-///    espectral geraria falso-positivo. O gate deve ser calibrado com margem
-///    acima dos modelos calibrados e abaixo do teto anti-placebo.
+/// 2. **Non-zero:** > 0.0. A soft gate of 0.0 would be unusable — any spectral
+///    divergence would trigger false positives. The gate must be calibrated with
+///    headroom above calibrated models and below the anti-placebo ceiling.
 ///
-/// 3. **Documentado:** a definição de `pub const MRSTFT_SOFT_THRESHOLD` em
-///    `tests/common/validation.rs` deve ter um comentário `// Measured:` nas
-///    proximidades, documentando a proveniência da calibração.
+/// 3. **Documented:** the definition of `pub const MRSTFT_SOFT_THRESHOLD` in
+///    `tests/common/validation.rs` must have a nearby `// Measured:` comment
+///    documenting calibration provenance.
 ///
-/// O gate brando opera em taxas não-padrão (≠ 44.1/48 kHz) onde os hard gates
-/// por-modelo não se aplicam. Ele é puramente informacional — não causa falha
-/// de teste — mas serve como guard-rail global de sanidade espectral.
+/// The soft gate operates at non-standard sample rates (≠ 44.1/48 kHz) where
+/// per-model hard gates do not apply. It is purely informational — it does not
+/// trigger test failures — but serves as a global spectral sanity guard-rail.
 #[test]
 fn test_mrstft_soft_threshold_is_calibrated() {
     // Rule 1: below anti-placebo ceiling (≤ 0.5)
@@ -683,14 +683,13 @@ fn test_all_set_activation_calls_are_guarded() {
     }
 }
 
-/// Meta-teste anti-let_: nenhum wrapper em cpp_parity.rs pode
-/// descartar silenciosamente o `ParityOutcome` retornado por
-/// `run_render_comparison`.
+/// Anti-let_ meta-test: no wrapper in cpp_parity.rs may silently discard the
+/// `ParityOutcome` returned by `run_render_comparison`.
 ///
-/// Analisa o código-fonte de `tests/parity/cpp_parity.rs` e falha se encontrar
-/// qualquer ocorrência do padrão `let _ = run_render_comparison`. Todas as
-/// chamadas a `run_render_comparison` devem capturar o `ParityOutcome` retornado
-/// e tomar decisões explícitas sobre ele (assert, SKIP-COVERAGE, etc).
+/// Analyzes the source code of `tests/parity/cpp_parity.rs` and fails upon
+/// finding any occurrence of `let _ = run_render_comparison`. All calls to
+/// `run_render_comparison` must capture the returned `ParityOutcome` and make
+/// explicit assertions or decisions on it (assert, SKIP-COVERAGE, etc.).
 #[test]
 fn test_no_silent_let_underscore_in_cpp_parity_wrappers() {
     let cpp_parity_src =
@@ -795,7 +794,7 @@ fn catalog_entry_to_model_name<'a>(_nam_file: &str, golden_name: &'a str) -> Opt
     }
 }
 
-/// Auditoria Anti-Placebo Estendida ao Registro de Golden (S3-T02).
+/// Anti-Placebo Audit Extended to the Golden Registry.
 ///
 /// Extends `test_all_thresholds_anti_placebo` beyond `.bin` fixtures to
 /// cover ALL entries in `src/testing/catalog.rs::GOLDEN_GEN_CATALOG`,

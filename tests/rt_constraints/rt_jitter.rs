@@ -17,7 +17,7 @@
 //  baseline of the same execution — they characterize resilience, they do NOT
 //  hard-assert zero violations.
 //
-//  ## Load scenarios (T3.1 / F-ROB-05)
+//  ## Load scenarios
 //
 //  - `stress-1`: exactly 1 CPU-burn worker during the whole measurement.
 //  - `stress-2`: exactly 2 CPU-burn workers during the whole measurement.
@@ -74,7 +74,7 @@ impl JitterStats {
 
     /// Number of CPU cores the process can actually use, given its affinity
     /// mask (e.g. `taskset -c N`). `1` means "single core available by
-    /// affinity" — the T3.1 rollback condition for multi-worker stress.
+    /// affinity" — the rollback condition for multi-worker stress.
     fn affinity_cores() -> usize {
         thread::available_parallelism()
             .map(|n| n.get())
@@ -143,7 +143,7 @@ fn measure_latency(
     let hist = LatencyHistogram::new();
     let mut violations: u64 = 0;
 
-    // T2.5 (G-04 certification): `black_box` around the process call and the
+    // `black_box` around the process call and the
     // output consumption proves the loop exercises the buffers and
     // coefficients — no compiler elision can fake a latency reading.
     for _ in 0..MEASURE_BLOCKS {
@@ -231,7 +231,7 @@ fn emit_skip_receipt(label: &str, stress_workers: usize, reason: &str) {
 
 /// Runs one jitter characterization scenario at the given stress level.
 ///
-/// T3.1: the stress count is explicit — a scenario labeled `stress-N` spawns
+/// The stress count is explicit — a scenario labeled `stress-N` spawns
 /// exactly N CPU-burn workers for the whole measurement. When the process
 /// affinity exposes fewer cores than the requested worker count, the scenario
 /// is declared `SKIP_CAPABILITY` (typed marker) instead of running with
@@ -326,7 +326,7 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
         );
 
         // Run stress characterizations with delta against this baseline.
-        // T3.1: stress-1 and stress-2 carry 1 and 2 real CPU-burn workers.
+        // Stress-1 and stress-2 carry 1 and 2 real CPU-burn workers.
         run_jitter_characterization("WaveNet-Std-char-stress-1", &mut model, Some(&baseline), 1);
         run_jitter_characterization("WaveNet-Std-char-stress-2", &mut model, Some(&baseline), 2);
 
@@ -364,7 +364,7 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
                  environmental characterization, NOT a deadline gate."
             );
         }
-        // T2.5 (G-03): every scenario (baseline, stress-1, stress-2 and
+        // Every scenario (baseline, stress-1, stress-2 and
         // saturate-N, including the single-core `saturate-1`) ended its
         // section with a canonical `[RECEIPT]`/`[STATUS]` terminal line — the
         // section-level marker closes the test so a truncated log is visible.

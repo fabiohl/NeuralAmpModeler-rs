@@ -14,7 +14,7 @@ arithmetic. The weight byte order is a fixed fact (determine it empirically by
 checking which reading matches the f32 production engine), but the computation
 must stay idiomatic NumPy so that a shared conceptual bug cannot pass silently
 in both. A historic violation (this script copying the old Rust shared-buffer
-layout) made the S5 anchor circular and hid a real bug until T8.2; see T8.13.
+layout) made the anchor circular and hid a real bug until corrected.
 
 Validation requirement (NOT optional): after any change to the oracle or this
 script, the generated anchor must satisfy BOTH
@@ -114,7 +114,7 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
     num_frames = len(x)
     cursor = 0
 
-    # ── condition_dsp sub-model (T1.2) ──
+    # ── condition_dsp sub-model ──
     cond_dsp_out = None
     if not all_channels and config.get("condition_dsp") is not None:
         import copy
@@ -627,7 +627,7 @@ def convnet_forward(model: dict, x: np.ndarray) -> np.ndarray:
     return output
 
 
-# ── A2 f64 model (Generic topology — S13.2) ────────────────────────────────
+# ── A2 f64 model (Generic topology) ────────────────────────────────────────
 
 # Legacy hardcoded constants (fallback when layer_raw lacks kernel_sizes/dilations)
 A2_KS = [6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 15, 15, 6, 6, 6, 6, 6, 6, 6]
@@ -791,7 +791,7 @@ def _extract_head1x1_active(layer_raw):
 
 
 def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
-    """A2 forward pass in NumPy f64 — Multi-array cascade (S14.2).
+    """A2 forward pass in NumPy f64 — Multi-array cascade.
 
     Supports open topologies, multi-array cascade, condition_dsp sub-model
     (dispatched via forward_dispatch, supporting any architecture: LSTM, A2,
@@ -814,7 +814,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         return np.zeros(0, dtype=np.float64)
 
     # ── condition_dsp sub-model ──
-    # T1.2: Use wavenet_forward_all_channels for WaveNet A1 condition_dsp
+    # Use wavenet_forward_all_channels for WaveNet A1 condition_dsp
     # to get ALL head output channels (matching C++ NumOutputChannels()).
     # A2 condition_dsp falls back to forward_dispatch (mono) until §4.4.
     cond_dsp_out = None
@@ -1340,7 +1340,7 @@ def detect_architecture(model: dict) -> str:
 def forward_dispatch(model: dict, x: np.ndarray) -> np.ndarray:
     """Generic forward dispatcher — routes to correct architecture-specific function.
 
-    This is the recursive dispatch point for condition_dsp sub-models (T5.1).
+    This is the recursive dispatch point for condition_dsp sub-models.
     Unlike the command-line --architecture flag, this function auto-detects the
     architecture from the model dict, supporting sub-models of any type.
     """
@@ -1388,7 +1388,7 @@ def main():
         # A2 detection: head_scale present, no post-stack head, and layers
         # have dilations+channels (either with kernel_sizes array or
         # kernel_size scalar).
-        # S16.4 (T5.1): condition_dsp models with Tanh activation route through
+        # Condition_dsp models with Tanh activation route through
         # the WaveNet A1 oracle, matching Rust's is_a2_model routing.
         has_head_scale = "head_scale" in config
         has_head = bool(config.get("head"))

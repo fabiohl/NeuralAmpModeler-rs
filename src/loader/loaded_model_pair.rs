@@ -3,6 +3,7 @@
 
 use crate::common::diagnostics::ModelInfo;
 use crate::models::StaticModel;
+use log::warn;
 use std::path::Path;
 
 /// Default input level in dBu for models that do not specify metadata.
@@ -66,6 +67,65 @@ pub enum MetadataError {
         /// Maximum plausible linear multiplier.
         max: f32,
     },
+}
+
+/// Validates float metadata fields (`input_level_dbu`, `output_level_dbu`, `loudness`,
+/// `head_scale`) for finiteness and plausible range (F-14).
+///
+/// Weights already reject NaN/Inf element-by-element; metadata does not go
+/// through that path. A JSON value like `1e39` silently saturates to
+/// `+Inf` when deserialized into `f32`, which would poison gain staging
+/// (`db_to_linear`) with NaN/Inf/zero multipliers. This post-parse gate
+/// applies uniformly to `.nam` and `.namb` loads.
+pub(crate) fn validate_metadata_floats(
+    meta: &crate::loader::nam_json::NamMetadata,
+    head_scale: Option<f32>,
+) -> Result<(), MetadataError> {
+    let db_fields: [(&'static str, Option<f32>); 3] = [
+        ("input_level_dbu", meta.input_level_dbu),
+        ("output_level_dbu", meta.output_level_dbu),
+        ("loudness", meta.loudness),
+    ];
+    for (field, value) in db_fields {
+        if let Some(v) = value {
+            if !v.is_finite() {
+                // Structured rejection diagnostic for off-RT triage.
+                // Metadata floats are validated post-parse (no file byte
+                // offset is tracked for these top-level scalar fields).
+                warn!(
+                    "[Loader] Invalid field rejected: field='{}', value={:?}, offset_bytes={}",
+                    field, v, 0
+                );
+                return Err(MetadataError::NonFinite { field, value: v });
+            }
+            if v.abs() > MAX_PLAUSIBLE_DBU {
+                return Err(MetadataError::DbOutOfRange {
+                    field,
+                    value: v,
+                    max: MAX_PLAUSIBLE_DBU,
+                });
+            }
+        }
+    }
+    if let Some(v) = head_scale {
+        if !v.is_finite() {
+            warn!(
+                "[Loader] Invalid field rejected: field='head_scale', value={:?}, offset_bytes={}",
+                v, 0
+            );
+            return Err(MetadataError::NonFinite {
+                field: "head_scale",
+                value: v,
+            });
+        }
+        if v <= 0.0 || v > MAX_PLAUSIBLE_HEAD_SCALE {
+            return Err(MetadataError::HeadScaleOutOfRange {
+                value: v,
+                max: MAX_PLAUSIBLE_HEAD_SCALE,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Pair of loaded models with calibration metadata.

@@ -166,7 +166,7 @@ fn passthrough_on_empty_ir() {
 
 #[test]
 fn reset_clears_fdl_and_fifos_matches_fresh() {
-    // T4.3 / F-CLAP-010: after `reset()`, processing must be bit-identical to
+    // Reset invariant: after `reset()`, processing must be bit-identical to
     // a freshly constructed adapter with the same IR — no tail or accumulated
     // sub-block may survive the reset.
     let partition = 64;
@@ -575,7 +575,7 @@ fn tail_samples_single_partition() {
 
 #[test]
 fn oversize_sub_block_clamps_and_raises_flag() {
-    // F-03 / T2.3: a sub-block 2× the partition (host quantum renegotiation
+    // Cabsim contract guard (F-03): a sub-block 2× the partition (host quantum renegotiation
     // window) must not panic — the adapter clamps defensively and raises the
     // CABSIM_CONTRACT_VIOLATION status flag.
     let ir = synth_ir(60, 500.0, 10.0, 48000);
@@ -596,7 +596,7 @@ fn oversize_sub_block_clamps_and_raises_flag() {
 
 #[test]
 fn mismatched_output_len_clamps_and_raises_flag() {
-    // F-03 / T2.3: input/output length disagreement must never panic in
+    // Cabsim contract guard (F-03): input/output length disagreement must never panic in
     // release — the adapter clamps to the shortest slice and raises the
     // contract flag. Debug builds keep `debug_assert_eq!` (loud during
     // development), so the two modes are asserted separately.
@@ -645,7 +645,7 @@ fn contract_compliant_sub_blocks_do_not_raise_flag() {
 
 #[test]
 fn in_place_matches_separate_buffer() {
-    // T5.1: `process_in_place` must produce bit-identical output to the
+    // `process_in_place` must produce bit-identical output to the
     // separate-buffer `process_variable` for the same sub-block schedule
     // (the FIFO paths are shared, so the only difference is the destination).
     let ir = synth_ir(200, 500.0, 8.0, 48000);
@@ -703,7 +703,7 @@ fn in_place_matches_separate_buffer() {
 
 #[test]
 fn in_place_passthrough_identity() {
-    // T5.1: passthrough in-place must preserve the buffer unchanged (identity).
+    // Passthrough in-place must preserve the buffer unchanged (identity).
     let engine = Box::new(ConvEngine::new(&[], 64).expect("construction should succeed"));
     let mut adapter = CabSimAdapter::new(engine).expect("adapter construction should succeed");
     assert!(adapter.is_passthrough());
@@ -716,7 +716,7 @@ fn in_place_passthrough_identity() {
 
 #[test]
 fn in_place_oversize_clamps_and_raises_flag() {
-    // T5.1: in-place oversize sub-block must clamp and raise the contract flag
+    // In-place oversize sub-block must clamp and raise the contract flag
     // without panicking (same fail-closed contract as `process_variable`).
     let ir = synth_ir(60, 500.0, 10.0, 48000);
     let partition = 64;
@@ -728,9 +728,9 @@ fn in_place_oversize_clamps_and_raises_flag() {
     assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
 }
 
-// ── CabSimPair (T2.3 / F-RB-006): stereo decoupling ─────────────────────────
+// ── CabSimPair: stereo decoupling ─────────────────────────
 
-/// T2.3 acceptance: unit delta on L with absolute silence on R must yield an R
+/// Unit delta on L with absolute silence on R must yield an R
 /// output that is rigorously `0.0` (-inf dB crosstalk) for the entire IR tail.
 #[test]
 fn pair_crosstalk_delta_l_only_r_exactly_silent() {
@@ -781,7 +781,7 @@ fn lcg_noise(seed: u64, n: usize) -> Vec<f32> {
         .collect()
 }
 
-/// T2.3 acceptance: each pair channel must be bit-identical to an independent
+/// Each pair channel must be bit-identical to an independent
 /// mono `CabSimAdapter` running the same IR and the same signal — no shared
 /// FIFO/FDL state may leak between L and R, under variable sub-block sizes.
 #[test]

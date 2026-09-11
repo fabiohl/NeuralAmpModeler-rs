@@ -40,13 +40,13 @@ fn count_gc_resamplers(items: &[GcItem]) -> usize {
 }
 
 // =============================================================================
-// Test 1 — GcOverflowBuffer concurrent push/drain (T6.3 torn-read coverage)
+// Test 1 — GcOverflowBuffer concurrent push/drain (torn-read regression coverage)
 // =============================================================================
 
 /// Rapid concurrent push/drain on the overflow buffer with 4 producer
 /// threads and 1 drainer thread.  Every drained item must decode
 /// correctly — a single `RT_STATUS_GC_CORRUPTED` flag means that a
-/// torn-read (type↔ptr inconsistency) slipped through, which T6.3
+/// torn-read (type↔ptr inconsistency) slipped through; this was
 /// eliminated by packing both into a single `AtomicU64`.
 #[test]
 fn test_overflow_concurrent_push_drain() {
@@ -116,7 +116,7 @@ fn test_overflow_concurrent_push_drain() {
     // is zero GC_CORRUPTED flags.
     assert!(
         !drain_status.check_flag(RT_STATUS_GC_CORRUPTED),
-        "RT_STATUS_GC_CORRUPTED was set — possible torn-read (T6.3 regression)!"
+        "RT_STATUS_GC_CORRUPTED was set — possible torn-read regression!"
     );
     assert!(
         total > 0,
@@ -572,13 +572,13 @@ fn test_param_smoothing_concurrent_updates() {
 }
 
 // =============================================================================
-// Test 6 — T6.3 race reproduction: torn-read prevention under max contention
+// Test 6 — GcOverflowBuffer torn-read prevention under maximum contention
 // =============================================================================
 
-/// Reproduces the exact scenario that the T6.3 fix protects against:
+/// Reproduces the exact race scenario that the torn-read fix protects against:
 /// maximum-rate concurrent `push()` and `drain()` on the
-/// `GcOverflowBuffer`.  Before T6.3, type and pointer were two separate
-/// atomic swaps, creating a torn-read window.  After T6.3, type+pointer
+/// `GcOverflowBuffer`. Before the fix, type and pointer were two separate
+/// atomic swaps, creating a torn-read window. After the fix, type+pointer
 /// are packed into a single `AtomicU64`, eliminating the window.
 ///
 /// This test runs hundreds of thousands of push/drain cycles and asserts
@@ -654,13 +654,13 @@ fn test_t6_3_torn_read_prevention() {
 
     assert!(
         !drain_status.check_flag(RT_STATUS_GC_CORRUPTED),
-        "T6.3 regression! GC_CORRUPTED flag set under maximum contention — \
+        "GC_CORRUPTED flag set under maximum contention — \
          torn-read window may still exist. {} items drained.",
         total
     );
 
     println!(
-        "T6.3 torn-read prevention OK — {} items pushed/drained with zero corruption.",
+        "Torn-read prevention OK — {} items pushed/drained with zero corruption.",
         total
     );
 }

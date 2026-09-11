@@ -22,7 +22,7 @@ use super::stages::{
 ///
 /// Returns the number of output samples processed (`n_pw`). Returns 0 if `bridge_writer` is None or gate is closed.
 ///
-/// # Host Contract Guard (F-12 / T2.4)
+/// # Host Contract Guard
 ///
 /// `n_samples` is defensively clamped to
 /// `min(n_samples, samples_l.len(), samples_r.len(), MAX_RESAMP_BUF)` before
@@ -30,7 +30,7 @@ use super::stages::{
 /// `RT_STATUS_HOST_CONTRACT_VIOLATION` flag is raised (lock-free, zero-alloc,
 /// no RT logging) — the audio thread never panics on slice out-of-bounds.
 ///
-/// # Denormal Protection (FTZ + DAZ) (F-04 / T3.2)
+/// # Denormal Protection (FTZ + DAZ)
 ///
 /// MXCSR is a per-thread register: a host that never configures it leaves the
 /// audio thread exposed to denormal stalls (up to 100× per instruction). This
@@ -51,7 +51,7 @@ pub fn capture_dsp_pipeline(
     use crate::math::common::Avx512Math;
     use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
 
-    // F-04 / T3.2: reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
+    // Reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
     // before any DSP runs. This is a fixed stmxcsr/ldmxcsr pair — zero-alloc,
     // lock-free, no RT logging — reasserted on every audio callback.
     // SAFETY: `set_daz_ftz` only manipulates the MXCSR register of the current
@@ -173,12 +173,12 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 
     // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
     //
-    // P-03 / T5.1: process the resampled buffers in place — each adapter
+    // Process the resampled buffers in place — each adapter
     // consumes the sub-block into its input FIFO before writing back the
     // causal output, so source and destination may alias. This removes the
     // up-to-32 KiB copy-back per callback (and the destination scratch).
     //
-    // T2.3 / F-RB-006: the stereo-decoupled pair path runs independent L/R
+    // Stereo decoupling: the stereo-decoupled pair path runs independent L/R
     // adapters so no convolucional state is shared between channels. The
     // shared-state single-adapter path is retained for mono-only consumers.
     let convolved = if let Some(ref mut pair) = ctx.conv_pair {

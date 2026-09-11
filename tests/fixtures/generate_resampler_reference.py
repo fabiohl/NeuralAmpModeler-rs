@@ -157,7 +157,7 @@ def main() -> None:
     fixture_dir = Path(__file__).resolve().parent
 
     # Rate pairs: (from_rate, to_rate)
-    # Covers 44.1↔48↔96 kHz as required by T8.9
+    # Covers 44.1↔48↔96 kHz sample-rate conversions
     rate_pairs: list[tuple[int, int]] = [
         (44100, 48000),
         (48000, 44100),

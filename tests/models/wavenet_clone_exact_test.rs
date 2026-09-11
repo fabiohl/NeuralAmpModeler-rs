@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Acceptance test for Task T3.1: Structural exact clone (`clone_exact` / `clone_wavenet_for_slimmable_storage`)
+//! Structural exact clone tests (`clone_exact` / `clone_wavenet_for_slimmable_storage`)
 //! verifying zero panics / SIGABRT on models with heterogeneous channel geometries.
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;

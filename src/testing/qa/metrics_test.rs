@@ -42,7 +42,7 @@ fn canonical_fixture_matches_tests_long_expect_str() {
     assert_eq!(
         model_a.esr_f64,
         MetricValue::Na,
-        "sink lines carry no esr_f64 (S2.T6)"
+        "sink lines carry no esr_f64"
     );
 
     let model_b = &records[1];

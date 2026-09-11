@@ -9,7 +9,7 @@
 //! **never** flip `FIDELITY` to FAIL. Fidelity phases (`golden_vectors`,
 //! `reference_oracle_f64`, `quick_parity`) must be `PASS`.
 //!
-//! ## ISA phase naming (T3.2 / G-02)
+//! ## ISA phase naming
 //!
 //! The ISA coverage is split into two distinct phase records so the report can
 //! never mistake internal consistency for inter-ISA parity:
@@ -27,7 +27,7 @@
 //! Literal-port notes:
 //! - ESR envelope limits are rounded with `printf "%.2e"` semantics BEFORE
 //!   the comparison — the rounded value is the effective gate
-//!   (`quality-dashboard.sh:2241-2250`, S1.T2 note). SNR, MR-STFT and latency
+//!   (`quality-dashboard.sh:2241-2250`, verification note). SNR, MR-STFT and latency
 //!   compare the exact limit.
 //! - The f64 ESR oracle gets **no** syntactic finite gate (the bash compares
 //!   it directly via `awk cur+0`); `inf`/`nan` flow through f64 comparison
@@ -42,9 +42,9 @@
 //!
 //! The report format (one JSON object per line) is the future `nam_quality
 //! verify --report` input: phase records (`phase_id`/`status`, bash receipt
-//! shape), fidelity records (S2.T1 `FidelityRecord`, optionally with the
+//! shape), fidelity records (`FidelityRecord`, optionally with the
 //! paired `esr_f64`), latency records (`kind` `latency`, `label`,
-//! `median_latency_us`). Unknown kinds (S2.T6) are skipped.
+//! `median_latency_us`). Unknown kinds are skipped.
 
 use std::collections::HashMap;
 
@@ -94,7 +94,7 @@ pub struct LatencyRecord {
 pub struct VerifyReport {
     /// Phase outcome records.
     pub phases: Vec<PhaseRecord>,
-    /// Fidelity metric records (S2.T1 shape).
+    /// Fidelity metric records.
     pub fidelity: Vec<FidelityRecord>,
     /// Latency measurement records.
     pub latency: Vec<LatencyRecord>,
@@ -104,8 +104,8 @@ pub struct VerifyReport {
 ///
 /// Routing: records with `phase_id` are phase records, records with
 /// `median_latency_us` are latency records, everything else goes through the
-/// fidelity canonicalization of S2.T1 (kind filter + label drop). Unknown
-/// kinds (`build_metadata` provenance, S2.T6 sink kinds) are skipped.
+/// fidelity canonicalization (kind filter + label drop). Unknown
+/// kinds (`build_metadata` provenance, sink kinds) are skipped.
 pub fn parse_verify_report(input: &str) -> Result<VerifyReport, VerifyError> {
     let mut report = VerifyReport {
         phases: Vec::new(),
@@ -430,7 +430,7 @@ pub enum PerfResult {
     },
     /// Contract entry matched to no report record.
     MissingLabel,
-    /// Benchmark matched but carried no data (future sink; see S2.T6/T7).
+    /// Benchmark matched but carried no data (future sink).
     MissingLatency,
 }
 

@@ -19,7 +19,7 @@ pub(crate) use schema::*;
 pub use schema::{MAX_HIDDEN_SIZE, MAX_LAYERS};
 pub use semantic::*;
 
-// Side channel for typed parse errors produced by serde visitors (T5.1).
+// Side channel for typed parse errors produced by serde visitors.
 //
 // `serde::de::Error::custom` only preserves a `Display` string — the typed
 // `JsonError` raised inside a visitor (e.g. `WeightNotFinite`) would be

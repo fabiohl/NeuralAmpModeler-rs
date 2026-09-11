@@ -120,7 +120,7 @@ rs_dirs=( src tests )
 [ -d benches ] && rs_dirs+=( benches )
 [ -d examples ] && rs_dirs+=( examples )
 
-# T2.4: enumeration is fail-closed — a failing `find` (or any step below)
+# enumeration is fail-closed — a failing `find` (or any step below)
 # aborts the script via `set -e` instead of being swallowed by `|| true`
 # into an empty scope that would let missing files pass silently.
 spdx_scope=$(

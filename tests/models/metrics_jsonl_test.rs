@@ -187,12 +187,11 @@ fn metrics_jsonl_never_emits_null() {
     );
 }
 
-// ── S2.T6 oracle sinks (R-06, slice 1) ──────────────────────────────────────
+// ── Secondary oracle sinks ──────────────────────────────────────────────────
 // One test per `report_*` kind: each emits a serde-valid JSONL line with the
 // canonical `kind` and finite numeric fields (non-finite → string sentinels,
 // never `null`), following the `metrics_jsonl_never_emits_null` invariant.
-// The single exception is the fidelity record's `snr_db` — see the module
-// doc (P0.T3).
+// The single exception is the fidelity record's `snr_db` — see the module doc.
 
 #[test]
 fn f64_table_sink_emits_valid_jsonl() {

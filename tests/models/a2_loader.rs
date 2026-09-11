@@ -192,7 +192,7 @@ fn test_is_a2_shape_rejects_wrong_dilations() {
 
 #[test]
 fn test_is_a2_shape_accepts_multiple_layers() {
-    // S14.1 (PM-15): Multi-array A2 topologies are now accepted.
+    // Multi-array A2 topologies are now accepted.
     // The first layer must have valid A2 shape characteristics.
     let data = NamModelData {
         version: Some("0.6.0".to_string()),
@@ -242,7 +242,7 @@ fn test_is_a2_shape_accepts_multiple_layers() {
     };
     assert!(
         is_a2_shape(&data).is_some(),
-        "S14.1: multi-array A2 models with valid shape must now be accepted"
+        "multi-array A2 models with valid shape must now be accepted"
     );
 }
 
@@ -896,7 +896,7 @@ fn test_unrecognized_a2_shape_returns_clear_error() {
 }
 
 // =============================================================================
-// 7. Strict A2 shape rejection (acceptance criteria for T11.2)
+// 7. Strict A2 shape rejection
 // =============================================================================
 
 /// bottleneck != channels must be rejected by is_a2_shape (prevents
@@ -972,7 +972,7 @@ fn test_is_a2_shape_rejects_gated_activation() {
     );
 }
 
-/// Active FiLM conditioning is now accepted by is_a2_shape (T2.2 relaxation: FiLM
+/// Active FiLM conditioning is now accepted by is_a2_shape (FiLM
 /// weight loading happens in set_weights, so the shape detector no longer rejects
 /// models with active FiLM config entries).
 #[test]
@@ -1006,7 +1006,7 @@ fn test_is_a2_shape_accepts_active_film() {
     let data = parse_nam_json(json).expect("JSON parse failed");
     assert!(
         is_a2_shape(&data).is_some(),
-        "active FiLM (conv_pre_film) must now be accepted by is_a2_shape (T2.2 relaxation)"
+        "active FiLM (conv_pre_film) must now be accepted by is_a2_shape"
     );
 }
 
@@ -1070,7 +1070,7 @@ fn test_regression_a1_lstm() {
 }
 
 // ---------------------------------------------------------------------------
-// T1.2 — Adversarial A2 topology validation (F-02 / F-03 / F-04)
+// Adversarial A2 topology validation (F-02 / F-03 / F-04)
 // ---------------------------------------------------------------------------
 
 fn make_a2_data_with_topology(

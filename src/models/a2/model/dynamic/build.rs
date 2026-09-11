@@ -145,7 +145,7 @@ impl WaveNetA2Dyn {
         // After reorder: transpose from row-major [out_ch][in_pg] to
         // col-major [in_pg][out_ch] so the hot path can use contiguous
         // 8-wide SIMD loads across output channels with broadcast condition
-        // (T4.3 vectorization).
+        // (AVX2 SIMD vectorization via 8-wide broadcast FMA).
         let mg: u32 = self.mixin_groups.max(1);
         let mixin_in_pg = self.condition_size / mg as usize;
         let mixin_out_per_g = conv_out / mg as usize;
@@ -178,7 +178,7 @@ impl WaveNetA2Dyn {
         // Transpose from row-major [out_per_g][in_pg] to col-major
         // [in_pg][out_per_g] within each group block, so the hot path can
         // use contiguous 8-wide SIMD loads across output channels with
-        // broadcast condition (T4.3).
+        // Broadcast condition.
         let mut mixin_w = AlignedVec::new(mixin_count, 0.0f32)
             .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
         for g in 0..mg as usize {

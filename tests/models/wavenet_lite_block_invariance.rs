@@ -192,9 +192,9 @@ fn build_tiny_lite_wavenet() -> WaveNetModel<12, 3, 6> {
 }
 
 #[test]
-// T1.2 fix: MirroredBuffer::new_aligned guarantees size_elements % channels == 0,
+// MirroredBuffer::new_aligned guarantees size_elements % channels == 0,
 // so the ring-buffer wrap period aligns exactly with the mirror period.
-// T1.3: hardened to assert! < 1e-7 (synthetic model gives MSE~1e-20 post-fix).
+// Hardened to assert! < 1e-7 (synthetic model gives MSE~1e-20 post-fix).
 fn test_wavenet_lite_block_invariance() {
     let num_samples = 16384;
     let input = generate_sine_440hz(num_samples);

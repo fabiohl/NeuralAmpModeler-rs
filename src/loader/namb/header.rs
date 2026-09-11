@@ -42,7 +42,7 @@ pub fn check_crc(
     };
 
     if calculated != expected {
-        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        // Structured rejection diagnostic (CRC integrity policy).
         // `offset_of!` yields the byte offset of the `crc32` field within the
         // packed header (also the absolute file offset, since the header
         // starts at file byte 0).

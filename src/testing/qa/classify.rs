@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Single performance-status classifier — literal port of the bash
-//! `classify_regression_outcome` (F-08 / EP-05; the bash copy was removed,
+//! `classify_regression_outcome` (the bash copy was removed;
 //! `utils/_lib.sh` now delegates nothing here — the dashboard
 //! inlines the same 3-way case over the Rust-written receipt).
 //!
@@ -12,7 +12,7 @@
 //! — real regressions, benchmark failures, empty receipts, and
 //! `SKIP_CAPABILITY` — is fail-closed `FAIL` (never promoted).
 
-/// Single performance verification outcome (F-08).
+/// Single performance verification outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegressionOutcome {
     /// Receipt status `PASS`.
@@ -48,7 +48,7 @@ pub fn classify_regression_outcome(status: &str, reason: &str) -> RegressionOutc
     }
 }
 
-/// Fail-closed fresh-run classification (T2.3 / F-08) — the dashboard's
+/// Fail-closed fresh-run classification — the dashboard's
 /// `regression_gate` phase.
 ///
 /// A receipt from a **previous** execution can never validate the current
@@ -140,7 +140,7 @@ mod tests {
         );
     }
 
-    /// T2.3 acceptance: a stale or absent receipt never validates the run.
+    /// Fresh-run invariant: a stale or absent receipt never validates the current run.
     #[test]
     fn fresh_classification_rejects_stale_and_aborted_runs() {
         // Clean run with a FRESH PASS receipt → PASS.

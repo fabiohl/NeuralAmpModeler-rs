@@ -7,73 +7,14 @@
 use crate::common::diagnostics::{NamDiagnostic, NamErrorCode, SystemSnapshot};
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::path::Path;
 
 use super::error::LoadError;
 use super::loaded_model_pair::{
     DEFAULT_INPUT_LEVEL_DBU, DEFAULT_LOUDNESS_DB, DEFAULT_SAMPLE_RATE, LoadedModelPair,
-    MAX_MODEL_BYTES, MAX_PLAUSIBLE_DBU, MAX_PLAUSIBLE_HEAD_SCALE, MetadataError,
+    MAX_MODEL_BYTES, validate_metadata_floats,
 };
-
-/// Validates metadata floats (`input_level_dbu`, `output_level_dbu`, `loudness`,
-/// `head_scale`) for finiteness and plausible range (F-14).
-///
-/// Weights already reject NaN/Inf element-by-element; metadata does not go
-/// through that path. A JSON value like `1e39` silently saturates to
-/// `+Inf` when deserialized into `f32`, which would poison gain staging
-/// (`db_to_linear`) with NaN/Inf/zero multipliers. This post-parse gate
-/// applies uniformly to `.nam` and `.namb` loads.
-fn validate_metadata_floats(
-    meta: &crate::loader::nam_json::NamMetadata,
-    head_scale: Option<f32>,
-) -> Result<(), MetadataError> {
-    let db_fields: [(&'static str, Option<f32>); 3] = [
-        ("input_level_dbu", meta.input_level_dbu),
-        ("output_level_dbu", meta.output_level_dbu),
-        ("loudness", meta.loudness),
-    ];
-    for (field, value) in db_fields {
-        if let Some(v) = value {
-            if !v.is_finite() {
-                // T5.1: structured rejection diagnostic for off-RT triage.
-                // Metadata floats are validated post-parse (no file byte
-                // offset is tracked for these top-level scalar fields).
-                warn!(
-                    "[Loader] Invalid field rejected: field='{}', value={:?}, offset_bytes={}",
-                    field, v, 0
-                );
-                return Err(MetadataError::NonFinite { field, value: v });
-            }
-            if v.abs() > MAX_PLAUSIBLE_DBU {
-                return Err(MetadataError::DbOutOfRange {
-                    field,
-                    value: v,
-                    max: MAX_PLAUSIBLE_DBU,
-                });
-            }
-        }
-    }
-    if let Some(v) = head_scale {
-        if !v.is_finite() {
-            warn!(
-                "[Loader] Invalid field rejected: field='head_scale', value={:?}, offset_bytes={}",
-                v, 0
-            );
-            return Err(MetadataError::NonFinite {
-                field: "head_scale",
-                value: v,
-            });
-        }
-        if v <= 0.0 || v > MAX_PLAUSIBLE_HEAD_SCALE {
-            return Err(MetadataError::HeadScaleOutOfRange {
-                value: v,
-                max: MAX_PLAUSIBLE_HEAD_SCALE,
-            });
-        }
-    }
-    Ok(())
-}
 
 /// Reads a model file into a byte buffer after validating its size.
 ///
@@ -92,7 +33,7 @@ fn read_and_validate_model_bytes(
     use std::io::Read;
 
     let mut file = std::fs::File::open(path).map_err(|e| {
-        // T5.1: structured failure diagnostic (size unknown at open time → 0).
+        // Structured failure diagnostic (size unknown at open time → 0).
         error!(
             "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
             path_str,
@@ -223,7 +164,7 @@ pub fn load_and_build_model(
                 | Some(namb::NambError::MetadataJson(_)) => NamErrorCode::ModelBuildFailed,
                 None => NamErrorCode::ModelBuildFailed,
             };
-            // T5.1: structured failure diagnostic (path + size + code).
+            // Structured failure diagnostic (path + size + code).
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
                 path_str, file_size, code
@@ -313,7 +254,7 @@ pub fn load_and_build_model(
                 }
                 _ => NamErrorCode::NamJsonParseError,
             };
-            // T5.1: structured failure diagnostic (path + size + code).
+            // Structured failure diagnostic (path + size + code).
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
                 path_str, file_size, code

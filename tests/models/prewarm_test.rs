@@ -156,7 +156,7 @@ fn test_reset_without_prewarm_no_panic() {
 }
 
 /// Verify that `reset()` clears internal state regardless of
-/// `prewarm_on_reset` (S3.T2): with the flag disabled, the FIR history and
+/// `prewarm_on_reset`: with the flag disabled, the FIR history and
 /// FFT tail must still be silenced — the flag only gates the priming pass.
 /// Process audio first (fill internal state), then compare reset outcomes.
 #[test]
@@ -514,7 +514,7 @@ fn test_lstm_reset_differs_prewarm_vs_noprewarm() {
 }
 
 // =============================================================================
-// Test 6: WaveNet prewarm_samples() regression (S3-T2)
+// Test 6: WaveNet prewarm_samples() regression
 // =============================================================================
 
 /// Validates that `prewarm_samples()` on a static 2-array WaveNet model

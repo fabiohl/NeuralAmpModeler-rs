@@ -15,7 +15,7 @@ use super::validation::{
 /// `hidden_size` must not exceed [`MAX_HIDDEN_SIZE`]. Returns
 /// `JsonError::UnsupportedTopology` immediately if limits are breached.
 ///
-/// Typed-error preservation (T5.1): serde visitors reject hostile fields with
+/// Typed-error preservation: serde visitors reject hostile fields with
 /// typed `JsonError` variants (e.g. `WeightNotFinite`, `InvalidSampleRate`),
 /// but `serde_json::Error` only preserves their `Display` string. On failure
 /// the typed variant recorded by the visitor is recovered so callers can map

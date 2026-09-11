@@ -72,7 +72,7 @@ fn test_lstm_v2_gate_major_parity() {
     // 5. Compare numerical output to guarantee absolute parity (MSE near zero).
     // PrecisionGuard ensures stable ActivationPrecision across both process() calls
     // — without it, a parallel writer thread could flip the global atomic between
-    // the two inferences, causing spurious MSE divergence (S6.T01/F11 victims).
+    // the two inferences, causing spurious MSE divergence.
     let _guard = PrecisionGuard::new(ActivationPrecision::Standard);
     let input = generate_sine(512);
     let mut out_orig = vec![0.0f32; 512];

@@ -254,7 +254,7 @@ impl CabSimAdapter {
                 self.output_read = 0;
             }
 
-            // P-04 / T5.1: render straight into the output-FIFO partitions. The
+            // Render straight into the output-FIFO partitions. The
             // compaction above guarantees at most `partition` samples remain
             // queued at the front, so the write region
             // `[output_write, output_write + partition)` never overflows the

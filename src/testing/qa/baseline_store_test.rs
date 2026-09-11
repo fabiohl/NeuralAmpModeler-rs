@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Tests for the baseline store (S3.T3) — the acceptance of
+//! Tests for the baseline store — the acceptance of
 //! `tests/scripts/test_regression_guard.sh` scenario 4 mirrored verbatim
 //! (nested sanitize + replace-copy never nests), plus persist/restore
 //! roundtrips.

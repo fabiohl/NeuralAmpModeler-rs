@@ -3,7 +3,7 @@
 
 //! One-shot transcription of `docs/quality-contract.txt` → `docs/quality-contract.json`.
 //!
-//! Dev tool only (S1.T3, finding R-01). The production code never parses the
+//! Dev tool only. The production code never parses the
 //! ASCII snapshot; this test holds the reviewed hardcoded table and prints the
 //! canonical JSON through the typed schema of this module.
 //!

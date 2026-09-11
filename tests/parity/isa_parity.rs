@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  Cross-ISA Determinism Matrix — Task 2.7 (P-8).
+//  Cross-ISA Determinism Matrix.
 //
 //  Runs golden vectors through each supported ISA path (AVX2 as reference,
 //  and AVX-512) and asserts end-to-end model output parity.
@@ -41,7 +41,7 @@
 //  Tests requiring AVX-512 hardware are `#[ignore]` and only execute in
 //  environments that support those ISA levels (or via `utils/tests-long.sh`).
 //
-//  # Scope: self-consistency vs. real cross-ISA parity (T3.2 / G-02)
+//  # Scope: self-consistency vs. real cross-ISA parity
 //
 //  The local QA dashboard (`utils/quality-dashboard.sh`) runs only the AVX2-vs-
 //  AVX2 self-consistency cases under the phase name `isa_self_consistency` and
@@ -75,13 +75,13 @@ use neural_amp_modeler_rs::testing::isa_guard::IsaGuard;
 use super::common;
 use common::*;
 
-/// Serialises access to the process-wide ISA override (T2.3: all installs go
+/// Serialises access to the process-wide ISA override (all installs go
 /// through the validated `testing::isa_guard::IsaGuard`).
 static ISA_LOCK: Mutex<()> = Mutex::new(());
 
 /// Signals that the host CPU does not support a given ISA path.
 ///
-/// T3.2: emits the typed `[STATUS] SKIP_CAPABILITY` marker (machine-parseable
+/// Emits the typed `[STATUS] SKIP_CAPABILITY` marker (machine-parseable
 /// by `detect_gap_markers` in `src/testing/receipt.rs`) instead of free-form
 /// `SKIP ...` prints.
 macro_rules! skip_if_unsupported {
@@ -189,7 +189,7 @@ fn run_under_isa(
     // parity of the Padé/minimax kernels specifically (the `_hf` sibling
     // function below measures the Standard/exact-grade kernels instead).
     // Standard-mode tests may have left the global atomic dirty.
-    // T2.3: installs go through the validated crate guard (host capability
+    // Installs go through the validated crate guard (host capability
     // checked) — a mismatch degrades to a typed skip, never a SIGILL.
     let _guard = match IsaGuard::try_set(isa) {
         Ok(g) => g,
@@ -326,7 +326,7 @@ fn assert_isa_parity(
          budget ESR<{max_esr:.1e}"
     );
 
-    // S2.T6: forensic JSONL sink (kind `isa`) — human log unchanged.
+    // Forensic JSONL sink (kind `isa`) — human log unchanged.
     common::report_isa(
         label,
         ref_name,
@@ -440,7 +440,7 @@ fn assert_isa_self_consistency(
     };
     println!("[ISA Matrix] {label} | {isa_name:>10} self-consistency | MSE={mse:.2e}");
 
-    // S2.T6: self-consistency sinks with `ref_isa == test_isa` (kind `isa`,
+    // Self-consistency sinks with `ref_isa == test_isa` (kind `isa`,
     // only `mse` carried) — human log unchanged.
     common::report_isa(label, isa_name, isa_name, None, mse, None, None);
 
@@ -847,10 +847,10 @@ fn isa_parity_hf_wavenet_standard_avx2_vs_avx512() {
 fn isa_matrix_header_info() {
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║  Cross-ISA Determinism Matrix (P-8 / Task 2.7)               ║");
+    println!("║  Cross-ISA Determinism Matrix                                ║");
     println!("║  Reference = AVX2 (x86-64-v3, always available)              ║");
     println!("║                                                              ║");
-    println!("║  Scope (T3.2): local runner = AVX2 self-consistency only     ║");
+    println!("║  Scope: local runner = AVX2 self-consistency only            ║");
     println!("║  (isa_self_consistency). Cross-ISA matrix = remote gate      ║");
     println!("║  (utils/remote-simd-gate.sh, --features avx512) / long suite ║");
     println!("║                                                              ║");

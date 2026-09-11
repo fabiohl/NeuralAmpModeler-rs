@@ -93,7 +93,7 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
     let crc32_header = header.crc32;
 
     if version >= 2 && hdr_flags & FLAG_HAS_CRC32 == 0 {
-        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        // Structured rejection diagnostic (CRC integrity policy).
         log::warn!(
             "[Loader] Invalid CRC rejected: field='crc32', value=0 (FLAG_HAS_CRC32 absent, v{}), offset_bytes={}",
             version,
@@ -103,7 +103,7 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
     }
 
     if version == 1 && crc32_header == 0 {
-        // T5.1: structured rejection diagnostic (CRC integrity policy).
+        // Structured rejection diagnostic (CRC integrity policy).
         log::warn!(
             "[Loader] Invalid CRC rejected: field='crc32', value=0 (v1 sentinel), offset_bytes={}",
             std::mem::offset_of!(NambHeader, crc32)
@@ -139,7 +139,7 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
     for (i, chunk) in pesos_raw.chunks_exact(4).enumerate() {
         let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         if !val.is_finite() {
-            // T5.1: structured rejection diagnostic for off-RT triage. The byte
+            // Structured rejection diagnostic for off-RT triage. The byte
             // offset is the absolute file offset of the offending f32 slot
             // (weights section start + element index × 4).
             log::warn!(
@@ -167,7 +167,7 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
     );
 
     if !sample_rate_header.is_finite() {
-        // T5.1: structured rejection diagnostic. `offset_of!` yields the byte
+        // Structured rejection diagnostic. `offset_of!` yields the byte
         // offset of the field within the packed header (also the absolute file
         // offset, since the header starts at file byte 0).
         log::warn!(

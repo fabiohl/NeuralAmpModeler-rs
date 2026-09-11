@@ -347,7 +347,7 @@ fn test_gc_cascade_flushes_parking_lot_to_spsc() {
     assert!(gc_cons.pop().is_ok(), "parked item was not flushed to SPSC");
 }
 
-/// F-07 / T5.2: a Tier 3 overflow must be signaled atomically so the main
+/// A Tier 3 overflow must be signaled atomically so the main
 /// thread can consume and log the event instead of losing it silently.
 ///
 /// Fills the SPSC (capacity 1), the parking lot (16) and the overflow buffer

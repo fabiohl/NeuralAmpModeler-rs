@@ -310,7 +310,7 @@ fn rejects_unsupported_schema_version() {
 #[test]
 fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     let json = std::fs::read_to_string("docs/quality-contract.json")
-        .expect("docs/quality-contract.json must exist (S1.T3 transcription)");
+        .expect("docs/quality-contract.json must exist");
     let contract = QualityContract::from_json_str(&json)
         .expect("committed contract must validate against the schema");
     assert_eq!(
@@ -331,7 +331,7 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     assert!(contract.provenance.git_dirty);
 }
 
-/// T3.2 drift guard: the dashboard shell emitter keeps mirror variables of the
+/// ISA phase drift guard: the dashboard shell emitter keeps mirror variables of the
 /// canonical ISA phase ids/reason defined in `phases.rs`. If they drift, the
 /// report renderer (`render.rs`) would query a phase id the receipt never
 /// emitted (or vice-versa) and silently misreport. This test reads the shell

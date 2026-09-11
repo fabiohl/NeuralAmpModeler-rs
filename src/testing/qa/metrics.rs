@@ -77,8 +77,7 @@ impl MetricValue {
 pub struct FidelityRecord {
     /// Model label; missing, null, empty, or `"null"` labels are dropped.
     pub label: String,
-    /// Stream kind — `"fidelity"` or absent; other kinds are skipped until
-    /// the sink extension (S2.T6).
+    /// Stream kind — `"fidelity"` or absent; other kinds are skipped by the sink.
     pub kind: Option<String>,
     /// Linear ESR against the NAMCore reference.
     pub esr: MetricValue,
@@ -92,7 +91,7 @@ pub struct FidelityRecord {
     pub mrstft: MetricValue,
     /// Paired f64-oracle ESR (`"N/A"` when not measured).
     ///
-    /// The canonical sink does not emit this field yet (S2.T6); the verify
+    /// The canonical sink does not emit this field yet; the verify
     /// report may carry it as `"esr_f64"`.
     pub esr_f64: MetricValue,
 }
@@ -134,8 +133,8 @@ pub(crate) fn fidelity_from_json(value: &Value) -> Option<FidelityRecord> {
 ///
 /// Faithful port of `parse_jsonl_fidelity` (`quality-dashboard.sh:530`):
 /// - records whose `kind` is neither `"fidelity"` nor absent are skipped
-///   (other kinds land with S2.T6; non-string `kind` values are skipped too
-///   — the canonical sink only ever emits `"fidelity"`);
+///   (non-string `kind` values are skipped too — the canonical sink only ever
+///   emits `"fidelity"`);
 /// - JSON `null` metrics normalize to `MetricValue::Null`; absent fields
 ///   and empty strings normalize to `MetricValue::Na`;
 /// - records with a missing, null, empty, or `"null"` label are dropped;

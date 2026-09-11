@@ -192,7 +192,7 @@ ensure_long_receipt_bin() {
 }
 
 # emit_preflight_receipt <phase_id> <name> <status> <duration_ms> [--log <path>] [--gaps <list>]
-# Best-effort structured trace for one preflight step (S6-T03 / RES-08).
+# Best-effort structured trace for one preflight step.
 # A failure flags LONG_RECEIPT_FAILED (fail-closed at the final verdict) but
 # never rewrites the preflight's own outcome.
 emit_preflight_receipt() {
@@ -221,7 +221,7 @@ emit_preflight_receipt() {
 # Appends the failing preflight's receipt line (status FAILED), generates the
 # suite-level `overall` verdict (FAILED) and exits 1. Preflights abort before
 # any timed phase, so this is the only moment the overall line can be produced
-# (S6-T03 / RES-08 acceptance: aborted preflight ⇒ line FAILED + overall FAILED).
+# (aborted preflight ⇒ line FAILED + overall FAILED).
 abort_preflight() {
     local phase_id="$1" name="$2" duration_ms="$3"
     shift 3
@@ -387,7 +387,7 @@ echo -e "${GREEN}✓ Golden catalog matches tests coherently.${NC}"
 emit_preflight_receipt "preflight-meta" "Catalog↔test coherence preflight" "PASSED" "$PF_META_DUR" --log target/logs/meta_coherence.log || true
 
 # ── SIMD Probe Preflight ──
-# PO directive (Sprint 4.1): register the machine SIMD capability profile and
+# Register the machine SIMD capability profile and
 # the active engine dispatch backend in every long-suite audit. Diagnostic
 # recording only — never a gate (hardware may legitimately lack AVX-512).
 echo -e "\n${BLUE}${BOLD}→ Preflight: SIMD Hardware & Engine Dispatch Probe (preflight-simd-probe)...${NC}"
@@ -402,7 +402,7 @@ emit_preflight_receipt "preflight-simd-probe" "SIMD Capability & Dispatch Probe"
 # ── Phase classification for fidelity/performance split ──────────────────────
 # run_phase indices: 0 soak, 1 defense, 2 proptests, 3 heap,
 #                    4 deadline, 5 jitter, 6 loom
-# The fidelity/performance split itself moved to Rust in S5:
+# The fidelity/performance split is implemented in Rust:
 # src/testing/receipt.rs::PERFORMANCE_PHASE_IDS (phase5 = RT Deadline,
 # phase6 = RT Jitter) — the human summary derives FIDELITY from the receipt.
 
@@ -451,7 +451,7 @@ run_phase() {
     PHASE_DURATIONS_MS[$PHASE_COUNT]="$duration_ms"
     PHASE_DURATIONS[$PHASE_COUNT]="$duration_ms"
 
-    # T2.4: the legacy exit-code 77 skip convention is dead — skips are now
+    # the legacy exit-code 77 skip convention is dead — skips are now
     # conveyed exclusively by typed `[STATUS]` log markers, picked up by
     # `nam_long_receipt append --log` (detect_gap_markers) and recorded as
     # gaps in the structured receipt. `run_phase` only distinguishes PASSED
@@ -479,12 +479,12 @@ run_phase() {
 
 # ── Structured long-audit receipt: per-phase emission ───────────────────────
 # Receipt file/bin/ensure_long_receipt_bin/emit_preflight_receipt/abort_preflight
-# are defined at the top (preflight steps emit before Phase 1 — S6-T03).
+# are defined at the top (preflight steps emit before Phase 1).
 
 # emit_long_phase_receipt <phase_idx> <log_file>
 # Appends the just-completed phase's structured receipt line; `--log` makes
 # `nam_long_receipt append` detect typed gap markers in the phase log
-# (detect_gap_markers — the S5 carrier of measurement bypasses; the old
+# (detect_gap_markers — the carrier of measurement bypasses; the old
 # post-phase PHASE_STATUS overrides for phases 4/5 are gone). A failure
 # flags LONG_RECEIPT_FAILED (fail-closed at the final verdict) but never
 # rewrites the phase's own outcome.
@@ -612,7 +612,7 @@ run_proptests_parity_phase() {
     # when the running CPU lacks the target ISA (see skip_if_unsupported!
     # in tests/isa_parity.rs) — safe to run unconditionally on any machine.
     #
-    # T2.4: the matrix runs under its OWN subphase log so the mandatory-
+    # the matrix runs under its OWN subphase log so the mandatory-
     # subphase gate can prove real execution. On a default local runner
     # (no `--features avx512`) the cross-ISA cases compile out via `#[cfg]` —
     # the AVX2 self-consistency cases still prove the subphase ran, and the
@@ -708,7 +708,7 @@ run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase
 # The receipt carries the bypass typed in the log: when the Rust preflight
 # reports an uncontrolled environment the test exits 0 (no assertion) but the
 # log contains the INCONCLUSIVE_ENVIRONMENT marker. `nam_long_receipt append
-# --log` picks it up via detect_gap_markers (S5 — the PHASE_STATUS override
+# --log` picks it up via detect_gap_markers (the PHASE_STATUS override
 # is gone; the marker is the only carrier, and the summary derives
 # COMPLETED_WITH_GAPS from it).
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase4-rt-deadline.log" || true
@@ -747,7 +747,7 @@ fi
 # The Rust test returns exit 0 even when internally bypassed (INCONCLUSIVE
 # or SKIP_CAPABILITY) to avoid false FAIL — the [STATUS] log markers are
 # authoritative and `nam_long_receipt append --log` records them as typed
-# gaps (S5: the PHASE_STATUS override is gone). Invariant: exit-0 with
+# gaps (the PHASE_STATUS override is gone). Invariant: exit-0 with
 # internal measurement bypass SHALL NOT be promoted to PASS.
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase5-rt-jitter.log" || true
 

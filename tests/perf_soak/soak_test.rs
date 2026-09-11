@@ -1152,7 +1152,7 @@ fn test_adaptive_fsm_transition_cycles() {
 }
 
 // =============================================================================
-// T1.4 — WaveNet Drift Source Decomposition
+// WaveNet Drift Source Decomposition
 // =============================================================================
 
 /// Padé [5,4] scalar approximation of tanh. Max error ~2.32e-3.
@@ -1661,7 +1661,7 @@ fn esr_to_db(esr: f64) -> f64 {
     }
 }
 
-/// T1.4 — Drift Source Decomposition for WaveNet Standard (CH=16).
+/// Drift Source Decomposition for WaveNet Standard (CH=16).
 ///
 /// Measures the contribution of each precision-loss source to the total
 /// ESR against a full-precision (f32 weights + exact tanh) scalar reference:
@@ -1698,7 +1698,7 @@ fn test_wavenet_drift_decomposition() {
 
     println!();
     println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║  T1.4 — WaveNet Drift Decomposition (Standard, CH=16)  ║");
+    println!("║  WaveNet Drift Decomposition (Standard, CH=16)         ║");
     println!("╠══════════════════════════════════════════════════════════╣");
     println!("║  Source                                  ESR       dB   ║");
     println!("╠══════════════════════════════════════════════════════════╣");

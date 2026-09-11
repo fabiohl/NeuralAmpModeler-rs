@@ -311,7 +311,7 @@ fn test_long_receipt_cli_end_to_end() {
     assert_eq!(bad_run.status.code(), Some(2), "bad status must exit 2");
 }
 
-// S4.T2: `count-log` is the F-21 counter behind `_lib.sh::assert_ran_tests`.
+// `count-log` is the counter behind `_lib.sh::assert_ran_tests`.
 #[test]
 fn test_long_receipt_count_log_mirrors_f21_cases() {
     let bin = env!("CARGO_BIN_EXE_nam_long_receipt");

@@ -17,7 +17,7 @@
 //! compared to the strictly‑serial FMA chain of the scalar reference. No
 //! dequantization or precision conversion is involved.
 //!
-//! # Lane‑equivalence with 4x kernel (T2.S1.1)
+//! # Lane‑equivalence with 4x kernel
 //!
 //! **Decision:** the 16x kernel is **bit‑exact per‑lane** to the 4x kernel
 //! for any shared lane index `j ∈ [0..11]` (12‑channel Lite via pad‑to‑16),

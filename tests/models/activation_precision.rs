@@ -348,7 +348,7 @@ fn test_hf_mode_switch_functional() {
 //
 // LSTM models are included in the audit: the switch call itself is zero-alloc
 // regardless of whether the model dispatches to the HF kernel (WaveNet does,
-// LSTM doesn't yet — see Epic β/I6).
+// LSTM does not yet implement a distinct high-fidelity activation kernel).
 
 /// Zero-alloc: `set_activation_tls()` global atomic write.
 ///
@@ -456,7 +456,7 @@ fn test_zero_alloc_activation_hot_path_switch() {
 /// Verifies that switching modes mid-stream produces valid (non-NaN, finite)
 /// output and that the mode switch does not silently fall back to incorrect
 /// behavior. For WaveNet, output differs (Standard path active); for LSTM,
-/// output is identical to Fast (known limitation, Epic β/I6). Both cases
+/// output is identical to Fast (known structural behavior in current LSTM implementation). Both cases
 /// confirm the global atomic path is properly synchronized.
 #[test]
 fn test_activation_switch_output_idempotent() {

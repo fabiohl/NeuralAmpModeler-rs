@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 #
 """
-Deterministic fixture generator for Task B.1.2 — ConvNet, WaveNetDyn, LstmDyn.
+Deterministic fixture generator for dynamic models — ConvNet, WaveNetDyn, LstmDyn.
 
 Produces:
   convnet_test.nam     — 2-block ConvNet (CH=8,4; Tanh; no post-stack head)
@@ -36,7 +36,7 @@ def gen_weights(n: int, rng: random.Random, scale: float) -> List[float]:
 
 
 # =============================================================================
-# 1. ConvNet — C++ flat format (T4.7 F-A1)
+# 1. ConvNet — C++ flat format (F-A1)
 #
 # Compatible with NAM Core v0.5.3+ render tool.
 # Format: scalar `channels`, global `dilations`, `batchnorm` bool,

@@ -365,7 +365,7 @@ impl NamResampler {
     ///
     /// # Parameters
     /// - `_host_rate`: Host sample rate (ignored in favor of the configured `self.host_rate`;
-    ///   retained for backward compatibility and scheduled for removal in v0.8 / Sprint 5).
+    ///   retained for backward compatibility and scheduled for removal in a future release).
     ///
     /// # Returns
     /// Total latency in samples at `self.host_rate()`.

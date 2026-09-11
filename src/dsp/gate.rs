@@ -289,7 +289,7 @@ impl DynamicHysteresis {
     /// If the gate is opening or closing, it performs a smooth change (ramp).
     /// If it is fully open or closed, it applies a constant volume.
     ///
-    /// ## RT-Safety (defensive clamping, T4.2)
+    /// ## RT-Safety (defensive clamping)
     ///
     /// Never panics for any buffer length (including `len == 0`) and never
     /// produces NaN/Inf from a zero `n_samples`: the ramp length and the
@@ -358,7 +358,7 @@ impl DynamicHysteresis {
     /// Does the same as the function above, but for stereo sound (left and right channels).
     /// Processing is done jointly for improved speed.
     ///
-    /// ## RT-Safety (defensive clamping, T4.2)
+    /// ## RT-Safety (defensive clamping)
     ///
     /// Never panics for any buffer length (including empty or unequal
     /// L/R lengths): both channels are processed over the common prefix

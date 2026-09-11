@@ -7,23 +7,32 @@
 //! aliasing from non-linear activations, following the half-band filter design
 //! principles of Kahles, Esqueda & Välimäki (JAES 2019).
 //!
-//! ## Architecture
+//! ## Polyphase Half-Band Filter Design & Efficiency
 //!
-//! Each 2× stage uses a Kaiser-windowed half-band FIR filter (25 taps, β=12,
-//! \>100 dB stop-band). The half-band property h\[2n\]=0 (n≠D/2) halves the
-//! effective MAC count per sample.
+//! Each 2× stage employs a symmetric Kaiser-windowed half-band FIR filter
+//! (25 taps, `D = 12`, `beta = 12.0`, stop-band rejection > 100 dB).
 //!
-//! - **Upsampler**: inserts zeros → filters. Even outputs = x[n-D/2]*0.5;
-//!   odd outputs = convolution with non-zero odd taps.
-//! - **Downsampler**: FIR at full rate → decimates by 2. Uses contiguous
-//!   double-buffer delay line (same pattern as `NamResampler`).
+//! A half-band filter is defined by the frequency symmetry `H(e^{j*w}) + H(e^{j*(pi - w)}) = 1`,
+//! meaning its impulse response satisfies:
+//! - `h[D] = 0.5` (normalized center tap)
+//! - `h[D ± 2k] = 0` for all integers `k != 0` (all other even offsets are strictly zero)
+//! - `h[D ± (2k - 1)] != 0` (only odd offsets carry non-zero coefficients)
+//!
+//! This structural property yields a 2:1 reduction in Multiply-Accumulate (MAC) operations:
+//! - **Upsampler (1 -> 2)**: zero-stuffing `x[n]` followed by filtering.
+//!   - Even sub-phase: reads the single center tap `x[n - D/2] * h[D]` (direct scaled delay).
+//!   - Odd sub-phase: convolved with the 12 non-zero odd taps using SIMD AVX2 FMA.
+//! - **Downsampler (2 -> 1)**: anti-aliasing filtering followed by 2:1 decimation.
+//!   - Evaluated via dual delay lines (even and odd phase streams), eliminating redundant
+//!     evaluations of discarded output samples.
 //!
 //! ## RT-Safety
 //!
-//! All allocation in `OversampleEngine::new()`. During `process()`,
-//! only pre-allocated buffers — zero alloc, zero heap-drop.
+//! All allocation is performed in `OversampleEngine::new()`. During `process()`,
+//! only pre-allocated buffers are used — zero alloc, zero heap-drop.
 //!
-//! Factor change requires rebuild (off-RT), same path as model hot-swap.
+//! Factor changes require rebuilding or swapping off-RT, following the same
+//! protocol as model hot-swapping.
 
 use super::stage::X2Stage;
 use crate::common::diagnostics::NamErrorCode;
@@ -208,8 +217,23 @@ impl OversampleEngine {
 
     /// Returns the group delay in samples at the native (model) rate.
     ///
-    /// Each 2× half-band stage introduces HB_DELAY (= 12) samples.
-    /// Off → 0, X2 → 12, X4 → 24.
+    /// ## Mathematical Derivation
+    /// Each 2× half-band stage uses a linear-phase Type I FIR of length `N = 25` taps.
+    /// The phase response is linear with constant group delay `tau_g = (N - 1) / 2 = 12` samples
+    /// at the stage's processing rate.
+    ///
+    /// For a full upsample -> neural processing -> downsample round trip:
+    /// - Stage 1 upsampler introduces `D/2 = 6` native samples delay (12 oversampled samples).
+    /// - Stage 1 downsampler introduces `D/2 = 6` native samples delay (12 oversampled samples).
+    /// - Net round-trip group delay per 2× stage: exactly `D = 12` samples at native model rate.
+    ///
+    /// For cascaded 4× oversampling (two stages):
+    /// - Total latency = `2 * 12 = 24` samples at native rate.
+    ///
+    /// ### Latency Table
+    /// - `Off` -> 0 samples (zero added delay).
+    /// - `X2`  -> 12 samples (e.g., 0.25 ms @ 48 kHz).
+    /// - `X4`  -> 24 samples (e.g., 0.50 ms @ 48 kHz).
     #[inline]
     pub fn latency_samples(&self) -> usize {
         match self.factor {
@@ -237,8 +261,8 @@ impl OversampleEngine {
     /// `output`, and `RT_STATUS_HOST_CONTRACT_VIOLATION` is raised when
     /// `rt_status` is provided.
     ///
-    /// Input blocks larger than `max_samples` are truncated defensively (F-12 /
-    /// T2.4): when `rt_status` is provided the truncation raises
+    /// Input blocks larger than `max_samples` are truncated defensively:
+    /// when `rt_status` is provided the truncation raises
     /// `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
     pub fn upsample(
         &mut self,
@@ -301,7 +325,7 @@ impl OversampleEngine {
     /// provided.
     ///
     /// Input blocks larger than `max_samples × multiplier` are truncated
-    /// defensively (F-12 / T2.4): when `rt_status` is provided the truncation
+    /// defensively: when `rt_status` is provided the truncation
     /// raises `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
     pub fn downsample(
         &mut self,

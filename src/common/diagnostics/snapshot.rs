@@ -116,17 +116,17 @@ pub struct TelemetrySnapshot {
     /// Total host buffer misses on the playback (output) side.
     pub output_buffer_miss: u32,
     /// Total playback cycles that delivered deterministic silence because the
-    /// bridge produced no new DSP block (G-RB-001 / T4.2).
+    /// bridge produced no new DSP block (G-RB-001).
     pub playback_bridge_starvation: u32,
     /// Last sample rate negotiated by the capture stream's `param_changed`
-    /// listener (0 = never negotiated) (G-RB-001 / T4.3).
+    /// listener (0 = never negotiated) (G-RB-001).
     pub capture_negotiated_rate: u32,
     /// Last sample rate negotiated by the playback stream's `param_changed`
-    /// listener (0 = never negotiated) (G-RB-001 / T4.3).
+    /// listener (0 = never negotiated) (G-RB-001).
     pub playback_negotiated_rate: u32,
     /// Sticky latch: `false` while the last negotiated SPA format violated the
     /// strict F32P planar stereo contract (RT mutes until a valid
-    /// renegotiation restores it) (G-RB-001 / T4.3).
+    /// renegotiation restores it) (G-RB-001).
     pub format_contract_ok: bool,
 }
 

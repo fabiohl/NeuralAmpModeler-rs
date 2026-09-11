@@ -9,7 +9,7 @@ use crate::math::activations::{simd_tanh_avx2, simd_tanh_dual_avx2};
 const DENSE_POINTS: usize = 4001;
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_pade_nr1_vs_div_precision_avx2() {
     let sweep: Vec<f32> = (0..DENSE_POINTS)
         .map(|i| -4.0_f32 + i as f32 * 0.002_f32)
@@ -67,7 +67,7 @@ fn test_pade_nr1_vs_div_precision_avx2() {
 }
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_pade_nr2_vs_nr1_precision_avx2() {
     let sweep: Vec<f32> = (0..DENSE_POINTS)
         .map(|i| -4.0_f32 + i as f32 * 0.002_f32)
@@ -102,7 +102,7 @@ fn test_pade_nr2_vs_nr1_precision_avx2() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_pade_nr1_vs_div_precision_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;
@@ -166,7 +166,7 @@ fn test_pade_nr1_vs_div_precision_avx512() {
 }
 
 #[test]
-#[ignore = "consistency-only: oráculo f64 fornece correção absoluta; roda em long-suite"]
+#[ignore = "consistency-only: f64 oracle provides absolute correctness; runs in long-suite"]
 fn test_pade_nr1_dual_vs_production_avx2() {
     let sweep: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.03125) - 4.0).collect();
     let mut max_nr1_vs_div: f32 = 0.0;

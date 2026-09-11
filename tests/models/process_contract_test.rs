@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! S3.T3 — `NamModel::process` length-contract battery.
+//! `NamModel::process` length-contract battery.
 //!
 //! Every architecture family must survive asymmetric caller buffers
 //! (`output.len() = input.len() - 1`) without panicking, in debug and in

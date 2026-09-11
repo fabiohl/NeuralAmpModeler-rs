@@ -930,7 +930,7 @@ fn test_lstm_variable_block_sizes() {
 }
 
 // =============================================================================
-// Community Model Tests (Task 6.2)
+// Community Model Tests
 // =============================================================================
 
 /// Inference Validation on Real Community Models (Ecosystem Regression).
