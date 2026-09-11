@@ -542,7 +542,7 @@ any of:
 - `head1x1` active
 - `layer1x1` active
 - Any FiLM parameter object present
-- `secondary_activation` set to a non-trivial value
+- `secondary_activation` set to a non-trivial value (exercised by negative fixture `wavenet_a1_secondary_act.nam`)
 
 Each rejection message follows the canonical pattern `"A2 feature not supported in WaveNet A1"`,
 making the failure observable in logs and in the `Err` variant returned to the public loader API.
@@ -556,7 +556,7 @@ The guard covers **all** A1 paths — both catalog-SKU matching and the free-geo
 - `test_wavenet_a1_rejects_head1x1_active`
 - `test_wavenet_a1_rejects_layer1x1_active`
 - `test_wavenet_a1_rejects_film_active`
-- `test_wavenet_a1_rejects_secondary_activation`
+- `test_wavenet_a1_rejects_secondary_activation` (`wavenet_a1_secondary_act.nam`)
 
 Each test constructs a minimal JSON config with the offending feature and asserts that topology
 detection returns `WavenetTopologyResult::Rejected`. All six are active (not `#[ignore]`) and run
@@ -768,14 +768,14 @@ here — not a parity claim.
 
 #### 3.9.5 Summary: canonical `condition_dsp` semantics
 
-| Aspect                                 | C++ (NAMcore v0.5.4)                                                        | Python trainer (v0.13.0)                               | Rust production (NeuralAmpModeler-rs)                        |
-|:-------------------------------------- |:--------------------------------------------------------------------------- |:------------------------------------------------------ |:------------------------------------------------------------ |
-| `condition_dsp` matrix rows            | `condition_dsp->NumOutputChannels()`                                        | `condition_dsp.head.out_channels`                      | `condition_dsp.num_output_channels()`                        |
-| Dimension enforcement                  | Hard assertion: `condition_size == NumOutputChannels()` (throw on mismatch) | Structural match (fails dimension check in forward)    | `assert` on max channels; broadcasts when `dsp_ch < cond`    |
-| Broadcasting (dsp_ch < cond)           | **None** — construction rejected                                            | **None** — structural match prevents mismatch          | **Yes** — replicates channel 0 across all condition channels |
-| Supported condition_dsp architectures  | Only WaveNet (and LSTM — but see §3.9.4 re: assertion rejection)            | Only WaveNet (raises `NotImplementedError` for others) | Any (LSTM accepted; see §3.9.4)                              |
-| Reference for `condition_lstm` fixture | N/A — model rejected                                                        | N/A — model cannot be produced                         | Golden from `wavenet_condition_dsp.nam` (WaveNet sub-model)  |
-| Key file:line references               | `model.cpp:592-601,652-660,699-729,744-770`                                 | `_wavenet.py:142-155,171-195`                          | `model_dyn.rs:236-251`, `model_dyn.rs:357-373`               |
+| Aspect                                 | C++ (NAMcore v0.5.4)                                                        | Python trainer (v0.13.0)                               | Rust production (NeuralAmpModeler-rs)                                    |
+|:-------------------------------------- |:--------------------------------------------------------------------------- |:------------------------------------------------------ |:------------------------------------------------------------------------ |
+| `condition_dsp` matrix rows            | `condition_dsp->NumOutputChannels()`                                        | `condition_dsp.head.out_channels`                      | `condition_dsp.num_output_channels()`                                    |
+| Dimension enforcement                  | Hard assertion: `condition_size == NumOutputChannels()` (throw on mismatch) | Structural match (fails dimension check in forward)    | `assert` on max channels; broadcasts when `dsp_ch < cond`                |
+| Broadcasting (dsp_ch < cond)           | **None** — construction rejected                                            | **None** — structural match prevents mismatch          | **Yes** — replicates channel 0 across all condition channels             |
+| Supported condition_dsp architectures  | Only WaveNet (and LSTM — but see §3.9.4 re: assertion rejection)            | Only WaveNet (raises `NotImplementedError` for others) | Only WaveNet (LSTM rejected fail-closed; see §3.9.4, §7.4)               |
+| Reference for `condition_lstm` fixture | N/A — model rejected                                                        | N/A — model cannot be produced                         | N/A — model rejected fail-closed (`wavenet_condition_lstm.nam`, §7.4 P1) |
+| Key file:line references               | `model.cpp:592-601,652-660,699-729,744-770`                                 | `_wavenet.py:142-155,171-195`                          | `model_dyn.rs:236-251`, `model_dyn.rs:357-373`                           |
 
 #### 3.9.6 Weight-stream `head_scale` Specification (WaveNet A1 oracle)
 
@@ -836,6 +836,13 @@ line number. This is the best-audited topology detector in the codebase.
 `head1x1`, or non-1 groups routes to `A2TopologyResult::Dynamic`, matching C++'s
 `is_a2_shape` fallback to generic Eigen WaveNet exactly. The fast path strictly requires zero
 active FiLM slots, matching C++. The dynamic engine's FiLM emulation is calibrated separately (§4.2).
+
+**Layered A2 Detection & Version Telemetry** (`topology/wavenet.rs:114-165`):
+A2 classification in `NamModelData::is_wavenet_a2()` is structured in three defensive layers:
+
+1. *Primary (Shape):* `is_a2_shape()` verifies exact channels, dilations, and kernel sizes.
+2. *Secondary (Activation):* single-layer array models declaring non-`Tanh` activations route to A2 semantics.
+3. *Tertiary (Version Telemetry):* models declaring SemVer `>= 0.6.0` whose structural shape does not match any known A2 topology emit a diagnostic warning (`WARN ... Treating as non-A2`) and fall back to the A1 generic path. This prevents high-versioned hybrid models or unconventional captures from being silently misrouted into incompatible A2 execution paths.
 
 ### 4.2 Fast path (A2-Full CH=8 / A2-Lite CH=3): structurally correct, only synthetic fixtures
 
@@ -1491,15 +1498,15 @@ These do not produce wrong audio, but they can make the *evidence* for parity ev
 Items below are **not** the Max freeze. They are intentional product policy, low-severity
 defensive holes, or incomplete evidence. This table is the parity-map ledger only.
 
-| ID  | Item                                                                   | Class                       | Status / contract                                                                                                                                                                                                                      |
-|:--- |:---------------------------------------------------------------------- |:--------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                  | **Policy reject**           | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
-| P2  | A1 models with `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` | **Fail-closed**             | Rejected at topology detection (§3.6).                                                                                                                                                                                                 |
-| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                 | **Fail-closed implemented** | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
-| P4  | WaveNet multi-array RF prewarm calculation                             | **Canonical Sum**           | Canonical sum of all components; analytical prewarm unchanged (§3.5).                                                                                                                                                                  |
-| P5  | `dsp_ch < condition_size` broadcast in Rust production                 | **Intentional Rust-only**   | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
-| P6  | `SlimmableWavenet` multi-size vs NAMCore                               | **Disclaimer**              | Inference-only; no multi-size NAMCore parity claim. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                               |
-| P7  | A2 fast-path fixtures synthetic-only                                   | **Documented caveat**       | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). No public trained A2-Full/Lite incorporated; full/lite fixtures remain calibrated synthetic.                                       |
+| ID  | Item                                                                                                                             | Class                       | Status / contract                                                                                                                                                                                                                      |
+|:--- |:-------------------------------------------------------------------------------------------------------------------------------- |:--------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                                            | **Policy reject**           | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
+| P2  | A1 models with `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` / `secondary_activation` (`wavenet_a1_secondary_act.nam`) | **Fail-closed**             | Rejected at topology detection (§3.6).                                                                                                                                                                                                 |
+| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                                           | **Fail-closed implemented** | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
+| P4  | WaveNet multi-array RF prewarm calculation                                                                                       | **Canonical Sum**           | Canonical sum of all components; analytical prewarm unchanged (§3.5).                                                                                                                                                                  |
+| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                                           | **Intentional Rust-only**   | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
+| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                                         | **Disclaimer**              | Inference-only; no multi-size NAMCore parity claim. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                               |
+| P7  | A2 fast-path fixtures synthetic-only                                                                                             | **Documented caveat**       | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). No public trained A2-Full/Lite incorporated; full/lite fixtures remain calibrated synthetic.                                       |
 
 **Non-goals of this ledger row:** reopening KB-A2-MAX, regenerating Max goldens to force a pass, or using f64 oracle as adjudicator (H0 Case D — §4.4.2).
 
