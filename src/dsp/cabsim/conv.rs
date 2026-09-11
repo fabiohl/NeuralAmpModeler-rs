@@ -51,7 +51,7 @@ use crate::math::common::AlignedVec;
 use crate::math::common::Avx2Math;
 use crate::math::common::traits::SimdMath;
 use crate::math::dsp::fft::RfftPlanner;
-use log::info;
+use log::debug;
 
 /// Uniform-Partitioned Overlap-Save convolution engine.
 ///
@@ -179,12 +179,12 @@ impl ConvEngine {
         let output_buf = AlignedVec::new(fft_size, 0.0_f32)?;
 
         if num_partitions == 0 {
-            info!(
+            debug!(
                 "[Conv] Engine built: passthrough (empty IR), partition={}, fft={}",
                 partition_size, fft_size
             );
         } else {
-            info!(
+            debug!(
                 "[Conv] Engine built: {} IR samples, partition={}, fft={}, {} partitions",
                 ir.len(),
                 partition_size,

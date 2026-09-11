@@ -45,17 +45,17 @@ pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::
         pos += chunk;
     }
 
-    in_buf.fill(0.0);
-    let flush_iters = TAPS_PER_PHASE * 2;
-    for _ in 0..flush_iters {
-        let written = resampler
-            .process_input_mono(&in_buf, &mut out_l, &mut out_r)
-            .samples_written;
-        if written == 0 {
-            break;
-        }
-        output.extend_from_slice(&out_l[..written]);
-    }
+    // Drain the polyphase delay lines with a single zero block. Each phase's
+    // FIR window is exactly `TAPS_PER_PHASE` input samples wide, so pushing one
+    // window worth of zeros empties it and recovers the full (short) tail; any
+    // further zeros are guaranteed-zero padding. Feeding full `MAX_RESAMP_BUF`
+    // blocks here would append ~1.048.576 near-silent samples (Finding F-1).
+    let flush_len = TAPS_PER_PHASE.min(in_buf.len());
+    in_buf[..flush_len].fill(0.0);
+    let written = resampler
+        .process_input_mono(&in_buf[..flush_len], &mut out_l, &mut out_r)
+        .samples_written;
+    output.extend_from_slice(&out_l[..written]);
 
     if output.is_empty() {
         return Err(io::Error::other("IR resample produced no output samples"));

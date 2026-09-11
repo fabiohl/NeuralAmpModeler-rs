@@ -493,3 +493,45 @@ fn test_ir_resample_long_ir_chunking() {
         assert!(s.is_finite(), "long IR: non-finite sample at index {i}");
     }
 }
+
+/// Regression for the resampler flush (Finding F-1).
+///
+/// The flush must drain only the polyphase FIR delay line (`TAPS_PER_PHASE`
+/// input samples per phase), not concatenate whole `MAX_RESAMP_BUF` zero blocks.
+///
+/// A synthetic 35.109-sample IR converted from 44.1 kHz to 48 kHz must land
+/// near `35_109 × 48_000 / 44_100 ≈ 38_214` samples plus a short FIR tail
+/// (measured: 38_284). The defective implementation appended
+/// `128 × 8_192 = 1_048_576` near-silent samples, producing 1.083.685 samples.
+#[test]
+fn test_ir_resample_flush_avoids_zero_flood() {
+    let input_rate = 44_100u32;
+    let output_rate = 48_000u32;
+    let ir_len = 35_109usize;
+
+    let samples: Vec<f32> = (0..ir_len)
+        .map(|i| {
+            let t = i as f32 / input_rate as f32;
+            (std::f32::consts::TAU * 440.0 * t).sin() * (-6.0 * t).exp()
+        })
+        .collect();
+
+    let resampled = ir_resample::resample(&samples, input_rate, output_rate)
+        .expect("IR resample should succeed");
+
+    // Measured: 38_284 samples (38_214 ratio term + ~70-sample FIR tail).
+    assert!(
+        (38_200..=38_300).contains(&resampled.len()),
+        "flush must yield ~38.2k samples, got {} (the 1_048_576-sample flood is a regression)",
+        resampled.len()
+    );
+    assert!(
+        resampled.len() < 1_083_685,
+        "resampled length {} matches the zero-flood defect",
+        resampled.len()
+    );
+    assert!(
+        resampled.iter().all(|s| s.is_finite()),
+        "resampled IR must contain only finite samples"
+    );
+}
