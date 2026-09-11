@@ -822,6 +822,25 @@ through to the same generic `NAM/wavenet/model.cpp` used by A1 (§3.1). NeuralAm
 faithfully: `WaveNetA2<3>`/`WaveNetA2<8>` (fast path) vs. `WaveNetA2Dyn`/`WaveNetA2Cascade`
 (everything else — FiLM, gating, blending, `condition_dsp`, multi-array cascade, `head1x1`).
 
+### 4.0 Provenance: Creator Statements (A2)
+
+Numeric parity in this section is audited against the vendored C++ reference (NAMcore). As an
+independent, non-formal second source of truth, the A2 architecture was also described publicly
+by its authors in *NAM A2: The Team Behind the Technology* (<https://youtu.be/24FCS8tFHcE>).
+The five substantive traits they describe map to the following Rust symbols:
+
+| A2 Trait                   | Rust Symbol(s)                                                                     | Video Timestamp           |
+| -------------------------- | ---------------------------------------------------------------------------------- | ------------------------- |
+| LeakyReLU activation       | `src/models/a2/activations.rs:24-74,120-123`; `src/models/a2/params.rs:37`         | `[00:11:00]`/`[00:12:37]` |
+| Degridding (odd dilations) | `src/models/a2/params.rs:39-45`; `src/loader/nam_json/topology/wavenet.rs:427-523` | `[00:20:46]`              |
+| ~132 ms receptive field    | `src/models/a2/model/mod.rs:36-49`                                                 | `[00:31:38]`              |
+| Convolutional head K=16    | `src/models/a2/head.rs:10-53,99-190`; `src/models/a2/params.rs:35`                 | `[00:24:23]`/`[00:26:38]` |
+| Slimmable Full/Light       | `src/models/container.rs:1-52,373-430`; `src/models/slimmable.rs:78-101`           | `[00:34:46]`–`[00:37:00]` |
+
+This creator-stated mapping complements — and does not supersede — the line-by-line C++ parity
+below. It gives the audit an independent reference so that a silent drift between the vendored
+mirror and the original A2 design intent surfaces as a mismatch against a second source.
+
 ### 4.1 Fast-path shape detection: a faithful, self-correcting mirror of C++
 
 `src/loader/nam_json/topology/a2.rs::is_a2_shape` was read line-by-line against
@@ -1516,6 +1535,7 @@ defensive holes, or incomplete evidence. This table is the parity-map ledger onl
 
 - [audio_fidelity_map.md](audio_fidelity_map.md) — off-spec DSP factors; §3 (LSTM recurrent drift) pairs with §2.5/§2.7 here
 - [perceptual_validation.md](perceptual_validation.md) — metrics and gate-calibration policy
+- §4.0 — A2 provenance from the authors' public description (independent second reference for the A2 traits)
 - §4.4 / §4.4.3 / §7.1 — **KB-A2-MAX freeze** (do not reopen without intermediate C++ dumps)
 - §7.4 — policy rejects and defensive/coverage backlog (non-Max)
 - `tests/parity/cpp_parity.rs` — live cross-validation against the C++ `render` tool

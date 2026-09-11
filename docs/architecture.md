@@ -382,7 +382,7 @@ Testing methodology, the three-oracle model (NAMCore f32 parity / f64 reference 
 
 ## 6. A2 Architecture: Current State (Beta)
 
-The A2 architecture is NAM's next-generation format (NeuralAmpModelerCore v0.5.2+). NeuralAmpModeler-rs provides a complete, high-performance, real-time safe implementation of the fixed A2 fast-path (**A2-Full** with 8 channels and **A2-Lite** with 3 channels), matching the behavior of `NAM/wavenet/a2_fast.cpp`. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4 for the parity audit and known issues with non-fast-path A2 models.
+The A2 architecture is NAM's next-generation format (NeuralAmpModelerCore v0.5.2+). NeuralAmpModeler-rs provides a complete, high-performance, real-time safe implementation of the fixed A2 fast-path (**A2-Full** with 8 channels and **A2-Lite** with 3 channels), matching the behavior of `NAM/wavenet/a2_fast.cpp`. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4 for the parity audit and known issues with non-fast-path A2 models; the provenance of its traits from the authors' public description is recorded in [docs/cpp_parity_map.md](cpp_parity_map.md) §4.0.
 
 ### Microarchitectural Optimizations
 
