@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use neural_amp_modeler_rs::common::diagnostics::SystemSnapshot;
+use neural_amp_modeler_rs::common::params::ProcessingParams;
+use neural_amp_modeler_rs::dsp::gate::GateParams;
 use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
+use neural_amp_modeler_rs::prelude::AdaptiveComputeMode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
@@ -102,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "  Left Channel Model : Ready ({})",
         if model_pair.model_r.is_some() {
-            "Stereo L"
+            "Dual-mono L"
         } else {
             "Mono"
         }
@@ -110,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "  Right Channel Model: {}",
         if model_pair.model_r.is_some() {
-            "Ready (Stereo R)"
+            "Ready (Dual-mono R)"
         } else {
             "None (Mono Load)"
         }
@@ -137,6 +140,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("  Input Adj Mult     : {:.6}", model_pair.input_mult_adj);
     println!("  Output Adj Mult    : {:.6}", model_pair.output_mult_adj);
+
+    // 6. Demonstrate configuring host processing and noise gate using fluent builders.
+    let gate_params = GateParams::builder()
+        .threshold_open_db(-65.0)
+        .hysteresis_db(10.0)
+        .hold_samples(2048)
+        .release_samples(256)
+        .build();
+
+    let processing_params = ProcessingParams::builder()
+        .with_model_path(&path)
+        .with_gate_threshold_db(gate_params.threshold_open_db)
+        .with_input_gain_db(0.0)
+        .with_output_gain_db(0.0)
+        .with_adaptive_compute(AdaptiveComputeMode::Conservative);
+
+    println!("\n[Configuration State via Builders]");
+    println!(
+        "  Gate Open Threshold: {:.1} dB",
+        gate_params.threshold_open_db
+    );
+    println!(
+        "  Gate Close Threshold: {:.1} dB",
+        gate_params.threshold_close_db
+    );
+    println!("  Configured Model   : {:?}", processing_params.model_path);
 
     println!("\n[Status] Model successfully loaded off-RT and ready for real-time DSP execution.");
     Ok(())

@@ -76,6 +76,7 @@ pub unsafe fn leaky_hard_tanh_slice_avx2(
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, and FMA support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl,fma")]
 pub unsafe fn leaky_hard_tanh_slice_avx512(
     data: &mut [f32],

@@ -63,8 +63,9 @@ fn build_wavenet_array_dyn(
 
         let one_by_one = layout::read_dense_weights_typed::<DenseLayerDyn>(cursor, ch, ch, true)?;
 
-        layers.push(WaveNetLayerDyn::new(ch, conv1d, input_mixin, one_by_one)?);
-        layers.last_mut().unwrap().activation = activation.clone();
+        let mut layer = WaveNetLayerDyn::new(ch, conv1d, input_mixin, one_by_one)?;
+        layer.activation = activation.clone();
+        layers.push(layer);
 
         let rf = (k - 1) * dilation;
         states.push(WaveNetLayerState::new(ch, rf, *alloc_num)?);

@@ -1,0 +1,17 @@
+{
+  "_schema_version": "0.7.4",
+  "input_gain_db": 0.0,
+  "output_gain_db": 0.0,
+  "gate_threshold_db": -70.0,
+  "model_path": null,
+  "model_basename": null,
+  "model_hash": null,
+  "model_search_paths": [],
+  "bypass": false,
+  "adaptive_compute": "Off",
+  "slim_override": "Auto",
+  "oversample": "Off",
+  "ir_path": null,
+  "ir_hash": null,
+  "activation_precision": "Standard"
+}

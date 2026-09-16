@@ -66,7 +66,34 @@ pub mod test_util {
     pub mod infra {
         #[cfg(test)]
         pub use crate::common::alloc_audit::CountingAllocator;
+
+        #[cfg(any(test, feature = "heap-audit"))]
         pub use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+
+        #[cfg(not(any(test, feature = "heap-audit")))]
+        /// No-op tracking guard fallback when `heap-audit` is disabled.
+        pub struct TrackingGuard;
+
+        #[cfg(not(any(test, feature = "heap-audit")))]
+        impl TrackingGuard {
+            /// Creates a no-op guard.
+            pub fn new() -> Self {
+                Self
+            }
+        }
+
+        #[cfg(not(any(test, feature = "heap-audit")))]
+        impl Default for TrackingGuard {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        #[cfg(not(any(test, feature = "heap-audit")))]
+        /// Returns 0 when `heap-audit` is disabled.
+        pub fn get_alloc_count() -> usize {
+            0
+        }
     }
 }
 

@@ -99,9 +99,14 @@ fn read_and_validate_model_bytes(
 /// Returns `Ok(pair)` guaranteeing that `pair.model_l` is non-null (`Some`) and
 /// ready for real-time audio processing.
 ///
-/// When `stereo` is `false`, only the left-channel model is built (`model_r` is `None`),
-/// avoiding unnecessary instantiation and prewarming. When `stereo` is `true`,
-/// both `model_l` and `model_r` are built (`Some`).
+/// When `dual_mono` is `false`, only the left-channel model is built (`model_r` is `None`),
+/// avoiding unnecessary instantiation and prewarming.
+///
+/// When `dual_mono` is `true`:
+/// - With the `dual-mono` feature enabled (default), both `model_l` and `model_r` are built (`Some`).
+/// - If the `dual-mono` feature is disabled at compile time, a warning is logged via `log::warn!`
+///   and `pair.model_r` remains `None` to prevent unexpected memory allocation when the engine
+///   is compiled for mono-only operation (Footgun F13).
 ///
 /// If file reading, format parsing, metadata validation, or architecture dispatching/construction
 /// fails for any requested channel, an error (`Err`) is returned.
@@ -120,7 +125,7 @@ fn read_and_validate_model_bytes(
 /// let pair = load_and_build_model(
 ///     Path::new("path/to/model.nam"),
 ///     &sys,
-///     false, // mono execution (set true for stereo)
+///     false, // dual_mono: left-channel only (set true for independent L/R inference)
 ///     LoadOptions::default(),
 /// )
 /// .expect("Failed to load model");
@@ -131,7 +136,7 @@ fn read_and_validate_model_bytes(
 pub fn load_and_build_model(
     path: &Path,
     sys: &SystemSnapshot,
-    stereo: bool,
+    dual_mono: bool,
     options: crate::loader::LoadOptions,
 ) -> Result<LoadedModelPair, LoadError> {
     let path_str = path.to_string_lossy();
@@ -144,25 +149,23 @@ pub fn load_and_build_model(
     let (model_data, file_size) = if ext_lower == "namb" {
         let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
         let file_size = bytes.len();
-        let data = namb::parse_namb(&bytes).map_err(|e| {
-            let code = match e.downcast_ref::<namb::NambError>() {
-                Some(namb::NambError::Truncated { .. }) => NamErrorCode::NambTruncated,
-                Some(namb::NambError::InvalidMagic(_)) => NamErrorCode::NambInvalidMagic,
-                Some(namb::NambError::InvalidVersion(_)) => NamErrorCode::NambUnsupportedVersion,
-                Some(namb::NambError::WeightsOffsetOutOfBounds { .. })
-                | Some(namb::NambError::InvalidWeightsOffset { .. }) => NamErrorCode::NambTruncated,
-                Some(namb::NambError::CrcMismatch { .. }) => NamErrorCode::NambCrc32Mismatch,
-                Some(namb::NambError::CrcMissing { .. }) | Some(namb::NambError::CrcMissingV1) => {
+        let data = namb::parse_namb_typed(&bytes).map_err(|e| {
+            let code = match &e {
+                namb::NambError::Truncated { .. } => NamErrorCode::NambTruncated,
+                namb::NambError::InvalidMagic(_) => NamErrorCode::NambInvalidMagic,
+                namb::NambError::InvalidVersion(_) => NamErrorCode::NambUnsupportedVersion,
+                namb::NambError::WeightsOffsetOutOfBounds { .. }
+                | namb::NambError::InvalidWeightsOffset { .. } => NamErrorCode::NambTruncated,
+                namb::NambError::CrcMismatch { .. } => NamErrorCode::NambCrc32Mismatch,
+                namb::NambError::CrcMissing { .. } | namb::NambError::CrcMissingV1 => {
                     NamErrorCode::NambCrc32Missing
                 }
-                Some(namb::NambError::WeightsTooLarge { .. }) => NamErrorCode::ModelTooLarge,
-                Some(namb::NambError::NonFiniteWeight { .. }) => NamErrorCode::NambNonFiniteWeight,
-                Some(namb::NambError::InvalidHeaderField { .. }) => {
-                    NamErrorCode::NambInvalidHeaderField
+                namb::NambError::WeightsTooLarge { .. } => NamErrorCode::ModelTooLarge,
+                namb::NambError::NonFiniteWeight { .. } => NamErrorCode::NambNonFiniteWeight,
+                namb::NambError::InvalidHeaderField { .. } => NamErrorCode::NambInvalidHeaderField,
+                namb::NambError::MetadataNotUtf8 { .. } | namb::NambError::MetadataJson(_) => {
+                    NamErrorCode::ModelBuildFailed
                 }
-                Some(namb::NambError::MetadataNotUtf8 { .. })
-                | Some(namb::NambError::MetadataJson(_)) => NamErrorCode::ModelBuildFailed,
-                None => NamErrorCode::ModelBuildFailed,
             };
             // Structured failure diagnostic (path + size + code).
             error!(
@@ -173,34 +176,7 @@ pub fn load_and_build_model(
                 .message(format!("Invalid \".namb\" file: {}", path_str))
                 .param("detail", e.to_string())
                 .emit();
-            match e.downcast::<namb::NambError>() {
-                Ok(namb_err) => match namb_err {
-                    namb::NambError::Truncated { .. }
-                    | namb::NambError::WeightsOffsetOutOfBounds { .. }
-                    | namb::NambError::InvalidWeightsOffset { .. } => {
-                        LoadError::NambTruncated(namb_err.to_string())
-                    }
-                    namb::NambError::InvalidMagic(m) => {
-                        LoadError::NambInvalidMagic(format!("0x{:08X}", m))
-                    }
-                    namb::NambError::InvalidVersion(v) => LoadError::UnsupportedArchitecture(
-                        format!("unsupported .namb version: {}", v),
-                    ),
-                    namb::NambError::CrcMismatch { .. } => LoadError::NambCrc32Mismatch,
-                    namb::NambError::CrcMissing { .. } | namb::NambError::CrcMissingV1 => {
-                        LoadError::NambCrc32Missing
-                    }
-                    namb::NambError::WeightsTooLarge { .. } => LoadError::ModelTooLarge,
-                    namb::NambError::NonFiniteWeight { .. } => LoadError::NonFiniteWeights,
-                    namb::NambError::InvalidHeaderField { field, .. } => {
-                        LoadError::Internal(format!("invalid header field {}", field))
-                    }
-                    namb::NambError::MetadataNotUtf8 { .. } | namb::NambError::MetadataJson(_) => {
-                        LoadError::Internal(namb_err.to_string())
-                    }
-                },
-                Err(orig_e) => LoadError::Internal(orig_e.to_string()),
-            }
+            LoadError::from(e)
         })?;
         (data, file_size)
     } else if ext_lower == "nam" {
@@ -281,7 +257,7 @@ pub fn load_and_build_model(
                 nam_json::JsonError::InvalidSampleRate { .. } => {
                     LoadError::UnsupportedArchitecture(e.to_string())
                 }
-                nam_json::JsonError::Serde(serde_err) => LoadError::JsonParse(serde_err),
+                nam_json::JsonError::Serde(_) => LoadError::Json(e),
             }
         })?;
         (data, file_size)
@@ -381,7 +357,20 @@ pub fn load_and_build_model(
         model_l.prewarm(model_l.prewarm_samples().max(2048));
     }
 
-    let model_r = if stereo {
+    #[cfg(feature = "dual-mono")]
+    let build_dual_mono = dual_mono;
+
+    #[cfg(not(feature = "dual-mono"))]
+    let build_dual_mono = {
+        if dual_mono {
+            log::warn!(
+                "[Loader] Requested dual-mono processing but feature 'dual-mono' is disabled at compile time; right-channel model will not be instantiated (model_r = None)."
+            );
+        }
+        false
+    };
+
+    let model_r = if build_dual_mono {
         let mut model = dispatcher::build_model(&model_data).map_err(|e| {
             let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
                 code
@@ -482,7 +471,7 @@ pub fn load_and_build_model(
     };
 
     let channels = if model_r.is_some() {
-        "stereo"
+        "dual-mono"
     } else {
         "mono (L only)"
     };

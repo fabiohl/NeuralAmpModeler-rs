@@ -1314,7 +1314,7 @@ Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_pa
   - `mock_a2.nam` — a deliberate negative fixture (zero weights, `ReLU` config) used only to test
     the RT-safe model-load-failure path (`RT_STATUS_MODEL_LOAD_FAILED`), not inference at all.
 
-- **Net assessment:** A2 *shape-detection* (§4.1) and *dynamic-engine feature*
+- **Net assessment:** A2 *shape-detection* (§4.1) and *dynamic model*
   fixtures are solid: gating/blending and FiLM paths measure **near-bit-exact** vs NAMcore after
   the identity-biased generator calibration (§4.3 / §7.2).
   Fast-path Full/Lite goldens pass with multi-order margin but remain **synthetic-only** (no
@@ -1469,7 +1469,7 @@ show up as nonzero numbers in the tables throughout this document, but they are 
   `tanh`/`sigmoid` — small, bounded, and identical in nature for LSTM and WaveNet A1/A2 (§2.5,
   §3.2, §5). `Standard` (exact-grade, universal default) collapsed this gap to match C++ parity
   within measurement noise.
-- **A2 FiLM dynamic-engine interop** — Standard identity-biased weights achieve near-bit-exact parity
+- **A2 FiLM dynamic engine interop** — Standard identity-biased weights achieve near-bit-exact parity
   (SNR 138+ dB / ESR ~1e-14) within float32 precision limits (§4.3).
 
 ### 7.3 🟠 Test-infrastructure caveats — parity coverage that can silently vanish

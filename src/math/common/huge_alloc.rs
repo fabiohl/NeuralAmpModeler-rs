@@ -388,9 +388,17 @@ impl<T: Copy> HugePageVec<T> {
             .checked_mul(std::mem::size_of::<T>())
             .ok_or(NamErrorCode::OutOfMemory)?;
         let (ptr, alloc_info, status) = allocate_huge_pages(size_bytes)?;
+        debug_assert!(
+            !ptr.is_null(),
+            "allocate_huge_pages returned Ok with null pointer"
+        );
+        // SAFETY: `allocate_huge_pages()` returns `Err(OutOfMemory)` on null /
+        // MAP_FAILED across all three allocation tiers (HugeTLB → THP →
+        // posix_memalign).  Reaching this point guarantees `ptr` is non-null.
+        let ptr_nn = unsafe { NonNull::new_unchecked(ptr as *mut T) };
         Ok((
             Self {
-                ptr: NonNull::new(ptr as *mut T).unwrap(),
+                ptr: ptr_nn,
                 len: 0,
                 cap: capacity,
                 alloc_info,

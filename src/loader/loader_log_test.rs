@@ -207,8 +207,11 @@ fn test_namb_nan_weight_rejected_with_structured_log() {
 
     let err = res.expect_err("NAMB NaN weight must be rejected");
     assert!(
-        matches!(err, LoadError::NonFiniteWeights),
-        "expected LoadError::NonFiniteWeights, got: {err:?}"
+        matches!(
+            err,
+            LoadError::Namb(crate::loader::NambError::NonFiniteWeight { .. })
+        ),
+        "expected LoadError::Namb(NonFiniteWeight), got: {err:?}"
     );
 
     let snap = log_snapshot();
@@ -255,8 +258,11 @@ fn test_namb_crc_mismatch_rejected_with_structured_log() {
 
     let err = res.expect_err("NAMB CRC mismatch must be rejected");
     assert!(
-        matches!(err, LoadError::NambCrc32Mismatch),
-        "expected LoadError::NambCrc32Mismatch, got: {err:?}"
+        matches!(
+            err,
+            LoadError::Namb(crate::loader::NambError::CrcMismatch { .. })
+        ),
+        "expected LoadError::Namb(CrcMismatch), got: {err:?}"
     );
 
     let snap = log_snapshot();
@@ -316,4 +322,110 @@ fn test_json_non_finite_metadata_rejected_with_structured_log() {
         buffer_has(&snap, "ERROR", "InvalidMetadata"),
         "LogBuffer must capture the InvalidMetadata code"
     );
+}
+
+/// Footgun F13: requesting dual-mono load when `dual-mono` feature is disabled
+/// emits a structured WARN and does not instantiate `model_r`.
+#[test]
+fn test_warn_dual_mono_divergence_when_dual_mono_disabled() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let path = crate::testing::fixtures::model_path("wavenet.nam");
+    let sys = SystemSnapshot::capture();
+    let res = load_and_build_model(&path, &sys, true, LoadOptions::default());
+
+    let pair = res.expect("wavenet.nam should load successfully");
+    assert!(pair.model_l.is_some());
+
+    #[cfg(feature = "dual-mono")]
+    {
+        assert!(pair.model_r.is_some());
+    }
+
+    #[cfg(not(feature = "dual-mono"))]
+    {
+        assert!(pair.model_r.is_none());
+        let snap = log_snapshot();
+        assert!(
+            buffer_has(
+                &snap,
+                "WARN",
+                "[Loader] Requested dual-mono processing but feature 'dual-mono' is disabled"
+            ),
+            "LogBuffer must capture the F13 warning when dual-mono is disabled"
+        );
+    }
+}
+
+/// Unit test verifying that a real `NambError` can be inspected directly via
+/// `if let LoadError::Namb(e) = err` without string matching (Finding F6).
+#[test]
+fn test_load_error_structured_namb_inspection() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let model = synthetic_lstm(vec![0.1, 0.2, 0.3]);
+    let mut namb = encode_namb(&model, 2, WeightsLayout::Original).expect("encode must succeed");
+
+    // Corrupt the CRC region
+    let last = namb.len() - 1;
+    namb[last] ^= 0xFF;
+
+    let path = temp_path("namb_structured_crc", "namb");
+    write_temp(&path, &namb);
+
+    let sys = SystemSnapshot::capture();
+    let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+    std::fs::remove_file(&path).ok();
+
+    let err = res.expect_err("corrupted CRC must fail");
+
+    // Direct structured inspection without String::contains or downcasting:
+    if let LoadError::Namb(namb_err) = err {
+        match namb_err {
+            crate::loader::NambError::CrcMismatch { expected, got } => {
+                assert_ne!(
+                    expected, got,
+                    "CRC mismatch must contain differing expected and got checksums"
+                );
+            }
+            other => panic!("expected NambError::CrcMismatch, got: {other:?}"),
+        }
+    } else {
+        panic!("expected LoadError::Namb, got: {err:?}");
+    }
+}
+
+/// Unit test verifying that a real `JsonError` can be inspected directly via
+/// `if let LoadError::Json(e) = err` without string matching (Finding F6).
+#[test]
+fn test_load_error_structured_json_inspection() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let json = "{ invalid json syntax";
+    let path = temp_path("json_structured_syntax", "nam");
+    write_temp(&path, json.as_bytes());
+
+    let sys = SystemSnapshot::capture();
+    let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+    std::fs::remove_file(&path).ok();
+
+    let err = res.expect_err("invalid json syntax must fail");
+
+    // Direct structured inspection without String::contains:
+    if let LoadError::Json(json_err) = err {
+        match json_err {
+            crate::loader::JsonError::Serde(serde_err) => {
+                assert!(
+                    serde_err.is_syntax() || serde_err.is_data() || serde_err.is_eof(),
+                    "serde_err must indicate syntax or parsing error"
+                );
+            }
+            other => panic!("expected JsonError::Serde, got: {other:?}"),
+        }
+    } else {
+        panic!("expected LoadError::Json, got: {err:?}");
+    }
 }

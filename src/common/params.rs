@@ -21,6 +21,13 @@ const GATE_THRESHOLD_DB_DEFAULT: f32 = -70.0;
 ///
 /// This structure encapsulates all controls available to the user,
 /// from basic gains to the path of the loaded neural model.
+///
+/// ## State Compatibility
+///
+/// Snapshots of `ProcessingParams` serialized by previous versions of this crate
+/// can be deserialized by subsequent versions via `serde_json::from_str` — missing
+/// fields receive their default values (`#[serde(default)]`). This contract is
+/// verified by regression tests in `tests/state_compat.rs`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessingParams {
     /// Input gain in decibels (dB). Default: 0.0.
@@ -76,6 +83,118 @@ pub struct ProcessingParams {
 
 fn default_gate_threshold_db() -> f32 {
     GATE_THRESHOLD_DB_DEFAULT
+}
+
+impl ProcessingParams {
+    /// Creates a new `ProcessingParams` initialized to default values for fluent building.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::prelude::*;
+    ///
+    /// let params = ProcessingParams::builder()
+    ///     .with_input_gain_db(-3.0)
+    ///     .with_output_gain_db(0.0)
+    ///     .with_adaptive_compute(AdaptiveComputeMode::Conservative)
+    ///     .with_oversample(OversampleFactor::X2);
+    ///
+    /// assert_eq!(params.input_gain_db, -3.0);
+    /// assert_eq!(params.adaptive_compute, AdaptiveComputeMode::Conservative);
+    /// ```
+    pub fn builder() -> Self {
+        Self::default()
+    }
+
+    /// Sets the input gain in decibels (dB).
+    pub fn with_input_gain_db(mut self, db: f32) -> Self {
+        self.input_gain_db = db;
+        self
+    }
+
+    /// Sets the output gain in decibels (dB).
+    pub fn with_output_gain_db(mut self, db: f32) -> Self {
+        self.output_gain_db = db;
+        self
+    }
+
+    /// Sets the noise gate threshold in decibels (dB).
+    pub fn with_gate_threshold_db(mut self, db: f32) -> Self {
+        self.gate_threshold_db = db;
+        self
+    }
+
+    /// Sets the neural model path.
+    pub fn with_model_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.model_path = Some(path.into());
+        self
+    }
+
+    /// Sets the portable model base name.
+    pub fn with_model_basename(mut self, name: impl Into<String>) -> Self {
+        self.model_basename = Some(name.into());
+        self
+    }
+
+    /// Sets the SHA-256 model content hash.
+    pub fn with_model_hash(mut self, hash: impl Into<String>) -> Self {
+        self.model_hash = Some(hash.into());
+        self
+    }
+
+    /// Sets the directories to search for models if the primary path is missing.
+    pub fn with_model_search_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.model_search_paths = paths;
+        self
+    }
+
+    /// Appends a directory to search for models.
+    pub fn with_model_search_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.model_search_paths.push(path.into());
+        self
+    }
+
+    /// Sets the bypass state.
+    pub fn with_bypass(mut self, bypass: bool) -> Self {
+        self.bypass = bypass;
+        self
+    }
+
+    /// Sets the adaptive compute mode.
+    pub fn with_adaptive_compute(mut self, mode: AdaptiveComputeMode) -> Self {
+        self.adaptive_compute = mode;
+        self
+    }
+
+    /// Sets the slim override mode.
+    pub fn with_slim_override(mut self, slim: SlimOverride) -> Self {
+        self.slim_override = slim;
+        self
+    }
+
+    /// Sets the oversampling factor.
+    pub fn with_oversample(mut self, oversample: OversampleFactor) -> Self {
+        self.oversample = oversample;
+        self
+    }
+
+    /// Sets the cab-sim IR file path.
+    pub fn with_ir_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.ir_path = Some(path.into());
+        self
+    }
+
+    /// Sets the cab-sim IR content hash.
+    pub fn with_ir_hash(mut self, hash: impl Into<String>) -> Self {
+        self.ir_hash = Some(hash.into());
+        self
+    }
+
+    /// Sets the activation precision mode.
+    pub fn with_activation_precision(mut self, precision: ActivationPrecision) -> Self {
+        self.activation_precision = precision;
+        self
+    }
 }
 
 impl Default for ProcessingParams {
@@ -168,5 +287,42 @@ mod tests {
         assert!(params.model_search_paths.is_empty());
         assert!(!params.bypass);
         assert_eq!(params.ir_path, None);
+    }
+
+    #[test]
+    fn test_params_builder() {
+        let params = ProcessingParams::builder()
+            .with_input_gain_db(3.5)
+            .with_output_gain_db(-2.0)
+            .with_gate_threshold_db(-65.0)
+            .with_model_path(PathBuf::from("/models/amp.nam"))
+            .with_model_basename("amp.nam")
+            .with_model_hash("abcd1234efgh5678")
+            .with_model_search_path(PathBuf::from("/custom/models"))
+            .with_bypass(true)
+            .with_adaptive_compute(AdaptiveComputeMode::Conservative)
+            .with_slim_override(SlimOverride::ForceFull)
+            .with_oversample(OversampleFactor::X2)
+            .with_ir_path(PathBuf::from("/irs/cab.wav"))
+            .with_ir_hash("feedbeefcafe")
+            .with_activation_precision(ActivationPrecision::Fast);
+
+        assert_eq!(params.input_gain_db, 3.5);
+        assert_eq!(params.output_gain_db, -2.0);
+        assert_eq!(params.gate_threshold_db, -65.0);
+        assert_eq!(params.model_path, Some(PathBuf::from("/models/amp.nam")));
+        assert_eq!(params.model_basename.as_deref(), Some("amp.nam"));
+        assert_eq!(params.model_hash.as_deref(), Some("abcd1234efgh5678"));
+        assert_eq!(
+            params.model_search_paths,
+            vec![PathBuf::from("/custom/models")]
+        );
+        assert!(params.bypass);
+        assert_eq!(params.adaptive_compute, AdaptiveComputeMode::Conservative);
+        assert_eq!(params.slim_override, SlimOverride::ForceFull);
+        assert_eq!(params.oversample, OversampleFactor::X2);
+        assert_eq!(params.ir_path, Some(PathBuf::from("/irs/cab.wav")));
+        assert_eq!(params.ir_hash.as_deref(), Some("feedbeefcafe"));
+        assert_eq!(params.activation_precision, ActivationPrecision::Fast);
     }
 }

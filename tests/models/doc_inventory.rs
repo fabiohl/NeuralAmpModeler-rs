@@ -103,11 +103,10 @@ fn extract_script_refs(text: &str) -> HashSet<String> {
 /// Extracts feature flag names from text.
 fn extract_feature_refs(text: &str) -> HashSet<String> {
     const KNOWN: &[&str] = &[
-        "stereo",
+        "dual-mono",
         "testing",
         "heap-audit",
-        "long_bench",
-        "dynamic-engine",
+        "fft-radix4-planner",
         "avx512",
     ];
     let lower = text.to_lowercase();

@@ -88,6 +88,7 @@ pub unsafe fn fast_tanh_slice_avx2(data: &mut [f32]) {
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, AVX-512DQ, and FMA support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq,fma")]
 #[expect(
     clippy::excessive_precision,

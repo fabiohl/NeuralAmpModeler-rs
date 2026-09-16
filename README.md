@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NeuralAmpModeler-rs
 
-![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.98.0-informational?logo=rust)
 
 **NeuralAmpModeler-rs** is a high-performance, real-time neural inference DSP engine written in pure Rust. It provides the core DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — as well as impulse response (.wav) cabinet convolution.
 
@@ -83,6 +83,59 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
 ```
 
+### ✈️ Hardware & Toolchain Pre-Flight Verification
+
+NeuralAmpModeler-rs strictly requires an `x86_64` processor with full **`x86-64-v3`** vector extensions (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`). If compiled without these target features enabled, build fails immediately via a compile-time assertion in `src/lib.rs:9-29`:
+
+```text
+error: NeuralAmpModeler-rs requires full x86-64-v3 target support (avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe). Compile with RUSTFLAGS="-Ctarget-cpu=x86-64-v3"
+```
+
+To verify host hardware and toolchain compatibility **before** integrating the crate:
+
+#### 1. First-Class Pre-Flight Diagnostic Probe (`simd_probe`)
+
+Run the crate's dedicated pre-flight diagnostic CLI:
+
+```bash
+cargo run --bin simd_probe
+```
+
+This probe:
+- Inspects CPU hardware feature flags (`avx2`, `fma`, `avx512*`) via `is_x86_feature_detected!`.
+- Validates operating system ZMM register context-saving support via `xgetbv` (`OSXSAVE`).
+- Reports the active monomorphized SIMD backend dispatch (`SIMD_MATH`).
+- Executes a synthetic 64-sample inference smoke test through a monomorphized model to verify that kernels execute deterministically without panics.
+
+#### 2. Manual Target Capability Check
+
+Inspect CPU instruction set support directly from the shell:
+
+```bash
+rustc --print target-features 2>/dev/null | grep -E 'avx2|fma|bmi2'
+```
+
+Or via Linux system utilities:
+
+```bash
+lscpu | grep -E 'avx2|fma|bmi2'
+```
+
+#### 3. Downstream Consumer Target Configuration
+
+Because Cargo does not automatically propagate dependency-level compiler flags to downstream consumers, projects depending on `NeuralAmpModeler-rs` must instruct `rustc` to compile for `x86-64-v3`:
+
+```bash
+RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
+```
+
+Or configure `.cargo/config.toml` in your downstream crate:
+
+```toml
+[build]
+rustflags = ["-Ctarget-cpu=x86-64-v3"]
+```
+
 ---
 
 ## 🚀 Quick Start — Installation & Usage
@@ -91,15 +144,17 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "0.7"
+NeuralAmpModeler-rs = "0.8"
 ```
 
 For off-RT testing utilities and audio signal generators:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "0.7", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "0.8", features = ["testing"] }
 ```
+
+See [Feature Flags](#-feature-flags) for available compile-time options.
 
 ### ⚠️ Consumer Build Requirement (`x86-64-v3`)
 
@@ -118,25 +173,7 @@ Or configure your consumer crate's `.cargo/config.toml`:
 rustflags = ["-Ctarget-cpu=x86-64-v3"]
 ```
 
-### Feature Flags
-
-| Feature          | Description                                                                                                  |
-|:---------------- |:------------------------------------------------------------------------------------------------------------ |
-| `stereo`         | Internal stereo path in the DSP pipeline (input stage; does not gate dual-model loading)                     |
-| `testing`        | Exposes off-RT test utilities, signal generators, and perceptual metrics                                     |
-| `heap-audit`     | Enables heap-allocation auditing infrastructure                                                              |
-| `long_bench`     | Enables long-form inference benchmarks                                                                       |
-| `dynamic-engine` | Test-only: forces dynamic fallback paths instead of static profiles for coverage testing (see note below)    |
-| `avx512`         | Enables opt-in AVX-512 upward dispatch and measurement harnesses (discouraged in production; see note below) |
-
-> ⚠️ **Note on `dynamic-engine`:** This flag does **not** enable non-standard topology support — dynamic fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`) are always compiled and unconditionally active. This flag is used exclusively for internal coverage and regression testing to force dynamic execution paths even when optimized static profiles are applicable.
->
-> ⚠️ **Note on `avx512` (Usage Discouraged in Production):** This flag enables upward runtime dispatch to specialized AVX-512 kernels (`Avx512Math`). However, its use in production builds, release packaging, and live audio processing is **actively discouraged**. Empirical hardware benchmarks (canonical 2026-09-09 audit receipt on Sapphire Rapids) demonstrate that the default `x86-64-v3` baseline (AVX2 + FMA) yields superior throughput and lower latency across canonical NAM models (AVX-512 introduced 2% to 33% latency regressions across 14 of 15 configurations due to vector zero-masking and packaging overhead in compact channel geometries $C \le 16$).
->
-> The `avx512` flag is retained strictly to:
->
-> 1. **Preserve engineering investment:** Retain the substantial work invested in specialized vector kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`).
-> 2. **Validate multiversioning architecture:** Exercise runtime SIMD multiversioning mechanics (`dispatch_simd!`, `simd_probe`, cross-ISA parity tests) as an architectural template for future instruction set additions and alternative CPU targets (e.g. AVX10, ARM Neon/SVE).
+See [Hardware & Toolchain Pre-Flight Verification](#️-hardware--toolchain-pre-flight-verification) above for pre-flight diagnosis via `simd_probe`.
 
 ---
 
@@ -156,7 +193,7 @@ fn main() {
     let mut model_pair = load_and_build_model(
         Path::new("models/BossWN-standard.nam"),
         &sys,
-        false, // mono processing
+        false, // dual_mono: left-channel only
         LoadOptions::default(),
     ).expect("Failed to load NAM model");
 
@@ -178,7 +215,7 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 
 #### 3. Executable Examples
 
-`NeuralAmpModeler-rs` includes 6 runnable examples in `examples/` demonstrating key features:
+`NeuralAmpModeler-rs` includes 7 runnable examples in `examples/` demonstrating key features:
 
 | Example                                                                                                     | Description                                                                     | Run Command                                                 |
 |:----------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------- |:----------------------------------------------------------- |
@@ -188,6 +225,7 @@ The API surface used there is documented in the [crate docs](https://docs.rs/Neu
 | [`cabsim`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling               | `cargo run --example cabsim -- <path/to/ir.wav>`            |
 | [`diagnostics`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export  | `cargo run --example diagnostics`                           |
 | [`math_activations`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`                      |
+| [`synthetic_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/synthetic_model.rs)   | In-memory `StaticModel` construction, zero-dependency (no `.nam` file needed)   | `cargo run --example synthetic_model`                       |
 
 ---
 
@@ -213,13 +251,34 @@ Full API documentation:
   # Production builds, testing, and CI of NeuralAmpModeler-rs remain strictly on stable Rust.
   RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
     --no-default-features \
-    --features "stereo,testing,heap-audit,long_bench,avx512" \
+    --features "dual-mono,testing,heap-audit,fft-radix4-planner,avx512" \
     --no-deps
   ```
 
 * **Online Documentation:** [docs.rs/NeuralAmpModeler-rs](https://docs.rs/NeuralAmpModeler-rs)
 
 > **Note on `docs.rs` Builds and AVX-512:** `NeuralAmpModeler-rs/build.rs` detects `DOCS_RS=1` to early-return before `avx2+fma` CPU target feature assertions. This allows `docs.rs` builders (running on baseline x86-64 without AVX2) to document the API successfully. While the AVX2 baseline already delivers ample headroom for real-time operation (and project benchmarks show AVX-512 yields marginal real-world difference), `avx512` is enabled in `[package.metadata.docs.rs].features` so that the complete API surface remains accessible to users wishing to utilize it. For new `crates.io` releases or manual doc rebuild requests, use the `docs.rs` re-trigger queue at `https://docs.rs/crate/NeuralAmpModeler-rs/latest/builds`.
+
+---
+
+## 🚩 Feature Flags
+
+NeuralAmpModeler-rs provides several Cargo feature flags to configure capabilities, tooling, and benchmarking:
+
+| Feature | Default | Description | Category |
+|:------- |:------- |:----------- |:-------- |
+| `dual-mono` | Enabled | Enables independent per-channel inference across the DSP pipeline for stereo/dual-mono signals. | Production |
+| `heap-audit` | Disabled | Enables real-time allocation tracking to audit zero-heap-allocation invariants. | Production / Diagnostics |
+| `testing` | Disabled | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles. | Reusable Tooling |
+| `fft-radix4-planner` | Disabled | Enables Radix-4 FFT planner benchmarks and execution planning routines. | Reusable Tooling / Benchmarks |
+| `avx512` | Disabled | Compiles optional AVX-512 kernels and dynamic runtime dispatch for experimental research and CPU benchmarking. | Research / Experimental |
+
+> ⚠️ **Note on `avx512` (Usage Discouraged in Production):** This flag enables upward runtime dispatch to specialized AVX-512 kernels (`Avx512Math`). However, its use in production builds, release packaging, and live audio processing is **actively discouraged**. Empirical hardware benchmarks (canonical 2026-09-09 audit receipt on Sapphire Rapids) demonstrate that the default `x86-64-v3` baseline (AVX2 + FMA) yields superior throughput and lower latency across canonical NAM models (AVX-512 introduced 2% to 33% latency regressions across 14 of 15 configurations due to vector zero-masking and packaging overhead in compact channel geometries $C \le 16$).
+>
+> The `avx512` flag is retained strictly to:
+>
+> 1. **Preserve engineering investment:** Retain the substantial work invested in specialized vector kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`).
+> 2. **Validate multiversioning architecture:** Exercise runtime SIMD multiversioning mechanics (`dispatch_simd!`, `simd_probe`, cross-ISA parity tests) as an architectural template for future instruction set additions and alternative CPU targets (e.g. AVX10, ARM Neon/SVE).
 
 ---
 

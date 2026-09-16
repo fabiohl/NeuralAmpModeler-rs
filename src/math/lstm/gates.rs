@@ -143,6 +143,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_hf(
@@ -192,6 +193,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_std(
@@ -239,6 +241,7 @@ pub unsafe fn fused_lstm_gates_avx512_std(
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512(
@@ -444,6 +447,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 /// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
 /// Output buffers must not alias `gates`.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_dyn_avx512(

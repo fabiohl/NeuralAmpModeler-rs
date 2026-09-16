@@ -191,6 +191,7 @@ proptest! {
             AdaptiveComputeMode::Conservative => (0.70f32, 0.85f32),
             AdaptiveComputeMode::Aggressive => (0.55f32, 0.70f32),
             AdaptiveComputeMode::Off => unreachable!(),
+            _ => unreachable!(),
         };
 
         let recovery_reduced = full_to_reduced * 0.5;
@@ -250,6 +251,7 @@ proptest! {
             AdaptiveComputeMode::Conservative => (0.70f32, 0.85f32),
             AdaptiveComputeMode::Aggressive => (0.55f32, 0.70f32),
             AdaptiveComputeMode::Off => unreachable!(),
+            _ => unreachable!(),
         };
 
         let recovery = full_to_reduced * 0.5;
@@ -324,6 +326,7 @@ proptest! {
             AdaptiveComputeMode::Conservative => (0.70f32, 0.85f32),
             AdaptiveComputeMode::Aggressive => (0.55f32, 0.70f32),
             AdaptiveComputeMode::Off => unreachable!(),
+            _ => unreachable!(),
         };
 
         let bf = budget as f32;

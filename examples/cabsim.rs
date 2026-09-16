@@ -27,9 +27,7 @@ use std::f32::consts::PI;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use neural_amp_modeler_rs::dsp::cabsim::adapter::CabSimAdapter;
-use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
-use neural_amp_modeler_rs::dsp::cabsim::loader::CabSimIr;
+use neural_amp_modeler_rs::prelude::*;
 
 /// Target audio sample rate.
 const SAMPLE_RATE: u32 = 48000;

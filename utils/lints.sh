@@ -10,14 +10,14 @@
 #   All Features (catch-all) : --all-targets --all-features
 #   Pure Core                : --lib --no-default-features
 #   No Default Features      : --all-targets --no-default-features
-#   Individual feature axes  : dynamic-engine, stereo, testing, heap-audit
+#   Individual feature axes  : fft-radix4-planner, dual-mono, testing, heap-audit
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
-PHASE_TOTAL=8
+PHASE_TOTAL=9
 source "$SCRIPT_DIR/_lib.sh"
 
 
@@ -62,11 +62,11 @@ cargo check --locked --lib --no-default-features
 echo -e "  ${YELLOW}${BOLD}Checking: All Targets (no default features)...${NC}"
 cargo check --locked --all-targets --no-default-features
 
-echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (dynamic-engine)...${NC}"
-cargo check --locked --all-targets --no-default-features --features dynamic-engine
+echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (fft-radix4-planner)...${NC}"
+cargo check --locked --all-targets --no-default-features --features fft-radix4-planner
 
-echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (stereo)...${NC}"
-cargo check --locked --all-targets --no-default-features --features stereo
+echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (dual-mono)...${NC}"
+cargo check --locked --all-targets --no-default-features --features dual-mono
 
 echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (testing)...${NC}"
 cargo check --locked --all-targets --no-default-features --features testing
@@ -90,11 +90,11 @@ cargo clippy --locked --lib --no-default-features -- -D warnings
 echo -e "  ${YELLOW}${BOLD}Clippy: All Targets (no default features)...${NC}"
 cargo clippy --locked --all-targets --no-default-features -- -D warnings
 
-echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (dynamic-engine)...${NC}"
-cargo clippy --locked --all-targets --no-default-features --features dynamic-engine -- -D warnings
+echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (fft-radix4-planner)...${NC}"
+cargo clippy --locked --all-targets --no-default-features --features fft-radix4-planner -- -D warnings
 
-echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (stereo)...${NC}"
-cargo clippy --locked --all-targets --no-default-features --features stereo -- -D warnings
+echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (dual-mono)...${NC}"
+cargo clippy --locked --all-targets --no-default-features --features dual-mono -- -D warnings
 
 ok "All static analysis permutations passed cleanly with zero warnings ($(phase_elapsed_str))."
 
@@ -238,6 +238,56 @@ if [ -n "$doc_cfg_errors" ]; then
     exit 1
 fi
 ok "All doc(cfg) feature annotations match declared features in Cargo.toml ($(phase_elapsed_str))."
+
+# ---------------------------------------------------------------------------
+# [9/9] Static validation: README crate version and MSRV against Cargo.toml
+# ---------------------------------------------------------------------------
+phase "Validating README crate version and MSRV against Cargo.toml..."
+
+cargo_version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([0-9]+\.[0-9]+).*"/\1/')
+cargo_msrv=$(grep -m1 '^rust-version = ' Cargo.toml | sed -E 's/rust-version = "([^"]+)"/\1/')
+
+if [ -z "$cargo_version" ]; then
+    echo -e "  ${RED}${BOLD}ERROR: Could not extract package version from Cargo.toml${NC}"
+    exit 1
+fi
+
+# Extract version numbers cited in README dependency blocks
+# Matches both 'NeuralAmpModeler-rs = "X.Y"' and '{ version = "X.Y", ... }'
+readme_version_matches=$(grep -nE 'NeuralAmpModeler-rs = ("([0-9]+\.[0-9]+)"|\{ version = "([0-9]+\.[0-9]+)")' README.md || true)
+if [ -z "$readme_version_matches" ]; then
+    echo -e "  ${RED}${BOLD}ERROR: No NeuralAmpModeler-rs dependency version specifications found in README.md${NC}"
+    exit 1
+fi
+
+readme_ver_errors=""
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ver=$(echo "$line" | grep -oE '"[0-9]+\.[0-9]+"' | tr -d '"')
+    if [ "$ver" != "$cargo_version" ]; then
+        readme_ver_errors+="  $line (expected $cargo_version, found $ver)"$'\n'
+    fi
+done <<< "$readme_version_matches"
+
+if [ -n "$readme_ver_errors" ]; then
+    echo -e "  ${RED}${BOLD}ERROR: README.md dependency version diverged from Cargo.toml ($cargo_version):${NC}"
+    echo "$readme_ver_errors"
+    exit 1
+fi
+
+# Validate MSRV badge matches rust-version in Cargo.toml
+if [ -n "$cargo_msrv" ]; then
+    readme_msrv=$(grep -oE 'badge/MSRV-[0-9]+\.[0-9]+(\.[0-9]+)?' README.md | sed -E 's/badge\/MSRV-//' || true)
+    if [ -z "$readme_msrv" ]; then
+        echo -e "  ${RED}${BOLD}ERROR: MSRV badge not found in README.md (expected MSRV-$cargo_msrv)${NC}"
+        exit 1
+    fi
+    if [ "$readme_msrv" != "$cargo_msrv" ]; then
+        echo -e "  ${RED}${BOLD}ERROR: README.md MSRV badge ($readme_msrv) diverged from Cargo.toml ($cargo_msrv)${NC}"
+        exit 1
+    fi
+fi
+ok "README version ($cargo_version) and MSRV ($cargo_msrv) match Cargo.toml ($(phase_elapsed_str))."
 
 SUITE_END=$(date +%s%N)
 TOTAL_DUR_MS=$(( (SUITE_END - SUITE_START) / 1000000 ))

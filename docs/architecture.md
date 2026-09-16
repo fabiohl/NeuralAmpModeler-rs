@@ -239,20 +239,17 @@ NeuralAmpModeler-rs uses *feature flags* to control optional capabilities:
 
 | Feature               | Compilation Command                           | Description                                                                              |
 |:--------------------- |:--------------------------------------------- |:---------------------------------------------------------------------------------------- |
-| **DSP Lib** (default) | `cargo build --lib`                           | Core DSP engine (rlib) targeting `x86-64-v3`. No external audio dependencies.            |
-| **`stereo`**          | `cargo build --features stereo --lib`         | Multi-channel / stereo dual-model loader and processing support.                         |
+| **`dual-mono`** (default) | `cargo build --lib`                       | Multi-channel / dual-mono dual-model loader and processing support.                     |
+| **Pure Core**         | `cargo build --no-default-features --lib`     | Mono-only core DSP engine (rlib) targeting `x86-64-v3`. No external audio dependencies.  |
 | **`testing`**         | `cargo build --features testing --lib`        | Off-RT test utilities, audio signal generators, and perceptual metrics.                  |
 | **`heap-audit`**      | `cargo build --features heap-audit --lib`     | Memory allocation tracking and zero-heap-allocation verification watchdog.               |
-| **`long_bench`**      | `cargo bench --features long_bench`           | Extended long-form Criterion inference benchmarks (>30s per model).                      |
-| **`dynamic-engine`**  | `cargo build --features dynamic-engine --lib` | Forces selection of dynamic execution paths instead of optimized static profiles (test). |
+| **`fft-radix4-planner`** | `cargo bench --features fft-radix4-planner` | Radix-4 FFT execution planner benchmark routines.                                      |
 | **`avx512`**          | `cargo build --features avx512 --lib`         | Opt-in research/measurement kernels for AVX-512 upward dispatch (not used in default).   |
 
-#### 3.1.1 Feature Flag: `dynamic-engine`
+#### 3.1.1 WaveNetA2 Fallback Invariants
 
-> **Scope:** The `dynamic-engine` feature flag (`Cargo.toml:141`) controls **exclusively** a scalar per-frame fallback path inside the `WaveNetA2` fast-path (`src/models/a2/model/static/process.rs:299-427`). It enables runtime handling of A2 layers whose convolution does not match the CH=3 (A2-Lite) or CH=8 (A2-Full) specialized kernels — e.g., grouped, depthwise, or heterogeneous-channel convolutions within an A2 model.
-> **When disabled** (production default), generic A2 convolutions are impossible by construction: the A2 loaders enforce CH∈{3,8} at parse time, and the fallback block compiles to `unreachable!()` with a static invariant message.
-> **When enabled** (testing / scaffolding), the scalar fallback is compiled in, allowing A2 models with non-standard channel geometries to execute inference correctly — at the cost of per-frame scalar processing (no SIMD tile optimization) for those layers.
-> **What this flag does NOT control:** The main dynamic engine variants — `WaveNetModelDyn`, `LstmModelDyn`, and `WaveNetA2Dyn` — are **always compiled** as integral variants of the `StaticModel` enum (§1.1, Structural Dispatch). These engines handle free-shape models (A1 WaveNet, LSTM, and A2 with runtime channel counts) regardless of the `dynamic-engine` flag. The flag is narrowly scoped to the A2 fast-path's internal scalar branch for non-standard convolution geometries.
+> **Internal Test Path:** A scalar per-frame fallback path exists inside the `WaveNetA2` fast-path (`src/models/a2/model/static/process.rs`) gated under `#[cfg(test)]`. In production builds (`#[cfg(not(test))]`), the static invariants guarantee that only specialized kernels (CH=3 or CH=8) are executed; non-standard configurations panic via `unreachable!()`.
+> **Structural Dispatch:** The main dynamic engine variants — `WaveNetModelDyn`, `LstmModelDyn`, and `WaveNetA2Dyn` — are **always compiled** as integral variants of the `StaticModel` enum (§1.1, Structural Dispatch). These engines handle free-shape models (A1 WaveNet, LSTM, and A2 with runtime channel counts) unconditionally.
 
 ## 4. DSP Signal Chain & Native Resampling
 

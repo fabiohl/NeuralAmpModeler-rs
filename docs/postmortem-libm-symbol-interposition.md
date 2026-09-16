@@ -61,7 +61,7 @@ class of bug.
 into the GOT slot from a live, attached process (not just the relocation
 *type*, which is not sufficient — see §3). Confirmed clean across all
 production link targets: the engine test suite (`--lib`), integration suites
-(`--features testing,stereo`), and downstream targets (CLAP cdylib plugins
+(`--features testing,dual-mono`), and downstream targets (CLAP cdylib plugins
 and standalone hosts).
 
 ## 2. Why this was hard to find

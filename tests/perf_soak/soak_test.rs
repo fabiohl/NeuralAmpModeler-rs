@@ -915,6 +915,7 @@ fn test_adaptive_fsm_endurance() {
             AdaptiveComputeMode::Conservative => (0.70, 0.85),
             AdaptiveComputeMode::Aggressive => (0.55, 0.70),
             AdaptiveComputeMode::Off => unreachable!(),
+            _ => unreachable!(),
         };
 
         let recovery_reduced = full_to_reduced * 0.5;
@@ -1056,6 +1057,7 @@ fn test_adaptive_fsm_transition_cycles() {
             AdaptiveComputeMode::Conservative => (0.70, 0.85),
             AdaptiveComputeMode::Aggressive => (0.55, 0.70),
             AdaptiveComputeMode::Off => unreachable!(),
+            _ => unreachable!(),
         };
 
         let recovery_reduced = full_to_reduced * 0.5;

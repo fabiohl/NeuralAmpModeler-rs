@@ -62,7 +62,7 @@ utils/lints.sh        # Static analysis, fmt, clippy (-D warnings), doc-tests, S
 utils/tests-quick.sh  # Agile testing, golden vectors, C++ parity gates, parser fuzzing
 ```
 
-- [ ] **`utils/lints.sh` Passed**: 100% clean across all feature permutations (`--all-features`, `--no-default-features`, `dynamic-engine`, `stereo`, `testing`, `heap-audit`).
+- [ ] **`utils/lints.sh` Passed**: 100% clean across all feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`).
 - [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 

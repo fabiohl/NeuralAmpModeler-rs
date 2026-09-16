@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.7.4"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.98.0"
 autobins = false
@@ -15,6 +15,7 @@ authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
 keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
 categories = ["multimedia::audio", "multimedia"]
 include = [
+    "/benches/",
     "/examples/",
     "/src/bin/",
     "/src/common/",
@@ -125,20 +126,17 @@ name = "head_gemv_bench"
 harness = false
 
 [features]
-default = []
-# Internal stereo path in the DSP pipeline (input stage); does not gate dual-model loading (controlled via stereo: bool).
-stereo = []
+default = ["dual-mono"]
+# Independent per-channel neural inference (dual mono); processes L and R through
+# separate model instances without cross-talk. Disabling via `default-features = false`
+# activates lean single-inference mode (half CPU cost, mono copied to R).
+dual-mono = []
 # Exposes off-RT test utilities, audio signal generators, and perceptual metrics.
 testing = []
 # Enables heap-allocation auditing infrastructure.
 heap-audit = []
-# Enables long-form inference benchmarks.
-long_bench = []
-# Forces selection of dynamic execution paths instead of optimized static profiles,
-# even when a static profile would apply. Used exclusively for dynamic fallback
-# test and regression coverage. Support for non-standard topologies (WaveNetModelDyn,
-# LstmModelDyn, WaveNetA2Dyn) is ALREADY ALWAYS ACTIVE regardless of this flag.
-dynamic-engine = []
+# Exposes Radix-4 DIT FFT execution planning routines (FftPlannerRadix4).
+fft-radix4-planner = []
 # Research and re-measurement only: enables AVX-512 kernels and instruction dispatch (not used in default/production).
 avx512 = []
 
@@ -221,6 +219,11 @@ name = "inspect_model"
 path = "examples/inspect_model.rs"
 required-features = []
 
+[[example]]
+name = "synthetic_model"
+path = "examples/synthetic_model.rs"
+required-features = []
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
@@ -253,5 +256,5 @@ split-debuginfo = "unpacked"
 
 [package.metadata.docs.rs]
 no-default-features = true
-features = ["stereo", "testing", "heap-audit", "long_bench", "avx512"]
+features = ["dual-mono", "testing", "heap-audit", "fft-radix4-planner", "avx512"]
 rustdoc-args = ["--cfg", "docsrs"]

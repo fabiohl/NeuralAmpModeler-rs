@@ -21,11 +21,9 @@
 //! ```
 
 use log::{LevelFilter, debug, error, info, warn};
-use neural_amp_modeler_rs::common::diagnostics::bundle::DiagnosticBundle;
-use neural_amp_modeler_rs::common::diagnostics::error_codes::NamErrorCode;
-use neural_amp_modeler_rs::common::diagnostics::logger::{LoggerConfig, NamLogger};
-use neural_amp_modeler_rs::common::diagnostics::system_info::SystemSnapshot;
-use neural_amp_modeler_rs::install_panic_hook;
+use neural_amp_modeler_rs::common::diagnostics::{LoggerConfig, NamErrorCode, NamLogger};
+use neural_amp_modeler_rs::prelude::*;
+use neural_amp_modeler_rs::{DiagnosticBundle, install_panic_hook};
 
 fn main() {
     println!("============================================================");

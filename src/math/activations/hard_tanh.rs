@@ -56,6 +56,7 @@ pub unsafe fn hard_tanh_slice_avx2(data: &mut [f32]) {
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn hard_tanh_slice_avx512(data: &mut [f32]) {
     let neg_one = _mm512_set1_ps(-1.0_f32);

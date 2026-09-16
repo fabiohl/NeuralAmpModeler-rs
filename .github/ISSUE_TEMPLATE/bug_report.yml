@@ -81,11 +81,11 @@ body:
       label: Environment & Hardware
       description: Provide details about your CPU microarchitecture, OS, and Rust toolchain.
       placeholder: |
-        - NeuralAmpModeler-rs version: 0.6.0 (or commit hash)
-        - Rustc version: rustc 1.94.0 (or output of `rustc --version`)
+        - NeuralAmpModeler-rs version: 0.8.0 (or commit hash)
+        - Rustc version: rustc 1.98.0 (or output of `rustc --version`)
         - Target triple: x86_64-unknown-linux-gnu
         - CPU Model: AMD Ryzen 9 7950X / Intel Core i7-13700K (AVX2, AVX-512)
-        - Active Crate Features: --features "dynamic-engine,stereo,testing"
+        - Active Crate Features: --features "dual-mono,testing"
         - Host / Embedding Context: Standalone host / CLAP wrapper / Offline renderer / Benchmark CLI
     validations:
       required: true

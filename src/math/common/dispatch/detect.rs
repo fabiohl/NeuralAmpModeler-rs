@@ -119,6 +119,7 @@ pub const fn avx512_capability_complete(f: bool, vl: bool, bw: bool, dq: bool) -
 ///
 /// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub fn has_full_avx512() -> bool {
     avx512_capability_complete(
         is_x86_feature_detected!("avx512f"),
@@ -137,6 +138,7 @@ pub fn has_full_avx512() -> bool {
 ///
 /// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub fn missing_avx512_features() -> Vec<&'static str> {
     let mut missing = Vec::with_capacity(4);
     for (name, ok) in [

@@ -10,23 +10,23 @@
 //! ## Running
 //!
 //! ```sh
-//! cargo bench --features standalone,long_bench --bench long_inference_bench
+//! cargo bench --features testing --bench long_inference_bench
 //! ```
 //!
-//! Without the `long_bench` feature this binary compiles to a no-op so that
+//! Without the `testing` feature this binary compiles to a no-op so that
 //! `cargo bench` (default pass) does not re-run the long soak benchmarks.
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 mod common;
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 use criterion::{Criterion, criterion_group, criterion_main};
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 use neural_amp_modeler_rs::models::NamModel;
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_wavenet_long_run(c: &mut Criterion) {
     let mut model = match common::load_and_prewarm("BossWN-standard.nam") {
         Some(m) => m,
@@ -46,7 +46,7 @@ fn bench_wavenet_long_run(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_lstm_long_run(c: &mut Criterion) {
     let data = common::make_lstm_data(2, 16);
     let mut model = build_model(&data).expect("Dispatcher failed");
@@ -65,7 +65,7 @@ fn bench_lstm_long_run(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_resampler_long_run(c: &mut Criterion) {
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
     let size = 4096;
@@ -85,7 +85,7 @@ fn bench_resampler_long_run(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_a2_full_long_run(c: &mut Criterion) {
     let mut model = match common::load_and_prewarm("wavenet_a2_full.nam") {
         Some(m) => m,
@@ -105,7 +105,7 @@ fn bench_a2_full_long_run(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_a2_lite_long_run(c: &mut Criterion) {
     let mut model = match common::load_and_prewarm("wavenet_a2_lite.nam") {
         Some(m) => m,
@@ -128,7 +128,7 @@ fn bench_a2_lite_long_run(c: &mut Criterion) {
 /// Measures CabSim 16384-tap convolution throughput under thermal soak
 /// (35 s measurement). Uses the same synthetic impulse response as the
 /// `cabsim_bench` suite for consistency.
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 fn bench_cabsim_long_run(c: &mut Criterion) {
     use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
     let ir = common::synth_ir(16384, 440.0, 10.0);
@@ -165,15 +165,15 @@ fn bench_cabsim_long_run(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 criterion_group!(
     name = long_benches;
     config = Criterion::default().noise_threshold(0.05);
     targets = bench_wavenet_long_run, bench_lstm_long_run, bench_resampler_long_run, bench_a2_full_long_run, bench_a2_lite_long_run, bench_cabsim_long_run
 );
 
-#[cfg(feature = "long_bench")]
+#[cfg(feature = "testing")]
 criterion_main!(long_benches);
 
-#[cfg(not(feature = "long_bench"))]
+#[cfg(not(feature = "testing"))]
 fn main() {}

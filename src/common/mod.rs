@@ -32,6 +32,8 @@ pub(crate) const fn unlikely(b: bool) -> bool {
 pub(crate) const CROSSFADE_DURATION_MS: f32 = 32.0;
 
 /// Compile-time heap-allocation auditing infrastructure for RT safety verification.
+#[cfg(any(test, feature = "heap-audit"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "heap-audit")))]
 pub mod alloc_audit;
 /// Diagnostic engine: error codes, snapshots, system info, runtime log formatting.
 pub mod diagnostics;

@@ -4,6 +4,8 @@
 //! Strongly-typed public error for model loading and construction.
 
 use super::loaded_model_pair::MetadataError;
+use super::nam_json::JsonError;
+use super::namb::NambError;
 use thiserror::Error;
 
 /// Public error returned by [`load_and_build_model`](crate::loader::load_and_build_model)
@@ -23,23 +25,48 @@ pub enum LoadError {
     #[error("Invalid UTF-8 encoding in model file: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
 
+    /// Structured `.namb` binary format error.
+    #[error("NAMB binary format error: {0}")]
+    Namb(#[from] NambError),
+
+    /// Structured `.nam` JSON format error.
+    #[error("NAM JSON format error: {0}")]
+    Json(#[from] JsonError),
+
     /// The `.nam` JSON data is malformed or violates the expected schema.
+    #[deprecated(since = "0.8.0", note = "use LoadError::Json instead")]
     #[error("Model JSON parse error: {0}")]
     JsonParse(#[source] serde_json::Error),
 
     /// The `.namb` file does not start with the expected magic bytes (`0x4E414D42`).
+    #[deprecated(
+        since = "0.8.0",
+        note = "use LoadError::Namb(NambError::InvalidMagic) instead"
+    )]
     #[error("Invalid .namb magic bytes: {0}")]
     NambInvalidMagic(String),
 
     /// The `.namb` file is truncated or has weight offsets exceeding file bounds.
+    #[deprecated(
+        since = "0.8.0",
+        note = "use LoadError::Namb(NambError::Truncated { .. }) instead"
+    )]
     #[error("Truncated or corrupt .namb file: {0}")]
     NambTruncated(String),
 
     /// The `.namb` file failed CRC32 integrity verification (corruption or incomplete download).
+    #[deprecated(
+        since = "0.8.0",
+        note = "use LoadError::Namb(NambError::CrcMismatch { .. }) instead"
+    )]
     #[error("CRC32 integrity mismatch in .namb file")]
     NambCrc32Mismatch,
 
     /// CRC32 integrity field is missing in a `.namb` file (policy requires checksum verification).
+    #[deprecated(
+        since = "0.8.0",
+        note = "use LoadError::Namb(NambError::CrcMissing { .. }) instead"
+    )]
     #[error("CRC32 integrity field missing in .namb file")]
     NambCrc32Missing,
 

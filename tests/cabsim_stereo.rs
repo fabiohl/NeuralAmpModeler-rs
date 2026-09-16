@@ -6,7 +6,7 @@
 //!
 //! Engine-level gates for the stereo-decoupled `CabSimPair`:
 //!
-//! 1. **Full-pipeline stereo fidelity vs dual mono** (`feature = "stereo"`):
+//! 1. **Full-pipeline stereo fidelity vs dual mono** (`feature = "dual-mono"`):
 //!    a unified stereo pipeline (independent L/R models + `CabSimPair`) must be
 //!    bit-exact against two 100% isolated mono pipelines (single adapter each)
 //!    — `MSE == 0.0`, `SNR > 120 dB`.
@@ -244,12 +244,12 @@ fn signal_pair(n: usize) -> (Vec<f32>, Vec<f32>) {
     (l, r)
 }
 
-// ── 1. Stereo cabsim fidelity vs dual mono (feature = "stereo") ─────────────
+// ── 1. Stereo cabsim fidelity vs dual mono (feature = "dual-mono") ──────────
 
 /// A unified stereo pipeline (independent L/R models + `CabSimPair`) is
 /// bit-exact against two isolated mono pipelines (single adapter each) across
 /// multiple blocks: `MSE == 0.0`, `SNR > 120 dB`.
-#[cfg(feature = "stereo")]
+#[cfg(feature = "dual-mono")]
 #[test]
 fn cabsim_stereo_pipeline_bit_exact_vs_dual_mono() {
     const N_BLOCKS: usize = 96;

@@ -57,25 +57,66 @@ pub mod math;
 /// Neural network architectures (WaveNet A1/A2, LSTM, ConvNet, Linear) and runtime dispatch.
 pub mod models;
 
-/// Convenience re-exports for the common inference pipeline.
+/// Convenience re-exports for the common inference and DSP pipeline.
 ///
 /// Host applications can `use neural_amp_modeler_rs::prelude::*;` to bring the
-/// core inference types into scope without deep paths: [`crate::SystemSnapshot`],
-/// [`crate::loader::load_and_build_model`], [`crate::loader::LoadOptions`],
-/// [`crate::models::NamModel`], [`crate::models::StaticModel`],
-/// [`crate::dsp::oversample::OversampleEngine`],
-/// [`crate::dsp::oversample::OversampleFactor`],
-/// [`crate::dsp::resampler::NamResampler`], and
-/// [`crate::dsp::cabsim::loader::CabSimIr`]. The deep module paths remain
-/// available and unchanged; this module is purely additive.
+/// core inference and signal processing types into scope without deep paths:
+///
+/// - **Diagnostics & Telemetry**: [`crate::SystemSnapshot`]
+/// - **Processing Parameters**: [`crate::ActivationPrecision`], [`crate::ProcessingParams`], [`crate::RtProcessingParams`], [`crate::AdaptiveComputeMode`], [`crate::SlimOverride`]
+/// - **Model Loading & Errors**: [`crate::loader::load_and_build_model`], [`crate::loader::LoadOptions`], [`crate::loader::LoadError`], [`crate::loader::NambError`], [`crate::loader::JsonError`], [`crate::loader::LoadedModelPair`]
+/// - **Neural Models**: [`crate::models::NamModel`], [`crate::models::StaticModel`]
+/// - **Noise Gate**: [`crate::dsp::gate::GateParams`], [`crate::dsp::gate::GateParamsBuilder`]
+/// - **Cabinet Simulation**: [`crate::dsp::cabsim::adapter::CabSimAdapter`], [`crate::dsp::cabsim::conv::ConvEngine`], [`crate::dsp::cabsim::loader::CabSimIr`]
+/// - **Oversampling Engine**: [`crate::dsp::oversample::OversampleEngine`], [`crate::dsp::oversample::OversampleFactor`]
+/// - **Sample-Rate Resampling**: [`crate::dsp::resampler::NamResampler`]
+///
+/// The deep module paths remain available and unchanged; this module is purely additive.
+///
+/// # Examples
+///
+/// ```
+/// use neural_amp_modeler_rs::prelude::*;
+///
+/// // Full pipeline components available directly from prelude:
+/// let _: Option<ConvEngine> = None;
+/// let _: Option<CabSimAdapter> = None;
+/// let _: Option<CabSimIr> = None;
+/// let _: Option<GateParams> = None;
+/// let _: Option<GateParamsBuilder> = None;
+/// let _: Option<SystemSnapshot> = None;
+/// let _: Option<ActivationPrecision> = None;
+/// let _: Option<AdaptiveComputeMode> = None;
+/// let _: Option<SlimOverride> = None;
+/// let _: Option<ProcessingParams> = None;
+/// let _: Option<RtProcessingParams> = None;
+/// let _: Option<LoadError> = None;
+/// let _: Option<NambError> = None;
+/// let _: Option<JsonError> = None;
+/// let _: Option<LoadedModelPair> = None;
+/// let _: Option<LoadOptions> = None;
+/// let _: Option<OversampleEngine> = None;
+/// let _: Option<OversampleFactor> = None;
+/// let _: Option<NamResampler> = None;
+/// let _: Option<Box<dyn NamModel>> = None;
+/// let _: Option<StaticModel> = None;
+/// let _ = load_and_build_model;
+/// ```
 pub mod prelude {
     pub use crate::common::diagnostics::SystemSnapshot;
-    pub use crate::common::params::{ActivationPrecision, ProcessingParams, RtProcessingParams};
+    pub use crate::common::params::{
+        ActivationPrecision, AdaptiveComputeMode, ProcessingParams, RtProcessingParams,
+        SlimOverride,
+    };
+    pub use crate::dsp::cabsim::adapter::CabSimAdapter;
+    pub use crate::dsp::cabsim::conv::ConvEngine;
     pub use crate::dsp::cabsim::loader::CabSimIr;
-    pub use crate::dsp::gate::GateParams;
+    pub use crate::dsp::gate::{GateParams, GateParamsBuilder};
     pub use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
     pub use crate::dsp::resampler::NamResampler;
-    pub use crate::loader::{LoadError, LoadOptions, load_and_build_model};
+    pub use crate::loader::{
+        JsonError, LoadError, LoadOptions, LoadedModelPair, NambError, load_and_build_model,
+    };
     pub use crate::models::{NamModel, StaticModel};
 }
 
@@ -108,6 +149,13 @@ core::arch::global_asm!(
     "acosf:",
     "    jmp acosf_compat@PLT",
     ".symver acosf_compat, acosf@GLIBC_2.2.5",
+    // --- Group 2: Hidden-only symbols ---
+    // cbrt, cbrtf, fma, fmod do not have problematic GLIBC version tags
+    // (they resolve to GLIBC_2.2.5 without a versioned symbol conflict).
+    // `.hidden` is sufficient to prevent the linker from emitting a versioned
+    // dependency; no jmp trampoline or .symver redirect is needed.
+    // If a future GLIBC version introduces a versioned variant of these
+    // symbols, promote them to Group 1 (full jmp + .symver redirect).
     ".global cbrt",
     ".hidden cbrt",
     ".global cbrtf",
@@ -117,3 +165,34 @@ core::arch::global_asm!(
     ".global fmod",
     ".hidden fmod"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::prelude::*;
+
+    #[test]
+    fn test_prelude_exports_cabsim_and_all_core_types() {
+        let _: Option<ConvEngine> = None;
+        let _: Option<CabSimAdapter> = None;
+        let _: Option<CabSimIr> = None;
+        let _: Option<GateParams> = None;
+        let _: Option<GateParamsBuilder> = None;
+        let _: Option<SystemSnapshot> = None;
+        let _: Option<ActivationPrecision> = None;
+        let _: Option<AdaptiveComputeMode> = None;
+        let _: Option<SlimOverride> = None;
+        let _: Option<ProcessingParams> = None;
+        let _: Option<RtProcessingParams> = None;
+        let _: Option<LoadError> = None;
+        let _: Option<NambError> = None;
+        let _: Option<JsonError> = None;
+        let _: Option<LoadedModelPair> = None;
+        let _: Option<LoadOptions> = None;
+        let _: Option<OversampleEngine> = None;
+        let _: Option<OversampleFactor> = None;
+        let _: Option<NamResampler> = None;
+        let _: Option<Box<dyn NamModel>> = None;
+        let _: Option<StaticModel> = None;
+        let _ = load_and_build_model;
+    }
+}

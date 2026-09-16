@@ -5,6 +5,7 @@
 
 /// Typed errors of the `.nam` JSON parser.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum JsonError {
     /// The `weights` array exceeds the float limit.
     WeightsExceedLimit {

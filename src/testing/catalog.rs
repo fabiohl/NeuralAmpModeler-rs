@@ -872,7 +872,7 @@ pub static GOLDEN_GEN_CATALOG: &[GoldenGenEntry] = &[
     },
     // Dynamic/FiLM models: v2_scope=none — C++ a2_fast render path rejects
     // FiLM-conditioned models and the generic Eigen engine does not support
-    // multi-SR FiLM rendering; dynamic-engine coverage is a superset at test
+    // multi-SR FiLM rendering; dynamic fallback coverage is a superset at test
     // time (see rationale comment in tests/fixtures/golden_gen_build.sh §7).
     GoldenGenEntry {
         nam_file: "a2_dynamic_gated_ch8.nam",

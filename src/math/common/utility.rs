@@ -45,6 +45,7 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
 /// The caller must guarantee AVX-512F is available (enforced by the
 /// `#[target_feature]` attribute). No pointers are dereferenced.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn hsum_avx512(v: __m512) -> f32 {
@@ -86,6 +87,7 @@ pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
 /// consecutive reads of initialized `f32` values. The caller must guarantee
 /// AVX-512F is available (`#[target_feature]`).
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn horizontal_sum_avx512(ptr: *const f32, len: usize) -> f32 {
     let mut i = 0;

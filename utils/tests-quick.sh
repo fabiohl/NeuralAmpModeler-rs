@@ -96,7 +96,7 @@ P1_START=$(date +%s%N)
     # module's structural checks still run in this phase.
     # cabsim_stereo carries the IR-multirate gates (its stereo
     # fidelity and heap-audit tests are feature-gated and run when the caller
-    # enables `stereo`/`heap-audit`).
+    # enables `dual-mono`/`heap-audit`).
     cargo test --features testing --lib \
         --test models --test perf_soak --test parity --test dsp_core \
         --test cabsim_stereo \

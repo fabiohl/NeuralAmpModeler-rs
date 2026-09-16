@@ -79,18 +79,18 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
-    #[cfg(feature = "stereo")]
+    #[cfg(feature = "dual-mono")]
     let energy_ms = {
         // SAFETY: both slices are valid references of identical length.
         unsafe { M::compute_energy_stereo(&samples_l[..n_samples], &samples_r[..n_samples]) }
     };
-    #[cfg(not(feature = "stereo"))]
+    #[cfg(not(feature = "dual-mono"))]
     let energy_ms = {
         // SAFETY: slice is valid.
         unsafe { M::compute_energy(&samples_l[..n_samples]) }
     };
 
-    #[cfg(not(feature = "stereo"))]
+    #[cfg(not(feature = "dual-mono"))]
     let _ = samples_r;
 
     // 1. UPDATE THE NOISE GATE
@@ -110,7 +110,7 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
         return GateState::Closed;
     }
 
-    #[cfg(feature = "stereo")]
+    #[cfg(feature = "dual-mono")]
     {
         // 2. MONO SOUND DETECTION (SAME ON BOTH SIDES)
         // SAFETY: both slices are valid references of identical length.
@@ -128,7 +128,7 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
         *ctx.process_mono = ctx.mono_hysteresis.state() == GateState::Closed
             || ctx.mono_hysteresis.state() == GateState::FadingOut;
     }
-    #[cfg(not(feature = "stereo"))]
+    #[cfg(not(feature = "dual-mono"))]
     {
         *ctx.process_mono = true;
     }
@@ -146,7 +146,7 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
             )
         };
 
-        #[cfg(feature = "stereo")]
+        #[cfg(feature = "dual-mono")]
         if !*ctx.process_mono {
             // SAFETY: slice is valid; gain and offset are finite f32.
             unsafe {
@@ -161,7 +161,7 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
         // SAFETY: slice is valid and offset is a finite f32.
         unsafe { M::apply_dither_add(&mut samples_l[..n_samples], DENORMAL_DITHER_OFFSET) };
 
-        #[cfg(feature = "stereo")]
+        #[cfg(feature = "dual-mono")]
         if !*ctx.process_mono {
             // SAFETY: slice is valid and offset is a finite f32.
             unsafe { M::apply_dither_add(&mut samples_r[..n_samples], DENORMAL_DITHER_OFFSET) };

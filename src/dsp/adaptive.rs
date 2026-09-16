@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
 /// Manual slim override — forces a fixed quality level, bypassing the FSM.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SlimOverride {
@@ -68,6 +69,7 @@ impl SlimOverride {
 }
 
 /// Adaptive compute mode — user-facing parameter.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum AdaptiveComputeMode {

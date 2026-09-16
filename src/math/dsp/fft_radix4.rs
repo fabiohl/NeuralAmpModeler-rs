@@ -54,12 +54,12 @@
 //!   shuffle/permute to recombine the 4 butterfly outputs from the 3
 //!   twiddled inputs.
 
-#[cfg(any(test, feature = "long_bench"))]
+#[cfg(any(test, feature = "fft-radix4-planner"))]
 use super::fft::FftFloat;
 
 /// Pre-computed Radix-4 DIT FFT plan.
-#[cfg(any(test, feature = "long_bench"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "long_bench")))]
+#[cfg(any(test, feature = "fft-radix4-planner"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "fft-radix4-planner")))]
 pub struct FftPlannerRadix4<T: FftFloat> {
     n: usize,
     bit_reverse: Vec<usize>,
@@ -72,8 +72,8 @@ pub struct FftPlannerRadix4<T: FftFloat> {
     stage_l: Vec<usize>,
 }
 
-#[cfg(any(test, feature = "long_bench"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "long_bench")))]
+#[cfg(any(test, feature = "fft-radix4-planner"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "fft-radix4-planner")))]
 impl<T: FftFloat> FftPlannerRadix4<T> {
     /// Creates a new Radix-4 FFT plan for size `n`.
     ///

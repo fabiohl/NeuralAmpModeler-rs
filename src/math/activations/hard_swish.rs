@@ -65,6 +65,7 @@ pub unsafe fn hard_swish_slice_avx2(data: &mut [f32]) {
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn hard_swish_slice_avx512(data: &mut [f32]) {
     let three = _mm512_set1_ps(3.0_f32);

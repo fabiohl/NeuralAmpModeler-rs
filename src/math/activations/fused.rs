@@ -69,6 +69,7 @@ pub unsafe fn simd_tanh_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_tanh_sigmoid_dual_avx512(x1: __m512, x2: __m512) -> (__m512, __m512) {
     // SAFETY: `simd_tanh_avx512` requires AVX-512F/VL, guaranteed by this
@@ -86,6 +87,7 @@ pub unsafe fn simd_tanh_sigmoid_dual_avx512(x1: __m512, x2: __m512) -> (__m512, 
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
     // SAFETY: `simd_sigmoid_avx512` requires AVX-512F/VL, guaranteed by this
@@ -142,6 +144,7 @@ pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_sigmoid_relu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;

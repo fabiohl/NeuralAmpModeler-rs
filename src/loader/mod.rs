@@ -27,6 +27,8 @@ pub mod transpose;
 pub use build::load_and_build_model;
 pub use error::LoadError;
 pub use loaded_model_pair::*;
+pub use nam_json::JsonError;
+pub use namb::NambError;
 
 #[cfg(test)]
 #[path = "loader_malformed_test.rs"]

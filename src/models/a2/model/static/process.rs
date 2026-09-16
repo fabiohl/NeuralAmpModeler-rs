@@ -296,7 +296,8 @@ impl<const CH: usize> WaveNetA2<CH> {
                 return;
             }
             // Fallback: per-frame path using the generic A2Conv1d enum.
-            #[cfg(any(test, feature = "dynamic-engine"))]
+            // Internal gate active in tests; the former public `dynamic-engine` cargo feature was removed.
+            #[cfg(test)]
             {
                 use super::super::super::params::A2_LEAKY_SLOPE;
 
@@ -425,7 +426,7 @@ impl<const CH: usize> WaveNetA2<CH> {
                     }
                 }
             }
-            #[cfg(not(any(test, feature = "dynamic-engine")))]
+            #[cfg(not(test))]
             {
                 // RT-safe fallback: this branch is unreachable per set_weights
                 // invariant (A2 layers always have CH=3 or CH=8 conv). Retained

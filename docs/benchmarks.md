@@ -43,7 +43,7 @@ cargo bench --bench kahan_conv1d_bench
 To evaluate performance under constant pressure and identify jitter caused by cache misses or TLB misses in large blocks, the project offers a long-duration benchmarking suite (30s+ per function):
 
 ```bash
-cargo bench --features long_bench --bench long_inference_bench
+cargo bench --features testing --bench long_inference_bench
 ```
 
 Or via the recommended manual trigger script:

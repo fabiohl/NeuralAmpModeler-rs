@@ -102,7 +102,7 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// let mut pair = load_and_build_model(
     ///     Path::new("path/to/model.nam"),
     ///     &sys,
-    ///     false,
+    ///     false, // dual_mono: left-channel only
     ///     LoadOptions::default(),
     /// )
     /// .expect("Failed to load model");
@@ -211,7 +211,7 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
 /// let pair = load_and_build_model(
 ///     Path::new("models/amp.nam"),
 ///     &sys,
-///     false,
+///     false, // dual_mono: left-channel only
 ///     LoadOptions::default(),
 /// ).expect("failed to load model");
 ///
@@ -221,6 +221,7 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
 ///     model.process(&input, &mut output);
 /// }
 /// ```
+#[non_exhaustive]
 pub enum StaticModel {
     /// WaveNet Standard (16 channels, kernel 3, dilation 8).
     WavenetStandard(Box<wavenet::WaveNetModel<16, 3, 8>>),

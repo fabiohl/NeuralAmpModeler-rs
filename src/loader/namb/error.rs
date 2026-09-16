@@ -9,6 +9,7 @@
 /// of the binary file, enabling precise diagnosis via
 /// `downcast_ref` in the `loader` module.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum NambError {
     /// Truncated file: insufficient bytes for the minimum header.
     #[error("file truncated: got {got} bytes, need at least {need}")]

@@ -56,11 +56,140 @@ impl GateParams {
             mono_epsilon,
         }
     }
+
+    /// Creates a new builder initialized with default gate parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::prelude::*;
+    ///
+    /// let params = GateParams::builder()
+    ///     .threshold_open_db(-65.0)
+    ///     .hysteresis_db(10.0)
+    ///     .hold_frames(2048)
+    ///     .release_samples(256)
+    ///     .energy_floor(1e-4)
+    ///     .build();
+    ///
+    /// assert_eq!(params.threshold_open_db, -65.0);
+    /// assert_eq!(params.threshold_close_db, -75.0);
+    /// ```
+    pub fn builder() -> GateParamsBuilder {
+        GateParamsBuilder::default()
+    }
 }
 
 impl Default for GateParams {
     fn default() -> Self {
         Self::new(-70.0, -80.0, 2048, 256, 1e-4)
+    }
+}
+
+/// Builder for constructing `GateParams` with custom thresholds, timings, or hysteresis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GateParamsBuilder {
+    threshold_open_db: f32,
+    threshold_close_db: f32,
+    hold_frames: usize,
+    fade_frames: usize,
+    mono_epsilon: f32,
+}
+
+impl Default for GateParamsBuilder {
+    fn default() -> Self {
+        Self {
+            threshold_open_db: -70.0,
+            threshold_close_db: -80.0,
+            hold_frames: 2048,
+            fade_frames: 256,
+            mono_epsilon: 1e-4,
+        }
+    }
+}
+
+impl GateParamsBuilder {
+    /// Creates a new builder with default parameters.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the gate open threshold in dB.
+    pub fn threshold_open_db(mut self, db: f32) -> Self {
+        self.threshold_open_db = db;
+        self
+    }
+
+    /// Sets the gate close threshold in dB.
+    pub fn threshold_close_db(mut self, db: f32) -> Self {
+        self.threshold_close_db = db;
+        self
+    }
+
+    /// Configures hysteresis relative to the open threshold.
+    ///
+    /// Sets `threshold_close_db = threshold_open_db - hysteresis_db.abs()`.
+    pub fn hysteresis_db(mut self, hyst: f32) -> Self {
+        self.threshold_close_db = self.threshold_open_db - hyst.abs();
+        self
+    }
+
+    /// Sets the hold duration in audio frames / samples.
+    pub fn hold_frames(mut self, frames: usize) -> Self {
+        self.hold_frames = frames;
+        self
+    }
+
+    /// Alias for `hold_frames`.
+    pub fn hold_samples(self, samples: usize) -> Self {
+        self.hold_frames(samples)
+    }
+
+    /// Sets the fade-in/out smoothing duration in audio frames / samples.
+    pub fn fade_frames(mut self, frames: usize) -> Self {
+        self.fade_frames = frames;
+        self
+    }
+
+    /// Alias for `fade_frames`.
+    pub fn release_samples(self, samples: usize) -> Self {
+        self.fade_frames(samples)
+    }
+
+    /// Sets the absolute tolerance between L/R channels for mono signal detection.
+    pub fn mono_epsilon(mut self, eps: f32) -> Self {
+        self.mono_epsilon = eps;
+        self
+    }
+
+    /// Alias for `mono_epsilon`.
+    pub fn energy_floor(self, eps: f32) -> Self {
+        self.mono_epsilon(eps)
+    }
+
+    /// Builds the `GateParams` struct, precomputing `inv_fade_frames`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::prelude::*;
+    ///
+    /// let params = GateParamsBuilder::default()
+    ///     .threshold_open_db(-65.0)
+    ///     .hold_frames(4096)
+    ///     .build();
+    ///
+    /// assert_eq!(params.hold_frames, 4096);
+    /// assert_eq!(params.threshold_close_db, -80.0);
+    /// ```
+    pub fn build(self) -> GateParams {
+        GateParams::new(
+            self.threshold_open_db,
+            self.threshold_close_db,
+            self.hold_frames,
+            self.fade_frames,
+            self.mono_epsilon,
+        )
     }
 }
 

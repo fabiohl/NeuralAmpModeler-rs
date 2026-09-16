@@ -603,4 +603,39 @@ mod tests {
             "closed gate must silence right tail"
         );
     }
+
+    #[test]
+    fn test_gate_params_builder() {
+        let params = GateParams::builder()
+            .threshold_open_db(-60.0)
+            .threshold_close_db(-75.0)
+            .hold_samples(1024)
+            .release_samples(512)
+            .energy_floor(1e-5)
+            .build();
+
+        assert_eq!(params.threshold_open_db, -60.0);
+        assert_eq!(params.threshold_close_db, -75.0);
+        assert_eq!(params.hold_frames, 1024);
+        assert_eq!(params.fade_frames, 512);
+        assert!((params.inv_fade_frames - 1.0 / 512.0).abs() < 1e-6);
+        assert_eq!(params.mono_epsilon, 1e-5);
+    }
+
+    #[test]
+    fn test_gate_params_builder_hysteresis() {
+        let params = GateParams::builder()
+            .threshold_open_db(-65.0)
+            .hysteresis_db(12.0)
+            .hold_frames(4096)
+            .fade_frames(128)
+            .mono_epsilon(2e-4)
+            .build();
+
+        assert_eq!(params.threshold_open_db, -65.0);
+        assert_eq!(params.threshold_close_db, -77.0);
+        assert_eq!(params.hold_frames, 4096);
+        assert_eq!(params.fade_frames, 128);
+        assert_eq!(params.mono_epsilon, 2e-4);
+    }
 }

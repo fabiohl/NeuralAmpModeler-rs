@@ -1,0 +1,7 @@
+{
+  "_schema_version": "0.1.0",
+  "input_gain_db": 0.0,
+  "output_gain_db": 0.0,
+  "gate_threshold_db": -70.0,
+  "bypass": false
+}

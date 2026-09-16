@@ -114,6 +114,7 @@ pub unsafe fn simd_tanh_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
 /// # Safety
 /// The caller must guarantee AVX-512F, AVX-512VL, and AVX-512DQ support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn simd_tanh_avx512(x: __m512) -> __m512 {
@@ -189,6 +190,7 @@ pub unsafe fn tanh_slice_avx2(slice: &mut [f32]) {
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, and AVX-512DQ support.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl,avx512dq")]
 pub unsafe fn tanh_slice_avx512(slice: &mut [f32]) {
