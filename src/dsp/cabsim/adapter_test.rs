@@ -781,6 +781,186 @@ fn lcg_noise(seed: u64, n: usize) -> Vec<f32> {
         .collect()
 }
 
+/// `process_in_place_stereo` must be bit-identical to driving each channel's
+/// adapter individually — the stereo convenience must never introduce shared
+/// state or reordering between L and R, under variable sub-block sizes.
+#[test]
+fn pair_process_in_place_stereo_matches_individual_adapters() {
+    let ir = synth_ir(220, 700.0, 8.0, 48000);
+    let partition = 64;
+    let mut pair = CabSimPair {
+        l: Box::new(adapter_from_ir(&ir, partition)),
+        r: Box::new(adapter_from_ir(&ir, partition)),
+        sample_rate: 48000,
+    };
+    let mut mono_l = adapter_from_ir(&ir, partition);
+    let mut mono_r = adapter_from_ir(&ir, partition);
+
+    let signal_l = lcg_noise(0x5EED_0011, 512);
+    let signal_r = lcg_noise(0x5EED_0022, 512);
+    let sub_sizes = [64usize, 13, 37, 64, 1, 51, 64, 29];
+
+    let mut pos = 0usize;
+    let mut block = 0usize;
+    let mut out_l = vec![0.0f32; partition];
+    let mut out_r = vec![0.0f32; partition];
+    let mut ref_out = vec![0.0f32; partition];
+
+    while pos < signal_l.len() {
+        let sub = sub_sizes[block % sub_sizes.len()].min(partition);
+        let n = sub.min(signal_l.len() - pos);
+
+        out_l[..n].copy_from_slice(&signal_l[pos..pos + n]);
+        out_r[..n].copy_from_slice(&signal_r[pos..pos + n]);
+        pair.process_in_place_stereo(&mut out_l[..n], &mut out_r[..n], None);
+
+        mono_l.process_variable(&signal_l[pos..pos + n], &mut ref_out[..n], None);
+        assert_eq!(
+            &out_l[..n],
+            &ref_out[..n],
+            "pair.process_in_place_stereo L must be bit-exact vs an independent mono adapter (block {block})"
+        );
+        mono_r.process_variable(&signal_r[pos..pos + n], &mut ref_out[..n], None);
+        assert_eq!(
+            &out_r[..n],
+            &ref_out[..n],
+            "pair.process_in_place_stereo R must be bit-exact vs an independent mono adapter (block {block})"
+        );
+
+        pos += n;
+        block += 1;
+    }
+}
+
+// ── IR tail drain (gate-closed ring-out) ──────────────────────────────────
+
+/// After the input goes silent, `drain_tail` must render the decaying IR
+/// ring-out (non-zero output), consume the ring-out budget strictly, and
+/// terminate with silence once the budget and the FDL are exhausted.
+#[test]
+fn drain_tail_rings_out_and_terminates() {
+    let ir = synth_ir(256, 500.0, 4.0, 48000); // slow decay: tail stays audible
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    // Feed enough active signal to fill the FDL.
+    let signal: Vec<f32> = (0..256).map(|i| (i as f32 * 0.05).sin()).collect();
+    let mut out = vec![0.0f32; partition];
+    for chunk in signal.chunks(partition) {
+        adapter.process_variable(chunk, &mut out[..chunk.len()], None);
+    }
+
+    // Budget armed by the pipeline on the active path.
+    adapter.rearm_tail();
+    let budget = adapter.remaining_tail_samples();
+    assert_eq!(
+        budget,
+        adapter.tail_samples(),
+        "budget must equal tail_samples"
+    );
+
+    // Drain: non-zero ring-out while the budget lasts, strictly counting down.
+    let mut drained_samples = 0usize;
+    let mut tail_energy = 0.0f32;
+    let mut buf = vec![0.0f32; partition];
+    while adapter.remaining_tail_samples() > 0 {
+        buf.fill(0.0);
+        adapter.drain_tail(&mut buf, None);
+        tail_energy += buf.iter().map(|s| s * s).sum::<f32>();
+        drained_samples += partition;
+    }
+    assert!(tail_energy > 0.0, "drain must emit the audible IR ring-out");
+    assert_eq!(
+        drained_samples, budget,
+        "drain must consume exactly the armed budget"
+    );
+
+    // Post-budget: silence forever (FDL fully flushed, counter stays 0).
+    for _ in 0..(adapter.num_partitions() + 2) {
+        buf.fill(0.0);
+        adapter.drain_tail(&mut buf, None);
+        assert!(
+            buf.iter().all(|&s| s == 0.0),
+            "drain after budget exhaustion must emit silence"
+        );
+        assert_eq!(adapter.remaining_tail_samples(), 0);
+    }
+}
+
+/// Active audio after a partial drain must re-arm the budget, so every gate
+/// close flushes the complete IR response (a consumed budget must not
+/// truncate the ring-out of a later passage).
+#[test]
+fn rearm_tail_after_activity_resets_budget() {
+    let ir = synth_ir(128, 600.0, 6.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+
+    let signal: Vec<f32> = (0..128).map(|i| (i as f32 * 0.07).sin()).collect();
+    let mut out = vec![0.0f32; partition];
+    adapter.process_variable(&signal[..64], &mut out, None);
+    adapter.rearm_tail();
+    assert_eq!(adapter.remaining_tail_samples(), adapter.tail_samples());
+
+    // Partial drain consumes the budget.
+    out.fill(0.0);
+    adapter.drain_tail(&mut out, None);
+    assert_eq!(
+        adapter.remaining_tail_samples(),
+        adapter.tail_samples() - partition
+    );
+
+    // New active audio re-arms the full budget.
+    adapter.process_variable(&signal[64..], &mut out, None);
+    adapter.rearm_tail();
+    assert_eq!(adapter.remaining_tail_samples(), adapter.tail_samples());
+}
+
+/// Oversize drain sub-blocks follow the same fail-closed contract as
+/// `process_in_place`: clamp + contract flag, never a panic. Only the clamped
+/// (partition-sized) prefix drains per call, so the budget decreases by
+/// exactly one partition.
+#[test]
+fn drain_tail_oversize_clamps_and_raises_flag() {
+    let ir = synth_ir(60, 500.0, 10.0, 48000);
+    let partition = 64;
+    let mut adapter = adapter_from_ir(&ir, partition);
+    adapter.rearm_tail();
+    let budget = adapter.remaining_tail_samples();
+
+    let rt = RtStatusFlags::new();
+    let mut buf = vec![0.0f32; 2 * partition];
+    adapter.drain_tail(&mut buf, Some(&rt));
+    assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
+    assert_eq!(adapter.remaining_tail_samples(), budget - partition);
+}
+
+/// Passthrough adapters have no IR tail: drain must emit silence and the
+/// budget must stay at zero through re-arm.
+#[test]
+fn drain_tail_passthrough_is_silent_and_budget_free() {
+    let engine = Box::new(ConvEngine::new(&[], 64).expect("construction should succeed"));
+    let mut adapter = CabSimAdapter::new(engine).expect("adapter construction should succeed");
+    adapter.rearm_tail();
+    assert_eq!(adapter.remaining_tail_samples(), 0);
+
+    let mut buf = vec![0.0f32; 64];
+    adapter.drain_tail(&mut buf, None);
+    assert!(buf.iter().all(|&s| s == 0.0));
+}
+
+/// `reset()` must clear the ring-out budget along with the FIFOs and the FDL.
+#[test]
+fn reset_clears_tail_budget() {
+    let ir = synth_ir(64, 440.0, 10.0, 48000);
+    let mut adapter = adapter_from_ir(&ir, 64);
+    adapter.rearm_tail();
+    assert!(adapter.remaining_tail_samples() > 0);
+
+    adapter.reset();
+    assert_eq!(adapter.remaining_tail_samples(), 0);
+}
+
 /// Each pair channel must be bit-identical to an independent
 /// mono `CabSimAdapter` running the same IR and the same signal — no shared
 /// FIFO/FDL state may leak between L and R, under variable sub-block sizes.

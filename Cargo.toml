@@ -23,6 +23,7 @@ include = [
     "/src/loader/",
     "/src/math/",
     "/src/models/",
+    "/src/rt_hardening/",
     "/src/testing/",
     "/src/lib.rs",
     "/Cargo.toml",
@@ -41,7 +42,9 @@ crate-type = ["rlib"]
 [dependencies]
 # Typed errors for the NAMB/loader surface.
 thiserror = "2.0"
-# POSIX calls (mlockall, prctl THP) for system utilities.
+# POSIX calls: mirror/huge-page allocation, TSC clock, scheduler introspection,
+# and the opt-in `rt-hardening` module (`set_cpu_affinity`, `mlockall`,
+# `sched_setscheduler`, THP `prctl`, `/dev/cpu_dma_latency`).
 libc = "0.2.189"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
 rtrb = "0.4.0"
@@ -118,6 +121,10 @@ name = "regression_gate"
 harness = false
 
 [[bench]]
+name = "conv1d_hotpath_bench"
+harness = false
+
+[[bench]]
 name = "cabsim_bench"
 harness = false
 
@@ -139,6 +146,11 @@ heap-audit = []
 fft-radix4-planner = []
 # Research and re-measurement only: enables AVX-512 kernels and instruction dispatch (not used in default/production).
 avx512 = []
+# Opt-in real-time host hardening (THP disable, mlockall, SCHED_FIFO, DAZ/FTZ,
+# IRQ-aware CPU affinity, /dev/cpu_dma_latency). Linux-only, never default.
+# Declared without `libc` forwarding: `libc` is already a mandatory engine
+# dependency (mirror/huge-page alloc, TSC, scheduler introspection).
+rt-hardening = []
 
 [[bin]]
 name = "gen_stress"
@@ -256,5 +268,5 @@ split-debuginfo = "unpacked"
 
 [package.metadata.docs.rs]
 no-default-features = true
-features = ["dual-mono", "testing", "heap-audit", "fft-radix4-planner", "avx512"]
+features = ["dual-mono", "testing", "heap-audit", "fft-radix4-planner", "avx512", "rt-hardening"]
 rustdoc-args = ["--cfg", "docsrs"]

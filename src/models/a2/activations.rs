@@ -94,6 +94,27 @@ impl ActivationType {
     /// the CPU ISA capabilities (guaranteed by the top-level `dispatch_simd!`).
     #[inline(always)]
     pub unsafe fn apply_simd<M: SimdMath>(&self, data: &mut [f32]) {
+        // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).
+        let is_hf = crate::math::activations::activation_precision()
+            == crate::math::activations::ActivationPrecision::Standard;
+        // SAFETY: `data` is a valid mutable slice from the caller of this
+        // `unsafe fn` and `M` matches the CPU ISA (top-level `dispatch_simd!`).
+        unsafe {
+            self.apply_simd_with_precision::<M>(data, is_hf);
+        }
+    }
+
+    /// Applies the activation function with a block-hoisted precision flag.
+    ///
+    /// Block-level callers ([`WaveNetA2Dyn::process`](super::model::dynamic::WaveNetA2Dyn::process)
+    /// cascade/block loops) read [`activation_precision`](crate::math::activations::activation_precision)
+    /// once per block and forward `is_hf`, avoiding a TLS read per frame/slice.
+    /// Per-frame callers without a block context keep using [`apply_simd`](Self::apply_simd).
+    ///
+    /// # Safety
+    /// Same contract as [`apply_simd`](Self::apply_simd).
+    #[inline(always)]
+    pub unsafe fn apply_simd_with_precision<M: SimdMath>(&self, data: &mut [f32], is_hf: bool) {
         match self {
             // SAFETY: `data` is a valid mutable slice from the caller of this
             // `unsafe fn` and `M` matches the CPU ISA (top-level `dispatch_simd!`).
@@ -140,9 +161,7 @@ impl ActivationType {
             // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
             // (top-level `dispatch_simd!`).
             Self::SiLU => unsafe {
-                if crate::math::activations::activation_precision()
-                    == crate::math::activations::ActivationPrecision::Standard
-                {
+                if is_hf {
                     M::silu_slice_hf(data);
                 } else {
                     M::silu_slice(data);

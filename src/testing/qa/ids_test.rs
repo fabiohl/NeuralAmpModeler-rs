@@ -90,30 +90,59 @@ fn rt_table_covers_every_regression_gate_bench() {
     }
 }
 
-/// Bench labels that differ from their contract id are mapped explicitly.
+/// Bench labels resolve to their contract id through the explicit registry
+/// (identity since the legacy-id rename — kept as the single join point).
 #[test]
 fn rt_aliases_map_bench_label_to_contract_id() {
-    assert_eq!(
-        resolve_rt_contract_id("RT_Linear"),
-        Some("RT_Linear_RF2048")
-    );
+    assert_eq!(resolve_rt_contract_id("RT_Linear"), Some("RT_Linear"));
     assert_eq!(
         resolve_rt_contract_id("RT_DSP_Resampler_44k1_to_48k"),
-        Some("RT_DSP_Resampler_44k_to_48k")
+        Some("RT_DSP_Resampler_44k1_to_48k")
     );
     assert_eq!(
         resolve_rt_contract_id("RT_DSP_Pipeline_Base_NoOS"),
-        Some("RT_DSP_Pipeline_Base")
+        Some("RT_DSP_Pipeline_Base_NoOS")
     );
     assert_eq!(
         resolve_rt_contract_id("RT_DSP_Pipeline_HQ_4xOS"),
-        Some("RT_DSP_Pipeline_HQ")
+        Some("RT_DSP_Pipeline_HQ_4xOS")
     );
     assert_eq!(
         resolve_rt_contract_id("RT_WaveNet_Std_CH16"),
         Some("RT_WaveNet_Std_CH16")
     );
     assert_eq!(resolve_rt_contract_id("RT_Unknown"), None);
+}
+
+/// The committed contract's performance ids are exactly the `RT_BENCH_TABLE`
+/// contract ids — the verify engine resolves every bench through this table,
+/// so a drifted id surfaces here instead of as a dashboard `MISSING_LABEL`
+/// (P0.T3) at gate time.
+#[test]
+fn rt_table_contract_ids_match_committed_contract() {
+    use crate::testing::qa::QualityContract;
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/quality-contract.json");
+    let content = std::fs::read_to_string(&path).expect("read docs/quality-contract.json");
+    let contract = QualityContract::from_json_str(&content)
+        .expect("contract must validate against the schema");
+
+    let table_ids: std::collections::HashSet<&str> =
+        RT_BENCH_TABLE.iter().map(|e| e.contract_id).collect();
+    let contract_ids: std::collections::HashSet<&str> =
+        contract.performance.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(
+        table_ids, contract_ids,
+        "contract ids must match RT_BENCH_TABLE"
+    );
+    for entry in RT_BENCH_TABLE {
+        assert_eq!(
+            resolve_rt_contract_id(entry.bench_label),
+            Some(entry.contract_id),
+            "bench label '{}' must resolve to its contract id",
+            entry.bench_label
+        );
+    }
 }
 
 /// Model benches resolve to a catalog fixture; DSP benches resolve to

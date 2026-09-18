@@ -50,6 +50,7 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
     activation: &ActivationType,
     cond_buf: &[f32],
     cond_size: usize,
+    is_hf: bool,
 ) {
     let frame_idx = max_lookback_cols + f;
     let cond_slice = &cond_buf[f * cond_size..(f + 1) * cond_size];
@@ -225,7 +226,8 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
         }
     }
 
-    // 3. Activation or Gating/Blending.
+    // 3. Activation or Gating/Blending (`is_hf` hoisted once per block by the
+    // caller — avoids a TLS read per frame; LSTM hoist pattern).
     if use_gating {
         if let Some(gc) = gating_config {
             // SAFETY: `M` matches the CPU ISA (top-level `dispatch_simd!`) and
@@ -233,7 +235,7 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
             // `debug_assert!` requires an even length, which holds because
             // `z_out_ch = bottleneck * 2` when gating is active.
             unsafe {
-                gc.apply_gating_simd::<M>(&mut z_scratch[..z_out_ch]);
+                gc.apply_gating_simd_with_precision::<M>(&mut z_scratch[..z_out_ch], is_hf);
             }
         }
         z_len = bottleneck;
@@ -244,7 +246,7 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
             // `debug_assert!`s require an even length and pre-allocated scratch,
             // which hold because `z_out_ch = bottleneck * 2` when blending is active.
             unsafe {
-                bc.apply_blending_simd::<M>(&mut z_scratch[..z_out_ch]);
+                bc.apply_blending_simd_with_precision::<M>(&mut z_scratch[..z_out_ch], is_hf);
             }
         }
         z_len = bottleneck;
@@ -253,7 +255,7 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
         // `z_scratch[..bottleneck]` is a valid in-bounds slice (documented
         // precondition of `apply_simd`).
         unsafe {
-            activation.apply_simd::<M>(&mut z_scratch[..bottleneck]);
+            activation.apply_simd_with_precision::<M>(&mut z_scratch[..bottleneck], is_hf);
         }
         z_len = bottleneck;
     }

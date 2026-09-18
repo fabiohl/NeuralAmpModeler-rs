@@ -33,6 +33,14 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
     /// (`WaveNetLayerState::new`, see `common.rs`), and the kernel clamps the tap
     /// offsets to the buffer start (F-01) so a violating caller still cannot produce
     /// an out-of-bounds read in release builds.
+    ///
+    /// # Portability Note (kept kernel)
+    /// Maintained for architectures with ≥ 16 YMM/ZMM registers (AVX-512, ARM
+    /// NEON) and for dual-vs-single-frame parity tests. Running this kernel as
+    /// a main loop on AVX2 is contraindicated — ~19% regression from register
+    /// pressure; see `docs/benchmarks.md` §"Experiment Report: Temporal Tiling
+    /// (Dual-Frame) on Conv1D". `WaveNetLayer::process_block_internal` must
+    /// keep the Single-Frame loop on x86-64-v3.
     #[inline(always)]
     #[expect(
         clippy::too_many_arguments,

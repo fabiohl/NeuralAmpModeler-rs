@@ -117,8 +117,9 @@ pub fn resolve_fixture_by_label(label: &str) -> Option<&'static str> {
 pub struct RtBenchEntry {
     /// Criterion `bench_function` label of `benches/regression_gate.rs`.
     pub bench_label: &'static str,
-    /// Canonical performance id of `docs/quality-contract.json`
-    /// (differs from the bench label for `RT_Linear` and the DSP benches).
+    /// Canonical performance id of `docs/quality-contract.json` (identical to
+    /// the bench label since the legacy-id rename — the resolver remains the
+    /// explicit registry consulted by the verify engine).
     pub contract_id: &'static str,
     /// Model fixture file loaded by the bench (`None` for DSP benches).
     pub fixture: Option<&'static str>,
@@ -126,7 +127,7 @@ pub struct RtBenchEntry {
 
 /// Explicit `RT_*` table of `benches/regression_gate.rs` — the contract ids
 /// are the ones of the current `docs/quality-contract.json` performance
-/// section, kept in sync by `rt_contract_ids_match_contract_docs`.
+/// section, kept in sync by `rt_table_contract_ids_match_committed_contract`.
 pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
     RtBenchEntry {
         bench_label: "RT_WaveNet_Std_CH16",
@@ -170,7 +171,7 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
     },
     RtBenchEntry {
         bench_label: "RT_Linear",
-        contract_id: "RT_Linear_RF2048",
+        contract_id: "RT_Linear",
         fixture: Some("linear_test.nam"),
     },
     RtBenchEntry {
@@ -200,7 +201,7 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
     },
     RtBenchEntry {
         bench_label: "RT_DSP_Resampler_44k1_to_48k",
-        contract_id: "RT_DSP_Resampler_44k_to_48k",
+        contract_id: "RT_DSP_Resampler_44k1_to_48k",
         fixture: None,
     },
     RtBenchEntry {
@@ -215,18 +216,22 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
     },
     RtBenchEntry {
         bench_label: "RT_DSP_Pipeline_Base_NoOS",
-        contract_id: "RT_DSP_Pipeline_Base",
+        contract_id: "RT_DSP_Pipeline_Base_NoOS",
         fixture: None,
     },
     RtBenchEntry {
         bench_label: "RT_DSP_Pipeline_HQ_4xOS",
-        contract_id: "RT_DSP_Pipeline_HQ",
+        contract_id: "RT_DSP_Pipeline_HQ_4xOS",
         fixture: None,
     },
 ];
 
 /// Resolves a Criterion bench label of `regression_gate.rs` to its canonical
-/// contract performance id.
+/// contract performance id. Since the legacy-id rename in
+/// `docs/quality-contract.json` (contract ids now equal the bench labels),
+/// this is an identity projection over `RT_BENCH_TABLE`; it is kept as the
+/// single join point for the verify engine so future label divergences stay
+/// one-table fixes.
 pub fn resolve_rt_contract_id(bench_label: &str) -> Option<&'static str> {
     RT_BENCH_TABLE
         .iter()

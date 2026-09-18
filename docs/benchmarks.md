@@ -93,17 +93,24 @@ All historical tracking metrics are recorded in local files within your project 
 > **Current vs. historical numbers.** The authoritative *current* per-model latency
 > figures come from a fresh `regression_gate` run — most conveniently via
 > [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) (PERFORMANCE section, median per 64-sample block).
-> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 36.9 µs
-> (2.8%, 2404 µs/MMAC), Feather CH8 ≈ 19.4 µs (1.5%, 5031 µs/MMAC), Lite CH12 ≈ 52.6 µs (3.9%, 6039 µs/MMAC),
-> Nano CH4 ≈ 17.4 µs (1.3%, 17969 µs/MMAC outlier due to layer overhead),
-> A2-Full CH8 ≈ 27.6 µs (2.1%), A2-Lite CH3 ≈ 18.4 µs (1.4%), LSTM 1×16 ≈ 7.5 µs (0.6%),
-> LSTM 2×8 ≈ 7.6 µs (0.6%), ConvNet ≈ 10.2 µs (0.8%), Linear RF=2048 ≈ 0.3 µs (0.02%),
-> DSP Resampler (44.1k→48k) ≈ 1.3 µs, DSP CabSim IR Medium (512) ≈ 1.3 µs,
-> Full DSP Pipeline Base (No OS) ≈ 37.2 µs (2.8%), Full DSP Pipeline HQ (4× OS) ≈ 150.6 µs (11.3%).
-> All ≤ 3.9% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
+> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 44.9 µs
+> (3.4%, 2925 µs/MMAC), Feather CH8 ≈ 20.0 µs (1.5%, 5176 µs/MMAC), Lite CH12 ≈ 58.8 µs (4.4%, 6746 µs/MMAC),
+> Nano CH4 ≈ 18.0 µs (1.4%, 18595 µs/MMAC outlier due to layer overhead),
+> A2-Full CH8 ≈ 25.7 µs (1.9%), A2-Lite CH3 ≈ 21.0 µs (1.6%), LSTM 1×16 ≈ 6.7 µs (0.5%),
+> LSTM 2×8 ≈ 7.3 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=2048 ≈ 0.3 µs (0.02%),
+> DSP Resampler (44.1k→48k) ≈ 1.2 µs, DSP CabSim IR Medium (2048 taps) ≈ 1.2 µs,
+> Full DSP Pipeline Base (No OS) ≈ 45.6 µs (3.4%), Full DSP Pipeline HQ (4× OS) ≈ 185.6 µs (13.9%).
+> All ≤ 4.4% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
 > sections further down are **historical point-in-time studies** documenting engineering
 > decisions; their absolute numbers (e.g. WaveNet Std ≈ 92.6 µs) predate later optimizations
 > and are retained only to justify the decisions, not as current performance claims.
+>
+> [!NOTE]
+> **Measurement context and provenance:**
+>
+> * Values measured on release build with `rustc 1.98.1` (single-frame processing, AVX2).
+> * Previous snapshot values (~36.9 µs etc.) corresponded to an unrepeatable `rustc 1.97.1` environment with `git_dirty: true` and were never reproduced on clean builds.
+> * The single canonical source of truth for performance is always [`docs/quality-contract.json`](quality-contract.json).
 
 *(Note: NeuralAmpModeler-rs intentionally disables HTML report generation with temporal charts in `Cargo.toml` (`default-features = false`) to omit downloading extensive visual dependencies, limiting evaluation to the console).*
 
@@ -326,6 +333,24 @@ degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
 > Updating one does **not** update the other. Order is always:
 > bootstrap Criterion → standalone `--check` green → dashboard `--save` → dashboard `--check`.
 
+### Contract Performance IDs and Bench-Label Resolution
+
+Every performance `id` in `quality-contract.json` is **identical to the Criterion
+bench label** in [`benches/regression_gate.rs`](../benches/regression_gate.rs).
+Historically four ids diverged from their bench labels
+(`RT_Linear_RF2048`, `RT_DSP_Resampler_44k_to_48k`, `RT_DSP_Pipeline_Base`,
+`RT_DSP_Pipeline_HQ`); they were renamed to the bench-label form
+(`RT_Linear`, `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Pipeline_Base_NoOS`,
+`RT_DSP_Pipeline_HQ_4xOS`), so ids now carry their distinguishing qualifier
+directly (sample-rate variant, oversampling mode).
+
+The join is kept explicit in `src/testing/qa/ids.rs` — `RT_BENCH_TABLE` maps
+each bench label to its contract id (currently an identity projection) via
+`resolve_rt_contract_id`, the single resolution point used by the verify
+engine and guarded by the
+`rt_table_contract_ids_match_committed_contract` test. Renaming a bench label
+therefore always requires renaming the contract id in the same change.
+
 ### Baselines and Renewal
 
 The official performance baseline lives in [`quality-contract.json`](quality-contract.json) alongside
@@ -412,6 +437,8 @@ To process two frames in parallel:
 
 **Conclusion:** The primary bottleneck of `Conv1D` in NeuralAmpModeler-rs is not tied to L1 Cache bandwidth, but rather to computational throughput and register contention in the backend (FMA). Because of this, while the kernel implementation has been kept in the `SimdMath` trait for portability and testing on architectures with more registers (e.g., AVX-512 or ARM NEON), the main loop in `WaveNetLayer` continues to use **Single-Frame processing** to ensure the lowest latency and highest real-time stability.
 
+The main loop in `src/models/wavenet/layer.rs::process_block_internal` uses exclusively `process_single_frame_with_mixin`; any switch to Dual-Frame in that context requires re-running the parity-validation benchmarks before merge.
+
 ---
 
 ## Experiment Report: Stereo Fusion in the Output Stage
@@ -490,6 +517,12 @@ The cabsim engine uses UPOLS (Uniform-Partitioned Overlap-Save) frequency-domain
 
 ### Benchmarks (64-sample blocks at 48 kHz)
 
+> [!NOTE]
+> Os valores desta tabela histórica refletem uma versão significativamente anterior
+> do kernel CabSim e não são comparáveis aos valores atuais do `quality-contract.json`.
+> Mantidos apenas como registro arqueológico. Para benchmarks atuais, consultar
+> `docs/quality-contract.json` e `utils/quality-dashboard.sh`.
+
 | Benchmark                 | IR Samples | Partitions | Latency (µs) | CPU % at 48kHz |
 |:------------------------- |:---------- |:---------- |:------------ |:-------------- |
 | ShortIR_64samp            | 64         | 1          | ~1.39        | ~0.1%          |
@@ -542,6 +575,95 @@ These optimizations reduced the global median latency of WaveNet Lite CH12 from 
 Assembly comparison and stride analysis revealed that fixed setup overhead (prologue, dispatch, bounds checks) accounts for 54% of instructions in Lite CH12 versus 34.5% in Standard CH16. On AVX2, the 8+4 channel split operates with 128-bit XMM instructions for the upper 4 lanes, yielding higher instruction counts per layer than standard 16-channel YMM operations.
 
 **Final Decision:** The WaveNet Lite CH12 SKU operates cleanly at **~52.7 µs** (96.1% headroom from the 1333 µs RT deadline), with 1e-7 parity tolerance restored and zero unneeded technical debt.
+
+### 3. CH=12 lane-route re-validation (kernel-level A/B)
+
+The 8+4 split was re-quantified at the dot-product kernel level with
+`benches/conv1d_hotpath_bench.rs` (group `ch12_lane_route`, IN=12, K=3 → 36
+taps, the WaveNet Lite dilated-conv geometry; AVX2, rustc 1.98.1). The
+padded-16 route runs `dot_product_16x_f32_accumulate` over zero-padded lanes
+12..15; the 8+4 composite runs the 8-wide kernel (lanes 0..8) plus the
+4-wide kernel (lanes 8..12) over the same taps — bit-equal on the 12 useful
+lanes (asserted in the bench). Across three independent builds the padded
+route won 2 of 3 windows (18.0–23.1 ns vs 21.8–24.0 ns for 8+4), matching
+the instruction-count argument above (same FMA count per tap, one extra
+broadcast per tap, duplicated loop/reduction overhead). **Decision
+confirmed: keep the padded 16-lane route for CH=12.**
+
+### 4. Constant-folding of `interleave_width` (verified)
+
+`select_interleave_width` is `const fn` (kept as fold insurance) and
+`OUT` is a const generic, so every per-SKU kernel monomorphizes exactly one
+`match` arm. Verified via `cargo rustc --release --lib -- --emit=asm` on
+rustc 1.98.1: each `WaveNetLayer<IN, OUT, K>::process_block_internal` body
+contains only its own kernel — CH16/CH12 instantiations show zero 128-bit
+FMA ops, while the 4-wide route (`OUT = 6`) shows the 128-bit FMA kernel;
+`select_interleave_width` never appears as a runtime call site. A
+`const`-binding test (`layout_test.rs`) keeps the foldability contract
+enforced by the build.
+
+---
+
+## Software Prefetch Policy for the Causal Conv1D Tap Loop
+
+`prefetch_strategy_simple` (`src/math/common/ops.rs`) is **stride-guarded**:
+the fixed `+16 f32` (one 64-byte line) T0 hint fires only when the tap
+stride `step = dilation * in_ch` fits inside one cache line
+(`step <= 16 f32`). Rationale (measured, AVX2, rustc 1.98.1, Zen 2 5700U —
+`benches/conv1d_hotpath_bench.rs`, group `prefetch_guard`):
+
+* For `step <= 16 f32` the prefetched line overlaps the next tap's row
+  (exactly for 16x16 d=1 / 8x8 d=2, partially for 12x12 d=1) — removing the
+  hint costs **+3..5%** on those cases (16x16 d=1, 12x12 d=1).
+* For larger strides the prefetched line is never read by any tap
+  (misaligned junk work on a load-port slot): removing it improves the
+  8-wide kernel by **~8-9%** for dilations ≥ 4 and is neutral-to-slightly
+  better on 4-wide/12-wide (the hardware prefetcher streams short strides;
+  the 2-stage strategy owns extreme dilations with a correctly aimed
+  next-tap + next-next lookahead).
+* A pure dilation threshold cannot express this: the same dilation is
+  aligned for CH16 (d=1) and misaligned for CH8 (d=2) because the useful
+  quantity is the byte stride. Model-level gate (same-window A/B):
+  Std CH16 **−4.0%**, Nano CH4 −0.8%, Feather CH8 −0.2% (no change),
+  Dyn_Free +0.2%, Lite CH12 +1.3% (within the ±2% codegen band; the isolated
+  12x12 kernel loop is neutral under the guard).
+
+### Empirical Validation and Resolution of Evidence Conflict (2026-09-17)
+
+To resolve the evidence conflict noted during audit between initial same-window measurements (−4.0%) and cross-run measurements under load (+4.6%), a dedicated A/B re-measurement protocol was executed on an idle system (`NAM_THERMAL_COOLDOWN_S=180`, `taskset -c 12` on AMD Zen 2 5700U):
+
+* **Kernel-level (`conv1d_hotpath_bench`):**
+  * Disabling the `step <= 16` guard in `prefetch_strategy_simple` provoked an immediate **+8.2% to +9.5%** regression across all dilations $\ge 4$ in `8x8` (`dil4_8x8`: +9.42%, `dil8_8x8`: +9.45%, `dil16_8x8`: +8.99%, `dil32_8x8`: +8.21%, $p = 0.00$), corroborating that unconditional prefetch on large strides pollutes the load ports with unread cache lines.
+  * In `16x16`, `12x12`, and `4x4`, differences remained neutral or within the statistical noise threshold ($p > 0.05$).
+* **Model-level (`regression_gate` / `RT_WaveNet_Std_CH16`):**
+  * Measured time: `[46.912 µs 47.434 µs 47.940 µs]`, change: `−0.52%` (`[−1.76%, +0.72%]`, $p = 0.44 > 0.05$).
+  * Verdict: **Neutral (within the ±2% noise threshold)**.
+* **Decision:** In accordance with the S5-T8 decision rule, the stride-guarded prefetch (`step <= 16`) is **retained in HEAD**. The +4.6% divergence observed during the earlier audit run was confirmed to be an environmental artifact of thermal throttling and system load.
+
+### Conv1D Hotpath Bench — Calibration Protocol
+
+`benches/conv1d_hotpath_bench.rs` is a dedicated manual micro-calibration tool designed to isolate kernel-level effects of causal convolution prefetching (`prefetch_guard`) and channel lane routing (`ch12_lane_route`).
+
+> [!NOTE]
+> **Manual Tooling Only:** This bench is **not part** of the automated regression gate (`regression_gate.rs` / `quality-dashboard.sh`) — it is an off-line calibration tool intended for targeted investigation and threshold validation.
+
+* **When to recalibrate:** After changes to `src/math/common/ops.rs` (`prefetch_strategy_simple`), `src/models/wavenet/conv1d.rs`, `src/models/wavenet/conv1d_dual.rs`, or when changing the Rust toolchain.
+* **How to recalibrate:**
+
+  ```bash
+  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --save-baseline cal-XX
+  # (alterar o código sob teste)
+  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --baseline cal-XX
+  ```
+
+* **Decision thresholds:**
+  * Regression > 5% in the 16×16 ($d=1$) kernel motivates an immediate revert.
+  * Improvement > 5% in the 8×8 ($d \ge 4$) kernel motivates expanding the prefetch guard.
+* **Model-level confirmation:** Always confirm kernel-level results with:
+
+  ```bash
+  cargo bench --bench regression_gate -- RT_WaveNet
+  ```
 
 ---
 

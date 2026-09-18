@@ -1213,3 +1213,113 @@ fn test_new_typed_simple_variants_and_bypass() {
         NamResampler::new_linear_simple_typed(96_000, 96_000).expect("typed linear bypass");
     assert!(linear_bypass.is_bypass());
 }
+
+// ── In-place reconfiguration (F7) ────────────────────────────────────────────
+
+/// `reconfigure` with the same rate pair must reuse the polyphase banks and
+/// delay-line allocations wholesale (zero allocations) and only discard the
+/// streaming state — verifiable with the counting allocator.
+#[test]
+fn test_reconfigure_same_ratio_reuses_allocations() {
+    use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+
+    let mut rs = NamResampler::new(44_100, 48_000, 256).expect("new failed");
+    assert!(!rs.is_bypass());
+
+    // Warm the engines, then dirty the streaming state with a real block.
+    let input = vec![0.25f32; 512];
+    let mut out_l = vec![0.0f32; 512];
+    let mut out_r = vec![0.0f32; 512];
+    rs.process_input(&input, &input, &mut out_l, &mut out_r);
+
+    let _guard = TrackingGuard::new();
+    rs.reconfigure(44_100, 48_000, 1024)
+        .expect("same-ratio reconfigure must succeed");
+    let allocs = get_alloc_count();
+    drop(_guard);
+
+    assert_eq!(
+        allocs, 0,
+        "same-ratio reconfigure must not allocate (banks reused)"
+    );
+    assert!(!rs.is_bypass());
+    assert_eq!(rs.host_rate(), 44_100);
+    assert_eq!(rs.nam_rate(), 48_000);
+
+    // Streaming state was discarded: the very next block must behave like a
+    // fresh engine (deterministic conversion of the same input).
+    let reference = {
+        let mut fresh = NamResampler::new(44_100, 48_000, 0).expect("fresh failed");
+        let mut out_l = vec![0.0f32; 480];
+        let mut out_r = vec![0.0f32; 480];
+        let progress = fresh.process_input(&input, &input, &mut out_l, &mut out_r);
+        assert_eq!(progress.samples_written, 480);
+        out_l
+    };
+    let mut converted_l = vec![0.0f32; 480];
+    let mut converted_r = vec![0.0f32; 480];
+    rs.process_input(&input, &input, &mut converted_l, &mut converted_r);
+    assert_eq!(
+        converted_l, reference,
+        "post-reconfigure streaming state must match a fresh engine"
+    );
+}
+
+/// `reconfigure` to a new ratio must rebuild both engines with the stored
+/// phase character and update the reported rates; equal rates must produce a
+/// full bypass.
+#[test]
+fn test_reconfigure_changes_ratio_and_bypass() {
+    let mut rs = NamResampler::new(44_100, 48_000, 0).expect("new failed");
+    assert!(!rs.is_bypass());
+    let latency_min_phase = rs.latency_samples(44_100);
+    assert!(latency_min_phase > 0);
+
+    // Same rates as a fresh minimum-phase engine: the phase character must
+    // be preserved by the rebuild.
+    rs.reconfigure(96_000, 48_000, 256).expect("rebuild failed");
+    assert!(!rs.is_bypass());
+    assert_eq!(rs.host_rate(), 96_000);
+    assert_eq!(rs.nam_rate(), 48_000);
+    let fresh_min_phase = NamResampler::new(96_000, 48_000, 0).expect("fresh failed");
+    assert_eq!(
+        rs.latency_samples(96_000),
+        fresh_min_phase.latency_samples(96_000),
+        "reconfigure must rebuild with the same phase type (minimum-phase)"
+    );
+
+    // Equal rates: full bypass.
+    rs.reconfigure(48_000, 48_000, 256)
+        .expect("bypass switch failed");
+    assert!(rs.is_bypass());
+    assert_eq!(rs.latency_samples(48_000), 0);
+}
+
+/// `reconfigure` must be fail-closed: an out-of-range rate returns
+/// [`NamErrorCode::ResamplerBuildFailed`] and leaves the previous working
+/// configuration untouched.
+#[test]
+fn test_reconfigure_rejects_invalid_rates_and_keeps_config() {
+    let mut rs = NamResampler::new(44_100, 48_000, 0).expect("new failed");
+
+    assert_eq!(
+        rs.reconfigure(1_000, 48_000, 256).err(),
+        Some(NamErrorCode::ResamplerBuildFailed)
+    );
+    assert_eq!(
+        rs.reconfigure(44_100, 500_000, 256).err(),
+        Some(NamErrorCode::ResamplerBuildFailed)
+    );
+
+    // Previous configuration must survive both failed attempts.
+    assert!(!rs.is_bypass());
+    assert_eq!(rs.host_rate(), 44_100);
+    assert_eq!(rs.nam_rate(), 48_000);
+
+    // And the engine must still process audio correctly.
+    let input = vec![0.5f32; 256];
+    let mut out_l = vec![0.0f32; 256];
+    let mut out_r = vec![0.0f32; 256];
+    let progress = rs.process_input(&input, &input, &mut out_l, &mut out_r);
+    assert_eq!(progress.samples_written, 256);
+}

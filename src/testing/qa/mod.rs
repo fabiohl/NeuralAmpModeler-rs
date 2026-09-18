@@ -28,6 +28,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub struct QualityContract {
     /// Schema version (see [`SCHEMA_VERSION`]).
     pub schema_version: u32,
+    /// Free-form interpretation notes for the schema's unit conventions
+    /// (e.g. the micro-batch `batch_factor` semantics). Documentation only —
+    /// the verify engine never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_notes: Option<String>,
     /// ISO-8601 timestamp of the measured snapshot.
     pub generated_at: String,
     /// Machine/toolchain provenance of the measured snapshot.
@@ -38,6 +43,11 @@ pub struct QualityContract {
     pub fidelity: Vec<FidelityEntry>,
     /// Real-time latency entries (Model Inference Core + DSP Infrastructure).
     pub performance: Vec<PerformanceEntry>,
+    /// Trend-monitoring alerts for the long-suite health metrics (see
+    /// [`MonitoringAlerts`]). Documentation only — the verify engine never
+    /// reads it and it never blocks `--check`/`--save`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitoring_alerts: Option<MonitoringAlerts>,
 }
 
 impl QualityContract {
@@ -164,6 +174,52 @@ pub struct FidelityEntry {
     pub optional: bool,
 }
 
+/// Trend-monitoring alerts for the long-suite (`pernoite.sh`) health metrics.
+///
+/// These values record the **worst observed** numbers of the most recent
+/// long-suite run next to their hard contract budget and the softer alert
+/// point where the next run deserves human attention. They are purely for
+/// trend monitoring between contract regenerations — the verify engine never
+/// reads this section and it never blocks CI (`--check`/`--save`); the
+/// binding gates remain the fidelity/performance envelopes above.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitoringAlerts {
+    /// What this section is (and is not): trend-monitoring aids, not
+    /// blocking gates (JSON cannot carry comments, so the caveat lives here).
+    pub notes: String,
+    /// Worst ESR parity of the last long-suite run vs. the NAMcore limiar
+    /// and the human-alert point.
+    pub worst_esr_parity: MonitoringAlertF64,
+    /// Worst RT P99.9 under CPU contention (µs) vs. the RT deadline budget
+    /// and the human-alert point.
+    pub rt_p99_9_under_contention_us: MonitoringAlertUs,
+}
+
+/// Floating-point trend alert (ESR family).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MonitoringAlertF64 {
+    /// Worst measured value of the reference run.
+    pub measured: f64,
+    /// Hard threshold of the underlying quality gate.
+    pub threshold: f64,
+    /// Alert when the next measurement exceeds this value.
+    pub alert_above: f64,
+}
+
+/// Integer trend alert in microseconds (RT latency family).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitoringAlertUs {
+    /// Worst measured value of the reference run, in µs.
+    pub measured_us: u64,
+    /// Hard deadline budget, in µs.
+    pub threshold_us: u64,
+    /// Alert when the next measurement exceeds this value, in µs.
+    pub alert_above_us: u64,
+}
+
 /// One real-time latency entry (Model Inference Core or DSP Infrastructure).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,6 +230,17 @@ pub struct PerformanceEntry {
     pub label: String,
     /// Median block latency in microseconds.
     pub median_latency_us: f64,
+    /// Blocks processed per Criterion sample when the bench batches sub-µs
+    /// work (`None` for per-block benches). The canonical value lives in
+    /// `benches/constants.rs::DSP_MICRO_BATCH` (exported to
+    /// `target/bench_constants.env` for `utils/quality-dashboard.sh`); the
+    /// dashboard divides the measured median by this factor before comparing
+    /// to `median_latency_us`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_factor: Option<u64>,
+    /// Reporting unit of `median_latency_us` (e.g. `per_block_us`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 /// Typed error for parsing/persisting a quality contract.

@@ -108,6 +108,7 @@ fn extract_feature_refs(text: &str) -> HashSet<String> {
         "heap-audit",
         "fft-radix4-planner",
         "avx512",
+        "rt-hardening",
     ];
     let lower = text.to_lowercase();
     let mut refs = HashSet::new();

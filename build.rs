@@ -27,6 +27,9 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-changed=.cargo/hide-libm-shadow.map");
+    // Keep `target/bench_constants.env` in sync with the canonical constant —
+    // `utils/quality-dashboard.sh` sources this file instead of hard-coding it.
+    println!("cargo:rerun-if-changed=benches/constants.rs");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -64,5 +67,41 @@ fn main() {
         println!(
             "cargo:rustc-link-arg=-Wl,--version-script={manifest_dir}/.cargo/hide-libm-shadow.map"
         );
+    }
+
+    export_bench_constants_env();
+}
+
+/// Extracts `DSP_MICRO_BATCH` from the canonical `benches/constants.rs` and
+/// writes it to `target/bench_constants.env` for `utils/quality-dashboard.sh`
+/// (`parse_benchmarks` sources it to divide micro-bench medians by the batch
+/// factor). Fails the build loudly if the constant cannot be resolved — a
+/// silently stale env file would let the dashboard compare wrong units.
+fn export_bench_constants_env() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let constants_path = format!("{manifest_dir}/benches/constants.rs");
+    let source = std::fs::read_to_string(&constants_path)
+        .unwrap_or_else(|e| panic!("build.rs: cannot read {constants_path}: {e}"));
+
+    let needle = "pub const DSP_MICRO_BATCH: usize";
+    let decl = source
+        .lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("build.rs: `{needle}` not found in benches/constants.rs"));
+    let value = decl
+        .split('=')
+        .next_back()
+        .and_then(|rhs| {
+            rhs.trim()
+                .trim_end_matches(';')
+                .trim()
+                .parse::<usize>()
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("build.rs: cannot parse `usize` value from `{decl}`"));
+
+    let env_path = format!("{manifest_dir}/target/bench_constants.env");
+    if let Err(e) = std::fs::write(&env_path, format!("DSP_MICRO_BATCH={value}\n")) {
+        panic!("build.rs: cannot write {env_path}: {e}");
     }
 }

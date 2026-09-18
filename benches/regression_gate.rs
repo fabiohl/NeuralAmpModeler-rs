@@ -34,8 +34,12 @@
 //! - Pipeline: Canonical Base (No OS, 48 kHz, 64-sample block)
 //! - Pipeline: HQ 4xOS (4x oversampling, 48 kHz, 64-sample block)
 
+#[path = "constants.rs"]
+mod bench_constants;
 #[path = "common.rs"]
 mod common;
+
+use bench_constants::DSP_MICRO_BATCH;
 
 use criterion::{Criterion, criterion_group};
 use neural_amp_modeler_rs::common::params::AdaptiveComputeMode;
@@ -133,11 +137,9 @@ fn bench_a2_dyn_blended(c: &mut Criterion) {
 
 // ── DSP Infrastructure ───────────────────────────────────────────────────────
 
-// Sub-µs kernels need batched work per Criterion sample. A single 64-sample
-// block is ~0.7–1.4 µs and trips the 2% noise wall from timer jitter alone.
-// Batch size is fixed; Criterion params (sample_size/measurement/noise) stay
-// canonical. Reported time is for the full batch (not per-block).
-const DSP_MICRO_BATCH: usize = 64;
+// Sub-µs kernels need batched work per Criterion sample; the batch size is
+// the canonical `DSP_MICRO_BATCH` from `benches/constants.rs` (exported to
+// `target/bench_constants.env` by `build.rs` for the quality dashboard).
 
 fn bench_dsp_resampler_44k1_to_48k(c: &mut Criterion) {
     let mut rs =

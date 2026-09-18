@@ -97,6 +97,8 @@ mod spectral_fidelity;
 mod thp_coherence;
 #[path = "models/threshold_calibration.rs"]
 mod threshold_calibration;
+#[path = "models/wavenet_dual_frame_guard.rs"]
+mod wavenet_dual_frame_guard;
 #[path = "models/wavenet_lite_block_invariance.rs"]
 mod wavenet_lite_block_invariance;
 #[path = "models/wavenet_prewarm_edge.rs"]

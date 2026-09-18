@@ -67,6 +67,18 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
     /// violations are flagged at the pipeline boundary (`capture.rs`,
     /// `RT_STATUS_HOST_CONTRACT_VIOLATION`); the clamp here is the last line of
     /// defense and never allocates or panics.
+    ///
+    /// # Architectural Decision — Single-Frame Main Loop (x86-64-v3/AVX2)
+    /// `process_single_frame_with_mixin` is the mandatory main-loop kernel on
+    /// AVX2/FMA: throughput — not L1 bandwidth — is the Conv1D bottleneck.
+    /// `process_dual_frame_with_mixin` (Temporal Tiling) exists for
+    /// portability on architectures with wider register files (AVX-512, NEON
+    /// — ≥ 16 YMM/ZMM registers) and for dual-vs-single parity tests.
+    /// NUNCA usar process_dual_frame_with_mixin como laço principal em
+    /// x86-64-v3 (AVX2) — regressão de ~19% por pressão de registradores
+    /// (acumuladores YMM dobrados + overhead de blend/shuffle no frontend).
+    /// Veja docs/benchmarks.md §"Experiment Report: Temporal Tiling (Dual-Frame) on Conv1D".
+    /// Invariante R6 garantido via teste executável `tests/models/wavenet_dual_frame_guard.rs`.
     #[inline]
     pub unsafe fn process_block_internal<M: SimdMath>(&mut self, ctx: WavenetProcessContext<'_>) {
         let WavenetProcessContext {
@@ -132,40 +144,24 @@ impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, 
 
             let conv_slice = self.scratch_conv.get_unchecked_mut(..num_frames * CH);
 
-            let mut i = 0;
-            let mut chunks = conv_slice.chunks_exact_mut(2 * CH);
-            for chunk in chunks.by_ref() {
-                let (out_frame_f0, out_frame_f1) = chunk.split_at_mut(CH);
-
-                let mix_idx_f0 = i * CH;
-                let mix_idx_f1 = (i + 1) * CH;
-                let mixin_f0 = &mixin_out[mix_idx_f0..mix_idx_f0 + CH];
-                let mixin_f1 = &mixin_out[mix_idx_f1..mix_idx_f1 + CH];
-
-                self.conv1d.process_dual_frame_with_mixin::<M>(
-                    layer_buffer,
-                    out_frame_f0,
-                    out_frame_f1,
-                    buffer_start + i,
-                    buffer_start + i + 1,
-                    mixin_f0,
-                    mixin_f1,
-                );
-                i += 2;
-            }
-
-            let rem = chunks.into_remainder();
-            if !rem.is_empty() {
+            // Single-Frame main loop — mandatory on x86-64-v3 (AVX2). Guard:
+            // never swap in `process_dual_frame_with_mixin` here; see the
+            // architectural-decision doc on `process_block_internal` and
+            // docs/benchmarks.md §"Temporal Tiling (Dual-Frame) on Conv1D".
+            // Note: chunks_exact_mut(CH) yields no remainder — audio blocks hold
+            // an integer number of frames (num_frames * CH samples by design).
+            let mut chunks = conv_slice.chunks_exact_mut(CH);
+            for (i, frame) in chunks.by_ref().enumerate() {
                 let mix_idx = i * CH;
                 let mixin_slice = &mixin_out[mix_idx..mix_idx + CH];
-
                 self.conv1d.process_single_frame_with_mixin::<M>(
                     layer_buffer,
-                    rem,
+                    frame,
                     buffer_start + i,
                     mixin_slice,
                 );
             }
+            debug_assert!(chunks.into_remainder().is_empty());
 
             #[cfg(test)]
             let t_conv = if let Some(ts) = t_mixin {

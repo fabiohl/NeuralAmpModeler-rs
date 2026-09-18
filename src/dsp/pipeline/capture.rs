@@ -4,7 +4,7 @@
 //! Full capture DSP pipeline — aggregates all stages.
 
 use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
-use crate::dsp::gate::GateState;
+use crate::dsp::gate::{DynamicHysteresis, GateState};
 use crate::dsp::resampling::StreamingResampleBuffer;
 use crate::math::common::SimdMath;
 use crate::math::common::set_daz_ftz;
@@ -20,7 +20,10 @@ use super::stages::{
 /// Statically dispatches to a monomorphized inner implementation, eliminating
 /// v-table overhead from all inner SIMD operations.
 ///
-/// Returns the number of output samples processed (`n_pw`). Returns 0 if `bridge_writer` is None or gate is closed.
+/// Returns the number of output samples processed (`n_pw`), or 0 when the
+/// gate is closed. `bridge_writer = None` runs the full pipeline normally
+/// and only skips the bridge write (the bridge stage itself treats `None`
+/// as "no listener").
 ///
 /// # Host Contract Guard
 ///
@@ -133,9 +136,13 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
     bufs: DspBuffers<'_>,
     sample_rate: u32,
 ) -> usize {
-    if ctx.bridge_writer.is_none() {
-        return 0;
-    }
+    // `bridge_writer = None` is a first-class mode (headless consumers): the
+    // pipeline below runs every stage and `write_bridge` simply skips the
+    // delivery when there is no listener. There is deliberately no early
+    // return on `bridge_writer.is_none()` — that would force every consumer
+    // without a monitoring bridge to reimplement the whole stage
+    // orchestration (F5).
+
     // STAGE 1: INPUT AND CLEANUP
     let gate_state =
         // SAFETY: slices and context are valid; M corresponds to detected CPU features.
@@ -145,6 +152,10 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
     crate::dsp::gate_flags::report_gate_flags(ctx.rt_status, gate_state);
 
     if gate_state == GateState::Closed {
+        // No IR tail drain on this non-streaming entry: the gate-capable
+        // consumer path is the streaming entry
+        // (`capture_dsp_pipeline_streaming`), which drains the cab-sim tail
+        // on closure instead of cutting to silence instantly.
         if let Some(writer) = ctx.bridge_writer {
             writer.write_silence();
         }
@@ -249,7 +260,33 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 /// guaranteeing that **exactly** `n_samples` host samples are consumed and
 /// produced per invocation regardless of fractional sample-rate ratios.
 ///
-/// Returns the number of output samples processed (`n_pw == n_samples`). Returns 0 if `bridge_writer` is None or gate is closed.
+/// `bridge_writer = None` is a first-class mode: every stage runs normally
+/// and only the bridge delivery is skipped — consumers without a monitoring
+/// bridge get the full orchestrated pipeline instead of having to
+/// reimplement the stage orchestration themselves (F5).
+///
+/// # Noise-Gate Closure and IR Tail Drain
+///
+/// When the noise gate closes, the cab-sim convolution does not cut to
+/// silence instantly: while any attached cab-sim adapter still reports
+/// pending ring-out
+/// ([`remaining_tail_samples`](crate::dsp::cabsim::adapter::CabSimAdapter::remaining_tail_samples)),
+/// closed-gate blocks feed zero input through the convolution stage and emit
+/// the decaying IR response
+/// ([`drain_tail`](crate::dsp::cabsim::adapter::CabSimAdapter::drain_tail)),
+/// so the audible reverb tail completes naturally instead of being
+/// truncated. The budget is re-armed on the active-audio path
+/// ([`rearm_tail`](crate::dsp::cabsim::adapter::CabSimAdapter::rearm_tail))
+/// and the drain applies the output stage through a fresh unity gate — the
+/// ring-out is intentional signal, not noise floor, while the real gate FSM
+/// (stage 1) keeps tracking the host input and reopens on the next loud
+/// block. Once the budget is exhausted (or no cab-sim is attached), closed
+/// blocks emit true silence again. The drain is RT-safe: zero allocations,
+/// zero locks, bounded by the armed budget.
+///
+/// Returns the number of output samples produced for this block
+/// (`n_pw == n_samples` while the gate is open or the IR tail is still
+/// draining, `0` once the gate is closed and the tail is fully flushed).
 #[inline]
 pub fn capture_dsp_pipeline_streaming(
     samples_l: &mut [f32],
@@ -336,9 +373,12 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
     bufs: DspBuffers<'_>,
     sample_rate: u32,
 ) -> usize {
-    if ctx.bridge_writer.is_none() {
-        return 0;
-    }
+    // `bridge_writer = None` is a first-class mode (headless consumers): the
+    // pipeline below runs every stage and `write_bridge` simply skips the
+    // delivery when there is no listener. There is deliberately no early
+    // return on `bridge_writer.is_none()` — that would force every consumer
+    // without a monitoring bridge to reimplement the whole stage
+    // orchestration (F5).
 
     // STAGE 1: INPUT AND CLEANUP
     // SAFETY: Caller guarantees valid pointers and aligned slices within buffer lengths.
@@ -350,6 +390,103 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
 
     if gate_state == GateState::Closed {
         stream.reset();
+
+        // ── Cab-sim IR tail drain ────────────────────────────────────────
+        // The gate closed because the *input* went silent, but the
+        // convolution FDL still holds the ringing IR response. Feeding zero
+        // input through the adapter renders that tail causally; cutting to
+        // silence here would truncate the reverb audibly (F8).
+        //
+        // The drain budget is armed on the active-audio path (`rearm_tail`)
+        // and consumed here (`drain_tail` never re-arms), so the drain is
+        // strictly bounded and always terminates.
+        let convolved = if let Some(ref mut pair) = ctx.conv_pair {
+            // Both channels always advance together so their FDLs flush
+            // independently (a mono mirror below overwrites R afterwards).
+            let pending = pair.remaining_tail_samples();
+            if pending > 0 {
+                bufs.resamp_out_l[..n_samples].fill(0.0);
+                bufs.resamp_out_r[..n_samples].fill(0.0);
+                pair.drain_tail_stereo(
+                    &mut bufs.resamp_out_l[..n_samples],
+                    &mut bufs.resamp_out_r[..n_samples],
+                    Some(ctx.rt_status),
+                );
+                true
+            } else {
+                false
+            }
+        } else if let Some(ref mut conv) = ctx.conv {
+            let pending = conv.remaining_tail_samples();
+            if pending > 0 {
+                bufs.resamp_out_l[..n_samples].fill(0.0);
+                conv.drain_tail(&mut bufs.resamp_out_l[..n_samples], Some(ctx.rt_status));
+                if !*ctx.process_mono {
+                    bufs.resamp_out_r[..n_samples].fill(0.0);
+                    conv.drain_tail(&mut bufs.resamp_out_r[..n_samples], Some(ctx.rt_status));
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if convolved {
+            if *ctx.process_mono {
+                // Mono mirror: cab-sim runs on the left channel only; the
+                // right channel mirrors the drained left signal.
+                // SAFETY: `n_samples <= MAX_RESAMP_BUF` and both `resamp_out_l`
+                // / `resamp_out_r` are at least `MAX_RESAMP_BUF` elements long,
+                // so the `n_samples`-element source and destination ranges are
+                // in-bounds; the two buffers are distinct allocations, hence
+                // non-overlapping.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        bufs.resamp_out_l.as_ptr(),
+                        bufs.resamp_out_r.as_mut_ptr(),
+                        n_samples,
+                    );
+                }
+            }
+
+            // The ring-out is intentional signal, not noise floor — the
+            // closed-gate multiplier (0.0) must not zero it. A fresh unity
+            // gate (Open, multiplier 1.0, steady) yields exactly the wet
+            // output gain + smoothing while the IR rings to completion; the
+            // real gate FSM (stage 1) keeps tracking the host input
+            // independently and reopens on the next loud block.
+            let mut tail_gate = DynamicHysteresis::new();
+            // SAFETY: buffers and context are valid; M corresponds to detected CPU features.
+            unsafe {
+                apply_output_stage_inner::<M>(
+                    bufs.resamp_out_l,
+                    bufs.resamp_out_r,
+                    n_samples,
+                    ctx.output_gain_mult,
+                    &mut tail_gate,
+                    ctx.rt_status,
+                    *ctx.process_mono,
+                    ctx.adaptive,
+                    sample_rate,
+                );
+            }
+
+            // STAGE 5: FINAL DELIVERY (THE BRIDGE) — `None` simply skips.
+            write_bridge(
+                bufs.resamp_out_l,
+                bufs.resamp_out_r,
+                n_samples,
+                ctx.bridge_writer,
+                *ctx.process_mono,
+            );
+
+            // Strict host cardinality: the drained block still consumed and
+            // produced exactly `n_samples` host samples.
+            return n_samples;
+        }
+
         if let Some(writer) = ctx.bridge_writer {
             writer.write_silence();
         }
@@ -381,11 +518,22 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
             pair.r
                 .process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
         }
+        if n_pw > 0 {
+            // Fresh signal reached the convolution: re-arm the IR ring-out
+            // budget so the next gate close flushes the complete tail. The
+            // drain path never re-arms (no signal reaches the conv there),
+            // which is what keeps the drain strictly bounded.
+            pair.rearm_tail();
+        }
         true
     } else if let Some(ref mut conv) = ctx.conv {
         conv.process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
         if !*ctx.process_mono {
             conv.process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
+        }
+        if n_pw > 0 {
+            // See the pair path above: re-arm on the active-audio path only.
+            conv.rearm_tail();
         }
         true
     } else {

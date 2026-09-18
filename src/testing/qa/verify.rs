@@ -881,9 +881,9 @@ fn parse_finite(raw: &str) -> f64 {
 }
 
 /// Matches a contract performance entry against the report latency records:
-/// exact label, exact id, the `RT_*` bench-label alias table
-/// (`ids::resolve_rt_contract_id` — the Criterion bench names differ from the
-/// contract ids for `RT_Linear` and the DSP benches), or bash-style
+/// exact label, exact id, the `RT_*` bench-label registry
+/// (`ids::resolve_rt_contract_id` — identity projection since the contract
+/// ids were aligned with the Criterion bench names), or bash-style
 /// normalized equality (`×`→`x`, `→`→`->`, collapsed double spaces,
 /// case-insensitive).
 fn match_latency<'a>(

@@ -388,6 +388,9 @@ impl WaveNetA2Dyn {
                 &input[pos..pos + nf]
             };
 
+            // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).
+            let is_hf = crate::math::activations::activation_precision()
+                == crate::math::activations::ActivationPrecision::Standard;
             for f in 0..nf {
                 let bc = blending_config.as_deref_mut();
                 // SAFETY: `process_frame_dyn` is an `unsafe fn`; the caller has verified
@@ -421,6 +424,7 @@ impl WaveNetA2Dyn {
                         activation,
                         cond_buf,
                         cond_size,
+                        is_hf,
                     );
                 }
             }

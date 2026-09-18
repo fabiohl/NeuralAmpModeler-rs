@@ -245,6 +245,7 @@ NeuralAmpModeler-rs uses *feature flags* to control optional capabilities:
 | **`heap-audit`**      | `cargo build --features heap-audit --lib`     | Memory allocation tracking and zero-heap-allocation verification watchdog.               |
 | **`fft-radix4-planner`** | `cargo bench --features fft-radix4-planner` | Radix-4 FFT execution planner benchmark routines.                                      |
 | **`avx512`**          | `cargo build --features avx512 --lib`         | Opt-in research/measurement kernels for AVX-512 upward dispatch (not used in default).   |
+| **`rt-hardening`**    | `cargo build --features rt-hardening --lib`   | Opt-in Linux RT host hardening (THP/mlockall/SCHED_FIFO/affinity/PM-QoS, `src/rt_hardening/`). |
 
 #### 3.1.1 WaveNetA2 Fallback Invariants
 

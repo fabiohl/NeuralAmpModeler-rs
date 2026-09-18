@@ -56,6 +56,10 @@ pub use loader::LoadError;
 pub mod math;
 /// Neural network architectures (WaveNet A1/A2, LSTM, ConvNet, Linear) and runtime dispatch.
 pub mod models;
+/// Opt-in real-time host hardening (Linux-only, never default).
+#[cfg(all(feature = "rt-hardening", target_os = "linux"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "rt-hardening")))]
+pub mod rt_hardening;
 
 /// Convenience re-exports for the common inference and DSP pipeline.
 ///
@@ -70,6 +74,7 @@ pub mod models;
 /// - **Cabinet Simulation**: [`crate::dsp::cabsim::adapter::CabSimAdapter`], [`crate::dsp::cabsim::conv::ConvEngine`], [`crate::dsp::cabsim::loader::CabSimIr`]
 /// - **Oversampling Engine**: [`crate::dsp::oversample::OversampleEngine`], [`crate::dsp::oversample::OversampleFactor`]
 /// - **Sample-Rate Resampling**: [`crate::dsp::resampler::NamResampler`]
+/// - **Generic DSP Utilities**: [`crate::dsp::utils::DelayLine`]
 ///
 /// The deep module paths remain available and unchanged; this module is purely additive.
 ///
@@ -98,6 +103,7 @@ pub mod models;
 /// let _: Option<OversampleEngine> = None;
 /// let _: Option<OversampleFactor> = None;
 /// let _: Option<NamResampler> = None;
+/// let _: Option<DelayLine<f32>> = None;
 /// let _: Option<Box<dyn NamModel>> = None;
 /// let _: Option<StaticModel> = None;
 /// let _ = load_and_build_model;
@@ -114,6 +120,7 @@ pub mod prelude {
     pub use crate::dsp::gate::{GateParams, GateParamsBuilder};
     pub use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
     pub use crate::dsp::resampler::NamResampler;
+    pub use crate::dsp::utils::DelayLine;
     pub use crate::loader::{
         JsonError, LoadError, LoadOptions, LoadedModelPair, NambError, load_and_build_model,
     };
@@ -191,6 +198,7 @@ mod tests {
         let _: Option<OversampleEngine> = None;
         let _: Option<OversampleFactor> = None;
         let _: Option<NamResampler> = None;
+        let _: Option<DelayLine<f32>> = None;
         let _: Option<Box<dyn NamModel>> = None;
         let _: Option<StaticModel> = None;
         let _ = load_and_build_model;

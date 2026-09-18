@@ -880,10 +880,10 @@ fn latency_regression_and_missing_label_are_performance_violations() {
         panic!("expected latency regression");
     };
     assert_eq!(*median_us, 200.0);
-    assert_eq!(*baseline_us, 36.9);
+    assert_eq!(*baseline_us, 44.89);
     assert!(
-        (*limit_us - 40.59).abs() < 1e-9,
-        "latency compares the exact limit max(36.9×1.10, 36.9+0.05): {limit_us}"
+        (*limit_us - 49.379).abs() < 1e-9,
+        "latency compares the exact limit max(44.89×1.10, 44.89+0.05): {limit_us}"
     );
 
     // One latency record missing → MISSING_LABEL fail-closed.
@@ -925,25 +925,18 @@ fn latency_label_normalization_matches_contract() {
     );
 }
 
-/// The Criterion bench labels of `regression_gate.rs` differ from the
-/// contract performance ids for `RT_Linear` and the DSP benches — the verify
-/// must resolve them through `ids::resolve_rt_contract_id`, otherwise the
+/// The contract performance ids equal the Criterion bench labels of
+/// `regression_gate.rs` since the legacy-id rename; the report is built with
+/// those labels and must match through the exact-id path — otherwise the
 /// dashboard reports `MISSING_LABEL` for benches that ran and passed
 /// (P0.T3).
 #[test]
 fn latency_bench_labels_resolve_to_contract_ids() {
     let contract = load_contract();
     let report = build_report(&contract, &ALL_PASS, canonical_fidelity, |e| {
-        let bench_label = match e.id.as_str() {
-            "RT_Linear_RF2048" => "RT_Linear",
-            "RT_DSP_Resampler_44k_to_48k" => "RT_DSP_Resampler_44k1_to_48k",
-            "RT_DSP_Pipeline_Base" => "RT_DSP_Pipeline_Base_NoOS",
-            "RT_DSP_Pipeline_HQ" => "RT_DSP_Pipeline_HQ_4xOS",
-            id => id,
-        };
         Some(json!({
             "kind": "latency",
-            "label": bench_label,
+            "label": e.id,
             "median_latency_us": e.median_latency_us,
         }))
     });

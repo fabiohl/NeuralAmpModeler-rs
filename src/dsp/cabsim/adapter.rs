@@ -25,6 +25,10 @@
 //!     drained.
 //! *   **Zero-alloc hot path** — all buffers are pre-allocated in
 //!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
+//! *   **Zero-alloc hot path** — all buffers are pre-allocated in
+//!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
+//! *   **Zero-alloc hot path** — all buffers are pre-allocated in
+//!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
 //! *   **In-place processing** — [`process_in_place()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_in_place)
 //!     reads and writes the same buffer, eliminating the destination copy
 //!     on the audio callback.
@@ -47,6 +51,11 @@ pub struct CabSimAdapter {
     input_count: usize,
     output_read: usize,
     output_write: usize,
+    /// Remaining ring-out budget (zero-input samples still to be fed before
+    /// the IR tail is fully flushed). Armed by [`rearm_tail`](Self::rearm_tail)
+    /// on the active-audio path and consumed by
+    /// [`drain_tail`](Self::drain_tail) after the input went silent.
+    tail_pending: usize,
 }
 
 impl CabSimAdapter {
@@ -64,6 +73,7 @@ impl CabSimAdapter {
             input_count: 0,
             output_read: 0,
             output_write: 0,
+            tail_pending: 0,
         })
     }
 
@@ -125,6 +135,7 @@ impl CabSimAdapter {
         self.input_count = 0;
         self.output_read = 0;
         self.output_write = 0;
+        self.tail_pending = 0;
         self.engine.reset();
     }
 
@@ -137,6 +148,74 @@ impl CabSimAdapter {
             return 0;
         }
         self.engine.num_partitions().saturating_mul(self.partition) + self.partition // one extra block for adapter fifo accumulator
+    }
+
+    /// Re-arms the IR ring-out budget to the full tail duration
+    /// ([`tail_samples`](Self::tail_samples)).
+    ///
+    /// The pipeline calls this on the active-audio path — after a sub-block
+    /// containing fresh signal was fed to the adapter — so the next silence
+    /// event always flushes the complete IR response. A no-op for passthrough
+    /// adapters (budget stays 0).
+    ///
+    /// RT-safe: plain counter write, zero-alloc.
+    #[inline(always)]
+    pub fn rearm_tail(&mut self) {
+        self.tail_pending = self.tail_samples();
+    }
+
+    /// Returns the remaining ring-out budget in samples — the number of
+    /// zero-input samples still to be fed through
+    /// [`drain_tail`](Self::drain_tail) before the IR tail is fully flushed.
+    ///
+    /// `0` means there is nothing left to ring out (or the adapter is in
+    /// passthrough mode); the pipeline can switch to true silence.
+    #[inline(always)]
+    pub fn remaining_tail_samples(&self) -> usize {
+        self.tail_pending
+    }
+
+    /// Feeds one zero-input flush sub-block through the engine, delivering the
+    /// decaying IR ring-out into `output`.
+    ///
+    /// Called after the input went silent (noise gate closed): the convolution
+    /// tail is intentional signal, so it is rendered to completion instead of
+    /// being truncated by an instant cut to silence. Each call advances the
+    /// engine FDL by one partition of zeros and consumes up to `output.len()`
+    /// from the remaining
+    /// [`remaining_tail_samples`](Self::remaining_tail_samples) budget; once
+    /// the budget and the FDL are exhausted, further calls emit silence.
+    ///
+    /// Drain never re-arms the budget (no signal reaches the convolution),
+    /// guaranteeing termination.
+    ///
+    /// # Constraints
+    ///
+    /// *   `output.len() <= partition_size` (same sub-block contract as
+    ///     [`process_in_place`](Self::process_in_place))
+    ///
+    /// # RT-Safety
+    ///
+    /// Zero-alloc, lock-free, never panics.
+    pub fn drain_tail(&mut self, output: &mut [f32], rt_status: Option<&RtStatusFlags>) {
+        let sub_n = output.len().min(self.partition);
+        let contract_violation = output.len() > self.partition;
+        if contract_violation && let Some(rt) = rt_status {
+            rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);
+        }
+
+        if self.engine.is_passthrough() {
+            output.fill(0.0);
+            return;
+        }
+
+        if sub_n > 0 {
+            self.input_buf[self.input_count..self.input_count + sub_n].fill(0.0);
+            self.input_count += sub_n;
+        }
+        self.run_partitions(rt_status);
+        self.deliver(sub_n, output);
+        self.tail_pending = self.tail_pending.saturating_sub(sub_n);
     }
 
     /// Processes a variable-size sub-block through the convolution engine.
@@ -195,9 +274,19 @@ impl CabSimAdapter {
     /// that reads and writes the same buffer, avoiding a separate destination
     /// slice (and its intermediate copy) on the audio callback.
     ///
-    /// All input samples are consumed into the internal input FIFO before any
-    /// output is written back into `input_output`, so aliasing the source and
-    /// destination is safe.
+    /// This is the preferred production variant: the pipeline (and any host)
+    /// processing from a pre-filled work buffer saves the full sub-block copy
+    /// that `process_variable` needs for its separate input/destination
+    /// slices. All input samples are consumed into the internal input FIFO
+    /// before any output is written back into `input_output`, so aliasing the
+    /// source and destination is safe.
+    ///
+    /// `input_output` is modified in place: consumed samples are overwritten
+    /// by the causal convolution output and the suffix is silenced.
+    /// `rt_status` is optional telemetry plumbing — when `Some`, host contract
+    /// violations (e.g. an oversize sub-block during quantum renegotiation)
+    /// are reported through [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`] instead of
+    /// panicking on the audio thread.
     ///
     /// # Constraints
     ///
@@ -328,6 +417,85 @@ impl CabSimPair {
     #[inline(always)]
     pub fn partition_size(&self) -> usize {
         self.l.partition_size()
+    }
+
+    /// In-place stereo processing: runs both channel adapters over their
+    /// slices without any intermediate copy.
+    ///
+    /// This is the preferred production variant over
+    /// [`process_variable`](CabSimAdapter::process_variable)-style separate
+    /// input/destination buffers — the host processes its work buffers
+    /// directly, saving the per-callback copy of the copy-based API. Each
+    /// slice is modified in place by its own adapter (`samples_l` through
+    /// [`l`](CabSimPair::l), `samples_r` through [`r`](CabSimPair::r)); the
+    /// two adapters never share convolucional state, so each channel's
+    /// impulse response evolves strictly along its own time axis.
+    ///
+    /// `rt_status` is optional telemetry plumbing (contract-violation
+    /// reporting, see [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`]).
+    ///
+    /// # Constraints
+    ///
+    /// *   `samples_l.len() <= partition_size` and `samples_r.len() <=
+    ///     partition_size`
+    /// *   Both lengths must be equal for stereo content (the pipeline
+    ///     contract; oversized or mismatched slices are clamped and reported
+    ///     via `rt_status`).
+    ///
+    /// # RT-Safety
+    ///
+    /// Zero-alloc, lock-free, never panics.
+    #[inline(always)]
+    pub fn process_in_place_stereo(
+        &mut self,
+        samples_l: &mut [f32],
+        samples_r: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        self.l.process_in_place(samples_l, rt_status);
+        self.r.process_in_place(samples_r, rt_status);
+    }
+
+    /// Maximum remaining IR ring-out budget across both channels.
+    ///
+    /// `0` means both channels finished ringing out; the pipeline can switch
+    /// to true silence. See [`CabSimAdapter::remaining_tail_samples`].
+    #[inline(always)]
+    pub fn remaining_tail_samples(&self) -> usize {
+        self.l
+            .remaining_tail_samples()
+            .max(self.r.remaining_tail_samples())
+    }
+
+    /// Re-arms both channels' IR ring-out budget to the full tail duration.
+    ///
+    /// Called on the active-audio path, after fresh signal was fed through
+    /// the pair. See [`CabSimAdapter::rearm_tail`].
+    #[inline(always)]
+    pub fn rearm_tail(&mut self) {
+        self.l.rearm_tail();
+        self.r.rearm_tail();
+    }
+
+    /// Feeds one zero-input flush sub-block through both channel engines,
+    /// delivering the decaying IR ring-out into `out_l`/`out_r`.
+    ///
+    /// Both adapters always advance together (their FDLs must flush
+    /// independently), even when the pipeline is currently mirroring one
+    /// channel into the other. See [`CabSimAdapter::drain_tail`].
+    ///
+    /// # Constraints
+    ///
+    /// *   `out_l.len() <= partition_size` and `out_r.len() <= partition_size`
+    #[inline(always)]
+    pub fn drain_tail_stereo(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        self.l.drain_tail(out_l, rt_status);
+        self.r.drain_tail(out_r, rt_status);
     }
 }
 

@@ -30,3 +30,5 @@ pub mod smoother;
 pub mod stage;
 /// RT-safe telemetry accumulator: peak/RMS/counter aggregates for the DSP monitoring loop.
 pub mod telemetry;
+/// Generic RT-safe DSP utilities: variable delay line and shared building blocks.
+pub mod utils;

@@ -355,8 +355,14 @@ pub(crate) fn transpose_4wide_to_16wide(
 /// Selects the optimal interleaving width based on output channel count.
 /// Must be used consistently by both the weight loader (to store weights
 /// in the correct layout) and the convolution processors (to read them back).
+///
+/// `const fn` so the per-SKU hot-path kernels (const-generic `OUT`) fold the
+/// choice at compile time and monomorphize exactly one `match` arm — verified
+/// on rustc 1.98.1 via `--emit=asm`: each `WaveNetLayer<IN, OUT, K>` body
+/// contains only its own kernel (e.g. CH16/CH12 show zero 128-bit FMA ops,
+/// while the 4-wide route shows them).
 #[inline]
-pub fn select_interleave_width(out_ch: usize) -> usize {
+pub const fn select_interleave_width(out_ch: usize) -> usize {
     if out_ch.is_multiple_of(16) || out_ch == 12 {
         16
     } else if out_ch.is_multiple_of(8) {

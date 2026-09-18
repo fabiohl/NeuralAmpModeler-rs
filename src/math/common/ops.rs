@@ -130,16 +130,30 @@ pub fn prefetch_t1<T>(base: *const T, offset: usize) {
 }
 
 /// Simple prefetch strategy for small/medium dilations.
+///
+/// Stride-guarded: the fixed +16 f32 (64-byte line) hint only pays off when
+/// it lands on the next causal tap's row, i.e. when the tap stride
+/// `step = dilation * in_ch` fits inside one cache line. For larger strides
+/// the prefetched line is never read by any tap (misaligned junk work on a
+/// load port slot), and for the short strides the hardware prefetcher already
+/// streams the rows. Medido (conv1d_hotpath_bench, rustc 1.98.1, Zen 2 5700U):
+/// remover o prefetch com stride > 16 melhora os kernels 8-wide em ~9%
+/// (d <= 8), é neutro no 4-wide (o streamer de hardware domina) e regredir
+/// +3..5% se removido nos casos alinhados (16x16 d=1, 12x12 d=1) — por isso
+/// o limiar é no stride, não na dilatação pura: dilatações altas com IN
+/// pequeno continuam desalinhadas, e dilatação 1 com IN 12/16 continua útil.
 #[inline(always)]
 pub fn prefetch_strategy_simple(
     base_ptr: *const f32,
-    _step: usize,
+    step: usize,
     _k: usize,
     _k_limit: usize,
     _dilation: usize,
 ) {
-    // SAFETY: Speculative prefetch using wrapping_add is safe from out-of-bounds UB.
-    prefetch_t0(base_ptr, 16);
+    if step <= 16 {
+        // SAFETY: Speculative prefetch using wrapping_add is safe from out-of-bounds UB.
+        prefetch_t0(base_ptr, 16);
+    }
 }
 
 /// 2-stage prefetch strategy for extreme dilations.

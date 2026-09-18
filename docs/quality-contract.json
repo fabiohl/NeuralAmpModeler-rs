@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T09:20:03-03:00",
+  "schema_notes": "Benchmarks com `batch_factor > 1` reportam tempo total de `batch_factor` blocos; o dashboard divide por `batch_factor` antes de comparar ao threshold.",
+  "generated_at": "2026-09-17T22:04:30-03:00",
   "provenance": {
-    "git_commit": "0e22ea4ec247",
-    "git_dirty": true,
-    "run_id": "1786537203076204151-15755",
+    "git_commit": "7576d49305bb079ec6435516d97b0e415e524466",
+    "git_dirty": false,
+    "run_id": "1789692961050429696-14880",
     "effective_isa": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
     "cpu_model": "AMD Ryzen 7 5700U with Radeon Graphics",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
     "cargo_profile": "release"
   },
   "envelopes": {
@@ -26,19 +27,19 @@
     {
       "id": "bosslstm-1x16@48000:live",
       "label": "BossLSTM-1x16 @48000 Live",
-      "esr_namcore": 8.5e-12,
-      "esr_f64": 8.9e-13,
+      "esr_namcore": 8.51e-12,
+      "esr_f64": 9.08e-13,
       "snr_db": 110.7,
-      "mrstft": 0.000028,
+      "mrstft": 0.0000282,
       "optional": false
     },
     {
       "id": "bosslstm-2x8@48000:live",
       "label": "BossLSTM-2x8 @48000 Live",
       "esr_namcore": 1e-11,
-      "esr_f64": 5.68e-13,
+      "esr_f64": 5.78e-13,
       "snr_db": 110.0,
-      "mrstft": 0.0000157,
+      "mrstft": 0.0000165,
       "optional": false
     },
     {
@@ -71,10 +72,10 @@
     {
       "id": "convnet-test@48000:live",
       "label": "ConvNet Test @48000 Live",
-      "esr_namcore": 4.23e-15,
-      "esr_f64": 3.57e-15,
-      "snr_db": 143.7,
-      "mrstft": 1.17e-6,
+      "esr_namcore": 6.1e-16,
+      "esr_f64": 4.93e-16,
+      "snr_db": 152.1,
+      "mrstft": 4.99e-7,
       "optional": false
     },
     {
@@ -89,10 +90,10 @@
     {
       "id": "lstm-dyn-1x7@48000:live",
       "label": "LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live",
-      "esr_namcore": 3.7e-15,
-      "esr_f64": 2.86e-15,
-      "snr_db": 144.3,
-      "mrstft": 1.45e-6,
+      "esr_namcore": 3.67e-15,
+      "esr_f64": 3.02e-15,
+      "snr_db": 144.4,
+      "mrstft": 1.46e-6,
       "optional": false
     },
     {
@@ -251,28 +252,28 @@
     {
       "id": "convnet-nobn@48000:live",
       "label": "convnet_nobn @48000 Live",
-      "esr_namcore": 3.23e-14,
+      "esr_namcore": 3.17e-14,
       "esr_f64": null,
-      "snr_db": 134.9,
-      "mrstft": 5.62e-6,
+      "snr_db": 135.0,
+      "mrstft": 5.74e-6,
       "optional": false
     },
     {
       "id": "convnet-relu@48000:live",
       "label": "convnet_relu @48000 Live",
-      "esr_namcore": 6.84e-15,
+      "esr_namcore": 9.33e-16,
       "esr_f64": null,
-      "snr_db": 141.6,
-      "mrstft": 2.27e-6,
+      "snr_db": 150.3,
+      "mrstft": 8.14e-7,
       "optional": false
     },
     {
       "id": "convnet-silu@48000:live",
       "label": "convnet_silu @48000 Live",
-      "esr_namcore": 2.58e-13,
+      "esr_namcore": 3.24e-13,
       "esr_f64": null,
       "snr_db": null,
-      "mrstft": 8.67e-6,
+      "mrstft": 0.000011,
       "optional": false
     },
     {
@@ -296,28 +297,28 @@
     {
       "id": "lstm-1x10@48000:live",
       "label": "lstm_1x10 @48000 Live",
-      "esr_namcore": 4.01e-15,
+      "esr_namcore": 4.08e-15,
       "esr_f64": null,
-      "snr_db": 144.0,
-      "mrstft": 1.25e-6,
+      "snr_db": 143.9,
+      "mrstft": 1.19e-6,
       "optional": false
     },
     {
       "id": "lstm-2x24@48000:live",
       "label": "lstm_2x24 @48000 Live",
-      "esr_namcore": 2.71e-14,
+      "esr_namcore": 2.83e-14,
       "esr_f64": null,
-      "snr_db": 135.7,
-      "mrstft": 3.5e-6,
+      "snr_db": 135.5,
+      "mrstft": 3.7e-6,
       "optional": false
     },
     {
       "id": "lstm-3x8@48000:live",
       "label": "lstm_3x8 @48000 Live",
-      "esr_namcore": 3.66e-15,
+      "esr_namcore": 3.7e-15,
       "esr_f64": null,
-      "snr_db": 144.4,
-      "mrstft": 5.55e-7,
+      "snr_db": 144.3,
+      "mrstft": 5.79e-7,
       "optional": false
     },
     {
@@ -368,46 +369,46 @@
     {
       "id": "quick-a2-full@48000:live",
       "label": "Quick A2-Full @48000 Live",
-      "esr_namcore": 1.12e-13,
+      "esr_namcore": 1.46e-13,
       "esr_f64": 7.83e-14,
-      "snr_db": 129.5,
-      "mrstft": 0.0000149,
+      "snr_db": 128.3,
+      "mrstft": 0.0000168,
       "optional": false
     },
     {
       "id": "quick-a2-full-v2@48000:live",
       "label": "Quick A2-Full v2 @48000 Live",
-      "esr_namcore": 1.2e-13,
+      "esr_namcore": 1.57e-13,
       "esr_f64": null,
-      "snr_db": 129.2,
-      "mrstft": 0.000024,
+      "snr_db": 128.0,
+      "mrstft": 0.0000276,
       "optional": false
     },
     {
       "id": "quick-convnet-nobn@48000:live",
       "label": "Quick ConvNet No BatchNorm @48000 Live",
-      "esr_namcore": 3.14e-14,
+      "esr_namcore": 3.17e-14,
       "esr_f64": null,
       "snr_db": 135.0,
-      "mrstft": 5.54e-6,
+      "mrstft": 5.74e-6,
       "optional": false
     },
     {
       "id": "quick-convnet-relu@48000:live",
       "label": "Quick ConvNet ReLU @48000 Live",
-      "esr_namcore": 6.76e-15,
+      "esr_namcore": 9.33e-16,
       "esr_f64": null,
-      "snr_db": 141.7,
-      "mrstft": 2.25e-6,
+      "snr_db": 150.3,
+      "mrstft": 8.14e-7,
       "optional": false
     },
     {
       "id": "quick-convnet-silu@48000:live",
       "label": "Quick ConvNet SiLU @48000 Live",
-      "esr_namcore": 5.26e-13,
+      "esr_namcore": 3.24e-13,
       "esr_f64": null,
-      "snr_db": 122.8,
-      "mrstft": 0.0000142,
+      "snr_db": null,
+      "mrstft": 0.000011,
       "optional": false
     },
     {
@@ -416,34 +417,34 @@
       "esr_namcore": 4.08e-15,
       "esr_f64": null,
       "snr_db": 143.9,
-      "mrstft": 1.35e-6,
+      "mrstft": 1.19e-6,
       "optional": false
     },
     {
       "id": "quick-lstm-1x16@48000:live",
       "label": "Quick LSTM 1×16 @48000 Live",
-      "esr_namcore": 1.45e-11,
-      "esr_f64": 8.9e-13,
-      "snr_db": 108.4,
-      "mrstft": 0.000032,
+      "esr_namcore": 8.19e-12,
+      "esr_f64": 9.08e-13,
+      "snr_db": 110.9,
+      "mrstft": 0.0000301,
       "optional": false
     },
     {
       "id": "quick-lstm-2x24@48000:live",
       "label": "Quick LSTM 2×24 @48000 Live",
-      "esr_namcore": 2.78e-14,
+      "esr_namcore": 2.83e-14,
       "esr_f64": null,
-      "snr_db": 135.6,
-      "mrstft": 3.73e-6,
+      "snr_db": 135.5,
+      "mrstft": 3.7e-6,
       "optional": false
     },
     {
       "id": "quick-lstm-3x8@48000:live",
       "label": "Quick LSTM 3×8 @48000 Live",
-      "esr_namcore": 3.61e-15,
+      "esr_namcore": 3.69e-15,
       "esr_f64": null,
-      "snr_db": 144.4,
-      "mrstft": 6.22e-7,
+      "snr_db": 144.3,
+      "mrstft": 5.79e-7,
       "optional": false
     },
     {
@@ -458,28 +459,28 @@
     {
       "id": "quick-slim-a2-v2@48000:live",
       "label": "Quick SlimmableContainer A2 Example v2 @48000 Live",
-      "esr_namcore": 4.08e-14,
+      "esr_namcore": 8.26e-14,
       "esr_f64": null,
-      "snr_db": 133.9,
-      "mrstft": 0.0000917,
+      "snr_db": 130.8,
+      "mrstft": 0.000158,
       "optional": false
     },
     {
       "id": "quick-wavenet-ch16@48000:live",
       "label": "Quick WaveNet CH16 @48000 Live",
-      "esr_namcore": 2.46e-14,
+      "esr_namcore": 2.31e-14,
       "esr_f64": 9.05e-15,
-      "snr_db": 136.1,
-      "mrstft": 6.89e-6,
+      "snr_db": 136.4,
+      "mrstft": 6.46e-6,
       "optional": false
     },
     {
       "id": "quick-wavenet-std-v2@48000:live",
       "label": "Quick WaveNet Standard v2 @48000 Live",
-      "esr_namcore": 9.96e-14,
+      "esr_namcore": 9.92e-14,
       "esr_f64": null,
       "snr_db": 130.0,
-      "mrstft": 0.0000429,
+      "mrstft": 0.0000431,
       "optional": false
     }
   ],
@@ -487,97 +488,116 @@
     {
       "id": "RT_WaveNet_Std_CH16",
       "label": "WaveNet Standard CH16",
-      "median_latency_us": 36.9
+      "median_latency_us": 44.89
     },
     {
       "id": "RT_WaveNet_Feather_CH8",
       "label": "WaveNet Feather CH8",
-      "median_latency_us": 19.4
+      "median_latency_us": 19.96
     },
     {
       "id": "RT_WaveNet_Lite_CH12",
       "label": "WaveNet Lite CH12",
-      "median_latency_us": 52.6
+      "median_latency_us": 58.76
     },
     {
       "id": "RT_WaveNet_Nano_CH4",
       "label": "WaveNet Nano CH4",
-      "median_latency_us": 17.4
+      "median_latency_us": 18.0
     },
     {
       "id": "RT_A2_Full_CH8",
       "label": "A2 Full CH8",
-      "median_latency_us": 27.6
+      "median_latency_us": 25.74
     },
     {
       "id": "RT_A2_Lite_CH3",
       "label": "A2 Lite CH3",
-      "median_latency_us": 18.4
+      "median_latency_us": 20.96
     },
     {
       "id": "RT_LSTM_1x16",
       "label": "LSTM 1x16",
-      "median_latency_us": 7.5
+      "median_latency_us": 6.69
     },
     {
       "id": "RT_LSTM_2x8",
       "label": "LSTM 2x8",
-      "median_latency_us": 7.6
+      "median_latency_us": 7.26
     },
     {
-      "id": "RT_Linear_RF2048",
+      "id": "RT_Linear",
       "label": "Linear RF=2048",
-      "median_latency_us": 0.3
+      "median_latency_us": 0.26
     },
     {
       "id": "RT_ConvNet",
       "label": "ConvNet",
-      "median_latency_us": 10.2
+      "median_latency_us": 8.69
     },
     {
       "id": "RT_WaveNet_Dyn_Free",
       "label": "WaveNet Dyn Free",
-      "median_latency_us": 22.5
+      "median_latency_us": 21.56
     },
     {
       "id": "RT_LSTM_Dyn_1x7",
       "label": "LSTM Dyn 1x7",
-      "median_latency_us": 8.2
+      "median_latency_us": 8.06
     },
     {
       "id": "RT_A2_Dyn_Gated_CH8",
       "label": "A2 Dyn Gated CH8",
-      "median_latency_us": 170.8
+      "median_latency_us": 176.96
     },
     {
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
-      "median_latency_us": 136.2
+      "median_latency_us": 129.61
     },
     {
-      "id": "RT_DSP_Resampler_44k_to_48k",
+      "id": "RT_DSP_Resampler_44k1_to_48k",
       "label": "DSP Resampler 44.1k->48k",
-      "median_latency_us": 1.3
+      "median_latency_us": 1.24,
+      "batch_factor": 64,
+      "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Resampler_96k_to_48k",
       "label": "DSP Resampler 96k->48k",
-      "median_latency_us": 0.7
+      "median_latency_us": 0.62,
+      "batch_factor": 64,
+      "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_CabSim_IR_Medium",
       "label": "DSP CabSim IR Medium",
-      "median_latency_us": 1.3
+      "median_latency_us": 1.23,
+      "batch_factor": 64,
+      "unit": "per_block_us"
     },
     {
-      "id": "RT_DSP_Pipeline_Base",
+      "id": "RT_DSP_Pipeline_Base_NoOS",
       "label": "DSP Pipeline Base (No OS)",
-      "median_latency_us": 37.2
+      "median_latency_us": 45.62
     },
     {
-      "id": "RT_DSP_Pipeline_HQ",
+      "id": "RT_DSP_Pipeline_HQ_4xOS",
       "label": "DSP Pipeline HQ (4x OS)",
-      "median_latency_us": 150.6
+      "median_latency_us": 185.59
     }
-  ]
+  ],
+  "monitoring_alerts": {
+    "notes": "Trend-monitoring only — never a blocking gate. Alert when the next long-suite run exceeds alert_above.",
+    "worst_esr_parity": {
+      "measured": 5.03e-11,
+      "threshold": 1e-10,
+      "alert_above": 8e-11
+    },
+    "rt_p99_9_under_contention_us": {
+      "measured_us": 131,
+      "threshold_us": 1330,
+      "alert_above_us": 200
+    }
+  }
 }

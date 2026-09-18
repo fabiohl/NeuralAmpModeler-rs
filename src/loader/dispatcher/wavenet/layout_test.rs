@@ -15,6 +15,18 @@ mod tests {
     }
 
     #[test]
+    fn select_interleave_width_is_const_evaluable() {
+        // The per-SKU hot-path kernels rely on the width choice folding at
+        // compile time (single monomorphized `match` arm per const-generic
+        // OUT); a `const` binding keeps that contract enforced by the build.
+        const W12: usize = select_interleave_width(12);
+        const W16: usize = select_interleave_width(16);
+        const W8: usize = select_interleave_width(8);
+        const W7: usize = select_interleave_width(7);
+        assert_eq!((W12, W16, W8, W7), (16, 16, 8, 4));
+    }
+
+    #[test]
     fn transpose_16wide_ch12_pads_lanes_12_to_15() {
         let in_ch: usize = 12;
         let out_ch: usize = 12;

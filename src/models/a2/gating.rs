@@ -85,6 +85,29 @@ impl GatingActivationConfig {
     /// `buf` must be valid and `M` must match the CPU ISA capabilities.
     #[inline(always)]
     pub unsafe fn apply_gating_simd<M: SimdMath>(&self, buf: &mut [f32]) {
+        // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).
+        let is_hf = crate::math::activations::activation_precision()
+            == crate::math::activations::ActivationPrecision::Standard;
+        // SAFETY: same contract as `apply_gating_simd_with_precision` below;
+        // `is_hf` is the current TLS precision read once for this call.
+        unsafe {
+            self.apply_gating_simd_with_precision::<M>(buf, is_hf);
+        }
+    }
+
+    /// Applies gating with a block-hoisted precision flag.
+    ///
+    /// Block-level callers read `activation_precision()` once per block and
+    /// forward `is_hf`, avoiding a TLS read per frame/slice.
+    ///
+    /// # Safety
+    /// `buf` must be valid and `M` must match the CPU ISA capabilities.
+    #[inline(always)]
+    pub unsafe fn apply_gating_simd_with_precision<M: SimdMath>(
+        &self,
+        buf: &mut [f32],
+        is_hf: bool,
+    ) {
         let ch = buf.len() / 2;
         debug_assert!(
             ch * 2 == buf.len(),
@@ -96,8 +119,10 @@ impl GatingActivationConfig {
         // above guarantees `ch * 2 == buf.len()`, so the halves `buf[..ch]` and
         // `buf[ch..]` are valid, disjoint, in-bounds sub-slices.
         unsafe {
-            self.input_activation.apply_simd::<M>(&mut buf[..ch]);
-            self.gating_activation.apply_simd::<M>(&mut buf[ch..]);
+            self.input_activation
+                .apply_simd_with_precision::<M>(&mut buf[..ch], is_hf);
+            self.gating_activation
+                .apply_simd_with_precision::<M>(&mut buf[ch..], is_hf);
         }
 
         for i in 0..ch {
@@ -204,6 +229,30 @@ impl BlendingActivationConfig {
     /// Panics in debug if `buf.len()` exceeds scratch capacity.
     #[inline(always)]
     pub unsafe fn apply_blending_simd<M: SimdMath>(&mut self, buf: &mut [f32]) {
+        // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).
+        let is_hf = crate::math::activations::activation_precision()
+            == crate::math::activations::ActivationPrecision::Standard;
+        // SAFETY: same contract as `apply_blending_simd_with_precision` below;
+        // `is_hf` is the current TLS precision read once for this call.
+        unsafe {
+            self.apply_blending_simd_with_precision::<M>(buf, is_hf);
+        }
+    }
+
+    /// Applies blending with a block-hoisted precision flag.
+    ///
+    /// Block-level callers read `activation_precision()` once per block and
+    /// forward `is_hf`, avoiding a TLS read per frame/slice.
+    ///
+    /// # Safety
+    /// `buf` must be valid and `M` must match the CPU ISA capabilities.
+    /// Panics in debug if `buf.len()` exceeds scratch capacity.
+    #[inline(always)]
+    pub unsafe fn apply_blending_simd_with_precision<M: SimdMath>(
+        &mut self,
+        buf: &mut [f32],
+        is_hf: bool,
+    ) {
         let ch = buf.len() / 2;
         debug_assert!(
             ch * 2 == buf.len(),
@@ -223,8 +272,10 @@ impl BlendingActivationConfig {
         // above guarantees `ch * 2 == buf.len()`, so `buf[..ch]` and `buf[ch..]`
         // are valid, disjoint, in-bounds sub-slices.
         unsafe {
-            self.input_activation.apply_simd::<M>(&mut buf[..ch]);
-            self.blending_activation.apply_simd::<M>(&mut buf[ch..]);
+            self.input_activation
+                .apply_simd_with_precision::<M>(&mut buf[..ch], is_hf);
+            self.blending_activation
+                .apply_simd_with_precision::<M>(&mut buf[ch..], is_hf);
         }
 
         for i in 0..ch {

@@ -61,6 +61,14 @@ enum PhaseType {
     Linear,
 }
 
+impl Copy for PhaseType {}
+
+impl Clone for PhaseType {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 /// RT-safe wrapper for bidirectional Minimum-Phase Polyphase Sinc FIR resampling.
 ///
 /// Encapsulates two independent pre-allocated engines (input + output).
@@ -91,6 +99,9 @@ pub struct NamResampler {
     host_rate: u32,
     /// Target NAM model rate.
     nam_rate: u32,
+    /// Phase type (minimum/linear) the engines were built with, so
+    /// [`reconfigure`](Self::reconfigure) rebuilds with the same character.
+    phase: PhaseType,
 }
 
 impl NamResampler {
@@ -158,6 +169,7 @@ impl NamResampler {
                 outer: None,
                 host_rate,
                 nam_rate,
+                phase,
             });
         }
 
@@ -183,6 +195,7 @@ impl NamResampler {
             outer: Some(outer),
             host_rate,
             nam_rate,
+            phase,
         })
     }
     /// Creates the pair of resamplers (input+output), pre-allocating all buffers.
@@ -196,7 +209,13 @@ impl NamResampler {
     /// # Parameters
     /// - `host_rate`: Host sample rate (e.g., 44100, 48000, 96000).
     /// - `nam_rate`: NAM model rate (e.g., 48000).
-    /// - `_chunk_size`: kept for API compatibility (not used internally).
+    /// - `_chunk_size`: intentionally ignored. The polyphase engine is fully
+    ///   variable-block — it consumes/produces arbitrary slice lengths and
+    ///   holds no chunk-dependent buffers, so there is nothing to pre-size
+    ///   from it. The parameter stays in the signature for source
+    ///   compatibility; sample-rate/quantum renegotiation is handled by
+    ///   [`reconfigure`](Self::reconfigure), which documents the same
+    ///   semantics for its own `chunk_size` parameter.
     ///
     /// # Errors
     ///
@@ -227,6 +246,10 @@ impl NamResampler {
     /// phase accuracy is paramount.
     ///
     /// If `host_rate == nam_rate`, full bypass with no overhead.
+    ///
+    /// `_chunk_size` is intentionally ignored — see [`new`](Self::new) for the
+    /// rationale (fully variable-block engine, nothing chunk-dependent to
+    /// pre-size).
     ///
     /// # Errors
     ///
@@ -341,6 +364,67 @@ impl NamResampler {
         if let Some(ref mut core) = self.outer {
             core.reset_state();
         }
+    }
+
+    /// Reconfigures the resampler in place for a new sample-rate pair and/or
+    /// block size, reusing existing allocations whenever possible.
+    ///
+    /// This replaces the rebuild + SPSC-swap cycle consumers previously needed
+    /// for any quantum/sample-rate renegotiation: the resampler itself is
+    /// mutated off the RT thread and stays valid for the running audio
+    /// thread through the caller's own synchronization.
+    ///
+    /// # Semantics
+    ///
+    /// - **Same ratio** (`input_rate == host_rate()` and
+    ///   `output_rate == nam_rate()`): the polyphase banks and delay-line
+    ///   allocations are reused wholesale — zero allocations — and only the
+    ///   streaming state (phase accumulators + delay lines) is reset.
+    /// - **Changed ratio**: both engines are rebuilt with freshly generated
+    ///   banks (the allocation-heavy step) using the same phase type
+    ///   (minimum/linear) the resampler was constructed with. On success the
+    ///   old banks are released; on failure the previous configuration is
+    ///   kept intact (fail-closed).
+    /// - **Equal input/output rates**: full bypass — the engines are dropped
+    ///   and the hot path passes through with zero overhead.
+    ///
+    /// Streaming state (in-flight filter content) is always discarded,
+    /// mirroring the fresh-construction semantics of the rebuild+swap
+    /// protocol this API replaces.
+    ///
+    /// Must be called only outside the audio thread (bank generation and
+    /// engine (re)construction allocate); marked `#[cold]` accordingly.
+    ///
+    /// `_chunk_size` is accepted for constructor symmetry and intentionally
+    /// ignored, exactly like in [`new`](Self::new) — the engine is fully
+    /// variable-block and holds no chunk-dependent buffers to pre-size.
+    ///
+    /// # Errors
+    ///
+    /// - [`NamErrorCode::ResamplerBuildFailed`] (E2200) when either rate is
+    ///   outside `4_000..=384_000` Hz (previous configuration untouched).
+    /// - [`NamErrorCode::OutOfMemory`] (E5000) when the rebuilt polyphase
+    ///   banks or delay lines fail to allocate (previous configuration
+    ///   untouched).
+    #[cold]
+    pub fn reconfigure(
+        &mut self,
+        input_rate: u32,
+        output_rate: u32,
+        _chunk_size: usize,
+    ) -> Result<(), NamErrorCode> {
+        Self::validate_rates(input_rate, output_rate)?;
+        if input_rate == self.host_rate && output_rate == self.nam_rate {
+            // Same ratio: reuse the polyphase banks and delay-line
+            // allocations wholesale; only the streaming state is discarded.
+            self.reset();
+            return Ok(());
+        }
+        // Ratio changed: rebuild both engines off-RT with the same phase
+        // character. `build_inner` consumes no state from `self`, so a
+        // failure leaves the previous configuration untouched.
+        *self = Self::build_inner(input_rate, output_rate, self.phase)?;
+        Ok(())
     }
 
     /// Returns the host sample rate.

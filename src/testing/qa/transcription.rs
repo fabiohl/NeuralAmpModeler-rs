@@ -14,7 +14,8 @@
 //!     > docs/quality-contract.json
 //! ```
 //!
-//! Source snapshot: `docs/quality-contract.txt`, measured 2026-08-12 09:20:03 -03,
+//! Source snapshot: dashboard run (release, clean tree), measured 2026-09-17
+//! 22:04:30 -03, commit `7576d49305bb` (clean), run `1789692961050429696-14880`.
 //! commit `0e22ea4ec247` (dirty), run `1786537203076204151-15755`.
 
 use super::*;
@@ -62,6 +63,23 @@ fn perf(id: &str, label: &str, median_latency_us: f64) -> PerformanceEntry {
         id: id.into(),
         label: label.into(),
         median_latency_us,
+        batch_factor: None,
+        unit: None,
+    }
+}
+
+/// Micro-batch perf entry: total time of `batch_factor` blocks per Criterion
+/// sample, reported in per-block contract units.
+fn perf_micro_batch(
+    id: &str,
+    label: &str,
+    median_latency_us: f64,
+    batch_factor: u64,
+) -> PerformanceEntry {
+    PerformanceEntry {
+        batch_factor: Some(batch_factor),
+        unit: Some("per_block_us".into()),
+        ..perf(id, label, median_latency_us)
     }
 }
 
@@ -70,34 +88,39 @@ fn perf(id: &str, label: &str, median_latency_us: f64) -> PerformanceEntry {
 fn transcribe_quality_contract_to_json() {
     let contract = QualityContract {
         schema_version: SCHEMA_VERSION,
-        generated_at: "2026-08-12T09:20:03-03:00".into(),
+        schema_notes: Some(
+            "Benchmarks com `batch_factor > 1` reportam tempo total de \
+             `batch_factor` blocos; o dashboard divide por `batch_factor` \
+             antes de comparar ao threshold."
+                .into(),
+        ),
+        generated_at: "2026-09-17T22:04:30-03:00".into(),
         provenance: Provenance {
-            git_commit: "0e22ea4ec247".into(),
-            git_dirty: true,
-            run_id: "1786537203076204151-15755".into(),
+            git_commit: "7576d49305bb079ec6435516d97b0e415e524466".into(),
+            git_dirty: false,
+            run_id: "1789692961050429696-14880".into(),
             effective_isa: "x86-64-v3 (AVX2/FMA/F16C/BMI)".into(),
             cpu_model: "AMD Ryzen 7 5700U with Radeon Graphics".into(),
-            rustc: "rustc 1.97.1 (8bab26f4f 2026-07-14)".into(),
+            rustc: "rustc 1.98.1 (48a229cea 2026-09-01)".into(),
             cargo_profile: "release".into(),
         },
         envelopes: Envelopes::policy_v1(),
         fidelity: vec![
-            // ── Canonical Fidelity (golden_vectors) — 34 entries ──────────
             fid(
                 "bosslstm-1x16@48000:live",
                 "BossLSTM-1x16 @48000 Live",
-                8.50e-12,
-                Some(8.90e-13),
+                8.51e-12,
+                Some(9.08e-13),
                 Some(110.7),
-                2.80e-05,
+                2.82e-05,
             ),
             fid(
                 "bosslstm-2x8@48000:live",
                 "BossLSTM-2x8 @48000 Live",
                 1.00e-11,
-                Some(5.68e-13),
+                Some(5.78e-13),
                 Some(110.0),
-                1.57e-05,
+                1.65e-05,
             ),
             fid(
                 "bosswn-feather@48000:live",
@@ -126,10 +149,10 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "convnet-test@48000:live",
                 "ConvNet Test @48000 Live",
-                4.23e-15,
-                Some(3.57e-15),
-                Some(143.7),
-                1.17e-06,
+                6.10e-16,
+                Some(4.93e-16),
+                Some(152.1),
+                4.99e-07,
             ),
             fid_optional(
                 "evh-5150-lite@48000:live",
@@ -142,10 +165,10 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "lstm-dyn-1x7@48000:live",
                 "LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live",
-                3.70e-15,
-                Some(2.86e-15),
-                Some(144.3),
-                1.45e-06,
+                3.67e-15,
+                Some(3.02e-15),
+                Some(144.4),
+                1.46e-06,
             ),
             fid(
                 "linear-fft-rf2048@48000",
@@ -286,26 +309,26 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "convnet-nobn@48000:live",
                 "convnet_nobn @48000 Live",
-                3.23e-14,
+                3.17e-14,
                 None,
-                Some(134.9),
-                5.62e-06,
+                Some(135.0),
+                5.74e-06,
             ),
             fid(
                 "convnet-relu@48000:live",
                 "convnet_relu @48000 Live",
-                6.84e-15,
+                9.33e-16,
                 None,
-                Some(141.6),
-                2.27e-06,
+                Some(150.3),
+                8.14e-07,
             ),
             fid(
                 "convnet-silu@48000:live",
                 "convnet_silu @48000 Live",
-                2.58e-13,
+                3.24e-13,
                 None,
                 None,
-                8.67e-06,
+                1.10e-05,
             ),
             fid(
                 "linear-nobias@48000:live",
@@ -326,26 +349,26 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "lstm-1x10@48000:live",
                 "lstm_1x10 @48000 Live",
-                4.01e-15,
+                4.08e-15,
                 None,
-                Some(144.0),
-                1.25e-06,
+                Some(143.9),
+                1.19e-06,
             ),
             fid(
                 "lstm-2x24@48000:live",
                 "lstm_2x24 @48000 Live",
-                2.71e-14,
+                2.83e-14,
                 None,
-                Some(135.7),
-                3.50e-06,
+                Some(135.5),
+                3.70e-06,
             ),
             fid(
                 "lstm-3x8@48000:live",
                 "lstm_3x8 @48000 Live",
-                3.66e-15,
+                3.70e-15,
                 None,
-                Some(144.4),
-                5.55e-07,
+                Some(144.3),
+                5.79e-07,
             ),
             fid(
                 "wavenet-a1-standard@48000:live",
@@ -355,7 +378,6 @@ fn transcribe_quality_contract_to_json() {
                 Some(129.2),
                 2.26e-06,
             ),
-            // ── Additional Coverage (quick_parity, containers, regression gates) — 17 entries ──
             fid(
                 "container-a2-full@48000:live",
                 "Container A2-Full (CH=8) C++ cross-reference @48000 Live",
@@ -391,42 +413,42 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "quick-a2-full@48000:live",
                 "Quick A2-Full @48000 Live",
-                1.12e-13,
+                1.46e-13,
                 Some(7.83e-14),
-                Some(129.5),
-                1.49e-05,
+                Some(128.3),
+                1.68e-05,
             ),
             fid(
                 "quick-a2-full-v2@48000:live",
                 "Quick A2-Full v2 @48000 Live",
-                1.20e-13,
+                1.57e-13,
                 None,
-                Some(129.2),
-                2.40e-05,
+                Some(128.0),
+                2.76e-05,
             ),
             fid(
                 "quick-convnet-nobn@48000:live",
                 "Quick ConvNet No BatchNorm @48000 Live",
-                3.14e-14,
+                3.17e-14,
                 None,
                 Some(135.0),
-                5.54e-06,
+                5.74e-06,
             ),
             fid(
                 "quick-convnet-relu@48000:live",
                 "Quick ConvNet ReLU @48000 Live",
-                6.76e-15,
+                9.33e-16,
                 None,
-                Some(141.7),
-                2.25e-06,
+                Some(150.3),
+                8.14e-07,
             ),
             fid(
                 "quick-convnet-silu@48000:live",
                 "Quick ConvNet SiLU @48000 Live",
-                5.26e-13,
+                3.24e-13,
                 None,
-                Some(122.8),
-                1.42e-05,
+                None,
+                1.10e-05,
             ),
             fid(
                 "quick-lstm-1x10@48000:live",
@@ -434,31 +456,31 @@ fn transcribe_quality_contract_to_json() {
                 4.08e-15,
                 None,
                 Some(143.9),
-                1.35e-06,
+                1.19e-06,
             ),
             fid(
                 "quick-lstm-1x16@48000:live",
                 "Quick LSTM 1×16 @48000 Live",
-                1.45e-11,
-                Some(8.90e-13),
-                Some(108.4),
-                3.20e-05,
+                8.19e-12,
+                Some(9.08e-13),
+                Some(110.9),
+                3.01e-05,
             ),
             fid(
                 "quick-lstm-2x24@48000:live",
                 "Quick LSTM 2×24 @48000 Live",
-                2.78e-14,
+                2.83e-14,
                 None,
-                Some(135.6),
-                3.73e-06,
+                Some(135.5),
+                3.70e-06,
             ),
             fid(
                 "quick-lstm-3x8@48000:live",
                 "Quick LSTM 3×8 @48000 Live",
-                3.61e-15,
+                3.69e-15,
                 None,
-                Some(144.4),
-                6.22e-07,
+                Some(144.3),
+                5.79e-07,
             ),
             fid(
                 "quick-linear-nobias@48000:live",
@@ -471,54 +493,84 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "quick-slim-a2-v2@48000:live",
                 "Quick SlimmableContainer A2 Example v2 @48000 Live",
-                4.08e-14,
+                8.26e-14,
                 None,
-                Some(133.9),
-                9.17e-05,
+                Some(130.8),
+                1.58e-04,
             ),
             fid(
                 "quick-wavenet-ch16@48000:live",
                 "Quick WaveNet CH16 @48000 Live",
-                2.46e-14,
+                2.31e-14,
                 Some(9.05e-15),
-                Some(136.1),
-                6.89e-06,
+                Some(136.4),
+                6.46e-06,
             ),
             fid(
                 "quick-wavenet-std-v2@48000:live",
                 "Quick WaveNet Standard v2 @48000 Live",
-                9.96e-14,
+                9.92e-14,
                 None,
                 Some(130.0),
-                4.29e-05,
+                4.31e-05,
             ),
         ],
+        monitoring_alerts: Some(MonitoringAlerts {
+            // JSON cannot carry comments; the caveat lives here so every
+            // regeneration preserves the "trend aid, never a CI gate"
+            // semantics. Values track the most recent long-suite run
+            // (worst ESR parity and worst P99.9 under contention), refreshed
+            // alongside the contract snapshot.
+            notes: "Trend-monitoring only — never a blocking gate. \
+                    Alert when the next long-suite run exceeds alert_above."
+                .into(),
+            worst_esr_parity: MonitoringAlertF64 {
+                measured: 5.03e-11,
+                threshold: 1.0e-10,
+                alert_above: 8.0e-11,
+            },
+            rt_p99_9_under_contention_us: MonitoringAlertUs {
+                measured_us: 131,
+                threshold_us: 1_330,
+                alert_above_us: 200,
+            },
+        }),
         performance: vec![
             // ── Model Inference Core — 14 entries ──────────────────────────
-            perf("RT_WaveNet_Std_CH16", "WaveNet Standard CH16", 36.9),
-            perf("RT_WaveNet_Feather_CH8", "WaveNet Feather CH8", 19.4),
-            perf("RT_WaveNet_Lite_CH12", "WaveNet Lite CH12", 52.6),
-            perf("RT_WaveNet_Nano_CH4", "WaveNet Nano CH4", 17.4),
-            perf("RT_A2_Full_CH8", "A2 Full CH8", 27.6),
-            perf("RT_A2_Lite_CH3", "A2 Lite CH3", 18.4),
-            perf("RT_LSTM_1x16", "LSTM 1x16", 7.5),
-            perf("RT_LSTM_2x8", "LSTM 2x8", 7.6),
-            perf("RT_Linear_RF2048", "Linear RF=2048", 0.3),
-            perf("RT_ConvNet", "ConvNet", 10.2),
-            perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 22.5),
-            perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.2),
-            perf("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8", 170.8),
-            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 136.2),
+            perf("RT_WaveNet_Std_CH16", "WaveNet Standard CH16", 44.89),
+            perf("RT_WaveNet_Feather_CH8", "WaveNet Feather CH8", 19.96),
+            perf("RT_WaveNet_Lite_CH12", "WaveNet Lite CH12", 58.76),
+            perf("RT_WaveNet_Nano_CH4", "WaveNet Nano CH4", 18.0),
+            perf("RT_A2_Full_CH8", "A2 Full CH8", 25.74),
+            perf("RT_A2_Lite_CH3", "A2 Lite CH3", 20.96),
+            perf("RT_LSTM_1x16", "LSTM 1x16", 6.69),
+            perf("RT_LSTM_2x8", "LSTM 2x8", 7.26),
+            perf("RT_Linear", "Linear RF=2048", 0.26),
+            perf("RT_ConvNet", "ConvNet", 8.69),
+            perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 21.56),
+            perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.06),
+            perf("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8", 176.96),
+            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 129.61),
             // ── DSP Infrastructure — 5 entries ─────────────────────────────
-            perf(
-                "RT_DSP_Resampler_44k_to_48k",
+            perf_micro_batch(
+                "RT_DSP_Resampler_44k1_to_48k",
                 "DSP Resampler 44.1k->48k",
-                1.3,
+                1.24,
+                64,
             ),
-            perf("RT_DSP_Resampler_96k_to_48k", "DSP Resampler 96k->48k", 0.7),
-            perf("RT_DSP_CabSim_IR_Medium", "DSP CabSim IR Medium", 1.3),
-            perf("RT_DSP_Pipeline_Base", "DSP Pipeline Base (No OS)", 37.2),
-            perf("RT_DSP_Pipeline_HQ", "DSP Pipeline HQ (4x OS)", 150.6),
+            perf_micro_batch(
+                "RT_DSP_Resampler_96k_to_48k",
+                "DSP Resampler 96k->48k",
+                0.62,
+                64,
+            ),
+            perf_micro_batch("RT_DSP_CabSim_IR_Medium", "DSP CabSim IR Medium", 1.23, 64),
+            perf(
+                "RT_DSP_Pipeline_Base_NoOS",
+                "DSP Pipeline Base (No OS)",
+                45.62,
+            ),
+            perf("RT_DSP_Pipeline_HQ_4xOS", "DSP Pipeline HQ (4x OS)", 185.59),
         ],
     };
 

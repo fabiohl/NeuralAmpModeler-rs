@@ -24,7 +24,11 @@ pub mod fft_radix4;
 pub mod gain;
 /// Pre-computed dB-to-linear gain lookup table.
 pub mod gain_lut;
+/// SIMD non-finite detection and sanitization for f32 audio buffers.
+pub mod nonfinite;
 /// Real-valued FFT (RFFT) for spectrum analysis.
 pub mod rfft;
 /// Stereo audio utilities: convolution, energy computation, peak detection.
 pub mod stereo;
+
+pub use nonfinite::{all_finite_f32, sanitize_nonfinite_f32};
