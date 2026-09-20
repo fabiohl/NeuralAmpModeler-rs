@@ -226,6 +226,9 @@ phase "Phase 1: Cross-Mathematical Parity Validation..."
 if [ "$SKIP_PARITY" -eq 1 ]; then
     warn "Skipping Phase 1 (--skip-parity specified)."
 else
+    echo -e "  ${BLUE}Pre-compiling cross-ISA parity tests prior to cooldown...${NC}"
+    cargo test --release --features avx512 --test parity --no-run
+
     if [ "$COOLDOWN_SECS" -gt 0 ]; then
         echo -e "  ${YELLOW}Hardware thermal stabilization cooling period (${COOLDOWN_SECS}s)...${NC}"
         sleep "$COOLDOWN_SECS"
@@ -260,6 +263,9 @@ phase "Phase 2: ISA Comparison Benchmarking (Criterion)..."
 if [ "$SKIP_BENCH" -eq 1 ]; then
     warn "Skipping Phase 2 (--skip-bench specified)."
 else
+    echo -e "  ${BLUE}Pre-compiling inference benchmarks prior to cooldown...${NC}"
+    cargo bench --features avx512 --bench inference_bench --no-run
+
     if [ "$COOLDOWN_SECS" -gt 0 ]; then
         echo -e "  ${YELLOW}Hardware thermal stabilization cooling period (${COOLDOWN_SECS}s)...${NC}"
         sleep "$COOLDOWN_SECS"

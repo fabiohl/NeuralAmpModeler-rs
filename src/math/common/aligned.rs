@@ -230,16 +230,19 @@ impl<T: Copy> AlignedVec<T> {
     }
 
     /// Returns the number of elements in the buffer.
+    #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// Returns the allocated capacity (max number of elements without reallocation).
+    #[inline]
     pub fn cap(&self) -> usize {
         self.cap
     }
 
     /// Returns true if the buffer is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -320,6 +323,7 @@ impl<T: Copy> AlignedVec<T> {
 impl<T: Copy> Deref for AlignedVec<T> {
     type Target = [T];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         if self.len == 0 {
             &[]
@@ -336,6 +340,7 @@ impl<T: Copy> Deref for AlignedVec<T> {
 ///
 /// Ensures freedom to read and write content in a simple and direct way.
 impl<T: Copy> DerefMut for AlignedVec<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         if self.len == 0 {
             &mut []

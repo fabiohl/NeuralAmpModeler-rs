@@ -90,8 +90,8 @@ mod tests {
         let output_sr = 48000;
         let block_size = 64;
 
-        let mut resampler = NamResampler::new(input_sr, output_sr, block_size)
-            .expect("Failed to create NamResampler");
+        let mut resampler =
+            NamResampler::new_simple(input_sr, output_sr).expect("Failed to create NamResampler");
 
         let rt_status = RtStatusFlags::default();
 

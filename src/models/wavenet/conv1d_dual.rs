@@ -144,12 +144,23 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         .enumerate()
                         .take(w)
                     {
+                        let idx = out_c + j;
                         if self.do_bias {
-                            *item_f0 = self.bias[out_c + j] + mixin_f0[out_c + j];
-                            *item_f1 = self.bias[out_c + j] + mixin_f1[out_c + j];
+                            // SAFETY: `Conv1dDual::try_from_parts` enforces `bias.len() >= OUT`
+                            // when `do_bias` is true, and `mixin_f0`/`mixin_f1` have length `OUT`
+                            // with `idx = out_c + j < out_c + w <= OUT`.
+                            unsafe {
+                                *item_f0 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f0.get_unchecked(idx);
+                                *item_f1 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f1.get_unchecked(idx);
+                            }
                         } else {
-                            *item_f0 = mixin_f0[out_c + j];
-                            *item_f1 = mixin_f1[out_c + j];
+                            // SAFETY: `mixin_f0`/`mixin_f1` have length `OUT` and `idx < OUT`.
+                            unsafe {
+                                *item_f0 = *mixin_f0.get_unchecked(idx);
+                                *item_f1 = *mixin_f1.get_unchecked(idx);
+                            }
                         }
                     }
                     // SAFETY: `w_start < num_blocks * 16 * K * IN` because `b < num_blocks`, and
@@ -193,12 +204,23 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         .enumerate()
                         .take(w)
                     {
+                        let idx = out_c + j;
                         if self.do_bias {
-                            *item_f0 = self.bias[out_c + j] + mixin_f0[out_c + j];
-                            *item_f1 = self.bias[out_c + j] + mixin_f1[out_c + j];
+                            // SAFETY: `Conv1dDual::try_from_parts` enforces `bias.len() >= OUT`
+                            // when `do_bias` is true, and `mixin_f0`/`mixin_f1` have length `OUT`
+                            // with `idx = out_c + j < out_c + w <= OUT`.
+                            unsafe {
+                                *item_f0 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f0.get_unchecked(idx);
+                                *item_f1 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f1.get_unchecked(idx);
+                            }
                         } else {
-                            *item_f0 = mixin_f0[out_c + j];
-                            *item_f1 = mixin_f1[out_c + j];
+                            // SAFETY: `mixin_f0`/`mixin_f1` have length `OUT` and `idx < OUT`.
+                            unsafe {
+                                *item_f0 = *mixin_f0.get_unchecked(idx);
+                                *item_f1 = *mixin_f1.get_unchecked(idx);
+                            }
                         }
                     }
                     // SAFETY: `w_start < num_blocks * 8 * K * IN` because `b < num_blocks`, and
@@ -242,12 +264,23 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                         .enumerate()
                         .take(w)
                     {
+                        let idx = out_c + j;
                         if self.do_bias {
-                            *item_f0 = self.bias[out_c + j] + mixin_f0[out_c + j];
-                            *item_f1 = self.bias[out_c + j] + mixin_f1[out_c + j];
+                            // SAFETY: `Conv1dDual::try_from_parts` enforces `bias.len() >= OUT`
+                            // when `do_bias` is true, and `mixin_f0`/`mixin_f1` have length `OUT`
+                            // with `idx = out_c + j < out_c + w <= OUT`.
+                            unsafe {
+                                *item_f0 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f0.get_unchecked(idx);
+                                *item_f1 =
+                                    *self.bias.get_unchecked(idx) + *mixin_f1.get_unchecked(idx);
+                            }
                         } else {
-                            *item_f0 = mixin_f0[out_c + j];
-                            *item_f1 = mixin_f1[out_c + j];
+                            // SAFETY: `mixin_f0`/`mixin_f1` have length `OUT` and `idx < OUT`.
+                            unsafe {
+                                *item_f0 = *mixin_f0.get_unchecked(idx);
+                                *item_f1 = *mixin_f1.get_unchecked(idx);
+                            }
                         }
                     }
                     // SAFETY: `w_start < num_blocks * 4 * K * IN` because `b < num_blocks`, and

@@ -50,9 +50,9 @@ pub fn capture_dsp_pipeline(
     bufs: DspBuffers<'_>,
     sample_rate: u32,
 ) -> usize {
+    use crate::math::common::Avx2Math;
     #[cfg(feature = "avx512")]
-    use crate::math::common::Avx512Math;
-    use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
+    use crate::math::common::{Avx512Math, InstructionSet, effective_instruction_set};
 
     // Reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
     // before any DSP runs. This is a fixed stmxcsr/ldmxcsr pair — zero-alloc,
@@ -72,48 +72,43 @@ pub fn capture_dsp_pipeline(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
 
-    #[expect(deprecated)]
-    match effective_instruction_set() {
-        #[cfg(feature = "avx512")]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe {
-                capture_dsp_pipeline_inner::<Avx512Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    bufs,
-                    sample_rate,
-                )
+    #[cfg(feature = "avx512")]
+    {
+        #[expect(deprecated)]
+        match effective_instruction_set() {
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe {
+                    capture_dsp_pipeline_inner::<Avx512Math>(
+                        samples_l,
+                        samples_r,
+                        n,
+                        ctx,
+                        bufs,
+                        sample_rate,
+                    )
+                }
+            }
+            InstructionSet::Avx2 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe {
+                    capture_dsp_pipeline_inner::<Avx2Math>(
+                        samples_l,
+                        samples_r,
+                        n,
+                        ctx,
+                        bufs,
+                        sample_rate,
+                    )
+                }
             }
         }
-        #[cfg(not(feature = "avx512"))]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe {
-                capture_dsp_pipeline_inner::<Avx2Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    bufs,
-                    sample_rate,
-                )
-            }
-        }
-        InstructionSet::Avx2 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe {
-                capture_dsp_pipeline_inner::<Avx2Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    bufs,
-                    sample_rate,
-                )
-            }
+    }
+    #[cfg(not(feature = "avx512"))]
+    {
+        // SAFETY: inner invariants upheld by caller.
+        unsafe {
+            capture_dsp_pipeline_inner::<Avx2Math>(samples_l, samples_r, n, ctx, bufs, sample_rate)
         }
     }
 }
@@ -288,18 +283,19 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 /// (`n_pw == n_samples` while the gate is open or the IR tail is still
 /// draining, `0` once the gate is closed and the tail is fully flushed).
 #[inline]
-pub fn capture_dsp_pipeline_streaming(
+pub fn capture_dsp_pipeline_streaming<'b>(
     samples_l: &mut [f32],
     samples_r: &mut [f32],
     n_samples: usize,
     ctx: DspPipelineContext<'_>,
     stream: &mut StreamingResampleBuffer,
-    bufs: DspBuffers<'_>,
+    bufs: impl Into<DspBuffers<'b>>,
     sample_rate: u32,
 ) -> usize {
+    let bufs = bufs.into();
+    use crate::math::common::Avx2Math;
     #[cfg(feature = "avx512")]
-    use crate::math::common::Avx512Math;
-    use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
+    use crate::math::common::{Avx512Math, InstructionSet, effective_instruction_set};
 
     // SAFETY: Setting denormals-as-zero / flush-to-zero is safe on x86_64 targets.
     unsafe {
@@ -314,51 +310,53 @@ pub fn capture_dsp_pipeline_streaming(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
 
-    #[expect(deprecated)]
-    match effective_instruction_set() {
-        #[cfg(feature = "avx512")]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: Target CPU is guaranteed to support AVX-512 when dynamic dispatch returns this branch.
-            unsafe {
-                capture_dsp_pipeline_streaming_inner::<Avx512Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    stream,
-                    bufs,
-                    sample_rate,
-                )
+    #[cfg(feature = "avx512")]
+    {
+        #[expect(deprecated)]
+        match effective_instruction_set() {
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // SAFETY: Target CPU is guaranteed to support AVX-512 when dynamic dispatch returns this branch.
+                unsafe {
+                    capture_dsp_pipeline_streaming_inner::<Avx512Math>(
+                        samples_l,
+                        samples_r,
+                        n,
+                        ctx,
+                        stream,
+                        bufs,
+                        sample_rate,
+                    )
+                }
+            }
+            InstructionSet::Avx2 => {
+                // SAFETY: Target architecture baseline guarantees AVX2 support.
+                unsafe {
+                    capture_dsp_pipeline_streaming_inner::<Avx2Math>(
+                        samples_l,
+                        samples_r,
+                        n,
+                        ctx,
+                        stream,
+                        bufs,
+                        sample_rate,
+                    )
+                }
             }
         }
-        #[cfg(not(feature = "avx512"))]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: Fallback executes baseline AVX2 kernels supported by x86-64-v3.
-            unsafe {
-                capture_dsp_pipeline_streaming_inner::<Avx2Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    stream,
-                    bufs,
-                    sample_rate,
-                )
-            }
-        }
-        InstructionSet::Avx2 => {
-            // SAFETY: Target architecture baseline guarantees AVX2 support.
-            unsafe {
-                capture_dsp_pipeline_streaming_inner::<Avx2Math>(
-                    samples_l,
-                    samples_r,
-                    n,
-                    ctx,
-                    stream,
-                    bufs,
-                    sample_rate,
-                )
-            }
+    }
+    #[cfg(not(feature = "avx512"))]
+    {
+        // SAFETY: Fallback executes baseline AVX2 kernels supported by x86-64-v3.
+        unsafe {
+            capture_dsp_pipeline_streaming_inner::<Avx2Math>(
+                samples_l,
+                samples_r,
+                n,
+                ctx,
+                stream,
+                bufs,
+                sample_rate,
+            )
         }
     }
 }

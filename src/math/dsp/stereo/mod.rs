@@ -38,7 +38,7 @@ pub use peak::{compute_peak_abs_mono_avx512, compute_peak_abs_stereo_avx512};
 /// # Safety
 /// The slices must have the same length. The SIMD backends use unaligned loads,
 /// so no alignment contract is imposed on the caller.
-pub unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
+pub unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> (f32, bool) {
     crate::math::common::dispatch_simd!(compute_energy_stereo(l, r))
 }
 
@@ -47,7 +47,7 @@ pub unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
 /// # Safety
 /// The slices must have the same length. The SIMD backends use unaligned loads,
 /// so no alignment contract is imposed on the caller.
-pub unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32 {
+pub unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool) {
     crate::math::common::dispatch_simd!(compute_max_diff(a, b))
 }
 

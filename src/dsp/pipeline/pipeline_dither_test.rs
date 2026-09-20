@@ -18,7 +18,7 @@ fn test_denormal_dither_mono_symmetry() {
     let mut samples_l = vec![0.0_f32; n];
     let mut samples_r = vec![0.0_f32; n];
     let rt_status = RtStatusFlags::default();
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let gate_params = GateParams::new(-70.0, -80.0, 0, 0, 1e-4);
     let mut silence_hysteresis = DynamicHysteresis::new();
     let mut mono_hysteresis = DynamicHysteresis::new();

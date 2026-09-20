@@ -384,8 +384,8 @@ impl ConvEngine {
             self.acc_re[..n_bins].fill(0.0);
             self.acc_im[..n_bins].fill(0.0);
 
+            let mut fdl_p = self.fdl_idx;
             for p in 0..p_count {
-                let fdl_p = (self.fdl_idx + p_count - p) % p_count;
                 let fdl_start = fdl_p * self.n_bins;
                 let h_start = p * self.n_bins;
 
@@ -400,6 +400,11 @@ impl ConvEngine {
                         &mut self.acc_im[..n_bins],
                     );
                 }
+
+                if fdl_p == 0 {
+                    fdl_p = p_count;
+                }
+                fdl_p -= 1;
             }
         }
 

@@ -50,6 +50,43 @@ pub unsafe fn apply_gain_and_detect_clipping_stereo(
     crate::math::common::dispatch_simd!(apply_gain_and_detect_clipping_stereo(left, right, gain))
 }
 
+/// Subtracts dither offset, applies gain, and detects clipping in mono in a single pass via SIMD dispatch.
+///
+/// # Safety
+/// The buffer must be valid.
+pub unsafe fn apply_gain_with_dither_and_detect_clipping_mono(
+    data: &mut [f32],
+    gain: f32,
+    dither_sub: f32,
+) -> bool {
+    crate::math::common::dispatch_simd!(apply_gain_with_dither_and_detect_clipping_mono(
+        data, gain, dither_sub
+    ))
+}
+
+/// Subtracts dither offset, applies gain, and detects clipping in stereo in a single pass via SIMD dispatch.
+///
+/// # Safety
+/// The buffers must be valid and have the same size.
+pub unsafe fn apply_gain_with_dither_and_detect_clipping_stereo(
+    left: &mut [f32],
+    right: &mut [f32],
+    gain: f32,
+    dither_sub: f32,
+) -> bool {
+    crate::math::common::dispatch_simd!(apply_gain_with_dither_and_detect_clipping_stereo(
+        left, right, gain, dither_sub
+    ))
+}
+
+/// Copies `src` to `dst` while scaling each element by `scale` via SIMD dispatch.
+///
+/// # Safety
+/// The buffers must be valid.
+pub unsafe fn copy_with_scale(src: &[f32], dst: &mut [f32], scale: f32) {
+    crate::math::common::dispatch_simd!(copy_with_scale(src, dst, scale))
+}
+
 /// Applies linear gain ramp in stereo via SIMD dispatch.
 ///
 /// # Safety

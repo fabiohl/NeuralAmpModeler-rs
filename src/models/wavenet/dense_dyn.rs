@@ -22,6 +22,48 @@ pub struct DenseLayerDyn {
 }
 
 impl DenseLayerDyn {
+    /// Validated constructor (release-stable, off-RT) for a dynamic `DenseLayerDyn`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - `in_ch == 0` or `out_ch == 0`;
+    /// - `weights.len() < in_ch * out_ch`;
+    /// - `do_bias` is true and `bias.len() < out_ch`.
+    #[inline]
+    pub fn try_from_parts(
+        weights: AlignedVec<f32>,
+        bias: AlignedVec<f32>,
+        do_bias: bool,
+        in_ch: usize,
+        out_ch: usize,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(in_ch > 0, "DenseLayerDyn in_ch must be >= 1, got {in_ch}");
+        anyhow::ensure!(
+            out_ch > 0,
+            "DenseLayerDyn out_ch must be >= 1, got {out_ch}"
+        );
+        let min_weights = in_ch * out_ch;
+        anyhow::ensure!(
+            weights.len() >= min_weights,
+            "DenseLayerDyn weights buffer too small: expected >= {min_weights}, got {}",
+            weights.len()
+        );
+        if do_bias {
+            anyhow::ensure!(
+                bias.len() >= out_ch,
+                "DenseLayerDyn bias buffer too small: expected >= {out_ch}, got {}",
+                bias.len()
+            );
+        }
+        Ok(Self {
+            in_ch,
+            out_ch,
+            weights,
+            bias,
+            do_bias,
+        })
+    }
+
     /// Residual Sum (The Final 'Shortcut'):
     /// This function mixes channels AND adds the original sound
     /// (residual) to the result, all without needing to copy extra data in memory.

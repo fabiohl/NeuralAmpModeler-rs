@@ -82,58 +82,83 @@ pub unsafe fn apply_gain_fallback(data: &mut [f32], gain: f32) {
     }
 }
 
-/// Computes the energy (Mean Square) of a block via scalar.
+/// Computes the energy (Mean Square) of a block via scalar, returning (energy, has_non_finite).
 // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
 #[inline]
-pub unsafe fn compute_energy_fallback(data: &[f32]) -> f32 {
+pub unsafe fn compute_energy_fallback(data: &[f32]) -> (f32, bool) {
     let len = data.len();
     if len == 0 {
-        return 0.0;
+        return (0.0, false);
     }
     let mut sum = 0.0f32;
+    let mut has_non_finite = false;
     for &x in data {
+        if !x.is_finite() {
+            has_non_finite = true;
+        }
         sum += x * x;
     }
-    sum / (len as f32)
+    let energy = if has_non_finite {
+        0.0
+    } else {
+        sum / (len as f32)
+    };
+    (energy, has_non_finite)
 }
 
-/// Computes the maximum energy between two channels via scalar.
+/// Computes the maximum energy between two channels via scalar, returning (energy, has_non_finite).
 // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
 #[inline]
-pub unsafe fn compute_energy_stereo_fallback(l: &[f32], r: &[f32]) -> f32 {
+pub unsafe fn compute_energy_stereo_fallback(l: &[f32], r: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(l.len(), r.len());
     if len == 0 {
-        return 0.0;
+        return (0.0, false);
     }
     let mut sum_l = 0.0f32;
     let mut sum_r = 0.0f32;
+    let mut has_non_finite = false;
     for i in 0..len {
         let xl = *l.get_unchecked(i);
         let xr = *r.get_unchecked(i);
+        if !xl.is_finite() || !xr.is_finite() {
+            has_non_finite = true;
+        }
         sum_l += xl * xl;
         sum_r += xr * xr;
     }
-    let energy_l = sum_l / (len as f32);
-    let energy_r = sum_r / (len as f32);
-    energy_l.max(energy_r)
+    let energy = if has_non_finite {
+        0.0
+    } else {
+        let energy_l = sum_l / (len as f32);
+        let energy_r = sum_r / (len as f32);
+        energy_l.max(energy_r)
+    };
+    (energy, has_non_finite)
 }
 
-/// Computes the maximum absolute difference between two blocks via scalar.
+/// Computes the maximum absolute difference between two blocks via scalar, returning (max_diff, has_non_finite).
 // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
 #[inline]
-pub unsafe fn compute_max_diff_fallback(a: &[f32], b: &[f32]) -> f32 {
+pub unsafe fn compute_max_diff_fallback(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());
     if len == 0 {
-        return 0.0;
+        return (0.0, false);
     }
     let mut max_diff = 0.0f32;
+    let mut has_non_finite = false;
     for i in 0..len {
-        let d = (*a.get_unchecked(i) - *b.get_unchecked(i)).abs();
+        let va = *a.get_unchecked(i);
+        let vb = *b.get_unchecked(i);
+        if !va.is_finite() || !vb.is_finite() {
+            has_non_finite = true;
+        }
+        let d = (va - vb).abs();
         if d > max_diff {
             max_diff = d;
         }
     }
-    max_diff
+    let res = if has_non_finite { 0.0 } else { max_diff };
+    (res, has_non_finite)
 }
 
 /// Computes the peak absolute value of both channels (fallback).

@@ -17,6 +17,41 @@ pub struct DenseLayer<const IN: usize, const OUT: usize> {
 }
 
 impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
+    /// Validated constructor (release-stable, off-RT) for a static `DenseLayer`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - `IN == 0` or `OUT == 0`;
+    /// - `weights.len() < IN * OUT`;
+    /// - `do_bias` is true and `bias.len() < OUT`.
+    #[inline]
+    pub fn try_from_parts(
+        weights: AlignedVec<f32>,
+        bias: AlignedVec<f32>,
+        do_bias: bool,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(IN > 0, "DenseLayer IN must be >= 1, got {IN}");
+        anyhow::ensure!(OUT > 0, "DenseLayer OUT must be >= 1, got {OUT}");
+        let min_weights = IN * OUT;
+        anyhow::ensure!(
+            weights.len() >= min_weights,
+            "DenseLayer weights buffer too small: expected >= {min_weights}, got {}",
+            weights.len()
+        );
+        if do_bias {
+            anyhow::ensure!(
+                bias.len() >= OUT,
+                "DenseLayer bias buffer too small: expected >= {OUT}, got {}",
+                bias.len()
+            );
+        }
+        Ok(Self {
+            weights,
+            bias,
+            do_bias,
+        })
+    }
+
     /// Full-precision f32 fused residual batch.
     ///
     /// Fuses the 1x1 GEMV with bias and residual addition into a single SIMD

@@ -1042,9 +1042,6 @@ main() {
     fi
 
     if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "bench" ]; then
-        echo ""
-        echo -e "${BLUE}⏳ Waiting 180s for thermal cooling before benchmarks...${NC}"
-        sleep 180
         phase "regression_gate benchmarks"
         run_benchmarks
     fi

@@ -28,6 +28,7 @@ pub mod sinc_kernel;
 pub mod smoother;
 /// Half-band FIR upsampling/downsampling stage with SIMD acceleration.
 pub mod stage;
+pub use stage::X2Stage;
 /// RT-safe telemetry accumulator: peak/RMS/counter aggregates for the DSP monitoring loop.
 pub mod telemetry;
 /// Generic RT-safe DSP utilities: variable delay line and shared building blocks.

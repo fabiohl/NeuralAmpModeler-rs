@@ -97,14 +97,29 @@ fn test_compute_energy_avx2() {
     // SAFETY: the kernel requires the AVX2/FMA target features, which are not
     // carried by this plain test function's codegen (only by its own
     // `#[target_feature]` attribute or via inlining).
-    let energy = unsafe { compute_energy_avx2(&data) };
+    let (energy, non_finite) = unsafe { compute_energy_avx2(&data) };
+    assert!(!non_finite);
     // (1^2 + 2^2 + 3^2 + 4^2) / 4 = (1 + 4 + 9 + 16) / 4 = 30 / 4 = 7.5
     assert!((energy - 7.5).abs() < 1e-6);
 
     let data2 = vec![0.0; 16];
     // SAFETY: same target-feature requirement as above.
-    let energy2 = unsafe { compute_energy_avx2(&data2) };
+    let (energy2, non_finite2) = unsafe { compute_energy_avx2(&data2) };
+    assert!(!non_finite2);
     assert_eq!(energy2, 0.0);
+
+    // Non-finite containment: NaN or Inf must set non_finite flag and zero the energy.
+    let data_nan = vec![1.0, f32::NAN, 3.0, 4.0];
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slice is valid.
+    let (energy_nan, non_finite_nan) = unsafe { compute_energy_avx2(&data_nan) };
+    assert!(non_finite_nan);
+    assert_eq!(energy_nan, 0.0);
+
+    let data_inf = vec![1.0, 2.0, f32::INFINITY, 4.0];
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slice is valid.
+    let (energy_inf, non_finite_inf) = unsafe { compute_energy_avx2(&data_inf) };
+    assert!(non_finite_inf);
+    assert_eq!(energy_inf, 0.0);
 }
 
 #[test]
@@ -113,15 +128,25 @@ fn test_compute_max_diff_avx2() {
     let a = vec![1.0, 2.0, 3.0, 4.0];
     let b = vec![1.1, 1.9, 3.5, 3.8];
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let max_diff = unsafe { compute_max_diff_avx2(&a, &b) };
+    let (max_diff, non_finite) = unsafe { compute_max_diff_avx2(&a, &b) };
+    assert!(!non_finite);
     // diffs: [0.1, 0.1, 0.5, 0.2] -> max = 0.5
     assert!((max_diff - 0.5).abs() < 1e-6);
 
     let a2 = vec![1.0; 8];
     let b2 = vec![1.0; 8];
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let max_diff2 = unsafe { compute_max_diff_avx2(&a2, &b2) };
+    let (max_diff2, non_finite2) = unsafe { compute_max_diff_avx2(&a2, &b2) };
+    assert!(!non_finite2);
     assert_eq!(max_diff2, 0.0);
+
+    // Non-finite containment: NaN or Inf must set non_finite flag and zero the max diff.
+    let a_nan = vec![1.0, f32::NAN, 3.0, 4.0];
+    let b_nan = vec![1.1, 1.9, 3.5, 3.8];
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slices are valid and equal length.
+    let (max_diff_nan, non_finite_nan) = unsafe { compute_max_diff_avx2(&a_nan, &b_nan) };
+    assert!(non_finite_nan);
+    assert_eq!(max_diff_nan, 0.0);
 }
 
 #[test]
@@ -272,17 +297,43 @@ fn test_store_bf16_avx512() {
 fn test_compute_energy_parity() {
     let data: Vec<f32> = (0..100).map(|i| i as f32 * 0.01).collect();
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let expected = unsafe { crate::math::common::compute_energy_fallback(&data) };
+    let (expected, exp_non_finite) = unsafe { crate::math::common::compute_energy_fallback(&data) };
+    assert!(!exp_non_finite);
 
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let res_avx2 = unsafe { Avx2Math::compute_energy(&data) };
+    let (res_avx2, avx2_non_finite) = unsafe { Avx2Math::compute_energy(&data) };
+    assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
     #[cfg(feature = "avx512")]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-        let res_avx512 = unsafe { Avx512Math::compute_energy(&data) };
+        let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_energy(&data) };
+        assert_eq!(avx512_non_finite, exp_non_finite);
         assert!((res_avx512 - expected).abs() < 1e-6);
+    }
+
+    // Non-finite parity test
+    let mut data_nan = data.clone();
+    data_nan[50] = f32::NAN;
+    // SAFETY: Fallback kernel called with valid slice.
+    let (expected_nan, exp_non_finite_nan) =
+        unsafe { crate::math::common::compute_energy_fallback(&data_nan) };
+    assert!(exp_non_finite_nan);
+    assert_eq!(expected_nan, 0.0);
+
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slice is valid.
+    let (res_avx2_nan, avx2_non_finite_nan) = unsafe { Avx2Math::compute_energy(&data_nan) };
+    assert!(avx2_non_finite_nan);
+    assert_eq!(res_avx2_nan, 0.0);
+
+    #[cfg(feature = "avx512")]
+    if is_x86_feature_detected!("avx512f") {
+        // SAFETY: AVX-512 target feature detected; slice is valid.
+        let (res_avx512_nan, avx512_non_finite_nan) =
+            unsafe { Avx512Math::compute_energy(&data_nan) };
+        assert!(avx512_non_finite_nan);
+        assert_eq!(res_avx512_nan, 0.0);
     }
 }
 
@@ -291,17 +342,45 @@ fn test_compute_energy_stereo_parity() {
     let l: Vec<f32> = (0..100).map(|i| i as f32 * 0.01).collect();
     let r: Vec<f32> = (0..100).map(|i| (100 - i) as f32 * 0.01).collect();
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let expected = unsafe { crate::math::common::compute_energy_stereo_fallback(&l, &r) };
+    let (expected, exp_non_finite) =
+        unsafe { crate::math::common::compute_energy_stereo_fallback(&l, &r) };
+    assert!(!exp_non_finite);
 
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let res_avx2 = unsafe { Avx2Math::compute_energy_stereo(&l, &r) };
+    let (res_avx2, avx2_non_finite) = unsafe { Avx2Math::compute_energy_stereo(&l, &r) };
+    assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
     #[cfg(feature = "avx512")]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-        let res_avx512 = unsafe { Avx512Math::compute_energy_stereo(&l, &r) };
+        let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_energy_stereo(&l, &r) };
+        assert_eq!(avx512_non_finite, exp_non_finite);
         assert!((res_avx512 - expected).abs() < 1e-6);
+    }
+
+    // Non-finite parity test
+    let mut l_nan = l.clone();
+    l_nan[25] = f32::INFINITY;
+    // SAFETY: Fallback kernel called with valid slices.
+    let (expected_nan, exp_non_finite_nan) =
+        unsafe { crate::math::common::compute_energy_stereo_fallback(&l_nan, &r) };
+    assert!(exp_non_finite_nan);
+    assert_eq!(expected_nan, 0.0);
+
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slices are valid.
+    let (res_avx2_nan, avx2_non_finite_nan) =
+        unsafe { Avx2Math::compute_energy_stereo(&l_nan, &r) };
+    assert!(avx2_non_finite_nan);
+    assert_eq!(res_avx2_nan, 0.0);
+
+    #[cfg(feature = "avx512")]
+    if is_x86_feature_detected!("avx512f") {
+        // SAFETY: AVX-512 target feature detected; slices are valid.
+        let (res_avx512_nan, avx512_non_finite_nan) =
+            unsafe { Avx512Math::compute_energy_stereo(&l_nan, &r) };
+        assert!(avx512_non_finite_nan);
+        assert_eq!(res_avx512_nan, 0.0);
     }
 }
 
@@ -310,17 +389,44 @@ fn test_compute_max_diff_parity() {
     let a: Vec<f32> = (0..100).map(|i| i as f32 * 0.01).collect();
     let b: Vec<f32> = (0..100).map(|i| (i as f32 * 1.1) * 0.01).collect();
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let expected = unsafe { crate::math::common::compute_max_diff_fallback(&a, &b) };
+    let (expected, exp_non_finite) =
+        unsafe { crate::math::common::compute_max_diff_fallback(&a, &b) };
+    assert!(!exp_non_finite);
 
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let res_avx2 = unsafe { Avx2Math::compute_max_diff(&a, &b) };
+    let (res_avx2, avx2_non_finite) = unsafe { Avx2Math::compute_max_diff(&a, &b) };
+    assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
     #[cfg(feature = "avx512")]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-        let res_avx512 = unsafe { Avx512Math::compute_max_diff(&a, &b) };
+        let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_max_diff(&a, &b) };
+        assert_eq!(avx512_non_finite, exp_non_finite);
         assert!((res_avx512 - expected).abs() < 1e-6);
+    }
+
+    // Non-finite parity test
+    let mut a_nan = a.clone();
+    a_nan[75] = f32::NAN;
+    // SAFETY: Fallback kernel called with valid slices.
+    let (expected_nan, exp_non_finite_nan) =
+        unsafe { crate::math::common::compute_max_diff_fallback(&a_nan, &b) };
+    assert!(exp_non_finite_nan);
+    assert_eq!(expected_nan, 0.0);
+
+    // SAFETY: AVX2 baseline guaranteed on x86-64-v3; slices are valid.
+    let (res_avx2_nan, avx2_non_finite_nan) = unsafe { Avx2Math::compute_max_diff(&a_nan, &b) };
+    assert!(avx2_non_finite_nan);
+    assert_eq!(res_avx2_nan, 0.0);
+
+    #[cfg(feature = "avx512")]
+    if is_x86_feature_detected!("avx512f") {
+        // SAFETY: AVX-512 target feature detected; slices are valid.
+        let (res_avx512_nan, avx512_non_finite_nan) =
+            unsafe { Avx512Math::compute_max_diff(&a_nan, &b) };
+        assert!(avx512_non_finite_nan);
+        assert_eq!(res_avx512_nan, 0.0);
     }
 }
 

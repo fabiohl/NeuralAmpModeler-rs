@@ -225,6 +225,7 @@ impl NamResampler {
     ///
     /// For a typed-error counterpart (no `anyhow`), see
     /// [`new_typed`](NamResampler::new_typed).
+    #[deprecated(note = "use new_simple or new_simple_typed")]
     #[cold]
     pub fn new(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
         Self::new_inner(host_rate, nam_rate, PhaseType::Minimum)
@@ -232,11 +233,10 @@ impl NamResampler {
 
     /// Creates the pair of resamplers (input+output) without the unused chunk-size parameter.
     ///
-    /// Equivalent to [`new`](NamResampler::new)`(host_rate, nam_rate, 0)`.
     /// See [`new`](NamResampler::new) for the full parameter and error documentation.
     #[cold]
     pub fn new_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
-        Self::new(host_rate, nam_rate, 0)
+        Self::new_inner(host_rate, nam_rate, PhaseType::Minimum)
     }
 
     /// Creates the pair of resamplers using **linear-phase** polyphase banks.
@@ -259,6 +259,7 @@ impl NamResampler {
     ///
     /// For a typed-error counterpart (no `anyhow`), see
     /// [`new_linear_typed`](NamResampler::new_linear_typed).
+    #[deprecated(note = "use new_linear_simple or new_linear_simple_typed")]
     #[cold]
     pub fn new_linear(host_rate: u32, nam_rate: u32, _chunk_size: usize) -> Result<Self> {
         Self::new_inner(host_rate, nam_rate, PhaseType::Linear)
@@ -266,11 +267,10 @@ impl NamResampler {
 
     /// Creates the linear-phase pair of resamplers without the unused chunk-size parameter.
     ///
-    /// Equivalent to [`new_linear`](NamResampler::new_linear)`(host_rate, nam_rate, 0)`.
     /// See [`new_linear`](NamResampler::new_linear) for the full parameter and error documentation.
     #[cold]
     pub fn new_linear_simple(host_rate: u32, nam_rate: u32) -> Result<Self> {
-        Self::new_linear(host_rate, nam_rate, 0)
+        Self::new_inner(host_rate, nam_rate, PhaseType::Linear)
     }
 
     /// Typed-error counterpart of [`new`](NamResampler::new) (minimum-phase).
@@ -294,12 +294,13 @@ impl NamResampler {
     /// use neural_amp_modeler_rs::dsp::resampler::NamResampler;
     /// use neural_amp_modeler_rs::common::diagnostics::NamErrorCode;
     ///
-    /// assert!(NamResampler::new_typed(44_100, 48_000, 0).is_ok());
+    /// assert!(NamResampler::new_simple_typed(44_100, 48_000).is_ok());
     /// assert_eq!(
-    ///     NamResampler::new_typed(1_000, 48_000, 0).err(),
+    ///     NamResampler::new_simple_typed(1_000, 48_000).err(),
     ///     Some(NamErrorCode::ResamplerBuildFailed),
     /// );
     /// ```
+    #[deprecated(note = "use new_simple_typed")]
     #[cold]
     pub fn new_typed(
         host_rate: u32,
@@ -310,11 +311,9 @@ impl NamResampler {
     }
 
     /// Typed-error counterpart of [`new_simple`](NamResampler::new_simple).
-    ///
-    /// Equivalent to [`new_typed`](NamResampler::new_typed)`(host_rate, nam_rate, 0)`.
     #[cold]
     pub fn new_simple_typed(host_rate: u32, nam_rate: u32) -> Result<Self, NamErrorCode> {
-        Self::new_typed(host_rate, nam_rate, 0)
+        Self::new_typed_inner(host_rate, nam_rate, PhaseType::Minimum)
     }
 
     /// Typed-error counterpart of [`new_linear`](NamResampler::new_linear)
@@ -326,6 +325,7 @@ impl NamResampler {
     /// [`NamErrorCode::ResamplerBuildFailed`] (E2200) for an out-of-range
     /// sample rate, [`NamErrorCode::OutOfMemory`] (E5000) on allocation
     /// failure.
+    #[deprecated(note = "use new_linear_simple_typed")]
     #[cold]
     pub fn new_linear_typed(
         host_rate: u32,
@@ -337,12 +337,9 @@ impl NamResampler {
 
     /// Typed-error counterpart of
     /// [`new_linear_simple`](NamResampler::new_linear_simple).
-    ///
-    /// Equivalent to
-    /// [`new_linear_typed`](NamResampler::new_linear_typed)`(host_rate, nam_rate, 0)`.
     #[cold]
     pub fn new_linear_simple_typed(host_rate: u32, nam_rate: u32) -> Result<Self, NamErrorCode> {
-        Self::new_linear_typed(host_rate, nam_rate, 0)
+        Self::new_typed_inner(host_rate, nam_rate, PhaseType::Linear)
     }
 
     /// Returns `true` when `host_rate == nam_rate` (bypass).

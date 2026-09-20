@@ -115,3 +115,148 @@ fn test_dense_layer_rectangular() {
     assert_eq!(output[2], 3.5);
     assert_eq!(output[3], -9.0);
 }
+
+/// Verifies that `DenseLayer::try_from_parts` fails closed with `Err` (without panicking)
+/// on sub-dimensioned buffers and invalid dimensions (F-PERF-01).
+#[test]
+fn test_dense_layer_try_from_parts_validation() {
+    // Under-dimensioned weights buffer (needs IN * OUT = 16, provide 15).
+    let short_weights = AlignedVec::from_vec(vec![0.0f32; 15]).unwrap();
+    let bias = AlignedVec::from_vec(vec![0.0f32; 4]).unwrap();
+    let res = DenseLayer::<4, 4>::try_from_parts(short_weights, bias.clone(), false);
+    assert!(
+        res.is_err(),
+        "DenseLayer should fail closed when weights are sub-dimensioned"
+    );
+
+    // Under-dimensioned bias buffer when do_bias is true (needs OUT = 4, provide 3).
+    let weights = AlignedVec::from_vec(vec![0.0f32; 16]).unwrap();
+    let short_bias = AlignedVec::from_vec(vec![0.0f32; 3]).unwrap();
+    let res = DenseLayer::<4, 4>::try_from_parts(weights.clone(), short_bias, true);
+    assert!(
+        res.is_err(),
+        "DenseLayer should fail closed when bias is sub-dimensioned and do_bias=true"
+    );
+
+    // Zero input dimension: IN = 0
+    let empty_weights = AlignedVec::new(0, 0.0f32).unwrap();
+    let res = DenseLayer::<0, 4>::try_from_parts(empty_weights, bias.clone(), false);
+    assert!(res.is_err(), "DenseLayer should fail closed when IN == 0");
+
+    // Valid construction succeeds
+    let valid = DenseLayer::<4, 4>::try_from_parts(weights, bias, true);
+    assert!(
+        valid.is_ok(),
+        "Valid parameters should construct successfully"
+    );
+}
+
+/// Verifies that `DenseLayerDyn::try_from_parts` fails closed with `Err` (without panicking)
+/// on sub-dimensioned buffers, invalid dimensions, and sub-4 channels (F-PERF-01).
+#[test]
+fn test_dense_layer_dyn_try_from_parts_validation() {
+    use crate::models::wavenet::dense_dyn::DenseLayerDyn;
+
+    // Sub-4 input channel (in_ch = 1 < 4, e.g. rechannel) with sub-dimensioned weights (needs 4, provide 3).
+    let short_weights = AlignedVec::from_vec(vec![0.0f32; 3]).unwrap();
+    let bias = AlignedVec::from_vec(vec![0.0f32; 4]).unwrap();
+    let res = DenseLayerDyn::try_from_parts(short_weights, bias.clone(), false, 1, 4);
+    assert!(
+        res.is_err(),
+        "DenseLayerDyn with in_ch=1 should fail closed when weights < in_ch*out_ch"
+    );
+
+    // in_ch = 2, out_ch = 8 with sub-dimensioned weights (needs 16, provide 15).
+    let short_weights16 = AlignedVec::from_vec(vec![0.0f32; 15]).unwrap();
+    let bias8 = AlignedVec::from_vec(vec![0.0f32; 8]).unwrap();
+    let res = DenseLayerDyn::try_from_parts(short_weights16, bias8.clone(), false, 2, 8);
+    assert!(
+        res.is_err(),
+        "DenseLayerDyn with in_ch=2 should fail closed when weights < 16"
+    );
+
+    // in_ch = 0 or out_ch = 0
+    let empty_weights = AlignedVec::new(0, 0.0f32).unwrap();
+    let res_in0 = DenseLayerDyn::try_from_parts(empty_weights.clone(), bias.clone(), false, 0, 4);
+    assert!(
+        res_in0.is_err(),
+        "DenseLayerDyn with in_ch=0 must fail closed"
+    );
+    let res_out0 = DenseLayerDyn::try_from_parts(empty_weights, bias.clone(), false, 4, 0);
+    assert!(
+        res_out0.is_err(),
+        "DenseLayerDyn with out_ch=0 must fail closed"
+    );
+
+    // Under-dimensioned bias buffer when do_bias is true.
+    let weights = AlignedVec::from_vec(vec![0.0f32; 8]).unwrap();
+    let short_bias = AlignedVec::from_vec(vec![0.0f32; 3]).unwrap();
+    let res = DenseLayerDyn::try_from_parts(weights.clone(), short_bias, true, 2, 4);
+    assert!(
+        res.is_err(),
+        "DenseLayerDyn should fail closed when bias is sub-dimensioned and do_bias=true"
+    );
+
+    // Valid construction succeeds
+    let valid = DenseLayerDyn::try_from_parts(weights, bias, true, 2, 4);
+    assert!(
+        valid.is_ok(),
+        "Valid parameters should construct successfully"
+    );
+}
+
+/// Verifies that `Conv1d::try_from_parts` and `Conv1dDyn::try_from_parts` fail closed
+/// with `Err` on sub-dimensioned buffers and invalid dimensions, including sub-4 input channels (F-PERF-01).
+#[test]
+fn test_conv1d_try_from_parts_validation() {
+    // Conv1d::<1, 4, 3>: in_ch = 1 < 4, out_ch = 4, K = 3.
+    // interleave_width = 4, num_blocks = 1, padded_total = 1 * 4 * 1 * 3 = 12.
+    let short_weights = AlignedVec::from_vec(vec![0.0f32; 11]).unwrap();
+    let bias = AlignedVec::from_vec(vec![0.0f32; 4]).unwrap();
+    let res = Conv1d::<1, 4, 3>::try_from_parts(short_weights, bias.clone(), false, 1);
+    assert!(
+        res.is_err(),
+        "Conv1d with in_ch=1 should fail closed when weights < padded_total"
+    );
+
+    // Sub-dimensioned bias when do_bias = true
+    let weights = AlignedVec::from_vec(vec![0.0f32; 12]).unwrap();
+    let short_bias = AlignedVec::from_vec(vec![0.0f32; 3]).unwrap();
+    let res = Conv1d::<1, 4, 3>::try_from_parts(weights.clone(), short_bias, true, 1);
+    assert!(
+        res.is_err(),
+        "Conv1d should fail closed when bias < OUT and do_bias=true"
+    );
+
+    // Valid Conv1d construction succeeds
+    let valid = Conv1d::<1, 4, 3>::try_from_parts(weights, bias.clone(), true, 1);
+    assert!(
+        valid.is_ok(),
+        "Valid Conv1d parameters should construct successfully"
+    );
+
+    // Conv1dDyn: in_ch = 1 < 4, out_ch = 4, kernel = 3, interleave_width = 4.
+    // padded_total = 1 * 4 * 1 * 3 = 12.
+    let short_weights_dyn = AlignedVec::from_vec(vec![0.0f32; 11]).unwrap();
+    let res_dyn = Conv1dDyn::try_from_parts(short_weights_dyn, bias.clone(), false, 1, 1, 4, 3, 4);
+    assert!(
+        res_dyn.is_err(),
+        "Conv1dDyn with in_ch=1 should fail closed when weights < padded_total"
+    );
+
+    // Invalid dimensions: in_ch = 0, out_ch = 0, kernel = 0, kernel > MAX_KERNEL
+    let empty = AlignedVec::new(0, 0.0f32).unwrap();
+    assert!(Conv1dDyn::try_from_parts(empty.clone(), bias.clone(), false, 1, 0, 4, 3, 4).is_err());
+    assert!(Conv1dDyn::try_from_parts(empty.clone(), bias.clone(), false, 1, 1, 0, 3, 4).is_err());
+    assert!(Conv1dDyn::try_from_parts(empty.clone(), bias.clone(), false, 1, 1, 4, 0, 4).is_err());
+    assert!(Conv1dDyn::try_from_parts(empty.clone(), bias.clone(), false, 1, 1, 4, 65, 4).is_err());
+    assert!(Conv1dDyn::try_from_parts(empty, bias.clone(), false, 1, 1, 4, 3, 5).is_err());
+
+    // Valid Conv1dDyn construction succeeds
+    let valid_weights = AlignedVec::from_vec(vec![0.0f32; 12]).unwrap();
+    let valid_dyn = Conv1dDyn::try_from_parts(valid_weights, bias, true, 1, 1, 4, 3, 4);
+    assert!(
+        valid_dyn.is_ok(),
+        "Valid Conv1dDyn parameters should construct successfully"
+    );
+}

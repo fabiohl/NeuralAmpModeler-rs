@@ -90,7 +90,7 @@ impl StreamPipeline {
         let open_lin = lut.db_to_linear(gate_params.threshold_open_db);
         let close_lin = lut.db_to_linear(gate_params.threshold_close_db);
         Self {
-            resampler: NamResampler::new(HOST_RATE, NAM_RATE, BLOCK).expect("resampler"),
+            resampler: NamResampler::new_simple(HOST_RATE, NAM_RATE).expect("resampler"),
             stream: StreamingResampleBuffer::new(HOST_RATE, NAM_RATE, MAX_RESAMP_BUF)
                 .expect("stream"),
             os_l: OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).expect("os"),

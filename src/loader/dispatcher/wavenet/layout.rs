@@ -98,7 +98,7 @@ pub(crate) fn read_dense_weights_typed<T: DenseWeightsOutput>(
         AlignedVec::new(out_size, 0.0)?
     };
 
-    Ok(T::from_parts(f32_weights, bias, do_bias, in_size, out_size))
+    T::from_parts(f32_weights, bias, do_bias, in_size, out_size)
 }
 
 pub(crate) fn read_dense_head_weights_typed<T: DenseWeightsOutput>(
@@ -124,7 +124,7 @@ pub(crate) fn read_dense_head_weights_typed<T: DenseWeightsOutput>(
         AlignedVec::new(out_size, 0.0)?
     };
 
-    Ok(T::from_parts(f32_weights, bias, do_bias, in_size, out_size))
+    T::from_parts(f32_weights, bias, do_bias, in_size, out_size)
 }
 
 // =============================================================================

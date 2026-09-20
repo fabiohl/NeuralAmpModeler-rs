@@ -334,6 +334,44 @@ macro_rules! impl_avx2_activations {
         }
 
         #[inline(always)]
+        // SAFETY: slice is valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn apply_gain_with_dither_and_detect_clipping_mono(
+            data: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::dsp::gain::apply_gain_with_dither_and_detect_clipping_mono_avx2(
+                    data, gain, dither_sub,
+                )
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn apply_gain_with_dither_and_detect_clipping_stereo(
+            left: &mut [f32],
+            right: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::dsp::gain::apply_gain_with_dither_and_detect_clipping_stereo_avx2(
+                    left, right, gain, dither_sub,
+                )
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn copy_with_scale(src: &[f32], dst: &mut [f32], scale: f32) {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe { super::super::dsp::gain::copy_with_scale_avx2(src, dst, scale) }
+        }
+
+        #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
         unsafe fn apply_gain_stereo(left: &mut [f32], right: &mut [f32], gain: f32) {
             // SAFETY: arguments satisfy the function's documented invariants.

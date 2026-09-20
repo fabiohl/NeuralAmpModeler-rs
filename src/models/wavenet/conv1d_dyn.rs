@@ -87,6 +87,8 @@ impl Conv1dDyn {
         kernel: usize,
         interleave_width: usize,
     ) -> anyhow::Result<Self> {
+        anyhow::ensure!(in_ch > 0, "Conv1dDyn in_ch must be >= 1, got {in_ch}");
+        anyhow::ensure!(out_ch > 0, "Conv1dDyn out_ch must be >= 1, got {out_ch}");
         anyhow::ensure!(
             kernel > 0,
             "Conv1dDyn kernel_size must be >= 1, got {kernel}"
@@ -109,6 +111,13 @@ impl Conv1dDyn {
              (SIMD-padded, interleave width {interleave_width}), got {}",
             weights.len()
         );
+        if do_bias {
+            anyhow::ensure!(
+                bias.len() >= out_ch,
+                "Conv1dDyn bias buffer is too small: expected >= {out_ch}, got {}",
+                bias.len()
+            );
+        }
         Ok(Conv1dDyn {
             weights,
             bias,

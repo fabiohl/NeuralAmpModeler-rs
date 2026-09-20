@@ -15,7 +15,7 @@ mod audit_tests {
 
     fn run_resampler_audit(host_rate: u32, nam_rate: u32, chunk_size: usize, is_mono: bool) {
         let mut resampler =
-            NamResampler::new(host_rate, nam_rate, chunk_size).expect("Failed to create resampler");
+            NamResampler::new_simple(host_rate, nam_rate).expect("Failed to create resampler");
 
         let in_l = generate_noise(chunk_size);
         let in_r = generate_noise(chunk_size);

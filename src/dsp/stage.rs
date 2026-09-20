@@ -164,7 +164,7 @@ impl HalfBandFilter {
 ///
 /// Uses pre-allocated double-buffer delay lines for contiguous SIMD access,
 /// eliminating per-sample modulo indexing from the hot-path.
-pub(crate) struct X2Stage {
+pub struct X2Stage {
     pub(crate) up_filter: HalfBandFilter,
     pub(crate) down_filter: HalfBandFilter,
     pub(crate) up_center: f32,
@@ -183,7 +183,7 @@ impl X2Stage {
     ///
     /// Allocates mirrored delay-line buffers for contiguous SIMD access.
     /// Returns `Err(NamErrorCode)` on aligned allocation failure.
-    pub(crate) fn new() -> Result<Self, NamErrorCode> {
+    pub fn new() -> Result<Self, NamErrorCode> {
         let dc_up = 2.0;
         let dc_down = 1.0;
         Ok(Self {
@@ -206,7 +206,7 @@ impl X2Stage {
     ///
     /// RT-safe: zero allocations (in-place buffer zero-fill only).
     #[inline(always)]
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.up_ring.fill(0.0);
         self.up_pos = 0;
         self.down_ring_even.fill(0.0);
@@ -233,7 +233,7 @@ impl X2Stage {
     /// Number of output samples written (≤ `2 * input.len()`, clamped to
     /// `output.len()`).
     #[inline(always)]
-    pub(crate) fn upsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+    pub fn upsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let coeffs = &self.up_filter.coeffs;
         let center = self.up_center;
         let n = HB_DELAY;
@@ -330,7 +330,7 @@ impl X2Stage {
     ///
     /// Number of output samples written (`input.len() / 2`, truncated).
     #[inline(always)]
-    pub(crate) fn downsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+    pub fn downsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
         let coeffs = self.down_filter.coeffs;
         let center = self.down_center;
         let mut out_idx = 0;

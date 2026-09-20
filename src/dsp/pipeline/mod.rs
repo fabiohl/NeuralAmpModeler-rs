@@ -33,7 +33,7 @@ pub use bridge::{BridgeBuffer, BridgeRef, DspBridge, DspBridgeReader, DspBridgeW
 pub use bridge::{MAX_BRIDGE_BUF, MAX_RESAMP_BUF};
 
 /// DSP buffer types and pipeline context for per-call stack allocation.
-pub use context::{DspBuffers, DspPipelineContext};
+pub use context::{DspBuffers, DspPipelineContext, StreamingDspBuffers};
 
 /// Denormal dither offset value for FTZ/DAZ protection on the hot path.
 pub use stages::DENORMAL_DITHER_OFFSET;
@@ -44,6 +44,8 @@ pub use stages::DISABLE_GATE;
 pub use stages::apply_input_stage;
 /// Output stage: final volume adjustment, clipping detection, and post-DSP smoothing.
 pub use stages::apply_output_stage;
+/// Output stage with explicit non-finite sample sanitization.
+pub use stages::apply_output_stage_sanitized;
 /// Silence bypass: zero-fills output buffer when gate is fully closed and signal is silent.
 pub use stages::handle_silence_bypass;
 /// Model inference dispatcher: routes to the correct architecture-specific process method.

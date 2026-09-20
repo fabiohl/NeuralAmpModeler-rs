@@ -20,7 +20,7 @@ macro_rules! impl_avx2_reduce {
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
-        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
+        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> (f32, bool) {
             // The kernel is safe to call directly: the `x86-64-v3` baseline
             // enables AVX2+FMA, satisfying the kernel's `#[target_feature]`.
             super::super::dsp::stereo::compute_energy_stereo_avx2(l, r)
@@ -28,7 +28,7 @@ macro_rules! impl_avx2_reduce {
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
-        unsafe fn compute_energy(data: &[f32]) -> f32 {
+        unsafe fn compute_energy(data: &[f32]) -> (f32, bool) {
             // The kernel is safe to call directly: the `x86-64-v3` baseline
             // enables AVX2+FMA, satisfying the kernel's `#[target_feature]`.
             super::super::dsp::stereo::compute_energy_avx2(data)
@@ -36,7 +36,7 @@ macro_rules! impl_avx2_reduce {
 
         #[inline(always)]
         // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
-        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32 {
+        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool) {
             // SAFETY: arguments satisfy the function's documented invariants.
             unsafe { super::super::dsp::stereo::compute_max_diff_avx2(a, b) }
         }

@@ -75,30 +75,26 @@ impl super::LinearFftState {
             return;
         }
 
-        // ── Step 1: Copy input window and compute forward RFFT ──
-        self.input_buf[..block_size].copy_from_slice(input_window);
+        // ── Step 1: Forward RFFT directly on input window (zero-copy, T4.1) ──
         self.rfft
-            .process_forward(&self.input_buf, &mut self.fft_re, &mut self.fft_im);
+            .process_forward(input_window, &mut self.fft_re, &mut self.fft_im);
 
-        // ── Step 2: Frequency-domain MAC ──
+        // ── Step 2: Frequency-domain MAC (T4.2, T4.3) ──
         // The tail output for the NEXT block needs the current input spectrum
         // (block B) for partition 0 (delay P) and FDL entries (blocks B-1,
         // B-2, ...) for partitions 1..K-1 (delays 2P, 3P, ..., K×P).
         // SAFETY: all slices have length num_bins, guaranteed by construction.
-        // ISA was captured at construction time.
+        // ISA was captured at construction time; hoisted outside partition loop.
         self.acc_re[..num_bins].fill(0.0);
         self.acc_im[..num_bins].fill(0.0);
 
-        // Partition 0 (delays P..2P−1): uses the current block's input spectrum.
-        // SAFETY: all slices have length `num_bins`, guaranteed by construction, and
-        // `complex_mac_accumulate` reads/writes exactly `num_bins` elements; the match
-        // on `self.isa` (captured at construction) dispatches to the matching
-        // `#[target_feature]` backend.
-        unsafe {
-            #[expect(deprecated)]
-            match self.isa {
-                #[cfg(feature = "avx512")]
-                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+        #[expect(deprecated)]
+        match self.isa {
+            #[cfg(feature = "avx512")]
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // Partition 0 (delays P..2P−1)
+                // SAFETY: self.isa guarantees AVX-512 support; all buffers are sized to num_bins.
+                unsafe {
                     Avx512Math::complex_mac_accumulate(
                         &self.h_fdl_re[..num_bins],
                         &self.h_fdl_im[..num_bins],
@@ -106,47 +102,20 @@ impl super::LinearFftState {
                         &self.fft_im[..num_bins],
                         &mut self.acc_re[..num_bins],
                         &mut self.acc_im[..num_bins],
-                    )
+                    );
                 }
-                #[cfg(not(feature = "avx512"))]
-                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-                    Avx2Math::complex_mac_accumulate(
-                        &self.h_fdl_re[..num_bins],
-                        &self.h_fdl_im[..num_bins],
-                        &self.fft_re[..num_bins],
-                        &self.fft_im[..num_bins],
-                        &mut self.acc_re[..num_bins],
-                        &mut self.acc_im[..num_bins],
-                    )
-                }
-                InstructionSet::Avx2 => Avx2Math::complex_mac_accumulate(
-                    &self.h_fdl_re[..num_bins],
-                    &self.h_fdl_im[..num_bins],
-                    &self.fft_re[..num_bins],
-                    &self.fft_im[..num_bins],
-                    &mut self.acc_re[..num_bins],
-                    &mut self.acc_im[..num_bins],
-                ),
-            }
-        }
 
-        // Partitions 1..K−1 (delays 2P..K×P): use past input spectra from FDL.
-        for k in 1..num_partitions {
-            let input_idx = (self.fdl_write_idx + num_partitions - k) % num_partitions;
-            let fdl_start = input_idx * num_bins;
-            let h_start = k * num_bins;
-
-            // SAFETY: `h_start = k*num_bins` with `k < num_partitions` and
-            // `fdl_start < num_partitions*num_bins`, so the `num_bins`-element
-            // `h_fdl_*`/`fdl_*` slices stay within the partition buffers (length
-            // `num_partitions*num_bins`, guaranteed by construction);
-            // `complex_mac_accumulate` reads/writes exactly `num_bins` elements, and
-            // the `self.isa` match dispatches to the matching `#[target_feature]` backend.
-            unsafe {
-                #[expect(deprecated)]
-                match self.isa {
-                    #[cfg(feature = "avx512")]
-                    InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // Partitions 1..K−1 (delays 2P..K×P) via wrapping decrement counter (T4.2)
+                let mut input_idx = if self.fdl_write_idx == 0 {
+                    num_partitions - 1
+                } else {
+                    self.fdl_write_idx - 1
+                };
+                for k in 1..num_partitions {
+                    let fdl_start = input_idx * num_bins;
+                    let h_start = k * num_bins;
+                    // SAFETY: self.isa guarantees AVX-512 support; fdl and h_fdl partitions have length num_bins.
+                    unsafe {
                         Avx512Math::complex_mac_accumulate(
                             &self.h_fdl_re[h_start..h_start + num_bins],
                             &self.h_fdl_im[h_start..h_start + num_bins],
@@ -154,10 +123,40 @@ impl super::LinearFftState {
                             &self.fdl_im[fdl_start..fdl_start + num_bins],
                             &mut self.acc_re[..num_bins],
                             &mut self.acc_im[..num_bins],
-                        )
+                        );
                     }
-                    #[cfg(not(feature = "avx512"))]
-                    InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                    if input_idx == 0 {
+                        input_idx = num_partitions;
+                    }
+                    input_idx -= 1;
+                }
+            }
+            #[cfg(not(feature = "avx512"))]
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // Partition 0 (delays P..2P−1)
+                // SAFETY: x86-64-v3 baseline guarantees AVX2 support; all buffers are sized to num_bins.
+                unsafe {
+                    Avx2Math::complex_mac_accumulate(
+                        &self.h_fdl_re[..num_bins],
+                        &self.h_fdl_im[..num_bins],
+                        &self.fft_re[..num_bins],
+                        &self.fft_im[..num_bins],
+                        &mut self.acc_re[..num_bins],
+                        &mut self.acc_im[..num_bins],
+                    );
+                }
+
+                // Partitions 1..K−1 (delays 2P..K×P) via wrapping decrement counter (T4.2)
+                let mut input_idx = if self.fdl_write_idx == 0 {
+                    num_partitions - 1
+                } else {
+                    self.fdl_write_idx - 1
+                };
+                for k in 1..num_partitions {
+                    let fdl_start = input_idx * num_bins;
+                    let h_start = k * num_bins;
+                    // SAFETY: x86-64-v3 baseline guarantees AVX2 support; fdl and h_fdl partitions have length num_bins.
+                    unsafe {
                         Avx2Math::complex_mac_accumulate(
                             &self.h_fdl_re[h_start..h_start + num_bins],
                             &self.h_fdl_im[h_start..h_start + num_bins],
@@ -165,16 +164,52 @@ impl super::LinearFftState {
                             &self.fdl_im[fdl_start..fdl_start + num_bins],
                             &mut self.acc_re[..num_bins],
                             &mut self.acc_im[..num_bins],
-                        )
+                        );
                     }
-                    InstructionSet::Avx2 => Avx2Math::complex_mac_accumulate(
-                        &self.h_fdl_re[h_start..h_start + num_bins],
-                        &self.h_fdl_im[h_start..h_start + num_bins],
-                        &self.fdl_re[fdl_start..fdl_start + num_bins],
-                        &self.fdl_im[fdl_start..fdl_start + num_bins],
+                    if input_idx == 0 {
+                        input_idx = num_partitions;
+                    }
+                    input_idx -= 1;
+                }
+            }
+            InstructionSet::Avx2 => {
+                // Partition 0 (delays P..2P−1)
+                // SAFETY: x86-64-v3 baseline guarantees AVX2 support; all buffers are sized to num_bins.
+                unsafe {
+                    Avx2Math::complex_mac_accumulate(
+                        &self.h_fdl_re[..num_bins],
+                        &self.h_fdl_im[..num_bins],
+                        &self.fft_re[..num_bins],
+                        &self.fft_im[..num_bins],
                         &mut self.acc_re[..num_bins],
                         &mut self.acc_im[..num_bins],
-                    ),
+                    );
+                }
+
+                // Partitions 1..K−1 (delays 2P..K×P) via wrapping decrement counter (T4.2)
+                let mut input_idx = if self.fdl_write_idx == 0 {
+                    num_partitions - 1
+                } else {
+                    self.fdl_write_idx - 1
+                };
+                for k in 1..num_partitions {
+                    let fdl_start = input_idx * num_bins;
+                    let h_start = k * num_bins;
+                    // SAFETY: x86-64-v3 baseline guarantees AVX2 support; fdl and h_fdl partitions have length num_bins.
+                    unsafe {
+                        Avx2Math::complex_mac_accumulate(
+                            &self.h_fdl_re[h_start..h_start + num_bins],
+                            &self.h_fdl_im[h_start..h_start + num_bins],
+                            &self.fdl_re[fdl_start..fdl_start + num_bins],
+                            &self.fdl_im[fdl_start..fdl_start + num_bins],
+                            &mut self.acc_re[..num_bins],
+                            &mut self.acc_im[..num_bins],
+                        );
+                    }
+                    if input_idx == 0 {
+                        input_idx = num_partitions;
+                    }
+                    input_idx -= 1;
                 }
             }
         }

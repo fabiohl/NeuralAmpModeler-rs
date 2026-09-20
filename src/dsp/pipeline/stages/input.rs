@@ -46,24 +46,29 @@ pub fn apply_input_stage(
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
     #[cfg(feature = "avx512")]
-    use crate::math::common::Avx512Math;
-    use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
-    #[expect(deprecated)]
-    match effective_instruction_set() {
-        #[cfg(feature = "avx512")]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe { apply_input_stage_inner::<Avx512Math>(samples_l, samples_r, n_samples, ctx) }
+    {
+        use crate::math::common::{
+            Avx2Math, Avx512Math, InstructionSet, effective_instruction_set,
+        };
+        #[expect(deprecated)]
+        match effective_instruction_set() {
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe {
+                    apply_input_stage_inner::<Avx512Math>(samples_l, samples_r, n_samples, ctx)
+                }
+            }
+            InstructionSet::Avx2 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe { apply_input_stage_inner::<Avx2Math>(samples_l, samples_r, n_samples, ctx) }
+            }
         }
-        #[cfg(not(feature = "avx512"))]
-        InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe { apply_input_stage_inner::<Avx2Math>(samples_l, samples_r, n_samples, ctx) }
-        }
-        InstructionSet::Avx2 => {
-            // SAFETY: inner invariants upheld by caller.
-            unsafe { apply_input_stage_inner::<Avx2Math>(samples_l, samples_r, n_samples, ctx) }
-        }
+    }
+    #[cfg(not(feature = "avx512"))]
+    {
+        use crate::math::common::Avx2Math;
+        // SAFETY: inner invariants upheld by caller.
+        unsafe { apply_input_stage_inner::<Avx2Math>(samples_l, samples_r, n_samples, ctx) }
     }
 }
 
@@ -80,15 +85,24 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
     #[cfg(feature = "dual-mono")]
-    let energy_ms = {
+    let (mut energy_ms, non_finite_energy) = {
         // SAFETY: both slices are valid references of identical length.
         unsafe { M::compute_energy_stereo(&samples_l[..n_samples], &samples_r[..n_samples]) }
     };
     #[cfg(not(feature = "dual-mono"))]
-    let energy_ms = {
+    let (mut energy_ms, non_finite_energy) = {
         // SAFETY: slice is valid.
         unsafe { M::compute_energy(&samples_l[..n_samples]) }
     };
+
+    if non_finite_energy {
+        ctx.rt_status
+            .set_flag(crate::common::spsc::RT_STATUS_NON_FINITE_INPUT_DETECTED);
+        energy_ms = 0.0;
+        crate::math::dsp::sanitize_nonfinite_f32(&mut samples_l[..n_samples]);
+        #[cfg(feature = "dual-mono")]
+        crate::math::dsp::sanitize_nonfinite_f32(&mut samples_r[..n_samples]);
+    }
 
     #[cfg(not(feature = "dual-mono"))]
     let _ = samples_r;
@@ -114,8 +128,15 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
     {
         // 2. MONO SOUND DETECTION (SAME ON BOTH SIDES)
         // SAFETY: both slices are valid references of identical length.
-        let max_diff =
+        let (max_diff, non_finite_diff) =
             unsafe { M::compute_max_diff(&samples_l[..n_samples], &samples_r[..n_samples]) };
+
+        if non_finite_diff {
+            ctx.rt_status
+                .set_flag(crate::common::spsc::RT_STATUS_NON_FINITE_INPUT_DETECTED);
+            crate::math::dsp::sanitize_nonfinite_f32(&mut samples_l[..n_samples]);
+            crate::math::dsp::sanitize_nonfinite_f32(&mut samples_r[..n_samples]);
+        }
 
         ctx.mono_hysteresis.update(
             max_diff,

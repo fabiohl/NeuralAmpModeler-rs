@@ -243,6 +243,21 @@ impl OversampleEngine {
         }
     }
 
+    /// Returns the required length in samples for external oversampling scratch buffers.
+    ///
+    /// When oversampling is disabled ([`OversampleFactor::Off`]), no external scratch buffer is needed,
+    /// returning `0`. For active oversampling (`X2`, `X4`), returns `max_block * factor.multiplier()`.
+    ///
+    /// This enables host applications to bypass allocation of oversample buffers when
+    /// oversampling is off (saving up to 512 KiB per channel).
+    #[inline]
+    pub const fn required_scratch_len(factor: OversampleFactor, max_block: usize) -> usize {
+        match factor {
+            OversampleFactor::Off => 0,
+            factor => max_block * factor.multiplier(),
+        }
+    }
+
     /// Upsamples mono input from native rate to oversampled rate.
     ///
     /// `output` must have room for `input.len() * factor.multiplier()` samples.

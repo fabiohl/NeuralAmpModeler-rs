@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+#![allow(deprecated)]
+
 use super::*;
 use crate::common::diagnostics::NamErrorCode;
 use crate::dsp::sinc_kernel::NUM_PHASES;

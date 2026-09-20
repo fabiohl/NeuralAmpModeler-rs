@@ -22,10 +22,12 @@ use std::sync::Arc;
 mod gc;
 mod payload;
 mod status;
+mod swap;
 
 pub use gc::*;
 pub use payload::*;
 pub use status::*;
+pub use swap::*;
 
 /// Default capacity for the main SPSC parameter channel.
 ///

@@ -255,3 +255,117 @@ pub unsafe fn apply_ramp_avx2(buffer: &mut [f32], start: f32, step: f32) {
         i += 1;
     }
 }
+
+/// Subtracts dither offset, applies gain, and detects clipping in mono in a single pass using AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn apply_gain_with_dither_and_detect_clipping_mono_avx2(
+    data: &mut [f32],
+    gain: f32,
+    dither_sub: f32,
+) -> bool {
+    let len = data.len();
+    let vg = _mm256_set1_ps(gain);
+    let vd = _mm256_set1_ps(dither_sub);
+    let limit = _mm256_set1_ps(1.0);
+    let sign_mask = _mm256_set1_ps(-0.0f32);
+    let mut any_clip = _mm256_setzero_ps();
+    let mut i = 0;
+
+    gain_simd_avx2!(i, len, {
+        let p = data.as_mut_ptr().add(i);
+        let v = _mm256_loadu_ps(p);
+        let t = _mm256_sub_ps(v, vd);
+        let g = _mm256_mul_ps(t, vg);
+        _mm256_storeu_ps(p, g);
+        let abs = _mm256_andnot_ps(sign_mask, g);
+        let cmp = _mm256_cmp_ps(abs, limit, _CMP_GT_OQ);
+        any_clip = _mm256_or_ps(any_clip, cmp);
+    });
+
+    let mut clipped = _mm256_movemask_ps(any_clip) != 0;
+
+    while i < len {
+        let v = (*data.get_unchecked(i) - dither_sub) * gain;
+        *data.get_unchecked_mut(i) = v;
+        if !clipped && v.abs() > 1.0 {
+            clipped = true;
+        }
+        i += 1;
+    }
+    clipped
+}
+
+/// Subtracts dither offset, applies gain, and detects clipping in stereo in a single pass using AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn apply_gain_with_dither_and_detect_clipping_stereo_avx2(
+    left: &mut [f32],
+    right: &mut [f32],
+    gain: f32,
+    dither_sub: f32,
+) -> bool {
+    let n = core::cmp::min(left.len(), right.len());
+    let ymm_gain = _mm256_set1_ps(gain);
+    let vd = _mm256_set1_ps(dither_sub);
+    let limit = _mm256_set1_ps(1.0);
+    let sign_mask = _mm256_set1_ps(-0.0f32);
+    let mut any_clip = _mm256_setzero_ps();
+    let mut i = 0;
+
+    gain_simd_avx2!(i, n, {
+        let pl = left.as_mut_ptr().add(i);
+        let pr = right.as_mut_ptr().add(i);
+
+        let vl = _mm256_loadu_ps(pl);
+        let vr = _mm256_loadu_ps(pr);
+
+        let tl = _mm256_sub_ps(vl, vd);
+        let tr = _mm256_sub_ps(vr, vd);
+
+        let gl = _mm256_mul_ps(tl, ymm_gain);
+        let gr = _mm256_mul_ps(tr, ymm_gain);
+
+        _mm256_storeu_ps(pl, gl);
+        _mm256_storeu_ps(pr, gr);
+
+        let abs_l = _mm256_andnot_ps(sign_mask, gl);
+        let abs_r = _mm256_andnot_ps(sign_mask, gr);
+
+        let cmp_l = _mm256_cmp_ps(abs_l, limit, _CMP_GT_OQ);
+        let cmp_r = _mm256_cmp_ps(abs_r, limit, _CMP_GT_OQ);
+
+        any_clip = _mm256_or_ps(any_clip, _mm256_or_ps(cmp_l, cmp_r));
+    });
+
+    let mut clipped = _mm256_movemask_ps(any_clip) != 0;
+
+    while i < n {
+        let vl = (*left.get_unchecked(i) - dither_sub) * gain;
+        let vr = (*right.get_unchecked(i) - dither_sub) * gain;
+        *left.get_unchecked_mut(i) = vl;
+        *right.get_unchecked_mut(i) = vr;
+        if !clipped && (vl.abs() > 1.0 || vr.abs() > 1.0) {
+            clipped = true;
+        }
+        i += 1;
+    }
+    clipped
+}
+
+/// Copies elements from `src` to `dst`, multiplying each by `scale`, using AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn copy_with_scale_avx2(src: &[f32], dst: &mut [f32], scale: f32) {
+    let len = src.len().min(dst.len());
+    let vs = _mm256_set1_ps(scale);
+    let mut i = 0;
+    gain_kernel_avx2!(
+        i,
+        len,
+        {
+            let v = _mm256_loadu_ps(src.as_ptr().add(i));
+            _mm256_storeu_ps(dst.as_mut_ptr().add(i), _mm256_mul_ps(v, vs));
+        },
+        {
+            *dst.get_unchecked_mut(i) = *src.get_unchecked(i) * scale;
+        }
+    );
+}

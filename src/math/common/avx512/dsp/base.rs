@@ -95,6 +95,47 @@ macro_rules! impl_avx512_dsp {
         }
 
         #[inline(always)]
+        // SAFETY: data is a valid mutable f32 slice; gain and dither_sub are finite f32 values;
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
+        unsafe fn apply_gain_with_dither_and_detect_clipping_mono(
+            data: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            // SAFETY: data, gain, and dither_sub satisfy function invariants.
+            unsafe {
+                crate::math::dsp::gain::apply_gain_with_dither_and_detect_clipping_mono_avx2(
+                    data, gain, dither_sub,
+                )
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: left and right are valid mutable f32 slices of equal length;
+        // gain and dither_sub are finite f32 values; AVX-512 implies AVX2. Delegates to AVX2 kernel.
+        unsafe fn apply_gain_with_dither_and_detect_clipping_stereo(
+            left: &mut [f32],
+            right: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            // SAFETY: left, right, gain, and dither_sub satisfy function invariants.
+            unsafe {
+                crate::math::dsp::gain::apply_gain_with_dither_and_detect_clipping_stereo_avx2(
+                    left, right, gain, dither_sub,
+                )
+            }
+        }
+
+        #[inline(always)]
+        // SAFETY: src and dst are valid f32 slices of matching length; scale is a finite f32;
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
+        unsafe fn copy_with_scale(src: &[f32], dst: &mut [f32], scale: f32) {
+            // SAFETY: src, dst, and scale satisfy function invariants.
+            unsafe { crate::math::dsp::gain::copy_with_scale_avx2(src, dst, scale) }
+        }
+
+        #[inline(always)]
         // SAFETY: left and right are valid mutable f32 slices of equal length;
         // gain is a finite f32; AVX-512 implies AVX2. Delegates to AVX2 kernel.
         unsafe fn apply_gain_stereo(left: &mut [f32], right: &mut [f32], gain: f32) {

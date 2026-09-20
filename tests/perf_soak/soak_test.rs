@@ -438,7 +438,7 @@ fn test_resampler_drift_soak_scenario(in_sr: u32, out_sr: u32, label: &str) {
     const BLOCK_SIZE: usize = 1024;
     const NUM_SAMPLES: usize = 50_000_000;
 
-    let mut resampler = NamResampler::new(in_sr, out_sr, 64).unwrap();
+    let mut resampler = NamResampler::new_simple(in_sr, out_sr).unwrap();
     let mut pcg = SimplePcg::new(777);
 
     let out_cap = NamResampler::min_output_samples(BLOCK_SIZE, in_sr, out_sr);

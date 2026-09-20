@@ -155,7 +155,7 @@ fn test_zero_alloc_capture_pipeline() {
     model_r.prewarm(2048);
 
     let n = 64;
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
         buffers: [BridgeBuffer::new(), BridgeBuffer::new()],

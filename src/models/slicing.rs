@@ -231,13 +231,10 @@ pub fn slice_dense(
     let mut new_bias = AlignedVec::new(new_out_ch, 0.0f32)?;
     new_bias.copy_from_slice(&dense.bias[..new_out_ch]);
 
-    Ok(DenseLayerDyn {
-        in_ch: new_in_ch,
-        out_ch: new_out_ch,
-        weights: new_weights,
-        bias: new_bias,
-        do_bias: dense.do_bias,
-    })
+    Ok(
+        DenseLayerDyn::try_from_parts(new_weights, new_bias, dense.do_bias, new_in_ch, new_out_ch)
+            .expect("slice_dense output buffer is correctly sized by construction"),
+    )
 }
 
 /// Creates a new `WaveNetLayerDyn` with reduced internal channel count.

@@ -33,8 +33,8 @@
 //! bit-equal — asserted once in setup below.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use neural_amp_modeler_rs::math::common::{Avx2Math, SimdMath};
-use neural_amp_modeler_rs::models::wavenet::Conv1d;
+use neural_amp_modeler_rs::math::common::{AlignedVec, Avx2Math, SimdMath};
+use neural_amp_modeler_rs::models::wavenet::{Conv1d, Conv1dDyn};
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -213,5 +213,205 @@ fn bench_ch12_lane_route(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_prefetch_guard, bench_ch12_lane_route);
+fn bench_conv1d_dyn_dual_vs_single(c: &mut Criterion) {
+    let mut group = c.benchmark_group("conv1d_dyn_dual_vs_single");
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    for &ch in &[4usize, 8, 16] {
+        let raw = match ch {
+            4 => interleaved_weights::<4>(ch, ch, K),
+            8 => interleaved_weights::<8>(ch, ch, K),
+            16 => interleaved_weights::<16>(ch, ch, K),
+            _ => unreachable!(),
+        };
+        let weights = AlignedVec::from_vec(raw).expect("bench weight allocation failed");
+        let bias = AlignedVec::from_vec(vec![0.0; ch]).expect("bench bias allocation failed");
+        let dilation = 1;
+        let conv = Conv1dDyn::try_from_parts(weights, bias, false, dilation, ch, ch, K, ch)
+            .expect("Conv1dDyn creation failed");
+
+        let buf_frames = dilation * (K - 1) + N_FRAMES + 16;
+        let input: Vec<f32> = (0..buf_frames * ch)
+            .map(|i| (i as f32 * 0.07 + 0.3).sin() * 0.8)
+            .collect();
+        let start_frame = dilation * (K - 1);
+
+        group.bench_function(format!("single_frame_ch{ch}"), |b| {
+            b.iter(|| {
+                let mut out = [0.0f32; 16];
+                for f in 0..N_FRAMES {
+                    // SAFETY: `input` spans `buf_frames * ch` f32s and
+                    // `start_frame >= dilation * (K - 1)`.
+                    unsafe {
+                        conv.process_single_frame::<Avx2Math>(
+                            &input,
+                            &mut out[..ch],
+                            start_frame + f,
+                            None,
+                        );
+                    }
+                }
+                black_box(out)
+            })
+        });
+
+        group.bench_function(format!("dual_frame_ch{ch}"), |b| {
+            b.iter(|| {
+                let mut out_f0 = [0.0f32; 16];
+                let mut out_f1 = [0.0f32; 16];
+                for f in 0..(N_FRAMES / 2) {
+                    // SAFETY: `input` spans `buf_frames * ch` f32s and
+                    // `start_frame + 2 * f + 1` is within causal receptive field and buffer bounds.
+                    unsafe {
+                        conv.process_dual_frame::<Avx2Math>(
+                            &input,
+                            &mut out_f0[..ch],
+                            &mut out_f1[..ch],
+                            start_frame + 2 * f,
+                            start_frame + 2 * f + 1,
+                            None,
+                            None,
+                        );
+                    }
+                }
+                black_box((out_f0, out_f1))
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_raw_dual_vs_2x_single(c: &mut Criterion) {
+    let mut group = c.benchmark_group("raw_dual_vs_2x_single");
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    // CH=4 (K=3 => 12 taps)
+    {
+        const CH: usize = 4;
+        const TAPS: usize = CH * K;
+        let w: Vec<[f32; 4]> = (0..TAPS)
+            .map(|t| core::array::from_fn(|lane| ((t * CH + lane) as f32 * 0.13).sin() * 0.25))
+            .collect();
+        let state_f0: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.3).sin() * 0.8)
+            .collect();
+        let state_f1: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.5).sin() * 0.8)
+            .collect();
+        let init_f0 = [0.1f32; 4];
+        let init_f1 = [0.2f32; 4];
+
+        group.bench_function("raw_2x_single_ch4", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r0 =
+                    unsafe { Avx2Math::dot_product_4x_f32_accumulate(&w, &state_f0, &init_f0) };
+                let r1 =
+                    unsafe { Avx2Math::dot_product_4x_f32_accumulate(&w, &state_f1, &init_f1) };
+                black_box((r0, r1))
+            })
+        });
+        group.bench_function("raw_dual_ch4", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r = unsafe {
+                    Avx2Math::dot_product_4x_f32_dual_accumulate(
+                        &w, &state_f0, &state_f1, &init_f0, &init_f1,
+                    )
+                };
+                black_box(r)
+            })
+        });
+    }
+
+    // CH=8 (K=3 => 24 taps)
+    {
+        const CH: usize = 8;
+        const TAPS: usize = CH * K;
+        let w: Vec<[f32; 8]> = (0..TAPS)
+            .map(|t| core::array::from_fn(|lane| ((t * CH + lane) as f32 * 0.13).sin() * 0.25))
+            .collect();
+        let state_f0: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.3).sin() * 0.8)
+            .collect();
+        let state_f1: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.5).sin() * 0.8)
+            .collect();
+        let init_f0 = [0.1f32; 8];
+        let init_f1 = [0.2f32; 8];
+
+        group.bench_function("raw_2x_single_ch8", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r0 =
+                    unsafe { Avx2Math::dot_product_8x_f32_accumulate(&w, &state_f0, &init_f0) };
+                let r1 =
+                    unsafe { Avx2Math::dot_product_8x_f32_accumulate(&w, &state_f1, &init_f1) };
+                black_box((r0, r1))
+            })
+        });
+        group.bench_function("raw_dual_ch8", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r = unsafe {
+                    Avx2Math::dot_product_8x_f32_dual_accumulate(
+                        &w, &state_f0, &state_f1, &init_f0, &init_f1,
+                    )
+                };
+                black_box(r)
+            })
+        });
+    }
+
+    // CH=16 (K=3 => 48 taps)
+    {
+        const CH: usize = 16;
+        const TAPS: usize = CH * K;
+        let w: Vec<[f32; 16]> = (0..TAPS)
+            .map(|t| core::array::from_fn(|lane| ((t * CH + lane) as f32 * 0.13).sin() * 0.25))
+            .collect();
+        let state_f0: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.3).sin() * 0.8)
+            .collect();
+        let state_f1: Vec<f32> = (0..TAPS)
+            .map(|t| (t as f32 * 0.07 + 0.5).sin() * 0.8)
+            .collect();
+        let init_f0 = [0.1f32; 16];
+        let init_f1 = [0.2f32; 16];
+
+        group.bench_function("raw_2x_single_ch16", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r0 =
+                    unsafe { Avx2Math::dot_product_16x_f32_accumulate(&w, &state_f0, &init_f0) };
+                let r1 =
+                    unsafe { Avx2Math::dot_product_16x_f32_accumulate(&w, &state_f1, &init_f1) };
+                black_box((r0, r1))
+            })
+        });
+        group.bench_function("raw_dual_ch16", |b| {
+            b.iter(|| {
+                // SAFETY: w.len() >= state_f0.len() == state_f1.len() == TAPS.
+                let r = unsafe {
+                    Avx2Math::dot_product_16x_f32_dual_accumulate(
+                        &w, &state_f0, &state_f1, &init_f0, &init_f1,
+                    )
+                };
+                black_box(r)
+            })
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_prefetch_guard,
+    bench_ch12_lane_route,
+    bench_conv1d_dyn_dual_vs_single,
+    bench_raw_dual_vs_2x_single
+);
 criterion_main!(benches);

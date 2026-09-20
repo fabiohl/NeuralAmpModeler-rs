@@ -42,21 +42,17 @@ pub unsafe fn fused_gemm_residual_batch_avx2(
         return;
     }
     debug_assert_eq!(in_frames.len() % num_frames, 0);
+    debug_assert_eq!(in_frames.len() % num_frames, 0);
     debug_assert_eq!(out_frames.len() % num_frames, 0);
     debug_assert_eq!(residual.len() % num_frames, 0);
     let in_len = in_frames.len() / num_frames;
     let out_len = out_frames.len() / num_frames;
+    debug_assert_eq!(in_frames.len(), num_frames * in_len);
+    debug_assert_eq!(out_frames.len(), num_frames * out_len);
     debug_assert!(weights.len() >= in_len * out_len);
-    debug_assert!(residual.len() >= out_frames.len());
+    debug_assert!(residual.len() >= num_frames * out_len);
     if do_bias {
         debug_assert!(bias.len() >= out_len);
-    }
-    assert!(in_frames.len() == num_frames * in_len);
-    assert!(out_frames.len() == num_frames * out_len);
-    assert!(weights.len() >= in_len * out_len);
-    assert!(residual.len() >= num_frames * out_len);
-    if do_bias {
-        assert!(bias.len() >= out_len);
     }
 
     let mut f = 0;
@@ -234,17 +230,12 @@ pub unsafe fn fused_gemm_residual_batch_f32_avx2(
     debug_assert_eq!(residual.len() % num_frames, 0);
     let in_len = in_frames.len() / num_frames;
     let out_len = out_frames.len() / num_frames;
+    debug_assert_eq!(in_frames.len(), num_frames * in_len);
+    debug_assert_eq!(out_frames.len(), num_frames * out_len);
     debug_assert!(weights.len() >= in_len * out_len);
-    debug_assert!(residual.len() >= out_frames.len());
+    debug_assert!(residual.len() >= num_frames * out_len);
     if do_bias {
         debug_assert!(bias.len() >= out_len);
-    }
-    assert!(in_frames.len() == num_frames * in_len);
-    assert!(out_frames.len() == num_frames * out_len);
-    assert!(weights.len() >= in_len * out_len);
-    assert!(residual.len() >= num_frames * out_len);
-    if do_bias {
-        assert!(bias.len() >= out_len);
     }
 
     let mut f = 0;
@@ -428,13 +419,6 @@ pub unsafe fn fused_gemm_residual_batch_f32_const<const IN: usize, const OUT: us
     if do_bias {
         debug_assert!(bias.len() >= OUT);
     }
-    assert!(in_frames.len() == num_frames * IN);
-    assert!(out_frames.len() == num_frames * OUT);
-    assert!(residual.len() == num_frames * OUT);
-    assert!(weights.len() >= IN * OUT);
-    if do_bias {
-        assert!(bias.len() >= OUT);
-    }
 
     let mut f = 0;
     gemm_batch_frame_loop_avx2!(
@@ -605,13 +589,6 @@ pub unsafe fn fused_gemm_residual_batch_f32_12x12(
     debug_assert!(weights.len() >= 144);
     if do_bias {
         debug_assert!(bias.len() >= 12);
-    }
-    assert!(in_frames.len() == num_frames * 12);
-    assert!(out_frames.len() == num_frames * 12);
-    assert!(residual.len() == num_frames * 12);
-    assert!(weights.len() >= 144);
-    if do_bias {
-        assert!(bias.len() >= 12);
     }
 
     use core::arch::x86_64::{

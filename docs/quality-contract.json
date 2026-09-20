@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "schema_notes": "Benchmarks com `batch_factor > 1` reportam tempo total de `batch_factor` blocos; o dashboard divide por `batch_factor` antes de comparar ao threshold.",
-  "generated_at": "2026-09-17T22:04:30-03:00",
+  "generated_at": "2026-09-19T22:56:10-03:00",
   "provenance": {
-    "git_commit": "7576d49305bb079ec6435516d97b0e415e524466",
+    "git_commit": "f2ac1a8703eb63682984b09660ed26457a5d45f4",
     "git_dirty": false,
-    "run_id": "1789692961050429696-14880",
+    "run_id": "1789866755538572185-53493",
     "effective_isa": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
     "cpu_model": "AMD Ryzen 7 5700U with Radeon Graphics",
     "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
@@ -488,77 +488,77 @@
     {
       "id": "RT_WaveNet_Std_CH16",
       "label": "WaveNet Standard CH16",
-      "median_latency_us": 44.89
+      "median_latency_us": 43.29
     },
     {
       "id": "RT_WaveNet_Feather_CH8",
       "label": "WaveNet Feather CH8",
-      "median_latency_us": 19.96
+      "median_latency_us": 19.85
     },
     {
       "id": "RT_WaveNet_Lite_CH12",
       "label": "WaveNet Lite CH12",
-      "median_latency_us": 58.76
+      "median_latency_us": 56.4
     },
     {
       "id": "RT_WaveNet_Nano_CH4",
       "label": "WaveNet Nano CH4",
-      "median_latency_us": 18.0
+      "median_latency_us": 17.83
     },
     {
       "id": "RT_A2_Full_CH8",
       "label": "A2 Full CH8",
-      "median_latency_us": 25.74
+      "median_latency_us": 25.64
     },
     {
       "id": "RT_A2_Lite_CH3",
       "label": "A2 Lite CH3",
-      "median_latency_us": 20.96
+      "median_latency_us": 22.55
     },
     {
       "id": "RT_LSTM_1x16",
       "label": "LSTM 1x16",
-      "median_latency_us": 6.69
+      "median_latency_us": 6.83
     },
     {
       "id": "RT_LSTM_2x8",
       "label": "LSTM 2x8",
-      "median_latency_us": 7.26
+      "median_latency_us": 7.13
     },
     {
       "id": "RT_Linear",
       "label": "Linear RF=2048",
-      "median_latency_us": 0.26
+      "median_latency_us": 0.33
     },
     {
       "id": "RT_ConvNet",
       "label": "ConvNet",
-      "median_latency_us": 8.69
+      "median_latency_us": 8.66
     },
     {
       "id": "RT_WaveNet_Dyn_Free",
       "label": "WaveNet Dyn Free",
-      "median_latency_us": 21.56
+      "median_latency_us": 21.69
     },
     {
       "id": "RT_LSTM_Dyn_1x7",
       "label": "LSTM Dyn 1x7",
-      "median_latency_us": 8.06
+      "median_latency_us": 8.81
     },
     {
       "id": "RT_A2_Dyn_Gated_CH8",
       "label": "A2 Dyn Gated CH8",
-      "median_latency_us": 176.96
+      "median_latency_us": 188.35
     },
     {
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
-      "median_latency_us": 129.61
+      "median_latency_us": 130.59
     },
     {
       "id": "RT_DSP_Resampler_44k1_to_48k",
       "label": "DSP Resampler 44.1k->48k",
-      "median_latency_us": 1.24,
+      "median_latency_us": 1.22,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
@@ -572,19 +572,19 @@
     {
       "id": "RT_DSP_CabSim_IR_Medium",
       "label": "DSP CabSim IR Medium",
-      "median_latency_us": 1.23,
+      "median_latency_us": 1.22,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Pipeline_Base_NoOS",
       "label": "DSP Pipeline Base (No OS)",
-      "median_latency_us": 45.62
+      "median_latency_us": 43.57
     },
     {
       "id": "RT_DSP_Pipeline_HQ_4xOS",
       "label": "DSP Pipeline HQ (4x OS)",
-      "median_latency_us": 185.59
+      "median_latency_us": 177.39
     }
   ],
   "monitoring_alerts": {

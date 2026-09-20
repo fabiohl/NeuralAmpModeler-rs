@@ -25,7 +25,7 @@ use neural_amp_modeler_rs::dsp::smoother::ParamSmoother;
 // =============================================================================
 
 fn make_bypass_resampler() -> NamResampler {
-    NamResampler::new(48000, 48000, 64).expect("Bypass resampler creation failed")
+    NamResampler::new_simple(48000, 48000).expect("Bypass resampler creation failed")
 }
 
 fn make_gc_resampler_item() -> GcItem {

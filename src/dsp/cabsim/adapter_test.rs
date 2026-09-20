@@ -1018,3 +1018,358 @@ fn pair_bit_exact_vs_two_mono_adapters() {
         block += 1;
     }
 }
+
+// ── process_block: driver de convolução particionada (bloco de tamanho arbitrário) ──
+
+/// Reference stream for a given host block size: what a consumer runs today —
+/// each host block is sliced into `partition_size`-capped windows and each
+/// window goes through one `process_in_place` call — the exact blocking
+/// `process_block` must reproduce bit-for-bit.
+fn drive_reference_fixed_path(
+    adapter: &mut CabSimAdapter,
+    signal: &[f32],
+    total: usize,
+    block: usize,
+) -> Vec<f32> {
+    let p = adapter.partition_size();
+    let mut out = Vec::with_capacity(total);
+    let mut pos = 0;
+    while pos < total {
+        let n = block.min(total - pos);
+        let mut host = vec![0.0f32; n];
+        if pos < signal.len() {
+            let take = n.min(signal.len() - pos);
+            host[..take].copy_from_slice(&signal[pos..pos + take]);
+        }
+        let mut wpos = 0;
+        while wpos < n {
+            let w = p.min(n - wpos);
+            let mut win = vec![0.0f32; w];
+            win.copy_from_slice(&host[wpos..wpos + w]);
+            adapter.process_in_place(&mut win, None);
+            out.extend_from_slice(&win);
+            wpos += w;
+        }
+        pos += n;
+    }
+    out
+}
+
+/// Same input stream through the driver with host blocks of `block` samples.
+fn drive_process_block(
+    adapter: &mut CabSimAdapter,
+    signal: &[f32],
+    total: usize,
+    block: usize,
+) -> Vec<f32> {
+    let mut out = Vec::with_capacity(total);
+    let mut pos = 0;
+    while pos < total {
+        let n = block.min(total - pos);
+        let mut buf = vec![0.0f32; n];
+        if pos < signal.len() {
+            let take = n.min(signal.len() - pos);
+            buf[..take].copy_from_slice(&signal[pos..pos + take]);
+        }
+        adapter.process_block(&mut buf, None);
+        out.extend_from_slice(&buf);
+        pos += n;
+    }
+    out
+}
+
+/// Causal silence prefix of a fresh adapter driven with host blocks of
+/// `block` samples: the samples delivered before the first partition
+/// completes (`block * (ceil(P / block) - 1)` for `block <= partition`).
+fn accumulation_prefix(partition: usize, block: usize) -> usize {
+    block * (partition.div_ceil(block) - 1)
+}
+
+/// Sweep: for every partition × host-block combination, `process_block` must
+/// be bit-identical to driving `process_in_place` with the same host-block
+/// windows (same accumulate order, same partition MAC order, same delivery
+/// order), including the full zero-input ring-out.
+#[test]
+fn process_block_bit_exact_blocking_sweep() {
+    let partitions = [32usize, 64, 128, 256];
+    let blocks = [16usize, 32, 64, 256, 333];
+    let ir = synth_ir(600, 350.0, 5.0, 48000);
+    let signal = lcg_noise(0x5EED_00B1, 2331);
+
+    for &p in &partitions {
+        let probe = adapter_from_ir(&ir, p);
+        let total = signal.len() + probe.tail_samples() + p;
+        for &b in &blocks {
+            let mut reference = adapter_from_ir(&ir, p);
+            let ref_out = drive_reference_fixed_path(&mut reference, &signal, total, b);
+            let mut driven = adapter_from_ir(&ir, p);
+            let drv_out = drive_process_block(&mut driven, &signal, total, b);
+
+            assert_eq!(drv_out.len(), ref_out.len());
+            for (i, (r, d)) in ref_out.iter().zip(drv_out.iter()).enumerate() {
+                assert_eq!(
+                    r, d,
+                    "bit-exact violation at sample {i} (partition {p}, block {b})"
+                );
+            }
+        }
+    }
+}
+
+/// The convolved body is blocking-invariant: for host blocks that divide the
+/// partition (aligned FIFO windows, no causal underrun gaps), stripping each
+/// stream's accumulation prefix yields the exact same sample sequence for
+/// every host-block size.
+#[test]
+fn process_block_body_blocking_invariant() {
+    let partition = 64usize;
+    let ir = synth_ir(600, 350.0, 5.0, 48000);
+    let signal = lcg_noise(0x5EED_00B2, 2331);
+
+    let probe = adapter_from_ir(&ir, partition);
+    let total = signal.len() + probe.tail_samples() + partition;
+    let mut golden: Option<Vec<f32>> = None;
+    for &b in &[16usize, 32, 64, 256] {
+        let mut adapter = adapter_from_ir(&ir, partition);
+        let out = drive_process_block(&mut adapter, &signal, total, b);
+        let prefix = accumulation_prefix(partition, b);
+        match &golden {
+            None => golden = Some(out[prefix..].to_vec()),
+            Some(g) => {
+                for (i, (a, d)) in g.iter().zip(out[prefix..].iter()).enumerate() {
+                    assert_eq!(a, d, "blocking-invariance violation at {i} (block {b})");
+                }
+            }
+        }
+    }
+}
+
+/// ESR acceptance gate: cab-sim stage with host blocks of 32 samples through
+/// a partition-64 engine stays within the established ESR threshold of the
+/// direct-convolution oracle.
+#[test]
+fn process_block_esr_gate_chunking_32_to_64() {
+    let ir = synth_ir(256, 400.0, 6.0, 48000);
+    let signal: Vec<f32> = (0..512)
+        .map(|i| {
+            let t = i as f32 / 48000.0;
+            (std::f32::consts::TAU * 180.0 * t).sin()
+        })
+        .collect();
+    let partition = 64usize;
+    let block = 32usize;
+
+    let mut adapter = adapter_from_ir(&ir, partition);
+    let total = signal.len() + adapter.tail_samples() + partition;
+    let out = drive_process_block(&mut adapter, &signal, total, block);
+
+    let ref_full = direct_convolve(&ir, &signal);
+    let prefix = accumulation_prefix(partition, block);
+    let n = ref_full.len().min(out.len() - prefix);
+    let esr = compute_esr(&ref_full[..n], &out[prefix..prefix + n]);
+    assert!(esr < 1e-5, "ESR = {esr:.2e} for chunking 32→64");
+}
+
+/// ESR acceptance gate with 16-sample host blocks through a partition-64
+/// engine (worst practical sub-block ratio).
+#[test]
+fn process_block_esr_gate_chunking_16_to_64() {
+    let ir = synth_ir(256, 400.0, 6.0, 48000);
+    let signal: Vec<f32> = (0..512)
+        .map(|i| {
+            let t = i as f32 / 48000.0;
+            (std::f32::consts::TAU * 180.0 * t).sin()
+        })
+        .collect();
+    let partition = 64usize;
+    let block = 16usize;
+
+    let mut adapter = adapter_from_ir(&ir, partition);
+    let total = signal.len() + adapter.tail_samples() + partition;
+    let out = drive_process_block(&mut adapter, &signal, total, block);
+
+    let ref_full = direct_convolve(&ir, &signal);
+    let prefix = accumulation_prefix(partition, block);
+    let n = ref_full.len().min(out.len() - prefix);
+    let esr = compute_esr(&ref_full[..n], &out[prefix..prefix + n]);
+    assert!(esr < 1e-5, "ESR = {esr:.2e} for chunking 16→64");
+}
+
+/// Ring-out semantics are unchanged: `rearm_tail` stays per host block and
+/// the `drain_tail` ring-out is bit-identical to the current path. Both
+/// adapters consume the same input through their own path (bit-identical
+/// delivered streams and therefore identical FIFO/FDL states), re-arm once,
+/// and drain with the same sub-blocking.
+#[test]
+fn process_block_tail_ringout_matches_fixed_path() {
+    let partition = 64usize;
+    let ir = synth_ir(400, 300.0, 4.0, 48000);
+    let signal = lcg_noise(0x5EED_00B3, 777);
+
+    // Driver: arbitrary host blocks through process_block.
+    let mut driver = adapter_from_ir(&ir, partition);
+    let mut pos = 0;
+    while pos < signal.len() {
+        let n = 333.min(signal.len() - pos);
+        let mut buf = vec![0.0f32; n];
+        buf.copy_from_slice(&signal[pos..pos + n]);
+        driver.process_block(&mut buf, None);
+        pos += n;
+    }
+
+    // Fixed path: the same input through partition-capped process_in_place
+    // windows (the current consumer path).
+    let mut fixed = adapter_from_ir(&ir, partition);
+    let _ = drive_reference_fixed_path(&mut fixed, &signal, signal.len(), 333);
+
+    // Identical states: re-arm once per path and drain with the same
+    // sub-blocking until both budgets are exhausted.
+    driver.rearm_tail();
+    fixed.rearm_tail();
+    assert_eq!(
+        driver.remaining_tail_samples(),
+        fixed.remaining_tail_samples()
+    );
+
+    let mut drain_out = Vec::new();
+    let mut slice = vec![0.0f32; partition];
+    while driver.remaining_tail_samples() > 0 {
+        driver.drain_tail(&mut slice, None);
+        drain_out.extend_from_slice(&slice);
+    }
+    let mut fixed_out = Vec::new();
+    while fixed.remaining_tail_samples() > 0 {
+        fixed.drain_tail(&mut slice, None);
+        fixed_out.extend_from_slice(&slice);
+    }
+
+    assert_eq!(drain_out.len(), fixed_out.len());
+    assert_eq!(drain_out, fixed_out, "ring-out must be bit-identical");
+    assert!(
+        drain_out.iter().any(|&s| s != 0.0),
+        "the ring-out must carry the IR tail (non-vacuous comparison)"
+    );
+    // Beyond the armed budget the FDL residue (if any) evolves identically on
+    // both paths: post-exhaustion drains stay bit-identical.
+    let mut post_driver = vec![1.0f32; 64];
+    let mut post_fixed = vec![1.0f32; 64];
+    driver.drain_tail(&mut post_driver, None);
+    fixed.drain_tail(&mut post_fixed, None);
+    assert_eq!(post_driver, post_fixed);
+}
+
+/// The driver chunks by construction: a host block larger than the partition
+/// never raises `RT_STATUS_CABSIM_CONTRACT_VIOLATION`, while the direct
+/// sub-block contract still does (preserved for direct adapter use).
+#[test]
+fn process_block_never_raises_contract_violation() {
+    use crate::common::spsc::RT_STATUS_CABSIM_CONTRACT_VIOLATION;
+    use crate::common::spsc::RtStatusFlags;
+
+    let ir = synth_ir(128, 500.0, 8.0, 48000);
+    let partition = 64;
+
+    let rt_driver = RtStatusFlags::new();
+    let mut driver = adapter_from_ir(&ir, partition);
+    let mut oversized = vec![0.5f32; 333];
+    driver.process_block(&mut oversized, Some(&rt_driver));
+    assert!(
+        !rt_driver.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION),
+        "process_block must never flag a contract violation"
+    );
+
+    let rt_direct = RtStatusFlags::new();
+    let mut direct = adapter_from_ir(&ir, partition);
+    let mut oversized_direct = vec![0.5f32; 333];
+    direct.process_in_place(&mut oversized_direct, Some(&rt_direct));
+    assert!(
+        rt_direct.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION),
+        "the existing sub-block contract must keep flagging oversized slices"
+    );
+}
+
+/// Heap-audit lane: the driver hot path performs zero allocations across the
+/// full blocking matrix.
+#[test]
+fn process_block_zero_alloc_hot_path() {
+    use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+
+    let partition = 64usize;
+    let ir = synth_ir(300, 400.0, 6.0, 48000);
+    let signal = lcg_noise(0x5EED_00B4, 4096);
+    let blocks = [1usize, 7, 16, 48, 64, 333, 1024];
+
+    for &block in &blocks {
+        let mut adapter = adapter_from_ir(&ir, partition);
+        let mut buf = vec![0.0f32; block];
+        // Warm the path so lazy state (if any) is outside the watchdog.
+        buf.copy_from_slice(&signal[..block]);
+        adapter.process_block(&mut buf, None);
+
+        let guard = TrackingGuard::new();
+        let mut pos = 0;
+        while pos < signal.len() {
+            let n = block.min(signal.len() - pos);
+            buf[..n].copy_from_slice(&signal[pos..pos + n]);
+            adapter.process_block(&mut buf[..n], None);
+            pos += n;
+        }
+        let allocs = get_alloc_count();
+        drop(guard);
+        assert_eq!(
+            allocs, 0,
+            "allocation detected in process_block (block {block})"
+        );
+    }
+}
+
+/// `process_block_stereo` must be bit-identical to driving each channel's
+/// adapter individually with the same host blocks.
+#[test]
+fn pair_process_block_stereo_matches_individual_adapters() {
+    let ir = synth_ir(220, 700.0, 8.0, 48000);
+    let partition = 64;
+    let mut pair = CabSimPair {
+        l: Box::new(adapter_from_ir(&ir, partition)),
+        r: Box::new(adapter_from_ir(&ir, partition)),
+        sample_rate: 48000,
+    };
+    let mut mono_l = adapter_from_ir(&ir, partition);
+    let mut mono_r = adapter_from_ir(&ir, partition);
+
+    let signal_l = lcg_noise(0x5EED_00C1, 2048);
+    let signal_r = lcg_noise(0x5EED_00C2, 1024);
+    let blocks = [64usize, 13, 37, 333, 1, 51];
+
+    let mut pos_l = 0usize;
+    let mut pos_r = 0usize;
+    let mut block = 0usize;
+    while pos_l < signal_l.len() || pos_r < signal_r.len() {
+        let size = blocks[block % blocks.len()];
+
+        let n_l = size.min(signal_l.len().saturating_sub(pos_l));
+        let n_r = size.min(signal_r.len().saturating_sub(pos_r));
+        let n = n_l.max(n_r);
+        if n == 0 {
+            break;
+        }
+
+        let mut buf_l = vec![0.0f32; n];
+        let mut buf_r = vec![0.0f32; n];
+        buf_l[..n_l].copy_from_slice(&signal_l[pos_l..pos_l + n_l]);
+        buf_r[..n_r].copy_from_slice(&signal_r[pos_r..pos_r + n_r]);
+
+        let mut ref_l = buf_l.clone();
+        let mut ref_r = buf_r.clone();
+
+        pair.process_block_stereo(&mut buf_l, &mut buf_r, None);
+        mono_l.process_block(&mut ref_l, None);
+        mono_r.process_block(&mut ref_r, None);
+
+        assert_eq!(buf_l, ref_l, "pair L must be bit-exact (block {block})");
+        assert_eq!(buf_r, ref_r, "pair R must be bit-exact (block {block})");
+        pos_l += n_l;
+        pos_r += n_r;
+        block += 1;
+    }
+}

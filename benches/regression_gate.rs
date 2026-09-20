@@ -142,8 +142,8 @@ fn bench_a2_dyn_blended(c: &mut Criterion) {
 // `target/bench_constants.env` by `build.rs` for the quality dashboard).
 
 fn bench_dsp_resampler_44k1_to_48k(c: &mut Criterion) {
-    let mut rs =
-        NamResampler::new(44_100, 48_000, 64).expect("Failed to initialize 44.1k->48k resampler");
+    let mut rs = NamResampler::new_simple(44_100, 48_000)
+        .expect("Failed to initialize 44.1k->48k resampler");
     let in_l = common::generate_sine_440hz(64);
     let in_r = common::generate_sine_440hz(64);
     let mut out_l = vec![0.0f32; 128];
@@ -170,7 +170,7 @@ fn bench_dsp_resampler_44k1_to_48k(c: &mut Criterion) {
 
 fn bench_dsp_resampler_96k_to_48k(c: &mut Criterion) {
     let mut rs =
-        NamResampler::new(96_000, 48_000, 64).expect("Failed to initialize 96k->48k resampler");
+        NamResampler::new_simple(96_000, 48_000).expect("Failed to initialize 96k->48k resampler");
     let in_l = common::generate_sine_440hz(64);
     let in_r = common::generate_sine_440hz(64);
     let mut out_l = vec![0.0f32; 128];
@@ -226,7 +226,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
     let mut opt_model_l = Some(Box::new(model));
     let mut opt_model_r = None;
 
-    let mut resampler = NamResampler::new(48000, 48000, block_size).expect("Resampler init failed");
+    let mut resampler = NamResampler::new_simple(48000, 48000).expect("Resampler init failed");
     let mut os_engine_l =
         OversampleEngine::new(os_factor, MAX_RESAMP_BUF).expect("OS engine init failed");
     let mut os_engine_r =

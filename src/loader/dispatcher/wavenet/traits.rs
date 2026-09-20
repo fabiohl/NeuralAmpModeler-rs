@@ -78,7 +78,7 @@ pub(crate) trait DenseWeightsOutput: Sized {
         do_bias: bool,
         in_size: usize,
         out_size: usize,
-    ) -> Self;
+    ) -> anyhow::Result<Self>;
 }
 
 impl<const IN: usize, const OUT: usize> DenseWeightsOutput for DenseLayer<IN, OUT> {
@@ -89,12 +89,8 @@ impl<const IN: usize, const OUT: usize> DenseWeightsOutput for DenseLayer<IN, OU
         do_bias: bool,
         _in_size: usize,
         _out_size: usize,
-    ) -> Self {
-        DenseLayer {
-            weights,
-            bias,
-            do_bias,
-        }
+    ) -> anyhow::Result<Self> {
+        DenseLayer::try_from_parts(weights, bias, do_bias)
     }
 }
 
@@ -106,13 +102,7 @@ impl DenseWeightsOutput for DenseLayerDyn {
         do_bias: bool,
         in_size: usize,
         out_size: usize,
-    ) -> Self {
-        DenseLayerDyn {
-            in_ch: in_size,
-            out_ch: out_size,
-            weights,
-            bias,
-            do_bias,
-        }
+    ) -> anyhow::Result<Self> {
+        DenseLayerDyn::try_from_parts(weights, bias, do_bias, in_size, out_size)
     }
 }

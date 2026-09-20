@@ -9,7 +9,9 @@
 use crate::common::diagnostics::NamErrorCode;
 #[cfg(feature = "avx512")]
 use crate::math::common::Avx512Math;
-use crate::math::common::{Avx2Math, InstructionSet, SimdMath, effective_instruction_set};
+use crate::math::common::{Avx2Math, SimdMath};
+#[cfg(feature = "avx512")]
+use crate::math::common::{InstructionSet, effective_instruction_set};
 
 use super::super::sinc_kernel::{NUM_PHASES, PolyphaseBank};
 use super::delay_line::DelayLine;
@@ -273,17 +275,19 @@ impl ResamplerCore {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) -> ResamplerProgress {
-        #[expect(deprecated)]
-        match effective_instruction_set() {
-            #[cfg(feature = "avx512")]
-            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-                self.process_internal::<Avx512Math>(in_l, in_r, out_l, out_r)
+        #[cfg(feature = "avx512")]
+        {
+            #[expect(deprecated)]
+            match effective_instruction_set() {
+                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                    self.process_internal::<Avx512Math>(in_l, in_r, out_l, out_r)
+                }
+                InstructionSet::Avx2 => self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r),
             }
-            #[cfg(not(feature = "avx512"))]
-            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-                self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r)
-            }
-            InstructionSet::Avx2 => self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r),
+        }
+        #[cfg(not(feature = "avx512"))]
+        {
+            self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r)
         }
     }
 
@@ -295,17 +299,19 @@ impl ResamplerCore {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) -> ResamplerProgress {
-        #[expect(deprecated)]
-        match effective_instruction_set() {
-            #[cfg(feature = "avx512")]
-            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-                self.process_internal_mono::<Avx512Math>(in_l, out_l, out_r)
+        #[cfg(feature = "avx512")]
+        {
+            #[expect(deprecated)]
+            match effective_instruction_set() {
+                InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                    self.process_internal_mono::<Avx512Math>(in_l, out_l, out_r)
+                }
+                InstructionSet::Avx2 => self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r),
             }
-            #[cfg(not(feature = "avx512"))]
-            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
-                self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r)
-            }
-            InstructionSet::Avx2 => self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r),
+        }
+        #[cfg(not(feature = "avx512"))]
+        {
+            self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r)
         }
     }
 }

@@ -500,7 +500,7 @@ fn test_waveform_alignment_after_latency() {
 
     // Reference: raw NamResampler round trip (in → model-rate → host-rate)
     // driven with the exact same block structure.
-    let mut raw = NamResampler::new(host, model, n).expect("new failed");
+    let mut raw = NamResampler::new_simple(host, model).expect("new failed");
     let mut mid = vec![0.0f32; 4096];
     let mut mid_r = vec![0.0f32; 4096];
     let mut ro = Vec::with_capacity(n * iterations);

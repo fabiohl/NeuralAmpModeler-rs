@@ -376,6 +376,119 @@ To maintain absolute reproducibility across development sessions, CI runs, and A
 
 ---
 
+## Corrective Report: T4.8 RFFT SIMD Regression (F-PERF-28)
+
+Finding F-PERF-28 (post-Sprint-9 audit, 2026-09-19): the quality dashboard flagged
+`RT_Linear` at 0.330 µs against the contract limit 0.310 µs (frozen median 0.260 µs,
+commit `7576d49`). A controlled same-boot bisect attributed the end-to-end delta to the
+Sprint-4 item T4.8 (AVX2 vectorization of RFFT `pack_re_im`/`unpack_re_im`):
+
+| Configuration (audit bisect, same boot 2026-09-19)              | RT_Linear RF=2048 (median) | Verdict                |
+|:----------------------------------------------------------------|:---------------------------|:-----------------------|
+| `36830e2` (pre-T4.8 scalar)                                     | 269.7 ns                   | pre-sprint level       |
+| HEAD `f44b3fa` (with T4.8 SIMD)                                 | 327–348 ns                 | +22–29%, above limit   |
+| HEAD, only `src/models/linear_fft/process.rs` reverted          | 347.7 ns                   | innocent               |
+| HEAD, only `src/math/dsp/rfft.rs` reverted (T4.8 scalar)        | 278.8 ns (−20.8%)          | "guilty" in isolation  |
+
+This report documents the corrective cycle: bench extension (measurement blind-spot
+closure), paired SIMD-vs-scalar A/B per stage and per FFT size, the binding decision,
+and the restored implementation.
+
+### Effective FFT sizes on the production paths (measurement blind spot closed)
+
+The T4.8 micro-bench covered only N=512. Resolving every production `RfftPlanner`
+instantiation through its planner (`src/models/linear.rs`, `src/models/linear_fft.rs`,
+`src/dsp/cabsim/conv.rs`):
+
+| Production path                                   | RFFT size N                                            | Covered by bench group `Rfft_stages_by_size` |
+|:--------------------------------------------------|:-------------------------------------------------------|:---------------------------------------------|
+| `linear_test.nam` (the `RT_Linear` bench fixture) | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below |
+| Linear FFT path (`receptive_field ≥ 256`)         | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048** | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
+| CabSim `ConvEngine::new(ir, 64)` (block 64)       | `(2 × 64).next_power_of_two()` = **N=128**             | yes (N=128)                                   |
+
+The bench group `Rfft_stages_by_size` (`benches/dsp_bench.rs`) replaces the
+single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} for
+`pack_re_im` / `post_twiddle` / `pre_twiddle` / `unpack_re_im` /
+`process_forward_full` / `process_inverse_full`.
+
+> [!IMPORTANT]
+> **Mechanism correction.** `RT_Linear` benchmarks `linear_test.nam`, a 4-tap Linear
+> model that runs in **Direct (time-domain) mode and never executes RFFT**. The T4.8
+> SIMD code therefore cannot have slowed that bench algorithmically. The whole-binary
+> build of this crate uses `lto = "thin"` with `codegen-units = 1`
+> (`[profile.bench]`), so unrelated source changes shift the layout of the entire
+> `.text` and can move a ~340 ns hot loop by tens of ns. The audit's −20.8% from the
+> whole-file `rfft.rs` revert is reproduced here as a **code-layout artifact**: with
+> the surgical scalar restoration (staged API preserved), RT_Linear stays at the
+> same level as HEAD (paired A/B below, Δ = +0.9%, p = 0.107). The pre-sprint
+> 269.7 ns figure is not reachable by restoring the RFFT algorithm alone on the
+> current toolchain/boot; it reflects a different binary layout of commit `36830e2`.
+
+### Paired A/B protocol and results (2026-09-19)
+
+* **Arms:** SIMD = HEAD `d51fee9` (AVX2 `pack_re_im_f32_avx2` / `unpack_re_im_f32_avx2`);
+  scalar = the restoration (stride-2 de/interleave inside the staged API, AVX2 kernels removed).
+* **Methodology** (T5.1-style): `governor = performance`, `taskset -c 8` core pinning,
+  3 formal Criterion invocations per arm, per-run medians + Welch t-test over pooled
+  per-iteration samples (`sample.json`). Environmental drift was bidirectional
+  (RT_Linear medians drifted 339.7 → 353.9 ns within the SIMD arm), consistent with the
+  ±17% ns-scale drift documented for this desktop host — conclusions rest on pooled
+  Welch tests and on effect sizes an order of magnitude larger than the drift band.
+* **Stage level** (`benches/dsp_bench.rs::Rfft_stages_by_size`, Δ% = scalar vs SIMD,
+  positive = scalar slower; all pooled p ≤ 0.05 unless noted):
+
+| Stage               | N=64     | N=128   | N=256   | N=512   | N=1024   |
+|:--------------------|:---------|:--------|:--------|:--------|:---------|
+| `pack_re_im`        | +123.6%  | +54.8%  | +18.9%  | +7.9%   | **−3.6%** |
+| `unpack_re_im`      | +101.3%  | +27.5%  | +18.3%  | +8.9%   | +4.3%    |
+| `post_twiddle`      | −1.8%    | −3.0%   | +1.2%   | +0.9%   | −0.2%    |
+| `pre_twiddle`       | +0.7%    | +0.4%   | +1.4%   | +0.2%   | +1.0%    |
+| `process_forward_full`  | +3.6% | +2.8%  | +1.6%   | +0.9%   | +1.0%    |
+| `process_inverse_full`  | +0.8% | +7.4%  | +3.0%   | −1.9%   | −0.4%    |
+
+  Absolute anchors (median-of-3): pack N=128 9.0 → 14.0 ns; pack N=256 17.3 → 20.5 ns;
+  full forward N=128 403.6 → 413.7 ns. The isolated AVX2 shuffle kernels do win at
+  small N, but pack/unpack are only ~2-5% of a full transform, so the isolated gain
+  dilutes to ≤ 3.6% at the transform level.
+* **End-to-end** (`benches/regression_gate.rs`, 100 samples × 5 s, `ForceAvx2Guard`):
+
+| Series                     | SIMD (r1/r2/r3)                  | scalar (r1/r2/r3)                | Δ (pooled)        | Welch p |
+|:---------------------------|:---------------------------------|:---------------------------------|:------------------|:--------|
+| `RT_Linear`                | 336.9 / 345.3 / 353.6 ns         | 351.1 / 341.3 / 348.3 ns         | +0.9%             | 0.107   |
+| `RT_DSP_CabSim_IR_Medium`  | 82.7 / 85.6 / 85.3 µs            | 84.6 / 83.0 / 83.2 µs            | **−2.5%**         | 0.006   |
+
+### Binding decision (T10.2 criteria)
+
+Option B (size-gate) required **some** N ≥ 256 with isolated SIMD gain ≥ 10% *and*
+end-to-end corroboration. N=256 shows +18.3..18.9% isolated on pack/unpack, but the
+only production consumer (CabSim) is **faster with scalar** end-to-end (−2.5%, p = 0.006),
+and `RT_Linear` is a tie. Corroboration fails by an order of magnitude in the
+end-to-end direction.
+
+**Decision: Option A — full scalar restoration** (executed in the same change):
+`pack_re_im` / `unpack_re_im` restored to the pre-T4.8 scalar stride-2 loops *inside
+the staged API* (`pack_re_im` / `post_twiddle` / `pre_twiddle` / `unpack_re_im` /
+`scratch_buffers_mut` remain public; the T1.4-stage bench consumers are unaffected);
+the AVX2 kernels were deleted (dead `.text` policy); the T4.8(a) `debug_assert!`
+guards and safety documentation were preserved. The twiddle stages of T4.8 were
+already arithmetically identical to the pre-sprint scalar code (same `mul_add`
+sequence — verified by full-file diff against `36830e2`), so the restoration is
+**bit-exact by construction**; C++ NAMCore parity and the f64 oracle pass unchanged.
+`// Measured:` rationale is embedded in the `pack_re_im` / `unpack_re_im` doc comments.
+
+### Consequences for the closing ceremony
+
+The restoration does **not** return `RT_Linear` to the 0.26–0.28 µs contract zone on
+this boot (both arms measure ~0.34–0.35 µs; see the mechanism note above — the gap is
+binary-layout/environment, not the T4.8 algorithm). The human re-baseline
+(`--bootstrap-baseline`) will therefore register the current-boot level legitimately:
+the delta is a reproduced, understood codegen-environment shift, and the contract
+median is never hand-edited. If `PERFORMANCE: FAIL` persists on `RT_Linear` after the
+re-baseline and `--save`, that is the documented expected state until the contract is
+re-frozen from the new baseline — not a new regression.
+
+---
+
 ## Comparative Results: Scalar LSTM vs. SIMD (Fused Gates)
 
 Optimizations introduced gate fusion and SIMD activations (AVX2/AVX-512) into the recurrent networks' hot-path. Below are the measured gains on an x86-64-v3 (AVX2/FMA) architecture for 64-sample blocks:
@@ -438,6 +551,49 @@ To process two frames in parallel:
 **Conclusion:** The primary bottleneck of `Conv1D` in NeuralAmpModeler-rs is not tied to L1 Cache bandwidth, but rather to computational throughput and register contention in the backend (FMA). Because of this, while the kernel implementation has been kept in the `SimdMath` trait for portability and testing on architectures with more registers (e.g., AVX-512 or ARM NEON), the main loop in `WaveNetLayer` continues to use **Single-Frame processing** to ensure the lowest latency and highest real-time stability.
 
 The main loop in `src/models/wavenet/layer.rs::process_block_internal` uses exclusively `process_single_frame_with_mixin`; any switch to Dual-Frame in that context requires re-running the parity-validation benchmarks before merge.
+
+> [!NOTE]
+> The **dynamic** (`Conv1dDyn`) path reaches the **opposite** conclusion — measured directly in 2026-09-18; see the report below. The two kernels differ structurally (per-tap `dot_product_*x_f32_accumulate` vs `dot_product_*x_f32_dual_accumulate`), so neither result transfers to the other path.
+
+---
+
+## Experiment Report: Temporal Tiling (Dual-Frame) on Conv1dDyn (Dynamic Path)
+
+Unlike the static path above, `Conv1dDyn::process_block` has always used **dual-frame tiling as its main loop** (`chunks_exact_mut(2 * out_ch)` → `process_dual_frame`; `process_single_frame` only in the odd-frames remainder). Until now, that choice had **no documented A/B measurement** (audit finding F-PERF-06) — a blind spot given the static path's measured ~19% regression for the same tiling. This section closes the gap.
+
+### Measurement Setup
+
+* **Harness:** `benches/conv1d_hotpath_bench.rs` — group `conv1d_dyn_dual_vs_single` (the full `Conv1dDyn` call, one 64-frame block per iteration) plus the kernel-level control group `raw_dual_vs_2x_single` (one dual kernel call vs two single kernel calls). Geometry CH=4/8/16, K=3, dilation=1, 64-frame block (64 samples @ 48 kHz), interleave width = CH; weights interleaved exactly as the loader produces them.
+* **Environment:** AMD Zen 2 5700U, rustc 1.98.1, AVX2/FMA (x86-64-v3), CPU governor `performance`, `taskset` core pinning, thermal cooldown between invocations.
+* **Noise protocol:** this is a desktop host with co-resident load on SMT siblings; repeated runs showed **bidirectional drift of up to ~±17% per absolute median among formal runs (up to +30% on one ns-scale control bench across exploratory runs)**, largest on the ns-scale raw benches. Conclusions therefore rest on **paired within-run ratios** (each dual/single pair measured seconds apart), replicated across 4 independent invocations (2 exploratory on core 8, 2 formal on idle physical core 7), with Welch t-tests over per-iteration samples and Criterion bootstrap CIs. Absolute medians below are representative, not canonical.
+
+### Results — `Conv1dDyn` call level (per 64-frame block)
+
+Dual-frame median vs single-frame median, per independent invocation:
+
+| Geometry | Δ% (dual vs single) | Welch p | Verdict |
+|:---------|:--------------------|:--------|:--------|
+| CH=4     | −8.1%, −5.8%, −8.1%, −5.3% | ≤ 3.5e-08 | dual faster, all runs |
+| CH=8     | −12.0%, −7.6% (p = 0.13, outlier-contaminated sample), −12.4%, −13.2% | < 1e-4 in 3/4 runs | dual faster, all runs |
+| CH=16    | −12.1%, −9.0%, −9.6%, −11.6% | ≈ 0 | dual faster, all runs |
+
+Representative medians (formal run, core 14): CH4 single 1.48 µs / dual 1.36 µs; CH8 single 1.82 µs / dual 1.60 µs; CH16 single 3.32 µs / dual 3.00 µs.
+
+### Results — kernel-level control (dual kernel vs 2× single kernel)
+
+| Geometry | Δ% (dual vs 2× single) | Interpretation |
+|:---------|:-----------------------|:---------------|
+| CH=4     | **+18.5% to +20.3%** (p < 0.01) | the isolated 4-wide dual kernel loses decisively (doubled scalar state handling) |
+| CH=8     | −0.9% to +1.9% (p = 0.13..7e-04) | statistical tie |
+| CH=16    | −15.3% to +0.1% (drift-dominated) | tie to slightly faster |
+
+### Analysis and Architectural Decision
+
+The call-level and kernel-level results **diverge**: even where the isolated dual kernel is slower (CH=4), the dual-frame call wins by 5–13%. The dual-frame path amortizes the per-frame fixed overhead that dominates at K=3: the tap-pointer setup loop, the prefetch-strategy call, and the call prologue run **once per frame pair instead of twice**. At CH=16 the wide interleave additionally lets the dual kernel win on its own merits. This mirrors the static-path lesson in inverse: there, register pressure made tiling lose; here, fixed-overhead amortization makes tiling win — the dyn kernels are structurally different (scalar-init accumulators, per-tap pointer arrays), so the static-path result indeed did not transfer.
+
+**Decision (F-PERF-06 / Epic C): the dual-frame main loop of `Conv1dDyn::process_block` is RETAINED.** Consumers (`layer_dyn.rs`, `post_stack_head.rs`, `convnet/block.rs`) are unchanged. No re-baseline is required (no code change). Correctness of both paths remains exchangeable: kernel-level bit-equality is enforced by `test_dot_{4x,8x,16x}_f32_dual_avx2_single_vs_dual_invariance` (plus vs-scalar and stress variants). Any future swap must re-run this A/B on an idle system and undergo human re-baseline.
+
+* **Future note:** if non-catalog CH=4 dynamic models ever become a relevant workload, the isolated `dot_product_4x_f32_dual_accumulate` kernel (~+19% vs 2× single) is the optimization target — not the tiling, which is already correct.
 
 ---
 
@@ -647,7 +803,7 @@ To resolve the evidence conflict noted during audit between initial same-window 
 > [!NOTE]
 > **Manual Tooling Only:** This bench is **not part** of the automated regression gate (`regression_gate.rs` / `quality-dashboard.sh`) — it is an off-line calibration tool intended for targeted investigation and threshold validation.
 
-* **When to recalibrate:** After changes to `src/math/common/ops.rs` (`prefetch_strategy_simple`), `src/models/wavenet/conv1d.rs`, `src/models/wavenet/conv1d_dual.rs`, or when changing the Rust toolchain.
+* **When to recalibrate:** After changes to `src/math/common/ops.rs` (`prefetch_strategy_simple`), `src/models/wavenet/conv1d.rs`, `src/models/wavenet/conv1d_dual.rs`, `src/models/wavenet/conv1d_dyn.rs`/`conv1d_dyn_dual.rs` (groups `conv1d_dyn_dual_vs_single` / `raw_dual_vs_2x_single`), or when changing the Rust toolchain.
 * **How to recalibrate:**
 
   ```bash

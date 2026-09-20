@@ -343,8 +343,8 @@ impl WaveNetA2Dyn {
             } else {
                 &input[pos..pos + nf]
             };
-            for f in 0..nf {
-                if let Some(ref mut film) = self.layers[li].conv_pre_film {
+            if let Some(ref mut film) = self.layers[li].conv_pre_film {
+                for f in 0..nf {
                     let cond_slice = &cond_buf[f * cond_size..(f + 1) * cond_size];
                     // SAFETY: `cond_slice` has length exactly `cond_size`, matching this
                     // FiLM layer's `cond_size`, and the input slice is an in-bounds

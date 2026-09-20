@@ -149,19 +149,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
             let out_slice = &mut output[pos..pos + num_frames];
             // SAFETY: `array2_head` and `out_slice` both have exactly `num_frames` f32s, are
             // non-null/`f32`-aligned, and refer to distinct buffers (`head_outputs` vs `output`,
-            // no overlap).
+            // no overlap). `M` is supported by the CPU via runtime dispatch.
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    array2_head.as_ptr(),
-                    out_slice.as_mut_ptr(),
-                    num_frames,
-                );
-            }
-            // SAFETY: `M` is guaranteed by the runtime CPUID dispatch to support the executed
-            // backend's instructions, and `out_slice` has `num_frames` elements as the kernel
-            // requires.
-            unsafe {
-                M::apply_gain(out_slice, self.head_scale);
+                M::copy_with_scale(array2_head, out_slice, self.head_scale);
             }
             pos += num_frames;
         }

@@ -98,7 +98,7 @@ impl CabsimPipeline {
         let open_lin = lut.db_to_linear(gate_params.threshold_open_db);
         let close_lin = lut.db_to_linear(gate_params.threshold_close_db);
         Self {
-            resampler: NamResampler::new(host_rate, nam_rate, BLOCK).expect("resampler"),
+            resampler: NamResampler::new_simple(host_rate, nam_rate).expect("resampler"),
             os_l: OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).expect("os"),
             os_r: OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).expect("os"),
             model_l: None,

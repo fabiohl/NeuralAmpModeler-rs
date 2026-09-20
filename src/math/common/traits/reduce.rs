@@ -5,11 +5,11 @@
 
 /// Trait for vector reduction mathematical operations (energy, peak absolute, sums).
 pub trait VectorReduce {
-    /// Computes the mean-square energy: `(1/N) * Σ x_i²`.
+    /// Computes the mean-square energy: `(1/N) * Σ x_i²`, returning (energy, has_non_finite).
     ///
     /// # Safety
     /// `data` must be a valid slice.
-    unsafe fn compute_energy(data: &[f32]) -> f32;
+    unsafe fn compute_energy(data: &[f32]) -> (f32, bool);
 
     /// Computes `max(|x[i]|)` for a single channel.
     ///
@@ -17,11 +17,11 @@ pub trait VectorReduce {
     /// `data` must be a valid slice.
     unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32;
 
-    /// Computes `max(|a[i] - b[i]|)`.
+    /// Computes `max(|a[i] - b[i]|)`, returning (max_diff, has_non_finite).
     ///
     /// # Safety
     /// `a.len() == b.len()`. Both slices must be valid.
-    unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32;
+    unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool);
 
     /// Horizontal sum of `N` consecutive f32 values starting at `ptr`.
     ///

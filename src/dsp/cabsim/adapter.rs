@@ -317,6 +317,66 @@ impl CabSimAdapter {
         self.deliver(sub_n, input_output);
     }
 
+    /// Processes a host block of arbitrary size through the fixed-partition
+    /// engine, batching the FIFO mechanics internally in a single sweep.
+    ///
+    /// This is the driver-level entry point that decouples the partition
+    /// size (an installation-time policy, chosen when the IR is built) from
+    /// the host quantum: `input_output` has **no partition cap**, and the
+    /// driver chunks it internally, so cab-sim algorithmic latency no longer
+    /// tracks the host quantum and quantum renegotiations do not force a
+    /// rebuild when only the block size changed.
+    ///
+    /// # Constraints
+    ///
+    /// *   `input_output.len() > 0` (an empty slice is a harmless no-op;
+    ///     ring-out flushing remains the domain of
+    ///     [`drain_tail`](CabSimAdapter::drain_tail))
+    /// *   No partition cap on `input_output.len()` — the driver chunks
+    ///     internally and therefore never raises
+    ///     [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`]
+    ///
+    /// # Semantics
+    ///
+    /// *   Output is causal; the first `partition_size` samples of a fresh
+    ///     adapter remain silent ([`latency_samples`](Self::latency_samples)).
+    /// *   Bit-identical to the current consumer path — slicing each host
+    ///     block into `partition_size`-capped windows and calling
+    ///     [`process_in_place`](Self::process_in_place) per window: same
+    ///     accumulate order, same partition MAC order, same delivery order,
+    ///     same causal underrun silence at host-block remainders. The number
+    ///     of internal FIFO copies per partition is the same as the
+    ///     consumer-side loop, minus the per-call contract checks and call
+    ///     overhead.
+    /// *   [`rearm_tail`](Self::rearm_tail) / [`drain_tail`](Self::drain_tail)
+    ///     semantics are unchanged: re-arming stays per host block, never per
+    ///     internal chunk.
+    ///
+    /// # RT-Safety
+    ///
+    /// Zero-alloc, lock-free, never panics.
+    pub fn process_block(&mut self, input_output: &mut [f32], rt_status: Option<&RtStatusFlags>) {
+        if self.engine.is_passthrough() {
+            return;
+        }
+        // Single FIFO sweep: full partitions first, then the partial tail —
+        // exactly the accumulate/run/deliver sequence `process_in_place`
+        // executes per sub-block, so the output stream is blocking-invariant.
+        let mut blocks = input_output.chunks_exact_mut(self.partition);
+        for block in blocks.by_ref() {
+            self.accumulate(block, self.partition);
+            self.run_partitions(rt_status);
+            self.deliver(self.partition, block);
+        }
+        let tail = blocks.into_remainder();
+        if !tail.is_empty() {
+            let sub_n = tail.len();
+            self.accumulate(tail, sub_n);
+            self.run_partitions(rt_status);
+            self.deliver(sub_n, tail);
+        }
+    }
+
     /// Consumes `sub_n` samples from `input` into the input FIFO.
     #[inline(always)]
     fn accumulate(&mut self, input: &[f32], sub_n: usize) {
@@ -454,6 +514,44 @@ impl CabSimPair {
     ) {
         self.l.process_in_place(samples_l, rt_status);
         self.r.process_in_place(samples_r, rt_status);
+    }
+
+    /// Block-size-agnostic stereo processing: runs both channel adapters
+    /// over host blocks of any size, batching the FIFO mechanics internally.
+    ///
+    /// The pair-level mirror of [`CabSimAdapter::process_block`]: each slice
+    /// has no partition cap and is chunked internally by its own adapter, so
+    /// the pair's IR latency is decoupled from the host quantum. Channel
+    /// state remains fully independent — the two adapters never share
+    /// convolucional state.
+    ///
+    /// `rt_status` is optional telemetry plumbing (the driver never raises
+    /// [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`]; it chunks by construction).
+    ///
+    /// # Constraints
+    ///
+    /// *   `samples_l.len() == samples_r.len()` for stereo content (the
+    ///     pipeline contract; each slice is processed fully by its own
+    ///     adapter, no clamping).
+    /// *   Non-empty slices; an empty slice is a harmless no-op.
+    ///
+    /// # RT-Safety
+    ///
+    /// Zero-alloc, lock-free, never panics.
+    #[inline(always)]
+    pub fn process_block_stereo(
+        &mut self,
+        samples_l: &mut [f32],
+        samples_r: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    ) {
+        debug_assert_eq!(
+            samples_l.len(),
+            samples_r.len(),
+            "stereo pipeline contract: L and R host blocks must match"
+        );
+        self.l.process_block(samples_l, rt_status);
+        self.r.process_block(samples_r, rt_status);
     }
 
     /// Maximum remaining IR ring-out budget across both channels.

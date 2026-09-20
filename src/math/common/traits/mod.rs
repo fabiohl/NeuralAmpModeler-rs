@@ -600,29 +600,31 @@ pub trait SimdMath {
         ch: usize,
     );
 
-    /// Computes `max(energy(l), energy(r))` as max mean-square energy.
+    /// Computes `max(energy(l), energy(r))` as max mean-square energy,
+    /// returning `(energy, has_non_finite)`.
     ///
     /// No alignment required.
     ///
     /// # Safety
     /// `l` and `r` must be valid slices.
-    unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32;
+    unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> (f32, bool);
 
-    /// Computes the mean-square energy: `(1/N) * Σ x_i²`.
+    /// Computes the mean-square energy: `(1/N) * Σ x_i²`,
+    /// returning `(energy, has_non_finite)`.
     ///
     /// No alignment required.
     ///
     /// # Safety
     /// `data` must be a valid slice.
-    unsafe fn compute_energy(data: &[f32]) -> f32;
+    unsafe fn compute_energy(data: &[f32]) -> (f32, bool);
 
-    /// Computes `max(|a[i] - b[i]|)`.
+    /// Computes `max(|a[i] - b[i]|)`, returning `(max_diff, has_non_finite)`.
     ///
     /// No alignment required.
     ///
     /// # Safety
     /// `a.len() == b.len()`. Both slices must be valid.
-    unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32;
+    unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool);
 
     /// Computes `(max(|left|), max(|right|))`.
     ///
@@ -897,6 +899,37 @@ pub trait SimdMath {
         right: &mut [f32],
         gain: f32,
     ) -> bool;
+
+    /// Subtracts dither offset, applies gain, and detects clipping in mono in a single pass.
+    ///
+    /// Computes `data[i] = (data[i] - dither_sub) * gain` and returns `true` if any `|data[i]| > 1.0`.
+    ///
+    /// # Safety
+    /// `data` must be a valid mutable slice.
+    unsafe fn apply_gain_with_dither_and_detect_clipping_mono(
+        data: &mut [f32],
+        gain: f32,
+        dither_sub: f32,
+    ) -> bool;
+
+    /// Subtracts dither offset, applies gain, and detects clipping in stereo in a single pass.
+    ///
+    /// Computes `ch[i] = (ch[i] - dither_sub) * gain` and returns `true` if any `|ch[i]| > 1.0`.
+    ///
+    /// # Safety
+    /// `left` and `right` must be valid mutable slices.
+    unsafe fn apply_gain_with_dither_and_detect_clipping_stereo(
+        left: &mut [f32],
+        right: &mut [f32],
+        gain: f32,
+        dither_sub: f32,
+    ) -> bool;
+
+    /// Copies elements from `src` to `dst`, multiplying each by `scale`.
+    ///
+    /// # Safety
+    /// `src` and `dst` must be valid slices of matching length.
+    unsafe fn copy_with_scale(src: &[f32], dst: &mut [f32], scale: f32);
 
     /// Applies constant gain in stereo without clipping detection.
     ///

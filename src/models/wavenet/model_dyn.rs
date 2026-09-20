@@ -340,34 +340,18 @@ impl WaveNetModelDyn {
                 let out_slice = &mut output[out_start..out_start + num_frames * out_ch];
                 // SAFETY: `scratch` and `out_slice` both have exactly `num_frames * out_ch` f32s,
                 // are non-null/`f32`-aligned, and refer to distinct buffers (no overlap).
+                // `M` is supported by the CPU via runtime dispatch.
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        scratch.as_ptr(),
-                        out_slice.as_mut_ptr(),
-                        num_frames * out_ch,
-                    );
-                }
-                // SAFETY: `M` is `Avx2Math` (the only backend this model dispatches), and
-                // `out_slice` has `num_frames * out_ch` elements as the kernel requires.
-                unsafe {
-                    M::apply_gain(out_slice, self.head_scale);
+                    M::copy_with_scale(scratch, out_slice, self.head_scale);
                 }
             } else {
                 let out_start = pos * head_dim;
                 let out_slice = &mut output[out_start..out_start + num_frames * head_dim];
                 // SAFETY: `last_head` and `out_slice` both have exactly `num_frames * head_dim`
                 // f32s, are non-null/`f32`-aligned, and refer to distinct buffers (no overlap).
+                // `M` is supported by the CPU via runtime dispatch.
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        last_head.as_ptr(),
-                        out_slice.as_mut_ptr(),
-                        num_frames * head_dim,
-                    );
-                }
-                // SAFETY: `M` is `Avx2Math` (the only backend this model dispatches), and
-                // `out_slice` has `num_frames * head_dim` elements as the kernel requires.
-                unsafe {
-                    M::apply_gain(out_slice, self.head_scale);
+                    M::copy_with_scale(last_head, out_slice, self.head_scale);
                 }
             }
             pos += num_frames;

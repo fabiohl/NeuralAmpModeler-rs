@@ -274,4 +274,133 @@ impl<'a> DspBuffers<'a> {
         self.crossfade_scratch_r = crossfade_scratch_r;
         self
     }
+
+    /// Constructs a `DspBuffers` holding only the buffers required for streaming execution,
+    /// filling the unused intermediate buffers (`resamp_mid_l/r`, `model_out_l/r`) with empty slices.
+    #[inline]
+    pub fn for_streaming(
+        resamp_out_l: &'a mut [f32],
+        resamp_out_r: &'a mut [f32],
+        os_in_l: &'a mut [f32],
+        os_in_r: &'a mut [f32],
+        os_model_l: &'a mut [f32],
+        os_model_r: &'a mut [f32],
+    ) -> Self {
+        StreamingDspBuffers::new(
+            resamp_out_l,
+            resamp_out_r,
+            os_in_l,
+            os_in_r,
+            os_model_l,
+            os_model_r,
+        )
+        .into()
+    }
+}
+
+/// Streaming DSP pipeline working buffers without the dead intermediate buffers.
+///
+/// Unlike [`DspBuffers`], `StreamingDspBuffers` omits `resamp_mid_l/r` and `model_out_l/r`,
+/// saving 128 KiB of dead buffer allocations when the streaming pipeline
+/// ([`super::capture::capture_dsp_pipeline_streaming`]) is used.
+pub struct StreamingDspBuffers<'a> {
+    /// Final resampler output buffer for left channel after downsampling back to host rate.
+    pub resamp_out_l: &'a mut [f32],
+    /// Final resampler output buffer for right channel after downsampling back to host rate.
+    pub resamp_out_r: &'a mut [f32],
+    /// Oversampled input buffer for left channel (pre-neural model, 2× or 4× host rate).
+    pub os_in_l: &'a mut [f32],
+    /// Oversampled input buffer for right channel (pre-neural model, 2× or 4× host rate).
+    pub os_in_r: &'a mut [f32],
+    /// Oversampled model output buffer for left channel (post-neural model, 2× or 4× host rate).
+    pub os_model_l: &'a mut [f32],
+    /// Oversampled model output buffer for right channel (post-neural model, 2× or 4× host rate).
+    pub os_model_r: &'a mut [f32],
+    /// Scratch buffer for WaveNet crossfade second-pass output in inference stage.
+    pub crossfade_scratch_l: &'a mut [f32],
+    /// Scratch buffer for WaveNet crossfade second-pass output (right channel).
+    pub crossfade_scratch_r: &'a mut [f32],
+}
+
+impl<'a> StreamingDspBuffers<'a> {
+    /// Creates the streaming buffer set from all eight working slices.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "StreamingDspBuffers mirrors the public struct literal; all working slices are mandatory"
+    )]
+    pub fn from_parts(
+        resamp_out_l: &'a mut [f32],
+        resamp_out_r: &'a mut [f32],
+        os_in_l: &'a mut [f32],
+        os_in_r: &'a mut [f32],
+        os_model_l: &'a mut [f32],
+        os_model_r: &'a mut [f32],
+        crossfade_scratch_l: &'a mut [f32],
+        crossfade_scratch_r: &'a mut [f32],
+    ) -> Self {
+        Self {
+            resamp_out_l,
+            resamp_out_r,
+            os_in_l,
+            os_in_r,
+            os_model_l,
+            os_model_r,
+            crossfade_scratch_l,
+            crossfade_scratch_r,
+        }
+    }
+
+    /// Creates the streaming buffer set from the six stage slices, leaving both crossfade
+    /// scratches empty (`&mut []`).
+    pub fn new(
+        resamp_out_l: &'a mut [f32],
+        resamp_out_r: &'a mut [f32],
+        os_in_l: &'a mut [f32],
+        os_in_r: &'a mut [f32],
+        os_model_l: &'a mut [f32],
+        os_model_r: &'a mut [f32],
+    ) -> Self {
+        Self::from_parts(
+            resamp_out_l,
+            resamp_out_r,
+            os_in_l,
+            os_in_r,
+            os_model_l,
+            os_model_r,
+            &mut [],
+            &mut [],
+        )
+    }
+
+    /// Attaches the left-channel crossfade scratch slice (chainable).
+    pub fn with_crossfade_scratch_l(mut self, crossfade_scratch_l: &'a mut [f32]) -> Self {
+        self.crossfade_scratch_l = crossfade_scratch_l;
+        self
+    }
+
+    /// Attaches the right-channel crossfade scratch slice (chainable).
+    pub fn with_crossfade_scratch_r(mut self, crossfade_scratch_r: &'a mut [f32]) -> Self {
+        self.crossfade_scratch_r = crossfade_scratch_r;
+        self
+    }
+}
+
+impl<'a> From<StreamingDspBuffers<'a>> for DspBuffers<'a> {
+    #[inline]
+    fn from(s: StreamingDspBuffers<'a>) -> Self {
+        Self {
+            resamp_mid_l: &mut [],
+            resamp_mid_r: &mut [],
+            resamp_out_l: s.resamp_out_l,
+            resamp_out_r: s.resamp_out_r,
+            model_out_l: &mut [],
+            model_out_r: &mut [],
+            os_in_l: s.os_in_l,
+            os_in_r: s.os_in_r,
+            os_model_l: s.os_model_l,
+            os_model_r: s.os_model_r,
+            crossfade_scratch_l: s.crossfade_scratch_l,
+            crossfade_scratch_r: s.crossfade_scratch_r,
+        }
+    }
 }

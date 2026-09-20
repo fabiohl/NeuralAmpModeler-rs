@@ -281,12 +281,12 @@ fn run_render_comparison(
 
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
     let mut resampler_cpp = if actual_sr != model_sr {
-        Some(NamResampler::new(actual_sr, model_sr, 2048).expect("Failed to create NamResampler"))
+        Some(NamResampler::new_simple(actual_sr, model_sr).expect("Failed to create NamResampler"))
     } else {
         None
     };
     let mut resampler_rust = if actual_sr != model_sr {
-        Some(NamResampler::new(actual_sr, model_sr, 2048).expect("Failed to create NamResampler"))
+        Some(NamResampler::new_simple(actual_sr, model_sr).expect("Failed to create NamResampler"))
     } else {
         None
     };

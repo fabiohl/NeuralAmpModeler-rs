@@ -28,12 +28,22 @@ use super::conv1d_dyn::Conv1dDyn;
 use crate::math::common::{SimdMath, prefetch_strategy_2stage, prefetch_strategy_simple};
 
 impl Conv1dDyn {
+    /// F32-native dual-frame convolution (full-precision f32 weights).
+    ///
+    /// Computes two consecutive output frames (`out_f0` at `idx_f0`, `out_f1` at `idx_f1`)
+    /// in a single pass, sharing tap pointer arithmetic and weight loads across both frames.
+    ///
+    /// # Safety
+    ///
+    /// - `layer_buffer` must be sized large enough to hold the causal history for both frames.
+    /// - `out_f0` and `out_f1` must each have length >= `out_ch`.
+    /// - If `mixin_f0` / `mixin_f1` are provided, they must each have length >= `out_ch`.
     #[inline(always)]
     #[expect(
         clippy::too_many_arguments,
         reason = "WaveNet dynamic dual conv1d kernel requiring many dimension/stride parameters for adaptive dilated convolution"
     )]
-    pub(crate) unsafe fn process_dual_frame<M: SimdMath>(
+    pub unsafe fn process_dual_frame<M: SimdMath>(
         &self,
         layer_buffer: &[f32],
         out_f0: &mut [f32],

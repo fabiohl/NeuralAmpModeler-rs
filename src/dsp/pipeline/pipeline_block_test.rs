@@ -63,7 +63,7 @@ mod block_tests {
 
         // Initializes the Resampler. Here we use 48kHz -> 48kHz (bypass)
         // only to test the resampler buffering infrastructure with odd block sizes.
-        let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+        let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
 
         // Real-time status flags (indicate whether clipping or other issues occurred).
         let rt_status = RtStatusFlags::default();
@@ -288,7 +288,7 @@ mod block_tests {
             m.prewarm(2048);
         }
 
-        let mut resampler = NamResampler::new(host_rate, nam_rate, n).unwrap();
+        let mut resampler = NamResampler::new_simple(host_rate, nam_rate).unwrap();
 
         let rt_status = RtStatusFlags::default();
 

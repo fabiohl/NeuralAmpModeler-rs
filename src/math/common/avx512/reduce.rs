@@ -20,7 +20,7 @@ macro_rules! impl_avx512_reduce {
         #[inline(always)]
         // SAFETY: l and r are valid f32 slices of equal length;
         // CPU supports AVX-512F (verified by dispatch).
-        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
+        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> (f32, bool) {
             // SAFETY: the kernel is safe, but calling it requires AVX-512F,
             // which this dispatch impl does not enable in its own codegen: the
             // caller must guarantee the CPU supports it (verified by dispatch).
@@ -29,7 +29,7 @@ macro_rules! impl_avx512_reduce {
 
         #[inline(always)]
         // SAFETY: data is a valid f32 slice; CPU supports AVX-512F (verified by dispatch).
-        unsafe fn compute_energy(data: &[f32]) -> f32 {
+        unsafe fn compute_energy(data: &[f32]) -> (f32, bool) {
             // SAFETY: the kernel is safe, but calling it requires AVX-512F,
             // which this dispatch impl does not enable in its own codegen: the
             // caller must guarantee the CPU supports it (verified by dispatch).
@@ -39,7 +39,7 @@ macro_rules! impl_avx512_reduce {
         #[inline(always)]
         // SAFETY: a and b are valid f32 slices of equal length;
         // CPU supports AVX-512F (verified by dispatch).
-        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32 {
+        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool) {
             // SAFETY: a and b satisfy function invariants.
             unsafe { crate::math::dsp::stereo::compute_max_diff_avx512(a, b) }
         }
@@ -79,14 +79,14 @@ macro_rules! impl_avx512vnni_bf16_reduce {
         #[inline(always)]
         // SAFETY: l and r are valid f32 slices of equal length;
         // CPU supports AVX-512 VNNI+BF16 (verified by dispatch).
-        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> f32 {
+        unsafe fn compute_energy_stereo(l: &[f32], r: &[f32]) -> (f32, bool) {
             // SAFETY: l and r satisfy function invariants.
             unsafe { Avx512Math::compute_energy_stereo(l, r) }
         }
 
         #[inline(always)]
         // SAFETY: data is a valid f32 slice; CPU supports AVX-512 VNNI+BF16.
-        unsafe fn compute_energy(data: &[f32]) -> f32 {
+        unsafe fn compute_energy(data: &[f32]) -> (f32, bool) {
             // SAFETY: data satisfies function invariants.
             unsafe { Avx512Math::compute_energy(data) }
         }
@@ -94,7 +94,7 @@ macro_rules! impl_avx512vnni_bf16_reduce {
         #[inline(always)]
         // SAFETY: a and b are valid f32 slices of equal length;
         // CPU supports AVX-512 VNNI+BF16.
-        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> f32 {
+        unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool) {
             // SAFETY: a and b satisfy function invariants.
             unsafe { Avx512Math::compute_max_diff(a, b) }
         }

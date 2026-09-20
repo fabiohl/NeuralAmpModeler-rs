@@ -696,6 +696,9 @@ emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase3-heap-audit.log" || true
 run_rt_deadline_gate_phase() {
     local status=0
     local flag=$(_test_flag rt_deadline)
+    # Pre-compile without CPU affinity so all cores participate in compilation,
+    # leaving BENCH_CORE cool and quiescent before running the RT benchmark.
+    cargo test --features testing --release --no-run $flag >/dev/null 2>&1 || true
     if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
         taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
     else

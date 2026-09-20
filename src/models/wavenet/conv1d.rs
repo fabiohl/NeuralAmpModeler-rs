@@ -62,6 +62,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
         do_bias: bool,
         dilation: usize,
     ) -> anyhow::Result<Self> {
+        anyhow::ensure!(IN > 0, "Conv1d in_ch must be >= 1, got {IN}");
+        anyhow::ensure!(OUT > 0, "Conv1d out_ch must be >= 1, got {OUT}");
+        anyhow::ensure!(K > 0, "Conv1d kernel_size must be >= 1, got {K}");
         let interleave_width = select_interleave_width(OUT);
         let num_blocks = OUT.div_ceil(interleave_width);
         let padded_total = num_blocks * interleave_width * IN * K;
@@ -71,6 +74,13 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
              (SIMD-padded, interleave width {interleave_width}), got {}",
             weights.len()
         );
+        if do_bias {
+            anyhow::ensure!(
+                bias.len() >= OUT,
+                "Conv1d bias buffer is too small: expected >= {OUT}, got {}",
+                bias.len()
+            );
+        }
         Ok(Self {
             weights,
             bias,
@@ -185,10 +195,15 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                 16 => {
                     let mut init = [0.0f32; 16];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
-                        if self.do_bias {
-                            *item = self.bias[out_c + j] + mixin[out_c + j];
-                        } else {
-                            *item = mixin[out_c + j];
+                        let idx = out_c + j;
+                        // SAFETY: `out_c + j < out_c + w <= OUT`. The constructor guarantees `self.bias.len() >= OUT`
+                        // when `do_bias` is true, and caller contract guarantees `mixin.len() >= OUT`.
+                        unsafe {
+                            if self.do_bias {
+                                *item = *self.bias.get_unchecked(idx) + *mixin.get_unchecked(idx);
+                            } else {
+                                *item = *mixin.get_unchecked(idx);
+                            }
                         }
                     }
                     // F-16: the interleaved-16 block must be fully covered by the
@@ -225,10 +240,15 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                 8 => {
                     let mut init = [0.0f32; 8];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
-                        if self.do_bias {
-                            *item = self.bias[out_c + j] + mixin[out_c + j];
-                        } else {
-                            *item = mixin[out_c + j];
+                        let idx = out_c + j;
+                        // SAFETY: `out_c + j < out_c + w <= OUT`. The constructor guarantees `self.bias.len() >= OUT`
+                        // when `do_bias` is true, and caller contract guarantees `mixin.len() >= OUT`.
+                        unsafe {
+                            if self.do_bias {
+                                *item = *self.bias.get_unchecked(idx) + *mixin.get_unchecked(idx);
+                            } else {
+                                *item = *mixin.get_unchecked(idx);
+                            }
                         }
                     }
                     // F-16: see interleave-16 note; same boundary proof for width 8.
@@ -263,10 +283,15 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                 _ => {
                     let mut init = [0.0f32; 4];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
-                        if self.do_bias {
-                            *item = self.bias[out_c + j] + mixin[out_c + j];
-                        } else {
-                            *item = mixin[out_c + j];
+                        let idx = out_c + j;
+                        // SAFETY: `out_c + j < out_c + w <= OUT`. The constructor guarantees `self.bias.len() >= OUT`
+                        // when `do_bias` is true, and caller contract guarantees `mixin.len() >= OUT`.
+                        unsafe {
+                            if self.do_bias {
+                                *item = *self.bias.get_unchecked(idx) + *mixin.get_unchecked(idx);
+                            } else {
+                                *item = *mixin.get_unchecked(idx);
+                            }
                         }
                     }
                     // F-16: see interleave-16 note; same boundary proof for width 4.
@@ -385,7 +410,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                     let mut init = [0.0f32; 16];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
                         if self.do_bias {
-                            *item = self.bias[out_c + j];
+                            // SAFETY: `Conv1d::try_from_parts` enforces `bias.len() >= OUT` when
+                            // `do_bias` is true, and `out_c + j < out_c + w <= OUT`.
+                            *item = unsafe { *self.bias.get_unchecked(out_c + j) };
                         }
                     }
                     // F-16: see the mixin kernel; same boundary proof for width 16.
@@ -421,7 +448,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                     let mut init = [0.0f32; 8];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
                         if self.do_bias {
-                            *item = self.bias[out_c + j];
+                            // SAFETY: `Conv1d::try_from_parts` enforces `bias.len() >= OUT` when
+                            // `do_bias` is true, and `out_c + j < out_c + w <= OUT`.
+                            *item = unsafe { *self.bias.get_unchecked(out_c + j) };
                         }
                     }
                     // F-16: see the mixin kernel; same boundary proof for width 8.
@@ -457,7 +486,9 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
                     let mut init = [0.0f32; 4];
                     for (j, item) in init.iter_mut().enumerate().take(w) {
                         if self.do_bias {
-                            *item = self.bias[out_c + j];
+                            // SAFETY: `Conv1d::try_from_parts` enforces `bias.len() >= OUT` when
+                            // `do_bias` is true, and `out_c + j < out_c + w <= OUT`.
+                            *item = unsafe { *self.bias.get_unchecked(out_c + j) };
                         }
                     }
                     // F-16: see the mixin kernel; same boundary proof for width 4.

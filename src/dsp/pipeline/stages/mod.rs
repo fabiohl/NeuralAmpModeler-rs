@@ -31,6 +31,6 @@ pub use input::apply_input_stage;
 pub(crate) use input::apply_input_stage_inner;
 /// Detects silence at the input and bypasses the entire DSP chain for idle blocks.
 pub use input::handle_silence_bypass;
-/// Applies output DSP stage: final volume, clipping detection, post-DSP smoothing.
-pub use output::apply_output_stage;
 pub(crate) use output::apply_output_stage_inner;
+/// Applies output DSP stage: final volume, clipping detection, post-DSP smoothing.
+pub use output::{apply_output_stage, apply_output_stage_sanitized};

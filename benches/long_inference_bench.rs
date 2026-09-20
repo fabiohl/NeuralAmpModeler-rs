@@ -69,7 +69,7 @@ fn bench_lstm_long_run(c: &mut Criterion) {
 fn bench_resampler_long_run(c: &mut Criterion) {
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
     let size = 4096;
-    let mut rs = NamResampler::new(44_100, 48_000, size).unwrap();
+    let mut rs = NamResampler::new_simple(44_100, 48_000).unwrap();
     let in_l = vec![0.0f32; size];
     let in_r = vec![0.0f32; size];
     let mut out_l = vec![0.0f32; size * 2];

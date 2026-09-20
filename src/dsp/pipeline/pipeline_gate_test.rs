@@ -20,7 +20,7 @@ fn test_hotpath_gate_closed_and_silence() {
     let input_r = vec![0.0; n]; // Silent input on right channel.
 
     // We prepare the audio tools (resampler and data bridge).
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
         buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
@@ -142,7 +142,7 @@ fn test_hotpath_gate_fading() {
         input_r[i] = 0.05;
     }
 
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
         buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
@@ -246,7 +246,7 @@ fn test_hotpath_clipping_detection() {
     // We force an impossible volume (1.5) on a specific sample to cause distortion.
     input_l[10] = 1.5;
 
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
         buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
@@ -342,7 +342,7 @@ fn test_hotpath_clipping_detection() {
 #[test]
 fn test_hotpath_dropped_frames() {
     let n = 64;
-    let mut resampler = NamResampler::new(48000, 48000, n).unwrap();
+    let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
     let mut bridge = Box::new(DspBridge {
         buffers: [BridgeBuffer::new(), BridgeBuffer::new()],

@@ -220,6 +220,38 @@ fn bench_dot_product_avx2_64(c: &mut Criterion) {
     });
 }
 
+/// Measures the performance of `dot_product_f32_native_kahan4` (LSTM per-sample head kernel)
+/// for 64 elements (typical LSTM hidden state size).
+fn bench_dot_product_f32_native_kahan4_64(c: &mut Criterion) {
+    let vec_a: Vec<f32> = (0..64).map(|i| (i as f32) * 0.1).collect();
+    let vec_b: Vec<f32> = (0..64).map(|i| (i as f32) * -0.1).collect();
+
+    c.bench_function("DotProduct_Kahan4_64elem", |b| {
+        b.iter(|| {
+            neural_amp_modeler_rs::math::common::scalar_ref::dot_product_f32_native_kahan4(
+                std::hint::black_box(&vec_a),
+                std::hint::black_box(&vec_b),
+            )
+        });
+    });
+}
+
+/// Measures the performance of `dot_product_f32_native_kahan4` (LSTM per-sample head kernel)
+/// for 128 elements (larger LSTM hidden state size).
+fn bench_dot_product_f32_native_kahan4_128(c: &mut Criterion) {
+    let vec_a: Vec<f32> = (0..128).map(|i| (i as f32) * 0.1).collect();
+    let vec_b: Vec<f32> = (0..128).map(|i| (i as f32) * -0.1).collect();
+
+    c.bench_function("DotProduct_Kahan4_128elem", |b| {
+        b.iter(|| {
+            neural_amp_modeler_rs::math::common::scalar_ref::dot_product_f32_native_kahan4(
+                std::hint::black_box(&vec_a),
+                std::hint::black_box(&vec_b),
+            )
+        });
+    });
+}
+
 /// Benchmarks for processors that support AVX-512 (e.g. AMD Zen 4, Intel Ice Lake+).
 /// AVX-512 allows processing 16 floats simultaneously (512 bits), theoretically
 /// doubling throughput compared to AVX2.
@@ -318,6 +350,8 @@ criterion_group! {
     bench_tanh_poly_nr2_256,
     bench_dot_product_avx2_256,
     bench_dot_product_avx2_64,
+    bench_dot_product_f32_native_kahan4_64,
+    bench_dot_product_f32_native_kahan4_128,
     bench_tanh_avx512_256elem,
     bench_sigmoid_avx512_256elem,
     bench_tanh_pade_nr1_avx512_256elem,

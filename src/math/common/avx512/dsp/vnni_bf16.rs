@@ -105,6 +105,38 @@ macro_rules! impl_avx512vnni_bf16_dsp {
         }
 
         #[inline(always)]
+        // SAFETY: data is a valid mutable f32 slice; gain, dither_sub are finite f32;
+        // CPU supports AVX-512 VNNI+BF16. Delegates to Avx512Math.
+        unsafe fn apply_gain_with_dither_and_detect_clipping_mono(
+            data: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            Avx512Math::apply_gain_with_dither_and_detect_clipping_mono(data, gain, dither_sub)
+        }
+
+        #[inline(always)]
+        // SAFETY: left and right are valid mutable f32 slices of equal length;
+        // gain, dither_sub are finite f32; CPU supports AVX-512 VNNI+BF16. Delegates to Avx512Math.
+        unsafe fn apply_gain_with_dither_and_detect_clipping_stereo(
+            left: &mut [f32],
+            right: &mut [f32],
+            gain: f32,
+            dither_sub: f32,
+        ) -> bool {
+            Avx512Math::apply_gain_with_dither_and_detect_clipping_stereo(
+                left, right, gain, dither_sub,
+            )
+        }
+
+        #[inline(always)]
+        // SAFETY: src and dst are valid f32 slices of equal length; scale is a finite f32;
+        // CPU supports AVX-512 VNNI+BF16. Delegates to Avx512Math.
+        unsafe fn copy_with_scale(src: &[f32], dst: &mut [f32], scale: f32) {
+            Avx512Math::copy_with_scale(src, dst, scale)
+        }
+
+        #[inline(always)]
         // SAFETY: data is a valid mutable f32 slice; gain and offset are finite f32;
         // CPU supports AVX-512 VNNI+BF16.
         unsafe fn apply_gain_then_dither(data: &mut [f32], gain: f32, offset: f32) {

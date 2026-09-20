@@ -605,3 +605,27 @@ fn test_x2_stage_phase_batched_reference_parity() {
         }
     }
 }
+
+#[test]
+fn test_required_scratch_len() {
+    assert_eq!(
+        OversampleEngine::required_scratch_len(OversampleFactor::Off, 128),
+        0
+    );
+    assert_eq!(
+        OversampleEngine::required_scratch_len(OversampleFactor::Off, 4096),
+        0
+    );
+    assert_eq!(
+        OversampleEngine::required_scratch_len(OversampleFactor::X2, 128),
+        256
+    );
+    assert_eq!(
+        OversampleEngine::required_scratch_len(OversampleFactor::X4, 128),
+        512
+    );
+    assert_eq!(
+        OversampleEngine::required_scratch_len(OversampleFactor::X4, 4096),
+        16384
+    );
+}

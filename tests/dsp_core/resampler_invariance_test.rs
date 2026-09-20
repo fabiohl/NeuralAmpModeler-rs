@@ -148,10 +148,10 @@ fn test_resampler_block_invariance() {
     ];
 
     for &(in_sr, out_sr, label) in scenarios {
-        let mut rs_a = NamResampler::new(in_sr, out_sr, 64).unwrap();
+        let mut rs_a = NamResampler::new_simple(in_sr, out_sr).unwrap();
         let out_a = process_monolithic(&mut rs_a, &signal, in_sr, out_sr);
 
-        let mut rs_b = NamResampler::new(in_sr, out_sr, 64).unwrap();
+        let mut rs_b = NamResampler::new_simple(in_sr, out_sr).unwrap();
         let out_b = process_fragmented(&mut rs_b, &signal, in_sr, out_sr);
 
         // ── Count identity ──────────────────────────────────────────────

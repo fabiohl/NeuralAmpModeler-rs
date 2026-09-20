@@ -85,6 +85,49 @@ DASHBOARD_PHASE_RECEIPT="$REGRESSION_RECEIPT"
 NAM_RUN_ID="${NAM_RUN_ID:-$(date +%s%N-$$)}"
 export NAM_RUN_ID
 
+# ── Pre-build & Direct Benchmark Execution Machinery ────────────────────────
+BENCH_EXE=""
+
+prebuild_benchmark() {
+    local bench_name="${1:-regression_gate}"
+    echo -e "  ${BLUE}Pre-compiling benchmark '${bench_name}' prior to cooldown (all cores)...${NC}" >&2
+    BENCH_EXE=""
+    # Pre-compile without CPU affinity so all cores participate in compilation,
+    # leaving BENCH_CORE cool and quiescent before running the RT benchmark.
+    local json_out
+    set +e
+    json_out=$(cargo bench --bench "$bench_name" --features testing --no-run --message-format=json 2>/dev/null)
+    local build_rc=$?
+    set -e
+    if [ "$build_rc" -ne 0 ]; then
+        echo -e "${RED}${BOLD}❌ Pre-compilation of benchmark '${bench_name}' failed.${NC}" >&2
+        return "$build_rc"
+    fi
+
+    BENCH_EXE=$(echo "$json_out" | grep -F '"executable":' | tail -1 | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
+    if [ -z "$BENCH_EXE" ] || [ ! -x "$BENCH_EXE" ]; then
+        BENCH_EXE=$(ls -t "target/release/deps/${bench_name}-"* 2>/dev/null | head -1 || true)
+    fi
+    if [ -n "$BENCH_EXE" ] && [ -x "$BENCH_EXE" ]; then
+        echo -e "  ${GREEN}✓${NC} Benchmark executable ready: ${CYAN}$(basename "$BENCH_EXE")${NC}" >&2
+    else
+        warn "Could not isolate standalone benchmark binary — fallback to cargo bench"
+    fi
+    return 0
+}
+
+run_benchmark_binary() {
+    local bench_name="${1:-regression_gate}"
+    shift
+    local extra_args=("$@")
+
+    if [ -n "$BENCH_EXE" ] && [ -x "$BENCH_EXE" ]; then
+        "${TASKSET[@]}" "$BENCH_EXE" --bench "${extra_args[@]}"
+    else
+        "${TASKSET[@]}" cargo bench --bench "$bench_name" --features testing -- "${extra_args[@]}"
+    fi
+}
+
 # ── Thermal Cooldown ─────────────────────────────────────────────────────────
 
 apply_thermal_cooldown() {
@@ -107,15 +150,27 @@ bootstrap_baseline() {
     echo -e "  ${YELLOW}⚠ This operation must be performed by a human operator.${NC}"
     echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}\n"
 
+    # Stage 1: Pre-build benchmark binary across all cores prior to cooldown
+    prebuild_benchmark "regression_gate"
+
+    # Stage 2: Thermal Cooldown (quiescent period)
     apply_thermal_cooldown
 
+    # Stage 3: Pure benchmark execution (immediate, zero compilation)
     local bench_start bench_end bench_dur_ms bench_dur_str
     bench_start=$(date +%s%N)
-    "${TASKSET[@]}" cargo bench --bench regression_gate --features testing -- --save-baseline "$BASELINE_NAME"
+    set +e
+    run_benchmark_binary "regression_gate" --save-baseline "$BASELINE_NAME"
+    local bench_rc=$?
+    set -e
+    if [ "$bench_rc" -ne 0 ]; then
+        die "Benchmark execution failed during baseline bootstrap (rc=$bench_rc)"
+    fi
     bench_end=$(date +%s%N)
     bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))
     bench_dur_str=$(format_duration_ms "$bench_dur_ms")
 
+    # Stage 4: Persist baseline data and environment fingerprint
     "$NAM_PERF_GATE" persist-baseline \
         --baseline-dir "$BASELINE_DIR" \
         --criterion-root "$CRITERION_BASELINE_TARGET" \
@@ -150,13 +205,11 @@ bootstrap_baseline() {
 check_regression() {
     echo -e "\n${BLUE}${BOLD}[CHECK] Comparing against CI baseline...${NC}" >&2
 
-    apply_thermal_cooldown
-
     mkdir -p "$PROJECT_DIR/target/logs"
     LOG_FILE="$PROJECT_DIR/target/logs/regression-check.log"
     : > "$LOG_FILE"
 
-    # Fingerprint comparison
+    # Stage 1: Pre-flight sanity & Fail-Fast checks BEFORE cooldown
     set +e
     "$NAM_PERF_GATE" compare \
         --baseline "$FINGERPRINT_FILE" \
@@ -194,15 +247,31 @@ check_regression() {
         --criterion-root "$CRITERION_BASELINE_TARGET" \
         --baseline "$BASELINE_NAME" >&2
 
-    # Run benchmarks
+    # Pre-build benchmark binary across all cores prior to cooldown
+    if ! prebuild_benchmark "regression_gate"; then
+        "$NAM_PERF_GATE" receipt append \
+            --phase-id "regression_check" \
+            --status "FAIL" \
+            --exit-code 1 \
+            --observed-records 0 \
+            --expected-records 1 \
+            --reason "BENCHMARK_PREBUILD_FAILED" \
+            --run-id "$NAM_RUN_ID" \
+            --out "$REGRESSION_RECEIPT" >&2
+        exit 1
+    fi
+
+    # Stage 2: Thermal Cooldown (quiescent period)
+    apply_thermal_cooldown
+
+    # Stage 3: Pure benchmark execution (immediate, zero compilation)
     mkdir -p target/logs
     LOG_FILE="target/logs/regression-check.log"
 
     local bench_start bench_end bench_dur_ms bench_dur_str
     bench_start=$(date +%s%N)
     set +e
-    "${TASKSET[@]}" cargo bench --bench regression_gate --features testing \
-        -- --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
+    run_benchmark_binary "regression_gate" --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
     BENCH_STATUS=$?
     bench_end=$(date +%s%N)
     bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))
