@@ -7,6 +7,12 @@ use crate::models::a2::A2_DILATIONS;
 use crate::models::a2::conv1d_fallback::a2_conv1d_single_frame_fallback;
 use crate::models::wavenet::conv1d_dyn::Conv1dDyn;
 
+/// Output frame length required by `process_single_ch3_unrolled`: the legacy kernels
+/// finalize with `_mm_storeu_ps`, storing a full XMM lane quad (4 floats) regardless of
+/// `out_ch == 3` — 3 valid channels + 1 padding lane, matching the production contract
+/// documented at `conv1d_ch3/simd.rs:31` (`CH_PAD = 4`).
+const CH3_UNROLLED_OUT_LEN: usize = 4;
+
 fn make_ch3_test_weights(kernel: usize, seed: u32) -> (AlignedVec<f32>, AlignedVec<f32>) {
     let in_ch = 3usize;
     let out_ch = 3usize;
@@ -81,11 +87,12 @@ fn test_ch3_unrolled_k6_parity() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut scalar_out = vec![0.0f32; 3];
 
     // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
-    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
+    // `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store; both outlive
+    // the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -140,11 +147,12 @@ fn test_ch3_unrolled_k15_parity() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut scalar_out = vec![0.0f32; 3];
 
     // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
-    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
+    // `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store; both outlive
+    // the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -207,11 +215,12 @@ fn test_ch3_unrolled_k6_with_mixin() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut scalar_out = vec![0.0f32; 3];
 
-    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has 3 elements
-    // (= out_ch) and `mixin` has 3 elements; all outlive the call.
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has
+    // `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store and `mixin` has 3 elements;
+    // all outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, Some(&mixin));
     }
@@ -274,11 +283,12 @@ fn test_ch3_unrolled_k15_with_mixin() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut scalar_out = vec![0.0f32; 3];
 
-    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has 3 elements
-    // (= out_ch) and `mixin` has 3 elements; all outlive the call.
+    // SAFETY: `layer_buffer` covers `frame_idx`'s kernel*dilation lookback, `ch3_out` has
+    // `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store and `mixin` has 3 elements;
+    // all outlive the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, Some(&mixin));
     }
@@ -342,11 +352,12 @@ fn test_ch3_unrolled_k6_all_dilations() {
 
         let frame_idx = 3500;
 
-        let mut ch3_out = vec![0.0f32; 3];
+        let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
         let mut scalar_out = vec![0.0f32; 3];
 
         // SAFETY: `layer_buffer` (4096*3) covers `frame_idx`'s kernel*dilation lookback and
-        // `ch3_out` has 3 elements (= out_ch); both outlive the call.
+        // `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store; both
+        // outlive the call.
         unsafe {
             conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         }
@@ -403,11 +414,12 @@ fn test_ch3_unrolled_k6_no_bias() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut scalar_out = vec![0.0f32; 3];
 
     // SAFETY: `layer_buffer` (buf_frames*3) covers `frame_idx`'s kernel*dilation lookback and
-    // `ch3_out` has 3 elements (= out_ch); both outlive the call.
+    // `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store; both outlive
+    // the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
     }
@@ -462,11 +474,12 @@ fn test_ch3_unrolled_k6_deterministic() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut out1 = vec![0.0f32; 3];
-    let mut out2 = vec![0.0f32; 3];
+    let mut out1 = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
+    let mut out2 = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
 
-    // SAFETY: `out1`/`out2` each have 3 elements (= out_ch) and `layer_buffer` covers `frame_idx`'s
-    // kernel*dilation lookback; all outlive the call.
+    // SAFETY: `out1`/`out2` each have `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM
+    // store and `layer_buffer` covers `frame_idx`'s kernel*dilation lookback; all outlive
+    // the call.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut out1, frame_idx, None);
         conv.process_single_ch3_unrolled(&layer_buffer, &mut out2, frame_idx, None);
@@ -504,11 +517,13 @@ fn test_ch3_unrolled_k6_vs_generic() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut generic_out = vec![0.0f32; 3];
 
-    // SAFETY: `ch3_out`/`generic_out` each have 3 elements (= out_ch) and `layer_buffer` covers
-    // `frame_idx`'s kernel*dilation lookback; all outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
+    // SAFETY: `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store,
+    // `generic_out` has 3 elements (= out_ch, written lane-by-lane by the generic path) and
+    // `layer_buffer` covers `frame_idx`'s kernel*dilation lookback; all outlive the call;
+    // AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut generic_out, frame_idx, None);
@@ -550,11 +565,13 @@ fn test_ch3_unrolled_k15_vs_generic() {
 
     let frame_idx = kernel * dilation + 64;
 
-    let mut ch3_out = vec![0.0f32; 3];
+    let mut ch3_out = vec![0.0f32; CH3_UNROLLED_OUT_LEN];
     let mut generic_out = vec![0.0f32; 3];
 
-    // SAFETY: `ch3_out`/`generic_out` each have 3 elements (= out_ch) and `layer_buffer` covers
-    // `frame_idx`'s kernel*dilation lookback; all outlive the call; AVX2+FMA is guaranteed by `Avx2Math`.
+    // SAFETY: `ch3_out` has `CH3_UNROLLED_OUT_LEN` (4) elements for the full-XMM store,
+    // `generic_out` has 3 elements (= out_ch, written lane-by-lane by the generic path) and
+    // `layer_buffer` covers `frame_idx`'s kernel*dilation lookback; all outlive the call;
+    // AVX2+FMA is guaranteed by `Avx2Math`.
     unsafe {
         conv.process_single_ch3_unrolled(&layer_buffer, &mut ch3_out, frame_idx, None);
         conv.process_single_frame::<Avx2Math>(&layer_buffer, &mut generic_out, frame_idx, None);

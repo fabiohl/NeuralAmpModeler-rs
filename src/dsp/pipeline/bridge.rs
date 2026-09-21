@@ -97,6 +97,12 @@ impl Default for BridgeBuffer {
 ///    real-time producer/consumer threads have stopped and no `DspBridgeWriter` /
 ///    `DspBridgeReader` / `&DspBridge` is live. Calling it while a callback may
 ///    run is a data race on the (non-atomic) `n_samples`/`generation` fields.
+/// 6. **Single-writer / single-reader discipline.** Exactly one capture thread
+///    may hold or use a `DspBridgeWriter`, and exactly one playback thread a
+///    `DspBridgeReader`. This is an invariant of the bridge type, not a
+///    runtime-enforced property: the payload writes in `write_block` are
+///    non-atomic, so the `unsafe impl Sync` on both faces is sound only under
+///    this rule.
 #[repr(align(128))]
 pub struct DspBridge {
     /// The two physical buffers (front/back) for double-buffering.
@@ -201,13 +207,22 @@ pub struct DspBridgeWriter(std::ptr::NonNull<DspBridge>);
 
 /// SAFETY: DspBridgeWriter owns a `NonNull<DspBridge>` that points to a heap-immortal
 /// allocation (Box::leak in standalone mode, or host/plugin lifecycle memory).
-/// The capture thread has exclusive write access to the back-buffer; the playback
-/// thread only reads the active front-buffer. All synchronization uses atomic
-/// ordering (Release/Acquire). Sending between threads for initialization is safe.
+/// Sending between threads for initialization is safe.
 unsafe impl Send for DspBridgeWriter {}
-/// SAFETY: DspBridgeWriter exposes only immutable reference access to the shared
-/// bridge through &self methods. All state transitions are mediated by atomic
-/// loads/stores with appropriate Release/Acquire ordering — no data races possible.
+/// SAFETY: `Sync` is sound **only under the single-writer/single-reader
+/// discipline declared as an invariant of the bridge type** (DspBridge doc,
+/// "RT ordering invariants", rule 6): exactly one capture thread may hold or
+/// use a `DspBridgeWriter`, and exactly one playback thread a
+/// `DspBridgeReader`. Under that discipline the `&self` writer methods mutate
+/// only the back-buffer the reader never touches and publish it with Release
+/// stores the reader observes with Acquire — no data race. The atomics alone
+/// do NOT provide this: `write_block` writes the payload with non-atomic
+/// `copy_nonoverlapping` and updates `n_samples`/`generation` non-atomically,
+/// so two threads sharing `&DspBridgeWriter` could legally collide. The
+/// discipline is upheld by the bridge lifecycle (the writer is handed to one
+/// capture callback, the reader to one playback callback), not enforceable by
+/// the type itself without an API redesign (an alternative `&mut`-only wrapper
+/// design was considered and deferred to avoid a public-API break).
 unsafe impl Sync for DspBridgeWriter {}
 
 impl DspBridgeWriter {
@@ -253,9 +268,24 @@ impl DspBridgeWriter {
         n_pw: usize,
         process_mono: bool,
     ) {
+        let n_bridge = n_pw.min(MAX_BRIDGE_BUF);
+        debug_assert!(
+            resamp_out_l.len() >= n_bridge,
+            "resamp_out_l slice smaller than n_bridge"
+        );
+        debug_assert!(
+            process_mono || resamp_out_r.len() >= n_bridge,
+            "resamp_out_r slice smaller than n_bridge in stereo mode"
+        );
+
         // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The back-buffer
         // (1 - active_read_idx) is exclusively written here; the reader only accesses the
-        // complementary front-buffer. Atomic fences (Release) synchronize visibility.
+        // complementary front-buffer.
+        // Bounds & non-overlap: `n_bridge <= MAX_BRIDGE_BUF` by definition; `back_buf.buf_l` and
+        // `back_buf.buf_r` have capacity `MAX_BRIDGE_BUF`. `resamp_out_l.len() >= n_bridge` and
+        // (in stereo) `resamp_out_r.len() >= n_bridge` by caller contract (verified by debug_assert).
+        // Memory regions do not overlap (input is resampler scratch, output is bridge back-buffer).
+        // Atomic fences (Release) synchronize visibility.
         unsafe {
             let bridge = self.0.as_ref();
 
@@ -275,7 +305,6 @@ impl DspBridgeWriter {
             let back_idx = 1 - bridge.active_read_idx.load(Ordering::Relaxed);
             let back_buf = &mut (*self.0.as_ptr()).buffers[back_idx];
 
-            let n_bridge = n_pw.min(MAX_BRIDGE_BUF);
             core::ptr::copy_nonoverlapping(
                 resamp_out_l.as_ptr(),
                 back_buf.buf_l.as_mut_ptr(),
@@ -343,13 +372,14 @@ pub struct DspBridgeReader(std::ptr::NonNull<DspBridge>);
 
 /// SAFETY: DspBridgeReader owns a `NonNull<DspBridge>` pointing to a heap-immortal
 /// allocation (same lifecycle as DspBridgeWriter — Box::leaked or host/plugin memory).
-/// The playback thread has exclusive read access to the active front-buffer (indicated
-/// by `active_read_idx`) while the capture thread writes the back-buffer. All
-/// synchronization uses atomic ordering. Sending between threads for init is safe.
+/// Sending between threads for init is safe.
 unsafe impl Send for DspBridgeReader {}
-/// SAFETY: DspBridgeReader exposes only &self reads from the bridge's front-buffer
-/// (selected atomically via active_read_idx with Acquire ordering). No mutable
-/// aliasing occurs — the capture thread writes the complementary back-buffer.
+/// SAFETY: sound under the bridge's single-writer/single-reader type invariant
+/// (see the writer's `Sync` SAFETY note): exactly one playback thread reads,
+/// its `&self` method only reads the front-buffer selected atomically via
+/// `active_read_idx` (Acquire) and publishes consumption via `consumed_gen`
+/// (Release), while the single writer mutates only the complementary
+/// back-buffer — no mutable aliasing occurs under that discipline.
 unsafe impl Sync for DspBridgeReader {}
 
 impl DspBridgeReader {

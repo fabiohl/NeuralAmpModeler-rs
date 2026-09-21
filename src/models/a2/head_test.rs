@@ -497,3 +497,33 @@ fn test_a2_head_ch3_sse_parity_wraparound() {
         );
     }
 }
+
+#[test]
+#[should_panic(expected = "output slice smaller than num_frames")]
+fn test_a2_head_conv_undersized_output_panics() {
+    let ch = 8;
+    let (w, bias, scale) = make_test_weights(ch);
+    let head = A2HeadConv::new(w, bias, scale, ch);
+
+    let ring_size = 64;
+    let ring_mask = ring_size - 1;
+    let history = make_test_history(ch, ring_size);
+    let mut undersized_output = vec![0.0f32; 4];
+
+    // num_frames is 8, but output is only 4 elements -> must panic fail-closed
+    head.process(&history, 10, ring_mask, 8, &mut undersized_output);
+}
+
+#[test]
+#[should_panic(expected = "head_history buffer smaller than ring buffer capacity")]
+fn test_a2_head_conv_undersized_history_panics() {
+    let ch = 8;
+    let (w, bias, scale) = make_test_weights(ch);
+    let head = A2HeadConv::new(w, bias, scale, ch);
+
+    let ring_mask = 63; // implies capacity (63 + 1) * 8 = 512
+    let undersized_history = vec![0.0f32; 256]; // only half capacity
+    let mut output = vec![0.0f32; 8];
+
+    head.process(&undersized_history, 10, ring_mask, 8, &mut output);
+}

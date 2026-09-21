@@ -119,7 +119,11 @@ impl ActivationType {
             // SAFETY: `data` is a valid mutable slice from the caller of this
             // `unsafe fn` and `M` matches the CPU ISA (top-level `dispatch_simd!`).
             Self::Tanh => unsafe {
-                M::tanh_slice(data);
+                if is_hf {
+                    M::tanh_slice_hf(data);
+                } else {
+                    M::tanh_slice(data);
+                }
             },
             // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
             // (top-level `dispatch_simd!`).
@@ -156,7 +160,11 @@ impl ActivationType {
             // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
             // (top-level `dispatch_simd!`).
             Self::Sigmoid => unsafe {
-                M::sigmoid_slice(data);
+                if is_hf {
+                    M::sigmoid_slice_hf(data);
+                } else {
+                    M::sigmoid_slice(data);
+                }
             },
             // SAFETY: `data` is a valid mutable slice and `M` matches the CPU ISA
             // (top-level `dispatch_simd!`).

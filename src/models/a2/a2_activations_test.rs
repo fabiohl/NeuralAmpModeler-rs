@@ -711,3 +711,183 @@ fn test_fast_tanh_avx512_large_slice() {
         );
     }
 }
+
+#[test]
+fn test_a2_tanh_simd_precision_parity() {
+    use crate::math::activations::{ActivationPrecision, set_thread_local_activation_precision};
+    use crate::math::common::Avx2Math;
+
+    // Test grid spanning negative, zero, positive, and saturation regions.
+    let grid_size = 1024;
+    let input_grid: Vec<f32> = (0..grid_size)
+        .map(|i| -6.0 + (12.0 * i as f32 / (grid_size - 1) as f32))
+        .collect();
+
+    let oracle_f64: Vec<f32> = input_grid
+        .iter()
+        .map(|&x| (x as f64).tanh() as f32)
+        .collect();
+
+    // 1. High-Fidelity path (is_hf = true, Standard precision)
+    let mut data_hf = input_grid.clone();
+    // SAFETY: data_hf is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+    unsafe {
+        ActivationType::Tanh.apply_simd_with_precision::<Avx2Math>(&mut data_hf, true);
+    }
+    let max_err_hf: f32 = data_hf
+        .iter()
+        .zip(oracle_f64.iter())
+        .map(|(&actual, &expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+
+    // 2. Fast path (is_hf = false, Fast precision / Padé)
+    let mut data_fast = input_grid.clone();
+    // SAFETY: data_fast is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+    unsafe {
+        ActivationType::Tanh.apply_simd_with_precision::<Avx2Math>(&mut data_fast, false);
+    }
+    let max_err_fast: f32 = data_fast
+        .iter()
+        .zip(oracle_f64.iter())
+        .map(|(&actual, &expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+
+    // Measured: max_err_hf = 2.3841858e-7, max_err_fast = 2.3217201e-3
+    assert!(
+        max_err_hf < 5e-7,
+        "Tanh Standard (HF) max error too high: {}",
+        max_err_hf
+    );
+    assert!(
+        max_err_fast < 3e-3,
+        "Tanh Fast (Padé) max error too high: {}",
+        max_err_fast
+    );
+    assert!(
+        max_err_fast > 1e-3,
+        "Tanh Fast should exhibit Padé approximation error (~2.32e-3), got {}",
+        max_err_fast
+    );
+
+    // Verify divergence between HF and Fast paths
+    let max_diff: f32 = data_hf
+        .iter()
+        .zip(data_fast.iter())
+        .map(|(&h, &f)| (h - f).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff > 1e-3,
+        "HF and Fast paths must diverge under Tanh, max_diff={}",
+        max_diff
+    );
+
+    // 3. Test TLS integration via apply_simd (Standard vs Fast)
+    {
+        let _guard = set_thread_local_activation_precision(Some(ActivationPrecision::Standard));
+        let mut data_tls_std = input_grid.clone();
+        // SAFETY: data_tls_std is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+        unsafe {
+            ActivationType::Tanh.apply_simd::<Avx2Math>(&mut data_tls_std);
+        }
+        assert_eq!(data_tls_std, data_hf);
+    }
+    {
+        let _guard = set_thread_local_activation_precision(Some(ActivationPrecision::Fast));
+        let mut data_tls_fast = input_grid.clone();
+        // SAFETY: data_tls_fast is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+        unsafe {
+            ActivationType::Tanh.apply_simd::<Avx2Math>(&mut data_tls_fast);
+        }
+        assert_eq!(data_tls_fast, data_fast);
+    }
+}
+
+#[test]
+fn test_a2_sigmoid_simd_precision_parity() {
+    use crate::math::activations::{ActivationPrecision, set_thread_local_activation_precision};
+    use crate::math::common::Avx2Math;
+
+    // Test grid spanning negative, zero, positive, and saturation regions.
+    let grid_size = 1024;
+    let input_grid: Vec<f32> = (0..grid_size)
+        .map(|i| -6.0 + (12.0 * i as f32 / (grid_size - 1) as f32))
+        .collect();
+
+    let oracle_f64: Vec<f32> = input_grid
+        .iter()
+        .map(|&x| (1.0 / (1.0 + (-x as f64).exp())) as f32)
+        .collect();
+
+    // 1. High-Fidelity path (is_hf = true, Standard precision)
+    let mut data_hf = input_grid.clone();
+    // SAFETY: data_hf is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+    unsafe {
+        ActivationType::Sigmoid.apply_simd_with_precision::<Avx2Math>(&mut data_hf, true);
+    }
+    let max_err_hf: f32 = data_hf
+        .iter()
+        .zip(oracle_f64.iter())
+        .map(|(&actual, &expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+
+    // 2. Fast path (is_hf = false, Fast precision / Minimax)
+    let mut data_fast = input_grid.clone();
+    // SAFETY: data_fast is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+    unsafe {
+        ActivationType::Sigmoid.apply_simd_with_precision::<Avx2Math>(&mut data_fast, false);
+    }
+    let max_err_fast: f32 = data_fast
+        .iter()
+        .zip(oracle_f64.iter())
+        .map(|(&actual, &expected)| (actual - expected).abs())
+        .fold(0.0f32, f32::max);
+
+    // Measured: max_err_hf = 2.0861626e-7, max_err_fast = 4.0888786e-4
+    assert!(
+        max_err_hf < 5e-7,
+        "Sigmoid Standard (HF) max error too high: {}",
+        max_err_hf
+    );
+    assert!(
+        max_err_fast < 1e-3,
+        "Sigmoid Fast (Minimax) max error too high: {}",
+        max_err_fast
+    );
+    assert!(
+        max_err_fast > 1e-4,
+        "Sigmoid Fast should exhibit minimax approximation error (~4.09e-4), got {}",
+        max_err_fast
+    );
+
+    // Verify divergence between HF and Fast paths
+    let max_diff: f32 = data_hf
+        .iter()
+        .zip(data_fast.iter())
+        .map(|(&h, &f)| (h - f).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff > 1e-4,
+        "HF and Fast paths must diverge under Sigmoid, max_diff={}",
+        max_diff
+    );
+
+    // 3. Test TLS integration via apply_simd (Standard vs Fast)
+    {
+        let _guard = set_thread_local_activation_precision(Some(ActivationPrecision::Standard));
+        let mut data_tls_std = input_grid.clone();
+        // SAFETY: data_tls_std is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+        unsafe {
+            ActivationType::Sigmoid.apply_simd::<Avx2Math>(&mut data_tls_std);
+        }
+        assert_eq!(data_tls_std, data_hf);
+    }
+    {
+        let _guard = set_thread_local_activation_precision(Some(ActivationPrecision::Fast));
+        let mut data_tls_fast = input_grid.clone();
+        // SAFETY: data_tls_fast is a valid slice; Avx2Math is supported by baseline x86-64-v3.
+        unsafe {
+            ActivationType::Sigmoid.apply_simd::<Avx2Math>(&mut data_tls_fast);
+        }
+        assert_eq!(data_tls_fast, data_fast);
+    }
+}

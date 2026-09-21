@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+// Integration test harness structures compiled across multiple test cases.
 #![allow(dead_code)]
 
 //! ER-2 stereo cab-sim validation harness.
@@ -421,7 +422,8 @@ fn cabsim_ir_multirate_load_metadata() {
             (std::f32::consts::TAU * 440.0 * t).sin() * (-30.0 * t).exp()
         })
         .collect();
-    write_wav_f32(&path, sr, &samples).expect("write IR wav");
+    // Canonical IEEE-float WAV writer (src/testing/wav.rs via tests/common).
+    common::wav::write_wav_f32(&path, &samples, sr).expect("write IR wav");
 
     let ir = CabSimIr::load(&path, 48_000, true).expect("load IR at target rate");
     assert_eq!(
@@ -438,30 +440,6 @@ fn cabsim_ir_multirate_load_metadata() {
         "normalized IR peak must be ~1.0, got {peak}"
     );
     let _ = std::fs::remove_file(&path);
-}
-
-/// Minimal mono f32 WAV writer for the IR loader.
-fn write_wav_f32(path: &std::path::Path, sample_rate: u32, samples: &[f32]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let data_len = (samples.len() * 4) as u32;
-    out.write_all(b"RIFF")?;
-    out.write_all(&(36 + data_len).to_le_bytes())?;
-    out.write_all(b"WAVE")?;
-    out.write_all(b"fmt ")?;
-    out.write_all(&16u32.to_le_bytes())?;
-    out.write_all(&1u16.to_le_bytes())?; // PCM
-    out.write_all(&1u16.to_le_bytes())?; // mono
-    out.write_all(&sample_rate.to_le_bytes())?;
-    out.write_all(&(sample_rate * 4).to_le_bytes())?; // byte rate
-    out.write_all(&4u16.to_le_bytes())?; // block align
-    out.write_all(&32u16.to_le_bytes())?; // bits
-    out.write_all(b"data")?;
-    out.write_all(&data_len.to_le_bytes())?;
-    for &s in samples {
-        out.write_all(&s.to_le_bytes())?;
-    }
-    out.flush()
 }
 
 // ── 3. Zero allocations on the stereo cabsim path (feature = "heap-audit") ──

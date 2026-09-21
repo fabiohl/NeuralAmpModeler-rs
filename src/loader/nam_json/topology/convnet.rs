@@ -190,12 +190,23 @@ pub fn get_convnet_topology(data: &NamModelData) -> Option<ConvNetTopology> {
         dilations.push(d);
     }
 
+    // ── Post-stack head ceilings (F-RES2-02) ──
+    // Same canonical ceilings as the WaveNet free-geometry path: the head is a
+    // `Conv1dDyn`, so hostile `head.channels` / `head.out_channels` /
+    // `head.kernel_size` must be rejected here, before `PostStackHead`
+    // multiplies them into an allocation size.
+    let in_channels = channels.last().copied().unwrap_or(1);
+    let head = match data.config.validate_head(in_channels) {
+        Ok(head) => head,
+        Err(_) => return None,
+    };
+
     Some(ConvNetTopology {
         num_blocks: layers.len(),
         channels,
         kernel_sizes,
         dilations,
-        head: data.config.parse_head(),
+        head,
         format: ConvNetFormat::Layers,
         batchnorm: None,
         activation: None,

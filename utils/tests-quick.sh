@@ -38,20 +38,10 @@ done
 PHASE_TOTAL=3
 source "$SCRIPT_DIR/_lib.sh"
 
-if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]; then
-    export NAM_LOW_PRIORITY=1
-    CMD_PREFIX=""
-    if command -v nice >/dev/null 2>&1; then
-        CMD_PREFIX="nice -n 19"
-    fi
-    if command -v ionice >/dev/null 2>&1; then
-        CMD_PREFIX="$CMD_PREFIX ionice -c 3"
-    fi
-    if [ -n "$CMD_PREFIX" ]; then
-        echo -e "${YELLOW}WARN: restarting with low CPU/IO priority (NAM_NO_LOW_PRIORITY=1 to skip)${NC}"
-        exec $CMD_PREFIX "$SCRIPT_PATH" "$@"
-    fi
-fi
+# Shared helper in _lib.sh; skips itself when already restarted or disabled.
+# (quality-dashboard.sh / tests-performance-regression.sh intentionally do NOT
+# deprioritize: they drive the statistical benchmarks — see _lib.sh.)
+maybe_restart_low_priority "$SCRIPT_PATH" "$@"
 
 cleanup_receipt() {
     local rc=$?
@@ -178,7 +168,7 @@ fi
 
 assert_ran_tests target/logs/quick-phase2.log 1
 
-ensure_third_party soft || true
+ensure_third_party soft || { warn "third-party setup failed — cpp_parity will be skipped"; }
 SKIP_CPP=0
 if RENDER_BIN="$(ensure_namcore_render)"; then
     :

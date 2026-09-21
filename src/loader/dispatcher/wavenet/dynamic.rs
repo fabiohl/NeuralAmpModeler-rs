@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Dynamic WaveNet model builder with runtime dimensions.
+//!
+//! # Structural Parallelism vs. Static Builders
+//!
+//! This module (`dynamic.rs`) defines runtime-dimensioned array construction
+//! ([`build_wavenet_array_dyn`]), while `standard.rs` defines const-generic static
+//! construction (`build_wavenet_array`).
+//! The structural parallelism between the two is an intentional design choice:
+//! - Static builders optimize for known topologies with zero dynamic dispatch and static array buffers.
+//! - Dynamic builders accommodate arbitrary layer counts, dilations, and channel configurations on the heap.
+//!
+//! Unifying these two paths via higher-order traits would introduce indirection that hurts static-path performance.
+//!
+//! # Recursion Limits
+//! Nested condition models and container models share the global [`MAX_UNIFIED_DEPTH`] (8) limit,
+//! which strictly bounds [`super::super::container::MAX_CONTAINER_DEPTH`] (4) to guarantee stack safety.
+
 use super::super::WeightCursor;
 use super::layout;
 use super::static_factory::reject_condition_dsp_lstm;

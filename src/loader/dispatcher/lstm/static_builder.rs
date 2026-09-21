@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::super::WeightCursor;
-use super::weights::read_lstm_layer;
+use super::weights::{read_lstm_head, read_lstm_layer};
 use crate::loader::loaded_model_pair::DEFAULT_SAMPLE_RATE;
 use crate::loader::nam_json::NamModelData;
 use crate::models::lstm::{LstmModel1, LstmModel2};
@@ -30,10 +30,9 @@ pub(crate) fn build_lstm_1layer<const H: usize, const H1_IH: usize, const H_H4: 
     let layer = read_lstm_layer::<1, H, H1_IH, H_H4>(&mut cursor)?;
 
     // Head: output linear projection weights
-    let head_weights_data = cursor.read_slice(H)?;
+    let (head_weights_data, head_bias) = read_lstm_head(&mut cursor, H)?;
     let mut head_weights_f32 = [0.0f32; H];
     head_weights_f32.copy_from_slice(head_weights_data);
-    let head_bias = cursor.read_f32_finite()?;
 
     cursor.verify_exhausted()?;
 
@@ -75,10 +74,9 @@ pub(crate) fn build_lstm_2layer<
     let layer2 = read_lstm_layer::<H, H, H2_IH, H_H4>(&mut cursor)?;
 
     // Head: final projection weights
-    let head_weights_data = cursor.read_slice(H)?;
+    let (head_weights_data, head_bias) = read_lstm_head(&mut cursor, H)?;
     let mut head_weights_f32 = [0.0f32; H];
     head_weights_f32.copy_from_slice(head_weights_data);
-    let head_bias = cursor.read_f32_finite()?;
 
     cursor.verify_exhausted()?;
 

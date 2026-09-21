@@ -1789,7 +1789,9 @@ proptest! {
 
 /// Strategy: A2-Dynamic WaveNet JSONs targeting the loader defenses —
 /// the `MAX_CONDITION_SIZE` semantic cap, `u32` range checks on group counts,
-/// and zero-group rejection. Returns `(json, expect_reject)`.
+/// zero-group rejection, and exact-divisibility of every `groups` field
+/// against its reshape operands (F-RES2-01/F-RES2-06). Returns
+/// `(json, expect_reject)`.
 fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, bool)> {
     use neural_amp_modeler_rs::loader::dispatcher::wavenet::MAX_CONDITION_SIZE;
 
@@ -1813,7 +1815,12 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
         // 5: layer1x1.groups > u32::MAX                     → must reject
         // 6: head1x1.groups = 0 (head1x1 active)            → must reject
         // 7: channels > MAX_A2_DYN_CHANNELS                 → must reject
-        // 8: benign valid-but-unusual values                → may build
+        // 8: conv_pre_film.groups = 0                       → must reject
+        // 9: conv_pre_film.groups > u32::MAX                → must reject
+        // 10: benign valid-but-unusual values               → may build
+        // 11: groups_input = 7 with channels = 12 (12 % 7)  → must reject
+        // 12: groups_input divisor of channels = 12         → may build
+        // 13: groups_input > u32::MAX                       → must reject
         let (
             condition_size,
             mixin_groups,
@@ -1821,8 +1828,10 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
             h1x1_active,
             h1x1_groups,
             channels,
+            film_groups,
+            groups_input,
             expect_reject,
-        ) = match pattern % 9 {
+        ) = match pattern % 14 {
             0 => (
                 MAX_CONDITION_SIZE + 1 + (raw % 10_000),
                 1u64,
@@ -1830,10 +1839,12 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
                 false,
                 1u64,
                 12usize,
+                None,
+                1u64,
                 true,
             ),
-            1 => (MAX_CONDITION_SIZE, 1, 1, false, 1, 12, false),
-            2 => (1, 0, 1, false, 1, 12, true),
+            1 => (MAX_CONDITION_SIZE, 1, 1, false, 1, 12, None, 1, false),
+            2 => (1, 0, 1, false, 1, 12, None, 1, true),
             3 => (
                 1,
                 u32::MAX as u64 + 1 + (raw as u64 % 10_000),
@@ -1841,9 +1852,11 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
                 false,
                 1,
                 12,
+                None,
+                1,
                 true,
             ),
-            4 => (1, 1, 0, false, 1, 12, true),
+            4 => (1, 1, 0, false, 1, 12, None, 1, true),
             5 => (
                 1,
                 1,
@@ -1851,9 +1864,11 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
                 false,
                 1,
                 12,
+                None,
+                1,
                 true,
             ),
-            6 => (1, 1, 1, true, 0, 12, true),
+            6 => (1, 1, 1, true, 0, 12, None, 1, true),
             7 => (
                 1,
                 1,
@@ -1861,10 +1876,77 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
                 false,
                 1,
                 MAX_A2_DYN_CHANNELS + 1 + (raw % 10_000),
+                None,
+                1,
                 true,
             ),
-            _ => (2, 2, 2, false, 1, 12, false),
+            8 => (1, 1, 1, false, 1, 12, Some(serde_json::json!(0)), 1, true),
+            9 => (
+                1,
+                1,
+                1,
+                false,
+                1,
+                12,
+                Some(serde_json::json!(
+                    u32::MAX as u64 + 1 + (raw as u64 % 10_000)
+                )),
+                1,
+                true,
+            ),
+            // Benign edge: every group count divides its operands
+            // (mixin 2 | condition_size=2, 2 | conv_out=12;
+            // l1x1 2 | bottleneck=12, 2 | channels=12).
+            10 => (2, 2, 2, false, 1, 12, Some(serde_json::json!(1)), 1, false),
+            // Non-divisor groups_input against channels=12 (12 % 7 == 5):
+            // the loader must reject before any mis-shaped grouped conv is
+            // built — never panic (F-RES2-01).
+            11 => (1, 1, 1, false, 1, 12, None, 7, true),
+            // Exact divisors of channels=12: benign grouped topology.
+            12 => (1, 1, 1, false, 1, 12, None, [2u64, 3, 4, 6][raw % 4], false),
+            13 => (
+                1,
+                1,
+                1,
+                false,
+                1,
+                12,
+                None,
+                u32::MAX as u64 + 1 + (raw as u64 % 10_000),
+                true,
+            ),
+            // Benign default (mirrors pattern 10).
+            _ => (2, 2, 2, false, 1, 12, Some(serde_json::json!(1)), 1, false),
         };
+
+        let mut layer_json = serde_json::json!({
+            "input_size": 1,
+            "condition_size": condition_size,
+            "channels": channels,
+            "bottleneck": channels,
+            "kernel_sizes": a2_kernel_sizes,
+            "dilations": a2_dilations,
+            "head_size": 1,
+            "head_bias": true,
+            "activation": acts,
+            "layer1x1": {"active": true, "groups": l1x1_groups},
+            "head1x1": {
+                "active": h1x1_active,
+                "out_channels": 12,
+                "groups": h1x1_groups
+            },
+            "groups_input_mixin": mixin_groups,
+            "groups_input": groups_input,
+            "head": {"out_channels": 1, "kernel_size": 16, "bias": true}
+        });
+
+        if let Some(fg) = film_groups {
+            layer_json["conv_pre_film"] = serde_json::json!({
+                "active": true,
+                "shift": true,
+                "groups": fg
+            });
+        }
 
         let json = serde_json::json!({
             "version": "0.7.0",
@@ -1872,25 +1954,7 @@ fn adversarial_a2_condition_groups_strategy() -> impl Strategy<Value = (String, 
             "config": {
                 "in_channels": 1,
                 "head_scale": 0.02,
-                "layers": [{
-                    "input_size": 1,
-                    "condition_size": condition_size,
-                    "channels": channels,
-                    "bottleneck": channels,
-                    "kernel_sizes": a2_kernel_sizes,
-                    "dilations": a2_dilations,
-                    "head_size": 1,
-                    "head_bias": true,
-                    "activation": acts,
-                    "layer1x1": {"active": true, "groups": l1x1_groups},
-                    "head1x1": {
-                        "active": h1x1_active,
-                        "out_channels": 12,
-                        "groups": h1x1_groups
-                    },
-                    "groups_input_mixin": mixin_groups,
-                    "head": {"out_channels": 1, "kernel_size": 16, "bias": true}
-                }]
+                "layers": [layer_json]
             },
             "weights": vec![0.0f32; 65536],
             "sample_rate": 48000

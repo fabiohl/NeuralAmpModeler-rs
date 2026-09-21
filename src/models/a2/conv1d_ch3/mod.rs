@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// SIMD 3-channel convolution module using internal helper signatures.
 #![allow(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -62,6 +63,14 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     ///
     /// Dispatches to `process_single_ch3_k6` or `process_single_ch3_k15`
     /// depending on the kernel size.
+    ///
+    /// # Safety
+    /// - `layer_buffer` must cover the `in_ch`-wide tap window for every tap of
+    ///   `frame_idx`'s `kernel * dilation` lookback (warm-up invariant owned by the caller).
+    /// - `out_frame` must have at least 4 elements (3 valid + 1 scratch): both kernels
+    ///   finalize with `_mm_storeu_ps`, writing a full XMM lane quad regardless of
+    ///   `out_ch == 3` (same contract as the production kernel, `conv1d_ch3/simd.rs:31`).
+    /// - `mixin` may be `None` or any length (all lanes are length-guarded internally).
     #[cfg(test)]
     #[inline(always)]
     pub(crate) unsafe fn process_single_ch3_unrolled(
@@ -89,6 +98,13 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     }
 
     /// Unrolled K=6 GEMV for 3-channel input/output (f32-native).
+    ///
+    /// # Safety
+    /// - `weights` must have at least `kernel * 16` f32 elements (interleave-4 padded).
+    /// - `layer_buffer` positions for all 6 taps must be valid.
+    /// - `out_frame` must have at least 4 elements (3 valid + 1 scratch):
+    ///   `_mm_storeu_ps(out_frame.as_mut_ptr(), acc)` writes all 4 lanes.
+    /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
     #[target_feature(enable = "avx")]
     unsafe fn process_single_ch3_k6(
@@ -158,6 +174,13 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     }
 
     /// Unrolled K=15 GEMV for 3-channel input/output (f32-native).
+    ///
+    /// # Safety
+    /// - `weights` must have at least `kernel * 16` f32 elements (interleave-4 padded).
+    /// - `layer_buffer` positions for all 15 taps must be valid.
+    /// - `out_frame` must have at least 4 elements (3 valid + 1 scratch):
+    ///   `_mm_storeu_ps(out_frame.as_mut_ptr(), acc)` writes all 4 lanes.
+    /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
     #[target_feature(enable = "avx")]
     unsafe fn process_single_ch3_k15(

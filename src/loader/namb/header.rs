@@ -31,6 +31,13 @@ pub fn check_crc(
     weights_offset: usize,
     expected: u32,
 ) -> Result<(), NambError> {
+    if data.len() < 28 {
+        return Err(NambError::Truncated {
+            got: data.len(),
+            need: 28,
+        });
+    }
+
     let calculated = if version >= 2 {
         // v2+ covers header (except crc field) + JSON + weights.
         // CRC32 field is at offset 24..28.
@@ -38,6 +45,12 @@ pub fn check_crc(
         let crc = crc32_ieee_update(crc, &data[28..]);
         crc ^ 0xFFFFFFFFu32
     } else {
+        if weights_offset > data.len() {
+            return Err(NambError::WeightsOffsetOutOfBounds {
+                offset: weights_offset,
+                file_len: data.len(),
+            });
+        }
         crc32_ieee(&data[weights_offset..])
     };
 
@@ -215,5 +228,43 @@ mod tests {
         bytes[4..6].copy_from_slice(&99u16.to_ne_bytes());
         let err = NambHeader::from_slice(&bytes).unwrap_err();
         assert!(matches!(err, NambError::InvalidVersion(99)));
+    }
+
+    #[test]
+    fn check_crc_truncated_under_28_bytes() {
+        let err_0 = check_crc(&[], 2, 0, 0).unwrap_err();
+        assert!(matches!(err_0, NambError::Truncated { got: 0, need: 28 }));
+
+        let err_27 = check_crc(&[0u8; 27], 2, 0, 0).unwrap_err();
+        assert!(matches!(err_27, NambError::Truncated { got: 27, need: 28 }));
+
+        let err_v1 = check_crc(&[0u8; 27], 1, 0, 0).unwrap_err();
+        assert!(matches!(err_v1, NambError::Truncated { got: 27, need: 28 }));
+    }
+
+    #[test]
+    fn check_crc_v1_weights_offset_out_of_bounds() {
+        let buf = [0u8; 32];
+        let err = check_crc(&buf, 1, 50, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            NambError::WeightsOffsetOutOfBounds {
+                offset: 50,
+                file_len: 32
+            }
+        ));
+    }
+
+    #[test]
+    fn check_crc_v2_valid_and_mismatch() {
+        let buf = vec![0u8; 40];
+        let crc = crc32_ieee_update(0xFFFFFFFFu32, &buf[..24]);
+        let crc = crc32_ieee_update(crc, &buf[28..]);
+        let expected = crc ^ 0xFFFFFFFFu32;
+
+        assert!(check_crc(&buf, 2, 80, expected).is_ok());
+
+        let mismatch = check_crc(&buf, 2, 80, expected ^ 0xFF).unwrap_err();
+        assert!(matches!(mismatch, NambError::CrcMismatch { .. }));
     }
 }

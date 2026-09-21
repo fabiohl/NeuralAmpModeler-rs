@@ -20,21 +20,10 @@ SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 PHASE_TOTAL=9
 source "$SCRIPT_DIR/_lib.sh"
 
-
-if [ "${NAM_LOW_PRIORITY:-0}" != "1" ] && [ "${NAM_NO_LOW_PRIORITY:-0}" != "1" ]; then
-    export NAM_LOW_PRIORITY=1
-    CMD_PREFIX=""
-    if command -v nice >/dev/null 2>&1; then
-        CMD_PREFIX="nice -n 19"
-    fi
-    if command -v ionice >/dev/null 2>&1; then
-        CMD_PREFIX="$CMD_PREFIX ionice -c 3"
-    fi
-    if [ -n "$CMD_PREFIX" ]; then
-        echo -e "${YELLOW}WARN: restarting with low CPU/IO priority (NAM_NO_LOW_PRIORITY=1 to skip)${NC}"
-        exec $CMD_PREFIX "$SCRIPT_PATH" "$@"
-    fi
-fi
+# Shared helper in _lib.sh; skips itself when already restarted or disabled.
+# (quality-dashboard.sh / tests-performance-regression.sh intentionally do NOT
+# deprioritize: they drive the statistical benchmarks — see _lib.sh.)
+maybe_restart_low_priority "$SCRIPT_PATH" "$@"
 
 echo -e "${BLUE}${BOLD}================================================================${NC}"
 echo -e "${BLUE}${BOLD}                 NeuralAmpModeler-rs Linting & Quality Suite                 ${NC}"
@@ -173,7 +162,16 @@ if [ ! -d "tests/common" ]; then
     echo -e "  ${RED}${BOLD}ERROR: Directory tests/common/ is missing. Cannot verify anti-patterns.${NC}"
     exit 1
 fi
-if grep -rnF "#[test]" tests/common/ >/dev/null 2>&1; then
+# Fail-closed grep handling (mirrors the SPDX scan above): rc==1 means "no
+# match" and passes; rc>=2 is a tool error (e.g. unreadable file) and must
+# fail the gate — a grep error can never be mistaken for a clean tree.
+grep_rc=0
+grep -rnF "#[test]" tests/common/ >/dev/null 2>&1 || grep_rc=$?
+if [ "$grep_rc" -ge 2 ]; then
+    echo -e "  ${RED}${BOLD}ERROR: grep failed scanning tests/common/ (rc=$grep_rc) — gate fails closed.${NC}"
+    exit 1
+fi
+if [ "$grep_rc" -eq 0 ]; then
     echo -e "  ${RED}${BOLD}ERROR: '#[test]' found in tests/common/ (redundant executions):${NC}"
     grep -rnF "#[test]" tests/common/ | sed 's/^/    /'
     exit 1
@@ -181,21 +179,30 @@ fi
 ok "No '#[test]' in tests/common/ ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
-# [7/8] Undocumented #[allow(clippy::)] check (enforce allow_attributes policy)
+# [7/8] Undocumented #[allow(...)] / #![allow(...)] check (enforce allow_attributes policy)
 # ---------------------------------------------------------------------------
-phase "Checking for undocumented #[allow(clippy::)] suppressions..."
+phase "Checking for undocumented #[allow(...)] / #![allow(...)] suppressions..."
 
 undocumented_allows=""
 while IFS= read -r rs_file; do
     prev_was_comment=false
     while IFS= read -r line; do
         trimmed="${line#"${line%%[! ]*}"}"
-        if [[ "$trimmed" =~ ^\#\[allow\(clippy:: ]]; then
+        # Every #[allow(...)] (item-level) and #![allow(...)] (inner) attribute
+        # requires a justification comment — the pattern list is intentionally
+        # open-ended so newly-used lint names (deprecated, unused,
+        # unreachable_code, ...) cannot bypass the gate.
+        if [[ "$trimmed" =~ ^#!\[allow\(|^#\[allow\( ]]; then
             if ! $prev_was_comment; then
                 undocumented_allows+="$rs_file: $trimmed"$'\n'
             fi
+            # Stacked/consecutive allow attributes share the preceding justification comment
+        elif [[ "$trimmed" =~ ^//\ SPDX|^//\ Copyright ]]; then
             prev_was_comment=false
-        elif [[ "$trimmed" =~ ^//|^# ]]; then
+        elif [[ "$trimmed" =~ ^//!|^/// ]]; then
+            # Doc comments describe item/module purpose, not justification for suppressions
+            prev_was_comment=false
+        elif [[ "$trimmed" =~ ^//|^\/\* ]]; then
             prev_was_comment=true
         elif [ -n "$trimmed" ]; then
             prev_was_comment=false
@@ -204,11 +211,11 @@ while IFS= read -r rs_file; do
 done < <(printf '%s\n' "$spdx_scope" | grep '\.rs$')
 
 if [ -n "$undocumented_allows" ]; then
-    echo -e "  ${RED}${BOLD}ERROR: Undocumented #[allow(clippy::)] found (add a justification comment above):${NC}"
+    echo -e "  ${RED}${BOLD}ERROR: Undocumented #[allow(...)] / #![allow(...)] found (add a justification comment above):${NC}"
     echo "$undocumented_allows" | sed 's/^/    /'
     exit 1
 fi
-ok "All #[allow(clippy::)] suppressions are documented ($(phase_elapsed_str))."
+ok "All #[allow(...)] / #![allow(...)] suppressions are documented ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
 # [8/8] Static validation: doc(cfg(feature = "...")) feature names exist in Cargo.toml
@@ -224,13 +231,20 @@ for k in data.get('features', {}).keys():
     print(k)
 ")
 
+# Fail-closed: git grep exit 1 = no files found, which is itself a gate failure.
+doc_cfg_matches=""
+if ! doc_cfg_matches=$(git grep -n -o -E 'doc\(cfg\(feature = "[^"]+"\)\)' src/); then
+    echo -e "  ${RED}${BOLD}ERROR: No doc(cfg(feature = ...)) annotations found in src/ (or git grep failed).${NC}"
+    exit 1
+fi
+
 while IFS=: read -r file line match; do
     [ -n "$file" ] || continue
     feat=$(echo "$match" | sed -E 's/.*doc\(cfg\(feature = "([^"]+)".*/\1/')
     if ! echo "$cargo_features" | grep -qx "$feat"; then
         doc_cfg_errors+="$file:$line: feature '$feat' not found in Cargo.toml [features]"$'\n'
     fi
-done < <(git grep -n -o -E 'doc\(cfg\(feature = "[^"]+"\)\)' src/)
+done <<< "$doc_cfg_matches"
 
 if [ -n "$doc_cfg_errors" ]; then
     echo -e "  ${RED}${BOLD}ERROR: Invalid feature name(s) in doc(cfg):${NC}"

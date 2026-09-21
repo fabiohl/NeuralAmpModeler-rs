@@ -40,17 +40,18 @@ unsafe fn conv1d_ch3_k6_f32(
 ) {
     const CH: usize = 3;
     let d = dilation as isize;
+    let fi = frame_idx as isize;
     let buf = layer_buffer.as_ptr();
     let w_ptr = weights.as_ptr();
 
     // Pre-compute tap base offsets (in elements, CH=3 stride).
-    let fi = frame_idx as isize;
-    let t0 = (fi + d * (1 - 6)) as usize * CH;
-    let t1 = (fi + d * (2 - 6)) as usize * CH;
-    let t2 = (fi + d * (3 - 6)) as usize * CH;
-    let t3 = (fi + d * (4 - 6)) as usize * CH;
-    let t4 = (fi + d * (5 - 6)) as usize * CH;
-    let t5 = fi as usize * CH; // tap 5 = current frame (offset 0)
+    // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+    let t0 = (fi + d * (1 - 6)).max(0) as usize * CH;
+    let t1 = (fi + d * (2 - 6)).max(0) as usize * CH;
+    let t2 = (fi + d * (3 - 6)).max(0) as usize * CH;
+    let t3 = (fi + d * (4 - 6)).max(0) as usize * CH;
+    let t4 = (fi + d * (5 - 6)).max(0) as usize * CH;
+    let t5 = fi.max(0) as usize * CH; // tap 5 = current frame (offset 0)
 
     let mut acc0 = _mm_loadu_ps(bias.as_ptr());
     let mut acc1 = _mm_setzero_ps();
@@ -120,7 +121,8 @@ unsafe fn conv1d_ch3_k15_f32(
 
     macro_rules! tap {
         ($idx:expr) => {
-            (fi + d * (($idx as isize) + 1 - k_limit)) as usize * CH
+            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            (fi + d * (($idx as isize) + 1 - k_limit)).max(0) as usize * CH
         };
     }
 

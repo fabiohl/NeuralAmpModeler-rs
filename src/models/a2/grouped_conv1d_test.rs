@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::diagnostics::NamErrorCode;
 
 #[test]
 fn test_grouped_conv1d_groups2_single_frame() {
@@ -914,8 +915,7 @@ fn should_panic_process_block_mixin_too_short() {
 }
 
 #[test]
-#[should_panic(expected = "raw_weights len")]
-fn should_panic_new_mismatched_weight_len() {
+fn new_rejects_mismatched_weight_len() {
     let in_ch = 8;
     let out_ch = 4;
     let kernel = 3;
@@ -924,7 +924,7 @@ fn should_panic_new_mismatched_weight_len() {
     let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
     let wrong_weights = &raw_weights[..raw_weights.len() - 1]; // truncate by 1
 
-    A2GroupedConv1d::new(
+    let err = A2GroupedConv1d::new(
         wrong_weights,
         &raw_bias,
         true,
@@ -934,19 +934,24 @@ fn should_panic_new_mismatched_weight_len() {
         kernel,
         groups,
     )
-    .expect("construction should succeed for test-sized buffers");
+    .err()
+    .expect("mismatched weight stream must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::WeightCountMismatch,
+        "weight count inconsistent with geometry must map to WeightCountMismatch: {err}"
+    );
 }
 
 #[test]
-#[should_panic(expected = "groups must be > 0")]
-fn should_panic_new_zero_groups() {
+fn new_rejects_zero_groups() {
     let in_ch = 8;
     let out_ch = 4;
     let kernel = 3;
     let groups = 0;
 
     let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, 2, 42);
-    A2GroupedConv1d::new(
+    let err = A2GroupedConv1d::new(
         &raw_weights,
         &raw_bias,
         true,
@@ -956,19 +961,24 @@ fn should_panic_new_zero_groups() {
         kernel,
         groups,
     )
-    .expect("construction should succeed for test-sized buffers");
+    .err()
+    .expect("zero groups must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "zero groups must map to InvalidModelTopology: {err}"
+    );
 }
 
 #[test]
-#[should_panic(expected = "in_ch")]
-fn should_panic_new_in_ch_not_divisible_by_groups() {
+fn new_rejects_in_ch_not_divisible_by_groups() {
     let in_ch = 7;
     let out_ch = 4;
     let kernel = 3;
     let groups = 2;
 
     let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
-    A2GroupedConv1d::new(
+    let err = A2GroupedConv1d::new(
         &raw_weights,
         &raw_bias,
         true,
@@ -978,19 +988,24 @@ fn should_panic_new_in_ch_not_divisible_by_groups() {
         kernel,
         groups,
     )
-    .expect("construction should succeed for test-sized buffers");
+    .err()
+    .expect("in_ch not divisible by groups must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "non-divisor in_ch/groups must map to InvalidModelTopology: {err}"
+    );
 }
 
 #[test]
-#[should_panic(expected = "out_ch")]
-fn should_panic_new_out_ch_not_divisible_by_groups() {
+fn new_rejects_out_ch_not_divisible_by_groups() {
     let in_ch = 8;
     let out_ch = 5;
     let kernel = 3;
     let groups = 2;
 
     let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
-    A2GroupedConv1d::new(
+    let err = A2GroupedConv1d::new(
         &raw_weights,
         &raw_bias,
         true,
@@ -1000,5 +1015,96 @@ fn should_panic_new_out_ch_not_divisible_by_groups() {
         kernel,
         groups,
     )
-    .expect("construction should succeed for test-sized buffers");
+    .err()
+    .expect("out_ch not divisible by groups must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "non-divisor out_ch/groups must map to InvalidModelTopology: {err}"
+    );
+}
+
+/// F-RES2-11: `kernel` above `MAX_KERNEL` (16) must be rejected by the
+/// constructor itself — the SIMD kernels read taps through a fixed
+/// 16-entry pointer array, and the loader's upstream ceiling must not be
+/// the only line of defense for the public constructor path.
+#[test]
+fn new_rejects_kernel_above_max_kernel() {
+    let in_ch = 4;
+    let out_ch = 4;
+    let kernel = 17; // MAX_KERNEL + 1
+    let groups = 2;
+
+    // Weights sized exactly for the geometry so only the kernel ceiling fires.
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+    let err = A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .err()
+    .expect("kernel above MAX_KERNEL must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "kernel above MAX_KERNEL must map to InvalidModelTopology: {err}"
+    );
+}
+
+/// Companion of `new_rejects_kernel_above_max_kernel`: zero kernel is the
+/// other endpoint of the `Conv1dDyn::try_from_parts` ceiling contract.
+#[test]
+fn new_rejects_zero_kernel() {
+    let in_ch = 4;
+    let out_ch = 4;
+    let kernel = 0;
+    let groups = 2;
+
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+    let err = A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .err()
+    .expect("zero kernel must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "zero kernel must map to InvalidModelTopology: {err}"
+    );
+}
+
+/// The ceiling is inclusive: `kernel == MAX_KERNEL` with a consistent weight
+/// stream must still construct (no valid fixture rejection).
+#[test]
+fn new_accepts_kernel_at_max_kernel() {
+    let in_ch = 4;
+    let out_ch = 4;
+    let kernel = 16; // == MAX_KERNEL
+    let groups = 2;
+
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+    let conv = A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .expect("kernel == MAX_KERNEL must construct with a consistent weight stream");
+    assert_eq!(conv.kernel, kernel);
 }

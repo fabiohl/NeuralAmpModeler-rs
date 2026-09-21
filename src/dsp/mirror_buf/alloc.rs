@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-// SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+// SAFETY: Virtual memory mappings (mmap, munmap, madvise) and file descriptor operations
+// in this module adhere to strict kernel invariants: validated page alignment, leak-free error paths,
+// and bounds-checked pointer offsets.
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use super::{
@@ -76,7 +78,8 @@ impl<T> MirroredBuffer<T> {
                 "MirroredBuffer element alignment must not exceed 64 bytes"
             );
         };
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: `sysconf` is a standard POSIX runtime system configuration query with no
+        // pointer dereferences or memory safety side-effects.
         let page_size = unsafe { sysconf(libc::_SC_PAGESIZE) } as usize;
         // R-5 / A7: the `mmap` base (and therefore every element address produced
         // by `Deref`/`DerefMut` over the 2N virtual extent) is aligned only to the
@@ -86,10 +89,14 @@ impl<T> MirroredBuffer<T> {
         // `align_of::<T>() <= 64` const assert (both are satisfied on every
         // supported platform, where page_size >= 4096).
         let align = std::mem::align_of::<T>();
-        assert!(
-            align <= page_size,
-            "MirroredBuffer element alignment {align} exceeds the system page size {page_size}"
-        );
+        if align > page_size {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "MirroredBuffer element alignment {align} exceeds the system page size {page_size}"
+                ),
+            ));
+        }
         let element_size = std::mem::size_of::<T>();
 
         if element_size == 0 {
@@ -173,7 +180,8 @@ impl<T> MirroredBuffer<T> {
         let size_elements = size_bytes / element_size;
 
         // 1. Create backing store (memfd on Linux, stub fallback on other platforms)
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: __errno_location() returns a valid thread-local errno pointer; create_backing_fd creates
+        // an anonymous, sealed memory file descriptor sized to size_bytes.
         let fd = unsafe {
             #[cfg(target_os = "linux")]
             {
@@ -186,9 +194,15 @@ impl<T> MirroredBuffer<T> {
         };
 
         // 2. Reserve contiguous virtual space (2x size)
-        let total_size = size_bytes * 2;
+        let total_size = size_bytes.checked_mul(2).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "size_bytes * 2 overflowed",
+            )
+        })?;
 
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: try_mmap_huge with null address requests a contiguous unmapped address reservation
+        // of total_size (2 * size_bytes) from the kernel; return value is checked against MAP_FAILED.
         let base_ptr = unsafe {
             if SIMULATE_FAIL.with(|f| f.get()) {
                 *libc::__errno_location() = libc::ENOMEM;
@@ -199,13 +213,14 @@ impl<T> MirroredBuffer<T> {
         };
         if base_ptr == MAP_FAILED {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: fd is the open file descriptor returned by create_backing_fd; closing it prevents descriptor leaks.
             unsafe { libc::close(fd) };
             return Err(err);
         }
 
         // 3. Map the first half
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: base_ptr is the base of the reserved virtual address range of size total_size >= size_bytes;
+        // MAP_FIXED | MAP_SHARED maps fd (valid descriptor of length size_bytes) at offset 0 into the first half.
         let ptr1 = unsafe {
             mmap(
                 base_ptr,
@@ -218,7 +233,7 @@ impl<T> MirroredBuffer<T> {
         };
         if ptr1 != base_ptr {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: Roll back on failure by unmapping the full total_size virtual reservation and closing fd.
             unsafe {
                 munmap(base_ptr, total_size);
                 libc::close(fd);
@@ -227,7 +242,8 @@ impl<T> MirroredBuffer<T> {
         }
 
         // 4. Map the second half (mirror)
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: base_ptr.add(size_bytes) points to the exact start of the second half within the
+        // contiguous total_size reservation; MAP_FIXED | MAP_SHARED maps the same fd at offset 0.
         let ptr2 = unsafe {
             mmap(
                 (base_ptr as *mut u8).add(size_bytes) as *mut c_void,
@@ -238,10 +254,10 @@ impl<T> MirroredBuffer<T> {
                 0,
             )
         };
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: Invariant check: base_ptr.add(size_bytes) computes the exact expected fixed address for the mirror.
         if ptr2 != unsafe { (base_ptr as *mut u8).add(size_bytes) as *mut c_void } {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: Roll back by unmapping the entire reserved virtual range (total_size) and closing fd.
             unsafe {
                 munmap(base_ptr, total_size);
                 libc::close(fd);
@@ -251,7 +267,7 @@ impl<T> MirroredBuffer<T> {
 
         // Hint THP promotion for the data regions, then force synchronous collapse.
         // Only report THP active if the kernel confirms success (return 0).
-        // SAFETY: base_ptr and size_bytes are valid mapped regions.
+        // SAFETY: base_ptr points to the valid page-aligned mapped region of size_bytes; madvise provides VM advice.
         let collapse_rc = unsafe {
             libc::madvise(base_ptr, size_bytes, MADV_HUGEPAGE);
             libc::madvise(base_ptr, size_bytes, libc::MADV_COLLAPSE)
@@ -261,7 +277,8 @@ impl<T> MirroredBuffer<T> {
                 .fetch_max(HUGEPAGE_STATE_THP, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: Both virtual mirrors maintain open references to the backing file in kernel VM state;
+        // closing the user-space fd avoids descriptor leaks without unmapping the memory.
         unsafe { libc::close(fd) };
 
         Ok(Self {
@@ -301,7 +318,8 @@ impl<T> MirroredBuffer<T> {
         let size_elements = size_bytes / element_size;
 
         // 1. Create HugeTLB-backed memfd (falls back to regular memfd)
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: __errno_location() returns a valid thread-local errno pointer; create_backing_fd creates
+        // an anonymous HugeTLB-backed memfd sized to size_bytes.
         let fd = unsafe {
             if SIMULATE_FAIL.with(|f| f.get()) {
                 *libc::__errno_location() = libc::ENOMEM;
@@ -310,21 +328,28 @@ impl<T> MirroredBuffer<T> {
             create_backing_fd(size_bytes, true)?
         };
 
-        let total_size = size_bytes * 2;
+        let total_size = size_bytes.checked_mul(2).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "size_bytes * 2 overflowed",
+            )
+        })?;
 
         // 2. Reserve 2x virtual space with MAP_HUGETLB
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: try_mmap_huge with null address requests a contiguous unmapped huge-page address reservation
+        // of total_size (2 * size_bytes) from the kernel; return value is checked against MAP_FAILED.
         let base_ptr = unsafe { try_mmap_huge(ptr::null_mut(), total_size, -1, 0, true) };
         if base_ptr == MAP_FAILED {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: fd is the open file descriptor returned by create_backing_fd; closing it prevents descriptor leaks.
             unsafe { libc::close(fd) };
             return Err(err);
         }
 
         // 3. Map the first half
         let map_flags = MAP_FIXED | MAP_SHARED;
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: base_ptr is the base of the reserved huge-page virtual address range of size total_size >= size_bytes;
+        // MAP_FIXED | MAP_SHARED maps fd (valid descriptor of length size_bytes) at offset 0 into the first half.
         let ptr1 = unsafe {
             mmap(
                 base_ptr,
@@ -337,7 +362,7 @@ impl<T> MirroredBuffer<T> {
         };
         if ptr1 != base_ptr {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: Roll back on failure by unmapping the full total_size huge-page virtual reservation and closing fd.
             unsafe {
                 munmap(base_ptr, total_size);
                 libc::close(fd);
@@ -346,7 +371,8 @@ impl<T> MirroredBuffer<T> {
         }
 
         // 4. Map the second half (mirror)
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: base_ptr.add(size_bytes) points to the exact start of the second half within the
+        // contiguous total_size reservation; MAP_FIXED | MAP_SHARED maps the same fd at offset 0.
         let ptr2 = unsafe {
             mmap(
                 (base_ptr as *mut u8).add(size_bytes) as *mut c_void,
@@ -357,10 +383,10 @@ impl<T> MirroredBuffer<T> {
                 0,
             )
         };
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: Invariant check: base_ptr.add(size_bytes) computes the exact expected fixed address for the mirror.
         if ptr2 != unsafe { (base_ptr as *mut u8).add(size_bytes) as *mut c_void } {
             let err = std::io::Error::last_os_error();
-            // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+            // SAFETY: Roll back by unmapping the entire reserved virtual range (total_size) and closing fd.
             unsafe {
                 munmap(base_ptr, total_size);
                 libc::close(fd);
@@ -368,7 +394,8 @@ impl<T> MirroredBuffer<T> {
             return Err(err);
         }
 
-        // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+        // SAFETY: Both huge-page virtual mirrors maintain open references to the backing file in kernel VM state;
+        // closing the user-space fd avoids descriptor leaks without unmapping the memory.
         unsafe { libc::close(fd) };
 
         Ok(Self {

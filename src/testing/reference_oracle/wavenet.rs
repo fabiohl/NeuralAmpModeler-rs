@@ -12,6 +12,7 @@
 //! residual connections and a gated activation (tanh ⊙ sigmoid),
 //! followed by a 1×1 head-mix projection to mono output.
 
+// Reference oracles mirror production formulas without individual item documentation.
 #![allow(missing_docs)]
 
 use crate::loader::nam_json::model::NamModelData;

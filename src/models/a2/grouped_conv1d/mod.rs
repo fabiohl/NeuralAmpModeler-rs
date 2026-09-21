@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Grouped convolution module using internal helper signatures.
 #![allow(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -33,6 +34,7 @@
 
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
+use crate::models::wavenet::common::MAX_KERNEL;
 
 pub mod reference;
 pub mod simd;
@@ -87,8 +89,17 @@ impl A2GroupedConv1d {
     /// The constructor permutes to grouped-interleaved-4-wide:
     /// `[group][num_blocks][kernel][in_per_group][4]`.
     ///
-    /// # Panics
-    /// Panics if `in_ch % groups != 0` or `out_ch % groups != 0`.
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] when `groups == 0`,
+    /// when `kernel` is zero or exceeds `MAX_KERNEL`, or when
+    /// `in_ch`/`out_ch` are not exactly divisible by `groups`, and
+    /// [`NamErrorCode::WeightCountMismatch`] when `raw_weights` does not hold
+    /// exactly `(out_ch * in_ch / groups) * kernel` values. The constructor is
+    /// reachable from hostile `.nam` parsing (public loader path), so every
+    /// violation is a typed `Err` — never `assert!`, which would panic the
+    /// host process in release builds too (F-RES2-01). Rejection logging
+    /// happens at the off-RT loader call site (this file also hosts the
+    /// SIMD hot-path kernels, so no `log::` calls are allowed here).
     pub fn new(
         raw_weights: &[f32],
         raw_bias: &[f32],
@@ -99,33 +110,31 @@ impl A2GroupedConv1d {
         kernel: usize,
         groups: usize,
     ) -> Result<Self, NamErrorCode> {
-        assert!(groups > 0, "groups must be > 0");
-        assert_eq!(
-            in_ch % groups,
-            0,
-            "in_ch={} must be divisible by groups={}",
-            in_ch,
-            groups
-        );
-        assert_eq!(
-            out_ch % groups,
-            0,
-            "out_ch={} must be divisible by groups={}",
-            out_ch,
-            groups
-        );
-        let expected_weights = (out_ch * in_ch / groups) * kernel;
-        assert_eq!(
-            raw_weights.len(),
-            expected_weights,
-            "raw_weights len {} != expected {} ((out_ch={} * in_ch={} / groups={}) * kernel={})",
-            raw_weights.len(),
-            expected_weights,
-            out_ch,
-            in_ch,
-            groups,
-            kernel
-        );
+        if groups == 0 || !in_ch.is_multiple_of(groups) || !out_ch.is_multiple_of(groups) {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        // The SIMD kernels read taps through a fixed `MAX_KERNEL`-entry pointer
+        // array with `get_unchecked(k)` (`simd.rs`, `tap_ptrs`), so a `kernel`
+        // beyond the ceiling would index past the array and dereference
+        // null/garbage pointers. Defense-in-depth mirroring the validated
+        // `Conv1dDyn::try_from_parts` ceiling — hostile input must not rely on
+        // the loader's upstream validation alone.
+        if kernel == 0 || kernel > MAX_KERNEL {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        // The divisibility checks above make `out_ch / groups` exact, so this
+        // product equals `out_ch * in_ch / groups` with no truncation;
+        // `checked_mul` keeps hostile dimensions from wrapping the expected
+        // count into a bogus (smaller) contract.
+        let expected_weights = (out_ch / groups)
+            .checked_mul(in_ch)
+            .and_then(|prod| prod.checked_mul(kernel));
+        let Some(expected_weights) = expected_weights else {
+            return Err(NamErrorCode::WeightCountMismatch);
+        };
+        if raw_weights.len() != expected_weights {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
 
         let in_per_group = in_ch / groups;
         let out_per_group = out_ch / groups;

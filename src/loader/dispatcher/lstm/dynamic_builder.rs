@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::super::WeightCursor;
-use super::weights::read_lstm_layer_dyn;
+use super::weights::{read_lstm_head, read_lstm_layer_dyn};
 use crate::loader::loaded_model_pair::DEFAULT_SAMPLE_RATE;
 use crate::loader::nam_json::NamModelData;
 use crate::models::lstm::LstmModelDyn;
@@ -38,11 +38,9 @@ pub(crate) fn build_lstm_dynamic(
         layers.push(layer);
     }
 
-    let h = hidden_size;
-    let head_weights_data = cursor.read_slice(h)?;
-    let mut head_weights_f32 = crate::math::common::AlignedVec::new(h, 0.0f32)?;
+    let (head_weights_data, head_bias) = read_lstm_head(&mut cursor, hidden_size)?;
+    let mut head_weights_f32 = crate::math::common::AlignedVec::new(hidden_size, 0.0f32)?;
     head_weights_f32.copy_from_slice(head_weights_data);
-    let head_bias = cursor.read_f32_finite()?;
 
     cursor.verify_exhausted()?;
 

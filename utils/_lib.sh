@@ -35,10 +35,13 @@
 # What remains here:
 #   * ANSI colors + phase/ok/warn/die
 #   * PROJECT_DIR + third-party paths
+#   * maybe_restart_low_priority (nice/ionice re-exec, opt-out via env)
 #   * ensure_third_party (mirror provisioning)
 #   * ensure_namcore_render (C++ render build)
+#   * ensure_long_receipt_bin (on-demand nam_long_receipt build)
 #   * Thin wrappers over the QA binaries:
 #     - assert_ran_tests        → nam_long_receipt count-log
+#     - assert_subphase_ran     → shared count-log core (subphase wording)
 #     - dashboard_phase_receipt → nam_quality receipt append
 #     - check_freshness → nam_freshness
 #
@@ -84,6 +87,39 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ---------------------------------------------------------------------------
+# Low-priority re-exec (shared by lints.sh and tests-quick.sh)
+# ---------------------------------------------------------------------------
+# maybe_restart_low_priority <script_path> [args...]
+#   Re-executes the caller under nice/ionice (best-effort, skipping whatever
+#   is unavailable) so long QA runs stay polite to the operator's machine.
+#   Skips when already restarted (NAM_LOW_PRIORITY=1) or explicitly disabled
+#   (NAM_NO_LOW_PRIORITY=1).
+#
+#   Deliberately NOT used by quality-dashboard.sh nor
+#   tests-performance-regression.sh: both drive the Criterion statistical
+#   benchmarks, and a de-prioritized bench loses CPU to same-priority load on
+#   the pinned core — inflating timings toward false regressions. Benchmarks
+#   must run at normal priority; only build/test-only suites self-deprioritize.
+maybe_restart_low_priority() {
+    if [ "${NAM_LOW_PRIORITY:-0}" = "1" ] || [ "${NAM_NO_LOW_PRIORITY:-0}" = "1" ]; then
+        return 0
+    fi
+    export NAM_LOW_PRIORITY=1
+    CMD_PREFIX=""
+    if command -v nice >/dev/null 2>&1; then
+        CMD_PREFIX="nice -n 19"
+    fi
+    if command -v ionice >/dev/null 2>&1; then
+        CMD_PREFIX="$CMD_PREFIX ionice -c 3"
+    fi
+    if [ -n "$CMD_PREFIX" ]; then
+        echo -e "${YELLOW}WARN: restarting with low CPU/IO priority (NAM_NO_LOW_PRIORITY=1 to skip)${NC}"
+        # Intentional unquoted expansion: CMD_PREFIX is "nice -n 19 [ionice -c 3]".
+        exec $CMD_PREFIX "$@"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Standard output & control helpers
 # ---------------------------------------------------------------------------
 PHASE_NUM=0
@@ -101,6 +137,16 @@ ok() {
 
 warn() {
     echo -e "  ${YELLOW}ⓘ${NC} $*"
+}
+
+log_warn() {
+    warn "$@"
+}
+
+json_escape_string() {
+    # Escapes backslashes and double quotes for safe JSON string embedding.
+    local s="$1"
+    printf '%s' "$s" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 die() {
@@ -159,7 +205,8 @@ dashboard_phase_receipt() {
     local phase_id="$1" status="$2" exit_code="${3:-0}" \
           observed_records="${4:-0}" expected_records="${5:-0}" reason="${6:-}"
     if [ -z "$DASHBOARD_PHASE_RECEIPT" ]; then
-        return 0
+        warn "DASHBOARD_PHASE_RECEIPT not set — receipt stream lost"
+        return 1
     fi
     local bin="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
     if [ ! -x "$bin" ]; then
@@ -186,25 +233,50 @@ count_jsonl_records() {
     wc -l < "$jsonl" 2>/dev/null || echo 0
 }
 
+# Structured long-audit receipt machinery (shared with tests-long.sh and
+# remote-simd-gate.sh): resolve the emitter binary once and build it on demand.
+LONG_RECEIPT_BIN="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
+
+# ensure_long_receipt_bin
+#   Idempotently guarantees $LONG_RECEIPT_BIN exists and is executable,
+#   building it with `cargo build --features testing` when missing.
+#   Fail-closed: returns 1 (never a silent skip) when the binary cannot be
+#   provided — receipt emission is mandatory, not best-effort.
+ensure_long_receipt_bin() {
+    if [ -x "$LONG_RECEIPT_BIN" ]; then
+        return 0
+    fi
+    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
+        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_long_receipt${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+# _count_log_total <log_file>
+#   Single implementation of the "how many tests/benchmarks did this log prove"
+#   query. The counting (libtest `passed`/`measured` counters + Criterion
+#   `time:` fallback) lives in src/testing/receipt.rs::
+#   count_tests_executed_from_log; this thin wrapper prints the total on stdout.
+#   Returns 1 (fail-closed) when the bin cannot be provided. Callers must emit
+#   their own fail-closed notice: stdout here is captured by the callers'
+#   command substitution, so anything printed on this path would be swallowed.
+_count_log_total() {
+    local log_file="$1"
+    ensure_long_receipt_bin || return 1
+    "$LONG_RECEIPT_BIN" count-log --log "$log_file" 2>/dev/null || echo 0
+}
+
 # assert_ran_tests <log_file> [min_count]
-# Verifies that a test/benchmark log proves real execution. The counting
-# (libtest `passed`/`measured` counters + Criterion `time:` fallback)
-# lives in src/testing/receipt.rs::count_tests_executed_from_log; this is a
-# thin wrapper over `nam_long_receipt count-log` — no grep -oP.
+# Verifies that a test/benchmark log proves real execution. This is a thin
+# wrapper over `nam_long_receipt count-log` — no grep -oP.
 assert_ran_tests() {
     local log_file="$1" min_count="${2:-1}"
-
-    local bin="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
-    if [ ! -x "$bin" ]; then
-        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
-            warn "failed to build nam_long_receipt — gate fails closed"
-            return 1
-        fi
-    fi
-
     local total
-    total=$("$bin" count-log --log "$log_file" 2>/dev/null || echo 0)
-
+    total=$(_count_log_total "$log_file") || {
+        warn "failed to build nam_long_receipt — gate fails closed"
+        return 1
+    }
     if [ "$total" -lt "$min_count" ]; then
         echo -e "${RED}${BOLD}❌ Gate failed: phase executed 0 tests/benchmarks (empty selection or filter mismatch).${NC}"
         return 1
@@ -223,18 +295,11 @@ assert_ran_tests() {
 # subphase executed zero tests due to `#[cfg]` compilation filters.
 assert_subphase_ran() {
     local phase_name="$1" log_file="$2" min_count="${3:-1}"
-
-    local bin="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
-    if [ ! -x "$bin" ]; then
-        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
-            warn "failed to build nam_long_receipt — subphase gate fails closed"
-            return 1
-        fi
-    fi
-
     local total
-    total=$("$bin" count-log --log "$log_file" 2>/dev/null || echo 0)
-
+    total=$(_count_log_total "$log_file") || {
+        warn "failed to build nam_long_receipt — subphase gate fails closed"
+        return 1
+    }
     if [ "$total" -lt "$min_count" ]; then
         echo -e "${RED}${BOLD}❌ Subphase gate failed: '${phase_name}' executed ${total} test(s)/benchmark(s) (< ${min_count}).${NC}"
         return 1
@@ -313,6 +378,9 @@ run_dashboard_phase() {
 
     dashboard_phase_receipt "$phase_id" "$status" "$exit_code" "$observed" "$min_records" "$reason"
 
+    if [ "$status" = "FAIL" ] || [ "${DASHBOARD_PHASE_HAD_FAILURE:-0}" -ne 0 ]; then
+        return 1
+    fi
     return 0
 }
 
@@ -388,6 +456,9 @@ ensure_third_party() {
 #   6 binary missing after a build that reported success
 ensure_namcore_render() {
     local build_dir="${NAM_RENDER_BUILD_DIR:-$PROJECT_DIR/build/namcore_render}"
+    if [ -z "$build_dir" ] || [ "$build_dir" = "/" ] || [ "$build_dir" = "." ]; then
+        die "invalid or dangerous NAM_RENDER_BUILD_DIR: '$build_dir'"
+    fi
     local logs_dir="$PROJECT_DIR/target/logs"
     local build_type="${NAM_RENDER_BUILD_TYPE:-Release}"
     local flags="-w -fno-fast-math -ffp-contract=off"

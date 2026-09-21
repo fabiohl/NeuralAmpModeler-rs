@@ -55,6 +55,17 @@ DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
 BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
 MODE="${1:---check}"
+# Single point of truth for mode routing: this gate admits exactly the modes
+# the dispatcher at the end of the script implements. `--save` is deliberately
+# NOT accepted — it was a vestige of quality-dashboard.sh's mode vocabulary
+# (never implemented here, no callers): it previously passed this gate only to
+# die at the dispatcher, while the documented `--bootstrap-baseline` mode
+# (header usage, docs/benchmarks.md, quality-dashboard.sh diagnostics) was
+# rejected here before ever reaching its working dispatcher branch.
+case "$MODE" in
+  --check|--bootstrap-baseline) ;;
+  *) echo -e "${RED}${BOLD}Unknown mode: $MODE (expected --check or --bootstrap-baseline)${NC}" >&2; exit 1 ;;
+esac
 
 BASELINE_DIR=".performance-baselines"
 FINGERPRINT_FILE="${BASELINE_DIR}/baseline-fingerprint.json"
@@ -88,6 +99,26 @@ export NAM_RUN_ID
 # ── Pre-build & Direct Benchmark Execution Machinery ────────────────────────
 BENCH_EXE=""
 
+# extract_bench_executable <cargo_json_output>
+# Extracts the benchmark executable path from `cargo bench --no-run
+# --message-format=json` output into the global BENCH_EXE. Explicit error
+# contract independent of the caller's errexit context:
+#   rc 0 — extraction ran; BENCH_EXE may still be empty when cargo emitted no
+#          "executable" line (callers apply the deps-directory fallback)
+#   rc 2 — the extraction pipeline itself failed (grep/sed tool error);
+#          callers must fail closed instead of silently proceeding
+extract_bench_executable() {
+    local json_out="$1"
+    local rc=0
+    BENCH_EXE=$(printf '%s\n' "$json_out" | grep -F '"executable":' | tail -1 \
+        | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') || rc=$?
+    if [ "$rc" -ge 2 ]; then
+        echo -e "${RED}${BOLD}❌ Failed to extract benchmark executable from cargo JSON (rc=$rc).${NC}" >&2
+        return 2
+    fi
+    return 0
+}
+
 prebuild_benchmark() {
     local bench_name="${1:-regression_gate}"
     echo -e "  ${BLUE}Pre-compiling benchmark '${bench_name}' prior to cooldown (all cores)...${NC}" >&2
@@ -104,7 +135,12 @@ prebuild_benchmark() {
         return "$build_rc"
     fi
 
-    BENCH_EXE=$(echo "$json_out" | grep -F '"executable":' | tail -1 | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
+    # rc==1 (no "executable" line) leaves BENCH_EXE empty for the fallback
+    # below; rc>=2 is a tool error and fails closed in BOTH call contexts
+    # (plain statement under errexit and `if !` with errexit suspended).
+    if ! extract_bench_executable "$json_out"; then
+        return 2
+    fi
     if [ -z "$BENCH_EXE" ] || [ ! -x "$BENCH_EXE" ]; then
         BENCH_EXE=$(ls -t "target/release/deps/${bench_name}-"* 2>/dev/null | head -1 || true)
     fi
@@ -421,7 +457,11 @@ case "$MODE" in
         check_regression
         ;;
     *)
-        echo -e "${RED}Unknown mode: $MODE${NC}"
+        # Unreachable for external input: the single MODE gate at the top of
+        # the script only admits the two modes above. Kept fail-closed so a
+        # future mode added to the gate without a dispatch branch here can
+        # never fall through silently.
+        echo -e "${RED}${BOLD}Unknown mode: $MODE (expected --check or --bootstrap-baseline)${NC}"
         echo "Usage: $0 [--check|--bootstrap-baseline]"
         exit 1
         ;;

@@ -27,6 +27,8 @@ impl DenseLayerDyn {
     /// # Errors
     /// Returns an error if:
     /// - `in_ch == 0` or `out_ch == 0`;
+    /// - the size product `in_ch * out_ch` overflows `usize` (checked,
+    ///   F-RES2-04 — never wraps in release);
     /// - `weights.len() < in_ch * out_ch`;
     /// - `do_bias` is true and `bias.len() < out_ch`.
     #[inline]
@@ -42,7 +44,15 @@ impl DenseLayerDyn {
             out_ch > 0,
             "DenseLayerDyn out_ch must be >= 1, got {out_ch}"
         );
-        let min_weights = in_ch * out_ch;
+        // Defense-in-depth (F-RES2-04): checked size product so hostile
+        // `in_ch`/`out_ch` can never wrap into a smaller contract in release
+        // builds (overflow-checks off). Mirrors
+        // `checked_arith::checked_dense_total` used by the loader.
+        let min_weights = in_ch.checked_mul(out_ch).ok_or_else(|| {
+            anyhow::anyhow!(
+                "DenseLayerDyn weights size overflows usize: in_ch ({in_ch}) * out_ch ({out_ch}) — DoS protection (F-RES2-04)"
+            )
+        })?;
         anyhow::ensure!(
             weights.len() >= min_weights,
             "DenseLayerDyn weights buffer too small: expected >= {min_weights}, got {}",

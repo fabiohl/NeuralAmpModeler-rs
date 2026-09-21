@@ -40,18 +40,7 @@ trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line 
 # duration_ms, tests_executed, gaps, timestamp) to target/logs/
 # remote-simd-receipt.jsonl via the same `nam_long_receipt` emitter used by
 # the long suite (src/testing/receipt.rs) — never hand-serialized JSON.
-LONG_RECEIPT_BIN="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
-
-ensure_long_receipt_bin() {
-    if [ -x "$LONG_RECEIPT_BIN" ]; then
-        return 0
-    fi
-    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
-        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_long_receipt${NC}" >&2
-        return 1
-    fi
-    return 0
-}
+# LONG_RECEIPT_BIN and ensure_long_receipt_bin come from _lib.sh.
 
 emit_remote_receipt() {
     local phase_id="$1" name="$2" status="$3" duration_ms="$4" log_file="$5"

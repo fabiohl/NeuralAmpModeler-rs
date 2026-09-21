@@ -7,8 +7,6 @@
 //! No external crate — just `std::fs` and `std::io`.
 // Public helpers used by integration tests (cpp_parity) and binary crates (wav_to_golden, gen_stress).
 
-#![allow(dead_code)]
-
 use std::fs;
 use std::io;
 use std::path::Path;

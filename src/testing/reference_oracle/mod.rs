@@ -28,6 +28,7 @@
 //! forward passes formula-by-formula, and the authoritative spec is
 //! `docs/cpp_parity_map.md` rather than per-function prose.
 
+// Reference oracles mirror production formulas without individual item documentation.
 #![allow(missing_docs)]
 
 use crate::loader::nam_json::model::NamModelData;

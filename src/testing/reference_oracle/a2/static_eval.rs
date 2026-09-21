@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Reference oracle mirrors mathematical formulas without requiring public docs.
 #![allow(missing_docs)]
 
 use crate::loader::nam_json::model::{NamLayerConfig, NamModelData};

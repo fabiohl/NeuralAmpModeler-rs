@@ -129,3 +129,15 @@ pub(crate) fn read_lstm_layer_dyn(
 
     Ok(layer)
 }
+
+/// Reads the head linear projection weights and scalar bias for an LSTM model.
+///
+/// Returns `(head_weights, head_bias)`.
+pub(crate) fn read_lstm_head<'a>(
+    cursor: &mut WeightCursor<'a>,
+    hidden_size: usize,
+) -> anyhow::Result<(&'a [f32], f32)> {
+    let head_weights = cursor.read_slice(hidden_size)?;
+    let head_bias = cursor.read_f32_finite()?;
+    Ok((head_weights, head_bias))
+}

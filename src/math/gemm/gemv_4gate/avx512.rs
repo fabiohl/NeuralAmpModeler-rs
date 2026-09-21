@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+// Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
+#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
 use core::arch::x86_64::*;
 
@@ -13,6 +10,22 @@ use core::arch::x86_64::*;
 /// This function processes the 4 main gates at once for a major speed boost.
 // AVX-512F+VL is the baseline AVX-512 target for this kernel.
 // f16c kept for x86-64-v3 baseline compatibility with caller target-feature requirements.
+///
+/// # Safety
+/// With `out_len = out.len() / 4` and `in_len = in_frame.len()`:
+/// - `out.len()` must be a multiple of 4 (gate-major layout: gate `g` occupies
+///   `out[g * out_len .. (g + 1) * out_len]`; a non-multiple silently truncates
+///   the last lanes of the scalar tail).
+/// - Each `w{i}` must hold a row-major `[in_len][out_len]` matrix, i.e.
+///   `w{i}.len() >= in_len * out_len` — every lane is read via unchecked
+///   `add(in_c * out_len + out_c)` for `in_c < in_len`, `out_c < out_len`.
+/// - `bias.len() >= 4 * out_len` (one lane per output element).
+/// - All slices must be valid for the full extents above for the duration of
+///   the call (no `out` element may overlap any input slice — guaranteed by
+///   the borrow checker for `&[f32]`/`&mut [f32]` arguments).
+/// - The CPU must support AVX-512F + AVX-512VL + F16C: the `#[target_feature]`
+///   attribute does not check anything at runtime; callers must dispatch
+///   through the runtime CPUID (`InstructionSet` detection) before calling.
 #[target_feature(enable = "avx512f,avx512vl,f16c")]
 #[expect(
     clippy::too_many_arguments,

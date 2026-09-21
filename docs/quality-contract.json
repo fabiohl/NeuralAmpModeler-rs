@@ -72,10 +72,10 @@
     {
       "id": "convnet-test@48000:live",
       "label": "ConvNet Test @48000 Live",
-      "esr_namcore": 6.1e-16,
-      "esr_f64": 4.93e-16,
-      "snr_db": 152.1,
-      "mrstft": 4.99e-7,
+      "esr_namcore": 7.65e-14,
+      "esr_f64": 7.63e-14,
+      "snr_db": 131.2,
+      "mrstft": 0.00000526,
       "optional": false
     },
     {
@@ -553,7 +553,7 @@
     {
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
-      "median_latency_us": 130.59
+      "median_latency_us": 147.5
     },
     {
       "id": "RT_DSP_Resampler_44k1_to_48k",

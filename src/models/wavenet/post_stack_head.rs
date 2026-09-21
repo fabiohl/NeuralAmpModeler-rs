@@ -38,15 +38,77 @@ impl PostStackHead {
     ///
     /// Weight and bias arrays are zero-initialized and must be populated
     /// by the dispatcher via `set_weights` and `set_bias`.
+    ///
+    /// # Errors
+    /// Rejects non-positive or oversized dimensions before any allocation:
+    /// zero channels/out-channels/kernel, `channels` above
+    /// `MAX_WAVENET_FREE_CHANNELS`, `out_channels` above `MAX_A2_HEAD_CHANNELS`
+    /// and `kernel` above `MAX_KERNEL` (the `Conv1dDyn` fixed tap array).
+    /// These are the canonical loader ceilings, re-checked here as
+    /// defense-in-depth (F-RES2-02) because `HeadConfig` is also constructible
+    /// directly (unit tests, oracle) bypassing the topology validators.
     pub fn from_config(config: &HeadConfig, in_channels: usize) -> std::io::Result<Self> {
+        use crate::loader::nam_json::validation::{
+            MAX_A2_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_WAVENET_FREE_CHANNELS,
+        };
+        use crate::models::wavenet::common::MAX_KERNEL;
+
         let channels = config.channels.unwrap_or(in_channels);
         let out_channels = config.out_channels.unwrap_or(1);
         let kernel = config.kernel_size.unwrap_or(3);
         let do_bias = config.bias.unwrap_or(false);
         let activation = parse_activation(config.activation.as_deref().unwrap_or("Tanh"));
 
+        if channels == 0 || out_channels == 0 || kernel == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "PostStackHead dimensions must be >= 1, got channels={channels}, out_channels={out_channels}, kernel={kernel}"
+                ),
+            ));
+        }
+        if channels > MAX_WAVENET_FREE_CHANNELS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "PostStackHead channels ({channels}) exceeds maximum {MAX_WAVENET_FREE_CHANNELS} — OOM/DoS protection (F-RES2-02)"
+                ),
+            ));
+        }
+        if out_channels > MAX_A2_HEAD_CHANNELS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "PostStackHead out_channels ({out_channels}) exceeds maximum {MAX_A2_HEAD_CHANNELS} — OOM/DoS protection (F-RES2-02)"
+                ),
+            ));
+        }
+        if kernel > MAX_HEAD_KERNEL_SIZE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "PostStackHead kernel ({kernel}) exceeds maximum {MAX_HEAD_KERNEL_SIZE} (MAX_KERNEL={MAX_KERNEL}) — hostile dimension rejected (F-RES2-02)"
+                ),
+            ));
+        }
+
         let num_blocks = out_channels.div_ceil(4);
-        let weights_len = num_blocks * kernel * channels * 4;
+        // Defense-in-depth (F-RES2-02/F-RES2-03): checked size arithmetic so a
+        // hostile dimension can never wrap into a smaller allocation in
+        // release builds (overflow-checks off). Ceilings above already bound
+        // real inputs; this keeps the computation itself total.
+        let weights_len = num_blocks
+            .checked_mul(4)
+            .and_then(|v| v.checked_mul(channels))
+            .and_then(|v| v.checked_mul(kernel))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "PostStackHead weights size overflows usize: num_blocks={num_blocks}, channels={channels}, kernel={kernel}"
+                    ),
+                )
+            })?;
         let bias_len = out_channels;
 
         let weights = AlignedVec::new(weights_len, 0.0f32)

@@ -7,11 +7,8 @@
 //! points using 512-bit SIMD intrinsics for double the throughput per iteration
 //! compared to the AVX2 path.
 
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+// Architecture-specific AVX-512 convolution helpers and parameter lists.
+#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
 use crate::impl_convolve_mono;
 use crate::impl_convolve_mono_dual;
@@ -45,7 +42,7 @@ macro_rules! avx512_add {
 }
 
 impl_convolve_stereo!(
-    #[doc = "Stereo Convolution AVX-512.\n\nApplies a filter (coefficients) to two audio channels at the same time.\nIt's like passing sound through an equalizer or simulating a room (reverb)."]
+    #[doc = "Stereo Convolution AVX-512.\n\nApplies a filter (coefficients) to two audio channels at the same time.\nIt's like passing sound through an equalizer or simulating a room (reverb).\n\n# Safety\n`coeffs`, `input_l` and `input_r` must each be valid for reads of `taps` initialized f32 elements; `coeffs` must be 64-byte aligned (debug-asserted); the CPU must support AVX-512F (runtime dispatch by the caller). See `impl_convolve_stereo!` for the full contract."]
     #[target_feature(enable = "avx512f")]
     convolve_stereo_avx512,
     AVX512_STEP_DBL,
@@ -59,7 +56,7 @@ impl_convolve_stereo!(
 );
 
 impl_convolve_stereo_dual!(
-    #[doc = "Stereo Dual Convolution AVX-512.\n\nPerforms two stereo convolutions (for two coefficient sets coeffs0 and coeffs1)\nover the same input buffers input_l and input_r.\nLoads input samples once and applies them to both coefficient sets."]
+    #[doc = "Stereo Dual Convolution AVX-512.\n\nPerforms two stereo convolutions (for two coefficient sets coeffs0 and coeffs1)\nover the same input buffers input_l and input_r.\nLoads input samples once and applies them to both coefficient sets.\n\n# Safety\n`coeffs0`, `coeffs1`, `input_l` and `input_r` must each be valid for reads of `taps` initialized f32 elements; `coeffs0` and `coeffs1` must be 64-byte aligned (debug-asserted); the CPU must support AVX-512F (runtime dispatch by the caller). See `impl_convolve_stereo_dual!` for the full contract."]
     #[target_feature(enable = "avx512f")]
     convolve_stereo_dual_avx512,
     AVX512_STEP_DBL,
@@ -73,7 +70,7 @@ impl_convolve_stereo_dual!(
 );
 
 impl_convolve_mono_dual!(
-    #[doc = "Mono Dual Convolution AVX-512.\n\nPerforms two mono convolutions on the same input buffer, reusing the loaded input samples."]
+    #[doc = "Mono Dual Convolution AVX-512.\n\nPerforms two mono convolutions on the same input buffer, reusing the loaded input samples.\n\n# Safety\n`coeffs0`, `coeffs1` and `input` must each be valid for reads of `taps` initialized f32 elements; `coeffs0` and `coeffs1` must be 64-byte aligned (debug-asserted); the CPU must support AVX-512F (runtime dispatch by the caller). See `impl_convolve_mono_dual!` for the full contract."]
     #[target_feature(enable = "avx512f")]
     convolve_mono_dual_avx512,
     AVX512_STEP_DBL,
@@ -87,7 +84,7 @@ impl_convolve_mono_dual!(
 );
 
 impl_convolve_mono!(
-    #[doc = "Mono Convolution AVX-512.\n\nLoads coefficients and applies them to a single channel."]
+    #[doc = "Mono Convolution AVX-512.\n\nLoads coefficients and applies them to a single channel.\n\n# Safety\n`coeffs` and `input` must each be valid for reads of `taps` initialized f32 elements; `coeffs` must be 64-byte aligned (debug-asserted); the CPU must support AVX-512F (runtime dispatch by the caller). See `impl_convolve_mono!` for the full contract."]
     #[target_feature(enable = "avx512f")]
     convolve_mono_avx512,
     AVX512_STEP_DBL,

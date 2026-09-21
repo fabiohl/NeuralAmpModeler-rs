@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// SIMD kernel implementation using specialized parameter lists.
 #![allow(
     unsafe_op_in_unsafe_fn,
     clippy::missing_safety_doc,
@@ -98,6 +99,23 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
         conv.in_ch
     );
 
+    // F-RES2-10: the 8-lane `_mm256_loadu_ps(tap.add(c))` loads below read up
+    // to element `(frame_idx + 1) * in_ch - 1` of `layer_buffer` (last tap =
+    // current frame at offset `frame_idx * in_ch`, last lane of the
+    // `ch8 = in_ch & !7` block), while the release `assert!` above only proves
+    // the tap *base* is in bounds. Production callers guarantee the full-row
+    // extent by construction (layer-state buffers are sized as
+    // `frames * in_ch` with `frame_idx < frames`); this debug-only net checks
+    // exactly that limit and is compiled out of release — zero hot-path cost.
+    debug_assert!(
+        layer_buffer.len() >= (frame_idx + 1) * conv.in_ch,
+        "depthwise: layer_buffer len {} < (frame_idx {} + 1) * in_ch {} \
+         (8-lane load upper bound)",
+        layer_buffer.len(),
+        frame_idx,
+        conv.in_ch
+    );
+
     let ch = conv.in_ch;
     let kernel = conv.kernel;
     let dilation = conv.dilation;
@@ -108,12 +126,15 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
     for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
         let offset = (dilation as isize) * ((k as isize) + 1 - (kernel as isize));
         let in_start = ((frame_idx as isize) + offset) as usize * ch;
-        // SAFETY: `layer_buffer` has length > `frame_idx * in_ch`
-        // (asserted at L96-103). Each tap pointer advances `in_start`
-        // elements into the buffer, which is within bounds for all
-        // k in [0, kernel) because `dilation * (kernel - 1)` ≤
-        // `frame_idx` (asserted at L90-95), so the most negative
-        // offset never underflows into a negative pointer.
+        // SAFETY: `layer_buffer` has length > `frame_idx * in_ch` (release
+        // `assert!` above), so the tap base `in_start` is in bounds for all
+        // k in [0, kernel) — `dilation * (kernel - 1)` ≤ `frame_idx` keeps the
+        // most negative offset from underflowing into a negative pointer.
+        // The 8-lane `_mm256_loadu_ps` loads additionally read
+        // `tap_base .. tap_base + ch8 - 1`, reaching at most
+        // `(frame_idx + 1) * in_ch - 1`; that full-row extent is guaranteed by
+        // the callers' frame-sized buffer layout and checked in debug by the
+        // `debug_assert!` above (F-RES2-10).
         unsafe {
             *tap = layer_buffer.as_ptr().add(in_start);
             if dilation >= 128 {
@@ -202,6 +223,18 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
 ///
 /// Same semantics as `process_single_frame_avx2` but keeps accumulators in XMM
 /// registers across the entire inner loop, yielding better code generation.
+///
+/// # Safety
+/// - `out_frame.len() >= conv.out_ch` (release-asserted inside).
+/// - `frame_idx >= conv.dilation * (conv.kernel - 1)` (release-asserted;
+///   the warm-up invariant, owned release-stable by the layer-state
+///   construction).
+/// - `layer_buffer` must cover the `in_ch`-wide lookback window for every tap
+///   of `frame_idx` (release-asserted tap bases plus a debug-only
+///   `(frame_idx + 1) * in_ch` upper-bound net, F-RES2-10) and outlive the call.
+/// - `mixin` must be `None` or hold at least `conv.out_ch` elements
+///   (release-asserted).
+/// - The CPU must support AVX2+FMA (runtime dispatch by the caller).
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn grouped_conv1d_single_frame_simd(
     conv: &A2GroupedConv1d,
@@ -242,6 +275,21 @@ pub unsafe fn grouped_conv1d_single_frame_simd(
         conv.out_ch
     );
 
+    // F-RES2-10: the per-lane reads `*tap.add(group_in_start + ic)` reach up
+    // to element `(frame_idx + 1) * in_ch - 1` of `layer_buffer` (last tap =
+    // current frame, last group's last channel), while the release `assert!`
+    // above only proves the tap *base* is in bounds. Production callers
+    // guarantee the full-row extent by construction (layer-state buffers are
+    // sized as `frames * in_ch` with `frame_idx < frames`); this debug-only
+    // net checks exactly that limit and is compiled out of release.
+    debug_assert!(
+        layer_buffer.len() >= (frame_idx + 1) * conv.in_ch,
+        "simd: layer_buffer len {} < (frame_idx {} + 1) * in_ch {} (channel row bound)",
+        layer_buffer.len(),
+        frame_idx,
+        conv.in_ch
+    );
+
     let in_ch = conv.in_ch;
     let in_per_group = conv.in_per_group;
     let out_per_group = conv.out_per_group;
@@ -256,9 +304,13 @@ pub unsafe fn grouped_conv1d_single_frame_simd(
     for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
         let offset = (dilation as isize) * ((k as isize) + 1 - (kernel as isize));
         let in_start = ((frame_idx as isize) + offset) as usize * in_ch;
-        // SAFETY: `layer_buffer` has length > `frame_idx * in_ch`
-        // (asserted at L229-235). Same pointer arithmetic invariants
-        // as `process_single_frame_depthwise_avx2`.
+        // SAFETY: `layer_buffer` has length > `frame_idx * in_ch` (release
+        // `assert!` above), so the tap base `in_start` is in bounds; same
+        // pointer-arithmetic invariants as `process_single_frame_depthwise_avx2`.
+        // The lane reads `tap.add(group_in_start + ic)` reach at most
+        // `(frame_idx + 1) * in_ch - 1`; that full-row extent is guaranteed by
+        // the callers' frame-sized buffer layout and checked in debug by the
+        // `debug_assert!` above (F-RES2-10).
         unsafe {
             *tap = layer_buffer.as_ptr().add(in_start);
             if dilation >= 128 {

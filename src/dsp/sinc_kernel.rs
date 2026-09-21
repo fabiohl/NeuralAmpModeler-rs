@@ -103,11 +103,12 @@ impl PolyphaseBank {
     /// Returns the pointer to the start of phase `phase` coefficients.
     ///
     /// # Safety
-    /// `phase` must be < `NUM_PHASES`.
+    /// `phase` must be < `NUM_PHASES`. The returned pointer is valid for `taps_per_phase`
+    /// floats and must not be dereferenced beyond `self.coeffs` bounds.
     #[inline]
-    pub fn phase_ptr(&self, phase: usize) -> *const f32 {
+    pub(crate) unsafe fn phase_ptr(&self, phase: usize) -> *const f32 {
         debug_assert!(phase < NUM_PHASES);
-        // SAFETY: the fn contract requires `phase < NUM_PHASES`, so the offset
+        // SAFETY: caller guarantees `phase < NUM_PHASES`, so the offset
         // `phase * taps_per_phase` stays within the `NUM_PHASES * taps_per_phase`
         // element `coeffs` allocation: the largest offset is
         // `(NUM_PHASES - 1) * taps_per_phase`, still inside the buffer.

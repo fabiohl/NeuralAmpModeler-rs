@@ -147,7 +147,7 @@ impl<const CH: usize> WaveNetA2<CH> {
 
             // 2f. FiLM layers (if active in layer_raw JSON) — read weights after l1x1 bias.
             if let Some(ref raw) = self.layer_raw {
-                let configs = parse_film_configs(raw);
+                let configs = parse_film_configs(raw).map_err(|e| e.to_string())?;
                 load_film_for_layer(&mut layer, &configs, CH, 1, 1, weights, &mut pos, total, i)?;
             }
 
@@ -208,6 +208,12 @@ impl<const CH: usize> WaveNetA2<CH> {
 
 /// Reads a contiguous slice of `n` f32 values from `weights[pos..]`,
 /// advancing `pos`. Returns an error with the label if out of bounds.
+///
+/// Consistency hardening (F-RES2-07): the end offset uses `checked_add`, like
+/// the rest of the loader pipeline (`checked_arith`), instead of a bare
+/// `*pos + n`. No attack vector is known today (`n` derives from const tables
+/// or bounded group formulas), so this is hardening, not a defect fix — the
+/// observable behavior for valid inputs is unchanged.
 #[inline]
 pub(crate) fn read_slice<'a>(
     weights: &'a [f32],
@@ -216,14 +222,20 @@ pub(crate) fn read_slice<'a>(
     total: usize,
     label: &str,
 ) -> Result<&'a [f32], String> {
-    if *pos + n > total {
+    let end = pos.checked_add(n).ok_or_else(|| {
+        format!(
+            "set_weights: position arithmetic overflows at position {} (need {} for \"{}\", total {})",
+            *pos, n, label, total
+        )
+    })?;
+    if end > total {
         return Err(format!(
             "set_weights: stream exhausted at position {} (need {} for \"{}\", total {})",
             *pos, n, label, total
         ));
     }
-    let slice = &weights[*pos..*pos + n];
-    *pos += n;
+    let slice = &weights[*pos..end];
+    *pos = end;
     Ok(slice)
 }
 
@@ -231,28 +243,62 @@ pub(crate) fn read_slice<'a>(
 // FiLM loading helpers
 // =============================================================================
 
-pub(crate) fn parse_single_film_config(raw: &serde_json::Value, key: &str) -> FiLMConfig {
+pub(crate) fn parse_single_film_config(
+    raw: &serde_json::Value,
+    key: &str,
+) -> anyhow::Result<FiLMConfig> {
     let obj = match raw.get(key).and_then(|v| v.as_object()) {
         Some(o) => o,
-        None => return FiLMConfig::default(),
+        None => return Ok(FiLMConfig::default()),
     };
-    FiLMConfig {
-        active: obj.get("active").and_then(|a| a.as_bool()).unwrap_or(false),
-        shift: obj.get("shift").and_then(|s| s.as_bool()).unwrap_or(true),
-        groups: obj
-            .get("groups")
-            .and_then(|g| g.as_u64())
-            .map(|g| g as u32)
-            .unwrap_or(1),
+    let active = obj.get("active").and_then(|a| a.as_bool()).unwrap_or(false);
+    let shift = obj.get("shift").and_then(|s| s.as_bool()).unwrap_or(true);
+
+    let raw_groups = match obj.get("groups") {
+        Some(v) => {
+            if let Some(i) = v.as_i64()
+                && i <= 0
+            {
+                log::warn!(
+                    "FiLM config '{key}': groups must be >= 1, got {i} (hostile JSON rejection)"
+                );
+                anyhow::bail!(
+                    "FiLM config '{key}': groups must be >= 1, got {i} (hostile JSON rejection)"
+                );
+            }
+            v.as_u64().ok_or_else(|| {
+                log::warn!("FiLM config '{key}': groups is not a valid unsigned integer (hostile JSON rejection)");
+                anyhow::anyhow!("FiLM config '{key}': groups is not a valid unsigned integer (hostile JSON rejection)")
+            })?
+        }
+        None => 1,
+    };
+    let groups = u32::try_from(raw_groups).map_err(|_| {
+        log::warn!(
+            "FiLM config '{key}': groups ({raw_groups}) exceeds u32::MAX (hostile JSON rejection)"
+        );
+        anyhow::anyhow!(
+            "FiLM config '{key}': groups ({raw_groups}) exceeds u32::MAX (hostile JSON rejection)"
+        )
+    })?;
+    if groups == 0 {
+        log::warn!("FiLM config '{key}': groups must be >= 1, got 0 (hostile JSON rejection)");
+        anyhow::bail!("FiLM config '{key}': groups must be >= 1, got 0 (hostile JSON rejection)");
     }
+
+    Ok(FiLMConfig {
+        active,
+        shift,
+        groups,
+    })
 }
 
-pub(crate) fn parse_film_configs(raw: &serde_json::Value) -> [FiLMConfig; 8] {
+pub(crate) fn parse_film_configs(raw: &serde_json::Value) -> anyhow::Result<[FiLMConfig; 8]> {
     let mut configs = [FiLMConfig::default(); 8];
     for &(key, idx) in FILM_KEYS {
-        configs[idx] = parse_single_film_config(raw, key);
+        configs[idx] = parse_single_film_config(raw, key)?;
     }
-    configs
+    Ok(configs)
 }
 
 pub(crate) fn set_layer_film(

@@ -328,4 +328,66 @@ impl DiagnosticBundle {
 
         block
     }
+
+    /// Purges crash report files from `~/.cache/neural-amp-modeler-rs/` older than `max_age_secs`.
+    ///
+    /// This is an off-RT maintenance function intended to be called on the main thread
+    /// (e.g. during application initialization or periodic housekeeping). Returns the
+    /// number of files removed, or `Ok(0)` if the cache directory does not exist.
+    pub fn purge_old_reports(max_age_secs: u64) -> std::io::Result<usize> {
+        let Some(home_dir) = std::env::var_os("HOME") else {
+            return Ok(0);
+        };
+        let mut cache_dir = std::path::PathBuf::from(home_dir);
+        cache_dir.push(".cache/neural-amp-modeler-rs");
+        Self::purge_old_reports_in_dir(&cache_dir, max_age_secs)
+    }
+
+    /// Purges crash report files in the specified directory older than `max_age_secs`.
+    ///
+    /// Identifies crash logs matching the `crash-*.txt` and `crash-*.tmp` patterns.
+    pub fn purge_old_reports_in_dir(
+        dir: &std::path::Path,
+        max_age_secs: u64,
+    ) -> std::io::Result<usize> {
+        if !dir.exists() {
+            return Ok(0);
+        }
+        let max_age = std::time::Duration::from_secs(max_age_secs);
+        let now = std::time::SystemTime::now();
+        let mut purged = 0;
+
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let is_crash_file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("crash-") && (n.ends_with(".txt") || n.ends_with(".tmp")))
+                .unwrap_or(false);
+
+            if !is_crash_file {
+                continue;
+            }
+
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let Ok(modified) = metadata.modified() else {
+                continue;
+            };
+            let Ok(age) = now.duration_since(modified) else {
+                continue;
+            };
+            if age >= max_age && std::fs::remove_file(&path).is_ok() {
+                purged += 1;
+            }
+        }
+
+        Ok(purged)
+    }
 }
+
+#[cfg(test)]
+#[path = "bundle_test.rs"]
+mod tests;

@@ -6,6 +6,7 @@
 //! - `static_eval` — weight extraction and static array construction from parsed model data.
 //! - `dynamic_eval` — forward-pass execution loop with FiLM conditioning and gating.
 
+// Reference oracles mirror production formulas without individual item documentation.
 #![allow(missing_docs)]
 
 pub(crate) mod dynamic_eval;

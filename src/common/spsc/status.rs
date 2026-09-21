@@ -221,38 +221,11 @@ pub struct RtStatusFlags {
     /// Read by the main thread and converted to Duration via Anchor.
     pub dsp_cycle_time: AtomicU64,
 
-    /// Duration of the last capture stage (callback start to end of SPA validation) in nanoseconds.
-    pub capture_cycle_time: AtomicU64,
-
-    /// Duration of the last audio recording enqueue stage in nanoseconds.
-    pub record_cycle_time: AtomicU64,
-
-    /// Duration of the last playback stage (callback start to SPA write completion) in nanoseconds.
-    pub playback_cycle_time: AtomicU64,
-
-    /// Duration of the last end-to-end cycle (capture start to playback output) in nanoseconds.
-    pub e2e_cycle_time: AtomicU64,
-
-    /// Starting timestamp of current capture block in nanoseconds (serialized RDTSC).
-    pub capture_start_tsc: AtomicU64,
-
     /// Number of samples processed in the last cycle (for budget calculation).
     pub last_n_samples: AtomicU32,
 
     /// Latency histogram for statistical analysis of DSP core execution (P50, P95, P99).
     pub latency_hist: crate::dsp::telemetry::LatencyHistogram,
-
-    /// Latency histogram for capture stage (callback start → end of SPA validation/dequeue).
-    pub capture_hist: crate::dsp::telemetry::LatencyHistogram,
-
-    /// Latency histogram for record enqueue stage (pre-push → post-push).
-    pub record_hist: crate::dsp::telemetry::LatencyHistogram,
-
-    /// Latency histogram for playback stage (callback start → hardware buffer write).
-    pub playback_hist: crate::dsp::telemetry::LatencyHistogram,
-
-    /// Latency histogram for end-to-end processing (capture start → hardware playback).
-    pub e2e_hist: crate::dsp::telemetry::LatencyHistogram,
 
     /// Total degradation transitions that have occurred (Full↔Reduced↔Minimal).
     pub degrade_transitions_total: AtomicU32,
@@ -348,57 +321,6 @@ pub struct RtStatusFlags {
     /// Incremented by the playback thread when `dequeue_buffer()`
     /// returns `None` — host buffer miss on the output side.
     pub output_buffer_miss: AtomicU32,
-    /// Incremented by the playback callback each time the bridge produced no
-    /// new DSP block (capture paused, resampler rebuild pending, clock drift or
-    /// quantum miss) and the deterministic silence policy delivered a recycled
-    /// output buffer filled with `0.0f32` (G-RB-001). Telemetry only —
-    /// the hardware never repeats stale audio.
-    pub playback_bridge_starvation: AtomicU32,
-
-    /// Last sample rate negotiated by the capture stream's `param_changed`
-    /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
-    /// thread (cold path, not the RT data thread); read by the playback
-    /// listener for the cross-stream rate comparison and by the main loop for
-    /// diagnostics (G-RB-001).
-    pub capture_negotiated_rate: AtomicU32,
-
-    /// Last sample rate negotiated by the playback stream's `param_changed`
-    /// listener (`0` = never negotiated). Written on the PipeWire ThreadLoop
-    /// thread (cold path, not the RT data thread); read by the capture
-    /// listener for the cross-stream rate comparison and by the main loop for
-    /// diagnostics (G-RB-001).
-    pub playback_negotiated_rate: AtomicU32,
-
-    /// Sticky latch guarding the capture stream SPA format contract.
-    pub capture_format_ok: AtomicU32,
-
-    /// Sticky latch guarding the playback stream SPA format contract.
-    pub playback_format_ok: AtomicU32,
-
-    /// Active state of the capture stream (1 = Streaming, 0 = Paused/Unconnected/Error).
-    pub capture_active: AtomicU32,
-
-    /// Active state of the playback stream (1 = Streaming, 0 = Paused/Unconnected/Error).
-    pub playback_active: AtomicU32,
-
-    /// Aggregate sticky latch guarding the strict SPA format contract (G-RB-001).
-    ///
-    /// `1` = both stream formats are valid (`F32P` planar stereo); `0` = a divergent format
-    /// was negotiated on either stream.
-    pub format_contract_ok: AtomicU32,
-
-    /// Host clock `time.now` from the last capture stream time() call (nanoseconds).
-    pub capture_host_now: AtomicI64,
-    /// Host clock `time.ticks` from the last capture stream time() call.
-    pub capture_host_ticks: AtomicU64,
-    /// Host clock `time.delay` from the last capture stream time() call (ticks).
-    pub capture_host_delay: AtomicI64,
-    /// Host clock `time.now` from the last playback stream time() call (nanoseconds).
-    pub playback_host_now: AtomicI64,
-    /// Host clock `time.ticks` from the last playback stream time() call.
-    pub playback_host_ticks: AtomicU64,
-    /// Host clock `time.delay` from the last playback stream time() call (ticks).
-    pub playback_host_delay: AtomicI64,
 
     /// Total count of structural commands deferred by the audio callback because
     /// the per-callback structural budget was exhausted (F-RT-007). Monotonic
@@ -434,17 +356,8 @@ impl RtStatusFlags {
             rt_priority: AtomicI32::new(-1),
             dsp_overloads: AtomicU32::new(0),
             dsp_cycle_time: AtomicU64::new(0),
-            capture_cycle_time: AtomicU64::new(0),
-            record_cycle_time: AtomicU64::new(0),
-            playback_cycle_time: AtomicU64::new(0),
-            e2e_cycle_time: AtomicU64::new(0),
-            capture_start_tsc: AtomicU64::new(0),
             last_n_samples: AtomicU32::new(0),
             latency_hist: crate::dsp::telemetry::LatencyHistogram::new(),
-            capture_hist: crate::dsp::telemetry::LatencyHistogram::new(),
-            record_hist: crate::dsp::telemetry::LatencyHistogram::new(),
-            playback_hist: crate::dsp::telemetry::LatencyHistogram::new(),
-            e2e_hist: crate::dsp::telemetry::LatencyHistogram::new(),
             degrade_transitions_total: AtomicU32::new(0),
             status_bits: AtomicU64::new(0),
             confirmed_priority: AtomicI32::new(-1),
@@ -468,20 +381,6 @@ impl RtStatusFlags {
             previous_buffer_frames: AtomicU32::new(0),
             input_buffer_miss: AtomicU32::new(0),
             output_buffer_miss: AtomicU32::new(0),
-            playback_bridge_starvation: AtomicU32::new(0),
-            capture_negotiated_rate: AtomicU32::new(0),
-            playback_negotiated_rate: AtomicU32::new(0),
-            capture_format_ok: AtomicU32::new(1),
-            playback_format_ok: AtomicU32::new(1),
-            capture_active: AtomicU32::new(1),
-            playback_active: AtomicU32::new(1),
-            format_contract_ok: AtomicU32::new(1),
-            capture_host_now: AtomicI64::new(0),
-            capture_host_ticks: AtomicU64::new(0),
-            capture_host_delay: AtomicI64::new(0),
-            playback_host_now: AtomicI64::new(0),
-            playback_host_ticks: AtomicU64::new(0),
-            playback_host_delay: AtomicI64::new(0),
             structural_deferred_total: AtomicU32::new(0),
             structural_superseded_total: AtomicU32::new(0),
             rt_affinity_err: AtomicI32::new(0),
@@ -489,16 +388,6 @@ impl RtStatusFlags {
             rt_getsched_err: AtomicI32::new(0),
             rt_target_cpu: AtomicI32::new(-1),
         }
-    }
-
-    /// Whether audio is unmuted across both streams (capture and playback format contracts
-    /// valid AND both streams active).
-    #[inline(always)]
-    pub fn is_audio_unmuted(&self) -> bool {
-        self.capture_format_ok.load(Ordering::Relaxed) != 0
-            && self.playback_format_ok.load(Ordering::Relaxed) != 0
-            && self.capture_active.load(Ordering::Relaxed) != 0
-            && self.playback_active.load(Ordering::Relaxed) != 0
     }
 
     /// Sets one or more flags in the bitmask with `Relaxed` ordering.

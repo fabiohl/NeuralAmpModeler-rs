@@ -88,20 +88,30 @@ pub(crate) fn reject_condition_dsp_lstm(cond_dsp_data: &NamModelData) -> anyhow:
 // A2 static fast-path builders
 // =============================================================================
 
+/// Generic helper to build a static WaveNet A2 model with const-generic channels.
+fn build_wavenet_a2_static<const CH: usize>(
+    data: &NamModelData,
+    layer_raw: Option<serde_json::Value>,
+    name: &'static str,
+) -> anyhow::Result<WaveNetA2<CH>> {
+    let mut model = WaveNetA2::<CH>::new()?;
+    model.set_layer_raw(layer_raw);
+    model
+        .set_weights(&data.weights)
+        .map_err(|e| anyhow::anyhow!("{name} weight load failed: {e}"))?;
+    info!(
+        "[Dispatcher] WaveNet {name} built — CH={CH}, layers=23, weights={}",
+        data.weights.len()
+    );
+    Ok(model)
+}
+
 /// Builds a WaveNet A2-Lite model (channels=3, 23-layer canonical dilation).
 fn build_wavenet_a2_lite(
     data: &NamModelData,
     layer_raw: Option<serde_json::Value>,
 ) -> anyhow::Result<Box<StaticModel>> {
-    let mut model = WaveNetA2::<3>::new()?;
-    model.set_layer_raw(layer_raw);
-    model
-        .set_weights(&data.weights)
-        .map_err(|e| anyhow::anyhow!("A2-Lite weight load failed: {e}"))?;
-    info!(
-        "[Dispatcher] WaveNet A2-Lite built — CH=3, layers=23, weights={}",
-        data.weights.len()
-    );
+    let model = build_wavenet_a2_static::<3>(data, layer_raw, "A2-Lite")?;
     Ok(Box::new(StaticModel::WavenetA2Lite(Box::new(model))))
 }
 
@@ -110,15 +120,7 @@ fn build_wavenet_a2_full(
     data: &NamModelData,
     layer_raw: Option<serde_json::Value>,
 ) -> anyhow::Result<Box<StaticModel>> {
-    let mut model = WaveNetA2::<8>::new()?;
-    model.set_layer_raw(layer_raw);
-    model
-        .set_weights(&data.weights)
-        .map_err(|e| anyhow::anyhow!("A2-Full weight load failed: {e}"))?;
-    info!(
-        "[Dispatcher] WaveNet A2-Full built — CH=8, layers=23, weights={}",
-        data.weights.len()
-    );
+    let model = build_wavenet_a2_static::<8>(data, layer_raw, "A2-Full")?;
     Ok(Box::new(StaticModel::WavenetA2Full(Box::new(model))))
 }
 
@@ -262,6 +264,50 @@ fn parse_groups_field(
         bail!("A2-Dynamic array[{ai}] {key} must be >= 1, got 0 (hostile JSON rejection)");
     }
     Ok(groups)
+}
+
+/// Fail-closed divisibility validation for an A2-Dynamic `groups` field
+/// (F-RES2-01/F-RES2-06).
+///
+/// `parse_groups_field` only bounds the value in range; a group count that
+/// does not exactly divide its reshape operands (`lhs`/`rhs` — the real
+/// channel counts consumed downstream by the grouped convolutions) silently
+/// truncates the reshape arithmetic and desynchronizes the weight stream.
+/// Such a model is rejected here, at the parsing point, with the same
+/// hostile-JSON-rejection pattern used for the range checks — the builder
+/// must never observe a non-divisor group count.
+fn validate_groups_divides(
+    groups: u32,
+    lhs: usize,
+    rhs: usize,
+    key: &str,
+    ai: usize,
+) -> anyhow::Result<()> {
+    let g = groups as usize;
+    if !lhs.is_multiple_of(g) || !rhs.is_multiple_of(g) {
+        log::warn!(
+            "A2-Dynamic array[{ai}] {key}={groups} does not exactly divide its operands ({lhs}, {rhs}) — rejecting model"
+        );
+        bail!(
+            "A2-Dynamic array[{ai}] {key} ({groups}) must exactly divide its operands ({lhs}, {rhs}) (hostile JSON rejection)"
+        );
+    }
+    Ok(())
+}
+
+/// Dilated-conv output channels for an A2-Dynamic layer: `2 × bottleneck`
+/// when the layer's gating mode is Gated/Blended (the gate branch doubles the
+/// conv output), `bottleneck` otherwise.
+///
+/// This mirrors the `conv_out` operand that `WaveNetA2Dyn` weight loading
+/// derives from the layer's gating mode, so grouped-conv group counts are
+/// validated against exactly the value the reshape will see.
+fn a2_dynamic_conv_out(bottleneck: usize, gating: GatingMode) -> usize {
+    if matches!(gating, GatingMode::Gated | GatingMode::Blended) {
+        bottleneck * 2
+    } else {
+        bottleneck
+    }
 }
 
 fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
@@ -414,9 +460,19 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 .and_then(|h| h.get("groups")),
             "head1x1.groups",
             ai,
-        )? as usize;
+        )?;
         let h1_in_size = if head1x1_active {
-            bottleneck / h1_groups
+            // The grouped head1x1 reshape consumes `bottleneck / groups` input
+            // channels and `head1x1_out_channels / groups` output channels —
+            // both divisions must be exact (F-RES2-06).
+            validate_groups_divides(
+                h1_groups,
+                bottleneck,
+                head1x1_out_channels,
+                "head1x1.groups",
+                ai,
+            )?;
+            bottleneck / h1_groups as usize
         } else {
             bottleneck
         };
@@ -457,7 +513,11 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         model.head_bias = head_bias;
 
         // Group configs (per-array, uniform across layers inside the array).
-        model.mixin_groups = parse_groups_field(
+        // Each group count must exactly divide the reshape operands it will
+        // feed (F-RES2-01/F-RES2-06): the mixin maps `condition_size` →
+        // per-layer `conv_out`; layer1x1 maps `bottleneck` → `channels`; the
+        // dilated grouped conv maps `channels` → per-layer `conv_out`.
+        let mixin_groups = parse_groups_field(
             layer_cfg
                 .layer_raw
                 .as_ref()
@@ -465,7 +525,17 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             "groups_input_mixin",
             ai,
         )?;
-        model.l1x1_groups = parse_groups_field(
+        for &gating in &model.gating_modes {
+            validate_groups_divides(
+                mixin_groups,
+                condition_size,
+                a2_dynamic_conv_out(bottleneck, gating),
+                "groups_input_mixin",
+                ai,
+            )?;
+        }
+        model.mixin_groups = mixin_groups;
+        let l1x1_groups = parse_groups_field(
             layer_cfg
                 .layer_raw
                 .as_ref()
@@ -474,7 +544,9 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             "layer1x1.groups",
             ai,
         )?;
-        model.groups_input = parse_groups_field(
+        validate_groups_divides(l1x1_groups, bottleneck, channels, "layer1x1.groups", ai)?;
+        model.l1x1_groups = l1x1_groups;
+        let groups_input = parse_groups_field(
             layer_cfg
                 .layer_raw
                 .as_ref()
@@ -482,6 +554,16 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             "groups_input",
             ai,
         )?;
+        for &gating in &model.gating_modes {
+            validate_groups_divides(
+                groups_input,
+                channels,
+                a2_dynamic_conv_out(bottleneck, gating),
+                "groups_input",
+                ai,
+            )?;
+        }
+        model.groups_input = groups_input;
 
         model.set_layer_raw(layer_cfg.layer_raw.clone());
         model.condition_size = condition_size;

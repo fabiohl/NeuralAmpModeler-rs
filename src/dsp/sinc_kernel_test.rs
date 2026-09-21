@@ -148,6 +148,7 @@ fn test_polyphase_bank_minphase_dc_unity() {
 fn test_aligned_coeffs_alignment() {
     let bank = generate_polyphase_bank(44100, 48000)
         .expect("construction should succeed for test-sized buffers");
-    let ptr = bank.phase_ptr(0) as usize;
+    // SAFETY: phase 0 is always < NUM_PHASES for validly constructed banks.
+    let ptr = unsafe { bank.phase_ptr(0) } as usize;
     assert_eq!(ptr % 64, 0, "Coefficients must be aligned to 64 bytes");
 }

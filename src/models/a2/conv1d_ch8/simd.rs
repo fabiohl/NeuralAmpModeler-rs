@@ -65,7 +65,8 @@ pub unsafe fn conv1d_ch8_t8_avx2(
         for k in 0..kernel {
             let wk_base = (k * 64) as isize;
             let taps_back = k_i - 1 - k as isize;
-            let tap0 = frame0 - d * taps_back;
+            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            let tap0 = (frame0 - d * taps_back).max(0);
             let hb = buf.offset(tap0 * ch as isize);
             for cp in 0..ch {
                 let wcol = _mm256_loadu_ps(w_ptr.offset(wk_base + (cp * 8) as isize));
@@ -104,7 +105,8 @@ pub unsafe fn conv1d_ch8_t8_avx2(
         for k in 0..kernel {
             let wk_base = (k * 64) as isize;
             let taps_back = k_i - 1 - k as isize;
-            let tap_base = frame_idx - d * taps_back;
+            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            let tap_base = (frame_idx - d * taps_back).max(0);
             let hb = buf.offset(tap_base * ch as isize);
             for cp in 0..ch {
                 let wcol = _mm256_loadu_ps(w_ptr.offset(wk_base + (cp * 8) as isize));
@@ -355,7 +357,8 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
 
         for k in 0..conv.kernel {
             let taps_back = k_i - 1 - k as isize;
-            let tap_base = frame_idx - d * taps_back;
+            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            let tap_base = (frame_idx - d * taps_back).max(0);
             let hb = buf.offset(tap_base * ch as isize);
             let in_slice = core::slice::from_raw_parts(hb, ch);
 

@@ -181,3 +181,11 @@ fn test_mirror_buf_alignment_invariants_r8() -> Result<(), Box<dyn std::error::E
 
     Ok(())
 }
+
+#[test]
+fn test_mirror_buf_overflow_handling() {
+    let result = MirroredBuffer::<u8>::new(usize::MAX);
+    assert!(result.is_err());
+    let err = result.err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}

@@ -9,6 +9,8 @@
 //! This module is compiled into multiple bench binaries; individual functions
 //! may appear unused in some binaries — this is expected and silenced with
 //! `#![allow(dead_code)]` below.
+
+// Benchmark common utilities shared across multiple bench targets.
 #![allow(dead_code)]
 #![allow(unused_imports)]
 

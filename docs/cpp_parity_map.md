@@ -18,7 +18,38 @@ line-by-line against the Rust implementation. Each architecture section document
 active verification status and invariants. **For a single-page triage of what is actually
 broken vs. what is under control, read [§7](#7-known-broken-ledger) first.**
 
-## 0. Audit Status
+**Última auditoria:** 2026-09-21 (deve ser atualizado a cada revisão técnica que reafirme as citações e alinhamento contra o mirror pinado).
+
+## 0. Escopo e Exclusões Declaradas
+
+### 0.1 Escopo Arquitetural e Exclusões do Mirror C++
+
+Este mapa de paridade documenta e audita a correspondência entre a biblioteca canônica C++ **NeuralAmpModelerCore** (no pin `v0.5.4` / `1f42f88535884450104b8711d7595019afa0495b`) e a implementação em Rust do **NeuralAmpModeler-rs**. Para clareza de auditoria e rastreabilidade estrita, delimitam-se formalmente as inclusões e exclusões de escopo:
+
+1. **Headers cobertos por comportamento observável (sem citação direta de arquivo):**
+   - `NAM/film.h` (`class FiLM`): módulo de modulação linear de features (*Feature-wise Linear Modulation*). O comportamento numérico de escala e deslocamento (*shift*) condicionados por camada é integralmente exercitado e auditado através da integração em WaveNet A2 nos caminhos dinâmicos e rápidos (`NAM/wavenet/wavenet.cpp`, `NAM/wavenet/a2_fast.cpp`, `NAM/wavenet/model.cpp`; ver [§4.3](#43-measured-interop-drift-on-dynamic-paths-gating-blending-film) e [§4.4](#44--known-bug-kb-a2-max-wavenet_a2_maxnam-official-flagship)). A citação indireta via integração das camadas WaveNet é suficiente para cobrir os invariantes da classe.
+   - `NAM/gating_activations.h` (`class GatingActivation`, `class BlendingActivation`, `class IdentityActivation`): ativações de gating e blend para camadas convolucionais. Seu comportamento matemático é auditado e verificado via testes de WaveNet A1 e A2 ([§3.6](#36-generic-gatingfilmhead1x1layer1x1-fail-closed-policy) e [§4.3](#43-measured-interop-drift-on-dynamic-paths-gating-blending-film)), onde suas fórmulas são validadas contra o oráculo C++ e o oráculo f64. A citação indireta pelas camadas consumidoras atende plenamente à rastreabilidade.
+   - `NAM/ring_buffer.h` (`class RingBuffer`): buffer circular gerenciador de histórico para camadas convolucionais. É empregado internamente como membro privado `_input_buffer` de `Conv1D` (`NAM/conv1d.h:133`, `NAM/conv1d.cpp`). Sua semântica de FIFO circular é coberta diretamente pela auditoria e testes unitários/de paridade de `conv1d.h` / `conv1d.cpp`, ConvNet ([§6](#6-other-architectures)) e WaveNet ([§3](#3-wavenet-a1-architecture)). A citação indireta via `Conv1D` é suficiente e adequada.
+
+2. **Plumbing de fábrica, configuração e utilitários fora de escopo (infraestrutura, não DSP numérico):**
+   - `NAM/get_dsp.h` / `get_dsp.cpp`: funções de fábrica para carregamento de modelos a partir de arquivos `.nam` e instanciação polimórfica em C++.
+   - `NAM/model_config.h`: structs e rotinas de parsing de configuração de modelo.
+   - `NAM/registry.h`: registro e dispatch polimórfico de arquiteturas em C++.
+   - `NAM/util.h` / `util.cpp`: funções utilitárias auxiliares de impressão e formatação.
+   - `NAM/compiler.h`: diretivas de compilação C++ (como macros `NAM_FORCE_INLINE`).
+   - `NAM/version.h`: declaração de versão do upstream C++. Conforme explicitamente documentado em `variables.env:19-22`, este header é deliberadamente desconsiderado como fonte da versão pinada (na tag `v0.5.4` ele declara `0.5.3` por omissão upstream). O pin de referência é regido exclusivamente por `variables.env` (`NAM_CORE_TAG="v0.5.4"`, commit `1f42f88535884450104b8711d7595019afa0495b`).
+   *Justificativa:* Estes arquivos representam infraestrutura de host, parsing JSON e compilação do C++, e não algoritmos numéricos de processamento de sinal. O pipeline de carregamento e deserialização do Rust (`src/loader/`, `src/builder/`) possui modelagem própria fortemente tipada e validada em suíte independente.
+
+3. **Módulos `AudioDSPTools` fora do grafo de inclusão do NAM core:**
+   - `Dependencies/AudioDSPTools/dsp/{RecursiveLinearFilter,Resample,NoiseGate,wav}.h` e `Dependencies/AudioDSPTools/dsp/ResamplingContainer/{ResamplingContainer,Dependencies/LanczosResampler}.h`: ferramentas auxiliares do repositório upstream que não são incluídas por nenhum arquivo sob o diretório `NAM/` do NAMcore pinado. Não participam do grafo de inferência do modelo neural; portanto, estão fora do escopo de paridade deste documento.
+
+### 0.2 Escopo Numérico e Independência de ISA (SIMD)
+
+Este mapa de paridade audita exclusivamente a **semântica numérica e arquitetural** do modelo, independentemente do dispatch SIMD/ISA utilizado internamente pelo Rust (`scalar`, `sse4.2`, `avx2`, e a feature opt-in `avx512`). 
+
+Todos os kernels SIMD implementados no Rust devem produzir resultados matematicamente equivalentes e bit-compatíveis com a via escalar de referência do motor. A verificação dessa equivalência entre vias de despacho SIMD e a execução escalar é realizada pelos testes de integridade de ISA (registrados em `target/logs/subphase-isa-parity.log` e pela matriz de testes `isa_parity_full_matrix`), e não por este documento de paridade C++.
+
+### 0.3 Status da Auditoria por Arquitetura (Audit Status)
 
 > **Audit status:** Strict fail-closed policy maintained. **KB-A2-MAX remains frozen**
 > (fail-closed guard active; do not reopen without §4.4.3). Verified against current canonical source:
@@ -83,8 +114,9 @@ governance events, not automatic victories for either side. Disagreements must b
 
 ### 1.3 Reference version
 
+**Última auditoria:** 2026-09-21 (deve ser atualizado a cada revisão que reafirme as citações).
 The vendored working copy at `third-party/NeuralAmpModelerCore/` is checked out at tag
-`v0.5.4` (commit `1f42f88`; `NAM/version.h` still says `0.5.3` — the header wasn't bumped for
+`v0.5.4` (commit `1f42f88535884450104b8711d7595019afa0495b`, conforme `variables.env:24-25`; `NAM/version.h` still says `0.5.3` — the header wasn't bumped for
 the tag). Some older committed golden vectors were generated at `v0.5.3` (`9c7b185`). This
 patch-level drift is below the interop noise floor for all architectures except where explicitly
 noted per-model. Regenerate goldens with `tests/fixtures/golden_gen_build.sh` when in doubt.
@@ -1382,7 +1414,7 @@ has no practical benefit for any real-world use case.
 ### 5.2 FastLUTActivation — Not Ported
 
 **Background:** C++ NAMcore ships an optional `FastLUTActivation` class
-(`NAM/activations.h:127-169`) that precomputes look-up tables for `tanh` and `sigmoid`
+(`NAM/activations.h:374-428`, declared at `activations.h:374`) that precomputes look-up tables for `tanh` and `sigmoid`
 to accelerate inference on systems without fast `expf` hardware. It is controlled by
 `Activation::enable_fast_tanh()` and `Activation::using_fast_tanh`.
 
@@ -1396,7 +1428,7 @@ This is **not a parity gap** for the following reasons:
 - The NAMcore `render` tool (used for golden generation and live cross-validation) **never**
   enables it: `enable_fast_tanh()` is only called from benchmarking tools
   (`tools/benchmodel*.cpp`), not from `render.cpp`. This is confirmed in the NAMcore
-  audited source (`activations.h:14`: `static bool using_fast_tanh = false` is the only
+  audited source (`activations.h:165`: `static bool using_fast_tanh;`, defined as `false` in `activations.cpp:16`: `bool nam::activations::Activation::using_fast_tanh = false;` is the only
   initialization, and only `benchmodel*.cpp` flips it — verified by grep of all callers).
 - NeuralAmpModeler-rs's `ActivationPrecision::Standard` (universal default) already produces exact-grade
   `tanh`/`sigmoid` within 2×10⁻⁷ of C++'s exact math, making the LUT precision tradeoff

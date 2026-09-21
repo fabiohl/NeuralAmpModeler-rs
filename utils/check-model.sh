@@ -65,6 +65,10 @@ NOTES:
 HELP
 }
 
+log_warn() {
+    echo -e "Warning: $*" >&2
+}
+
 # ── Option parsing ────────────────────────────────────────────────────────────
 RELEASE_FLAG=""
 INSPECT_FLAGS=()
@@ -128,9 +132,16 @@ for scan_dir in "${DIRS_TO_SCAN[@]}"; do
     fi
 
     FOUND_IN_DIR=()
+    scan_err_file=$(mktemp)
     while IFS= read -r -d $'\0' file; do
         [[ -n "$file" ]] && FOUND_IN_DIR+=("$file")
-    done < <(find -L "$scan_dir" -type f \( -iname "*.nam" -o -iname "*.namb" \) -print0 2>/dev/null | sort -z)
+    done < <(find -L "$scan_dir" -type f \( -iname "*.nam" -o -iname "*.namb" \) -print0 2>"$scan_err_file" | sort -z)
+
+    if [[ -s "$scan_err_file" ]]; then
+        log_warn "issues encountered while scanning '$scan_dir':"
+        cat "$scan_err_file" >&2
+    fi
+    rm -f "$scan_err_file"
 
     if [[ ${#FOUND_IN_DIR[@]} -eq 0 ]]; then
         echo "Error: No compatible model files (.nam, .namb) found in directory: '$scan_dir'" >&2

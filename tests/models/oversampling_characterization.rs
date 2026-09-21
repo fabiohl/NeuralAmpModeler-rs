@@ -156,6 +156,7 @@ struct EsrRow {
     x2_vs_off_esr_db: f64,
     x4_vs_off_esr: f64,
     x4_vs_off_esr_db: f64,
+    // Timbre characterization metric recorded for offline model analysis.
     #[allow(dead_code, clippy::allow_attributes)]
     off_mrstft: f64,
     x2_mrstft: f64,

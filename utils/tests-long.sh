@@ -177,19 +177,8 @@ rm -rf tests/fixtures/.temp_live/
 # `overall FAILED` verdict are emitted before that exit — failures before
 # Phase 1 still leave a machine-readable trace.
 LONG_RECEIPT_FILE="target/logs/long-audit-receipt.jsonl"
-LONG_RECEIPT_BIN="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
 LONG_RECEIPT_FAILED=0
-
-ensure_long_receipt_bin() {
-    if [ -x "$LONG_RECEIPT_BIN" ]; then
-        return 0
-    fi
-    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
-        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_long_receipt${NC}" >&2
-        return 1
-    fi
-    return 0
-}
+# LONG_RECEIPT_BIN and ensure_long_receipt_bin are provided by _lib.sh.
 
 # emit_preflight_receipt <phase_id> <name> <status> <duration_ms> [--log <path>] [--gaps <list>]
 # Best-effort structured trace for one preflight step.
@@ -299,8 +288,11 @@ if ! cargo test --features testing --release $(_test_flag catalog_preflight) -- 
     echo -e "${RED}${BOLD}FAIL: catalog_preflight — see target/logs/catalog_preflight.log${NC}"
     abort_preflight "preflight-catalog" "Fixture + V1/V2 catalog preflight" "$PF_CATALOG_DUR" --log target/logs/catalog_preflight.log
 fi
-# Extract MISSING-REQUIRED count for the summary
+# Extract MISSING-REQUIRED count for the summary. `${...:-0}` keeps the
+# counter numeric even when grep yields an empty string (unreadable log) —
+# same pattern as tests-performance-regression.sh's executed_count.
 MISSING_REQUIRED_COUNT=$(grep -c 'MISSING-REQUIRED:' target/logs/catalog_preflight.log 2>/dev/null || true)
+MISSING_REQUIRED_COUNT="${MISSING_REQUIRED_COUNT:-0}"
 if [ "$MISSING_REQUIRED_COUNT" -gt 0 ]; then
     PF_CATALOG_DUR=$(( ($(date +%s%N) - PF_CATALOG_START) / 1000000 ))
     echo -e "${RED}${BOLD}❌ Catalog preflight: ${MISSING_REQUIRED_COUNT} RequiredLocal fixture(s) absent.${NC}"
@@ -394,10 +386,15 @@ echo -e "\n${BLUE}${BOLD}→ Preflight: SIMD Hardware & Engine Dispatch Probe (p
 PF_SIMD_START=$(date +%s%N)
 mkdir -p target/logs
 SIMD_PROBE_LOG="target/logs/simd_probe.log"
-cargo run --quiet --bin simd_probe > "$SIMD_PROBE_LOG" 2>&1 || true
+probe_status=0
+cargo run --quiet --bin simd_probe > "$SIMD_PROBE_LOG" 2>&1 || probe_status=$?
 PF_SIMD_DUR=$(( ($(date +%s%N) - PF_SIMD_START) / 1000000 ))
 cat "$SIMD_PROBE_LOG"
-emit_preflight_receipt "preflight-simd-probe" "SIMD Capability & Dispatch Probe" "PASSED" "$PF_SIMD_DUR" --log "$SIMD_PROBE_LOG" || true
+probe_receipt_status="PASSED"
+if [ "$probe_status" -ne 0 ]; then
+    probe_receipt_status="FAILED"
+fi
+emit_preflight_receipt "preflight-simd-probe" "SIMD Capability & Dispatch Probe" "$probe_receipt_status" "$PF_SIMD_DUR" --log "$SIMD_PROBE_LOG" || true
 
 # ── Phase classification for fidelity/performance split ──────────────────────
 # run_phase indices: 0 soak, 1 defense, 2 proptests, 3 heap,
@@ -439,6 +436,7 @@ run_phase() {
     local start_time=$(date +%s%N)
 
     # Run command and capture output/status
+    # Explicit status propagation — set -e is inactive inside eval.
     eval "$cmd" > "target/logs/$log_file" 2>&1
     local status=$?
 
@@ -478,8 +476,9 @@ run_phase() {
 }
 
 # ── Structured long-audit receipt: per-phase emission ───────────────────────
-# Receipt file/bin/ensure_long_receipt_bin/emit_preflight_receipt/abort_preflight
-# are defined at the top (preflight steps emit before Phase 1).
+# Receipt file/emit_preflight_receipt/abort_preflight are defined at the top;
+# the receipt bin + ensure_long_receipt_bin come from _lib.sh (preflight steps
+# emit before Phase 1).
 
 # emit_long_phase_receipt <phase_idx> <log_file>
 # Appends the just-completed phase's structured receipt line; `--log` makes
@@ -527,6 +526,8 @@ run_soak_phase() {
     timed_cargo_test "concurrency_stress" --release --no-fail-fast $(_test_flag concurrency_stress) -- --ignored --nocapture || status=1
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "Soak Tests (Numerical Stability)" "run_soak_phase" "phase1-soak.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase1-soak.log" || true
 
@@ -566,6 +567,8 @@ run_defense_scripts_phase() {
     fi
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "Defense scripts + libm + oversample bound" "run_defense_scripts_phase" "phase-defense-scripts.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase-defense-scripts.log" || true
 
@@ -634,14 +637,15 @@ run_proptests_parity_phase() {
     # overwrite by the generator or any test-side mutation.
     local SF_BASELINE="tests/fixtures/spectral_fidelity_baseline.json"
     local SF_HASH_BEFORE
-    SF_HASH_BEFORE=$(sha256sum "$SF_BASELINE" | awk '{print $1}')
+    # Explicit status propagation — set -e is inactive inside eval.
+    SF_HASH_BEFORE=$(sha256sum "$SF_BASELINE" | awk '{print $1}') || status=1
     timed_cargo_test "spectral_fidelity_baselines" --release --no-fail-fast $(_test_flag spectral_fidelity) -- spectral_fidelity::model_baselines::baseline_ --skip generate_spectral_fidelity_baseline --ignored --nocapture || status=1
     local SF_HASH_AFTER
-    SF_HASH_AFTER=$(sha256sum "$SF_BASELINE" | awk '{print $1}')
-    if [ "$SF_HASH_BEFORE" != "$SF_HASH_AFTER" ]; then
-        echo -e "\n${RED}${BOLD}❌ IMMUTABILITY VIOLATION: $SF_BASELINE was modified during the spectral fidelity subphase.${NC}" >&2
-        echo -e "  SHA-256 before: ${YELLOW}$SF_HASH_BEFORE${NC}" >&2
-        echo -e "  SHA-256 after:  ${RED}$SF_HASH_AFTER${NC}" >&2
+    SF_HASH_AFTER=$(sha256sum "$SF_BASELINE" | awk '{print $1}') || status=1
+    if [ -z "$SF_HASH_BEFORE" ] || [ -z "$SF_HASH_AFTER" ] || [ "$SF_HASH_BEFORE" != "$SF_HASH_AFTER" ]; then
+        echo -e "\n${RED}${BOLD}❌ IMMUTABILITY VIOLATION: $SF_BASELINE was modified during the spectral fidelity subphase (or hash computation failed).${NC}" >&2
+        echo -e "  SHA-256 before: ${YELLOW}${SF_HASH_BEFORE:-<empty>}${NC}" >&2
+        echo -e "  SHA-256 after:  ${RED}${SF_HASH_AFTER:-<empty>}${NC}" >&2
         echo "  The committed baseline fixture must remain bitwise immutable under automated suites." >&2
         status=1
     fi
@@ -659,6 +663,8 @@ run_proptests_parity_phase() {
     timed_cargo_test "gate_envelope_continuity_proptest" --release --no-fail-fast --lib -- "dsp::gate::gate_test::tests::gate_envelope_continuity_on_reversal" --ignored --nocapture || status=1
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "Property-Based, Parity & Golden Vectors in Release" "run_proptests_parity_phase" "phase2-proptests-parity.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase2-proptests-parity.log" || true
 
@@ -681,6 +687,8 @@ run_heap_audit_phase() {
     timed_cargo_test "diagnostic_bundle_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag diagnostic_bundle) -- heap_audit || status=1
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "Resampler, Cabsim & A2 Heap-Audit" "run_heap_audit_phase" "phase3-heap-audit.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase3-heap-audit.log" || true
 
@@ -706,6 +714,8 @@ run_rt_deadline_gate_phase() {
     fi
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "RT Deadline Gate (deterministic)" "run_rt_deadline_gate_phase" "phase4-rt-deadline.log" || true
 
 # The receipt carries the bypass typed in the log: when the Rust preflight
@@ -731,6 +741,8 @@ run_rt_jitter_characterization_phase() {
     cargo test --features testing --release --no-fail-fast $flag -- --ignored --nocapture || status=$?
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "RT Jitter Characterization" "run_rt_jitter_characterization_phase" "phase5-rt-jitter.log" || true
 
 # Guard against regression: if host has multiple cores, Phase 5 must never
@@ -767,6 +779,8 @@ run_loom_phase() {
     RUSTFLAGS="$loom_flags --cfg loom" timed_cargo_test "loom_tests" --release --no-fail-fast --test loom_tests -- --nocapture || status=1
     return $status
 }
+# Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
+# runs every phase and the final verdict fails — errexit must not abort here.
 run_phase "Loom Concurrency Model Checking" "run_loom_phase" "phase6-loom.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase6-loom.log" || true
 

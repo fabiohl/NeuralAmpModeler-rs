@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Bit-exact verification against scalar reference uses explicit range loops.
 #![allow(clippy::needless_range_loop)]
 
 use super::*;

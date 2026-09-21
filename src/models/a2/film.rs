@@ -88,9 +88,22 @@ pub struct FiLMLayer {
 impl FiLMLayer {
     /// Allocates a FiLM layer with the given topology and copies in the weights.
     ///
+    /// `weights` must hold at least `groups * out_per_group * cond_per_group`
+    /// elements — the exact extent walked by [`FiLMLayer::process`] via
+    /// `get_unchecked` (see `cond_to_scale_shift`). The constructor owns this
+    /// invariant so the hot-path reader never depends on caller discipline
+    /// (pattern: `A2HeadConv::new_with_kernel`).
+    ///
     /// # Buffers
     /// `scale_shift_buf` is pre-allocated here — no heap traffic on the DSP
     /// hot-path.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] for `groups == 0`
+    /// (division by zero in the grouped reader; defense-in-depth — the JSON
+    /// parser already rejects it, but `FiLMConfig` is a plain public struct)
+    /// and [`NamErrorCode::WeightCountMismatch`] when `weights` cannot cover
+    /// the row layout above (count overflow included).
     pub fn load(
         config: FiLMConfig,
         cond_size: usize,
@@ -98,6 +111,29 @@ impl FiLMLayer {
         weights: Vec<f32>,
         bias: Vec<f32>,
     ) -> Result<Self, NamErrorCode> {
+        // Mirror of the `cond_to_scale_shift` row layout (truncated per-group
+        // divisions included), so the check proves exactly what the hot-path
+        // reads — no more, no less.
+        let groups = config.groups as usize;
+        if groups == 0 {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        let ch_per_group = channels / groups;
+        let cond_per_group = cond_size / groups;
+        let out_per_group = if config.shift {
+            ch_per_group.checked_mul(2)
+        } else {
+            Some(ch_per_group)
+        };
+        let needed_rows = out_per_group
+            .and_then(|rows| rows.checked_mul(cond_per_group))
+            .and_then(|rows| rows.checked_mul(groups));
+        let Some(needed_rows) = needed_rows else {
+            return Err(NamErrorCode::WeightCountMismatch);
+        };
+        if weights.len() < needed_rows {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
         let expected_bias = if config.shift { channels * 2 } else { channels };
         let mut bias_padded = bias;
         if bias_padded.len() < expected_bias {
@@ -168,6 +204,12 @@ impl FiLMLayer {
 
                 let mut sum = *self.bias.get_unchecked(global_out);
                 let w_start = w_offset + row * cond_per_group;
+                // SAFETY: `load()` guarantees `weights.len() >= groups *
+                // out_per_group * cond_per_group` (same truncated-division
+                // layout), so `w_start + cond_per_group` ≤ that extent for
+                // every `grp < g`, `row < out_per_group`; `cond_slice` spans
+                // `cond_per_group` lanes of `condition` (`process` contract:
+                // `condition.len() >= cond_size`).
                 let w_row = self
                     .weights
                     .get_unchecked(w_start..w_start + cond_per_group);

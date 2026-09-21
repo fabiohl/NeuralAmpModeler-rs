@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Comprehensive validation utilities shared across integration test targets.
 #![allow(dead_code)]
 
 use std::fmt::Write;
@@ -835,6 +836,7 @@ fn wavenet_thresholds(channels: u32) -> (f64, f64, Option<f64>) {
 /// `mse_limit` is `None` when MSE gate is not applicable (ESR is the primary gate,
 /// explicit `MseGate::NotApplicable` semantics).
 /// `mrstft_max` is asserted as a hard gate at 44.1/48 kHz.
+// Threshold tuple bundles (mse_limit, esr_limit, mrstft_max, lufs_max).
 #[allow(clippy::type_complexity, clippy::allow_attributes)]
 pub fn get_calibrated_threshold(
     model_name: &str,

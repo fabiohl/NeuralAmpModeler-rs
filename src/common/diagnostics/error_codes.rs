@@ -107,7 +107,8 @@ pub enum NamErrorCode {
     ModelBuildFailed,
     /// Model file exceeds the maximum allowed size (256 MiB).
     ModelTooLarge,
-    /// Slimmable metadata is invalid or inconsistent (channel mismatch, empty allowed list, etc.).
+    /// Model topology metadata is invalid or inconsistent (slimmable channel
+    /// mismatch, non-divisor convolution `groups`, empty allowed list, etc.).
     InvalidModelTopology,
 
     // E2xxx — Audio Backend / Processing
@@ -145,9 +146,9 @@ pub enum NamErrorCode {
     CpuAffinityFailed,
     /// Audio processing exceeded the deadline budget.
     ProcessingOverload,
-    /// The audio host renegotiated a SPA format diverging from the strict
-    /// contract (F32P planar stereo, 2 channels).
-    SpaFormatContractViolation,
+    /// The audio host renegotiated a format diverging from the strict
+    /// contract (e.g. non-planar, incorrect channel count).
+    HostFormatContractViolation,
     /// The audio backend lost fatal connectivity (stream error or post-streaming
     /// disconnect) and the host is terminating observably — fail-fast.
     BackendFailure,
@@ -225,7 +226,7 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "E2300",
             Self::CpuAffinityFailed => "E2301",
             Self::ProcessingOverload => "E2001",
-            Self::SpaFormatContractViolation => "E2304",
+            Self::HostFormatContractViolation => "E2304",
             Self::BackendFailure => "E2302",
             Self::ParamChannelFull => "E3100",
             Self::GcOverflow => "E3101",
@@ -280,7 +281,7 @@ impl NamErrorCode {
             Self::WeightCountMismatch => "Weight count mismatch",
             Self::ModelBuildFailed => "Model build failed",
             Self::ModelTooLarge => "Model file too large",
-            Self::InvalidModelTopology => "Invalid slimmable model topology",
+            Self::InvalidModelTopology => "Invalid model topology",
             Self::AudioInitFailed => "Audio backend initialization failed",
             Self::StreamError => "Audio stream error",
             Self::ResamplerBuildFailed => "Resampler build failed",
@@ -291,8 +292,8 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "Real-time priority denied",
             Self::CpuAffinityFailed => "CPU affinity setting failed",
             Self::ProcessingOverload => "Processing deadline exceeded",
-            Self::SpaFormatContractViolation => {
-                "SPA audio format contract violation (expected F32P planar stereo, 2 channels)"
+            Self::HostFormatContractViolation => {
+                "Audio host format contract violation (expected planar float stereo)"
             }
             Self::BackendFailure => "Audio backend failure",
             Self::ParamChannelFull => "Parameter channel full",
@@ -349,7 +350,7 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "RT_PRIORITY_DENIED",
             Self::CpuAffinityFailed => "CPU_AFFINITY_FAILED",
             Self::ProcessingOverload => "PROCESSING_OVERLOAD",
-            Self::SpaFormatContractViolation => "SPA_FORMAT_CONTRACT_VIOLATION",
+            Self::HostFormatContractViolation => "HOST_FORMAT_CONTRACT_VIOLATION",
             Self::BackendFailure => "BACKEND_FAILURE",
             Self::ParamChannelFull => "PARAM_CHANNEL_FULL",
             Self::GcOverflow => "GC_OVERFLOW",

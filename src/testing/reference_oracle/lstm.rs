@@ -15,6 +15,7 @@
 //! 4. Hidden state is projected through a linear head to produce
 //!    the final output sample.
 
+// Reference oracles mirror production formulas without individual item documentation.
 #![allow(missing_docs)]
 
 use crate::loader::nam_json::WeightsLayout;

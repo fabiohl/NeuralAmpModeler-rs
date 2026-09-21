@@ -415,7 +415,7 @@ fn test_film_bias_count_inactive() {
 #[test]
 fn test_parse_single_film_config_default() {
     let raw = serde_json::json!({});
-    let config = parse_single_film_config(&raw, "missing_key");
+    let config = parse_single_film_config(&raw, "missing_key").unwrap();
     assert_eq!(config, FiLMConfig::default());
 }
 
@@ -428,7 +428,7 @@ fn test_parse_single_film_config_active() {
             "groups": 1
         }
     });
-    let config = parse_single_film_config(&raw, "my_film");
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert!(config.active);
     assert!(config.shift);
     assert_eq!(config.groups, 1);
@@ -443,7 +443,7 @@ fn test_parse_single_film_config_shift_false() {
             "groups": 1
         }
     });
-    let config = parse_single_film_config(&raw, "my_film");
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert!(config.active);
     assert!(!config.shift);
     assert_eq!(config.groups, 1);
@@ -458,7 +458,7 @@ fn test_parse_single_film_config_groups() {
             "groups": 4
         }
     });
-    let config = parse_single_film_config(&raw, "my_film");
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert_eq!(config.groups, 4);
 }
 
@@ -471,7 +471,7 @@ fn test_parse_single_film_config_inactive() {
             "groups": 1
         }
     });
-    let config = parse_single_film_config(&raw, "my_film");
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert!(!config.active);
 }
 
@@ -480,8 +480,60 @@ fn test_parse_single_film_config_not_object() {
     let raw = serde_json::json!({
         "my_film": "not an object"
     });
-    let config = parse_single_film_config(&raw, "my_film");
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert_eq!(config, FiLMConfig::default());
+}
+
+#[test]
+fn test_parse_single_film_config_groups_zero_rejected() {
+    let raw = serde_json::json!({
+        "my_film": {
+            "active": true,
+            "shift": true,
+            "groups": 0
+        }
+    });
+    let err = parse_single_film_config(&raw, "my_film").unwrap_err();
+    assert!(err.to_string().contains("groups must be >= 1"));
+}
+
+#[test]
+fn test_parse_single_film_config_groups_negative_rejected() {
+    let raw = serde_json::json!({
+        "my_film": {
+            "active": true,
+            "shift": true,
+            "groups": -1
+        }
+    });
+    let err = parse_single_film_config(&raw, "my_film").unwrap_err();
+    assert!(err.to_string().contains("groups must be >= 1"));
+}
+
+#[test]
+fn test_parse_single_film_config_groups_overflow_rejected() {
+    let raw = serde_json::json!({
+        "my_film": {
+            "active": true,
+            "shift": true,
+            "groups": (u64::from(u32::MAX) + 1)
+        }
+    });
+    let err = parse_single_film_config(&raw, "my_film").unwrap_err();
+    assert!(err.to_string().contains("exceeds u32::MAX"));
+}
+
+#[test]
+fn test_parse_single_film_config_groups_non_integer_rejected() {
+    let raw = serde_json::json!({
+        "my_film": {
+            "active": true,
+            "shift": true,
+            "groups": "four"
+        }
+    });
+    let err = parse_single_film_config(&raw, "my_film").unwrap_err();
+    assert!(err.to_string().contains("not a valid unsigned integer"));
 }
 
 // =============================================================================
@@ -491,7 +543,7 @@ fn test_parse_single_film_config_not_object() {
 #[test]
 fn test_parse_film_configs_all_default() {
     let raw = serde_json::json!({});
-    let configs = parse_film_configs(&raw);
+    let configs = parse_film_configs(&raw).unwrap();
     assert_eq!(configs.len(), 8);
     for cfg in &configs {
         assert_eq!(*cfg, FiLMConfig::default());
@@ -507,7 +559,7 @@ fn test_parse_film_configs_one_active() {
             "groups": 2
         }
     });
-    let configs = parse_film_configs(&raw);
+    let configs = parse_film_configs(&raw).unwrap();
     assert_eq!(configs.len(), 8);
     assert!(configs[0].active);
     assert!(!configs[0].shift);
@@ -524,7 +576,7 @@ fn test_parse_film_configs_multiple_active() {
         "conv_pre_film": { "active": true, "shift": true, "groups": 1 },
         "head1x1_post_film": { "active": true, "shift": false, "groups": 4 }
     });
-    let configs = parse_film_configs(&raw);
+    let configs = parse_film_configs(&raw).unwrap();
     assert!(configs[0].active);
     assert!(configs[0].shift);
     assert_eq!(configs[0].groups, 1);
@@ -534,6 +586,14 @@ fn test_parse_film_configs_multiple_active() {
     for config in configs.iter().skip(1).take(6) {
         assert_eq!(*config, FiLMConfig::default());
     }
+}
+
+#[test]
+fn test_parse_film_configs_corrupted_rejected() {
+    let raw = serde_json::json!({
+        "conv_pre_film": { "active": true, "shift": true, "groups": 0 }
+    });
+    assert!(parse_film_configs(&raw).is_err());
 }
 
 // =============================================================================

@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+// Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
+#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
 use core::arch::x86_64::*;
 
@@ -19,6 +16,23 @@ use core::arch::x86_64::*;
 /// unrolls 4 input columns per iteration with 16 independent FMA accumulators (4 per gate:
 /// `acc_0`, `acc_1`, `acc_2`, `acc_3`), fully breaking the serial FMA latency dependency chain
 /// and saturating execution ports without spilling accumulators to the stack.
+///
+/// # Safety
+/// With `out_len = out_frame.len() / 4` and `in_len = in_frame.len()`:
+/// - `out_frame.len()` must be a multiple of 4 (gate-major layout: gate `g`
+///   occupies `out_frame[g * out_len .. (g + 1) * out_len]`; a non-multiple
+///   silently truncates the last lanes of the scalar tail).
+/// - Each `w{i}` must hold a row-major `[in_len][out_len]` matrix, i.e.
+///   `w{i}.len() >= in_len * out_len` — the SIMD loop reads 8 contiguous f32
+///   per gate via unchecked `add(in_c * out_len + out_c)` (guarded by
+///   `out_c + 8 <= out_len`).
+/// - `bias.len() >= 4 * out_len` (one lane per output element).
+/// - All slices must be valid for the full extents above for the duration of
+///   the call (no `out_frame` element may overlap any input slice —
+///   guaranteed by the borrow checker for `&[f32]`/`&mut [f32]` arguments).
+/// - The CPU must support AVX-512F + AVX-512VL: the `#[target_feature]`
+///   attribute does not check anything at runtime; callers must dispatch
+///   through the runtime CPUID (`InstructionSet` detection) before calling.
 #[target_feature(enable = "avx512f,avx512vl")]
 #[expect(
     clippy::too_many_arguments,

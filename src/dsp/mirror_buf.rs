@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-// SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
+// SAFETY: Low-level virtual memory mapping invariants are strictly encapsulated within MirroredBuffer.
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 //! # Mirrored Buffer (MirroredBuffer) via Mirrored Memory Mapping
@@ -139,6 +139,42 @@ pub fn huge_page_status() -> MirrorHugePageStatus {
 ///   instantiation, so no `Drop` runs through the aliased mapping; `T` must
 ///   remain `Copy`-like (`Deref` requires no `Drop` of an aliased slot).
 ///
+/// # Element type (`T`) contract
+///
+/// The mirror mapping makes every physical slot reachable through two virtual
+/// addresses, and the storage is zero-filled at creation. Soundness of
+/// `Deref`/`DerefMut` — which reinterpret the mapping as a `2N`-element
+/// `[T]` — therefore requires every `T` used with this buffer to satisfy **all**
+/// of the following. This is a safety contract of the type: it is enforced by
+/// this documentation and the internal-usage audit below, not by a trait
+/// bound (a public bound such as `unsafe trait MirrorSafe` would change the
+/// public API — see the crate changelog for any future restriction):
+///
+/// 1. **All-bits-zero is a valid `T`.** Storage is created zero-filled
+///    (fresh mmap/ftruncate pages), so an all-zero bit pattern must be a
+///    valid value of `T` — types with niches forbidding it (e.g.
+///    `NonNull<u8>`, a `bool` with an invalid-zero layout) are forbidden.
+/// 2. **No `Drop` glue.** A slot is reachable and overwritable through two
+///    virtual addresses; a destructor could run twice over the same physical
+///    value (or be skipped after an aliased overwrite). Every production
+///    instantiation is `f32` (plain old data).
+/// 3. **Aliasing tolerance under `&mut`.** Writes through the mirrored view
+///    intentionally create aliased observations of the same physical bytes;
+///    `T` must not rely on reference identity or on unique addresses for its
+///    own validity.
+/// 4. **No address-derived indirection.** The two virtual halves of one slot
+///    have different addresses but identical contents; `T` must not derive
+///    meaning from its own address.
+///
+/// Internal audit of every `MirroredBuffer<T>` instantiation in this crate:
+/// production uses only `MirroredBuffer<f32>` (`models/a2/model/static`,
+/// `models/a2/model/dynamic`, `models/wavenet/common`, `models/linear`);
+/// the remaining instantiations (u8/u32/i32/f64 and a 64-byte-aligned
+/// plain-data test type) live exclusively in this module's unit tests, and
+/// all satisfy items 1–4. Zero-sized types are rejected at construction
+/// (`mirror_buf/alloc.rs` returns `InvalidInput` for `size_of::<T>() == 0`),
+/// so `T` always occupies ≥ 1 byte.
+///
 /// # Alignment
 ///
 /// `from_raw_parts` requires the base pointer to be aligned to
@@ -215,10 +251,11 @@ impl<T> Drop for MirroredBuffer<T> {
     fn drop(&mut self) {
         let element_size = std::mem::size_of::<T>();
         let size_bytes = self.size_elements * element_size;
-        // SAFETY: self.ptr was obtained via mmap (or std heap via the alloc module).
-        // The virtual mapping spans size_bytes*2 (two mirrored halves). munmap receives
-        // the original base address and the full virtual extent, matching the allocation
-        // interface. Drop consumes self, so this is the last use of the pointer.
+        // SAFETY: self.ptr was obtained via double-mapping an anonymous file descriptor
+        // (memfd with MAP_SHARED) spanning size_bytes * 2 (two contiguous mirrored halves).
+        // munmap receives the original base address and the full virtual extent (size_bytes * 2),
+        // cleanly unmapping both virtual mirrors. Drop consumes self by value, ensuring
+        // this is the exclusive and final use of the pointer.
         unsafe {
             munmap(self.ptr as *mut c_void, size_bytes * 2);
         }
@@ -255,13 +292,16 @@ impl<T: Clone> Clone for MirroredBuffer<T> {
     }
 }
 
-// SAFETY: ptr points to an exclusive virtual mapping (mmap/MAP_PRIVATE or heap) with no
-// shared physical aliasing to other processes. Moving the struct across threads is sound
-// because the underlying memory is not shared with other MirroredBuffer instances.
+// SAFETY: ptr points to an exclusive process-local virtual mapping created via an
+// unlinked anonymous memfd (MAP_SHARED across the two adjacent mirror halves of this
+// buffer only, with no external process sharing or fd leaks). Moving the struct
+// across threads is sound because the underlying memory is uniquely owned by this
+// MirroredBuffer instance.
 unsafe impl<T: Send> Send for MirroredBuffer<T> {}
 // SAFETY: T: Sync ensures that shared references to T elements are sound across threads.
-// MirroredBuffer's internal ptr is only accessed through Deref/DerefMut which follow Rust's
-// borrow rules. The exclusive virtual mapping prevents races from external writers.
+// MirroredBuffer's internal ptr is accessed exclusively through Deref/DerefMut which follow
+// standard Rust borrowing rules (&self vs &mut self). The exclusive process-local virtual
+// mapping prevents data races from external writers.
 unsafe impl<T: Sync> Sync for MirroredBuffer<T> {}
 
 #[cfg(all(test, target_os = "linux"))]

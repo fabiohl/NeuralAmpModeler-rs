@@ -329,7 +329,7 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     assert_eq!(contract.schema_version, SCHEMA_VERSION);
     assert_eq!(
         contract.provenance.git_commit,
-        "7576d49305bb079ec6435516d97b0e415e524466"
+        "f2ac1a8703eb63682984b09660ed26457a5d45f4"
     );
     assert!(!contract.provenance.git_dirty);
 }

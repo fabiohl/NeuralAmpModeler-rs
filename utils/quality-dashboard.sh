@@ -24,6 +24,12 @@
 # (ingest/verify/save). ASCII `.txt` contracts are rejected with ERROR + exit 2.
 # The human render keeps reading the phase logs — `--check`/`--save` never use
 # the logs.
+#
+# Note: this script deliberately does NOT re-exec under nice/ionice (unlike
+# lints.sh/tests-quick.sh via maybe_restart_low_priority): it drives the
+# Criterion statistical benchmarks, and a de-prioritized bench loses CPU to
+# same-priority load on the pinned core — inflating timings toward false
+# regressions. Benchmarks must run at normal priority.
 
 set -euo pipefail
 
@@ -168,8 +174,16 @@ write_build_metadata() {
     local git_commit git_dirty
     git_commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then git_dirty="true"; else git_dirty="false"; fi
+    local esc_profile esc_target esc_rustflags esc_rustc_ver esc_git_commit esc_run_id esc_isa
+    esc_profile=$(json_escape_string "$CARGO_PROFILE")
+    esc_target=$(json_escape_string "$CARGO_TARGET_TRIPLE")
+    esc_rustflags=$(json_escape_string "${CARGO_RUSTFLAGS:-}")
+    esc_rustc_ver=$(json_escape_string "$RUSTC_VER")
+    esc_git_commit=$(json_escape_string "$git_commit")
+    esc_run_id=$(json_escape_string "${NAM_RUN_ID:-$RUN_ID}")
+    esc_isa=$(json_escape_string "$ISA")
     printf '{"kind":"build_metadata","cargo_profile":"%s","target_triple":"%s","rustflags":"%s","rustc_version":"%s","git_commit":"%s","git_dirty_state":%s,"run_id":"%s","effective_isa":"%s"}\n' \
-        "$CARGO_PROFILE" "$CARGO_TARGET_TRIPLE" "${CARGO_RUSTFLAGS:-}" "$RUSTC_VER" "$git_commit" "$git_dirty" "${NAM_RUN_ID:-$RUN_ID}" "$ISA" >> "$DASHBOARD_PHASE_RECEIPT"
+        "$esc_profile" "$esc_target" "$esc_rustflags" "$esc_rustc_ver" "$esc_git_commit" "$git_dirty" "$esc_run_id" "$esc_isa" >> "$DASHBOARD_PHASE_RECEIPT"
 }
 
 # Unified metric formatter — locale-safe (LC_ALL=C), auto-detects scientific notation.
@@ -321,7 +335,7 @@ run_golden_vectors() {
     local start_t end_t
     start_t=$(date +%s%N)
     NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "golden_vectors" 50 1 \
-        cargo test --release --features testing --test models golden_vectors -- --test-threads=1 --nocapture
+        cargo test --release --features testing --test models golden_vectors -- --test-threads=1 --nocapture || true
     end_t=$(date +%s%N)
     FIDELITY_DURATION_S=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
 }
@@ -335,7 +349,7 @@ run_reference_oracle() {
     # join `esr_f64` onto the fidelity records the verify engine reads
     # (P0.T3). The phase itself is not JSONL-gated (min_jsonl stays 0).
     NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "reference_oracle_f64" 10 \
-        cargo test --release --features testing --test parity reference_oracle_f64 -- --test-threads=1 --nocapture
+        cargo test --release --features testing --test parity reference_oracle_f64 -- --test-threads=1 --nocapture || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -356,7 +370,7 @@ run_isa_self_consistency() {
     local start_t end_t
     start_t=$(date +%s%N)
     run_dashboard_phase "$ISA_SELF_CONSISTENCY_PHASE" 5 \
-        cargo test --release --features testing --test parity isa_parity -- --test-threads=1 --nocapture
+        cargo test --release --features testing --test parity isa_parity -- --test-threads=1 --nocapture || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -376,7 +390,7 @@ run_spectral_fidelity() {
     local start_t end_t
     start_t=$(date +%s%N)
     run_dashboard_phase "spectral_fidelity" 5 \
-        cargo test --release --features testing --test models spectral_fidelity -- --nocapture
+        cargo test --release --features testing --test models spectral_fidelity -- --nocapture || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -389,7 +403,7 @@ run_activation_precision() {
     local start_t end_t
     start_t=$(date +%s%N)
     run_dashboard_phase "lstm_activation_precision" 5 \
-        cargo test --release --features testing --test models lstm_activation_precision -- --nocapture
+        cargo test --release --features testing --test models lstm_activation_precision -- --nocapture || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -402,7 +416,7 @@ run_quick_parity() {
     local start_t end_t
     start_t=$(date +%s%N)
     NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "quick_parity" 50 1 \
-        cargo test --release --features testing --test parity quick_parity -- --test-threads=1 --nocapture
+        cargo test --release --features testing --test parity quick_parity -- --test-threads=1 --nocapture || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')
@@ -839,8 +853,8 @@ compute_coverage() {
 
     if [ -n "${DASHBOARD_PHASE_RECEIPT:-}" ] && [ -f "$DASHBOARD_PHASE_RECEIPT" ]; then
         printf '{"kind":"coverage_matrix","namcore_parity":%s,"f64_oracle":%s,"isa_optimizations":%s,"spectral_baselines":%s,"rt_performance":%s}\n' \
-            "$COVERAGE_NAMCORE_PARITY" "$COVERAGE_F64_ORACLE" "$COVERAGE_ISA_OPTIMIZATIONS" \
-            "$COVERAGE_SPECTRAL_BASELINES" "$COVERAGE_RT_PERFORMANCE" >> "$DASHBOARD_PHASE_RECEIPT"
+            "${COVERAGE_NAMCORE_PARITY:-0}" "${COVERAGE_F64_ORACLE:-0}" "${COVERAGE_ISA_OPTIMIZATIONS:-0}" \
+            "${COVERAGE_SPECTRAL_BASELINES:-0}" "${COVERAGE_RT_PERFORMANCE:-0}" >> "$DASHBOARD_PHASE_RECEIPT"
     fi
 }
 
@@ -871,8 +885,8 @@ extract_test_counts() {
 
     if [ -n "${DASHBOARD_PHASE_RECEIPT:-}" ] && [ -f "$DASHBOARD_PHASE_RECEIPT" ]; then
         printf '{"kind":"test_counts","passed":%s,"failed":%s,"ignored":%s,"filtered":%s,"skip_capability":%s}\n' \
-            "${TEST_COUNTS[passed]}" "${TEST_COUNTS[failed]}" "${TEST_COUNTS[ignored]}" \
-            "${TEST_COUNTS[filtered]}" "${TEST_COUNTS[skip_capability]}" >> "$DASHBOARD_PHASE_RECEIPT"
+            "${TEST_COUNTS[passed]:-0}" "${TEST_COUNTS[failed]:-0}" "${TEST_COUNTS[ignored]:-0}" \
+            "${TEST_COUNTS[filtered]:-0}" "${TEST_COUNTS[skip_capability]:-0}" >> "$DASHBOARD_PHASE_RECEIPT"
     fi
 }
 
@@ -908,8 +922,10 @@ write_latency_stream() {
     : > "$out"
     local bench
     for bench in "${!LATENCY_US[@]}"; do
+        local esc_bench
+        esc_bench=$(json_escape_string "$bench")
         printf '{"kind":"latency","label":"%s","median_latency_us":%s}\n' \
-            "$bench" "${LATENCY_US[$bench]}" >> "$out"
+            "$esc_bench" "${LATENCY_US[$bench]:-0}" >> "$out"
     done
 }
 

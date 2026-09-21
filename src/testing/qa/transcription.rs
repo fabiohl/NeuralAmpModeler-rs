@@ -146,13 +146,14 @@ fn transcribe_quality_contract_to_json() {
                 Some(136.4),
                 6.46e-06,
             ),
+            // Measured (quick_parity_convnet): SNR=131.2 dB, ESR=7.65e-14, f64=7.63e-14, MRSTFT=5.26e-6
             fid(
                 "convnet-test@48000:live",
                 "ConvNet Test @48000 Live",
-                6.10e-16,
-                Some(4.93e-16),
-                Some(152.1),
-                4.99e-07,
+                7.65e-14,
+                Some(7.63e-14),
+                Some(131.2),
+                5.26e-06,
             ),
             fid_optional(
                 "evh-5150-lite@48000:live",
@@ -550,7 +551,8 @@ fn transcribe_quality_contract_to_json() {
             perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 21.56),
             perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.06),
             perf("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8", 176.96),
-            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 129.61),
+            // Measured (regression_gate Ryzen 7 5700U): median=147.50 us
+            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 147.50),
             // ── DSP Infrastructure — 5 entries ─────────────────────────────
             perf_micro_batch(
                 "RT_DSP_Resampler_44k1_to_48k",

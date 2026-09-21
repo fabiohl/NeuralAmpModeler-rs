@@ -11,6 +11,7 @@ mod common;
 use common::alloc_audit::CountingAllocator;
 
 #[cfg_attr(not(feature = "heap-audit"), global_allocator)]
+// Global allocator fixture retained across all feature configurations.
 #[allow(dead_code, clippy::allow_attributes)]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
@@ -21,6 +22,8 @@ mod a2_loader;
 mod block_invariance_test;
 #[path = "models/catalog_test.rs"]
 mod catalog_test;
+#[path = "models/condition_broadcast_test.rs"]
+mod condition_broadcast_test;
 #[path = "models/container_slimmable.rs"]
 mod container_slimmable;
 #[path = "models/deterministic_energy_test.rs"]

@@ -113,8 +113,14 @@ impl A2HeadConv {
         num_frames: usize,
         output: &mut [f32],
     ) {
-        debug_assert!(output.len() >= num_frames);
-        debug_assert!(head_history.len() >= (ring_mask + 1) * self.num_channels);
+        assert!(
+            output.len() >= num_frames,
+            "output slice smaller than num_frames"
+        );
+        assert!(
+            head_history.len() >= (ring_mask + 1) * self.num_channels,
+            "head_history buffer smaller than ring buffer capacity"
+        );
 
         // Dispatch to SIMD kernels when the canonical A2 kernel size is active.
         if self.kernel_size == Self::HEAD_KERNEL_SIZE {
@@ -171,13 +177,13 @@ impl A2HeadConv {
 
                 // SAFETY: `head_w.len()` is validated in `new()` (assert_eq
                 // `kernel_size * num_channels`) and `head_history.len()` by the
-                // `debug_assert!` at the top of `process`; `w_off + c < head_w.len()`
+                // `assert!` at the top of `process`; `w_off + c < head_w.len()`
                 // because `t < k` and `c < ch`, and `src_off + c < head_history.len()`
                 // because `col <= ring_mask`.
                 for c in 0..ch {
                     // SAFETY: `w_off + c < head_w.len()` because `t < k` and `c < ch`
                     // (lengths validated in `new()`), and `src_off + c < head_history.len()`
-                    // because `col <= ring_mask` (guaranteed by the `debug_assert!` above).
+                    // because `col <= ring_mask` (guaranteed by the `assert!` above).
                     unsafe {
                         y += *self.head_w.get_unchecked(w_off + c)
                             * *head_history.get_unchecked(src_off + c);

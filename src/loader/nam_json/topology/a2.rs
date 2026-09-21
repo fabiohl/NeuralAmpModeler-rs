@@ -173,21 +173,20 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
         return Some(A2TopologyResult::Dynamic);
     }
 
-    let ch = match l0.channels {
-        Some(c) => c as u8,
-        None => return Some(A2TopologyResult::Dynamic),
-    };
-
     // 8. channels and bottleneck must match (a2_fast.cpp:903-906)
-    let bn = l0.bottleneck.unwrap_or(0);
-    if ch as usize != bn {
-        return Some(A2TopologyResult::Dynamic);
-    }
-
     // 9. Channels must be exactly 3 or 8 (a2_fast.cpp:907-908)
-    if !A2_VALID_CHANNELS.contains(&ch) {
-        return Some(A2TopologyResult::Dynamic);
-    }
+    // The declared value is compared against the valid-channel list in its own
+    // (64-bit) width BEFORE any narrow cast: a silent `as u8` truncation
+    // (e.g. 259 → 3) would bypass topology validation and route a hostile
+    // model into the CH=3 fast-path (F-RES2-05).
+    let bn = l0.bottleneck.unwrap_or(0);
+    let ch = match l0.channels {
+        Some(c) if A2_VALID_CHANNELS.iter().any(|&v| usize::from(v) == c) && c == bn => {
+            // Lossless by the guard above: `c` is one of `A2_VALID_CHANNELS` (3 or 8).
+            c as u8
+        }
+        _ => return Some(A2TopologyResult::Dynamic),
+    };
 
     // ── Checks 12-19 require raw JSON (a2_fast.cpp:930-1000) ──
     if let Some(ref raw) = l0.layer_raw {

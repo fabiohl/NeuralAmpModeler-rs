@@ -880,10 +880,10 @@ fn latency_regression_and_missing_label_are_performance_violations() {
         panic!("expected latency regression");
     };
     assert_eq!(*median_us, 200.0);
-    assert_eq!(*baseline_us, 44.89);
+    assert_eq!(*baseline_us, 43.29);
     assert!(
-        (*limit_us - 49.379).abs() < 1e-9,
-        "latency compares the exact limit max(44.89×1.10, 44.89+0.05): {limit_us}"
+        (*limit_us - 47.619).abs() < 1e-9,
+        "latency compares the exact limit max(43.29×1.10, 43.29+0.05): {limit_us}"
     );
 
     // One latency record missing → MISSING_LABEL fail-closed.

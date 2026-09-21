@@ -1,6 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Standard WaveNet static model builder.
+//!
+//! # Structural Parallelism vs. Dynamic Builders
+//!
+//! This module (`standard.rs`) defines const-generic static array construction
+//! ([`build_wavenet_array`]), while `dynamic.rs` defines runtime-dimensioned
+//! construction (`build_wavenet_array_dyn`).
+//! The structural parallelism between the two is an intentional design choice:
+//! - Static builders bake channels, kernel size, and head dimension directly
+//!   into type parameters (`<const IN: usize, const COND: usize, const CH: usize, ...>`),
+//!   enabling aggressive loop unrolling, static stack buffers, and compiler auto-vectorization.
+//! - Dynamic builders support arbitrary user topologies on the heap with dynamic dispatch.
+//!
+//! Attempting to unify these two paths via a shared generic trait abstraction would
+//! introduce unnecessary indirection, hamper compiler optimizations on the hot static path,
+//! and obscure weight parsing invariants.
+//!
+//! # Recursion Limits
+//! Condition sub-models may contain nested architectures bounded by `MAX_UNIFIED_DEPTH` (8)
+//! defined in `dynamic.rs`.
+
 use super::super::WeightCursor;
 use super::layout;
 use crate::loader::nam_json::{NamModelData, NamWavenetTopology};

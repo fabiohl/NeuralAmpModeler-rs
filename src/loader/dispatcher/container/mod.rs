@@ -14,6 +14,11 @@ use crate::models::container::ContainerModel;
 use anyhow::Context;
 
 /// Maximum nesting depth for SlimmableContainer recursion.
+///
+/// # Invariants
+/// Must remain strictly <= `MAX_UNIFIED_DEPTH` (8) defined in
+/// `src/loader/dispatcher/wavenet/dynamic.rs` to bound memory consumption
+/// and prevent stack exhaustion across nested container and condition models.
 const MAX_CONTAINER_DEPTH: usize = 4;
 
 /// Builds a `Box<StaticModel>` for the `SlimmableContainer` architecture.
@@ -21,7 +26,7 @@ const MAX_CONTAINER_DEPTH: usize = 4;
 /// Parses `config.submodels[]`, recursively builds each submodel via the main
 /// dispatcher, validates ordering / sample rate uniformity, and wraps them in
 /// a `ContainerModel`.
-pub fn build_container(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
+pub(crate) fn build_container(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     build_container_inner(data, 0)
 }
 

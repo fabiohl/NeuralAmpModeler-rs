@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+// Architecture-specific intrinsics and internal helper signatures.
 #![allow(
     // SAFETY: All unsafe blocks in this module are guarded by CPU feature detection
     // (AVX-512F or AVX-512 VNNI+BF16) at dispatch time via SimdMathConfig::current().

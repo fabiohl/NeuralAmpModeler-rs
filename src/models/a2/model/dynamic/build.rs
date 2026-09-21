@@ -101,7 +101,23 @@ impl WaveNetA2Dyn {
         };
 
         // 2a. Dilated conv weights — interleave-4-wide (standard) or grouped-interleaved-4-wide.
+        // Defense in depth (F-RES2-01): the loader rejects non-divisor group
+        // counts at the parsing point, but `WaveNetA2Dyn::new` + `set_weights`
+        // form a public construction path that bypasses that parsing — the
+        // reshape arithmetic below must never see a non-divisor group count
+        // (it would silently truncate `conv_w_count` and desynchronize the
+        // weight stream).
         let groups_in = self.groups_input.max(1) as usize;
+        if !channels.is_multiple_of(groups_in) || !conv_out.is_multiple_of(groups_in) {
+            log::warn!(
+                "A2 grouped conv: groups_input={groups_in} does not exactly divide \
+                 channels={channels} / conv_out={conv_out} — rejecting weight stream"
+            );
+            return Err(format!(
+                "A2 grouped conv: groups_input ({groups_in}) must exactly divide \
+                 channels ({channels}) and conv_out ({conv_out})"
+            ));
+        }
         let conv_w_count = (channels * conv_out / groups_in) * ksize;
         let conv_w_f32 = super::super::set_weights::read_slice(
             weights,
@@ -126,7 +142,13 @@ impl WaveNetA2Dyn {
             crate::models::a2::conv1d::A2Conv1d::new_grouped(
                 conv_w_f32, conv_b_f32, true, dilation, channels, conv_out, ksize, groups_in,
             )
-            .map_err(|e| format!("A2 grouped conv creation failed: {e:?}"))?
+            .map_err(|e| {
+                log::warn!(
+                    "A2 grouped conv rejected (layer[{i}], channels={channels}, \
+                     conv_out={conv_out}, kernel={ksize}, groups={groups_in}): {e:?}"
+                );
+                format!("A2 grouped conv creation failed: {e:?}")
+            })?
         } else {
             let conv_w_padded = conv_out.div_ceil(4) * 4 * channels * ksize;
             let mut conv_w = AlignedVec::new(conv_w_padded, 0.0f32)
@@ -147,6 +169,22 @@ impl WaveNetA2Dyn {
         // 8-wide SIMD loads across output channels with broadcast condition
         // (AVX2 SIMD vectorization via 8-wide broadcast FMA).
         let mg: u32 = self.mixin_groups.max(1);
+        // Defense in depth (F-RES2-06): same non-divisor rejection as the
+        // grouped conv above — the mixin reshape divides both `condition_size`
+        // (input) and `conv_out` (output) by the group count.
+        if !self.condition_size.is_multiple_of(mg as usize) || !conv_out.is_multiple_of(mg as usize)
+        {
+            log::warn!(
+                "A2 mixin: groups_input_mixin={mg} does not exactly divide \
+                 condition_size={} / conv_out={conv_out} — rejecting weight stream",
+                self.condition_size
+            );
+            return Err(format!(
+                "A2 mixin: groups_input_mixin ({mg}) must exactly divide \
+                 condition_size ({}) and conv_out ({conv_out})",
+                self.condition_size
+            ));
+        }
         let mixin_in_pg = self.condition_size / mg as usize;
         let mixin_out_per_g = conv_out / mg as usize;
         let mixin_count = conv_out * mixin_in_pg;
@@ -196,6 +234,18 @@ impl WaveNetA2Dyn {
         // Groups=1: dense col-major `[bottleneck][channels]` (backward compat).
         // Groups>1: compact `[channels × in_per_group]` row-major per output channel.
         let lg: u32 = self.l1x1_groups.max(1);
+        // Defense in depth (F-RES2-06): layer1x1 divides `bottleneck` (input)
+        // and `channels` (output) by the group count — both must be exact.
+        if !bottleneck.is_multiple_of(lg as usize) || !channels.is_multiple_of(lg as usize) {
+            log::warn!(
+                "A2 layer1x1: groups={lg} does not exactly divide \
+                 bottleneck={bottleneck} / channels={channels} — rejecting weight stream"
+            );
+            return Err(format!(
+                "A2 layer1x1: groups ({lg}) must exactly divide \
+                 bottleneck ({bottleneck}) and channels ({channels})"
+            ));
+        }
         let l1x1_in_pg = bottleneck / lg as usize;
         let l1x1_out_per_g = channels / lg as usize;
         let l1x1_w_count = if lg > 1 {
@@ -283,7 +333,8 @@ impl WaveNetA2Dyn {
 
         // FiLM layers (if active in layer_raw JSON) — read weights after l1x1 bias.
         if let Some(ref raw) = self.layer_raw {
-            let configs = super::super::set_weights::parse_film_configs(raw);
+            let configs =
+                super::super::set_weights::parse_film_configs(raw).map_err(|e| e.to_string())?;
             super::super::set_weights::load_film_for_layer_dynamic(
                 &mut layer,
                 &configs,
@@ -320,7 +371,27 @@ impl WaveNetA2Dyn {
         }
         let h1_in = self.head1x1_h1_in;
         let h1_out = self.head_accum_size;
-        let h1_groups = bottleneck.checked_div(h1_in).unwrap_or(1);
+        // F-RES2-06: the group count is the exact quotient `bottleneck / h1_in`
+        // — the loader guarantees `head1x1.groups` divides `bottleneck` and
+        // `head_accum_size` at the parsing point, so a zero `h1_in` or a
+        // non-exact division here means the weight stream was built outside
+        // the loader; fail closed instead of silently falling back to the
+        // dense layout or leaving group-block outputs unwritten.
+        let h1_groups = if h1_in == 0
+            || !bottleneck.is_multiple_of(h1_in)
+            || !h1_out.is_multiple_of(bottleneck / h1_in)
+        {
+            log::warn!(
+                "A2 head1x1: h1_in={h1_in} does not exactly divide \
+                 bottleneck={bottleneck} / head_accum_size={h1_out} — rejecting weight stream"
+            );
+            return Err(format!(
+                "A2 head1x1: h1_in ({h1_in}) must exactly divide \
+                 bottleneck ({bottleneck}) and head_accum_size ({h1_out})"
+            ));
+        } else {
+            bottleneck / h1_in
+        };
         let h1_is_grouped = h1_groups > 1;
         let h1_w_count = h1_out * h1_in;
         let h1_w_f32 = super::super::set_weights::read_slice(

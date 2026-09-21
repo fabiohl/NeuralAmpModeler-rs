@@ -1,15 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+// Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
+#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
 use core::arch::x86_64::*;
 
 /// GEMV 4-gate BF16 kernel AVX-512 for LSTM.
 /// This version uses the BF16 format from the start to be even faster.
+///
+/// # Safety
+/// With `out_len = out.len() / 4` and `in_len = in_frame.len()`:
+/// - `out.len()` must be a multiple of 4 (gate-major layout: gate `g` occupies
+///   `out[g * out_len .. (g + 1) * out_len]`; a non-multiple silently truncates
+///   the last lanes of the scalar tail).
+/// - Each `w{i}` must hold a row-major `[in_len][out_len]` matrix of BF16
+///   (u16) values, i.e. `w{i}.len() >= in_len * out_len` — the SIMD loops
+///   read 16 contiguous u16 per gate via unchecked `add(in_c * out_len + out_c)`
+///   (guarded by `out_c + 16 <= out_len`).
+/// - `bias.len() >= 4 * out_len` (one f32 lane per output element).
+/// - `in_frame.as_ptr()` must be at least 4-byte aligned: the fast path reads
+///   the BF16 input *pair* `(in[i], in[i+1])` through a `*const i32`
+///   reference, which requires 4-byte alignment (u16 slices only guarantee
+///   2); all fixed-size/AlignedVec callers satisfy this.
+/// - All slices must be valid for the full extents above for the duration of
+///   the call.
+/// - The CPU must support AVX-512F + AVX-512VL + AVX512-BF16: the
+///   `#[target_feature]` attribute does not check anything at runtime;
+///   callers must dispatch through the runtime CPUID (`InstructionSet`
+///   detection) before calling.
 #[target_feature(enable = "avx512f,avx512vl,avx512bf16")]
 #[expect(
     clippy::too_many_arguments,

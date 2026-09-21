@@ -76,6 +76,17 @@ pub struct WaveNetLayerState {
 
 impl WaveNetLayerState {
     /// Static allocator constructor for State (execute before DSP Thread).
+    ///
+    /// # Errors
+    /// Returns `Err` when any intermediate size computation overflows `usize`
+    /// (checked arithmetic, F-RES2-03) or when the resolved `buffer_start`
+    /// lands below `receptive_field_size`. No `unwrap()`/`expect()` on this
+    /// path: every product/difference that feeds the checked allocator
+    /// (`MirroredBuffer::<f32>::new_aligned`, itself checked) is validated
+    /// first, so a hostile dimension rejected upstream (F-RES2-02) — or a
+    /// direct caller with extreme values — can never wrap into a smaller
+    /// buffer in release builds (overflow-checks off). For valid inputs the
+    /// arithmetic is bit-identical to the previous unchecked version.
     pub fn new(
         channels: usize,
         receptive_field_size: usize,
@@ -84,10 +95,35 @@ impl WaveNetLayerState {
         // [STEP 1: Calculate Temporal Buffer Size]
         // The buffer needs to accommodate the receptive field and block padding.
         // Page rounding is done internally by MirroredBuffer.
-        let min_buffer_frames =
-            receptive_field_size + (LAYER_ARRAY_BUFFER_PADDING + 1) * WAVENET_MAX_NUM_FRAMES;
+        let pad_frames = (LAYER_ARRAY_BUFFER_PADDING + 1)
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "WaveNetLayerState size overflows usize: (LAYER_ARRAY_BUFFER_PADDING + 1) * WAVENET_MAX_NUM_FRAMES = ({} + 1) * {}",
+                        LAYER_ARRAY_BUFFER_PADDING, WAVENET_MAX_NUM_FRAMES
+                    ),
+                )
+            })?;
+        let min_buffer_frames = receptive_field_size.checked_add(pad_frames).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "WaveNetLayerState size overflows usize: receptive_field_size ({receptive_field_size}) + pad_frames ({pad_frames})"
+                ),
+            )
+        })?;
 
-        let buffer = MirroredBuffer::<f32>::new_aligned(min_buffer_frames * channels, channels)?;
+        let requested_elems = min_buffer_frames.checked_mul(channels).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "WaveNetLayerState size overflows usize: min_buffer_frames ({min_buffer_frames}) * channels ({channels})"
+                ),
+            )
+        })?;
+        let buffer = MirroredBuffer::<f32>::new_aligned(requested_elems, channels)?;
 
         let actual_buffer_frames = buffer.size() / channels;
 
@@ -95,7 +131,30 @@ impl WaveNetLayerState {
         // Position the initial pointer in the second half of the virtual mapping (offset N).
         // This allows looking backwards (receptive field) without crossing the virtual buffer start.
         let jitter = (alloc_num % LAYER_ARRAY_BUFFER_PADDING) + 1;
-        let start = actual_buffer_frames * 2 - (WAVENET_MAX_NUM_FRAMES * jitter);
+        let jitter_frames = WAVENET_MAX_NUM_FRAMES.checked_mul(jitter).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "WaveNetLayerState offset overflows usize: WAVENET_MAX_NUM_FRAMES ({WAVENET_MAX_NUM_FRAMES}) * jitter ({jitter})"
+                ),
+            )
+        })?;
+        let doubled = actual_buffer_frames.checked_mul(2).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "WaveNetLayerState offset overflows usize: actual_buffer_frames ({actual_buffer_frames}) * 2"
+                ),
+            )
+        })?;
+        let start = doubled.checked_sub(jitter_frames).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "WaveNetLayerState offset underflows: {doubled} - {jitter_frames} (actual_buffer_frames={actual_buffer_frames}, jitter={jitter})"
+                ),
+            )
+        })?;
 
         if start < receptive_field_size {
             return Err(std::io::Error::new(

@@ -482,3 +482,81 @@ fn test_film_process_cond_size_4_groups_4_scale_only() {
         );
     }
 }
+
+// ── Constructor weight-count invariant (F-RES2-08) ────────────────────────
+
+/// F-RES2-08: `FiLMLayer::load` must reject a weight stream shorter than
+/// `groups * out_per_group * cond_per_group` — the exact extent the
+/// `get_unchecked` reader in `cond_to_scale_shift` walks.
+#[test]
+fn load_rejects_weights_shorter_than_row_layout() {
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups: 1,
+    };
+    let cond_size = 4;
+    let channels = 3;
+    // Needed: (3 * 2) * 4 = 24. One element short must be rejected.
+    let weights = vec![0.0f32; 23];
+    let bias = vec![0.0f32; channels * 2];
+    let err = FiLMLayer::load(config, cond_size, channels, weights, bias)
+        .err()
+        .expect("weights shorter than the row layout must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::WeightCountMismatch,
+        "short weight stream must map to WeightCountMismatch: {err}"
+    );
+}
+
+/// Companion of `load_rejects_weights_shorter_than_row_layout`: the exact
+/// count still loads (no valid-fixture rejection), and surplus stays
+/// permitted because the reader never walks past the row layout.
+#[test]
+fn load_accepts_weights_covering_row_layout() {
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups: 2,
+    };
+    let cond_size = 4;
+    let channels = 4;
+    // Needed: groups=2 → ch_per_group=2, out_per_group=4, cond_per_group=2
+    // → 4 * 2 * 2 = 16.
+    // All-zero weights and bias keep scale/shift at exactly 0.
+    let weights = vec![0.0f32; 16];
+    let bias = vec![0.0f32; channels * 2];
+    let mut layer = FiLMLayer::load(config, cond_size, channels, weights, bias)
+        .expect("weights covering the row layout must load");
+
+    let condition = vec![0.1f32; cond_size];
+    let mut input = vec![1.0f32; channels];
+    // SAFETY: `condition.len() == cond_size` and `input.len() == channels` as
+    // required by `FiLMLayer::process`'s Safety docs.
+    unsafe { layer.process(&mut input, &condition) };
+    // Zero weights and bias keep scale/shift at exactly 0.
+    for (c, &v) in input.iter().enumerate().take(channels) {
+        assert_eq!(v, 0.0, "channel {c}: modulation must be exact");
+    }
+}
+
+/// `groups == 0` would divide by zero in `cond_to_scale_shift`; the
+/// constructor rejects it before any division (defense-in-depth — the JSON
+/// parser already rejects it, but `FiLMConfig` is a plain public struct).
+#[test]
+fn load_rejects_zero_groups() {
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups: 0,
+    };
+    let err = FiLMLayer::load(config, 4, 3, vec![0.0f32; 24], vec![0.0f32; 6])
+        .err()
+        .expect("zero groups must be rejected, not panic");
+    assert_eq!(
+        err,
+        NamErrorCode::InvalidModelTopology,
+        "zero groups must map to InvalidModelTopology: {err}"
+    );
+}

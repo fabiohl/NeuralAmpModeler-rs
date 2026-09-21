@@ -8,7 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::validation::{
-    deserialize_sample_rate, deserialize_submodels, deserialize_training, deserialize_weights,
+    MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, deserialize_sample_rate,
+    deserialize_submodels, deserialize_training, deserialize_weights,
 };
 
 /// Slimmable configuration extracted from per-layer metadata.
@@ -316,6 +317,15 @@ impl NamConfig {
     /// Extracts a typed `HeadConfig` from the raw `head` JSON value.
     ///
     /// Returns `None` if the head field is absent, `null`, or not an object.
+    ///
+    /// Fail-closed ceilings (F-RES2-02): `channels`, `out_channels` and
+    /// `kernel_size` are capped at [`MAX_HEAD_CHANNELS`],
+    /// [`MAX_HEAD_OUT_CHANNELS`] and [`MAX_HEAD_KERNEL_SIZE`] (aliases of the
+    /// canonical layer ceilings) before any allocation or size multiplication
+    /// downstream (`PostStackHead::from_config`, `Conv1dDyn`). Oversized values
+    /// are rejected with `log::warn!` + typed `Err` by
+    /// [`NamConfig::validate_head`] / the topology builders; `parse_head`
+    /// itself stays infallible so existing callers keep their signature.
     pub fn parse_head(&self) -> Option<HeadConfig> {
         let val = self.head.as_ref()?;
         if val.is_null() || !val.is_object() {
@@ -345,6 +355,61 @@ impl NamConfig {
             activation,
             kernel_size,
         })
+    }
+
+    /// Fail-closed validation of the post-stack `head` sub-object (F-RES2-02).
+    ///
+    /// Applies the canonical ceilings ([`MAX_HEAD_CHANNELS`],
+    /// [`MAX_HEAD_OUT_CHANNELS`], [`MAX_HEAD_KERNEL_SIZE`]) to the parsed
+    /// `head.channels` / `head.out_channels` / `head.kernel_size` **before**
+    /// any downstream allocation or size multiplication. Consumed by the
+    /// topology validators (`topology/wavenet.rs` and `topology/convnet.rs`).
+    /// A missing field falls back to the `PostStackHead::from_config` default
+    /// (`in_channels` / 1 / 3), which is always within the ceilings, so
+    /// defaults never trip this check.
+    ///
+    /// Returns the parsed [`HeadConfig`] on success; on violation logs a
+    /// hostile-rejection warning and returns a typed `serde_json::Error` so the
+    /// caller fails closed without allocating.
+    ///
+    /// Note: `PostStackHead::from_config` enforces the same ceilings on its
+    /// own path as defense-in-depth for direct callers.
+    pub fn validate_head(
+        &self,
+        in_channels: usize,
+    ) -> Result<Option<HeadConfig>, serde_json::Error> {
+        let Some(head) = self.parse_head() else {
+            return Ok(None);
+        };
+        // Unspecified fields resolve to builder defaults that are known-small.
+        let channels = head.channels.unwrap_or(in_channels);
+        let out_channels = head.out_channels.unwrap_or(1);
+        let kernel_size = head.kernel_size.unwrap_or(3);
+        if channels > MAX_HEAD_CHANNELS {
+            log::warn!(
+                "head.channels ({channels}) exceeds maximum {MAX_HEAD_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
+            );
+            return Err(serde::de::Error::custom(format!(
+                "head.channels ({channels}) exceeds maximum {MAX_HEAD_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
+            )));
+        }
+        if out_channels > MAX_HEAD_OUT_CHANNELS {
+            log::warn!(
+                "head.out_channels ({out_channels}) exceeds maximum {MAX_HEAD_OUT_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
+            );
+            return Err(serde::de::Error::custom(format!(
+                "head.out_channels ({out_channels}) exceeds maximum {MAX_HEAD_OUT_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
+            )));
+        }
+        if kernel_size == 0 || kernel_size > MAX_HEAD_KERNEL_SIZE {
+            log::warn!(
+                "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+            );
+            return Err(serde::de::Error::custom(format!(
+                "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+            )));
+        }
+        Ok(Some(head))
     }
 }
 

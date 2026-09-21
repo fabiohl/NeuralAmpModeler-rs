@@ -112,8 +112,11 @@ impl A2Conv1d {
     /// `[out_ch][in_ch][kernel]` order and are permuted to
     /// grouped-interleaved-4-wide internally.
     ///
-    /// # Panics
-    /// Panics in debug if `in_ch % groups != 0` or `out_ch % groups != 0`.
+    /// # Errors
+    /// Propagates the typed constructor rejections of `A2GroupedConv1d::new`
+    /// (zero/non-divisor `groups`, `kernel` zero or above the `MAX_KERNEL`
+    /// tap-pointer ceiling, weight count inconsistent with the geometry) —
+    /// reachable from hostile model parsing, so it never panics.
     #[expect(
         clippy::too_many_arguments,
         reason = "A2 grouped convolution kernel requiring many shape/stride/group parameters for efficient neural network inference"

@@ -158,7 +158,7 @@ impl WaveNetA2Cascade {
                     if dsp_ch == 1 {
                         for f in (0..nf).rev() {
                             let val = buf[f];
-                            for c in 1..cond_size {
+                            for c in 0..cond_size {
                                 buf[f * cond_size + c] = val;
                             }
                         }

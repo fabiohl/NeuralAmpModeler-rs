@@ -5,6 +5,27 @@
 ///
 /// Parameters include SIMD intrinsics as closures and step/alignment constants.
 /// The `$attr` fragment captures `#[doc]` and `#[target_feature]` attributes.
+///
+/// # Safety (contract of every generated function)
+///
+/// The generated functions take raw pointers, so every length guarantee lives
+/// with the caller (slice-based wrappers assert lengths before downgrading to
+/// pointers — a per-call length `debug_assert!` is impossible on bare
+/// pointers):
+///
+/// - `coeffs`, `input_l` and `input_r` must each be valid for reads of
+///   `taps` initialized f32 elements for the duration of the call; all
+///   vector loads are bounded by the loop guards (`i + $step_dbl <= taps`,
+///   `i + $half_step <= taps`) and the scalar tail covers the rest, so no
+///   read beyond `[ptr, ptr + taps)` occurs for `taps` valid elements.
+/// - `coeffs` must be `$align`-byte aligned (checked by a `debug_assert!`
+///   inside the generated body; release builds rely on the caller —
+///   production callers pass 64-byte `AlignedVec` taps). The input pointers
+///   have no alignment requirement (`$loadu`).
+/// - The CPU must support the features in the generated `#[target_feature]`
+///   attributes — callers dispatch through runtime CPUID detection.
+/// - The kernel performs reads only; aliasing between the three pointers
+///   does not violate memory safety (though it changes the computed sum).
 #[macro_export]
 macro_rules! impl_convolve_stereo {
     (
@@ -81,6 +102,15 @@ macro_rules! impl_convolve_stereo {
 ///
 /// Loads input samples once and applies them to both coefficient sets.
 /// Uses double unrolling for both architectures.
+///
+/// # Safety (contract of every generated function)
+///
+/// Same obligations as [`impl_convolve_stereo!`], with one pointer per
+/// coefficient set: `coeffs0`, `coeffs1`, `input_l` and `input_r` must each be
+/// valid for reads of `taps` initialized f32 elements; `coeffs0` and
+/// `coeffs1` must both be `$align`-byte aligned (debug-asserted); the CPU
+/// must support the generated `#[target_feature]` set (runtime dispatch by
+/// the caller). Reads only — aliasing does not violate memory safety.
 #[macro_export]
 macro_rules! impl_convolve_stereo_dual {
     (
@@ -195,6 +225,15 @@ macro_rules! impl_convolve_stereo_dual {
 ///
 /// Loads input samples once and applies them to both coefficient sets.
 /// Uses double unrolling for both architectures.
+///
+/// # Safety (contract of every generated function)
+///
+/// Same obligations as [`impl_convolve_stereo!`], with one pointer per
+/// coefficient set: `coeffs0`, `coeffs1` and `input` must each be valid for
+/// reads of `taps` initialized f32 elements; `coeffs0` and `coeffs1` must
+/// both be `$align`-byte aligned (debug-asserted); the CPU must support the
+/// generated `#[target_feature]` set (runtime dispatch by the caller).
+/// Reads only — aliasing does not violate memory safety.
 #[macro_export]
 macro_rules! impl_convolve_mono_dual {
     (
@@ -283,6 +322,15 @@ macro_rules! impl_convolve_mono_dual {
 /// Generates a mono convolution function (single coeff set, one input channel).
 ///
 /// Uses double unrolling for both architectures.
+///
+/// # Safety (contract of every generated function)
+///
+/// Same obligations as [`impl_convolve_stereo!`]: `coeffs` and `input` must
+/// each be valid for reads of `taps` initialized f32 elements; `coeffs` must
+/// be `$align`-byte aligned (debug-asserted); `input` has no alignment
+/// requirement (`$loadu`); the CPU must support the generated
+/// `#[target_feature]` set (runtime dispatch by the caller). Reads only —
+/// aliasing does not violate memory safety.
 #[macro_export]
 macro_rules! impl_convolve_mono {
     (

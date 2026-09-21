@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+// Architecture-specific intrinsics and internal helper signatures.
 #![allow(
     // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
     unsafe_op_in_unsafe_fn,

@@ -52,6 +52,31 @@ pub const MAX_WAVENET_ARRAYS: usize = 8;
 /// Maximum head_size (head projection dimension) accepted from model config.
 pub const MAX_HEAD_SIZE: usize = 512;
 
+/// Post-stack head (`head` sub-object, WaveNet free-geometry / ConvNet `Layers`)
+/// channel cap (F-RES2-02).
+///
+/// Provenance: alias of [`MAX_WAVENET_FREE_CHANNELS`]; numerically identical to
+/// [`MAX_CONVNET_CHANNELS`] (both 512), so a single ceiling covers both
+/// head consumers (`PostStackHead::from_config` via WaveNet dynamic and ConvNet
+/// `Layers` builders) without inventing a new limit.
+pub const MAX_HEAD_CHANNELS: usize = MAX_WAVENET_FREE_CHANNELS;
+
+/// Post-stack head `out_channels` cap (F-RES2-02).
+///
+/// Provenance: alias of [`MAX_A2_HEAD_CHANNELS`]; numerically identical to
+/// [`MAX_HEAD_SIZE`] and [`MAX_CONVNET_CHANNELS`] (all 512).
+pub const MAX_HEAD_OUT_CHANNELS: usize = MAX_A2_HEAD_CHANNELS;
+
+/// Post-stack head `kernel_size` cap (F-RES2-02).
+///
+/// Provenance: alias of [`MAX_KERNEL_SIZE`] (16, the `Conv1dDyn` fixed
+/// `[null; MAX_KERNEL]` tap array). ConvNet blocks accept up to
+/// [`MAX_CONVNET_KERNEL_SIZE`] (64), but the head itself is a `Conv1dDyn`
+/// (`PostStackHead::from_config` → `Conv1dDyn::try_from_parts`), so the
+/// tighter dynamic-conv ceiling applies here; larger values are rejected
+/// before any allocation instead of surfacing later as a layout error.
+pub const MAX_HEAD_KERNEL_SIZE: usize = MAX_KERNEL_SIZE;
+
 /// Maximum channels per block for ConvNet.
 pub const MAX_CONVNET_CHANNELS: usize = 512;
 

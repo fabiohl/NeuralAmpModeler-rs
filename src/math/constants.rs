@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Numerical accuracy of Minimax polynomial and LUT constants requires excessive precision.
 #![allow(clippy::excessive_precision)]
 
 //! Mathematical constants, Minimax polynomial coefficients, and LUT parameters.

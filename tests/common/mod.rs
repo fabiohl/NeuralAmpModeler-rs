@@ -6,6 +6,7 @@
 //! Centralizes signal generation functions, error metrics, and DSP validation
 //! to avoid duplication across integration test files.
 
+// Test module fixtures shared across independent integration test targets.
 #![allow(dead_code)]
 #![allow(unused_imports)]
 

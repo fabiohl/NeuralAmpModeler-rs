@@ -11,12 +11,14 @@
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{
-    MAX_A2_HEAD_CHANNELS, WavenetTopologyResult, get_convnet_topology, get_lstm_topology,
-    get_wavenet_topology, parse_nam_json,
+    MAX_A2_HEAD_CHANNELS, MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS,
+    WavenetTopologyResult, get_convnet_topology, get_lstm_topology, get_wavenet_topology,
+    parse_nam_json,
 };
 use neural_amp_modeler_rs::loader::namb_encoder::ensure_capacity;
 use neural_amp_modeler_rs::loader::transpose::wavenet::transpose_wavenet_interleaved4;
 use neural_amp_modeler_rs::math::common::AlignedVec;
+use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::a2::conv1d::A2Conv1d;
 
 // ── Arithmetic Hardening & Integer Overflow Protection ────────────────────────
@@ -231,6 +233,147 @@ fn test_hostile_a2_oversized_head_size_rejected() {
     );
 }
 
+// ── A2-Dynamic `groups` Divisibility (F-RES2-01/F-RES2-06) ────────────────────
+
+/// Single-array A2-Dynamic WaveNet JSON (channels=12, bottleneck=12,
+/// non-gated LeakyReLU, one conv layer with kernel 3, layer-array head K=16)
+/// with configurable group counts — the minimal topology that reaches the
+/// grouped-conv/mixin/l1x1/head1x1 reshape arithmetic.
+fn a2_dynamic_groups_json(
+    groups_input: u64,
+    mixin_groups: u64,
+    l1x1_groups: u64,
+    head1x1_groups: Option<u64>,
+) -> String {
+    let head1x1 = match head1x1_groups {
+        None => "null".to_string(),
+        Some(g) => format!(r#"{{"active": true, "out_channels": 12, "groups": {g}}}"#),
+    };
+    format!(
+        r#"{{
+            "version": "0.6.0",
+            "architecture": "WaveNet",
+            "config": {{
+                "in_channels": 1,
+                "head_scale": 0.02,
+                "layers": [{{
+                    "input_size": 1,
+                    "condition_size": 1,
+                    "channels": 12,
+                    "bottleneck": 12,
+                    "kernel_sizes": [3],
+                    "dilations": [1],
+                    "activation": [{{"type": "LeakyReLU", "negative_slope": 0.01}}],
+                    "layer1x1": {{"active": true, "groups": {l1x1_groups}}},
+                    "head1x1": {head1x1},
+                    "head": {{"out_channels": 1, "kernel_size": 16, "bias": true}},
+                    "groups_input": {groups_input},
+                    "groups_input_mixin": {mixin_groups}
+                }}]
+            }},
+            "weights": [],
+            "sample_rate": 48000.0
+        }}"#
+    )
+}
+
+/// Weight stream length for the topology above with the given `groups_input`:
+/// rechannel (1×12) + conv ((12×12/groups)×3 + bias 12) + mixin (12×1) +
+/// layer1x1 (12×12 + bias 12) + head (16×12 + 1 + 1).
+fn a2_dynamic_weight_count(groups_input: u64) -> usize {
+    let groups_input = groups_input.max(1) as usize;
+    12 + (12 * 12 / groups_input) * 3 + 12 + 12 + 144 + 12 + 192 + 1 + 1
+}
+
+/// `groups_input: 7` with `channels: 12` (12 % 7 == 5) must be rejected with
+/// a typed `Err` at the parsing point — never a panic in any build profile.
+#[test]
+fn test_hostile_a2_groups_input_non_divisor_rejected() {
+    let json = a2_dynamic_groups_json(7, 1, 1, None);
+    let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+    let build_res = build_model(&parsed)
+        .err()
+        .expect("non-divisor groups_input must be rejected, not panic");
+    let err = build_res.to_string();
+    assert!(
+        err.contains("groups_input (7)"),
+        "error should identify the non-divisor groups_input: {err}"
+    );
+    assert!(
+        err.contains("hostile JSON rejection"),
+        "rejection must follow the hostile-JSON pattern: {err}"
+    );
+}
+
+/// `groups_input: 2` exactly divides `channels` and `conv_out` (both 12):
+/// the grouped topology must build and run successfully with a well-formed
+/// weight stream.
+#[test]
+fn test_hostile_a2_groups_input_divisor_builds() {
+    let json = a2_dynamic_groups_json(2, 1, 1, None);
+    let mut parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+    parsed.weights = vec![0.0f32; a2_dynamic_weight_count(2)];
+
+    let mut model = build_model(&parsed)
+        .expect("divisor groups_input (2 | 12) must build a valid A2-Dynamic model");
+    model.prewarm(64);
+
+    let input = [0.1f32; 64];
+    let mut output = [0.0f32; 64];
+    model.process(&input, &mut output);
+    for &s in &output {
+        assert!(s.is_finite(), "zero-weight model must emit finite samples");
+    }
+}
+
+/// `groups_input_mixin: 3` with `condition_size: 1` does not divide the mixin
+/// reshape operands — rejected at the parsing point.
+#[test]
+fn test_hostile_a2_mixin_groups_non_divisor_rejected() {
+    let json = a2_dynamic_groups_json(1, 3, 1, None);
+    let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+    let err = build_model(&parsed)
+        .err()
+        .expect("non-divisor groups_input_mixin must be rejected")
+        .to_string();
+    assert!(
+        err.contains("groups_input_mixin (3)"),
+        "error should identify the non-divisor groups_input_mixin: {err}"
+    );
+}
+
+/// `layer1x1.groups: 5` with bottleneck/channels 12 does not divide the
+/// layer1x1 reshape operands — rejected at the parsing point.
+#[test]
+fn test_hostile_a2_l1x1_groups_non_divisor_rejected() {
+    let json = a2_dynamic_groups_json(1, 1, 5, None);
+    let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+    let err = build_model(&parsed)
+        .err()
+        .expect("non-divisor layer1x1.groups must be rejected")
+        .to_string();
+    assert!(
+        err.contains("layer1x1.groups (5)"),
+        "error should identify the non-divisor layer1x1.groups: {err}"
+    );
+}
+
+/// Active `head1x1` with `groups: 7` and bottleneck/out_channels 12 does not
+/// divide the head1x1 reshape operands — rejected at the parsing point.
+#[test]
+fn test_hostile_a2_head1x1_groups_non_divisor_rejected() {
+    let json = a2_dynamic_groups_json(1, 1, 1, Some(7));
+    let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+    let err = build_model(&parsed)
+        .err()
+        .expect("non-divisor head1x1.groups must be rejected")
+        .to_string();
+    assert!(
+        err.contains("head1x1.groups (7)"),
+        "error should identify the non-divisor head1x1.groups: {err}"
+    );
+}
+
 // ── Degenerate Topology Validation (LSTM, ConvNet, WaveNet) ───────────────────
 
 #[test]
@@ -387,5 +530,205 @@ fn test_a2_conv1d_try_new_fail_closed_validation() {
     assert!(
         A2Conv1d::try_new(weights, small_bias, true, 1, 4, 8, 3).is_err(),
         "undersized bias must be rejected"
+    );
+}
+
+// ── Post-Stack Head Ceilings (F-RES2-02) ─────────────────────────────────────
+//
+// The `head` sub-object is the only loader dimension with a declared ceiling
+// after Sprint 2: `head.channels` / `head.out_channels` / `head.kernel_size`
+// are capped at the canonical layer ceilings before any allocation or size
+// multiplication. Each hostile dimension must fail closed (`Err`, never panic
+// or wrap) on both WaveNet free-geometry and ConvNet `Layers` paths.
+
+/// Builds a minimal WaveNet free-geometry JSON with the given `head` object
+/// literal (e.g. `"null"` or `"{\"channels\": ...}"`).
+fn wavenet_free_head_json(head_literal: &str) -> String {
+    format!(
+        r#"{{
+            "version": "0.5.4",
+            "architecture": "WaveNet",
+            "config": {{
+                "layers": [
+                    {{
+                        "input_size": 1, "condition_size": 1, "head_size": 4,
+                        "channels": 8, "kernel_size": 3, "dilations": [1, 2],
+                        "activation": "Tanh", "gated": false, "head_bias": false
+                    }},
+                    {{
+                        "input_size": 1, "condition_size": 1, "head_size": 4,
+                        "channels": 8, "kernel_size": 3, "dilations": [1, 2],
+                        "activation": "Tanh", "gated": false, "head_bias": true
+                    }}
+                ],
+                "head": {head_literal},
+                "head_scale": 0.02
+            }},
+            "weights": [0.0],
+            "sample_rate": 48000.0
+        }}"#
+    )
+}
+
+/// Builds a minimal ConvNet `Layers` JSON with the given `head` object literal.
+fn convnet_layers_head_json(head_literal: &str) -> String {
+    format!(
+        r#"{{
+            "version": "0.5.4",
+            "architecture": "ConvNet",
+            "config": {{
+                "layers": [{{
+                    "channels": 4, "kernel_size": 2, "dilations": [1],
+                    "activation": "ReLU"
+                }}],
+                "head": {head_literal},
+                "head_scale": 1.0
+            }},
+            "weights": [0.0],
+            "sample_rate": 48000.0
+        }}"#
+    )
+}
+
+#[test]
+fn test_hostile_head_channels_extreme_rejected_wavenet() {
+    for extreme in [MAX_HEAD_CHANNELS + 1, usize::MAX] {
+        let json = wavenet_free_head_json(&format!(
+            r#"{{"channels": {extreme}, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": 1}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        match get_wavenet_topology(&parsed) {
+            WavenetTopologyResult::Rejected(reason) => assert!(
+                reason.contains("head"),
+                "rejection should identify the head ceiling, got: {reason}"
+            ),
+            other => panic!("head.channels={extreme} must be rejected, got {other:?}"),
+        }
+        assert!(
+            build_model(&parsed).is_err(),
+            "head.channels={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_head_out_channels_extreme_rejected_wavenet() {
+    for extreme in [MAX_HEAD_OUT_CHANNELS + 1, usize::MAX] {
+        let json = wavenet_free_head_json(&format!(
+            r#"{{"channels": 4, "bias": false, "out_channels": {extreme}, "activation": "Tanh", "kernel_size": 1}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        match get_wavenet_topology(&parsed) {
+            WavenetTopologyResult::Rejected(reason) => assert!(
+                reason.contains("head"),
+                "rejection should identify the head ceiling, got: {reason}"
+            ),
+            other => panic!("head.out_channels={extreme} must be rejected, got {other:?}"),
+        }
+        assert!(
+            build_model(&parsed).is_err(),
+            "head.out_channels={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_head_kernel_extreme_rejected_wavenet() {
+    for extreme in [MAX_HEAD_KERNEL_SIZE + 1, usize::MAX] {
+        let json = wavenet_free_head_json(&format!(
+            r#"{{"channels": 4, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": {extreme}}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        match get_wavenet_topology(&parsed) {
+            WavenetTopologyResult::Rejected(reason) => assert!(
+                reason.contains("head"),
+                "rejection should identify the head ceiling, got: {reason}"
+            ),
+            other => panic!("head.kernel_size={extreme} must be rejected, got {other:?}"),
+        }
+        assert!(
+            build_model(&parsed).is_err(),
+            "head.kernel_size={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_head_channels_extreme_rejected_convnet() {
+    for extreme in [MAX_HEAD_CHANNELS + 1, usize::MAX] {
+        let json = convnet_layers_head_json(&format!(
+            r#"{{"channels": {extreme}, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": 1}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        assert!(
+            get_convnet_topology(&parsed).is_none(),
+            "ConvNet head.channels={extreme} must be rejected by get_convnet_topology"
+        );
+        assert!(
+            build_model(&parsed).is_err(),
+            "ConvNet head.channels={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_head_out_channels_extreme_rejected_convnet() {
+    for extreme in [MAX_HEAD_OUT_CHANNELS + 1, usize::MAX] {
+        let json = convnet_layers_head_json(&format!(
+            r#"{{"channels": 4, "bias": false, "out_channels": {extreme}, "activation": "Tanh", "kernel_size": 1}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        assert!(
+            get_convnet_topology(&parsed).is_none(),
+            "ConvNet head.out_channels={extreme} must be rejected by get_convnet_topology"
+        );
+        assert!(
+            build_model(&parsed).is_err(),
+            "ConvNet head.out_channels={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_head_kernel_extreme_rejected_convnet() {
+    for extreme in [MAX_HEAD_KERNEL_SIZE + 1, usize::MAX] {
+        let json = convnet_layers_head_json(&format!(
+            r#"{{"channels": 4, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": {extreme}}}"#
+        ));
+        let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
+        assert!(
+            get_convnet_topology(&parsed).is_none(),
+            "ConvNet head.kernel_size={extreme} must be rejected by get_convnet_topology"
+        );
+        assert!(
+            build_model(&parsed).is_err(),
+            "ConvNet head.kernel_size={extreme} must fail build_model"
+        );
+    }
+}
+
+/// A small valid `head` must keep building on both paths (guard against
+/// ceiling regressions on legitimate models).
+#[test]
+fn test_valid_head_at_ceiling_builds() {
+    let wavenet = wavenet_free_head_json(&format!(
+        r#"{{"channels": {MAX_HEAD_CHANNELS}, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": 1}}"#
+    ));
+    let parsed = parse_nam_json(&wavenet).expect("JSON syntax is valid");
+    assert!(
+        matches!(
+            get_wavenet_topology(&parsed),
+            WavenetTopologyResult::Known(_) | WavenetTopologyResult::Free(_)
+        ),
+        "head at the ceiling must stay accepted"
+    );
+
+    let convnet = convnet_layers_head_json(
+        r#"{"channels": 4, "bias": false, "out_channels": 1, "activation": "Tanh", "kernel_size": 1}"#,
+    );
+    let parsed_conv = parse_nam_json(&convnet).expect("JSON syntax is valid");
+    assert!(
+        get_convnet_topology(&parsed_conv).is_some(),
+        "small valid ConvNet head must stay accepted"
     );
 }

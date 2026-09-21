@@ -8,6 +8,7 @@
 //! 1D convolutions, batchnorm/bias, and LeakyReLU activations,
 //! followed by a linear head projection to mono output.
 
+// Reference oracles mirror production formulas without individual item documentation.
 #![allow(missing_docs)]
 
 use crate::loader::nam_json::model::NamModelData;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+// Internal fallback convolution helper retains full signature.
 #![allow(clippy::too_many_arguments)]
 
 //! Scalar reference implementation for the A2 dilated causal Conv1D.
@@ -98,7 +99,8 @@ pub fn a2_conv1d_single_frame_fallback(
 
         for k in 0..kernel {
             let offset = (dilation as isize) * ((k as isize) + 1 - (kernel as isize));
-            let in_slice_start = ((frame_idx as isize) + offset) as usize * in_ch;
+            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            let in_slice_start = (((frame_idx as isize) + offset).max(0)) as usize * in_ch;
 
             let w_start = (b * kernel + k) * in_ch * 4;
 

@@ -278,10 +278,21 @@ impl WaveNetModelDyn {
                 cond_dsp.process(in_slice, cond_out);
                 let dsp_ch = cond_dsp.num_output_channels();
                 if dsp_ch > 0 && dsp_ch < cond {
-                    for f in (0..num_frames).rev() {
-                        let val = cond_out[f];
-                        for c in 1..cond {
-                            cond_out[f * cond + c] = val;
+                    if dsp_ch == 1 {
+                        for f in (0..num_frames).rev() {
+                            let val = cond_out[f];
+                            for c in 0..cond {
+                                cond_out[f * cond + c] = val;
+                            }
+                        }
+                    } else {
+                        for f in (0..num_frames).rev() {
+                            for c in (0..dsp_ch).rev() {
+                                cond_out[f * cond + c] = cond_out[f * dsp_ch + c];
+                            }
+                            for c in dsp_ch..cond {
+                                cond_out[f * cond + c] = cond_out[f * cond + (c % dsp_ch)];
+                            }
                         }
                     }
                 }
@@ -401,9 +412,15 @@ impl WaveNetModelDyn {
             cond_dsp.process(&zero_input, &mut self.condition_dsp_output[0..cond]);
             let dsp_ch = cond_dsp.num_output_channels();
             if dsp_ch > 0 && dsp_ch < cond {
-                let val = self.condition_dsp_output[0];
-                for c in 1..cond {
-                    self.condition_dsp_output[c] = val;
+                if dsp_ch == 1 {
+                    let val = self.condition_dsp_output[0];
+                    for c in 1..cond {
+                        self.condition_dsp_output[c] = val;
+                    }
+                } else {
+                    for c in dsp_ch..cond {
+                        self.condition_dsp_output[c] = self.condition_dsp_output[c % dsp_ch];
+                    }
                 }
             }
             &self.condition_dsp_output[0..cond]

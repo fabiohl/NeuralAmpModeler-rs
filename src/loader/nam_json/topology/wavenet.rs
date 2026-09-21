@@ -266,6 +266,29 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         );
     }
 
+    // ── Post-stack head ceilings (F-RES2-02) ──
+    // The head is the only loader dimension without a declared cap; validate
+    // it before the geometry is accepted so hostile `head.channels` /
+    // `head.out_channels` / `head.kernel_size` never reach the size arithmetic
+    // in `PostStackHead::from_config` (now checked, but still fail-closed here
+    // so the whole topology is rejected before any allocation).
+    let in_channels = data
+        .config
+        .layers
+        .last()
+        .and_then(|l| l.head_size)
+        .unwrap_or(1);
+    let post_stack_head = match data.config.validate_head(in_channels) {
+        Ok(head) => head,
+        Err(_) => {
+            return WavenetTopologyResult::Rejected(
+                "WaveNet free-geometry head exceeds canonical ceilings \
+                 (channels/out_channels/kernel_size) — OOM/DoS protection (F-RES2-02)."
+                    .to_string(),
+            );
+        }
+    };
+
     WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
         channels: extract.channels,
         kernel_size,
@@ -275,7 +298,7 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         condition_size,
         num_arrays: layers.len(),
         dilations: extract.dilations,
-        post_stack_head: data.config.parse_head(),
+        post_stack_head,
         allowed_channels,
     }))
 }

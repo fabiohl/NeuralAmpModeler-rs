@@ -55,8 +55,9 @@ impl Conv1dDyn {
     /// invariant (F-16 / R-2). The hot-path kernels derive their `[f32; W]`
     /// slices from `self.weights` for every output block
     /// `b < out_ch.div_ceil(W)` and every tap `k < kernel`, whose last element
-    /// ends at `out_ch.div_ceil(W) * W * in_ch * kernel`; rejecting smaller
-    /// buffers here keeps every `from_raw_parts` in the process methods
+    /// ends at `out_ch.div_ceil(W) * W * in_ch * kernel` (computed with checked
+    /// arithmetic, F-RES2-04); rejecting smaller buffers here keeps every
+    /// `from_raw_parts` in the process methods
     /// structurally in bounds in release builds — no hot-path check is needed
     /// or performed.
     ///
@@ -69,6 +70,8 @@ impl Conv1dDyn {
     /// - `kernel` is zero or exceeds `MAX_KERNEL` — the hot path reads taps
     ///   through a fixed `MAX_KERNEL`-entry array;
     /// - `interleave_width` is not one of 4/8/16;
+    /// - the padded size product `out_ch.div_ceil(W) * W * in_ch * kernel`
+    ///   overflows `usize` (checked, F-RES2-04 — never wraps in release);
     /// - `weights` holds fewer than the SIMD-padded total
     ///   `out_ch.div_ceil(W) * W * in_ch * kernel` f32s, which would make the
     ///   interleaved SIMD kernels read out of bounds on the hot path.
@@ -104,7 +107,19 @@ impl Conv1dDyn {
             "Conv1dDyn interleave_width must be 4, 8 or 16, got {interleave_width}"
         );
         let num_blocks = out_ch.div_ceil(interleave_width);
-        let padded_total = num_blocks * interleave_width * in_ch * kernel;
+        // Defense-in-depth (F-RES2-04): checked size product so hostile
+        // `in_ch`/`out_ch`/`kernel` can never wrap into a smaller contract in
+        // release builds (overflow-checks off). Mirrors the
+        // `checked_arith::checked_conv_padded_total` pattern used by the loader.
+        let padded_total = num_blocks
+            .checked_mul(interleave_width)
+            .and_then(|v| v.checked_mul(in_ch))
+            .and_then(|v| v.checked_mul(kernel))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Conv1dDyn weights size overflows usize: num_blocks ({num_blocks}) * interleave_width ({interleave_width}) * in_ch ({in_ch}) * kernel ({kernel}) — DoS protection (F-RES2-04)"
+                )
+            })?;
         anyhow::ensure!(
             weights.len() >= padded_total,
             "Conv1d weights buffer is too small: expected >= {padded_total} \
