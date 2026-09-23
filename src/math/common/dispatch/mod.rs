@@ -13,9 +13,12 @@ pub mod instruction_set;
 pub use config::SimdMathConfig;
 pub use detect::SIMD_MATH;
 pub use detect::{
-    IsaOverrideError, avx512_capability_complete, clear_test_isa_override, decode_isa_override,
-    effective_instruction_set, encode_isa_override, set_test_isa_override,
+    IsaOverrideError, avx512_capability_complete, decode_isa_override, effective_instruction_set,
+    encode_isa_override,
 };
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+pub use detect::{clear_test_isa_override, set_test_isa_override};
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use detect::{has_full_avx512, missing_avx512_features};

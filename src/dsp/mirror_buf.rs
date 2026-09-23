@@ -192,6 +192,8 @@ pub struct MirroredBuffer<T> {
 
 /// Sets whether the next `MirroredBuffer` creation calls should simulate
 /// virtual memory allocation failure.
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub fn set_simulate_fail(fail: bool) {
     SIMULATE_FAIL.with(|f| f.set(fail));
 }

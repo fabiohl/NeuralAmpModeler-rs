@@ -118,6 +118,7 @@ pub struct TelemetrySnapshot {
 }
 
 /// Snapshot of the dynamic runtime state, captured on-demand.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeSnapshot {
     /// Active model info, if loaded.

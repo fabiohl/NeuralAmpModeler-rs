@@ -251,7 +251,7 @@ Full API documentation:
   # Production builds, testing, and CI of NeuralAmpModeler-rs remain strictly on stable Rust.
   RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
     --no-default-features \
-    --features "dual-mono,testing,heap-audit,fft-radix4-planner,avx512" \
+    --features "dual-mono,testing,heap-audit,fft-radix4-planner,avx512,rt-hardening" \
     --no-deps
   ```
 
@@ -272,6 +272,7 @@ NeuralAmpModeler-rs provides several Cargo feature flags to configure capabiliti
 | `testing` | Disabled | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles. | Reusable Tooling |
 | `fft-radix4-planner` | Disabled | Enables Radix-4 FFT planner benchmarks and execution planning routines. | Reusable Tooling / Benchmarks |
 | `avx512` | Disabled | Compiles optional AVX-512 kernels and dynamic runtime dispatch for experimental research and CPU benchmarking. | Research / Experimental |
+| `rt-hardening` | Disabled | Opt-in real-time host hardening (THP disable, mlockall, SCHED_FIFO, DAZ/FTZ, IRQ affinity). Linux-only. | Production / Linux RT |
 
 > ⚠️ **Note on `avx512` (Usage Discouraged in Production):** This flag enables upward runtime dispatch to specialized AVX-512 kernels (`Avx512Math`). However, its use in production builds, release packaging, and live audio processing is **actively discouraged**. Empirical hardware benchmarks (canonical 2026-09-09 audit receipt on Sapphire Rapids) demonstrate that the default `x86-64-v3` baseline (AVX2 + FMA) yields superior throughput and lower latency across canonical NAM models (AVX-512 introduced 2% to 33% latency regressions across 14 of 15 configurations due to vector zero-masking and packaging overhead in compact channel geometries $C \le 16$).
 >

@@ -25,6 +25,7 @@ pub fn set_host_library_version(version: String) {
 ///
 /// Includes static system information useful for triage:
 /// NeuralAmpModeler-rs version, architecture, OS, CPU features, kernel version.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SystemSnapshot {
     /// NeuralAmpModeler-rs version (e.g. "1.0.0").

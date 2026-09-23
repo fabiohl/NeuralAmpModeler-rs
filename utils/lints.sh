@@ -10,7 +10,7 @@
 #   All Features (catch-all) : --all-targets --all-features
 #   Pure Core                : --lib --no-default-features
 #   No Default Features      : --all-targets --no-default-features
-#   Individual feature axes  : fft-radix4-planner, dual-mono, testing, heap-audit
+#   Individual feature axes  : fft-radix4-planner, dual-mono, testing, heap-audit, rt-hardening
 
 set -euo pipefail
 
@@ -63,6 +63,9 @@ cargo check --locked --all-targets --no-default-features --features testing
 echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (heap-audit)...${NC}"
 cargo check --locked --all-targets --no-default-features --features heap-audit
 
+echo -e "  ${YELLOW}${BOLD}Checking: Feature Axis (rt-hardening)...${NC}"
+cargo check --locked --all-targets --no-default-features --features rt-hardening
+
 ok "All compilation check permutations passed ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,15 @@ cargo clippy --locked --all-targets --no-default-features --features fft-radix4-
 
 echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (dual-mono)...${NC}"
 cargo clippy --locked --all-targets --no-default-features --features dual-mono -- -D warnings
+
+echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (testing)...${NC}"
+cargo clippy --locked --all-targets --no-default-features --features testing -- -D warnings
+
+echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (heap-audit)...${NC}"
+cargo clippy --locked --all-targets --no-default-features --features heap-audit -- -D warnings
+
+echo -e "  ${YELLOW}${BOLD}Clippy: Feature Axis (rt-hardening)...${NC}"
+cargo clippy --locked --all-targets --no-default-features --features rt-hardening -- -D warnings
 
 ok "All static analysis permutations passed cleanly with zero warnings ($(phase_elapsed_str))."
 

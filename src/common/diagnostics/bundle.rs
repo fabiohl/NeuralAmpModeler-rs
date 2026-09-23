@@ -29,6 +29,7 @@ pub struct ErrorContext {
 ///   instead of full paths.
 /// - When `full` is true (e.g. `--diagnose-full` or interactive `:diag --full`), paths are shown unredacted (bruto).
 /// - Weights content, audio signals, and user/host names are never captured or included.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct DiagnosticBundle {
     /// System snapshot (OS, kernel, etc).

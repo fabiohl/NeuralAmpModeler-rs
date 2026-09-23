@@ -170,6 +170,8 @@ pub fn missing_avx512_features() -> Vec<&'static str> {
 /// Returns the previous raw override byte (for restore semantics); callers
 /// may restore it via [`clear_test_isa_override`] or a raw store of the
 /// returned byte.
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 #[expect(deprecated)]
 pub fn set_test_isa_override(isa: InstructionSet) -> Result<u8, IsaOverrideError> {
     match isa {
@@ -217,6 +219,8 @@ pub fn set_test_isa_override(isa: InstructionSet) -> Result<u8, IsaOverrideError
 ///
 /// Returns the previous raw override byte (usually the one produced by a
 /// prior [`set_test_isa_override`] call).
+#[cfg(any(test, feature = "testing"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 #[inline]
 pub fn clear_test_isa_override() -> u8 {
     TEST_ISA_OVERRIDE.swap(u8::MAX, Ordering::SeqCst)

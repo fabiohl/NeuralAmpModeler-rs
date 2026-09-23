@@ -535,3 +535,43 @@ fn test_ir_resample_flush_avoids_zero_flood() {
         "resampled IR must contain only finite samples"
     );
 }
+
+/// Tests that loading a CabSim IR captures metadata and file size in `LogBuffer`.
+#[test]
+fn test_cab_sim_ir_log_buffer_observability() {
+    let _ = crate::common::diagnostics::NamLogger::init(crate::common::diagnostics::LoggerConfig {
+        level_filter: log::LevelFilter::Debug,
+        emit_stderr: false,
+    });
+
+    let path = create_temp_cab_ir_wav("log_obs");
+    let file_size = std::fs::metadata(&path).expect("metadata").len() as usize;
+
+    let ir = CabSimIr::load(&path, 0, false).expect("failed to load IR WAV");
+    assert_eq!(ir.sample_rate, 48_000);
+
+    let buffer =
+        crate::common::diagnostics::NamLogger::log_buffer().expect("LogBuffer should be available");
+    let snapshot = buffer.snapshot();
+
+    let has_loading = snapshot.iter().any(|r| {
+        r.message.contains("[Loader] Loading IR from")
+            && r.message.contains(&format!("size: {} bytes", file_size))
+    });
+    let has_success = snapshot.iter().any(|r| {
+        r.message.contains("[Loader] IR loaded successfully")
+            && r.message.contains("mono")
+            && r.message.contains(&format!("{} bytes", file_size))
+    });
+
+    std::fs::remove_file(path).ok();
+
+    assert!(
+        has_loading,
+        "LogBuffer must capture '[Loader] Loading IR from' with file size in bytes"
+    );
+    assert!(
+        has_success,
+        "LogBuffer must capture '[Loader] IR loaded successfully' with mono and file size in bytes"
+    );
+}

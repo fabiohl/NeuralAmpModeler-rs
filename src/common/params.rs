@@ -28,6 +28,7 @@ const GATE_THRESHOLD_DB_DEFAULT: f32 = -70.0;
 /// can be deserialized by subsequent versions via `serde_json::from_str` — missing
 /// fields receive their default values (`#[serde(default)]`). This contract is
 /// verified by regression tests in `tests/state_compat.rs`.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessingParams {
     /// Input gain in decibels (dB). Default: 0.0.
@@ -86,6 +87,11 @@ fn default_gate_threshold_db() -> f32 {
 }
 
 impl ProcessingParams {
+    /// Creates a new `ProcessingParams` initialized to default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Creates a new `ProcessingParams` initialized to default values for fluent building.
     ///
     /// # Examples

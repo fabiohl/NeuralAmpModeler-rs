@@ -42,10 +42,24 @@ mod loader_log_test;
 ///
 /// Produced by the main/UI thread and consumed by the loader before passing
 /// the ready-to-render model pair to the RT thread.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoadOptions {
     /// `None`  → use default (prewarm runs normally).
     /// `Some(false)` → skip the initial prewarm pass (fast preview / preset browsing).
     /// `Some(true)`  → force prewarm on (explicit override).
     pub prewarm: Option<bool>,
+}
+
+impl LoadOptions {
+    /// Creates a default `LoadOptions` configuration.
+    pub const fn new() -> Self {
+        Self { prewarm: None }
+    }
+
+    /// Configures explicit prewarm behavior.
+    pub const fn with_prewarm(mut self, prewarm: Option<bool>) -> Self {
+        self.prewarm = prewarm;
+        self
+    }
 }

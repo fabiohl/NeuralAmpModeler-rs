@@ -56,13 +56,15 @@ impl CabSimIr {
     /// ```
     #[cold]
     pub fn load(path: &Path, target_rate: u32, normalize: bool) -> io::Result<Box<Self>> {
+        let data = ir_parse::read_file(path)?;
+        let file_size_bytes = data.len();
         info!(
-            "[Loader] Loading IR from \"{}\" (target_rate={} Hz, normalize={})",
+            "[Loader] Loading IR from \"{}\" (size: {} bytes, target_rate={} Hz, normalize={})",
             path.display(),
+            file_size_bytes,
             target_rate,
             normalize
         );
-        let data = ir_parse::read_file(path)?;
         let (samples, original_rate) = ir_parse::parse_wav(&data)?;
 
         let mut samples = if target_rate != 0 && target_rate != original_rate {
@@ -94,9 +96,11 @@ impl CabSimIr {
         };
 
         info!(
-            "[Loader] IR loaded: {} samples, {} Hz, normalized={}",
+            "[Loader] IR loaded successfully: {} samples, {} Hz (original: {} Hz, mono, {} bytes, normalized={})",
             samples.len(),
             effective_rate,
+            original_rate,
+            file_size_bytes,
             normalized
         );
 

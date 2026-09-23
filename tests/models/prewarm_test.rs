@@ -33,8 +33,13 @@ fn load_with_opts(
     path: &std::path::Path,
     prewarm: Option<bool>,
 ) -> neural_amp_modeler_rs::loader::LoadedModelPair {
-    load_and_build_model(path, &sys(), false, LoadOptions { prewarm })
-        .expect("Failed to load model for prewarm test")
+    load_and_build_model(
+        path,
+        &sys(),
+        false,
+        LoadOptions::new().with_prewarm(prewarm),
+    )
+    .expect("Failed to load model for prewarm test")
 }
 
 // =============================================================================
@@ -265,9 +270,7 @@ fn test_container_load_skip_propagation() {
         &path,
         &sys(),
         false,
-        LoadOptions {
-            prewarm: Some(false),
-        },
+        LoadOptions::new().with_prewarm(Some(false)),
     ) else {
         eprintln!("SKIP: container build failed (unsupported activation in submodel).");
         return;
