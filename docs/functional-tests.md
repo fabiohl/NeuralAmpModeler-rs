@@ -33,6 +33,10 @@ Before executing manual stress scenarios, micro-benchmarking, or pre-release run
 
 1. **CPU Frequency Scaling Governor:**
    Must be configured to `performance` across all physical CPU cores to eliminate frequency throttling, core migration jitter, and timer noise during real-time deadline tests.
+   The QA harness (`EnvProbe`, RT preflight) probes the governor of the
+   effective bench core (`BENCH_CORE`/`NAM_BENCH_CORE`, default `nproc / 2`),
+   not a fixed `cpu0` — on hybrid (P-core/E-core) hosts `cpu0` alone is not
+   representative.
 
    ```bash
    # Check active governor status across all cores
@@ -271,8 +275,8 @@ All test runners, compilation helpers, and preflight steps persist detailed exec
 | **`target/logs/phase2-proptests-parity.log`**    | `tests-long.sh` (Phase 3)               | Full live C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                                                                                     |
 | **`target/logs/subphase-isa-parity.log`**        | `tests-long.sh` (Phase 3 Subphase)      | Cross-ISA determinism validation logs (`isa_parity`).                                                                                                            |
 | **`target/logs/phase3-heap-audit.log`**          | `tests-long.sh` (Phase 4)               | Memory interceptor allocation reports (`CountingAllocator`).                                                                                                     |
-| **`target/logs/phase4-rt-deadline.log`**         | `tests-long.sh` (Phase 5)               | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$).                                                                                      |
-| **`target/logs/phase5-rt-jitter.log`**           | `tests-long.sh` (Phase 6)               | Real-time jitter telemetry and thread contention profiles.                                                                                                       |
+| **`target/logs/phase4-rt-deadline.log`**         | `tests-long.sh` (Phase 5)               | Latency histograms, deadline overshoot statistics ($p99 < 1.33\text{ ms}$). p50/p90/p99/p99.9 are log2 bucket upper edges (`1 << (i+5)` ns, see `src/dsp/telemetry.rs`) — only `exact_max`/`exact_min`/`mean` are exact. |
+| **`target/logs/phase5-rt-jitter.log`**           | `tests-long.sh` (Phase 6)               | Real-time jitter telemetry and thread contention profiles. Same bucket semantics as `phase4-rt-deadline.log`: p50/p90/p99/p99.9 are bucket edges, not exact values. |
 | **`target/logs/phase6-loom.log`**                | `tests-long.sh` (Phase 7)               | Concurrency model checker state-space exploration logs.                                                                                                          |
 | **`~/.cache/neural-amp-modeler-rs/crash-*.txt`** | Runtime Panic Hook (DSP/Plugin)         | Stack-safe diagnostic crash reports rendered without heap allocations.                                                                                           |
 

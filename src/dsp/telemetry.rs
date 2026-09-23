@@ -2,6 +2,11 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Real-time latency telemetry for the DSP pipeline.
+//!
+//! The binary RT gate reads `LatencyHistogram` bucket edges. The
+//! complementary `ExactLatencyReservoir` (S1-T4, `testing`/`heap-audit`
+//! only, never production) stores exact samples for trend reports so
+//! sub-bucket drift is visible without touching the gate.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -157,6 +162,98 @@ impl LatencyHistogram {
     }
 }
 
+/// Complementary exact-sample reservoir for trend reports (S1-T4).
+///
+/// Stores up to `N` raw latency samples (ring overwrite) so exact
+/// percentiles (`p50`/`p90`/`p99`/`p99.9` via sorting) can be compared
+/// against the [`LatencyHistogram`] bucket edges. Off-RT only: `record`
+/// performs heap-free index arithmetic but `percentile_exact` sorts a
+/// snapshot — never call it on the audio thread.
+///
+/// Compiled only with `testing`/`heap-audit` (never in the default or
+/// production build) so the shipped codegen stays byte-identical.
+///
+/// Note: unit tests always compile with `cfg(test)`, so the S1-T4 tests
+/// below exercise the reservoir in every `cargo test` invocation — but the
+/// type itself is absent from non-`testing` library builds.
+#[cfg(any(test, feature = "testing", feature = "heap-audit"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[repr(align(128))]
+pub struct ExactLatencyReservoir<const N: usize = 2048> {
+    /// Ring buffer of exact samples in nanoseconds.
+    samples: [AtomicU64; N],
+    /// Monotonic write counter (also the filled-count source via `min`).
+    count: AtomicU64,
+}
+
+#[cfg(any(test, feature = "testing", feature = "heap-audit"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+impl<const N: usize> ExactLatencyReservoir<N> {
+    /// Creates a new empty reservoir.
+    #[cold]
+    pub fn new() -> Self {
+        Self {
+            samples: [const { AtomicU64::new(0) }; N],
+            count: AtomicU64::new(0),
+        }
+    }
+
+    /// Records one exact latency sample (off-RT trend path only).
+    ///
+    /// Lock-free ring overwrite: the slot is `count % N`. Concurrent
+    /// overwrites are benign (trend telemetry, not the binary gate).
+    pub fn record(&self, duration_ns: u64) {
+        let slot = self.count.fetch_add(1, Ordering::Relaxed) as usize % N;
+        // SAFETY: `slot < N` by construction (`% N`); single-slot store.
+        if let Some(cell) = self.samples.get(slot) {
+            cell.store(duration_ns, Ordering::Relaxed);
+        }
+    }
+
+    /// Number of valid samples currently held (`min(count, N)`).
+    pub fn len(&self) -> usize {
+        (self.count.load(Ordering::Relaxed) as usize).min(N)
+    }
+
+    /// Whether no sample has been recorded yet.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Exact percentile of the stored samples (`p` in `[0.0, 1.0]`).
+    ///
+    /// Sorts an off-RT snapshot — never call on the audio thread. Returns
+    /// `0` when empty; clamps `p` to `[0.0, 1.0]`.
+    pub fn percentile_exact(&self, p: f64) -> u64 {
+        let len = self.len();
+        if len == 0 || N == 0 {
+            return 0;
+        }
+        let mut snapshot: [u64; N] =
+            core::array::from_fn(|i| self.samples[i].load(Ordering::Relaxed));
+        snapshot[..len].sort_unstable();
+        let clamped = p.clamp(0.0, 1.0);
+        let rank = ((len as f64 * clamped) as usize).min(len).saturating_sub(1);
+        snapshot[rank]
+    }
+
+    /// Zeros all slots and the write counter (off-RT only).
+    pub fn reset(&self) {
+        for cell in &self.samples {
+            cell.store(0, Ordering::Relaxed);
+        }
+        self.count.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(any(test, feature = "testing", feature = "heap-audit"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+impl<const N: usize> Default for ExactLatencyReservoir<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +299,49 @@ mod tests {
         assert!(hist.get_percentile(0.99) <= 16384);
         assert_eq!(hist.get_exact_min(), 100);
         assert_eq!(hist.get_exact_max(), 10000);
+    }
+
+    /// S1-T4: exact percentiles resolve sub-bucket drift the log2 buckets hide.
+    /// Unit tests compile with `cfg(test)`, so this runs in every suite.
+    #[test]
+    fn test_exact_reservoir_resolves_sub_bucket_drift() {
+        let hist = LatencyHistogram::new();
+        let exact = ExactLatencyReservoir::<2048>::new();
+        for value in [700u64, 750, 800, 950, 1050] {
+            for _ in 0..400 {
+                hist.record(value);
+                exact.record(value);
+            }
+        }
+        // Both bucket populations collapse toward neighboring edges while the
+        // exact p50 tracks the true median sample.
+        assert_eq!(exact.percentile_exact(0.50), 800);
+        assert_eq!(exact.percentile_exact(0.80), 950);
+        assert_eq!(exact.percentile_exact(0.99), 1050);
+        assert!(
+            hist.get_percentile(0.50) != exact.percentile_exact(0.50),
+            "bucket edge must differ from the exact median for this mix"
+        );
+        assert_eq!(exact.len(), 2000);
+        assert!(!exact.is_empty());
+        exact.reset();
+        assert!(exact.is_empty());
+        assert_eq!(exact.percentile_exact(0.99), 0);
+    }
+
+    /// S1-T4: ring overwrite keeps the newest `N` samples; empty reads zero.
+    #[test]
+    fn test_exact_reservoir_ring_overwrite_and_empty() {
+        let exact = ExactLatencyReservoir::<8>::new();
+        assert!(exact.is_empty());
+        assert_eq!(exact.percentile_exact(0.50), 0);
+        for value in 1u64..=10 {
+            exact.record(value * 100);
+        }
+        assert_eq!(exact.len(), 8);
+        // Newest 8 of 1..=10 (×100): 300..=1000.
+        assert_eq!(exact.percentile_exact(0.0), 300);
+        assert_eq!(exact.percentile_exact(1.0), 1000);
+        assert_eq!(exact.percentile_exact(0.50), 600);
     }
 }

@@ -13,6 +13,8 @@ use core::arch::x86_64::*;
 /// # Safety
 ///
 /// The caller must ensure that the CPU supports AVX2 and FMA target features.
+// KEEP IN SYNC WITH: `src/models/a2/film.rs::dot_product_avx2`
+// (Note: `film.rs` maintains a specialized 2-accumulator 16-unrolled inlined version for small condition vectors)
 #[target_feature(enable = "avx2,fma")]
 pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());

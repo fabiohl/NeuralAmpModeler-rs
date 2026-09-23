@@ -560,3 +560,83 @@ fn load_rejects_zero_groups() {
         "zero groups must map to InvalidModelTopology: {err}"
     );
 }
+
+/// Regression test (S4-T3 / F-PERF-34): compares the local private
+/// `dot_product_avx2` in `film.rs` against the shared kernel in
+/// `crate::math::gemm::dot_basic::dot_product_avx2`.
+#[test]
+fn test_dot_product_avx2_identity_with_gemm() {
+    // 1. Structural lengths covering all unroll thresholds and tails:
+    // 0, 1..7 (scalar only), 8..15 (8-loop + tail), 16..31 (16-loop + 8-loop + tail),
+    // 32..63 (32-loop in gemm vs two 16-loops in film), 64..256.
+    for len in 0..=128 {
+        // Pattern A: standard arithmetic progression
+        let a: Vec<f32> = (0..len).map(|i| (i as f32 * 0.125) - 2.0).collect();
+        let b: Vec<f32> = (0..len).map(|i| ((i * 7) as f32 * 0.0625) + 0.5).collect();
+
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let film_res = unsafe { dot_product_avx2(&a, &b) };
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let gemm_res = unsafe { crate::math::gemm::dot_basic::dot_product_avx2(&a, &b) };
+
+        assert_eq!(
+            film_res.to_bits(),
+            gemm_res.to_bits(),
+            "Mismatch at len {len} (Pattern A): film={film_res} (0x{:08x}) vs gemm={gemm_res} (0x{:08x})",
+            film_res.to_bits(),
+            gemm_res.to_bits()
+        );
+
+        // Pattern B: pseudo-random oscillating values
+        let a_osc: Vec<f32> = (0..len)
+            .map(|i| ((i * 31 % 17) as f32 - 8.0) * 0.03125)
+            .collect();
+        let b_osc: Vec<f32> = (0..len)
+            .map(|i| ((i * 47 % 23) as f32 - 11.0) * 0.015625)
+            .collect();
+
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let film_res_b = unsafe { dot_product_avx2(&a_osc, &b_osc) };
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let gemm_res_b = unsafe { crate::math::gemm::dot_basic::dot_product_avx2(&a_osc, &b_osc) };
+
+        assert_eq!(
+            film_res_b.to_bits(),
+            gemm_res_b.to_bits(),
+            "Mismatch at len {len} (Pattern B): film={film_res_b} (0x{:08x}) vs gemm={gemm_res_b} (0x{:08x})",
+            film_res_b.to_bits(),
+            gemm_res_b.to_bits()
+        );
+
+        // Pattern C: arbitrary non-dyadic fractions
+        let a_frac: Vec<f32> = (0..len).map(|i| ((i + 1) as f32).sin() * 0.73).collect();
+        let b_frac: Vec<f32> = (0..len).map(|i| ((i + 1) as f32).cos() * 1.41).collect();
+
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let film_res_c = unsafe { dot_product_avx2(&a_frac, &b_frac) };
+        // SAFETY: AVX2 and FMA are guaranteed by x86-64-v3 baseline; slices have identical length `len`.
+        let gemm_res_c =
+            unsafe { crate::math::gemm::dot_basic::dot_product_avx2(&a_frac, &b_frac) };
+
+        if len < 32 {
+            // For len < 32, the SIMD tree is structurally identical (sum0, sum1).
+            // Tail uses Kahan in gemm vs naive in film, which can differ by at most 1 ULP on floats.
+            let diff_ulps = (film_res_c.to_bits() as i32).abs_diff(gemm_res_c.to_bits() as i32);
+            assert!(
+                diff_ulps <= 1,
+                "Mismatch at len {len} (<32, Pattern C): film={film_res_c} (0x{:08x}) vs gemm={gemm_res_c} (0x{:08x}), ulp diff={diff_ulps}",
+                film_res_c.to_bits(),
+                gemm_res_c.to_bits()
+            );
+        } else {
+            // For len >= 32, gemm uses 4 accumulators (32-wide unroll) and Kahan tail,
+            // whereas film uses 2 accumulators (16-wide unroll) and naive tail.
+            // Floating point non-associativity causes small ULP divergence (up to a few ULPs).
+            let diff = (film_res_c - gemm_res_c).abs();
+            assert!(
+                diff <= 1e-6,
+                "Mismatch at len {len} (>=32, Pattern C): film={film_res_c} vs gemm={gemm_res_c}, diff={diff}"
+            );
+        }
+    }
+}

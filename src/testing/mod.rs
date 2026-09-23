@@ -32,3 +32,8 @@ pub mod wav;
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use isa_guard::ForceAvx512Guard;
 pub use isa_guard::{ForceAvx2Guard, IsaGuard};
+
+pub use catalog::{
+    ArchitectureFamily, ArchitectureFixtureSpec, ParseArchitectureFamilyError,
+    reference_architecture_for, reference_architectures,
+};

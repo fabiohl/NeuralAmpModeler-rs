@@ -170,6 +170,8 @@ through `validate_v2_catalog()`. The former bash golden lists
 and the Phase-0 auto-rebuild in `tests-long.sh` were removed:
 regenerate missing goldens with `tests/fixtures/golden_gen_build.sh`.
 
+In addition to golden validation, `src/testing/catalog.rs` hosts the **Canonical Reference Architecture Manifesto** (`reference_architectures()` and `ArchitectureFixtureSpec`), providing a verified representative fixture catalog across all 5 neural and acoustic model families (WaveNet A1, WaveNet A2, LSTM, ConvNet, and Linear FIR/FFT) for profiling matrices (PGO/BOLT) and drift-free benchmarking. Coverage across all families is validated fail-closed by unit tests in `src/testing/catalog_test.rs`.
+
 The battery itself runs in sequential phases (see `utils/tests-long.sh`):
 
 1. **Soak / concurrency** (`#[ignore]`): 10M+ frame endurance plus heavy `concurrency_stress` ([tests/perf_soak/](../tests/perf_soak/)).

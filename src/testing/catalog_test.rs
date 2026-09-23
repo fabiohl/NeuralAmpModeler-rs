@@ -197,3 +197,188 @@ fn test_validate_v1_goldens_ok_on_committed_fixtures() {
     );
     assert_eq!(status.entries_checked, EXPECTED_V1_GOLDEN_FILES.len());
 }
+
+// =============================================================================
+// Reference Architecture Manifesto Tests [F-INOV-02]
+// =============================================================================
+
+#[test]
+fn test_reference_architectures_covers_all_families_fail_closed() {
+    let specs = reference_architectures();
+    assert!(
+        !specs.is_empty(),
+        "reference_architectures() must not be empty"
+    );
+
+    // Fail-closed anti-drift guard: every single family defined in ArchitectureFamily
+    // MUST have at least one registered reference fixture in REFERENCE_ARCHITECTURES.
+    for &family in ArchitectureFamily::ALL {
+        let matching: Vec<_> = specs.iter().filter(|s| s.family == family).collect();
+        assert!(
+            !matching.is_empty(),
+            "Architecture drift detected: family {family:?} ({family}) has zero \
+             reference fixtures in reference_architectures()! \
+             Every supported architecture family must have >=1 canonical fixture.",
+        );
+
+        let resolved = reference_architecture_for(family);
+        assert!(
+            resolved.is_some(),
+            "reference_architecture_for({family:?}) returned None despite matching entries"
+        );
+        assert_eq!(resolved.unwrap().family, family);
+    }
+}
+
+#[test]
+fn test_reference_architectures_fixtures_exist_and_load() {
+    let specs = reference_architectures();
+    let sys = crate::SystemSnapshot::capture();
+
+    for spec in specs {
+        assert!(
+            spec.exists(),
+            "Canonical reference fixture {:?} ({}) does not exist on disk at {:?}!",
+            spec.nam_file,
+            spec.family,
+            spec.resolve_path(),
+        );
+
+        assert!(
+            spec.suggested_sample_rate >= 44100,
+            "suggested_sample_rate {} for {:?} must be a standard pro-audio rate",
+            spec.suggested_sample_rate,
+            spec.nam_file
+        );
+        assert!(
+            spec.suggested_quantum > 0 && spec.suggested_quantum.is_power_of_two(),
+            "suggested_quantum {} for {:?} must be a power-of-two block size",
+            spec.suggested_quantum,
+            spec.nam_file
+        );
+        assert!(
+            !spec.description.is_empty(),
+            "spec {:?} lacks a description",
+            spec.nam_file
+        );
+
+        // Verify model parses, builds, and prewarms successfully with the engine
+        let path = spec.resolve_path();
+        let pair = crate::loader::load_and_build_model(
+            &path,
+            &sys,
+            false,
+            crate::loader::LoadOptions::default(),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to load reference architecture fixture {:?} ({}): {e}",
+                spec.nam_file, spec.family
+            )
+        });
+
+        assert!(
+            pair.model_l.is_some(),
+            "Reference architecture {:?} loaded with None model_l",
+            spec.nam_file
+        );
+    }
+}
+
+#[test]
+fn test_architecture_family_roundtrip_and_display() {
+    use std::str::FromStr;
+
+    for &family in ArchitectureFamily::ALL {
+        let ident = family.as_str();
+        assert!(!ident.is_empty());
+        let display = family.display_name();
+        assert!(!display.is_empty());
+
+        // Display trait uses display_name
+        assert_eq!(format!("{family}"), display);
+
+        // FromStr parses machine ident
+        let parsed = ArchitectureFamily::from_str(ident).expect("ident must parse");
+        assert_eq!(parsed, family);
+
+        // FromStr parses case-insensitively with dashes
+        let dashed = ident.replace('_', "-");
+        let parsed_dashed = ArchitectureFamily::from_str(&dashed).expect("dashed must parse");
+        assert_eq!(parsed_dashed, family);
+
+        // Serde JSON roundtrip
+        let json = serde_json::to_string(&family).expect("must serialize");
+        assert_eq!(json, format!("\"{ident}\""));
+        let de: ArchitectureFamily = serde_json::from_str(&json).expect("must deserialize");
+        assert_eq!(de, family);
+    }
+
+    // Invalid string parsing returns error
+    let err = ArchitectureFamily::from_str("nonexistent_arch").unwrap_err();
+    assert!(err.to_string().contains("nonexistent_arch"));
+}
+
+#[test]
+fn test_anti_drift_engine_models_match_architecture_families() {
+    // Structural mapping audit: every model family instantiated by the engine
+    // aligns with exactly one ArchitectureFamily variant.
+    use crate::models::StaticModel;
+
+    // Helper checking mapping classification logic
+    fn classify_static_model(model: &StaticModel) -> ArchitectureFamily {
+        match model {
+            StaticModel::WavenetStandard(_)
+            | StaticModel::WavenetLite(_)
+            | StaticModel::WavenetFeather(_)
+            | StaticModel::WavenetNano(_)
+            | StaticModel::WavenetDyn(_) => ArchitectureFamily::WaveNetA1,
+
+            StaticModel::WavenetA2Full(_)
+            | StaticModel::WavenetA2Lite(_)
+            | StaticModel::WavenetA2Dyn(_)
+            | StaticModel::WavenetA2Cascade(_) => ArchitectureFamily::WaveNetA2,
+
+            StaticModel::Lstm1x3(_)
+            | StaticModel::Lstm1x8(_)
+            | StaticModel::Lstm1x12(_)
+            | StaticModel::Lstm1x16(_)
+            | StaticModel::Lstm1x24(_)
+            | StaticModel::Lstm2x8(_)
+            | StaticModel::Lstm2x12(_)
+            | StaticModel::Lstm2x16(_)
+            | StaticModel::Lstm1x40(_)
+            | StaticModel::Lstm2x24(_)
+            | StaticModel::LstmDyn(_) => ArchitectureFamily::Lstm,
+
+            StaticModel::ConvNet(_) => ArchitectureFamily::ConvNet,
+
+            StaticModel::Linear(_) => ArchitectureFamily::Linear,
+
+            StaticModel::Container(_) => {
+                // SlimmableContainer bundles WaveNet / A2 models
+                ArchitectureFamily::WaveNetA2
+            }
+        }
+    }
+
+    // Load one fixture of each family to confirm classify_static_model produces the expected family
+    let sys = crate::SystemSnapshot::capture();
+    for spec in reference_architectures() {
+        let pair = crate::loader::load_and_build_model(
+            &spec.resolve_path(),
+            &sys,
+            false,
+            crate::loader::LoadOptions::default(),
+        )
+        .expect("load must succeed");
+
+        let model = pair.model_l.expect("model_l must exist");
+        let classified = classify_static_model(&model);
+        assert_eq!(
+            classified, spec.family,
+            "Classified family mismatch for {:?}",
+            spec.nam_file
+        );
+    }
+}

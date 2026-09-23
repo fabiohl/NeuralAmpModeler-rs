@@ -326,6 +326,16 @@ impl super::layer::A2Layer {
 ///
 /// Uses dual accumulator and horizontal reduction matching the
 /// `convolve_mono_avx2` pattern.
+// KEEP IN SYNC WITH: `src/math/gemm/dot_basic.rs::dot_product_avx2`
+//
+// Architectural Rationale for Duplication (S4-T3 / F-PERF-34):
+// - FiLM operates on condition vectors where `cond_per_group` is small (typically 1..8).
+// - This specialized kernel uses 2 accumulators (16-wide unroll), naive scalar tail,
+//   and `#[inline(always)]` to inline directly into `FiLMLayer::process` without register
+//   spilling or call overhead.
+// - In contrast, `gemm::dot_basic::dot_product_avx2` targets large GEMM matrices,
+//   employing 4 accumulators (32-wide unroll) and Kahan compensated summation in the tail.
+// - Parity is verified in `film_test.rs::test_dot_product_avx2_identity_with_gemm`.
 #[inline(always)]
 unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();

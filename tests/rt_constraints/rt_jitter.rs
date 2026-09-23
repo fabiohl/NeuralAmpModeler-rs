@@ -38,6 +38,7 @@
 //
 //  Marked `#[ignore]` — runs during `tests-long.sh` Phase 5.
 
+pub(crate) use super::budget::{BLOCK_SIZE, RT_DEADLINE_US};
 use super::common;
 use common::rt_helpers::{self, RtPreflightStatus};
 use common::*;
@@ -52,8 +53,6 @@ use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
 
-const RT_DEADLINE_US: u64 = 1330;
-const BLOCK_SIZE: usize = 64;
 const MEASURE_BLOCKS: usize = 2048;
 
 #[derive(Debug, Default)]

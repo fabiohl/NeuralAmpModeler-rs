@@ -33,6 +33,7 @@
 # ----------------------
 #   NAM_BENCH_CORE          CPU core to pin via taskset (default: middle core).
 #   NAM_BASELINE_NAME       Criterion baseline name (default: ci-baseline).
+#   NAM_BENCH_SUITE         Criterion benchmark suite (default: regression_gate).
 #   NAM_THERMAL_COOLDOWN_S  Seconds to sleep for thermal cooldown before
 #                           benchmarks (default: 180, 0 to bypass).
 #
@@ -54,6 +55,7 @@ NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
 BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
+BENCH_SUITE="${NAM_BENCH_SUITE:-regression_gate}"
 MODE="${1:---check}"
 # Single point of truth for mode routing: this gate admits exactly the modes
 # the dispatcher at the end of the script implements. `--save` is deliberately
@@ -187,7 +189,7 @@ bootstrap_baseline() {
     echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}\n"
 
     # Stage 1: Pre-build benchmark binary across all cores prior to cooldown
-    prebuild_benchmark "regression_gate"
+    prebuild_benchmark "$BENCH_SUITE"
 
     # Stage 2: Thermal Cooldown (quiescent period)
     apply_thermal_cooldown
@@ -196,7 +198,7 @@ bootstrap_baseline() {
     local bench_start bench_end bench_dur_ms bench_dur_str
     bench_start=$(date +%s%N)
     set +e
-    run_benchmark_binary "regression_gate" --save-baseline "$BASELINE_NAME"
+    run_benchmark_binary "$BENCH_SUITE" --save-baseline "$BASELINE_NAME"
     local bench_rc=$?
     set -e
     if [ "$bench_rc" -ne 0 ]; then
@@ -284,7 +286,7 @@ check_regression() {
         --baseline "$BASELINE_NAME" >&2
 
     # Pre-build benchmark binary across all cores prior to cooldown
-    if ! prebuild_benchmark "regression_gate"; then
+    if ! prebuild_benchmark "$BENCH_SUITE"; then
         "$NAM_PERF_GATE" receipt append \
             --phase-id "regression_check" \
             --status "FAIL" \
@@ -307,7 +309,7 @@ check_regression() {
     local bench_start bench_end bench_dur_ms bench_dur_str
     bench_start=$(date +%s%N)
     set +e
-    run_benchmark_binary "regression_gate" --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
+    run_benchmark_binary "$BENCH_SUITE" --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
     BENCH_STATUS=$?
     bench_end=$(date +%s%N)
     bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))

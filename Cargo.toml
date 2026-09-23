@@ -132,6 +132,10 @@ harness = false
 name = "head_gemv_bench"
 harness = false
 
+[[bench]]
+name = "spsc_swap_bench"
+harness = false
+
 [features]
 default = ["dual-mono"]
 # Independent per-channel neural inference (dual mono); processes L and R through

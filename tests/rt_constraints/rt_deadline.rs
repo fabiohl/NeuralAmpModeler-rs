@@ -20,13 +20,14 @@
 //  taskset -c 0 cargo test --release --test rt_deadline -- --nocapture
 //  ```
 //
-//  ## Constants
+//  ## Constants (single source: `super::budget` — S1-T1)
 //
 //  - `RT_DEADLINE_US`: 1330 (1.33 ms @ 48 kHz, 64-sample block)
 //  - `WARMUP_BLOCKS`: 256 (stabilize CPU caches and branch predictor)
 //  - `MEASURE_BLOCKS`: 2048 (sufficient for stable p99)
 //  - `BLOCK_SIZE`: 64
 
+pub(crate) use super::budget::{BLOCK_SIZE, RT_DEADLINE_US};
 use super::common;
 use common::rt_helpers::{self, RtPreflightStatus};
 use common::*;
@@ -39,17 +40,11 @@ use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
 
-/// RT deadline for 64 samples at 48 kHz: 1.33 ms.
-const RT_DEADLINE_US: u64 = 1330;
-
 /// Number of warmup blocks before measurement (stabilize CPU state).
 const WARMUP_BLOCKS: usize = 256;
 
 /// Number of measured blocks for stable p50/p99 statistics.
 const MEASURE_BLOCKS: usize = 2048;
-
-/// DSP block size in samples (standard 48 kHz JACK/PipeWire buffer).
-const BLOCK_SIZE: usize = 64;
 
 /// Preflight runs once per process; subsequent calls return the cached result.
 fn preflight_ok() -> bool {

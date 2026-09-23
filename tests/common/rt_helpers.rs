@@ -70,9 +70,63 @@ fn check_cpu_affinity(single_core_required: bool) -> (bool, Option<usize>) {
     }
 }
 
+/// Builds the `scaling_governor` path for an explicit CPU core.
+///
+/// Pure constructor (no I/O) — unit-testable with a mocked core id.
+pub fn governor_path_for_core(core: u32) -> String {
+    format!("/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
+}
+
+/// Effective bench core for governor probing (S1-T2).
+///
+/// Precedence: the pinned core observed from the process affinity mask when
+/// it resolves to exactly one core (the `taskset -c <core>` case — the most
+/// precise signal), then `BENCH_CORE`/`NAM_BENCH_CORE`, then `nproc / 2`
+/// (integer division — the same default as
+/// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
+/// ignored; on machines without `cpufreq` the read below fails closed to
+/// `unknown` (never a hard error where a graceful skip existed before).
+fn effective_bench_core() -> u32 {
+    // Most precise signal first: when the process is pinned to exactly one
+    // core (`taskset -c <core>`, the RT-gate invocation shape), probe that
+    // core — `BENCH_CORE` may be unset in that path (tests-long.sh only
+    // exports `NAM_BENCH_CORE` when the operator sets it explicitly).
+    #[cfg(target_os = "linux")]
+    {
+        let (single_pinned, pinned) = check_cpu_affinity(true);
+        if single_pinned && let Some(core) = pinned {
+            return core as u32;
+        }
+    }
+    for key in ["BENCH_CORE", "NAM_BENCH_CORE"] {
+        if let Ok(raw) = std::env::var(key) {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(core) = trimmed.parse::<u32>() {
+                return core;
+            }
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|n| (n.get() / 2) as u32)
+        .unwrap_or(0)
+}
+
 fn read_governor() -> Result<String, io::Error> {
-    fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
-        .map(|s| s.trim().to_string())
+    // S1-T2: probe the governor of the effective bench core — the core the
+    // bench is actually pinned to — instead of a fixed `cpu0`. On hybrid
+    // (P-core/E-core) systems `cpu0` may report `performance` while the
+    // pinned core does not.
+    let path = governor_path_for_core(effective_bench_core());
+    let text = fs::read_to_string(path)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        Err(io::Error::new(io::ErrorKind::InvalidData, "empty governor"))
+    } else {
+        Ok(trimmed.to_string())
+    }
 }
 
 fn check_governor() -> (bool, String) {

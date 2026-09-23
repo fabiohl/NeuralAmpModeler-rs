@@ -170,3 +170,76 @@ fn live_probe_yields_canonical_isa_and_toolchain() {
     assert!(!probe.host_triple.is_empty());
     assert!(probe.physical_cores >= 1);
 }
+
+/// S1-T2: the governor path constructor targets the requested core.
+#[test]
+fn governor_path_constructor_targets_the_requested_core() {
+    assert_eq!(
+        governor_path_for_core(0),
+        "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+    );
+    assert_eq!(
+        governor_path_for_core(6),
+        "/sys/devices/system/cpu/cpu6/cpufreq/scaling_governor"
+    );
+}
+
+/// S1-T2: `BENCH_CORE`/`NAM_BENCH_CORE` select the probed core; an
+/// unparseable value falls back to `nproc / 2` instead of `cpu0`.
+#[test]
+fn effective_bench_core_prefers_env_then_nproc_half() {
+    use std::sync::{Mutex, OnceLock};
+    static ENV_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = ENV_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let saved_bench = std::env::var("BENCH_CORE").ok();
+    let saved_nam = std::env::var("NAM_BENCH_CORE").ok();
+
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::set_var("BENCH_CORE", "7") };
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::remove_var("NAM_BENCH_CORE") };
+    assert_eq!(effective_bench_core(), 7);
+    assert_eq!(
+        effective_governor_path(),
+        "/sys/devices/system/cpu/cpu7/cpufreq/scaling_governor"
+    );
+
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::remove_var("BENCH_CORE") };
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::set_var("NAM_BENCH_CORE", "3") };
+    assert_eq!(effective_bench_core(), 3);
+
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::set_var("BENCH_CORE", "not-a-core") };
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // values are restored before return.
+    unsafe { std::env::set_var("NAM_BENCH_CORE", "") };
+    let fallback = probe_nproc().unwrap_or(1) / 2;
+    assert_eq!(effective_bench_core(), fallback);
+
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // restoring the pre-test values.
+    unsafe { std::env::remove_var("BENCH_CORE") };
+    // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+    // restoring the pre-test values.
+    unsafe { std::env::remove_var("NAM_BENCH_CORE") };
+    if let Some(value) = saved_bench {
+        // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+        // restoring the pre-test values.
+        unsafe { std::env::set_var("BENCH_CORE", value) };
+    }
+    if let Some(value) = saved_nam {
+        // SAFETY: test-scoped env mutation under a process-wide mutex guard;
+        // restoring the pre-test values.
+        unsafe { std::env::set_var("NAM_BENCH_CORE", value) };
+    }
+}

@@ -33,6 +33,7 @@
 //! - CabSim: Medium IR (2048 taps, 64-sample block)
 //! - Pipeline: Canonical Base (No OS, 48 kHz, 64-sample block)
 //! - Pipeline: HQ 4xOS (4x oversampling, 48 kHz, 64-sample block)
+//! - Pipeline: Adaptive Dynamic (Conservative mode, 48 kHz, 64-sample block)
 
 #[path = "constants.rs"]
 mod bench_constants;
@@ -367,6 +368,179 @@ fn bench_dsp_pipeline_hq_4x_os(c: &mut Criterion) {
     bench_dsp_pipeline_helper(c, "RT_DSP_Pipeline_HQ_4xOS", OversampleFactor::X4);
 }
 
+fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
+    let block_size = 64;
+    let sample_rate = 48000;
+    let budget_us: u64 = 1333; // (64 samples / 48000 Hz) ≈ 1333 µs
+    let model = common::load_and_prewarm_required("BossWN-standard.nam");
+    let mut opt_model_l = Some(Box::new(model));
+    let mut opt_model_r = None;
+
+    let mut resampler =
+        NamResampler::new_simple(sample_rate, sample_rate).expect("Resampler init failed");
+    let mut os_engine_l = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF)
+        .expect("OS engine init failed");
+    let mut os_engine_r = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF)
+        .expect("OS engine init failed");
+
+    let rt_status = RtStatusFlags::default();
+    let mut bridge = Box::new(DspBridge {
+        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
+        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
+        generation: std::sync::atomic::AtomicU64::new(0),
+        consumed_gen: std::sync::atomic::AtomicU64::new(0),
+        dropped_frames: std::sync::atomic::AtomicU32::new(0),
+    });
+
+    let mut resamp_mid_l = vec![0.0f32; MAX_RESAMP_BUF];
+    let mut resamp_mid_r = vec![0.0f32; MAX_RESAMP_BUF];
+    let mut resamp_out_l = vec![0.0f32; MAX_RESAMP_BUF];
+    let mut resamp_out_r = vec![0.0f32; MAX_RESAMP_BUF];
+    let mut model_out_l = vec![0.0f32; MAX_RESAMP_BUF];
+    let mut model_out_r = vec![0.0f32; MAX_RESAMP_BUF];
+
+    let gate_params = GateParams::default();
+    let mut silence_hysteresis = DynamicHysteresis::new();
+    let mut mono_hysteresis = DynamicHysteresis::new();
+    let mut process_mono = true;
+    let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
+    let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
+    let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
+
+    let template_in_l = common::generate_sine_440hz(block_size);
+    let template_in_r = common::generate_sine_440hz(block_size);
+    let mut samples_l = template_in_l.clone();
+    let mut samples_r = template_in_r.clone();
+
+    // Warm up pipeline and adaptive FSM across a full 64-block cycle
+    for i in 0..64 {
+        samples_l.copy_from_slice(&template_in_l);
+        samples_r.copy_from_slice(&template_in_r);
+        let ctx = DspPipelineContext {
+            resampler: &mut resampler,
+            os_l: &mut os_engine_l,
+            os_r: &mut os_engine_r,
+            active_model_l: &mut opt_model_l,
+            active_model_r: &mut opt_model_r,
+            input_gain_mult: 1.0,
+            output_gain_mult: 1.0,
+            gate_params: &gate_params,
+            silence_hysteresis: &mut silence_hysteresis,
+            mono_hysteresis: &mut mono_hysteresis,
+            threshold_open_sq: 0.0,
+            threshold_close_sq: 0.0,
+            process_mono: &mut process_mono,
+            rt_status: &rt_status,
+            adaptive: &mut adaptive,
+            bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
+            conv: None,
+            conv_pair: None,
+        };
+        let bufs = DspBuffers {
+            resamp_mid_l: &mut resamp_mid_l,
+            resamp_mid_r: &mut resamp_mid_r,
+            resamp_out_l: &mut resamp_out_l,
+            resamp_out_r: &mut resamp_out_r,
+            model_out_l: &mut model_out_l,
+            model_out_r: &mut model_out_r,
+            os_in_l: os_in_l_slice,
+            os_in_r: os_in_r_slice,
+            os_model_l: os_model_l_slice,
+            os_model_r: os_model_r_slice,
+            crossfade_scratch_l,
+            crossfade_scratch_r,
+        };
+        capture_dsp_pipeline(
+            &mut samples_l,
+            &mut samples_r,
+            block_size,
+            ctx,
+            bufs,
+            sample_rate,
+        );
+        let latency_us = match i % 64 {
+            0..=3 => 1100,
+            4..=27 => 700,
+            28..=33 => 350,
+            _ => 700,
+        };
+        adaptive.update(latency_us, budget_us, sample_rate, &rt_status);
+    }
+
+    let mut cycle: u32 = 0;
+    c.bench_function("RT_DSP_Pipeline_AdaptiveOn", |b| {
+        b.iter(|| {
+            samples_l.copy_from_slice(&template_in_l);
+            samples_r.copy_from_slice(&template_in_r);
+            let ctx = DspPipelineContext {
+                resampler: &mut resampler,
+                os_l: &mut os_engine_l,
+                os_r: &mut os_engine_r,
+                active_model_l: &mut opt_model_l,
+                active_model_r: &mut opt_model_r,
+                input_gain_mult: 1.0,
+                output_gain_mult: 1.0,
+                gate_params: &gate_params,
+                silence_hysteresis: &mut silence_hysteresis,
+                mono_hysteresis: &mut mono_hysteresis,
+                threshold_open_sq: 0.0,
+                threshold_close_sq: 0.0,
+                process_mono: &mut process_mono,
+                rt_status: &rt_status,
+                adaptive: &mut adaptive,
+                bridge_writer: unsafe {
+                    Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
+                },
+                conv: None,
+                conv_pair: None,
+            };
+            let bufs = DspBuffers {
+                resamp_mid_l: &mut resamp_mid_l,
+                resamp_mid_r: &mut resamp_mid_r,
+                resamp_out_l: &mut resamp_out_l,
+                resamp_out_r: &mut resamp_out_r,
+                model_out_l: &mut model_out_l,
+                model_out_r: &mut model_out_r,
+                os_in_l: os_in_l_slice,
+                os_in_r: os_in_r_slice,
+                os_model_l: os_model_l_slice,
+                os_model_r: os_model_r_slice,
+                crossfade_scratch_l,
+                crossfade_scratch_r,
+            };
+            capture_dsp_pipeline(
+                std::hint::black_box(&mut samples_l),
+                std::hint::black_box(&mut samples_r),
+                block_size,
+                ctx,
+                bufs,
+                sample_rate,
+            );
+
+            // Host telemetry feedback: exercises hysteresis FSM transitions,
+            // active crossfade double-pass inference, and crossfade clock advance.
+            let latency_us = match cycle % 64 {
+                0..=3 => 1100,  // Overload: triggers Full -> Reduced
+                4..=27 => 700,  // Steady crossfade progress to Reduced
+                28..=33 => 350, // Headroom recovery: triggers Reduced -> Full
+                _ => 700,       // Steady crossfade progress back to Full
+            };
+            adaptive.update(
+                std::hint::black_box(latency_us),
+                budget_us,
+                sample_rate,
+                &rt_status,
+            );
+            cycle = cycle.wrapping_add(1);
+        });
+    });
+}
+
 criterion_group!(
     name = regression_gates;
     config = Criterion::default()
@@ -394,6 +568,7 @@ criterion_group!(
         bench_dsp_cabsim_ir_medium,
         bench_dsp_pipeline_base_no_os,
         bench_dsp_pipeline_hq_4x_os,
+        bench_dsp_pipeline_adaptive_on,
 );
 
 fn main() {

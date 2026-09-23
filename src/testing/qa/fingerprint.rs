@@ -78,7 +78,7 @@ pub struct Fingerprint {
     pub rustflags: String,
     /// Cargo profile of the benchmark (see [`DEFAULT_BUILD_PROFILE`]).
     pub build_profile: String,
-    /// CPU frequency governor of CPU 0.
+    /// CPU frequency governor of the effective bench core (S1-T2).
     pub frequency_governor: String,
     /// Producing git commit (provenance only — never compared).
     pub git_commit: String,
@@ -135,8 +135,26 @@ impl Fingerprint {
 
     /// Probes the live host and builds the fingerprint of the current
     /// environment.
+    ///
+    /// S1-T2: when `bench_core` names an explicit core, the governor is
+    /// re-probed on that core's `cpufreq` path (instead of the ambient
+    /// `BENCH_CORE`/`NAM_BENCH_CORE` default) so the fingerprint reflects the
+    /// core the bench is actually pinned to.
     pub fn probe(bench_core: &str) -> Self {
-        Self::from_env_probe(&EnvProbe::probe(), bench_core)
+        let mut fingerprint = Self::from_env_probe(&EnvProbe::probe(), bench_core);
+        match std::fs::read_to_string(super::env::governor_path_for_bench_core_arg(bench_core)) {
+            Ok(text) if !text.trim().is_empty() => {
+                fingerprint.frequency_governor = text.trim().to_string();
+            }
+            Ok(_) if bench_core.trim().is_empty() => {}
+            _ if !bench_core.trim().is_empty() => {
+                // Explicit bench core without a readable per-core path stays
+                // fail-closed (`unknown`, never the ambient cpu0 value).
+                fingerprint.frequency_governor = "unknown".to_string();
+            }
+            _ => {}
+        }
+        fingerprint
     }
 
     /// Serializes the fingerprint as pretty-printed JSON (UTF-8), like the

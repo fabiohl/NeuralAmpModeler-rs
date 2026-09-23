@@ -28,8 +28,69 @@ pub const ISA_X86_64_BASE: &str = "x86-64 (base)";
 
 /// Path of the live CPU information file.
 pub const CPUINFO_PATH: &str = "/proc/cpuinfo";
-/// Path of the live frequency governor of CPU 0.
+/// Path of the live frequency governor of CPU 0 (legacy, pre-S1-T2).
+///
+/// Retained for compatibility; new code must use
+/// [`governor_path_for_core`] / [`effective_governor_path`] so the probed
+/// core matches the pinned bench core (`BENCH_CORE`/`NAM_BENCH_CORE`,
+/// default `nproc / 2` — same default as
+/// `utils/tests-performance-regression.sh:53-55`).
 pub const GOVERNOR_PATH: &str = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor";
+
+/// Builds the `scaling_governor` path for an explicit CPU core.
+///
+/// Pure constructor (no I/O) — unit-tested with a mocked core id.
+pub fn governor_path_for_core(core: u32) -> String {
+    format!("/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
+}
+
+/// Effective bench core for governor probing.
+///
+/// Precedence: `BENCH_CORE`, then `NAM_BENCH_CORE`, else `nproc / 2`
+/// (integer division — the same default as
+/// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
+/// ignored so probing stays fail-closed (`unknown`) instead of panicking.
+pub fn effective_bench_core() -> u32 {
+    for key in ["BENCH_CORE", "NAM_BENCH_CORE"] {
+        if let Ok(raw) = std::env::var(key) {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(core) = trimmed.parse::<u32>() {
+                return core;
+            }
+        }
+    }
+    probe_nproc().unwrap_or(1) / 2
+}
+
+/// Path of the live frequency governor of the effective bench core.
+pub fn effective_governor_path() -> String {
+    governor_path_for_core(effective_bench_core())
+}
+
+/// `scaling_governor` of the effective bench core (`None` when unreadable —
+/// the caller maps to `unknown`, preserving the fail-closed
+/// `INCOMPARABLE_ENVIRONMENT` semantics on VMs/CI without per-core
+/// `cpufreq`).
+pub fn read_effective_governor() -> Option<String> {
+    read_trimmed(&effective_governor_path())
+}
+
+/// Governor path for an explicit bench-core string (e.g. the
+/// `Fingerprint::probe` argument): a parseable value wins, otherwise the
+/// effective bench core. Never falls back to `cpu0` — a missing per-core
+/// path stays fail-closed (`unknown`).
+pub fn governor_path_for_bench_core_arg(bench_core: &str) -> String {
+    let trimmed = bench_core.trim();
+    if !trimmed.is_empty()
+        && let Ok(core) = trimmed.parse::<u32>()
+    {
+        return governor_path_for_core(core);
+    }
+    effective_governor_path()
+}
 
 /// CPU-related fields parsed from a `/proc/cpuinfo` text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +172,7 @@ pub struct EnvProbe {
     pub host_triple: String,
     /// `RUSTFLAGS` environment value (empty when unset).
     pub rustflags: String,
-    /// `scaling_governor` of CPU 0 (`unknown` when unavailable).
+    /// `scaling_governor` of the effective bench core (`unknown` when unavailable).
     pub frequency_governor: String,
     /// `git rev-parse HEAD` of the working directory (`unknown` when not a repo).
     pub git_commit: String,
@@ -148,8 +209,11 @@ impl EnvProbe {
                 .unwrap_or_else(|| "unknown".to_string()),
             host_triple: rustc_host_triple().unwrap_or_else(|| "unknown".to_string()),
             rustflags: std::env::var("RUSTFLAGS").unwrap_or_default(),
-            frequency_governor: read_trimmed(GOVERNOR_PATH)
-                .unwrap_or_else(|| "unknown".to_string()),
+            // S1-T2: probe the governor of the effective bench core, not a
+            // fixed `cpu0` — on hybrid (P-core/E-core) systems `cpu0` may
+            // report `performance` while the pinned bench core does not.
+            // Missing per-core `cpufreq` (VM/CI) stays `unknown` (fail-closed).
+            frequency_governor: read_effective_governor().unwrap_or_else(|| "unknown".to_string()),
             git_commit: first_line_of_command(&["git", "rev-parse", "HEAD"])
                 .unwrap_or_else(|| "unknown".to_string()),
             git_dirty: git_is_dirty(),
