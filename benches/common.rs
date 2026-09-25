@@ -185,6 +185,45 @@ pub fn make_wavenet_a2_dyn_data() -> NamModelData {
     }
 }
 
+/// Builds synthetic `NamModelData` for a `Linear` FIR model with the given
+/// receptive field and optional bias scalar.
+///
+/// `implementation` is left unset, so the loader resolves it to
+/// `LinearImplementation::Auto`: a receptive field at or above
+/// `FFT_AUTO_THRESHOLD` (256) selects the partitioned-FFT production path,
+/// below it the time-domain Direct path. Weights are a deterministic
+/// decaying sinusoid; the trailing bias (when enabled) is zero.
+pub fn make_linear_data(receptive_field: usize, bias: bool) -> NamModelData {
+    let mut weights: Vec<f32> = (0..receptive_field)
+        .map(|i| (i as f32 * 0.001).sin() * 0.5)
+        .collect();
+    if bias {
+        weights.push(0.0);
+    }
+    NamModelData {
+        version: Some("0.7.0".to_string()),
+        architecture: "Linear".to_string(),
+        config: NamConfig {
+            receptive_field: Some(receptive_field),
+            bias: Some(bias),
+            ..Default::default()
+        },
+        weights,
+        weights_layout: neural_amp_modeler_rs::loader::nam_json::WeightsLayout::Original,
+        sample_rate: Some(48000.0),
+        metadata: None,
+    }
+}
+
+/// Builds and prewarms the synthetic `Linear` RF=2048 model that exercises the
+/// partitioned-FFT (`LinearMode::Fft`) production path, without a fixture file.
+pub fn load_and_prewarm_linear_fft_rf2048() -> neural_amp_modeler_rs::models::StaticModel {
+    let data = make_linear_data(2048, true);
+    let mut model = build_model(&data).expect("synthetic Linear RF=2048 model must build");
+    model.prewarm(2048);
+    *model
+}
+
 /// Resolves the path to a model fixture file, preferring `models-nondist`
 /// or `third-party/community_models` when present and falling back to `tests/fixtures/models`.
 pub fn model_path(filename: &str) -> PathBuf {

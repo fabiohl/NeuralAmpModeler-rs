@@ -44,13 +44,11 @@ pub fn get_lstm_topology(data: &NamModelData) -> Result<Option<(usize, usize)>, 
         });
     }
 
-    let num_layers = match num_layers {
-        Some(n) => n,
-        None => return Ok(None),
+    let Some(num_layers) = num_layers else {
+        return Ok(None);
     };
-    let hidden_size = match hidden_size {
-        Some(h) => h,
-        None => return Ok(None),
+    let Some(hidden_size) = hidden_size else {
+        return Ok(None);
     };
 
     if num_layers == 0 {

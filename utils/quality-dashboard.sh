@@ -802,7 +802,7 @@ parse_benchmarks() {
         RT_A2_Lite_CH3
         RT_LSTM_1x16
         RT_LSTM_2x8
-        RT_Linear
+        RT_Linear_Direct_RF4
         RT_ConvNet
         RT_WaveNet_Dyn_Free
         RT_LSTM_Dyn_1x7

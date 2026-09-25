@@ -129,7 +129,7 @@ fn test_wavenet_layer_does_not_call_dual_frame_in_main_loop() {
 
 #[test]
 fn test_wavenet_layer_runtime_invariant_chunks_remainder_empty() {
-    // S5-T5 requirement 2: Confirm debug_assert!(chunks.into_remainder().is_empty()) is present
+    // Invariant check: Confirm debug_assert!(chunks.into_remainder().is_empty()) is present
     assert!(
         LAYER_RS_SOURCE.contains("debug_assert!(chunks.into_remainder().is_empty())"),
         "Runtime invariant missing: `debug_assert!(chunks.into_remainder().is_empty())` \

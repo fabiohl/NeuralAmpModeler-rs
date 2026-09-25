@@ -11,6 +11,10 @@
 use crate::math::common::SimdMath;
 
 /// Configuration parameters for the Gate and Hysteresis logic.
+///
+/// Construct with [`Self::new`], [`Self::default`], or [`Self::builder`].
+/// Direct struct literals are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(align(128))] // Avoids false sharing on the SPSC channel
 pub struct GateParams {
@@ -287,6 +291,17 @@ impl DynamicHysteresis {
         }
     }
 
+    /// Evaluates state transitions while the gate is fully open (`current_multiplier == 1.0`).
+    ///
+    /// ## Schmitt Trigger Hysteresis & Hold Counter
+    /// When the monitored signal falls below `threshold_close` (the lower hysteresis threshold),
+    /// we do not close immediately to prevent "chatter" (rapid toggling during brief musical pauses).
+    /// Instead, `hold_counter` accumulates processed frames.
+    ///
+    /// - If `hold_counter >= params.hold_frames`: the hold interval has elapsed.
+    ///   - If `params.fade_frames == 0`: close immediately (`GateState::Closed`, multiplier 0.0).
+    ///   - Otherwise: transition to `GateState::FadingOut`, initializing `fade_counter = params.fade_frames`.
+    /// - If the signal recovers above `threshold_close`: reset `hold_counter = 0`.
     fn update_open(
         &mut self,
         value: f32,
@@ -316,6 +331,15 @@ impl DynamicHysteresis {
         }
     }
 
+    /// Evaluates state transitions while actively fading out towards silence.
+    ///
+    /// ## Linear Fade Multiplier & Re-Triggering
+    /// - **Re-opening**: If the signal exceeds `threshold_open` (upper hysteresis threshold)
+    ///   mid-fade, the gate immediately aborts closure and reverses into `GateState::FadingIn`.
+    /// - **Linear Fade**: Otherwise, `fade_counter` decrements by `n_samples`. The gain multiplier
+    ///   is computed as `fade_counter * inv_fade_frames` (a linear ramp from 1.0 down to 0.0).
+    /// - **Closure**: When `fade_counter <= n_samples`, the fade-out completes on the current block,
+    ///   transitioning to `GateState::Closed` with multiplier 0.0.
     fn update_fading_out(
         &mut self,
         value: f32,
@@ -348,6 +372,17 @@ impl DynamicHysteresis {
         }
     }
 
+    /// Evaluates state transitions while the gate is fully closed (`current_multiplier == 0.0`).
+    ///
+    /// ## Schmitt Trigger Opening
+    /// The gate remains closed until the input signal exceeds `threshold_open` (the upper
+    /// hysteresis threshold). This prevents low-level ambient noise below `threshold_open`
+    /// from accidentally unmuting the audio path.
+    ///
+    /// - If `params.fade_frames == 0`: instant opening (`GateState::Open`, multiplier 1.0).
+    /// - Otherwise: transition to `GateState::FadingIn`, resetting `fade_counter = 0`.
+    ///   If the incoming block `n_samples >= params.fade_frames`, the fade finishes within
+    ///   the block, transitioning immediately to `GateState::Open`.
     fn update_closed(
         &mut self,
         value: f32,
@@ -382,6 +417,15 @@ impl DynamicHysteresis {
         }
     }
 
+    /// Evaluates state transitions while actively fading in towards full unity gain.
+    ///
+    /// ## Linear Fade Multiplier & Abort Handling
+    /// - **Closure Abort**: If the signal drops below `threshold_close` (lower hysteresis threshold)
+    ///   while opening, the gate immediately aborts opening and reverses into `GateState::FadingOut`.
+    /// - **Linear Fade**: Otherwise, `fade_counter` increments by `n_samples`. The multiplier is
+    ///   computed as `fade_counter * inv_fade_frames` (a linear ramp from 0.0 up to 1.0).
+    /// - **Completion**: When `fade_counter + n_samples >= params.fade_frames`, the gate reaches
+    ///   full unity gain, transitioning to `GateState::Open` with multiplier 1.0.
     fn update_fading_in(
         &mut self,
         value: f32,

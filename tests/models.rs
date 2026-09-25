@@ -36,6 +36,8 @@ mod doc_inventory;
 mod ebu_lufs_compliance;
 #[path = "models/hostile_models_test.rs"]
 mod hostile_models_test;
+#[path = "models/loader_stderr_hygiene.rs"]
+mod loader_stderr_hygiene;
 #[path = "models/receipt_test.rs"]
 mod receipt_test;
 #[path = "models/wavenet_clone_exact_test.rs"]

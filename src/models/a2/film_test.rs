@@ -561,7 +561,7 @@ fn load_rejects_zero_groups() {
     );
 }
 
-/// Regression test (S4-T3 / F-PERF-34): compares the local private
+/// Regression test (F-PERF-34): compares the local private
 /// `dot_product_avx2` in `film.rs` against the shared kernel in
 /// `crate::math::gemm::dot_basic::dot_product_avx2`.
 #[test]

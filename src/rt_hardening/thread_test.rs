@@ -22,10 +22,7 @@ impl ThreadConfigurator for MockConfigurator {
     fn set_thread_affinity(&self, _thread_id: libc::pthread_t, _cpuset: &libc::cpu_set_t) -> i32 {
         self.affinity_ret
     }
-    fn get_sched_param(
-        &self,
-        _thread_id: libc::pthread_t,
-    ) -> Result<(i32, libc::sched_param), i32> {
+    fn get_current_sched_param(&self) -> Result<(i32, libc::sched_param), i32> {
         match self.getsched_err {
             Some(e) => Err(e),
             None => Ok((
@@ -36,12 +33,7 @@ impl ThreadConfigurator for MockConfigurator {
             )),
         }
     }
-    fn set_sched_param(
-        &self,
-        _thread_id: libc::pthread_t,
-        _policy: i32,
-        _param: &libc::sched_param,
-    ) -> i32 {
+    fn set_current_sched_param(&self, _policy: i32, _param: &libc::sched_param) -> i32 {
         self.setsched_ret
     }
     fn get_current_cpu(&self) -> i32 {
@@ -115,6 +107,24 @@ fn test_promote_other_elevates_and_records_failure_gracefully() {
     };
     let res = promote_sched_fifo_with(88, &flags, &denied_cfg);
     assert!(res.is_err());
+    assert_eq!(res.unwrap_err(), libc::EPERM);
     assert_eq!(flags.rt_sched_err.load(Ordering::Relaxed), libc::EPERM);
     assert!(!flags.check_flag(crate::common::spsc::RT_STATUS_RT_IS_FIFO));
+}
+
+#[test]
+fn test_promote_getsched_failure_never_returns_err_zero() {
+    let flags = RtStatusFlags::new();
+    let cfg = MockConfigurator {
+        policy: libc::SCHED_OTHER,
+        priority: 0,
+        getsched_err: Some(libc::EINVAL),
+        setsched_ret: 0,
+        affinity_ret: 0,
+    };
+    let res = promote_sched_fifo_with(88, &flags, &cfg);
+    assert!(res.is_err());
+    assert_ne!(res.unwrap_err(), 0);
+    assert_eq!(res.unwrap_err(), libc::EINVAL);
+    assert_eq!(flags.rt_getsched_err.load(Ordering::Relaxed), libc::EINVAL);
 }

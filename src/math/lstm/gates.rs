@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //! Fused kernels for LSTM gates (AVX2 and AVX-512).
-//!
-//! Extracted from `activations/fused.rs` and `simd/avx2.rs`/`simd/avx512.rs`.
 
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;

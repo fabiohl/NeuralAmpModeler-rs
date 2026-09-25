@@ -75,7 +75,7 @@
       "esr_namcore": 7.65e-14,
       "esr_f64": 7.63e-14,
       "snr_db": 131.2,
-      "mrstft": 0.00000526,
+      "mrstft": 5.26e-6,
       "optional": false
     },
     {
@@ -526,9 +526,14 @@
       "median_latency_us": 7.13
     },
     {
-      "id": "RT_Linear",
-      "label": "Linear RF=2048",
+      "id": "RT_Linear_Direct_RF4",
+      "label": "Linear RF=4 Direct",
       "median_latency_us": 0.33
+    },
+    {
+      "id": "RT_Linear_Fft_RF2048",
+      "label": "Linear FFT RF=2048",
+      "median_latency_us": 4.84
     },
     {
       "id": "RT_ConvNet",

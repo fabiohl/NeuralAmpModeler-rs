@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Single RT budget module (S1-T1) — the one place that defines the
+//! Single RT budget module — the one place that defines the
 //! real-time processing budget for `tests/rt_constraints`.
 //!
 //! Previously `RT_DEADLINE_US` and `BLOCK_SIZE` were independently
@@ -22,7 +22,7 @@
 //! before/after this extraction.
 //!
 //! Parametrization by the real `(sample_rate, block_size)` of each scenario
-//! is intentionally out of scope here (requires PO approval).
+//! is intentionally out of scope here (requires explicit design decision for multi-rate suites).
 
 /// RT deadline for 64 samples at 48 kHz: 1.33 ms (see module docs for the margin).
 pub const RT_DEADLINE_US: u64 = 1330;

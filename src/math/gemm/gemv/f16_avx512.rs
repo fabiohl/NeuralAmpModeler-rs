@@ -36,8 +36,6 @@ pub unsafe fn gemv_overwrite_avx512_small(
 
     let mut in_c = 0;
     while in_c + 8 <= in_len {
-        _mm_prefetch::<_MM_HINT_T0>(in_frame.as_ptr().wrapping_add(in_c + 64) as *const i8);
-
         let v_in0 = _mm512_set1_ps(*in_frame.get_unchecked(in_c));
         let v_in1 = _mm512_set1_ps(*in_frame.get_unchecked(in_c + 1));
         let v_in2 = _mm512_set1_ps(*in_frame.get_unchecked(in_c + 2));

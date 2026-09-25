@@ -15,7 +15,7 @@ use common::alloc_audit::CountingAllocator;
 #[allow(dead_code, clippy::allow_attributes)]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-// ── Shared RT budget (S1-T1: single source of truth) ─────────────────────────
+// ── Shared RT budget (single source of truth) ─────────────────────────
 #[path = "rt_constraints/budget.rs"]
 mod budget;
 
@@ -33,7 +33,7 @@ mod rt_deadline;
 #[path = "rt_constraints/rt_jitter.rs"]
 mod rt_jitter;
 
-// ── S1-T1 coherence: both suites must observe the same RT budget ────────────
+// ── Budget coherence: both suites must observe the same RT budget ────────────
 #[cfg(test)]
 mod budget_coherence {
     use super::budget;

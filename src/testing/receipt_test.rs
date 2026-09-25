@@ -28,6 +28,7 @@ fn status_parses_all_canonical_values() {
         "INCONCLUSIVE",
         "SKIP_CAPABILITY",
         "NOT_RUN",
+        "SIMULATED",
         "COMPLETED_WITH_GAPS",
     ] {
         let parsed = LongPhaseStatus::from_str(s).unwrap_or_else(|e| panic!("{e}"));
@@ -46,7 +47,9 @@ fn gap_classification_matches_runner_semantics() {
     assert!(LongPhaseStatus::Inconclusive.is_gap());
     assert!(LongPhaseStatus::SkipCapability.is_gap());
     assert!(LongPhaseStatus::NotRun.is_gap());
+    assert!(LongPhaseStatus::Simulated.is_gap());
     assert_eq!(LongPhaseStatus::Inconclusive.gap_id(), Some("inconclusive"));
+    assert_eq!(LongPhaseStatus::Simulated.gap_id(), Some("simulated"));
     assert_eq!(LongPhaseStatus::Passed.gap_id(), None);
 }
 
@@ -829,6 +832,13 @@ fn strict_verdict_rejects_every_gap_condition() {
         vec![mk_phase("phase2", LongPhaseStatus::Skipped, 0, &[])],
         // not-run status
         vec![mk_phase("phase6", LongPhaseStatus::NotRun, 0, &[])],
+        // simulated pre-registration (T2.1 / F-03: never passes strict)
+        vec![mk_phase(
+            "phase1",
+            LongPhaseStatus::Simulated,
+            0,
+            &["simulated"],
+        )],
         // PASSED with typed markers
         vec![mk_phase(
             "phase5",
@@ -883,4 +893,34 @@ fn gap_family_prefix_matching_survives_details() {
         )],
     };
     assert_eq!(with_detail_deadline.rt_deadline_verdict(), "INCONCLUSIVE");
+}
+
+#[test]
+fn simulated_preregistration_derives_completed_with_gaps_and_rejects_strict() {
+    // T2.1 / F-03: `--simulate` pre-registers every phase as SIMULATED with
+    // zero executed tests. The summary must derive COMPLETED_WITH_GAPS (never
+    // PASSED) and `strict_verdict` must reject it fail-closed.
+    let phases = vec![
+        mk_phase(
+            "preflight-render",
+            LongPhaseStatus::Simulated,
+            0,
+            &["simulated"],
+        ),
+        mk_phase("phase1", LongPhaseStatus::Simulated, 0, &["simulated"]),
+        mk_phase("phase7", LongPhaseStatus::Simulated, 0, &["simulated"]),
+    ];
+    let receipt = LongAuditReceipt { phases };
+    let summary = receipt.summary_receipt();
+    assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
+    assert_eq!(
+        summary.gaps,
+        vec![
+            "preflight-render:SIMULATED",
+            "phase1:SIMULATED",
+            "phase7:SIMULATED"
+        ]
+    );
+    assert!(receipt.has_declared_gaps());
+    assert!(receipt.strict_verdict().is_err());
 }

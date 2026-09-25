@@ -260,7 +260,7 @@ fn parse_routes_every_kind() {
         "mandatory phases + declared cross-ISA gap"
     );
     assert_eq!(report.fidelity.len(), 51, "all contract fidelity entries");
-    assert_eq!(report.latency.len(), 19, "all RT_* latency records");
+    assert_eq!(report.latency.len(), 20, "all RT_* latency records");
     assert_eq!(report.f64_table.len(), 2);
     assert_eq!(report.f64_decomp.len(), 2);
     assert_eq!(report.activation.len(), 2);

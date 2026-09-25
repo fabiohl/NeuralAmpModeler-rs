@@ -754,7 +754,7 @@ const QUICK_REPS: &[(&str, &str, &[&str])] = &[
     ("ConvNet", "RT_ConvNet", &["ConvNet"]),
     (
         "Linear (RF=2048)",
-        "RT_Linear",
+        "RT_Linear_Fft_RF2048",
         &["linear_fft_rf2048", "Linear FFT RF=2048"],
     ),
 ];
@@ -916,12 +916,12 @@ fn fidelity_row(record: &FidelityRecord, p: &Palette) -> String {
     let esr_nam = fmt_metric(&record.esr);
     let esr_nam_colored = match metric_f64(&record.esr) {
         Some(esr) => p.paint_class(esr_color_class(esr), &esr_nam),
-        None => esr_nam.clone(),
+        None => esr_nam,
     };
     let esr_f64 = fmt_metric(&record.esr_f64);
     let esr_f64_colored = match metric_f64(&record.esr_f64) {
         Some(esr) => p.paint_class(esr_color_class(esr), &esr_f64),
-        None => esr_f64.clone(),
+        None => esr_f64,
     };
     let snr = fmt_snr(&record.snr_db);
     let mrstft = fmt_metric(&record.mrstft);
@@ -948,7 +948,8 @@ const BENCH_DISPLAY: &[(&str, &str)] = &[
     ("RT_A2_Lite_CH3", "A2 Lite CH3"),
     ("RT_LSTM_1x16", "LSTM 1x16"),
     ("RT_LSTM_2x8", "LSTM 2x8"),
-    ("RT_Linear", "Linear RF=2048"),
+    ("RT_Linear_Direct_RF4", "Linear RF=4 Direct"),
+    ("RT_Linear_Fft_RF2048", "Linear FFT RF=2048"),
     ("RT_ConvNet", "ConvNet"),
     ("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free"),
     ("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7"),

@@ -45,6 +45,12 @@ fn main() {
 }
 
 /// Prints the runtime-detected CPU hardware flags and OS context-save status.
+///
+/// Compliance is judged strictly against the project's mandatory
+/// `x86-64-v3` baseline (AVX2 + FMA). AVX-512 is an opt-in extension
+/// (`--features avx512`) and is reported on a separate informative line, so a
+/// host lacking the full F+VL+BW+DQ capability matrix is never flagged as
+/// NON-COMPLIANT hardware.
 fn print_hardware_flags() {
     let avx2 = is_x86_feature_detected!("avx2");
     let fma = is_x86_feature_detected!("fma");
@@ -65,15 +71,38 @@ fn print_hardware_flags() {
     println!("  - osxsave:     {}", bool_label(osxsave, ""));
     println!("  - xgetbv ZMM:  {}", bool_label(zmm_os_context, ""));
 
-    let compatible = avx512_capability_complete(avx512f, avx512vl, avx512bw, avx512dq);
+    let avx512_complete = avx512_capability_complete(avx512f, avx512vl, avx512bw, avx512dq);
     println!(
-        "  -> Hardware Status: [{}]",
-        if compatible {
-            "COMPLIANT"
-        } else {
-            "NON-COMPLIANT"
-        }
+        "  -> Baseline Hardware (x86-64-v3): [{}]",
+        baseline_status_label(avx2, fma)
     );
+    println!(
+        "  -> AVX-512 Extensions: [{}]",
+        avx512_extension_label(avx512_complete)
+    );
+}
+
+/// Verdict label for the mandatory `x86-64-v3` baseline (AVX2 + FMA).
+///
+/// AVX2 and FMA are the project's non-negotiable floor: the default build
+/// targets them via `.cargo/config.toml` and the deterministic dispatch
+/// assumes they are present. The optional AVX-512 extension set must never
+/// influence this verdict.
+fn baseline_status_label(avx2: bool, fma: bool) -> &'static str {
+    if avx2 && fma {
+        "COMPLIANT"
+    } else {
+        "NON-COMPLIANT"
+    }
+}
+
+/// Verdict label for the optional AVX-512 extension set (F+VL+BW+DQ).
+fn avx512_extension_label(complete: bool) -> &'static str {
+    if complete {
+        "AVAILABLE"
+    } else {
+        "NOT DETECTED / INACTIVE"
+    }
 }
 
 /// Prints the Cargo feature state of the crate under test.
@@ -172,5 +201,31 @@ fn bool_label(value: bool, suffix: &str) -> String {
         format!("YES{suffix}")
     } else {
         "NO".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{avx512_extension_label, baseline_status_label};
+
+    /// A host with AVX2+FMA is baseline-compliant even without the optional
+    /// AVX-512 capability matrix: declaring NON-COMPLIANT in that case is a
+    /// false negative that invalidates otherwise valid environments.
+    #[test]
+    fn baseline_is_compliant_with_avx2_fma_even_without_avx512() {
+        assert_eq!(baseline_status_label(true, true), "COMPLIANT");
+    }
+
+    #[test]
+    fn baseline_is_non_compliant_without_full_baseline() {
+        assert_eq!(baseline_status_label(false, true), "NON-COMPLIANT");
+        assert_eq!(baseline_status_label(true, false), "NON-COMPLIANT");
+        assert_eq!(baseline_status_label(false, false), "NON-COMPLIANT");
+    }
+
+    #[test]
+    fn avx512_extension_label_reports_presence_and_absence() {
+        assert_eq!(avx512_extension_label(true), "AVAILABLE");
+        assert_eq!(avx512_extension_label(false), "NOT DETECTED / INACTIVE");
     }
 }

@@ -86,7 +86,7 @@ pub(crate) const fn align_up(size: usize, alignment: usize) -> Option<usize> {
 /// # Safety
 /// The caller must eventually deallocate using `deallocate_huge()` with the matching `AllocInfo`.
 /// The returned pointer is guaranteed to be at least 64-byte aligned for AVX-512.
-pub fn allocate_huge_pages(
+pub(crate) fn allocate_huge_pages(
     size_bytes: usize,
 ) -> Result<(*mut u8, AllocInfo, HugePageStatus), NamErrorCode> {
     if size_bytes == 0 {

@@ -98,7 +98,7 @@ All historical tracking metrics are recorded in local files within your project 
 > (3.4%, 2925 µs/MMAC), Feather CH8 ≈ 20.0 µs (1.5%, 5176 µs/MMAC), Lite CH12 ≈ 58.8 µs (4.4%, 6746 µs/MMAC),
 > Nano CH4 ≈ 18.0 µs (1.4%, 18595 µs/MMAC outlier due to layer overhead),
 > A2-Full CH8 ≈ 25.7 µs (1.9%), A2-Lite CH3 ≈ 21.0 µs (1.6%), LSTM 1×16 ≈ 6.7 µs (0.5%),
-> LSTM 2×8 ≈ 7.3 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=2048 ≈ 0.3 µs (0.02%),
+> LSTM 2×8 ≈ 7.3 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=4 Direct ≈ 0.3 µs (0.02%),
 > DSP Resampler (44.1k→48k) ≈ 1.2 µs, DSP CabSim IR Medium (2048 taps) ≈ 1.2 µs,
 > Full DSP Pipeline Base (No OS) ≈ 45.6 µs (3.4%), Full DSP Pipeline HQ (4× OS) ≈ 185.6 µs (13.9%).
 > All ≤ 4.4% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
@@ -197,7 +197,7 @@ utils/quality-dashboard.sh --check docs/quality-contract.json
 fidelity work (goldens, f64 oracle, quick_parity, …) **before** invoking the
 regression gate. That raises thermals/OS noise versus a cold standalone
 `--check`. Micro-benches near the noise floor (e.g. `RT_LSTM_2x8` ~7.5 µs,
-`RT_Linear` ~340 ns) may then report a Criterion "regressed" of a few percent
+`RT_Linear_Direct_RF4` ~340 ns) may then report a Criterion "regressed" of a few percent
 even with **no code change**. This is environmental, not a fidelity bug.
 
 **Operator response to a flaky dashboard `--check` after a green standalone gate:**
@@ -225,7 +225,7 @@ Run this checklist **before** `--check` or `--bootstrap-baseline`:
       `cat /sys/devices/system/cpu/cpu<N>/cpufreq/scaling_governor`
       (where `<N>` is the pinned bench core — `BENCH_CORE`/`NAM_BENCH_CORE`,
       default `nproc / 2`; the QA harness probes that core's path, not a
-      fixed `cpu0`, since S1-T2). A different governor (`powersave`,
+      fixed `cpu0`). A different governor (`powersave`,
       `schedutil`, amd_pstate default) makes measurements incomparable →
       `INCOMPARABLE_ENVIRONMENT`.
 * [ ] **Low background load.** Close browsers/heavy services; thermals and
@@ -346,7 +346,10 @@ Historically four ids diverged from their bench labels
 `RT_DSP_Pipeline_HQ`); they were renamed to the bench-label form
 (`RT_Linear`, `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Pipeline_Base_NoOS`,
 `RT_DSP_Pipeline_HQ_4xOS`), so ids now carry their distinguishing qualifier
-directly (sample-rate variant, oversampling mode).
+directly (sample-rate variant, oversampling mode). The `RT_Linear` id was later
+renamed again to `RT_Linear_Direct_RF4` (label `Linear RF=4 Direct`) because the
+fixture it benches is a 4-tap model that resolves to `LinearMode::Direct` and
+never executes RFFT — the old `Linear RF=2048` label was a misnomer (F-PERF-02).
 
 The join is kept explicit in `src/testing/qa/ids.rs` — `RT_BENCH_TABLE` maps
 each bench label to its contract id (currently an identity projection) via
@@ -390,16 +393,17 @@ To maintain absolute reproducibility across development sessions, CI runs, and A
 
 ---
 
-## Corrective Report: T4.8 RFFT SIMD Regression (F-PERF-28)
+## Corrective Report: RFFT SIMD Regression Analysis (F-PERF-28)
 
-Finding F-PERF-28 (post-Sprint-9 audit, 2026-09-19): the quality dashboard flagged
-`RT_Linear` at 0.330 µs against the contract limit 0.310 µs (frozen median 0.260 µs,
+Finding F-PERF-28 (post-audit, 2026-09-19): the quality dashboard flagged
+`RT_Linear` (now `RT_Linear_Direct_RF4`) at 0.330 µs against the contract limit
+0.310 µs (frozen median 0.260 µs,
 commit `7576d49`). A controlled same-boot bisect attributed the end-to-end delta to the
-Sprint-4 item T4.8 (AVX2 vectorization of RFFT `pack_re_im`/`unpack_re_im`):
+AVX2 vectorization of RFFT `pack_re_im`/`unpack_re_im`:
 
-| Configuration (audit bisect, same boot 2026-09-19)              | RT_Linear RF=2048 (median) | Verdict                |
+| Configuration (audit bisect, same boot 2026-09-19)              | RT_Linear (Direct RF=4) median | Verdict                |
 |:----------------------------------------------------------------|:---------------------------|:-----------------------|
-| `36830e2` (pre-T4.8 scalar)                                     | 269.7 ns                   | pre-sprint level       |
+| `36830e2` (scalar baseline)                                     | 269.7 ns                   | baseline level         |
 | HEAD `f44b3fa` (with T4.8 SIMD)                                 | 327–348 ns                 | +22–29%, above limit   |
 | HEAD, only `src/models/linear_fft/process.rs` reverted          | 347.7 ns                   | innocent               |
 | HEAD, only `src/math/dsp/rfft.rs` reverted (T4.8 scalar)        | 278.8 ns (−20.8%)          | "guilty" in isolation  |
@@ -416,8 +420,8 @@ instantiation through its planner (`src/models/linear.rs`, `src/models/linear_ff
 
 | Production path                                   | RFFT size N                                            | Covered by bench group `Rfft_stages_by_size` |
 |:--------------------------------------------------|:-------------------------------------------------------|:---------------------------------------------|
-| `linear_test.nam` (the `RT_Linear` bench fixture) | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below |
-| Linear FFT path (`receptive_field ≥ 256`)         | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048** | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
+| `linear_test.nam` (the `RT_Linear_Direct_RF4` bench fixture) | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below |
+| Linear FFT path (`receptive_field ≥ 256`), e.g. the synthetic `RT_Linear_Fft_RF2048` target | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048** | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
 | CabSim `ConvEngine::new(ir, 64)` (block 64)       | `(2 × 64).next_power_of_two()` = **N=128**             | yes (N=128)                                   |
 
 The bench group `Rfft_stages_by_size` (`benches/dsp_bench.rs`) replaces the
@@ -426,15 +430,19 @@ single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} f
 `process_forward_full` / `process_inverse_full`.
 
 > [!IMPORTANT]
-> **Mechanism correction.** `RT_Linear` benchmarks `linear_test.nam`, a 4-tap Linear
-> model that runs in **Direct (time-domain) mode and never executes RFFT**. The T4.8
-> SIMD code therefore cannot have slowed that bench algorithmically. The whole-binary
+> **Mechanism correction.** `RT_Linear_Direct_RF4` benchmarks `linear_test.nam`, a 4-tap
+> Linear model that runs in **Direct (time-domain) mode and never executes RFFT**. The
+> T4.8 SIMD code therefore cannot have slowed that bench algorithmically. The
+> partitioned-FFT production path has its own dedicated target,
+> `RT_Linear_Fft_RF2048` (synthetic RF=2048 fixture, `LinearImplementation::Auto` →
+> `LinearMode::Fft`), so the FFT path is no longer a measurement blind spot. The
+> whole-binary
 > build of this crate uses `lto = "thin"` with `codegen-units = 1`
 > (`[profile.bench]`), so unrelated source changes shift the layout of the entire
 > `.text` and can move a ~340 ns hot loop by tens of ns. The audit's −20.8% from the
 > whole-file `rfft.rs` revert is reproduced here as a **code-layout artifact**: with
-> the surgical scalar restoration (staged API preserved), RT_Linear stays at the
-> same level as HEAD (paired A/B below, Δ = +0.9%, p = 0.107). The pre-sprint
+> the surgical scalar restoration (staged API preserved), RT_Linear_Direct_RF4 stays at the
+> same level as HEAD (paired A/B below, Δ = +0.9%, p = 0.107). The baseline
 > 269.7 ns figure is not reachable by restoring the RFFT algorithm alone on the
 > current toolchain/boot; it reflects a different binary layout of commit `36830e2`.
 
@@ -445,7 +453,7 @@ single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} f
 * **Methodology** (T5.1-style): `governor = performance`, `taskset -c 8` core pinning,
   3 formal Criterion invocations per arm, per-run medians + Welch t-test over pooled
   per-iteration samples (`sample.json`). Environmental drift was bidirectional
-  (RT_Linear medians drifted 339.7 → 353.9 ns within the SIMD arm), consistent with the
+  (RT_Linear_Direct_RF4 medians drifted 339.7 → 353.9 ns within the SIMD arm), consistent with the
   ±17% ns-scale drift documented for this desktop host — conclusions rest on pooled
   Welch tests and on effect sizes an order of magnitude larger than the drift band.
 * **Stage level** (`benches/dsp_bench.rs::Rfft_stages_by_size`, Δ% = scalar vs SIMD,
@@ -468,7 +476,7 @@ single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} f
 
 | Series                     | SIMD (r1/r2/r3)                  | scalar (r1/r2/r3)                | Δ (pooled)        | Welch p |
 |:---------------------------|:---------------------------------|:---------------------------------|:------------------|:--------|
-| `RT_Linear`                | 336.9 / 345.3 / 353.6 ns         | 351.1 / 341.3 / 348.3 ns         | +0.9%             | 0.107   |
+| `RT_Linear_Direct_RF4`     | 336.9 / 345.3 / 353.6 ns         | 351.1 / 341.3 / 348.3 ns         | +0.9%             | 0.107   |
 | `RT_DSP_CabSim_IR_Medium`  | 82.7 / 85.6 / 85.3 µs            | 84.6 / 83.0 / 83.2 µs            | **−2.5%**         | 0.006   |
 
 ### Binding decision (T10.2 criteria)
@@ -476,7 +484,7 @@ single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} f
 Option B (size-gate) required **some** N ≥ 256 with isolated SIMD gain ≥ 10% *and*
 end-to-end corroboration. N=256 shows +18.3..18.9% isolated on pack/unpack, but the
 only production consumer (CabSim) is **faster with scalar** end-to-end (−2.5%, p = 0.006),
-and `RT_Linear` is a tie. Corroboration fails by an order of magnitude in the
+and `RT_Linear_Direct_RF4` is a tie. Corroboration fails by an order of magnitude in the
 end-to-end direction.
 
 **Decision: Option A — full scalar restoration** (executed in the same change):
@@ -484,20 +492,20 @@ end-to-end direction.
 the staged API* (`pack_re_im` / `post_twiddle` / `pre_twiddle` / `unpack_re_im` /
 `scratch_buffers_mut` remain public; the T1.4-stage bench consumers are unaffected);
 the AVX2 kernels were deleted (dead `.text` policy); the T4.8(a) `debug_assert!`
-guards and safety documentation were preserved. The twiddle stages of T4.8 were
-already arithmetically identical to the pre-sprint scalar code (same `mul_add`
+guards and safety documentation were preserved. The twiddle stages were
+already arithmetically identical to the baseline scalar code (same `mul_add`
 sequence — verified by full-file diff against `36830e2`), so the restoration is
 **bit-exact by construction**; C++ NAMCore parity and the f64 oracle pass unchanged.
 `// Measured:` rationale is embedded in the `pack_re_im` / `unpack_re_im` doc comments.
 
 ### Consequences for the closing ceremony
 
-The restoration does **not** return `RT_Linear` to the 0.26–0.28 µs contract zone on
+The restoration does **not** return `RT_Linear_Direct_RF4` to the 0.26–0.28 µs contract zone on
 this boot (both arms measure ~0.34–0.35 µs; see the mechanism note above — the gap is
 binary-layout/environment, not the T4.8 algorithm). The human re-baseline
 (`--bootstrap-baseline`) will therefore register the current-boot level legitimately:
 the delta is a reproduced, understood codegen-environment shift, and the contract
-median is never hand-edited. If `PERFORMANCE: FAIL` persists on `RT_Linear` after the
+median is never hand-edited. If `PERFORMANCE: FAIL` persists on `RT_Linear_Direct_RF4` after the
 re-baseline and `--save`, that is the documented expected state until the contract is
 re-frozen from the new baseline — not a new regression.
 
@@ -851,7 +859,7 @@ To resolve the evidence conflict noted during audit between initial same-window 
 * **Model-level (`regression_gate` / `RT_WaveNet_Std_CH16`):**
   * Measured time: `[46.912 µs 47.434 µs 47.940 µs]`, change: `−0.52%` (`[−1.76%, +0.72%]`, $p = 0.44 > 0.05$).
   * Verdict: **Neutral (within the ±2% noise threshold)**.
-* **Decision:** In accordance with the S5-T8 decision rule, the stride-guarded prefetch (`step <= 16`) is **retained in HEAD**. The +4.6% divergence observed during the earlier audit run was confirmed to be an environmental artifact of thermal throttling and system load.
+* **Decision:** In accordance with the decision rule, the stride-guarded prefetch (`step <= 16`) is **retained in HEAD**. The +4.6% divergence observed during the earlier audit run was confirmed to be an environmental artifact of thermal throttling and system load.
 
 ### Conv1D Hotpath Bench — Calibration Protocol
 

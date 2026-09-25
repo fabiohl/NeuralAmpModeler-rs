@@ -101,11 +101,11 @@ phase "Syncing NeuralAmpModelerPlugin mirror..."
 sync_git_pin "NeuralAmpModelerPlugin" "$NAM_PLUGIN_DIR" \
     "$NAM_PLUGIN_REPO" "$NAM_PLUGIN_TAG" "$NAM_PLUGIN_COMMIT"
 
-sub_plugin_path="$NAM_PLUGIN_DIR/Dependencies/AudioDSPTools"
-if [ ! -d "$sub_plugin_path" ] || [ -z "$(ls -A "$sub_plugin_path" 2>/dev/null || true)" ]; then
-    echo -e "  Initializing submodules for NeuralAmpModelerPlugin..."
-    (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive Dependencies/AudioDSPTools 2>/dev/null || (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive))
-    ok "NeuralAmpModelerPlugin submodules initialized."
+sub_plugin_path="$NAM_PLUGIN_DIR/AudioDSPTools"
+if [ ! -d "$sub_plugin_path" ] || [ ! -d "$sub_plugin_path/Dependencies/eigen/Eigen" ]; then
+    echo -e "  Initializing submodule AudioDSPTools for NeuralAmpModelerPlugin..."
+    (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive AudioDSPTools)
+    ok "NeuralAmpModelerPlugin submodules ready."
 else
     ok "NeuralAmpModelerPlugin submodules already present."
 fi

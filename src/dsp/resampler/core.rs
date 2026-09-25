@@ -25,12 +25,23 @@ use super::delay_line::DelayLine;
 /// be less than the input length. Unconsumed input is NOT pushed to the delay lines
 /// and the resampler state (`phase_accum`, delay lines) remains exactly at the
 /// point of suspension — ready for the next call.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResamplerProgress {
     /// Number of input samples consumed (per L/R channel).
     pub samples_read: usize,
     /// Number of output samples produced (per L/R channel).
     pub samples_written: usize,
+}
+
+impl ResamplerProgress {
+    /// Creates a progress report for a single resampler processing call.
+    pub const fn new(samples_read: usize, samples_written: usize) -> Self {
+        Self {
+            samples_read,
+            samples_written,
+        }
+    }
 }
 
 /// Resampling engine for one direction (input or output).

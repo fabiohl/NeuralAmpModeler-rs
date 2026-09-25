@@ -53,14 +53,33 @@
 set -euo pipefail
 
 STRICT_PRE_RELEASE=0
+SIMULATE=0
 for arg in "$@"; do
     case "$arg" in
         --strict-pre-release)
             STRICT_PRE_RELEASE=1
             ;;
+        --simulate|--dry-run)
+            SIMULATE=1
+            ;;
         --help|-h)
-            echo "Usage: $0 [--strict-pre-release]"
+            echo "Usage: $0 [--strict-pre-release] [--simulate|--dry-run]"
+            echo ""
+            echo "NeuralAmpModeler-rs nightly / pre-release long audit suite"
+            echo "(~10 min, HUMAN OPERATOR ONLY — AI agents must never execute the full suite)."
+            echo ""
+            echo "Options:"
+            echo "  --strict-pre-release   Promote every GAP to a hard failure (release gate)."
+            echo "  --simulate, --dry-run  Pre-register the 6 preflights + 7 phases as SIMULATED"
+            echo "                         in target/logs/long-audit-receipt.jsonl without executing"
+            echo "                         any test. Safe for AI/CI structural validation (~50ms)."
+            echo "  -h, --help             Show this help and exit."
             exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: $0 [--strict-pre-release] [--simulate|--dry-run]" >&2
+            exit 2
             ;;
     esac
 done
@@ -124,6 +143,62 @@ _test_flag() {
 # Shared style helpers (RED/GREEN/YELLOW/BLUE/BOLD/NC) + cd to project root.
 source "$(dirname "$0")/_lib.sh"
 
+# ── Simulate / dry-run pre-registration (T2.1 / F-03) ────────────────────────
+# `--simulate` / `--dry-run` registers the full receipt structure (6 preflights
+# + 7 timed phases) as SIMULATED with tests_executed=0 in ~50ms, without
+# executing any test. Safe structural surface for AI/CI and for the workspace
+# bootstrap pre-registration. A simulated receipt NEVER passes strict mode:
+# SIMULATED is a declared gap, so `summary` derives COMPLETED_WITH_GAPS and
+# `--strict-pre-release` exits 1.
+if [ "${SIMULATE:-0}" = "1" ]; then
+    if [ "${STRICT_PRE_RELEASE:-0}" = "1" ]; then
+        echo -e "${RED}${BOLD}❌ --strict-pre-release rejects simulated receipts (SIMULATED is a declared gap).${NC}" >&2
+        exit 1
+    fi
+    echo -e "${BLUE}${BOLD}=============================================================${NC}"
+    echo -e "${BLUE}${BOLD}    NeuralAmpModeler-rs Long-Duration Stress & Audit Suite   ${NC}"
+    echo -e "${BLUE}${BOLD}=============================================================${NC}"
+    echo -e "${YELLOW}${BOLD}SIMULATION MODE: no test will be executed — pre-registering receipt structure.${NC}"
+    mkdir -p target/logs
+    rm -f target/logs/long-audit-receipt.jsonl
+    if ! ensure_long_receipt_bin; then
+        echo -e "${RED}${BOLD}❌ nam_long_receipt unavailable — simulated receipt NOT emitted (fail-closed).${NC}" >&2
+        exit 1
+    fi
+    SIM_START_MS=$(date +%s%N)
+    for spec in \
+        "preflight-render|C++ render binary (preflight)" \
+        "preflight-catalog|Fixture + V1/V2 catalog preflight" \
+        "preflight-package|Cargo package exclusion preflight" \
+        "preflight-freshness|Fixture/golden freshness preflight" \
+        "preflight-meta|Catalog↔test coherence preflight" \
+        "preflight-simd-probe|SIMD Capability & Dispatch Probe" \
+        "phase1|Soak Tests (Numerical Stability)" \
+        "phase2|Defense scripts + libm + oversample bound" \
+        "phase3|Property-Based, Parity & Golden Vectors in Release" \
+        "phase4|Resampler, Cabsim & A2 Heap-Audit" \
+        "phase5|RT Deadline Gate (deterministic)" \
+        "phase6|RT Jitter Characterization" \
+        "phase7|Loom Concurrency Model Checking"; do
+        pid="${spec%%|*}"
+        pname="${spec#*|}"
+        if ! "$LONG_RECEIPT_BIN" append --phase-id "$pid" --name "$pname" \
+            --status SIMULATED --duration-ms 0 --tests-executed 0 \
+            --out target/logs/long-audit-receipt.jsonl >/dev/null 2>&1; then
+            echo -e "${RED}${BOLD}❌ Simulated receipt emission failed for $pid (fail-closed).${NC}" >&2
+            exit 1
+        fi
+    done
+    if ! SUMMARY_TEXT="$("$LONG_RECEIPT_BIN" summary --out target/logs/long-audit-receipt.jsonl)"; then
+        echo -e "${RED}${BOLD}❌ Simulated receipt summary emission failed (fail-closed).${NC}" >&2
+        exit 1
+    fi
+    SIM_DUR_MS=$(( ($(date +%s%N) - SIM_START_MS) / 1000000 ))
+    printf '%s\n' "$SUMMARY_TEXT"
+    echo -e "${YELLOW}${BOLD}Simulation only — no test executed in ${SIM_DUR_MS}ms. Receipt: target/logs/long-audit-receipt.jsonl${NC}"
+    exit 0
+fi
+
 # CPU core pinning for performance-sensitive phases (RT Deadline, RT Jitter).
 # Override with NAM_BENCH_CORE; defaults to the middle physical core.
 NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
@@ -152,7 +227,6 @@ rm -f target/logs/catalog_preflight.log \
       target/logs/meta_coherence.log \
       target/logs/package-list.err \
       target/logs/phase1-soak.log \
-      target/logs/phase-libm-exports.log \
       target/logs/phase2-proptests-parity.log \
       target/logs/phase3-heap-audit.log \
       target/logs/phase4-rt-deadline.log \
@@ -350,7 +424,9 @@ emit_preflight_receipt "preflight-package" "Cargo package exclusion preflight" "
 # ── Freshness gate (blocking, centralized) ──
 # hard-fail: artifact integrity + generator provenance (stricter than quick's
 # artifacts-hard, which only warns on generator-script drift).
-# Bypass with NAM_BYPASS_FRESHNESS=1 for local developer convenience.
+# Bypass with NAM_BYPASS_FRESHNESS=1 for local developer convenience. A
+# bypassed check is recorded as a typed gap so the suite degrades to
+# COMPLETED_WITH_GAPS and --strict-pre-release rejects it.
 echo -e "\n→ Checking freshness of test fixtures and goldens (preflight-freshness)..."
 PF_FRESH_START=$(date +%s%N)
 if ! check_freshness hard-fail; then
@@ -358,7 +434,12 @@ if ! check_freshness hard-fail; then
     abort_preflight "preflight-freshness" "Fixture/golden freshness preflight" "$PF_FRESH_DUR"
 fi
 PF_FRESH_DUR=$(( ($(date +%s%N) - PF_FRESH_START) / 1000000 ))
-emit_preflight_receipt "preflight-freshness" "Fixture/golden freshness preflight" "PASSED" "$PF_FRESH_DUR" || true
+if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
+    echo -e "  ${YELLOW}${BOLD}⚠ NAM_BYPASS_FRESHNESS=1 — freshness check bypassed (recorded as gap).${NC}"
+    emit_preflight_receipt "preflight-freshness" "Fixture/golden freshness preflight" "PASSED" "$PF_FRESH_DUR" --gaps "freshness_bypassed_by_env" || true
+else
+    emit_preflight_receipt "preflight-freshness" "Fixture/golden freshness preflight" "PASSED" "$PF_FRESH_DUR" || true
+fi
 
 # ── Catalog↔test coherence gate (blocking) ──
 # `meta_coherence` is a cheap, dependency-free governance test (no NAMCore, no
@@ -623,11 +704,18 @@ run_proptests_parity_phase() {
     # by nam_long_receipt detect_gap_markers) records the missing opt-in as a
     # typed gap instead of silently promoting a zero-case matrix to PASSED.
     local SUBLOG="target/logs/subphase-isa-parity.log"
+    # Single-writer invariant: the stdout of `tee` already flows to the
+    # `run_phase` file descriptor (sequential writer). A second explicit
+    # append (`>> phase2 log`) would open a concurrent offset that later
+    # writes overwrite, corrupting typed markers in the phase log.
     cargo test --features testing --release --no-fail-fast $(_test_flag isa_parity) -- \
-        --include-ignored --test-threads=1 --nocapture 2>&1 | tee -a "$SUBLOG" \
-        >> "target/logs/phase2-proptests-parity.log" || status=1
+        --include-ignored --test-threads=1 --nocapture 2>&1 | tee -a "$SUBLOG" || status=1
     assert_subphase_ran "isa_parity_full_matrix" "$SUBLOG" 1 || status=1
-    if grep -qE "AVX-512" "$SUBLOG"; then
+    # Positive-execution gate: only a real cross-ISA comparison emits
+    # `AVX512_MATRIX: EXERCISED` (see tests/parity/isa_parity.rs). Skip
+    # notices mention the ISA name but never this marker, so a zero-case
+    # matrix cannot be mistaken for coverage.
+    if grep -qE "^AVX512_MATRIX: EXERCISED" "$SUBLOG"; then
         echo "AVX512_OPT_IN: RUN (cross-ISA AVX-512 matrix compiled and exercised)"
     else
         echo "AVX512_OPT_IN: NOT_RUN (default runner without --features avx512)"

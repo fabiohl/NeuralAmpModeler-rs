@@ -115,16 +115,16 @@ pub trait ThreadConfigurator {
     /// Sets CPU affinity for `thread_id`.
     fn set_thread_affinity(&self, thread_id: libc::pthread_t, cpuset: &libc::cpu_set_t) -> i32;
 
-    /// Reads the scheduling policy and parameters.
-    fn get_sched_param(&self, thread_id: libc::pthread_t) -> Result<(i32, libc::sched_param), i32>;
+    /// Reads the calling thread's scheduling policy and parameters.
+    ///
+    /// Current-thread only: implementations must not accept an arbitrary
+    /// `pthread_t` (a leftover `thread_id` would silently target the wrong
+    /// thread if a future caller passed another id).
+    fn get_current_sched_param(&self) -> Result<(i32, libc::sched_param), i32>;
 
-    /// Requests a scheduling policy and parameters (`sched_setscheduler`).
-    fn set_sched_param(
-        &self,
-        thread_id: libc::pthread_t,
-        policy: i32,
-        param: &libc::sched_param,
-    ) -> i32;
+    /// Requests a scheduling policy and parameters for the calling thread
+    /// (`sched_setscheduler` with pid 0).
+    fn set_current_sched_param(&self, policy: i32, param: &libc::sched_param) -> i32;
 
     /// Returns the CPU the calling thread currently runs on.
     fn get_current_cpu(&self) -> i32;
@@ -152,7 +152,8 @@ impl ThreadConfigurator for SystemThreadConfigurator {
         }
     }
 
-    fn get_sched_param(&self, thread_id: libc::pthread_t) -> Result<(i32, libc::sched_param), i32> {
+    fn get_current_sched_param(&self) -> Result<(i32, libc::sched_param), i32> {
+        let thread_id = self.current_thread_id();
         let mut policy = 0i32;
         let mut param = libc::sched_param { sched_priority: 0 };
         // SAFETY: `&mut policy`/`&mut param` are valid out-pointers.
@@ -164,12 +165,8 @@ impl ThreadConfigurator for SystemThreadConfigurator {
         }
     }
 
-    fn set_sched_param(
-        &self,
-        _thread_id: libc::pthread_t,
-        policy: i32,
-        param: &libc::sched_param,
-    ) -> i32 {
+    fn set_current_sched_param(&self, policy: i32, param: &libc::sched_param) -> i32 {
+        // pid 0 = calling thread (man 2 sched_setscheduler).
         // SAFETY: `param` is a valid pointer for the syscall duration.
         let ret = unsafe { libc::sched_setscheduler(0, policy, param) };
         if ret == -1 {
@@ -288,7 +285,9 @@ pub fn promote_sched_fifo_with<C: ThreadConfigurator>(
     // the host logs alongside `rt_cpu`; keep the field populated.
     rt_status.rt_tid.store(thread_id as i64, Ordering::Relaxed);
 
-    let (actual_policy, actual_param) = match cfg.get_sched_param(thread_id) {
+    let mut set_err: i32 = 0;
+    let mut get_err: i32 = 0;
+    let (actual_policy, actual_param) = match cfg.get_current_sched_param() {
         Ok((p, param)) => {
             let base_policy = p & !0x40000000i32;
             if base_policy == libc::SCHED_FIFO || base_policy == libc::SCHED_RR {
@@ -297,16 +296,18 @@ pub fn promote_sched_fifo_with<C: ThreadConfigurator>(
                 let target_param = libc::sched_param {
                     sched_priority: priority,
                 };
-                let ret_set = cfg.set_sched_param(thread_id, libc::SCHED_FIFO, &target_param);
+                let ret_set = cfg.set_current_sched_param(libc::SCHED_FIFO, &target_param);
                 if ret_set == 0 {
                     (libc::SCHED_FIFO, target_param)
                 } else {
+                    set_err = ret_set;
                     rt_status.rt_sched_err.store(ret_set, Ordering::Relaxed);
                     (base_policy, param)
                 }
             }
         }
         Err(ret_getsched) => {
+            get_err = ret_getsched;
             rt_status
                 .rt_getsched_err
                 .store(ret_getsched, Ordering::Relaxed);
@@ -335,9 +336,27 @@ pub fn promote_sched_fifo_with<C: ThreadConfigurator>(
     if actual_policy == libc::SCHED_FIFO || actual_policy == libc::SCHED_RR {
         Ok(())
     } else {
-        Err(rt_status
+        // Invariant: Err never carries 0 (errno 0 means success). Prefer the
+        // elevation errno from this call, fall back to the getsched errno,
+        // then to the atomics (in case a reused RtStatusFlags already held a
+        // stale value), and finally to EINVAL as a fail-closed sentinel.
+        let sched_err = rt_status
             .rt_sched_err
-            .load(std::sync::atomic::Ordering::Relaxed))
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let getsched_err = rt_status
+            .rt_getsched_err
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Err(if set_err != 0 {
+            set_err
+        } else if get_err != 0 {
+            get_err
+        } else if sched_err != 0 {
+            sched_err
+        } else if getsched_err != 0 {
+            getsched_err
+        } else {
+            libc::EINVAL
+        })
     }
 }
 

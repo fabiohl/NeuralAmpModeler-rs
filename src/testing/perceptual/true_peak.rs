@@ -9,9 +9,9 @@
 //!     oversampling adds ~48 MAC/sample (12 per phase × 4) — prohibitive in the
 //!     DSP callback where every μs matters.
 //!   - Off-RT QA/telemetry: functions below expose full BS.1770-4 dBTP via
-//!     `compute_true_peak_db()` and `find_true_peak_overs()`. The main-thread
-//!     telemetry loop (src/standalone/rt_setup/telemetry.rs:81) can optionally
-//!     run these on buffered audio for comprehensive inter-sample over detection.
+//!     `compute_true_peak_db()` and `find_true_peak_overs()`. Off-RT host
+//!     telemetry loops can optionally run these on buffered audio for
+//!     comprehensive inter-sample over detection.
 //!   - Bench number: pending hardware-validation measurements.
 
 /// Oversampling factor for BS.1770-4 true-peak measurement.

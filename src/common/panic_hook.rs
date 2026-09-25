@@ -6,7 +6,9 @@
 //! The hook minimizes allocations during the crash path: `SystemSnapshot` is
 //! pre-captured at `install_panic_hook` time, the report is formatted into a
 //! stack-allocated `[u8; 16384]` buffer via `LimitWriter`, and `RwLock` reads
-//! use `try_read()` with fallback to avoid deadlocks. Remaining heap
+//! use `try_read()` with fallback to avoid deadlocks. If the snapshot is
+//! missing (hook invoked without `install_panic_hook`), a minimal report is
+//! emitted instead of panicking — a panic hook must never panic. Remaining heap
 //! allocations (`var_os`, `PathBuf`) only occur when a writable `~/.cache/neural-amp-modeler-rs`
 //! directory is found.
 //!
@@ -125,9 +127,13 @@ fn format_panic_report_to_buf(
     thread_name: &str,
     location: &str,
     payload_str: &str,
-    system: &SystemSnapshot,
+    system: Option<&SystemSnapshot>,
 ) -> usize {
     let mut w = LimitWriter::new(buf);
+
+    let version = system
+        .map(|s| s.version)
+        .unwrap_or(env!("CARGO_PKG_VERSION"));
 
     let _ = write!(
         w,
@@ -139,7 +145,7 @@ fn format_panic_report_to_buf(
          Thread: {}\n\
          Location: {}\n\
          Message: {}\n\n",
-        system.version, component, thread_name, location, payload_str
+        version, component, thread_name, location, payload_str
     );
 
     let _ = writeln!(w, "──── Runtime State ─────────────────────────────");
@@ -212,25 +218,32 @@ fn format_panic_report_to_buf(
         .unwrap_or(0);
 
     let _ = writeln!(w, "──── System Info ─────────────────────────────");
-    let _ = writeln!(w, "arch={}", system.arch);
-    let _ = writeln!(w, "os={} kernel={}", system.os, system.kernel);
-    let _ = write!(
-        w,
-        "host_library={}",
-        system.host_library_version.as_deref().unwrap_or("N/A")
-    );
-    let _ = write!(w, "\nfeatures=");
-    if system.features.is_empty() {
-        let _ = write!(w, "none (baseline x86-64-v3 only)");
-    } else {
-        for (i, f) in system.features.iter().enumerate() {
-            if i > 0 {
-                let _ = write!(w, ", ");
+    if let Some(system) = system {
+        let _ = writeln!(w, "arch={}", system.arch);
+        let _ = writeln!(w, "os={} kernel={}", system.os, system.kernel);
+        let _ = write!(
+            w,
+            "host_library={}",
+            system.host_library_version.as_deref().unwrap_or("N/A")
+        );
+        let _ = write!(w, "\nfeatures=");
+        if system.features.is_empty() {
+            let _ = write!(w, "none (baseline x86-64-v3 only)");
+        } else {
+            for (i, f) in system.features.iter().enumerate() {
+                if i > 0 {
+                    let _ = write!(w, ", ");
+                }
+                let _ = write!(w, "{}", f);
             }
-            let _ = write!(w, "{}", f);
         }
+        let _ = writeln!(w);
+    } else {
+        let _ = writeln!(w, "arch=<unavailable>");
+        let _ = writeln!(w, "os=<unavailable> kernel=<unavailable>");
+        let _ = writeln!(w, "host_library=<unavailable>");
+        let _ = writeln!(w, "features=<snapshot not initialized>");
     }
-    let _ = writeln!(w);
     let mut ts_buf = NumBuffer::new();
     let _ = writeln!(w, "timestamp_unix={}", unix_ts.format_into(&mut ts_buf));
 
@@ -243,8 +256,30 @@ fn format_panic_report_to_buf(
     w.cursor
 }
 
+/// Formats a crash report using the pre-captured snapshot when present,
+/// otherwise a minimal report. Never panics — safe to call from the hook.
+fn write_panic_report(
+    buf: &mut [u8],
+    component: &str,
+    thread_name: &str,
+    location: &str,
+    payload_str: &str,
+) -> usize {
+    format_panic_report_to_buf(
+        buf,
+        component,
+        thread_name,
+        location,
+        payload_str,
+        SYSTEM_SNAPSHOT.get(),
+    )
+}
+
 /// Public entry point for heap-audit tests to exercise `format_panic_report_to_buf`
 /// with the pre-captured `SystemSnapshot` without triggering a real panic.
+///
+/// Degrades to the minimal report when `install_panic_hook` was not called,
+/// matching the installed hook's no-double-panic contract.
 #[cfg(feature = "heap-audit")]
 #[cfg_attr(docsrs, doc(cfg(feature = "heap-audit")))]
 pub fn format_panic_report_for_audit_test(
@@ -254,10 +289,7 @@ pub fn format_panic_report_for_audit_test(
     location: &str,
     payload_str: &str,
 ) -> usize {
-    let system = SYSTEM_SNAPSHOT
-        .get()
-        .expect("SystemSnapshot not initialized");
-    format_panic_report_to_buf(buf, component, thread_name, location, payload_str, system)
+    write_panic_report(buf, component, thread_name, location, payload_str)
 }
 
 /// Installs a panic hook that writes a zero-alloc crash report to
@@ -302,18 +334,13 @@ pub fn install_panic_hook(component: &'static str) {
             std::str::from_utf8(&location_buf[..len]).unwrap_or("<invalid utf-8>")
         };
 
-        let system = SYSTEM_SNAPSHOT
-            .get()
-            .expect("SystemSnapshot not initialized");
-
         let mut report_buf = [0u8; 16384];
-        let written = format_panic_report_to_buf(
+        let written = write_panic_report(
             &mut report_buf,
             component,
             thread_name,
             location_str,
             payload_str,
-            system,
         );
 
         if let Some(home_dir) = std::env::var_os("HOME") {

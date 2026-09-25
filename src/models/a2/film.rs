@@ -328,7 +328,7 @@ impl super::layer::A2Layer {
 /// `convolve_mono_avx2` pattern.
 // KEEP IN SYNC WITH: `src/math/gemm/dot_basic.rs::dot_product_avx2`
 //
-// Architectural Rationale for Duplication (S4-T3 / F-PERF-34):
+// Architectural Rationale for Duplication (F-PERF-34):
 // - FiLM operates on condition vectors where `cond_per_group` is small (typically 1..8).
 // - This specialized kernel uses 2 accumulators (16-wide unroll), naive scalar tail,
 //   and `#[inline(always)]` to inline directly into `FiLMLayer::process` without register

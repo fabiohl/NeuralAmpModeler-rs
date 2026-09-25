@@ -54,8 +54,6 @@ macro_rules! gemv_kernel {
         let mut in_c = 0;
         let in_len = $in_frame.len();
         while in_c + 8 <= in_len {
-            _mm_prefetch::<_MM_HINT_T0>($in_frame.as_ptr().wrapping_add(in_c + 64) as *const i8);
-
             let vs0 = _mm256_set1_ps(*$in_frame.get_unchecked(in_c));
             let vs1 = _mm256_set1_ps(*$in_frame.get_unchecked(in_c + 1));
             let vs2 = _mm256_set1_ps(*$in_frame.get_unchecked(in_c + 2));
@@ -154,8 +152,6 @@ macro_rules! gemv_kernel {
         let mut in_c = 0;
         let in_len = $in_frame.len();
         while in_c + 8 <= in_len {
-            _mm_prefetch::<_MM_HINT_T0>($in_frame.as_ptr().wrapping_add(in_c + 64) as *const i8);
-
             let vs0 = _mm512_set1_ps(*$in_frame.get_unchecked(in_c));
             let vs1 = _mm512_set1_ps(*$in_frame.get_unchecked(in_c + 1));
             let vs2 = _mm512_set1_ps(*$in_frame.get_unchecked(in_c + 2));

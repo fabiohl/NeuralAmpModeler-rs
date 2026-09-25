@@ -103,23 +103,92 @@ impl Default for BridgeBuffer {
 ///    runtime-enforced property: the payload writes in `write_block` are
 ///    non-atomic, so the `unsafe impl Sync` on both faces is sound only under
 ///    this rule.
-#[repr(align(128))]
+#[repr(C, align(128))]
 pub struct DspBridge {
     /// The two physical buffers (front/back) for double-buffering.
     pub buffers: [BridgeBuffer; 2],
+
+    // =========================================================================
+    // Writer-Owned Line (64 bytes):
+    // Written exclusively by the capture callback (DSP producer) during block
+    // publication and frame-drop accounting. Main thread drains dropped_frames.
+    // =========================================================================
     /// Index of the active buffer for READING (0 or 1). Capture always writes to (1 - active).
     pub active_read_idx: AtomicUsize,
     /// Generation counter — incremented on each write by the capture callback.
     /// Playback compares with its local copy to detect new data.
     pub generation: AtomicU64,
-    /// Consumed generation counter — updated by the playback callback.
-    pub consumed_gen: AtomicU64,
     /// Counter of dropped frames (overwritten without consumption).
     /// Incremented by RT callbacks, drained via `drain_dropped_frames()` by the main loop.
     pub dropped_frames: AtomicU32,
+    /// Padding to isolate writer-owned atomic fields to their own 64-byte cache line.
+    /// (8 + 8 + 4 = 20 bytes; 64 - 20 = 44 bytes).
+    _pad_writer: [u8; 44],
+
+    // =========================================================================
+    // Reader-Owned Line (64 bytes):
+    // Written exclusively by the playback callback (consumer) upon block consumption.
+    // Read by the writer to detect pending (unconsumed) frames.
+    // =========================================================================
+    /// Consumed generation counter — updated by the playback callback.
+    pub consumed_gen: AtomicU64,
+    /// Padding to isolate reader-owned atomic fields to their own 64-byte cache line
+    /// and maintain 128-byte alignment for the entire struct.
+    /// (8 bytes; 64 - 8 = 56 bytes).
+    _pad_reader: [u8; 56],
 }
 
 impl DspBridge {
+    /// Creates a new zero-initialized `DspBridge`.
+    pub fn new() -> Self {
+        Self {
+            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
+            active_read_idx: AtomicUsize::new(0),
+            generation: AtomicU64::new(0),
+            dropped_frames: AtomicU32::new(0),
+            _pad_writer: [0; 44],
+            consumed_gen: AtomicU64::new(0),
+            _pad_reader: [0; 56],
+        }
+    }
+
+    /// Allocates and initializes a new heap-allocated `DspBridge`.
+    ///
+    /// The allocation is performed in-place on the heap using `Box::new_uninit()`
+    /// to avoid placing a ~131 KiB temporary on the caller's thread stack.
+    pub fn new_boxed() -> Box<Self> {
+        let mut boxed = Box::<Self>::new_uninit();
+        // SAFETY: `boxed` is freshly allocated memory for `DspBridge`. Zeroing all bytes initializes
+        // the 128 KiB sample buffers and padding cleanly, and atomic fields are explicitly constructed.
+        unsafe {
+            core::ptr::write_bytes(boxed.as_mut_ptr(), 0, 1);
+            let b = boxed.as_mut_ptr();
+            (*b).active_read_idx = AtomicUsize::new(0);
+            (*b).generation = AtomicU64::new(0);
+            (*b).dropped_frames = AtomicU32::new(0);
+            (*b).consumed_gen = AtomicU64::new(0);
+            boxed.assume_init()
+        }
+    }
+
+    /// Initializes a `DspBridge` in-place at the provided raw pointer.
+    ///
+    /// # Safety
+    /// `ptr` must be valid for writes, properly aligned to `align_of::<DspBridge>()`,
+    /// and point to memory of at least `size_of::<DspBridge>()` bytes.
+    pub unsafe fn init_in_place(ptr: *mut Self) {
+        // SAFETY: Caller guarantees `ptr` is valid for writes, properly aligned to 128 bytes,
+        // and points to at least `size_of::<DspBridge>()` bytes.
+        unsafe {
+            core::ptr::write_bytes(ptr, 0, 1);
+            let b = &mut *ptr;
+            b.active_read_idx = AtomicUsize::new(0);
+            b.generation = AtomicU64::new(0);
+            b.dropped_frames = AtomicU32::new(0);
+            b.consumed_gen = AtomicU64::new(0);
+        }
+    }
+
     /// Drains the dropped frames counter, returning the accumulated value and resetting it.
     ///
     /// RT-Safe for the reader: uses atomic `swap` without locks.
@@ -156,6 +225,12 @@ impl DspBridge {
         self.active_read_idx.store(0, Ordering::Release);
         self.consumed_gen.store(next_gen, Ordering::Release);
         self.generation.store(next_gen, Ordering::Release);
+    }
+}
+
+impl Default for DspBridge {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

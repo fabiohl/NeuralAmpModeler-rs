@@ -31,6 +31,7 @@ pub use data::{
     SlimmableConfig, SlimmableKwargs, WeightsLayout,
 };
 pub use parse::parse_nam_json;
+pub(crate) use parse::validate_model_data;
 #[cfg(test)]
 pub(crate) use topology::parse_semver;
 pub use topology::{

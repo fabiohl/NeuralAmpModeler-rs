@@ -28,9 +28,22 @@ pub fn parse_nam_json(json_str: &str) -> Result<NamModelData, JsonError> {
             return Err(take_last_typed_parse_error().unwrap_or(JsonError::Serde(e)));
         }
     };
-    validate_version(&data)?;
-    validate_topology_limits(&data)?;
+    validate_model_data(&data)?;
     Ok(data)
+}
+
+/// Consolidated post-deserialization validation of a [`NamModelData`]:
+/// version-range enforcement ([`validate_version`]) plus OOM-safety topology
+/// limits ([`validate_topology_limits`]).
+///
+/// [`parse_nam_json`] applies this to the root of every `.nam` file.
+/// Sub-models deserialized from raw `serde_json::Value` (e.g. the nested
+/// `condition_dsp` of a WaveNet model) bypass `parse_nam_json` and must call
+/// this function explicitly before construction, so a nested sub-model can
+/// never bypass the version range enforced for the root model.
+pub(crate) fn validate_model_data(data: &NamModelData) -> Result<(), JsonError> {
+    validate_version(data)?;
+    validate_topology_limits(data)
 }
 
 /// Validates the `.nam` version field against NAMcore-compatible SemVer

@@ -398,7 +398,7 @@ into the existing group.
    the driver with `partition ∈ {32, 64, 128, 256}` × host block `∈ {16, 32, 64, 256, 333}` and
    assert **exact equality** with the current single-partition path output (the FIFO makes
    blocking-invariant output an exact identity, not a tolerance).
-2. **End-to-end ESR gate** (Sprint 7 acceptance): cab-sim stage with chunking 32→64 and 16→64
+2. **End-to-end ESR gate** (acceptance): cab-sim stage with chunking 32→64 and 16→64
    (sub-block → partition), output within the established ESR threshold of the current path.
 3. **Parity oracles unchanged:** `cpp_parity quick_parity` PASS and f64 oracle PASS — the driver
    must not alter arithmetic; it only reorders *when* FIFO copies happen, never the MAC order.
@@ -410,7 +410,7 @@ into the existing group.
 
 ---
 
-## Open decisions for the project owner (gate before implementation)
+## Open decisions (gate before implementation)
 
 1. **Approve the scheduler API surface (Part B)** — in particular the `SwapRing`/`RtSwapHandler`
    trait split and the shared `SwapBudget` model as the canonical semantics.
@@ -419,7 +419,7 @@ into the existing group.
 3. **Approve the driver API (Part C)** and confirm the default partition policy stays
    `partition_size ==` host maximum block until a consumer opts into sub-partition latency.
 4. **Sequencing:** engine M1 may proceed immediately after approval; M2/M3 stay bound to the
-   integration sprints that already own consumer migrations.
+   integration phases that already own consumer migrations.
 
 ---
 

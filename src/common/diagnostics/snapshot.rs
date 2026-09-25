@@ -35,12 +35,26 @@ pub struct ModelInfo {
 }
 
 /// Consumer-provided audio metadata for snapshot capture.
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct AudioMetadata {
     /// Active channel count (e.g. 1 for mono, 2 for stereo).
     pub channel_count: usize,
     /// Host name provided by the consumer (e.g. "Standalone", "HostPlugin").
     pub host_name: String,
+}
+
+impl AudioMetadata {
+    /// Creates consumer-provided audio metadata for snapshot capture.
+    pub fn new(channel_count: usize, host_name: impl Into<String>) -> Self {
+        Self {
+            channel_count,
+            host_name: host_name.into(),
+        }
+    }
 }
 
 /// Detailed audio configuration for runtime diagnostic snapshot.

@@ -78,7 +78,7 @@ pub struct Fingerprint {
     pub rustflags: String,
     /// Cargo profile of the benchmark (see [`DEFAULT_BUILD_PROFILE`]).
     pub build_profile: String,
-    /// CPU frequency governor of the effective bench core (S1-T2).
+    /// CPU frequency governor of the effective bench core.
     pub frequency_governor: String,
     /// Producing git commit (provenance only — never compared).
     pub git_commit: String,
@@ -136,7 +136,7 @@ impl Fingerprint {
     /// Probes the live host and builds the fingerprint of the current
     /// environment.
     ///
-    /// S1-T2: when `bench_core` names an explicit core, the governor is
+    /// When `bench_core` names an explicit core, the governor is
     /// re-probed on that core's `cpufreq` path (instead of the ambient
     /// `BENCH_CORE`/`NAM_BENCH_CORE` default) so the fingerprint reflects the
     /// core the bench is actually pinned to.

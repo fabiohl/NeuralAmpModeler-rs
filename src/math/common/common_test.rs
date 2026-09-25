@@ -6,6 +6,8 @@ use super::traits::SimdMath;
 use crate::math::common::Avx2Math;
 #[cfg(feature = "avx512")]
 use crate::math::common::Avx512Math;
+#[cfg(feature = "avx512")]
+use crate::math::common::has_full_avx512;
 use crate::math::dsp::stereo::{compute_energy_avx2, compute_max_diff_avx2};
 use crate::math::gemm::dot_basic::dot_product_avx2;
 #[cfg(feature = "avx512")]
@@ -213,7 +215,9 @@ fn test_accumulate_head() {
     // test_backend::<ScalarMath>(); // ScalarMath removed (Project targets x86-64-v3+)
     test_backend::<Avx2Math>();
     #[cfg(feature = "avx512")]
-    if std::is_x86_feature_detected!("avx512f") {
+    // Full F+VL+BW+DQ matrix required: Avx512Math reaches F+VL kernels
+    // (accumulate_head_avx512vl) that fault on partial subsets.
+    if has_full_avx512() {
         test_backend::<Avx512Math>();
     }
 }
@@ -252,7 +256,9 @@ fn test_tanh_and_accumulate_with_seed() {
 
     test_backend::<Avx2Math>();
     #[cfg(feature = "avx512")]
-    if std::is_x86_feature_detected!("avx512f") {
+    // Full F+VL+BW+DQ matrix required: Avx512Math reaches F+VL kernels
+    // (tanh_and_accumulate_with_seed_avx512vl) that fault on partial subsets.
+    if has_full_avx512() {
         test_backend::<Avx512Math>();
     }
 }
@@ -278,7 +284,9 @@ fn test_store_bf16_avx2() {
 #[cfg(feature = "avx512")]
 #[test]
 fn test_store_bf16_avx512() {
-    if !is_x86_feature_detected!("avx512f") {
+    // F+VL required: Avx512Math::store_bf16 lowers via 512-bit shift/pack
+    // (F+VL per dispatch docs); solo-F would risk SIGILL on partial subsets.
+    if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;
     }
     let vals: Vec<f32> = (0..16).map(|i| i as f32 + 1.0).collect();
@@ -665,7 +673,9 @@ fn gen_bf16_data(len: usize, seed: f32) -> Vec<u16> {
 #[cfg(feature = "avx512")]
 #[test]
 fn test_f32_to_bf16_avx512_regression() {
-    if !is_x86_feature_detected!("avx512f") {
+    // f32_to_bf16_avx512 is #[target_feature(enable = "avx512f,avx512vl")];
+    // solo-F would risk SIGILL on partial subsets.
+    if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
         return;
     }
 
@@ -808,7 +818,9 @@ fn test_tanh_and_overwrite_block() {
 
     test_backend::<Avx2Math>();
     #[cfg(feature = "avx512")]
-    if std::is_x86_feature_detected!("avx512f") {
+    // Full F+VL+BW+DQ matrix required: tanh_and_overwrite_block_avx512vl
+    // faults on partial subsets.
+    if has_full_avx512() {
         test_backend::<Avx512Math>();
     }
 }
@@ -845,7 +857,9 @@ fn test_tanh_and_accumulate_block() {
 
     test_backend::<Avx2Math>();
     #[cfg(feature = "avx512")]
-    if std::is_x86_feature_detected!("avx512f") {
+    // Full F+VL+BW+DQ matrix required: tanh_and_accumulate_block_avx512vl
+    // faults on partial subsets.
+    if has_full_avx512() {
         test_backend::<Avx512Math>();
     }
 }
@@ -872,7 +886,9 @@ fn test_gated_activation_and_overwrite_block() {
 
     test_backend::<Avx2Math>();
     #[cfg(feature = "avx512")]
-    if std::is_x86_feature_detected!("avx512f") {
+    // Full F+VL+BW+DQ matrix required: gated_activation_and_overwrite_block_avx512vl
+    // faults on partial subsets.
+    if has_full_avx512() {
         test_backend::<Avx512Math>();
     }
 }
@@ -941,7 +957,10 @@ fn test_complex_mac_overwrite_parity() {
             &h_re, &h_im, &x_re, &x_im, &scalar_re, &scalar_im, len, "AVX2",
         );
         #[cfg(feature = "avx512")]
-        if is_x86_feature_detected!("avx512f") {
+        // complex_mac_overwrite delegates to the AVX2 routine (no AVX-512
+        // encoding); still gate on the full matrix for consistency with the
+        // rest of the Avx512Math suite — a partial subset must skip, not run.
+        if has_full_avx512() {
             test_simd::<Avx512Math>(
                 &h_re, &h_im, &x_re, &x_im, &scalar_re, &scalar_im, len, "AVX-512",
             );
@@ -1019,7 +1038,10 @@ fn test_complex_mac_accumulate_parity() {
             &h_re, &h_im, &x_re, &x_im, &init_re, &init_im, &scalar_re, &scalar_im, len, "AVX2",
         );
         #[cfg(feature = "avx512")]
-        if is_x86_feature_detected!("avx512f") {
+        // complex_mac_accumulate delegates to the AVX2 routine (no AVX-512
+        // encoding); still gate on the full matrix for consistency with the
+        // rest of the Avx512Math suite — a partial subset must skip, not run.
+        if has_full_avx512() {
             test_simd::<Avx512Math>(
                 &h_re, &h_im, &x_re, &x_im, &init_re, &init_im, &scalar_re, &scalar_im, len,
                 "AVX-512",

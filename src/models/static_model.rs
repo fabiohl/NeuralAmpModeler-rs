@@ -357,14 +357,11 @@ impl StaticModel {
             Self::WavenetStandard(_)
             | Self::WavenetLite(_)
             | Self::WavenetFeather(_)
-            | Self::WavenetNano(_) => 1,
-            Self::WavenetA2Full(_) => 1,
-            Self::WavenetA2Lite(_) => 1,
-            Self::WavenetA2Dyn(_) => 1,
-            Self::WavenetA2Cascade(m) => m.arrays.last().map(|a| a.head_size).unwrap_or(1),
-            Self::WavenetDyn(m) => m.arrays.last().map(|a| a.head).unwrap_or(0),
-            Self::Container(c) => c.active().num_output_channels(),
-            Self::Lstm1x3(_)
+            | Self::WavenetNano(_)
+            | Self::WavenetA2Full(_)
+            | Self::WavenetA2Lite(_)
+            | Self::WavenetA2Dyn(_)
+            | Self::Lstm1x3(_)
             | Self::Lstm1x8(_)
             | Self::Lstm2x8(_)
             | Self::Lstm1x12(_)
@@ -374,8 +371,11 @@ impl StaticModel {
             | Self::Lstm1x24(_)
             | Self::Lstm2x24(_)
             | Self::Lstm1x40(_)
-            | Self::LstmDyn(_) => 1,
-            Self::Linear(_) => 1,
+            | Self::LstmDyn(_)
+            | Self::Linear(_) => 1,
+            Self::WavenetA2Cascade(m) => m.arrays.last().map(|a| a.head_size).unwrap_or(1),
+            Self::WavenetDyn(m) => m.arrays.last().map(|a| a.head).unwrap_or(0),
+            Self::Container(c) => c.active().num_output_channels(),
             Self::ConvNet(m) => m.out_channels(),
         }
     }
@@ -390,7 +390,6 @@ impl StaticModel {
 pub(crate) fn clone_condition_dsp(model: &Option<Box<StaticModel>>) -> Option<Box<StaticModel>> {
     model.as_ref().and_then(|m| match m.as_ref() {
         StaticModel::WavenetDyn(w) => Some(Box::new(StaticModel::WavenetDyn(w.clone()))),
-        StaticModel::WavenetA2Cascade(_) => None,
         _ => None,
     })
 }

@@ -266,7 +266,7 @@ fn policy_v1_snr_mrstft_latency_limits_match_awk_reference() {
         (36.9, "WaveNet Standard CH16", "40.590000000000003"),
         (52.6, "WaveNet Lite CH12", "57.860000000000007"),
         (150.6, "DSP Pipeline HQ (4x OS)", "165.66"),
-        (0.3, "Linear RF=2048", "0.34999999999999998"),
+        (0.3, "Linear RF=4 Direct", "0.34999999999999998"),
     ];
     for (baseline, row, limit_ref) in latency_cases {
         let limit = (*baseline * policy.latency_mult).max(*baseline + policy.latency_floor_us);
@@ -320,8 +320,8 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     );
     assert_eq!(
         contract.performance.len(),
-        19,
-        "latency count (14 core + 5 DSP)"
+        20,
+        "latency count (15 core + 5 DSP)"
     );
     let optional: Vec<&FidelityEntry> = contract.fidelity.iter().filter(|f| f.optional).collect();
     assert_eq!(optional.len(), 1, "optional:true only on EVH-5150-Lite");

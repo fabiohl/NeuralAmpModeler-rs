@@ -24,6 +24,7 @@ use super::static_factory::reject_condition_dsp_lstm;
 use crate::loader::dispatcher::checked_arith;
 use crate::loader::nam_json::{
     FreeWavenetGeometry, NamModelData, WavenetTopologyResult, get_wavenet_topology,
+    validate_model_data,
 };
 use crate::math::common::AlignedVec;
 use crate::models::a2::activations::ActivationType;
@@ -295,6 +296,11 @@ fn build_wavenet_dynamic_inner(
         }
 
         let cond_dsp_data: NamModelData = serde_json::from_value(cond_dsp_json.clone())?;
+
+        // The nested sub-model never went through `parse_nam_json`, so the
+        // root version-range/topology validation must be re-applied here
+        // before the sub-model is built.
+        validate_model_data(&cond_dsp_data)?;
 
         reject_condition_dsp_lstm(&cond_dsp_data)?;
 

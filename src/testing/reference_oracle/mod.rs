@@ -418,19 +418,9 @@ fn is_a2_model(model_data: &NamModelData) -> bool {
 
 fn oracle_apply_activation(data: &mut [f64], activation: &str, config: &PrecisionConfig) {
     match activation {
-        "Tanh" => {
-            for v in data.iter_mut() {
-                *v = oracle_tanh(*v, config.activation);
-            }
-        }
         "HardTanh" => {
             for v in data.iter_mut() {
                 *v = v.clamp(-1.0, 1.0);
-            }
-        }
-        "FastTanh" => {
-            for v in data.iter_mut() {
-                *v = oracle_tanh(*v, config.activation);
             }
         }
         "ReLU" => {

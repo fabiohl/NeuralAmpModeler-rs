@@ -475,6 +475,62 @@ fn test_gemv_overwrite_f32_specialized_vs_fallback() {
     }
 }
 
+// ── Generic (non-specialized) GEMV loops (exercising gemv_kernel!) ────────
+
+#[test]
+fn test_f32_generic_gemv_avx2_vs_fallback() {
+    let test_shapes = [
+        (8, 16),
+        (16, 8),
+        (16, 16),
+        (24, 24),
+        (32, 16),
+        (16, 24),
+        (64, 32),
+    ];
+    for &(in_len, out_len) in &test_shapes {
+        for &do_bias in &[true, false] {
+            let (in_frame, weights, bias) = make_f32_gemv_data(in_len, out_len);
+
+            // 1. fused_add_gemv_avx2
+            let mut out_fused_simd = vec![0.5f32; out_len];
+            let mut out_fused_fb = vec![0.5f32; out_len];
+            // SAFETY: `in_frame`, `weights`, `bias`, and `out_fused_*` buffers match (in_len, out_len) dimensions and outlive the call.
+            unsafe {
+                fused_add_gemv_avx2(&in_frame, &weights, &bias, &mut out_fused_simd, do_bias);
+                fused_add_gemv_f32_ref(&in_frame, &weights, &bias, &mut out_fused_fb, do_bias);
+            }
+            for c in 0..out_len {
+                let diff = (out_fused_simd[c] - out_fused_fb[c]).abs();
+                assert!(
+                    diff < 5e-4,
+                    "generic fused_add {in_len}x{out_len} bias={do_bias} ch={c}: simd={}, fb={}, diff={diff:e}",
+                    out_fused_simd[c],
+                    out_fused_fb[c],
+                );
+            }
+
+            // 2. gemv_overwrite_avx2
+            let mut out_ovw_simd = vec![0.0f32; out_len];
+            let mut out_ovw_fb = vec![0.0f32; out_len];
+            // SAFETY: `in_frame`, `weights`, `bias`, and `out_ovw_*` buffers match (in_len, out_len) dimensions and outlive the call.
+            unsafe {
+                gemv_overwrite_avx2(&in_frame, &weights, &bias, &mut out_ovw_simd, do_bias);
+                gemv_overwrite_f32_ref(&in_frame, &weights, &bias, &mut out_ovw_fb, do_bias);
+            }
+            for c in 0..out_len {
+                let diff = (out_ovw_simd[c] - out_ovw_fb[c]).abs();
+                assert!(
+                    diff < 5e-4,
+                    "generic overwrite {in_len}x{out_len} bias={do_bias} ch={c}: simd={}, fb={}, diff={diff:e}",
+                    out_ovw_simd[c],
+                    out_ovw_fb[c],
+                );
+            }
+        }
+    }
+}
+
 // ── Boundary conditions ───────────────────────────────────────────────────
 
 #[test]

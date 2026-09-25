@@ -71,15 +71,7 @@ mod block_tests {
         // The DspBridge is our memory "bridge". It stores processed audio for
         // another thread (such as the GUI or recorder) to read.
         // We use Box to guarantee a fixed memory address (heap).
-        let mut bridge = Box::new(DspBridge {
-            // We create two buffers for the "Double Buffering" technique (prevents readers from disrupting writers).
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            // Atomic counters for safe synchronization between threads without locks.
-            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-            generation: std::sync::atomic::AtomicU64::new(0),
-            consumed_gen: std::sync::atomic::AtomicU64::new(0),
-            dropped_frames: std::sync::atomic::AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         // We allocate intermediate buffers needed for the processing stages.
         let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
@@ -292,13 +284,7 @@ mod block_tests {
 
         let rt_status = RtStatusFlags::default();
 
-        let mut bridge = Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-            generation: std::sync::atomic::AtomicU64::new(0),
-            consumed_gen: std::sync::atomic::AtomicU64::new(0),
-            dropped_frames: std::sync::atomic::AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
         let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];

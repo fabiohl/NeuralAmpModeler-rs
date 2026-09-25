@@ -51,7 +51,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
             &data.weights,
             cursor,
             size,
-            format!("Array {} Rechannel Weights", li),
+            format!("Array {li} Rechannel Weights"),
         )?;
         let raw = &data.weights[cursor..cursor + size];
         for in_c in 0..in_ch {
@@ -76,7 +76,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 size,
-                format!("Array {} Layer {} Conv1D Weights", li, di),
+                format!("Array {li} Layer {di} Conv1D Weights"),
             )?;
             let raw = &data.weights[cursor..cursor + size];
             let num_blocks = conv_out_ch.div_ceil(4);
@@ -103,7 +103,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 conv_out_ch,
-                format!("Array {} Layer {} Conv1D Bias", li, di),
+                format!("Array {li} Layer {di} Conv1D Bias"),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + conv_out_ch]);
             cursor = cursor.checked_add(conv_out_ch).ok_or_else(|| {
@@ -118,7 +118,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 size,
-                format!("Array {} Layer {} Input Mixin Weights", li, di),
+                format!("Array {li} Layer {di} Input Mixin Weights"),
             )?;
             let raw = &data.weights[cursor..cursor + size];
             for in_c in 0..cond_ch {
@@ -138,7 +138,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 size,
-                format!("Array {} Layer {} 1x1 Weights", li, di),
+                format!("Array {li} Layer {di} 1x1 Weights"),
             )?;
             let raw = &data.weights[cursor..cursor + size];
             for in_c in 0..ch {
@@ -155,7 +155,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 ch,
-                format!("Array {} Layer {} 1x1 Bias", li, di),
+                format!("Array {li} Layer {di} 1x1 Bias"),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + ch]);
             cursor = cursor.checked_add(ch).ok_or_else(|| {
@@ -171,7 +171,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
             &data.weights,
             cursor,
             size,
-            format!("Array {} Head Rechannel Weights", li),
+            format!("Array {li} Head Rechannel Weights"),
         )?;
         let raw = &data.weights[cursor..cursor + size];
         for in_c in 0..ch {
@@ -189,7 +189,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
                 &data.weights,
                 cursor,
                 head_ch,
-                format!("Array {} Head Rechannel Bias", li),
+                format!("Array {li} Head Rechannel Bias"),
             )?;
             out_weights.extend_from_slice(&data.weights[cursor..cursor + head_ch]);
             cursor = cursor.checked_add(head_ch).ok_or_else(|| {

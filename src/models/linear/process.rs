@@ -28,6 +28,7 @@ impl super::LinearModel {
     ///
     /// # Safety
     /// `self.weights` must be 64-byte aligned (guaranteed by `AlignedVec`).
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) unsafe fn process_sample<M: SimdMath>(&mut self, input: f32) -> f32 {
         self.history[self.write_pos] = input;
@@ -87,18 +88,103 @@ impl super::LinearModel {
 
     /// Processes a block of audio samples, monomorphized over `M: SimdMath`.
     ///
+    /// Monomorphizes over `M: SimdMath` and hoists the `self.mode` branch outside
+    /// the sample loop, so neither the ISA dispatch nor the convolution mode match
+    /// is evaluated per sample.
+    ///
     /// # Safety
     /// `self.weights` must be 64-byte aligned.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
         let n = core::cmp::min(input.len(), output.len());
-        for i in 0..n {
-            // SAFETY: `process_sample::<M>` is an `unsafe fn`; its documented
-            // precondition holds (`self.weights` is 64-byte aligned via AlignedVec),
-            // `i < n <= input.len()` and `i < n <= output.len()`, and `M` matches
-            // the CPU ISA (top-level `dispatch_simd!`).
-            unsafe {
-                output[i] = self.process_sample::<M>(input[i]);
+        match &mut self.mode {
+            LinearMode::Direct => {
+                let rf = self.receptive_field;
+                let weights_ptr = self.weights.as_ptr();
+                if rf < 8 {
+                    for i in 0..n {
+                        self.history[self.write_pos] = input[i];
+
+                        self.write_pos += 1;
+                        if self.write_pos >= self.double_limit {
+                            self.write_pos -= self.history.size();
+                        }
+
+                        let start = self.write_pos - rf;
+                        let window = &self.history[start..self.write_pos];
+                        // Sequential scalar loop is bit-exact with `M::convolve_mono`
+                        // when rf < 8, because `convolve_mono` initializes zero YMM/ZMM,
+                        // skips vector chunks (< 8 taps), reduces 0.0, and executes this
+                        // exact sequential loop. Hoisting/avoiding the SIMD function setup
+                        // and horizontal zero-reduction saves cycles on small receptive fields.
+                        let mut dot = 0.0f32;
+                        let win_ptr = window.as_ptr();
+                        for k in 0..rf {
+                            // SAFETY: `self.weights` has length `receptive_field` (rf), and
+                            // `window` has length `rf` from `history` bounds; `k < rf`.
+                            dot += unsafe { *weights_ptr.add(k) * *win_ptr.add(k) };
+                        }
+                        output[i] = self.bias + dot;
+                    }
+                } else {
+                    for i in 0..n {
+                        self.history[self.write_pos] = input[i];
+
+                        self.write_pos += 1;
+                        if self.write_pos >= self.double_limit {
+                            self.write_pos -= self.history.size();
+                        }
+
+                        let start = self.write_pos - rf;
+                        let window = &self.history[start..self.write_pos];
+                        // SAFETY: `window` is `history[start..write_pos]` with
+                        // `start = write_pos - receptive_field`, so it has exactly
+                        // `receptive_field` elements; `self.weights` also holds
+                        // `receptive_field` elements (set in `new` from `weights.len()`) and
+                        // is 64-byte aligned (AlignedVec); `M` matches the CPU ISA.
+                        let dot = unsafe { M::convolve_mono(weights_ptr, window.as_ptr(), rf) };
+                        output[i] = self.bias + dot;
+                    }
+                }
+            }
+            LinearMode::Fft(state) => {
+                let p = state.p;
+                for i in 0..n {
+                    self.history[self.write_pos] = input[i];
+
+                    self.write_pos += 1;
+                    if self.write_pos >= self.double_limit {
+                        self.write_pos -= self.history.size();
+                    }
+
+                    // SAFETY: `self.weights` holds exactly `receptive_field` elements
+                    // (set in `new` from `weights.len()`), and
+                    // `receptive_field - p + p == receptive_field`, so `add(receptive_field - p)`
+                    // plus the subsequent `p`-element read stays within bounds; `self.weights`
+                    // is 64-byte aligned (AlignedVec).
+                    let head_weights_ptr =
+                        unsafe { self.weights.as_ptr().add(self.receptive_field - p) };
+                    let head_start = self.write_pos - p;
+                    let head_window = &self.history[head_start..self.write_pos];
+                    // SAFETY: `head_window` is `history[head_start..write_pos]` with
+                    // `head_start = write_pos - p`, so it has exactly `p` elements;
+                    // `head_weights_ptr` is valid for `p` elements;
+                    // `self.weights` is 64-byte aligned; `M` matches the CPU ISA.
+                    let head_dot =
+                        unsafe { M::convolve_mono(head_weights_ptr, head_window.as_ptr(), p) };
+
+                    let y_tail = state.tail_output_buf[state.sample_counter];
+                    state.sample_counter += 1;
+
+                    if state.sample_counter >= p {
+                        let block_start = self.write_pos - 2 * p;
+                        let block_window = &self.history[block_start..self.write_pos];
+                        state.process_tail_block(block_window);
+                        state.sample_counter = 0;
+                    }
+
+                    output[i] = self.bias + head_dot + y_tail;
+                }
             }
         }
     }

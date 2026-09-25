@@ -57,11 +57,11 @@ fn fixture_label_lookup_covers_known_and_unknown_labels() {
     assert_eq!(resolve_fixture_by_label(""), None);
 }
 
-/// All 19 bench labels of `benches/regression_gate.rs` are registered.
+/// All 20 bench labels of `benches/regression_gate.rs` are registered.
 #[test]
 fn rt_table_covers_every_regression_gate_bench() {
     let bench_labels: Vec<&str> = RT_BENCH_TABLE.iter().map(|e| e.bench_label).collect();
-    assert_eq!(bench_labels.len(), 19);
+    assert_eq!(bench_labels.len(), 20);
     for expected in [
         "RT_WaveNet_Std_CH16",
         "RT_WaveNet_Feather_CH8",
@@ -71,7 +71,8 @@ fn rt_table_covers_every_regression_gate_bench() {
         "RT_A2_Lite_CH3",
         "RT_LSTM_1x16",
         "RT_LSTM_2x8",
-        "RT_Linear",
+        "RT_Linear_Direct_RF4",
+        "RT_Linear_Fft_RF2048",
         "RT_ConvNet",
         "RT_WaveNet_Dyn_Free",
         "RT_LSTM_Dyn_1x7",
@@ -94,7 +95,10 @@ fn rt_table_covers_every_regression_gate_bench() {
 /// (identity since the legacy-id rename — kept as the single join point).
 #[test]
 fn rt_aliases_map_bench_label_to_contract_id() {
-    assert_eq!(resolve_rt_contract_id("RT_Linear"), Some("RT_Linear"));
+    assert_eq!(
+        resolve_rt_contract_id("RT_Linear_Direct_RF4"),
+        Some("RT_Linear_Direct_RF4")
+    );
     assert_eq!(
         resolve_rt_contract_id("RT_DSP_Resampler_44k1_to_48k"),
         Some("RT_DSP_Resampler_44k1_to_48k")
@@ -153,7 +157,10 @@ fn rt_fixtures_split_models_from_dsp_benches() {
         resolve_rt_fixture("RT_WaveNet_Std_CH16"),
         Some("BossWN-standard.nam")
     );
-    assert_eq!(resolve_rt_fixture("RT_Linear"), Some("linear_test.nam"));
+    assert_eq!(
+        resolve_rt_fixture("RT_Linear_Direct_RF4"),
+        Some("linear_test.nam")
+    );
     assert_eq!(resolve_rt_fixture("RT_DSP_CabSim_IR_Medium"), None);
     assert_eq!(resolve_rt_fixture("RT_DSP_Pipeline_HQ_4xOS"), None);
 }

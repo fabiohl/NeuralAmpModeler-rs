@@ -28,7 +28,7 @@ pub const ISA_X86_64_BASE: &str = "x86-64 (base)";
 
 /// Path of the live CPU information file.
 pub const CPUINFO_PATH: &str = "/proc/cpuinfo";
-/// Path of the live frequency governor of CPU 0 (legacy, pre-S1-T2).
+/// Path of the live frequency governor of CPU 0 (legacy).
 ///
 /// Retained for compatibility; new code must use
 /// [`governor_path_for_core`] / [`effective_governor_path`] so the probed
@@ -209,7 +209,7 @@ impl EnvProbe {
                 .unwrap_or_else(|| "unknown".to_string()),
             host_triple: rustc_host_triple().unwrap_or_else(|| "unknown".to_string()),
             rustflags: std::env::var("RUSTFLAGS").unwrap_or_default(),
-            // S1-T2: probe the governor of the effective bench core, not a
+            // Probe the governor of the effective bench core, not a
             // fixed `cpu0` — on hybrid (P-core/E-core) systems `cpu0` may
             // report `performance` while the pinned bench core does not.
             // Missing per-core `cpufreq` (VM/CI) stays `unknown` (fail-closed).

@@ -248,15 +248,12 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     }
 
     // ── Free geometry (valid A1, but not in catalog) ──
-    let kernel_size = match extract.first_kernel_size {
-        Some(k) => k,
-        None => {
-            return WavenetTopologyResult::Rejected(
-                "Layer 0 is missing or has invalid 'kernel_size' — required for \
-                 free geometry WaveNet A1."
-                    .to_string(),
-            );
-        }
+    let Some(kernel_size) = extract.first_kernel_size else {
+        return WavenetTopologyResult::Rejected(
+            "Layer 0 is missing or has invalid 'kernel_size' — required for \
+             free geometry WaveNet A1."
+                .to_string(),
+        );
     };
     if extract.first_head_size.is_none_or(|h| h == 0) {
         return WavenetTopologyResult::Rejected(
@@ -278,15 +275,12 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         .last()
         .and_then(|l| l.head_size)
         .unwrap_or(1);
-    let post_stack_head = match data.config.validate_head(in_channels) {
-        Ok(head) => head,
-        Err(_) => {
-            return WavenetTopologyResult::Rejected(
-                "WaveNet free-geometry head exceeds canonical ceilings \
-                 (channels/out_channels/kernel_size) — OOM/DoS protection (F-RES2-02)."
-                    .to_string(),
-            );
-        }
+    let Ok(post_stack_head) = data.config.validate_head(in_channels) else {
+        return WavenetTopologyResult::Rejected(
+            "WaveNet free-geometry head exceeds canonical ceilings \
+             (channels/out_channels/kernel_size) — OOM/DoS protection (F-RES2-02)."
+                .to_string(),
+        );
     };
 
     WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
@@ -678,17 +672,14 @@ fn validate_slimmable_metadata(
                 cfg.method.as_deref().unwrap_or("(none)")
             ));
         }
-        let ac = match cfg
+        let Some(ac) = cfg
             .kwargs
             .as_ref()
             .and_then(|k| k.allowed_channels.as_deref())
-        {
-            Some(ac) => ac,
-            None => {
-                return Err(format!(
-                    "Layer {i} has slimmable config but missing kwargs.allowed_channels."
-                ));
-            }
+        else {
+            return Err(format!(
+                "Layer {i} has slimmable config but missing kwargs.allowed_channels."
+            ));
         };
         if ac.is_empty() {
             return Err(format!(

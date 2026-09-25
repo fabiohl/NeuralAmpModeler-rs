@@ -342,6 +342,12 @@ fn assert_isa_parity(
         "[{label}] ISA parity FAIL: {ref_name} → {test_name} \
          ESR={esr:.2e} ≥ budget={max_esr:.1e}"
     );
+
+    // Positive-execution marker for the long-suite gate: the shell gate
+    // (`tests-long.sh` AVX512_OPT_IN) counts only this line. Skip notices
+    // mention ISA names but never emit this marker, so a zero-case matrix
+    // cannot be mistaken for exercised coverage.
+    println!("AVX512_MATRIX: EXERCISED n_cases=1 label=\"{label}\"");
 }
 
 /// Convenience: runs cross-ISA comparison for one model at 48 kHz

@@ -381,15 +381,12 @@ fn oracle_a2_forward_internal(
                             );
                         }
                     }
+                } else if li == 0 && ai == 0 {
+                    head_accs[0][head_off..head_off + z_len].copy_from_slice(&z_scratch[..z_len]);
                 } else {
-                    if li == 0 && ai == 0 {
-                        head_accs[0][head_off..head_off + z_len]
-                            .copy_from_slice(&z_scratch[..z_len]);
-                    } else {
-                        for c in 0..z_len {
-                            head_accs[ai][head_off + c] =
-                                accum_f64(head_accs[ai][head_off + c], z_scratch[c], acc_mode);
-                        }
+                    for c in 0..z_len {
+                        head_accs[ai][head_off + c] =
+                            accum_f64(head_accs[ai][head_off + c], z_scratch[c], acc_mode);
                     }
                 }
 

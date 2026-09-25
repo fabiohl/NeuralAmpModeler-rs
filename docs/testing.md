@@ -26,6 +26,8 @@ The `NeuralAmpModeler-rs` crate defines several features in [Cargo.toml](../Carg
 | **`heap-audit`**     | Memory watchdog tracking      | Global `CountingAllocator` interceptor | [src/common/alloc_audit.rs](../src/common/alloc_audit.rs), [tests/rt_constraints/](../tests/rt_constraints/) heap checks |
 | **`fft-radix4-planner`** | Radix-4 FFT benchmark planner | `fft_radix4_bench`                     | [benches/fft_radix4_bench.rs](../benches/fft_radix4_bench.rs) (FFT execution planning routines)                           |
 | **`avx512`**         | AVX-512 research kernels      | Experimental AVX-512 kernels           | [src/math/activations/](../src/math/activations/), dispatch tables                                                       |
+| **`rt-hardening`**   | Opt-in real-time host hardening | Linux OS calls (THP, mlockall, SCHED_FIFO, PM QoS, affinity) | [src/rt_hardening/](../src/rt_hardening/) (Linux off-RT host setup only)                                                  |
+
 
 ---
 

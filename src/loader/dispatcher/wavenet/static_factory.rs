@@ -9,6 +9,7 @@
 
 use crate::loader::nam_json::{
     A2TopologyResult, NamModelData, WavenetTopologyResult, get_wavenet_topology,
+    validate_model_data,
 };
 use crate::math::common::AlignedVec;
 use crate::models::StaticModel;
@@ -602,6 +603,10 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     // Build condition_dsp sub-model if present.
     let condition_dsp = if let Some(ref cond_dsp_json) = data.config.condition_dsp {
         let cond_dsp_data: NamModelData = serde_json::from_value(cond_dsp_json.clone())?;
+        // The nested sub-model never went through `parse_nam_json`, so the
+        // root version-range/topology validation must be re-applied here
+        // before the sub-model is built.
+        validate_model_data(&cond_dsp_data)?;
         reject_condition_dsp_lstm(&cond_dsp_data)?;
         let cond_model = crate::loader::dispatcher::build_model(&cond_dsp_data)?;
         let cond_out = cond_model.num_output_channels();

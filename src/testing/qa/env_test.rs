@@ -171,7 +171,7 @@ fn live_probe_yields_canonical_isa_and_toolchain() {
     assert!(probe.physical_cores >= 1);
 }
 
-/// S1-T2: the governor path constructor targets the requested core.
+/// The governor path constructor targets the requested core.
 #[test]
 fn governor_path_constructor_targets_the_requested_core() {
     assert_eq!(
@@ -184,7 +184,7 @@ fn governor_path_constructor_targets_the_requested_core() {
     );
 }
 
-/// S1-T2: `BENCH_CORE`/`NAM_BENCH_CORE` select the probed core; an
+/// `BENCH_CORE`/`NAM_BENCH_CORE` select the probed core; an
 /// unparseable value falls back to `nproc / 2` instead of `cpu0`.
 #[test]
 fn effective_bench_core_prefers_env_then_nproc_half() {

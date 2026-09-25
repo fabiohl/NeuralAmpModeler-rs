@@ -247,9 +247,8 @@ pub(crate) fn parse_single_film_config(
     raw: &serde_json::Value,
     key: &str,
 ) -> anyhow::Result<FiLMConfig> {
-    let obj = match raw.get(key).and_then(|v| v.as_object()) {
-        Some(o) => o,
-        None => return Ok(FiLMConfig::default()),
+    let Some(obj) = raw.get(key).and_then(|v| v.as_object()) else {
+        return Ok(FiLMConfig::default());
     };
     let active = obj.get("active").and_then(|a| a.as_bool()).unwrap_or(false);
     let shift = obj.get("shift").and_then(|s| s.as_bool()).unwrap_or(true);

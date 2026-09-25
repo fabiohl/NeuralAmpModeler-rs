@@ -45,9 +45,8 @@ pub fn parse_proc_interrupts<R: std::io::BufRead>(reader: R) -> HashMap<usize, u
     let mut totals: HashMap<usize, u64> = HashMap::new();
     let mut lines = reader.lines();
 
-    let header = match lines.next() {
-        Some(Ok(h)) => h,
-        _ => return totals,
+    let Some(Ok(header)) = lines.next() else {
+        return totals;
     };
 
     let cpu_ids: Vec<usize> = header
@@ -63,10 +62,7 @@ pub fn parse_proc_interrupts<R: std::io::BufRead>(reader: R) -> HashMap<usize, u
     }
 
     for line_res in lines {
-        let line = match line_res {
-            Ok(l) => l,
-            Err(_) => break,
-        };
+        let Ok(line) = line_res else { break };
         let trimmed = line.trim_start();
         let irq_end = trimmed.find(':').unwrap_or(0);
         if irq_end == 0 {
@@ -82,9 +78,8 @@ pub fn parse_proc_interrupts<R: std::io::BufRead>(reader: R) -> HashMap<usize, u
             continue;
         }
 
-        let after_colon = match trimmed.get(irq_end + 1..) {
-            Some(s) => s,
-            None => continue,
+        let Some(after_colon) = trimmed.get(irq_end + 1..) else {
+            continue;
         };
 
         for (&cpu_id, token) in cpu_ids.iter().zip(after_colon.split_whitespace()) {
@@ -106,9 +101,8 @@ pub fn parse_interrupts_per_cpu() -> HashMap<usize, u64> {
     use std::fs::File;
     use std::io::BufReader;
 
-    let file = match File::open("/proc/interrupts") {
-        Ok(f) => f,
-        Err(_) => return HashMap::new(),
+    let Ok(file) = File::open("/proc/interrupts") else {
+        return HashMap::new();
     };
     parse_proc_interrupts(BufReader::new(file))
 }
@@ -493,7 +487,7 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
         .filter(|&c| c != chosen.logical_id && !chosen.smt_siblings.contains(&c))
         .collect();
     let final_housekeeping = if housekeeping_cpus.is_empty() {
-        allowed_cpus.clone()
+        allowed_cpus
     } else {
         housekeeping_cpus
     };

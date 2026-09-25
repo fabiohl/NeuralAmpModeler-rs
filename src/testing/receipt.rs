@@ -455,8 +455,11 @@ pub fn now_iso8601() -> String {
 /// Typed status vocabulary of the long-duration audit suite phases.
 ///
 /// Mirrors the statuses produced by `utils/tests-long.sh::run_phase`
-/// (PASSED / FAILED / SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY / NOT_RUN).
+/// (PASSED / FAILED / SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY / NOT_RUN /
+/// SIMULATED).
 /// `CompletedWithGaps` is only used by the suite-level `overall` line.
+/// `Simulated` is only used by `--simulate` / `--dry-run` pre-registration
+/// (no test executed; strict-pre-release always rejects it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LongPhaseStatus {
@@ -474,6 +477,8 @@ pub enum LongPhaseStatus {
     SkipCapability,
     /// Phase was never executed.
     NotRun,
+    /// Phase pre-registered without execution (`--simulate` / `--dry-run`).
+    Simulated,
     /// Suite verdict: audit completed, but with declared gaps.
     CompletedWithGaps,
 }
@@ -488,13 +493,14 @@ impl LongPhaseStatus {
             LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
             LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
             LongPhaseStatus::NotRun => "NOT_RUN",
+            LongPhaseStatus::Simulated => "SIMULATED",
             LongPhaseStatus::CompletedWithGaps => "COMPLETED_WITH_GAPS",
         }
     }
 
     /// Returns `true` when this status declares a gap for the audit verdict
     /// (the long suite's `HAS_GAPS` semantics: skipped / inconclusive /
-    /// capability-skipped / not-run phases).
+    /// capability-skipped / not-run / simulated phases).
     pub fn is_gap(self) -> bool {
         matches!(
             self,
@@ -502,6 +508,7 @@ impl LongPhaseStatus {
                 | LongPhaseStatus::Inconclusive
                 | LongPhaseStatus::SkipCapability
                 | LongPhaseStatus::NotRun
+                | LongPhaseStatus::Simulated
         )
     }
 
@@ -512,6 +519,7 @@ impl LongPhaseStatus {
             LongPhaseStatus::Inconclusive => Some("inconclusive"),
             LongPhaseStatus::SkipCapability => Some("skip_capability"),
             LongPhaseStatus::NotRun => Some("not_run"),
+            LongPhaseStatus::Simulated => Some("simulated"),
             _ => None,
         }
     }
@@ -528,10 +536,11 @@ impl FromStr for LongPhaseStatus {
             "INCONCLUSIVE" => Ok(LongPhaseStatus::Inconclusive),
             "SKIP_CAPABILITY" => Ok(LongPhaseStatus::SkipCapability),
             "NOT_RUN" => Ok(LongPhaseStatus::NotRun),
+            "SIMULATED" => Ok(LongPhaseStatus::Simulated),
             "COMPLETED_WITH_GAPS" => Ok(LongPhaseStatus::CompletedWithGaps),
             other => Err(format!(
                 "invalid long-suite status '{other}' (expected one of: \
-                 PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN, COMPLETED_WITH_GAPS)"
+                 PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN, SIMULATED, COMPLETED_WITH_GAPS)"
             )),
         }
     }
@@ -885,9 +894,8 @@ impl LongAuditReceipt {
             None => "PASS",
             Some(p) => match p.status {
                 LongPhaseStatus::Failed => "FAIL",
-                LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
+                LongPhaseStatus::Inconclusive | LongPhaseStatus::Skipped => "INCONCLUSIVE",
                 LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
-                LongPhaseStatus::Skipped => "INCONCLUSIVE",
                 LongPhaseStatus::Passed
                     if p.gaps.iter().any(|g| gap_has_id(g, "skip_capability")) =>
                 {
@@ -1052,9 +1060,8 @@ fn marker_gap_entry(needle: &str, id: &str, line: &str) -> String {
 /// `log_unreadable` — a missing/corrupt phase log can never be promoted to a
 /// clean `PASSED` with `gaps: []`.
 pub fn detect_gap_markers(path: &Path) -> Vec<String> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return vec!["log_unreadable".to_string()],
+    let Ok(content) = fs::read_to_string(path) else {
+        return vec!["log_unreadable".to_string()];
     };
     let mut gaps: Vec<String> = Vec::new();
     for (needle, id) in LONG_GAP_MARKERS {

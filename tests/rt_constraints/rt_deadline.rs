@@ -20,7 +20,7 @@
 //  taskset -c 0 cargo test --release --test rt_deadline -- --nocapture
 //  ```
 //
-//  ## Constants (single source: `super::budget` — S1-T1)
+//  ## Constants (single source: `super::budget`)
 //
 //  - `RT_DEADLINE_US`: 1330 (1.33 ms @ 48 kHz, 64-sample block)
 //  - `WARMUP_BLOCKS`: 256 (stabilize CPU caches and branch predictor)
@@ -72,7 +72,7 @@ struct DeadlineStats {
 fn load_model(filename: &str) -> Option<neural_amp_modeler_rs::models::StaticModel> {
     let path = model_path(filename);
     if !path.exists() {
-        eprintln!("[STATUS] SKIP_CAPABILITY: model_not_found:{filename}");
+        println!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:{filename}\"");
         return None;
     }
     let json_data =
@@ -146,7 +146,10 @@ fn measure_rt_deadline(
 }
 
 /// Emits full telemetry receipt and asserts deadline compliance when the
-/// environment is controlled.
+/// environment is controlled. Release builds assert (hard failure on
+/// violation); debug builds never assert and therefore emit an
+/// `INCONCLUSIVE` receipt — a deadline receipt never claims `deadline_ok`
+/// without having effectively asserted it.
 fn emit_and_assert(label: &str, stats: &DeadlineStats) {
     let pflight_ok = preflight_ok();
 
@@ -164,11 +167,19 @@ fn emit_and_assert(label: &str, stats: &DeadlineStats) {
     );
 
     if pflight_ok {
-        println!(
-            "[{label}] RECEIPT: deadline_ok violations={}/{} max={}μs",
-            stats.violations, stats.total_blocks, stats.exact_max_us,
-        );
-        if !cfg!(debug_assertions) {
+        if cfg!(debug_assertions) {
+            // Deadline assertions below are compiled out in debug builds, so
+            // the measured values are uncertified telemetry — never `deadline_ok`.
+            println!(
+                "[{label}] [RECEIPT] status=INCONCLUSIVE \
+                 reason=\"debug_build_assertions_disabled\" violations={}/{} max={}μs",
+                stats.violations, stats.total_blocks, stats.exact_max_us,
+            );
+        } else {
+            println!(
+                "[{label}] RECEIPT: deadline_ok violations={}/{} max={}μs",
+                stats.violations, stats.total_blocks, stats.exact_max_us,
+            );
             assert!(
                 stats.violations == 0,
                 "[{label}] {}/{} blocks exceeded RT deadline {RT_DEADLINE_US}μs — \
@@ -269,7 +280,7 @@ fn test_rt_deadline_convnet() {
 fn test_rt_deadline_adaptive_states() {
     let path = model_path("wavenet_a2_container.nam");
     if !path.exists() {
-        eprintln!("SKIP: wavenet_a2_container.nam not found.");
+        println!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:wavenet_a2_container.nam\"");
         return;
     }
 

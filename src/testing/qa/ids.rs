@@ -170,9 +170,14 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
         fixture: Some("BossLSTM-2x8.nam"),
     },
     RtBenchEntry {
-        bench_label: "RT_Linear",
-        contract_id: "RT_Linear",
+        bench_label: "RT_Linear_Direct_RF4",
+        contract_id: "RT_Linear_Direct_RF4",
         fixture: Some("linear_test.nam"),
+    },
+    RtBenchEntry {
+        bench_label: "RT_Linear_Fft_RF2048",
+        contract_id: "RT_Linear_Fft_RF2048",
+        fixture: None,
     },
     RtBenchEntry {
         bench_label: "RT_ConvNet",

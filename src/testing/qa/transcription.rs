@@ -537,7 +537,7 @@ fn transcribe_quality_contract_to_json() {
             },
         }),
         performance: vec![
-            // ── Model Inference Core — 14 entries ──────────────────────────
+            // ── Model Inference Core — 15 entries ──────────────────────────
             perf("RT_WaveNet_Std_CH16", "WaveNet Standard CH16", 44.89),
             perf("RT_WaveNet_Feather_CH8", "WaveNet Feather CH8", 19.96),
             perf("RT_WaveNet_Lite_CH12", "WaveNet Lite CH12", 58.76),
@@ -546,7 +546,8 @@ fn transcribe_quality_contract_to_json() {
             perf("RT_A2_Lite_CH3", "A2 Lite CH3", 20.96),
             perf("RT_LSTM_1x16", "LSTM 1x16", 6.69),
             perf("RT_LSTM_2x8", "LSTM 2x8", 7.26),
-            perf("RT_Linear", "Linear RF=2048", 0.26),
+            perf("RT_Linear_Direct_RF4", "Linear RF=4 Direct", 0.26),
+            perf("RT_Linear_Fft_RF2048", "Linear FFT RF=2048", 4.84),
             perf("RT_ConvNet", "ConvNet", 8.69),
             perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 21.56),
             perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.06),
@@ -592,7 +593,7 @@ fn transcribe_quality_contract_to_json() {
     );
     assert_eq!(
         contract.performance.len(),
-        19,
+        20,
         "performance count must match snapshot"
     );
     assert_eq!(

@@ -39,8 +39,8 @@ use neural_amp_modeler_rs::dsp::cabsim::loader::CabSimIr;
 use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
 use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
 use neural_amp_modeler_rs::dsp::pipeline::{
-    BridgeBuffer, BridgeRef, DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext,
-    MAX_RESAMP_BUF, capture_dsp_pipeline,
+    BridgeRef, DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext, MAX_RESAMP_BUF,
+    capture_dsp_pipeline,
 };
 use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
@@ -115,13 +115,7 @@ impl CabsimPipeline {
             process_mono: false,
             rt_status: neural_amp_modeler_rs::common::spsc::RtStatusFlags::new(),
             adaptive: AdaptiveCompute::new(AdaptiveComputeMode::Off),
-            bridge: Box::new(DspBridge {
-                buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-                active_read_idx: Default::default(),
-                generation: Default::default(),
-                consumed_gen: Default::default(),
-                dropped_frames: Default::default(),
-            }),
+            bridge: DspBridge::new_boxed(),
             resamp_mid_l: Box::new([0.0; MAX_RESAMP_BUF]),
             resamp_mid_r: Box::new([0.0; MAX_RESAMP_BUF]),
             resamp_out_l: Box::new([0.0; MAX_RESAMP_BUF]),

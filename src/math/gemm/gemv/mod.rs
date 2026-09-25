@@ -16,7 +16,7 @@
 //! - AVX2: 8 YMM accumulators (8×8 = 64 lanes), inner loop with step 8.
 //! - AVX-512: 8 ZMM accumulators (8×16 = 128 lanes), inner loop with step 8.
 //! - FMA dependency chain breaking via multiple accumulators.
-//! - Software prefetch on in_frame to reduce cache miss latency.
+//! - Cache-resident vector-matrix multiply with unrolled FMA accumulators.
 
 #[doc = "GEMV kernels using AVX2 (fused_add_gemv_avx2, gemv_overwrite_avx2)."]
 pub mod f16_avx2;

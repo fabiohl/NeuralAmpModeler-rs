@@ -22,13 +22,7 @@ fn test_hotpath_gate_closed_and_silence() {
     // We prepare the audio tools (resampler and data bridge).
     let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     // Temporary working buffers for DSP calculations.
     let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
@@ -144,13 +138,7 @@ fn test_hotpath_gate_fading() {
 
     let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
     let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
@@ -248,13 +236,7 @@ fn test_hotpath_clipping_detection() {
 
     let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     // Temporary working buffers for DSP calculations.
     let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
@@ -344,14 +326,7 @@ fn test_hotpath_dropped_frames() {
     let n = 64;
     let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        // Simulates that whoever should "listen" to the sound (consumer) hasn't read anything yet.
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
     let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];

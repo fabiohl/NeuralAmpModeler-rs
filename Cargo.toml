@@ -9,7 +9,7 @@ autobins = false
 license = "Apache-2.0"
 repository = "https://github.com/fabiohl/NeuralAmpModeler-rs"
 documentation = "https://docs.rs/NeuralAmpModeler-rs"
-description = "High-performance Neural Amp Modeler DSP core: WaveNet/LSTM/ConvNet inference, SIMD math (x86-64-v3), .nam/.namb loader, cabinet IR, resampling and noise gate."
+description = "High-performance Neural Amp Modeler DSP core: WaveNet/LSTM/ConvNet inference, requires x86-64-v3 SIMD, .nam/.namb loader, IR, resampling, noise gate."
 readme = "README.md"
 authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
 keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
@@ -57,7 +57,6 @@ sha2 = "0.11"
 log = "0.4.34"
 # Lean error signaling for off-RT threads.
 anyhow = "1.0.104"
-
 
 [dev-dependencies]
 NeuralAmpModeler-rs = { path = ".", features = ["testing"] }
@@ -135,6 +134,11 @@ harness = false
 [[bench]]
 name = "spsc_swap_bench"
 harness = false
+
+[[bench]]
+name = "dsp_bridge_bench"
+harness = false
+
 
 [features]
 default = ["dual-mono"]

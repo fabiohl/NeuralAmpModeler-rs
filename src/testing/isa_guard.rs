@@ -49,12 +49,14 @@ impl Drop for ForceAvx2Guard {
 ///
 /// On [`Drop::drop`], the previous instruction set override setting is restored.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[derive(Debug)]
 pub struct ForceAvx512Guard {
     prev_override: u8,
 }
 
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl ForceAvx512Guard {
     /// Fallibly creates a new guard, forcing [`InstructionSet::Avx512`] SIMD
     /// dispatch — but ONLY after validating that the host CPU supports the
@@ -96,22 +98,10 @@ impl ForceAvx512Guard {
             prev_override: prev,
         }
     }
-
-    /// Legacy infallible constructor.
-    ///
-    /// Prefer [`Self::try_new`]: this constructor panics (never installs the
-    /// override) when the host lacks the full `F+VL+BW+DQ` capability set —
-    /// the fail-closed safe behavior.
-    #[deprecated(
-        note = "use try_new() which returns IsaOverrideError instead of panicking when the host lacks full AVX-512 (F+VL+BW+DQ)"
-    )]
-    pub fn new() -> Self {
-        Self::try_new()
-            .expect("AVX-512 dispatch override requires the full host capability set (F+VL+BW+DQ)")
-    }
 }
 
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl Default for ForceAvx512Guard {
     fn default() -> Self {
         Self::try_new()
@@ -120,6 +110,7 @@ impl Default for ForceAvx512Guard {
 }
 
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl Drop for ForceAvx512Guard {
     fn drop(&mut self) {
         TEST_ISA_OVERRIDE.store(self.prev_override, Ordering::SeqCst);
@@ -144,13 +135,6 @@ impl IsaGuard {
         set_test_isa_override(isa).map(|prev| Self {
             prev_override: prev,
         })
-    }
-
-    /// Legacy infallible constructor — panics (fail-closed, never `SIGILL`)
-    /// when the requested ISA is not executable on the current host.
-    #[deprecated(note = "use try_set() which returns IsaOverrideError on capability mismatch")]
-    pub fn set(isa: InstructionSet) -> Self {
-        Self::try_set(isa).expect("ISA dispatch override requires matching host capabilities")
     }
 }
 

@@ -95,10 +95,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
         flags: 0x1a,
     };
 
-    let consumer = AudioMetadata {
-        channel_count: 2,
-        host_name: "CLAP".into(),
-    };
+    let consumer = AudioMetadata::new(2, "CLAP");
     let bundle = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
     let rendered = bundle.render();
 
@@ -139,10 +136,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
 fn test_rt_status_flags_provider_defaults() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt_status = RtStatusFlags::new();
-    let consumer = AudioMetadata {
-        channel_count: 4,
-        host_name: "Standalone".into(),
-    };
+    let consumer = AudioMetadata::new(4, "Standalone");
     let snapshot = RuntimeSnapshot::capture(&rt_status, &consumer);
 
     assert_eq!(snapshot.audio.sample_rate, 0);
@@ -172,10 +166,7 @@ fn test_rt_status_flags_provider_populated() {
     rt_status.drains.store(7, Ordering::Relaxed);
     rt_status.flags_seen.store(0x4b, Ordering::Relaxed);
 
-    let consumer = AudioMetadata {
-        channel_count: 2,
-        host_name: "Standalone".into(),
-    };
+    let consumer = AudioMetadata::new(2, "Standalone");
     let snapshot = RuntimeSnapshot::capture(&rt_status, &consumer);
 
     assert_eq!(snapshot.audio.sample_rate, 44100);
@@ -369,10 +360,7 @@ fn test_diagnostic_bundle_path_redaction() {
         flags: 0,
     };
 
-    let consumer = AudioMetadata {
-        channel_count: 2,
-        host_name: "Test".into(),
-    };
+    let consumer = AudioMetadata::new(2, "Test");
 
     // Case A: Default capture (redacted)
     let bundle_default = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
@@ -515,10 +503,7 @@ fn test_diagnostic_bundle_regex_roundtrip() {
         flags: 0x01,
     };
 
-    let consumer = AudioMetadata {
-        channel_count: 1,
-        host_name: "PipeWire".into(),
-    };
+    let consumer = AudioMetadata::new(1, "PipeWire");
     let bundle = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
     let rendered = bundle.render();
 
@@ -637,10 +622,7 @@ fn test_diagnostic_bundle_model_sample_rate_mismatch() {
         flags: 0,
     };
 
-    let consumer = AudioMetadata {
-        channel_count: 1,
-        host_name: "Test".into(),
-    };
+    let consumer = AudioMetadata::new(1, "Test");
     let bundle = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
     let rendered = bundle.render();
 

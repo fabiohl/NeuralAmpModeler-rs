@@ -70,7 +70,9 @@ fn print_help() {
     println!("  nam_long_receipt validate [--out <file>] [--strict]");
     println!("  nam_long_receipt count-log --log <path>");
     println!();
-    println!("Status values: PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN");
+    println!(
+        "Status values: PASSED, FAILED, SKIPPED, INCONCLUSIVE, SKIP_CAPABILITY, NOT_RUN, SIMULATED"
+    );
     println!(
         "Canonical preflight ids: {}",
         PREFLIGHT_PHASE_IDS.join(", ")

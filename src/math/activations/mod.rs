@@ -68,6 +68,7 @@ pub use tanh::*;
 /// fidelity for CPU headroom. Numeric discriminants are unchanged from the
 /// previous naming, so existing host automation/state (raw `0`/`1`
 /// values) keeps selecting the same underlying kernel.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[repr(usize)]
 pub enum ActivationPrecision {

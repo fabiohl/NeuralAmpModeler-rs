@@ -229,7 +229,7 @@ fn bench_x2stage_isolated(c: &mut Criterion) {
 /// sizes of the production RFFT consumers (F-PERF-15.4, F-PERF-28).
 ///
 /// Effective sizes resolved from the planners on this codebase:
-/// - `linear_test.nam` (the `RT_Linear` bench fixture): receptive field 4 is below
+/// - `linear_test.nam` (the `RT_Linear_Direct_RF4` bench fixture): receptive field 4 is below
 ///   `FFT_AUTO_THRESHOLD` (256) in `src/models/linear.rs`, so the model resolves to
 ///   `LinearMode::Direct` — **no RFFT runs on its hot path**.
 /// - Linear FFT-hybrid path (`receptive_field >= 256`): `N = 2P` with

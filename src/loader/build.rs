@@ -4,7 +4,7 @@
 //! Model loading and building — reads `.nam`/`.namb` files, parses, calibrates,
 //! and dispatches to the appropriate architecture builder.
 
-use crate::common::diagnostics::{NamDiagnostic, NamErrorCode, SystemSnapshot};
+use crate::common::diagnostics::{NamErrorCode, SystemSnapshot};
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
 use log::{debug, error, info};
@@ -28,24 +28,22 @@ use super::loaded_model_pair::{
 fn read_and_validate_model_bytes(
     path: &Path,
     path_str: &str,
-    sys: &SystemSnapshot,
 ) -> Result<Vec<u8>, super::error::LoadError> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(path).map_err(|e| {
         // Structured failure diagnostic (size unknown at open time → 0).
+        // Library loaders log and return the enriched error; the visual
+        // support block is rendered only by CLIs via
+        // `NamDiagnostic::support_block()`.
         error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             failed to open the file (io_error: {}). Please verify file access permissions.",
             path_str,
             0,
-            NamErrorCode::FileReadError
+            NamErrorCode::FileReadError,
+            e
         );
-        NamDiagnostic::new(NamErrorCode::FileReadError, sys)
-            .message(format!("Failed to open the file \"{}\".", path_str))
-            .hint("Please verify file access permissions.")
-            .param("file", path_str)
-            .param("io_error", &e)
-            .emit();
         super::error::LoadError::Io(e)
     })?;
 
@@ -57,38 +55,27 @@ fn read_and_validate_model_bytes(
         .read_to_end(&mut bytes)
         .map_err(|e| {
             error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 failed to read the file (io_error: {}). Please verify file access permissions.",
                 path_str,
                 bytes.len(),
-                NamErrorCode::FileReadError
+                NamErrorCode::FileReadError,
+                e
             );
-            NamDiagnostic::new(NamErrorCode::FileReadError, sys)
-                .message(format!("Failed to read the file \"{}\".", path_str))
-                .hint("Please verify file access permissions.")
-                .param("file", path_str)
-                .param("io_error", &e)
-                .emit();
             super::error::LoadError::Io(e)
         })?;
 
     if bytes.len() as u64 > MAX_MODEL_BYTES {
         error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             model file is too large ({} bytes, max is {} bytes). Please check the file \
+             size and ensure it is a valid NAM model.",
             path_str,
             bytes.len(),
-            NamErrorCode::ModelTooLarge
+            NamErrorCode::ModelTooLarge,
+            bytes.len(),
+            MAX_MODEL_BYTES
         );
-        NamDiagnostic::new(NamErrorCode::ModelTooLarge, sys)
-            .message(format!(
-                "Model file \"{}\" is too large ({} bytes, max is {} bytes).",
-                path_str,
-                bytes.len(),
-                MAX_MODEL_BYTES
-            ))
-            .hint("Please check the file size and ensure it is a valid NAM model.")
-            .param("file", path_str)
-            .param("size_bytes", bytes.len())
-            .emit();
         return Err(super::error::LoadError::ModelTooLarge);
     }
     Ok(bytes)
@@ -145,9 +132,14 @@ pub fn load_and_build_model(
 
     info!("[Loader] Loading model from \"{}\"", path_str);
 
+    // Host context rides in the structured trace (debug level): every load
+    // failure logged below stays correlated with the captured snapshot in the
+    // LogBuffer, without the loader painting support blocks on stderr.
+    debug!("[Loader] System snapshot: {:?}", sys);
+
     // 1. Reading and Parsing
     let (model_data, file_size) = if ext_lower == "namb" {
-        let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
+        let bytes = read_and_validate_model_bytes(path, &path_str)?;
         let file_size = bytes.len();
         let data = namb::parse_namb_typed(&bytes).map_err(|e| {
             let code = match &e {
@@ -167,34 +159,29 @@ pub fn load_and_build_model(
                     NamErrorCode::ModelBuildFailed
                 }
             };
-            // Structured failure diagnostic (path + size + code).
+            // Structured failure diagnostic (path + size + code). The typed
+            // error payload travels in the returned `LoadError::Namb`.
             error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
-                path_str, file_size, code
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 invalid \".namb\" file (detail: {}).",
+                path_str, file_size, code, e
             );
-            NamDiagnostic::new(code, sys)
-                .message(format!("Invalid \".namb\" file: {}", path_str))
-                .param("detail", e.to_string())
-                .emit();
             LoadError::from(e)
         })?;
         (data, file_size)
     } else if ext_lower == "nam" {
-        let bytes = read_and_validate_model_bytes(path, &path_str, sys)?;
+        let bytes = read_and_validate_model_bytes(path, &path_str)?;
         let file_size = bytes.len();
         let json = String::from_utf8(bytes).map_err(|e| {
             error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 file contains invalid UTF-8 (utf8_error: {}). Only UTF-8 encoded \
+                 .nam files are supported.",
                 path_str,
                 file_size,
-                NamErrorCode::FileReadError
+                NamErrorCode::FileReadError,
+                e
             );
-            NamDiagnostic::new(NamErrorCode::FileReadError, sys)
-                .message(format!("File \"{}\" contains invalid UTF-8.", path_str))
-                .hint("Only UTF-8 encoded .nam files are supported.")
-                .param("file", &path_str)
-                .param("utf8_error", &e)
-                .emit();
             LoadError::InvalidUtf8(e)
         })?;
         let data = nam_json::parse_nam_json(&json).map_err(|e| {
@@ -230,15 +217,13 @@ pub fn load_and_build_model(
                 }
                 _ => NamErrorCode::NamJsonParseError,
             };
-            // Structured failure diagnostic (path + size + code).
+            // Structured failure diagnostic (path + size + code). The typed
+            // error payload travels in the returned `LoadError` variant.
             error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
-                path_str, file_size, code
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 error parsing model JSON (detail: {}).",
+                path_str, file_size, code, e
             );
-            NamDiagnostic::new(code, sys)
-                .message(format!("Error parsing model JSON: {}", path_str))
-                .param("detail", &e)
-                .emit();
             match e {
                 nam_json::JsonError::WeightsExceedLimit { .. }
                 | nam_json::JsonError::TrainingTooLarge { .. } => LoadError::ModelTooLarge,
@@ -287,15 +272,13 @@ pub fn load_and_build_model(
     let meta = model_data.metadata.clone().unwrap_or_default();
     validate_metadata_floats(&meta, model_data.config.head_scale).map_err(|e| {
         error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             invalid model metadata (detail: {}).",
             path_str,
             file_size,
-            NamErrorCode::InvalidMetadata
+            NamErrorCode::InvalidMetadata,
+            e
         );
-        NamDiagnostic::new(NamErrorCode::InvalidMetadata, sys)
-            .message(format!("Invalid model metadata in \"{}\"", path_str))
-            .param("detail", e.to_string())
-            .emit();
         LoadError::InvalidMetadata(e)
     })?;
     let in_level = meta.input_level_dbu.unwrap_or(DEFAULT_INPUT_LEVEL_DBU);
@@ -330,13 +313,10 @@ pub fn load_and_build_model(
             NamErrorCode::ModelBuildFailed
         };
         error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
-            path_str, file_size, code
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             failed to build model (L) (detail: {}).",
+            path_str, file_size, code, e
         );
-        NamDiagnostic::new(code, sys)
-            .message(format!("Failed to build model (L): {}", path_str))
-            .param("detail", e.to_string())
-            .emit();
         if e.to_string().contains("slimmable") {
             LoadError::UnsupportedArchitecture(e.to_string())
         } else {
@@ -344,13 +324,18 @@ pub fn load_and_build_model(
         }
     })?;
 
-    // Size the model for the pipeline's documented maximum block size
-    // (`MAX_RESAMP_BUF`), so containers/crossfade scratch and ring buffers
-    // are pre-allocated for 8192-sample blocks before processing starts.
+    // Pre-allocate scratch containers, crossfade buffers, and delay lines for
+    // the engine's documented maximum block size (`MAX_RESAMP_BUF` = 8192 samples).
+    // INVARIANT: Performing this sizing once off-RT ensures that the audio callback
+    // never triggers buffer growth or memory reallocation on the RT hot-path.
     model_l
         .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
         .map_err(|e| LoadError::Internal(e.to_string()))?;
 
+    // Prewarm state history: flushes receptive fields and recurrent cell states to
+    // steady-state before audio processing starts.
+    // INVARIANT: Eliminates cold-start transients, pops, and DC step responses on
+    // the first processed audio block.
     if options.prewarm == Some(false) {
         model_l.set_prewarm_on_reset(false);
     } else {
@@ -370,6 +355,9 @@ pub fn load_and_build_model(
         false
     };
 
+    // Dual-mono channel isolation: instantiates an independent model replica for the
+    // right channel. Both channels run strictly disjoint internal states (ring buffers,
+    // delay lines, recurrent memory) to guarantee zero stereo crosstalk.
     let model_r = if build_dual_mono {
         let mut model = dispatcher::build_model(&model_data).map_err(|e| {
             let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
@@ -380,13 +368,10 @@ pub fn load_and_build_model(
                 NamErrorCode::ModelBuildFailed
             };
             error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
-                path_str, file_size, code
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 failed to build model (R) (detail: {}).",
+                path_str, file_size, code, e
             );
-            NamDiagnostic::new(code, sys)
-                .message(format!("Failed to build model (R): {}", path_str))
-                .param("detail", e.to_string())
-                .emit();
             if e.to_string().contains("slimmable") {
                 LoadError::UnsupportedArchitecture(e.to_string())
             } else {

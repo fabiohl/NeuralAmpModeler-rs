@@ -584,8 +584,10 @@ ensure_namcore_render() {
 # The heavy lifting now lives in Rust (src/testing/freshness.rs, incl. the
 # `# TOOLCHAIN:` drift check that replaced the bash check_toolchain_fingerprint)
 # so the shell wrapper is just a thin, portable adapter.
-# Note on NAM_BYPASS_FRESHNESS=1: Callers (utils/tests-quick.sh, utils/quality-dashboard.sh)
-# record an explicit typed gap (e.g. freshness:bypassed_by_env) in their receipts.
+# Note on NAM_BYPASS_FRESHNESS=1: Callers (utils/tests-quick.sh,
+# utils/tests-long.sh, utils/quality-dashboard.sh) record an explicit typed
+# gap (e.g. freshness:bypassed_by_env / freshness_bypassed_by_env /
+# bypass:freshness) in their receipts.
 check_freshness() {
     local mode="${1:-hard-fail}"
     if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then

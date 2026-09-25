@@ -138,6 +138,11 @@ impl WaveNetA2Cascade {
         }
 
         output[..total * out_per_frame].fill(0.0);
+        debug_assert!(
+            total <= self.max_buffer_size,
+            "process: input ({total}) > max_buffer_size ({})",
+            self.max_buffer_size
+        );
         let nf_total = total.min(self.max_buffer_size);
 
         let cond_size = self.condition_size;

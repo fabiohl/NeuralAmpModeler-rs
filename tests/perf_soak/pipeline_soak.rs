@@ -10,7 +10,7 @@
 
 mod tests {
     use std::fs;
-    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::Ordering;
     use std::time::Instant;
 
     use neural_amp_modeler_rs::common::params::AdaptiveComputeMode;
@@ -19,7 +19,7 @@ mod tests {
     use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
     use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
     use neural_amp_modeler_rs::dsp::pipeline::{
-        BridgeBuffer, DspBridge, DspBridgeReader, DspBridgeWriter, DspBuffers, DspPipelineContext,
+        DspBridge, DspBridgeReader, DspBridgeWriter, DspBuffers, DspPipelineContext,
         MAX_RESAMP_BUF, capture_dsp_pipeline,
     };
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
@@ -95,13 +95,7 @@ mod tests {
 
         let rt_status = RtStatusFlags::default();
 
-        let mut bridge = Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: AtomicUsize::new(0),
-            generation: AtomicU64::new(0),
-            consumed_gen: AtomicU64::new(0),
-            dropped_frames: AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
         let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
@@ -375,13 +369,7 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        let bridge: &'static DspBridge = Box::leak(Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: AtomicUsize::new(0),
-            generation: AtomicU64::new(0),
-            consumed_gen: AtomicU64::new(0),
-            dropped_frames: AtomicU32::new(0),
-        }));
+        let bridge: &'static DspBridge = Box::leak(DspBridge::new_boxed());
 
         let writer = unsafe { DspBridgeWriter::new(bridge as *const DspBridge as *mut DspBridge) };
         let reader = unsafe { DspBridgeReader::new(bridge as *const DspBridge as *mut DspBridge) };

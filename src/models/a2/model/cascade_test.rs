@@ -241,8 +241,10 @@ fn test_cascade_output_buffer_dirty_memory_clearing() {
     let arr1 = make_test_dyn_array(3, 4, 8, 1);
     let mut cascade =
         WaveNetA2Cascade::try_new(vec![arr0, arr1], None, 1).expect("cascade creation failed");
-
+    // Block-size contract: debug builds trap input > max_buffer_size, so grow
+    // the cascade to the test block size before processing (T2.1).
     let num_frames = 128;
+    cascade.set_max_buffer_size(num_frames).unwrap();
     let input = vec![0.2f32; num_frames];
 
     // Pre-fill output buffer with sentinel dirty data

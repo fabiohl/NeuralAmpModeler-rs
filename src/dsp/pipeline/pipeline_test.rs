@@ -51,13 +51,7 @@ mod tests {
         let n = n_samples;
         let mut resampler = NamResampler::new_simple(host_rate, nam_rate).unwrap();
 
-        let mut bridge = Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-            generation: std::sync::atomic::AtomicU64::new(0),
-            consumed_gen: std::sync::atomic::AtomicU64::new(0),
-            dropped_frames: std::sync::atomic::AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
         let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
@@ -278,13 +272,7 @@ mod tests {
         let mut resampler = NamResampler::new_simple(host_rate, nam_rate).unwrap();
         let mut stream = StreamingResampleBuffer::new(host_rate, nam_rate, MAX_RESAMP_BUF).unwrap();
 
-        let mut bridge = Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-            generation: std::sync::atomic::AtomicU64::new(0),
-            consumed_gen: std::sync::atomic::AtomicU64::new(0),
-            dropped_frames: std::sync::atomic::AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
         let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
@@ -377,7 +365,7 @@ mod tests {
         }
     }
 
-    /// Streaming pipeline with StreamingDspBuffers (F-PERF-17 / T3.3):
+    /// Streaming pipeline with StreamingDspBuffers (F-PERF-17):
     /// Verify that `capture_dsp_pipeline_streaming` accepts `StreamingDspBuffers`
     /// (omitting dead intermediate `resamp_mid` and `model_out` buffers),
     /// processes audio with zero allocations, and preserves signal sanity.
@@ -392,13 +380,7 @@ mod tests {
         let mut resampler = NamResampler::new_simple(host_rate, nam_rate).unwrap();
         let mut stream = StreamingResampleBuffer::new(host_rate, nam_rate, MAX_RESAMP_BUF).unwrap();
 
-        let mut bridge = Box::new(DspBridge {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-            active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-            generation: std::sync::atomic::AtomicU64::new(0),
-            consumed_gen: std::sync::atomic::AtomicU64::new(0),
-            dropped_frames: std::sync::atomic::AtomicU32::new(0),
-        });
+        let mut bridge = DspBridge::new_boxed();
 
         let mut resamp_out_l = vec![0.0; MAX_RESAMP_BUF];
         let mut resamp_out_r = [0.0; MAX_RESAMP_BUF];
@@ -485,7 +467,7 @@ mod tests {
         }
     }
 
-    /// Non-finite containment guard (F-PERF-16 / T3.1):
+    /// Non-finite containment guard (F-PERF-16):
     /// NaN or Inf on pipeline input must be detected in the input stage, raise
     /// `RT_STATUS_NON_FINITE_INPUT_DETECTED`, sanitize the buffers (in-place zeroing),
     /// and prevent poisonous values from propagating to downstream stages and outputs.

@@ -77,7 +77,7 @@ pub fn governor_path_for_core(core: u32) -> String {
     format!("/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
 }
 
-/// Effective bench core for governor probing (S1-T2).
+/// Effective bench core for governor probing.
 ///
 /// Precedence: the pinned core observed from the process affinity mask when
 /// it resolves to exactly one core (the `taskset -c <core>` case — the most
@@ -115,7 +115,7 @@ fn effective_bench_core() -> u32 {
 }
 
 fn read_governor() -> Result<String, io::Error> {
-    // S1-T2: probe the governor of the effective bench core — the core the
+    // Probe the governor of the effective bench core — the core the
     // bench is actually pinned to — instead of a fixed `cpu0`. On hybrid
     // (P-core/E-core) systems `cpu0` may report `performance` while the
     // pinned core does not.

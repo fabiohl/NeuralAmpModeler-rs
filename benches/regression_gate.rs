@@ -26,7 +26,7 @@
 //! - WaveNet: Standard (CH16), Feather (CH8), Lite (CH12), Nano (CH4), Dyn Free
 //! - A2: Full (CH8), Lite (CH3), Dyn Gated (CH8), Dyn Blended (CH3)
 //! - LSTM: 1x16, 2x8, Dyn 1x7
-//! - Linear (RF=2048), ConvNet
+//! - Linear: Direct (RF=4), FFT (RF=2048), ConvNet
 //!
 //! ### DSP Infrastructure:
 //! - Resampler: 44.1 kHz -> 48 kHz, 96 kHz -> 48 kHz (64-sample block)
@@ -50,15 +50,19 @@ use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
 use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
 use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
 use neural_amp_modeler_rs::dsp::pipeline::{
-    BridgeBuffer, DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext, MAX_RESAMP_BUF,
+    DspBridge, DspBridgeWriter, DspBuffers, DspPipelineContext, MAX_RESAMP_BUF,
     capture_dsp_pipeline,
 };
 use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 use neural_amp_modeler_rs::models::NamModel;
 
-macro_rules! regression_bench {
-    ($c:expr, $label:expr, $file:expr) => {
-        let mut model = common::load_and_prewarm_required($file);
+/// Runs the standard 64-sample block bench over an already-built model.
+///
+/// `$model` must evaluate to a `StaticModel`; the output buffer is sized for
+/// the model's channel count (ConvNet may emit more than one channel).
+macro_rules! regression_bench_model {
+    ($c:expr, $label:expr, $model:expr) => {
+        let mut model = $model;
         let out_channels = match &model {
             neural_amp_modeler_rs::models::StaticModel::ConvNet(c) => c.out_channels(),
             _ => 1,
@@ -73,6 +77,13 @@ macro_rules! regression_bench {
                 )
             });
         });
+    };
+}
+
+/// Loads a required fixture file and benches it via [`regression_bench_model!`].
+macro_rules! regression_bench {
+    ($c:expr, $label:expr, $file:expr) => {
+        regression_bench_model!($c, $label, common::load_and_prewarm_required($file));
     };
 }
 
@@ -110,8 +121,19 @@ fn bench_lstm_2x8(c: &mut Criterion) {
     regression_bench!(c, "RT_LSTM_2x8", "BossLSTM-2x8.nam");
 }
 
-fn bench_linear(c: &mut Criterion) {
-    regression_bench!(c, "RT_Linear", "linear_test.nam");
+fn bench_linear_direct_rf4(c: &mut Criterion) {
+    regression_bench!(c, "RT_Linear_Direct_RF4", "linear_test.nam");
+}
+
+/// Synthetic RF=2048 Linear model: `LinearImplementation::Auto` resolves to
+/// `LinearMode::Fft`, so this target measures the partitioned-FFT production
+/// path (unlike the RF=4 Direct target, which never constructs FFT state).
+fn bench_linear_fft_rf2048(c: &mut Criterion) {
+    regression_bench_model!(
+        c,
+        "RT_Linear_Fft_RF2048",
+        common::load_and_prewarm_linear_fft_rf2048()
+    );
 }
 
 fn bench_convnet(c: &mut Criterion) {
@@ -234,13 +256,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
         OversampleEngine::new(os_factor, MAX_RESAMP_BUF).expect("OS engine init failed");
 
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     let mut resamp_mid_l = vec![0.0f32; MAX_RESAMP_BUF];
     let mut resamp_mid_r = vec![0.0f32; MAX_RESAMP_BUF];
@@ -384,13 +400,7 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
         .expect("OS engine init failed");
 
     let rt_status = RtStatusFlags::default();
-    let mut bridge = Box::new(DspBridge {
-        buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
-        active_read_idx: std::sync::atomic::AtomicUsize::new(0),
-        generation: std::sync::atomic::AtomicU64::new(0),
-        consumed_gen: std::sync::atomic::AtomicU64::new(0),
-        dropped_frames: std::sync::atomic::AtomicU32::new(0),
-    });
+    let mut bridge = DspBridge::new_boxed();
 
     let mut resamp_mid_l = vec![0.0f32; MAX_RESAMP_BUF];
     let mut resamp_mid_r = vec![0.0f32; MAX_RESAMP_BUF];
@@ -557,7 +567,8 @@ criterion_group!(
         bench_a2_lite,
         bench_lstm_1x16,
         bench_lstm_2x8,
-        bench_linear,
+        bench_linear_direct_rf4,
+        bench_linear_fft_rf2048,
         bench_convnet,
         bench_wavenet_dyn_free,
         bench_lstm_dyn_1x7,

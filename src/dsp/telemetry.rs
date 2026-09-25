@@ -4,7 +4,7 @@
 //! Real-time latency telemetry for the DSP pipeline.
 //!
 //! The binary RT gate reads `LatencyHistogram` bucket edges. The
-//! complementary `ExactLatencyReservoir` (S1-T4, `testing`/`heap-audit`
+//! complementary `ExactLatencyReservoir` (`testing`/`heap-audit`
 //! only, never production) stores exact samples for trend reports so
 //! sub-bucket drift is visible without touching the gate.
 
@@ -162,7 +162,7 @@ impl LatencyHistogram {
     }
 }
 
-/// Complementary exact-sample reservoir for trend reports (S1-T4).
+/// Complementary exact-sample reservoir for trend reports.
 ///
 /// Stores up to `N` raw latency samples (ring overwrite) so exact
 /// percentiles (`p50`/`p90`/`p99`/`p99.9` via sorting) can be compared
@@ -173,11 +173,14 @@ impl LatencyHistogram {
 /// Compiled only with `testing`/`heap-audit` (never in the default or
 /// production build) so the shipped codegen stays byte-identical.
 ///
-/// Note: unit tests always compile with `cfg(test)`, so the S1-T4 tests
+/// Note: unit tests always compile with `cfg(test)`, so the reservoir tests
 /// below exercise the reservoir in every `cargo test` invocation — but the
 /// type itself is absent from non-`testing` library builds.
 #[cfg(any(test, feature = "testing", feature = "heap-audit"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(test, feature = "testing", feature = "heap-audit")))
+)]
 #[repr(align(128))]
 pub struct ExactLatencyReservoir<const N: usize = 2048> {
     /// Ring buffer of exact samples in nanoseconds.
@@ -187,7 +190,10 @@ pub struct ExactLatencyReservoir<const N: usize = 2048> {
 }
 
 #[cfg(any(test, feature = "testing", feature = "heap-audit"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(test, feature = "testing", feature = "heap-audit")))
+)]
 impl<const N: usize> ExactLatencyReservoir<N> {
     /// Creates a new empty reservoir.
     #[cold]
@@ -247,7 +253,10 @@ impl<const N: usize> ExactLatencyReservoir<N> {
 }
 
 #[cfg(any(test, feature = "testing", feature = "heap-audit"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(test, feature = "testing", feature = "heap-audit")))
+)]
 impl<const N: usize> Default for ExactLatencyReservoir<N> {
     fn default() -> Self {
         Self::new()
@@ -301,7 +310,7 @@ mod tests {
         assert_eq!(hist.get_exact_max(), 10000);
     }
 
-    /// S1-T4: exact percentiles resolve sub-bucket drift the log2 buckets hide.
+    /// Exact percentiles resolve sub-bucket drift the log2 buckets hide.
     /// Unit tests compile with `cfg(test)`, so this runs in every suite.
     #[test]
     fn test_exact_reservoir_resolves_sub_bucket_drift() {
@@ -329,7 +338,7 @@ mod tests {
         assert_eq!(exact.percentile_exact(0.99), 0);
     }
 
-    /// S1-T4: ring overwrite keeps the newest `N` samples; empty reads zero.
+    /// Ring overwrite keeps the newest `N` samples; empty reads zero.
     #[test]
     fn test_exact_reservoir_ring_overwrite_and_empty() {
         let exact = ExactLatencyReservoir::<8>::new();

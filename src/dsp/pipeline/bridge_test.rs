@@ -4,26 +4,7 @@
 use super::*;
 
 fn new_bridge() -> Box<DspBridge> {
-    Box::new(DspBridge {
-        buffers: [
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-                generation: 0,
-            },
-            BridgeBuffer {
-                buf_l: [0.0; MAX_BRIDGE_BUF],
-                buf_r: [0.0; MAX_BRIDGE_BUF],
-                n_samples: 0,
-                generation: 0,
-            },
-        ],
-        active_read_idx: AtomicUsize::new(0),
-        generation: AtomicU64::new(0),
-        consumed_gen: AtomicU64::new(0),
-        dropped_frames: AtomicU32::new(0),
-    })
+    DspBridge::new_boxed()
 }
 
 #[test]
@@ -111,5 +92,66 @@ fn test_bridge_reset_to_silence_teardown_only() {
     assert_eq!(
         last_bridge_gen, 0,
         "reader must not advance its generation on silence"
+    );
+}
+
+#[test]
+fn test_dsp_bridge_alignment_and_cache_isolation() {
+    use core::mem::{align_of, offset_of, size_of};
+
+    // Overall struct alignment and sizing
+    assert_eq!(
+        align_of::<DspBridge>(),
+        128,
+        "DspBridge must be 128-byte aligned"
+    );
+    assert_eq!(
+        size_of::<DspBridge>() % 128,
+        0,
+        "DspBridge size must be a multiple of 128 bytes"
+    );
+
+    // Buffers offset
+    let off_buf = offset_of!(DspBridge, buffers);
+    assert_eq!(off_buf, 0, "buffers must start at offset 0");
+
+    // Writer cache line offsets
+    let off_active_read = offset_of!(DspBridge, active_read_idx);
+    let off_gen = offset_of!(DspBridge, generation);
+    let off_dropped = offset_of!(DspBridge, dropped_frames);
+
+    assert_eq!(
+        off_active_read % 64,
+        0,
+        "active_read_idx must be on a 64-byte cache line boundary"
+    );
+    assert_eq!(
+        off_active_read / 64,
+        off_gen / 64,
+        "generation must share the writer cache line with active_read_idx"
+    );
+    assert_eq!(
+        off_active_read / 64,
+        off_dropped / 64,
+        "dropped_frames must share the writer cache line with active_read_idx"
+    );
+
+    // Reader cache line offset
+    let off_consumed = offset_of!(DspBridge, consumed_gen);
+    assert_eq!(
+        off_consumed % 64,
+        0,
+        "consumed_gen must be on a distinct 64-byte cache line boundary"
+    );
+    assert_ne!(
+        off_active_read / 64,
+        off_consumed / 64,
+        "writer atomics and reader atomics must reside on distinct cache lines (false sharing prevention)"
+    );
+
+    // Spacing between writer and reader cache lines must be at least 64 bytes
+    assert!(
+        off_consumed >= off_active_read + 64,
+        "reader cache line must follow writer cache line by at least 64 bytes"
     );
 }

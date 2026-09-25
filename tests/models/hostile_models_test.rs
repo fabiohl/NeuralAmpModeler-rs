@@ -535,11 +535,11 @@ fn test_a2_conv1d_try_new_fail_closed_validation() {
 
 // ── Post-Stack Head Ceilings (F-RES2-02) ─────────────────────────────────────
 //
-// The `head` sub-object is the only loader dimension with a declared ceiling
-// after Sprint 2: `head.channels` / `head.out_channels` / `head.kernel_size`
-// are capped at the canonical layer ceilings before any allocation or size
-// multiplication. Each hostile dimension must fail closed (`Err`, never panic
-// or wrap) on both WaveNet free-geometry and ConvNet `Layers` paths.
+// The `head` sub-object is the only loader dimension with a declared ceiling:
+// `head.channels` / `head.out_channels` / `head.kernel_size` are capped at the
+// canonical layer ceilings before any allocation or size multiplication.
+// Each hostile dimension must fail closed (`Err`, never panic or wrap) on
+// both WaveNet free-geometry and ConvNet `Layers` paths.
 
 /// Builds a minimal WaveNet free-geometry JSON with the given `head` object
 /// literal (e.g. `"null"` or `"{\"channels\": ...}"`).

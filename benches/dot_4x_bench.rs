@@ -146,10 +146,29 @@ fn bench_dot_16x_f32_avx512(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_dot_4x_f32_avx2(c: &mut Criterion) {
+    let sizes = [4, 8, 16, 64, 256, 1024, 4096];
+    let mut group = c.benchmark_group("dot_4x_f32");
+
+    for &size in &sizes {
+        let (weights, state) = generate_f32_test_data::<4>(size);
+
+        group.bench_function(format!("scalar_{}", size), |b| {
+            b.iter(|| unsafe { dot_4x::dot_product_4x_f32_scalar(&weights, &state) })
+        });
+
+        group.bench_function(format!("avx2_{}", size), |b| {
+            b.iter(|| unsafe { dot_4x::dot_product_4x_f32_avx2(&weights, &state) })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dot_4x_interleaved_avx512,
     bench_dot_4x_interleaved_dual_frame_avx512,
+    bench_dot_4x_f32_avx2,
     bench_dot_8x_f32_avx2,
     bench_dot_16x_f32_avx512,
 );

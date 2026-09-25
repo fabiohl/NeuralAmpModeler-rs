@@ -87,6 +87,14 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// buffer lengths. Hosts are expected to use equal-length buffers, but the
     /// engine degrades gracefully when they do not.
     ///
+    /// # Block Size Contract
+    /// Pre-condition: `input.len()` must not exceed the negotiated maximum
+    /// block size (`max_buffer_size`, set off-RT via
+    /// [`set_max_buffer_size`](NamModel::set_max_buffer_size)). Input beyond
+    /// that limit is silently truncated in release builds (only the first
+    /// `max_buffer_size` frames are processed); debug builds trap the
+    /// violation with a symmetric `debug_assert!` in every engine.
+    ///
     /// # Real-Time Safety
     /// This method MUST NOT allocate on the heap, acquire locks, or perform blocking I/O.
     ///

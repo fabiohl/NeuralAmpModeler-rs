@@ -24,11 +24,28 @@ use super::{NamModel, StaticModel};
 impl NamModel for StaticModel {
     /// Routes sample-by-sample neural inference to the active model variant.
     ///
-    /// All WaveNet-derived, LSTM, ConvNet, and Container variants delegate
-    /// to their respective `process` methods without special wrapping. The
-    /// `Linear` variant uses an `unsafe` block because the raw pointer passed
-    /// to the GEMM kernel cannot carry a compile-time lifetime through the
-    /// enum dispatch. The pointer validity is guaranteed by the `&[f32]`
+    /// # Design Rationale: Static Enum Dispatch vs Dynamic Dispatch
+    /// Instead of dynamic trait object dispatch (`Box<dyn NamModel>` or `&mut dyn NamModel`),
+    /// this engine uses static enum dispatch via exhaustive `match` arms over [`StaticModel`]:
+    ///
+    /// - **Predictable Branch Target Buffer (BTB) Performance:** In an audio processing session,
+    ///   the active model variant does not change dynamically on a sample-by-sample basis.
+    ///   Consequently, after the first branch prediction warm-up, the CPU BTB achieves
+    ///   near-100% prediction accuracy without pipeline flushes or indirect branch penalties.
+    /// - **Devirtualization and Monomorphization:** Enum dispatch eliminates vtable pointer
+    ///   indirection and indirect call overhead (`call *%rax`). The compiler is able to
+    ///   devirtualize each call site, inline target kernels where profitable, and perform
+    ///   per-architecture SIMD register allocation and instruction scheduling.
+    /// - **Cache and Real-Time Safety:** Trait objects typically incur fat pointers (data ptr +
+    ///   vtable ptr) and dynamic heap indirection. Static enum dispatch keeps state layouts
+    ///   deterministic, cache-local, and avoids pointer chasing on the critical `SCHED_FIFO`
+    ///   audio callback thread.
+    ///
+    /// # Safety and Wrapping
+    /// All WaveNet-derived, LSTM, ConvNet, and Container variants delegate directly to their
+    /// respective `process` methods. The `Linear` variant uses an `unsafe` block because the
+    /// raw pointer passed to the GEMM kernel cannot carry a compile-time lifetime through the
+    /// enum dispatch. The pointer validity is guaranteed by the `&[f32]` / `&mut [f32]`
     /// borrows already held by the caller.
     #[inline(always)]
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
@@ -62,6 +79,21 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Prewarms internal causal states (convolution delay buffers, LSTM hidden/cell states).
+    ///
+    /// # Audio Invariants and Click Prevention
+    /// Recursive networks (LSTM) and causal dilated convolutions (WaveNet, ConvNet) rely on
+    /// internal recurrent history or ring buffers. On cold startup or transport restart,
+    /// uninitialized or zero-filled history buffers can produce transient discontinuities,
+    /// DC offset step responses, or audible clicks/pops when audio playback begins.
+    ///
+    /// Calling `prewarm` pushes a sequence of silent samples (or initial baseline frames)
+    /// through the network, allowing internal state variables to settle into their stable
+    /// operating regime before live audio is routed through [`process`](Self::process).
+    ///
+    /// # Execution Context
+    /// This method is marked `#[cold]` because it runs strictly off-RT during model instantiation,
+    /// buffer re-allocation, or transport reset—never in the per-buffer hot audio path.
     #[cold]
     fn prewarm(&mut self, num_samples: usize) {
         match self {
@@ -91,6 +123,10 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Queries whether internal recurrent states should be prewarmed when the DSP pipeline resets.
+    ///
+    /// When `true`, subsequent invocations of [`reset`](Self::reset) will automatically flush
+    /// internal delay buffers and prime recurrent states to prevent cold-start transients.
     fn prewarm_on_reset(&self) -> bool {
         match self {
             Self::WavenetStandard(m) => m.prewarm_on_reset(),
@@ -119,6 +155,10 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Configures whether internal recurrent states should be prewarmed on reset.
+    ///
+    /// Setting this to `true` ensures that any future transport reset or sample rate reconfiguration
+    /// flushes recurrent states to steady-state before audio processing resumes.
     fn set_prewarm_on_reset(&mut self, val: bool) {
         match self {
             Self::WavenetStandard(m) => m.set_prewarm_on_reset(val),

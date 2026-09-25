@@ -46,6 +46,7 @@ pub(crate) const HB_TAPS: usize = 25;
 pub(crate) const HB_DELAY: usize = HB_TAPS / 2;
 
 /// Oversampling factor.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OversampleFactor {
     /// No oversampling — pass-through with zero overhead.

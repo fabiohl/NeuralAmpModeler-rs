@@ -51,13 +51,24 @@ fn main() {
 
     if !missing_features.is_empty() {
         let missing_str = missing_features.join(", ");
-        let msg = format!(
-            "NeuralAmpModeler-rs requires full x86-64-v3 target support. \
-             Missing required feature(s): {missing_str}. \
-             Set RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\" to compile. \
-             Detected features: {target_feature}"
-        );
-        println!("cargo:warning={msg}");
+        // Cargo renders each `cargo:warning=` as a separate one-line warning:
+        // `\n` escapes inside a value are not expanded and real newlines are
+        // dropped by the line-based stdout parser, so the multi-line fix is
+        // emitted as one warning per line. The `.cargo/config.toml` snippet
+        // mirrors README.md verbatim so consumers can copy it as-is (Cargo
+        // never propagates dependency RUSTFLAGS downstream, which is why
+        // `cargo add && cargo build` fails without this configuration).
+        let msg_lines = [
+            "NeuralAmpModeler-rs requires full x86-64-v3 target support.",
+            &format!("Missing required feature(s): {missing_str} (detected: {target_feature})."),
+            "Set RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\" to compile, or add the \
+             following snippet to your project's .cargo/config.toml:",
+            "[build]",
+            "rustflags = [\"-Ctarget-cpu=x86-64-v3\"]",
+        ];
+        for line in msg_lines {
+            println!("cargo:warning={line}");
+        }
         std::process::exit(1);
     }
 
@@ -100,8 +111,26 @@ fn export_bench_constants_env() {
         })
         .unwrap_or_else(|| panic!("build.rs: cannot parse `usize` value from `{decl}`"));
 
+    // Dashboard-only artifact: `utils/quality-dashboard.sh` sources this file to
+    // divide micro-bench medians by the batch factor. Crate consumers and
+    // `cargo package --verify` never need it, and the unpacked package copy
+    // has no `target/` directory — so export is best-effort: missing parents
+    // are created, and any residual I/O failure degrades to a warning rather
+    // than failing the consumer build. A wrong constant would still compare
+    // wrong units, so unparsable `benches/constants.rs` keeps panicking above.
     let env_path = format!("{manifest_dir}/target/bench_constants.env");
+    if let Some(parent) = std::path::Path::new(&env_path).parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        println!(
+            "cargo:warning=build.rs: cannot create {}: {e}; skipping bench_constants.env export (dashboard-only artifact)",
+            parent.display()
+        );
+        return;
+    }
     if let Err(e) = std::fs::write(&env_path, format!("DSP_MICRO_BATCH={value}\n")) {
-        panic!("build.rs: cannot write {env_path}: {e}");
+        println!(
+            "cargo:warning=build.rs: cannot write {env_path}: {e}; skipping bench_constants.env export (dashboard-only artifact)"
+        );
     }
 }

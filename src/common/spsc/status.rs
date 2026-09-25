@@ -159,8 +159,40 @@ pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
 /// | 28 | `STRUCTURAL_DEFERRED` | Structural command deferred to next callback (budget exhausted) |
 /// | 29 | `STRUCTURAL_SUPERSEDED` | Deferred structural command superseded by newer same-kind; discarded off-RT |
 /// | 30 | `PARAM_QUEUE_BACKLOG` | Scalar param queue still non-empty after the per-callback drain budget |
-#[repr(align(128))]
+#[repr(C, align(128))]
 pub struct RtStatusFlags {
+    // =========================================================================
+    // Line 0: RT Hot-Path (Audio thread per-block telemetry & state)
+    // Written on every audio block / frequent transitions; read by Main loop.
+    // =========================================================================
+    /// Atomic bitmask containing binary states (needs_rebuild, clipped, silent, etc).
+    /// Reduces Cache Bouncing by condensing multiple states into a single cache line.
+    pub status_bits: AtomicU64,
+    /// Processing time of the last DSP cycle in ticks (RDTSC).
+    /// Read by the main thread and converted to Duration via Anchor.
+    pub dsp_cycle_time: AtomicU64,
+    /// Number of samples processed in the last cycle (for budget calculation).
+    pub last_n_samples: AtomicU32,
+    /// Atomic counter of DSP overloads (virtual XRUNs).
+    /// Incremented by the RT callback if processing exceeds 85% of the time budget.
+    pub dsp_overloads: AtomicU32,
+    /// Total count of virtual XRUNs/overloads.
+    pub xruns: AtomicU32,
+    /// Total degradation transitions that have occurred (Full↔Reduced↔Minimal).
+    pub degrade_transitions_total: AtomicU32,
+    /// Total count of structural commands deferred by the audio callback because
+    /// the per-callback structural budget was exhausted (F-RT-007). Monotonic
+    /// telemetry counter — never reset; accompanies `RT_STATUS_STRUCTURAL_DEFERRED`.
+    pub structural_deferred_total: AtomicU32,
+    /// Total count of GC items successfully drained.
+    pub drains: AtomicU32,
+    /// Padding to isolate RT-hot fields to their own 64-byte cache line.
+    _pad_rt_hot: [u8; 24],
+
+    // =========================================================================
+    // Lines 1..3: RT Control & Handshake (Rate / Model / CabSim / Oversample / Quantum)
+    // Written by RT callback during renegotiations/swaps, read by Main thread.
+    // =========================================================================
     /// Effective sample rate active on the DSP thread after resampler rebuild.
     /// Set by the DSP thread upon consuming a new `NamResampler` from the SPSC channel.
     /// Value `0` indicates no pending update.
@@ -168,15 +200,34 @@ pub struct RtStatusFlags {
     /// Rate change notification for logging purposes.
     /// Value `0` indicates no change since the last poll.
     pub active_rate_changed: AtomicU32,
-
     /// Target rate detected by the DSP thread from the audio host but not yet applied (awaiting rebuild).
     /// The main thread reads this value to know which rate to build.
     /// Value `0` indicates no pending request.
     pub requested_host_rate: AtomicU32,
-
     /// Target rate of the loaded model (NAM). The usual default is 48000.
     pub requested_nam_rate: AtomicU32,
-
+    /// Host quantum (buffer size in frames) detected by the RT callback.
+    /// Stored by the RT thread whenever `n_samples` differs from the previous cycle.
+    /// Read by the main thread for quantum-renegotiation logging.
+    pub requested_buffer_frames: AtomicU32,
+    /// Requested partition size for cabsim rebuild (set by RT thread).
+    pub requested_cabsim_partition_size: AtomicU32,
+    /// Requested host output rate for cabsim rebuild (set by RT thread).
+    ///
+    /// The cab-sim stage runs at the host output rate (after the return
+    /// resampler), so the IR must be recalibrated whenever that rate
+    /// changes. The RT thread publishes the applied host rate here before
+    /// raising `RT_STATUS_NEEDS_CABSIM_REBUILD` (F-RB-006 rate
+    /// calibration); value `0` indicates no request was ever published.
+    pub requested_cabsim_host_rate: AtomicU32,
+    /// Requested slimmable channel count (set by RT thread, read by main thread).
+    /// Value `0` indicates no pending request.
+    pub requested_slimmable_ch: AtomicU32,
+    /// Requested oversampling factor (0=Off, 1=X2, 2=X4) for engine rebuild.
+    /// Set by RT thread, read and cleared by main thread after rebuild.
+    pub requested_os_factor: AtomicU32,
+    /// 4-byte padding to align subsequent generation u64 fields to 8 bytes.
+    _pad_handshake_u32: [u8; 4],
     /// Monotonic generation counter for resampler swap requests (F-RB-004).
     ///
     /// Incremented with `Ordering::Release` by the RT thread in `sync_rate`
@@ -188,7 +239,6 @@ pub struct RtStatusFlags {
     /// unmuting. This eliminates the lost-wakeup where a rate renegotiation
     /// arriving during a rebuild was silently erased.
     pub requested_rate_generation: AtomicU64,
-
     /// Generation of the resampler currently applied on the DSP thread.
     ///
     /// Stored with `Ordering::Release` by the RT thread when it installs a
@@ -198,68 +248,6 @@ pub struct RtStatusFlags {
     /// the callback clears `RT_STATUS_RESAMP_SWAP_PENDING` (unmutes) — a stale
     /// resampler can never substitute the most recent request.
     pub applied_rate_generation: AtomicU64,
-
-    /// Request generation of a failed resampler rebuild attempt by the main thread.
-    ///
-    /// Stored with `Ordering::Release` by the main thread when a resampler rebuild
-    /// attempt fails for `requested_rate_generation`. The RT callback checks
-    /// this value against its current `requested_rate_generation` before performing
-    /// a safe fail-open unmute: if a newer generation request B arrived while
-    /// generation A failed, the failure of A is ignored and B remains pending.
-    pub resampler_failed_generation: AtomicU64,
-
-    /// Effective RT priority confirmed by `pthread_getschedparam`.
-    /// Value `-1` indicates the check has not yet been performed.
-    /// Set on the cold-path of the DSP thread's first frame.
-    pub rt_priority: AtomicI32,
-
-    /// Atomic counter of DSP overloads (virtual XRUNs).
-    /// Incremented by the RT callback if processing exceeds 85% of the time budget.
-    pub dsp_overloads: AtomicU32,
-
-    /// Processing time of the last DSP cycle in ticks (RDTSC).
-    /// Read by the main thread and converted to Duration via Anchor.
-    pub dsp_cycle_time: AtomicU64,
-
-    /// Number of samples processed in the last cycle (for budget calculation).
-    pub last_n_samples: AtomicU32,
-
-    /// Latency histogram for statistical analysis of DSP core execution (P50, P95, P99).
-    pub latency_hist: crate::dsp::telemetry::LatencyHistogram,
-
-    /// Total degradation transitions that have occurred (Full↔Reduced↔Minimal).
-    pub degrade_transitions_total: AtomicU32,
-
-    /// Atomic bitmask containing binary states (needs_rebuild, clipped, silent, etc).
-    /// Reduces Cache Bouncing by condensing multiple states into a single cache line.
-    pub status_bits: AtomicU64,
-
-    /// Confirmed RT priority.
-    pub confirmed_priority: AtomicI32,
-    /// Confirmed RT scheduling policy.
-    pub rt_policy: AtomicI32,
-    /// Thread ID (kernel TID or pthread ID) of the active DSP/data thread.
-    pub rt_tid: AtomicI64,
-    /// Processing time of the very first audio block in ticks (cold start latency).
-    pub first_block_nanos: AtomicU64,
-    /// Pinned physical CPU core (or -1 if not pinned).
-    pub rt_cpu: AtomicI32,
-    /// Accumulated OR of all RT_STATUS_* flags ever seen since startup.
-    pub flags_seen: AtomicU64,
-    /// Total count of virtual XRUNs/overloads.
-    pub xruns: AtomicU32,
-    /// Total count of GC items successfully drained.
-    pub drains: AtomicU32,
-    /// Requested partition size for cabsim rebuild (set by RT thread).
-    pub requested_cabsim_partition_size: AtomicU32,
-    /// Requested host output rate for cabsim rebuild (set by RT thread).
-    ///
-    /// The cab-sim stage runs at the host output rate (after the return
-    /// resampler), so the IR must be recalibrated whenever that rate
-    /// changes. The RT thread publishes the applied host rate here before
-    /// raising `RT_STATUS_NEEDS_CABSIM_REBUILD` (F-RB-006 rate
-    /// calibration); value `0` indicates no request was ever published.
-    pub requested_cabsim_host_rate: AtomicU32,
     /// Monotonic generation counter for cabsim rebuild requests (F-RB-004
     /// pattern).
     ///
@@ -276,9 +264,6 @@ pub struct RtStatusFlags {
     /// `CabSimSwapPayload` whose generation matches
     /// [`Self::requested_cabsim_generation`].
     pub applied_cabsim_generation: AtomicU64,
-    /// Requested slimmable channel count (set by RT thread, read by main thread).
-    /// Value `0` indicates no pending request.
-    pub requested_slimmable_ch: AtomicU32,
     /// Slimmable rebuild generation (set by RT thread, read by main thread).
     ///
     /// Incremented with `Release` by the RT callback whenever it requests a
@@ -288,9 +273,6 @@ pub struct RtStatusFlags {
     /// [`crate::common::spsc::SlimModelPair`], so the RT drain can discard stale
     /// pairs and guarantee L/R are always swapped from the latest request.
     pub requested_slimmable_generation: AtomicU64,
-    /// Requested oversampling factor (0=Off, 1=X2, 2=X4) for engine rebuild.
-    /// Set by RT thread, read and cleared by main thread after rebuild.
-    pub requested_os_factor: AtomicU32,
     /// Monotonic generation counter for oversampling rebuild requests (F-RB-004
     /// pattern).
     ///
@@ -305,40 +287,77 @@ pub struct RtStatusFlags {
     /// Stored with `Ordering::Release` by the RT thread when it installs an
     /// `OsEnginePair` whose generation matches [`Self::requested_os_generation`].
     pub applied_os_generation: AtomicU64,
+    /// Padding to isolate RT handshake fields and align the subsequent histogram to 128 bytes.
+    _pad_rt_handshake: [u8; 96],
 
-    /// Host quantum (buffer size in frames) detected by the RT callback.
-    /// Stored by the RT thread whenever `n_samples` differs from the previous cycle.
-    /// Read by the main thread for quantum-renegotiation logging.
-    pub requested_buffer_frames: AtomicU32,
+    // =========================================================================
+    // Lines 4..9: Histogram (Latency histogram, 128-byte aligned, 384 bytes)
+    // =========================================================================
+    /// Latency histogram for statistical analysis of DSP core execution (P50, P95, P99).
+    pub latency_hist: crate::dsp::telemetry::LatencyHistogram,
 
-    /// Previous quantum value used by the main loop to detect and log changes.
-    /// Updated by the main thread after logging. Not accessed by the RT thread.
-    pub previous_buffer_frames: AtomicU32,
-
+    // =========================================================================
+    // Line 10: Capture-owned (Host audio capture thread)
+    // =========================================================================
     /// Incremented by the RT callback when capture (source)
     /// `dequeue_buffer()` returns `None` — host buffer miss on the input side.
     pub input_buffer_miss: AtomicU32,
+    /// Dedicated padding isolating capture-owned miss counter into its own 64-byte cache line.
+    _pad_capture: [u8; 60],
+
+    // =========================================================================
+    // Line 11: Playback-owned (Host audio playback thread)
+    // =========================================================================
     /// Incremented by the playback thread when `dequeue_buffer()`
     /// returns `None` — host buffer miss on the output side.
     pub output_buffer_miss: AtomicU32,
+    /// Dedicated padding isolating playback-owned miss counter into its own 64-byte cache line.
+    _pad_playback: [u8; 60],
 
-    /// Total count of structural commands deferred by the audio callback because
-    /// the per-callback structural budget was exhausted (F-RT-007). Monotonic
-    /// telemetry counter — never reset; accompanies `RT_STATUS_STRUCTURAL_DEFERRED`.
-    pub structural_deferred_total: AtomicU32,
+    // =========================================================================
+    // Lines 12..13: Main-owned / Off-RT & Cold Diagnostics
+    // =========================================================================
+    /// Previous quantum value used by the main loop to detect and log changes.
+    /// Updated by the main thread after logging. Not accessed by the RT thread.
+    pub previous_buffer_frames: AtomicU32,
     /// Total count of deferred structural commands superseded by a newer
     /// same-kind command and discarded off-RT via the GC cascade (command
     /// coalescing). Accompanies `RT_STATUS_STRUCTURAL_SUPERSEDED`.
     pub structural_superseded_total: AtomicU32,
-
+    /// Request generation of a failed resampler rebuild attempt by the main thread.
+    ///
+    /// Stored with `Ordering::Release` by the main thread when a resampler rebuild
+    /// attempt fails for `requested_rate_generation`. The RT callback checks
+    /// this value against its current `requested_rate_generation` before performing
+    /// a safe fail-open unmute: if a newer generation request B arrived while
+    /// generation A failed, the failure of A is ignored and B remains pending.
+    pub resampler_failed_generation: AtomicU64,
+    /// Accumulated OR of all RT_STATUS_* flags ever seen since startup.
+    pub flags_seen: AtomicU64,
+    /// Effective RT priority confirmed by `pthread_getschedparam`.
+    /// Value `-1` indicates the check has not yet been performed.
+    /// Set on the cold-path of the DSP thread's first frame.
+    pub rt_priority: AtomicI32,
+    /// Confirmed RT priority.
+    pub confirmed_priority: AtomicI32,
+    /// Confirmed RT scheduling policy.
+    pub rt_policy: AtomicI32,
+    /// Pinned physical CPU core (or -1 if not pinned).
+    pub rt_cpu: AtomicI32,
+    /// Target CPU requested for affinity pinning (-1 = not set).
+    pub rt_target_cpu: AtomicI32,
     /// errno from `pthread_setaffinity_np` (0 = success).
     pub rt_affinity_err: AtomicI32,
     /// errno from `pthread_setschedparam` (0 = success).
     pub rt_sched_err: AtomicI32,
     /// errno from `pthread_getschedparam` (0 = success).
     pub rt_getsched_err: AtomicI32,
-    /// Target CPU requested for affinity pinning (-1 = not set).
-    pub rt_target_cpu: AtomicI32,
+    /// Thread ID (kernel TID or pthread ID) of the active DSP/data thread.
+    pub rt_tid: AtomicI64,
+    /// Processing time of the very first audio block in ticks (cold start latency).
+    pub first_block_nanos: AtomicU64,
+    /// Trailing padding to align entire struct size to 128-byte boundary.
+    _pad_main: [u8; 56],
 }
 
 impl RtStatusFlags {
@@ -346,47 +365,58 @@ impl RtStatusFlags {
     #[cold]
     pub fn new() -> Self {
         Self {
+            status_bits: AtomicU64::new(0),
+            dsp_cycle_time: AtomicU64::new(0),
+            last_n_samples: AtomicU32::new(0),
+            dsp_overloads: AtomicU32::new(0),
+            xruns: AtomicU32::new(0),
+            degrade_transitions_total: AtomicU32::new(0),
+            structural_deferred_total: AtomicU32::new(0),
+            drains: AtomicU32::new(0),
+            _pad_rt_hot: [0; 24],
+
             active_rate: AtomicU32::new(0),
             active_rate_changed: AtomicU32::new(0),
             requested_host_rate: AtomicU32::new(0),
             requested_nam_rate: AtomicU32::new(48_000),
-            requested_rate_generation: AtomicU64::new(0),
-            applied_rate_generation: AtomicU64::new(0),
-            resampler_failed_generation: AtomicU64::new(0),
-            rt_priority: AtomicI32::new(-1),
-            dsp_overloads: AtomicU32::new(0),
-            dsp_cycle_time: AtomicU64::new(0),
-            last_n_samples: AtomicU32::new(0),
-            latency_hist: crate::dsp::telemetry::LatencyHistogram::new(),
-            degrade_transitions_total: AtomicU32::new(0),
-            status_bits: AtomicU64::new(0),
-            confirmed_priority: AtomicI32::new(-1),
-            rt_policy: AtomicI32::new(-1),
-            rt_tid: AtomicI64::new(-1),
-            first_block_nanos: AtomicU64::new(0),
-            rt_cpu: AtomicI32::new(-1),
-            flags_seen: AtomicU64::new(0),
-            xruns: AtomicU32::new(0),
-            drains: AtomicU32::new(0),
+            requested_buffer_frames: AtomicU32::new(0),
             requested_cabsim_partition_size: AtomicU32::new(0),
             requested_cabsim_host_rate: AtomicU32::new(0),
+            requested_slimmable_ch: AtomicU32::new(0),
+            requested_os_factor: AtomicU32::new(0),
+            _pad_handshake_u32: [0; 4],
+            requested_rate_generation: AtomicU64::new(0),
+            applied_rate_generation: AtomicU64::new(0),
             requested_cabsim_generation: AtomicU64::new(0),
             applied_cabsim_generation: AtomicU64::new(0),
-            requested_slimmable_ch: AtomicU32::new(0),
             requested_slimmable_generation: AtomicU64::new(0),
-            requested_os_factor: AtomicU32::new(0),
             requested_os_generation: AtomicU64::new(0),
             applied_os_generation: AtomicU64::new(0),
-            requested_buffer_frames: AtomicU32::new(0),
-            previous_buffer_frames: AtomicU32::new(0),
+            _pad_rt_handshake: [0; 96],
+
+            latency_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+
             input_buffer_miss: AtomicU32::new(0),
+            _pad_capture: [0; 60],
+
             output_buffer_miss: AtomicU32::new(0),
-            structural_deferred_total: AtomicU32::new(0),
+            _pad_playback: [0; 60],
+
+            previous_buffer_frames: AtomicU32::new(0),
             structural_superseded_total: AtomicU32::new(0),
+            resampler_failed_generation: AtomicU64::new(0),
+            flags_seen: AtomicU64::new(0),
+            rt_priority: AtomicI32::new(-1),
+            confirmed_priority: AtomicI32::new(-1),
+            rt_policy: AtomicI32::new(-1),
+            rt_cpu: AtomicI32::new(-1),
+            rt_target_cpu: AtomicI32::new(-1),
             rt_affinity_err: AtomicI32::new(0),
             rt_sched_err: AtomicI32::new(0),
             rt_getsched_err: AtomicI32::new(0),
-            rt_target_cpu: AtomicI32::new(-1),
+            rt_tid: AtomicI64::new(-1),
+            first_block_nanos: AtomicU64::new(0),
+            _pad_main: [0; 56],
         }
     }
 
@@ -530,3 +560,7 @@ impl Default for RtStatusFlags {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "status_test.rs"]
+mod status_test;

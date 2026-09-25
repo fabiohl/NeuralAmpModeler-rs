@@ -60,6 +60,27 @@ fn leaked_in(nm: &str, artifact: &PathBuf, extra_args: &[&str]) -> Vec<&'static 
                 artifact.display()
             )
         });
+    // Fail-closed: a failed `nm` yields empty stdout, which would otherwise
+    // look like "no leaks" and certify an unchecked surface.
+    assert!(
+        output.status.success(),
+        "libm_export_guard: {} exited {:?} on {}",
+        nm,
+        output.status.code(),
+        artifact.display()
+    );
+    // A stripped binary reports "no symbols" on stderr with empty stdout;
+    // passing vacuously here would certify nothing, so fail instead.
+    if output.stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("no symbols"),
+            "libm_export_guard: {} reported no symbols on {} (stderr: {}); cannot certify ELF surface",
+            nm,
+            artifact.display(),
+            stderr.trim()
+        );
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     LIBM_SYMBOLS
         .iter()

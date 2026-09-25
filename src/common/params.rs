@@ -226,6 +226,11 @@ impl Default for ProcessingParams {
 
 /// Simplified parameter snapshot for the Real-Time audio thread.
 /// Contains no heap-allocated fields (like PathBuf or String) to guarantee RT-safety when dropped.
+///
+/// Construct with [`Self::default`], [`Self::builder`], [`Self::new`], or
+/// [`Self::from_processing_params`]. Direct struct literals are not available
+/// outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RtProcessingParams {
     /// Input gain in decibels (dB).
@@ -247,6 +252,30 @@ pub struct RtProcessingParams {
 }
 
 impl RtProcessingParams {
+    /// Creates a new `RtProcessingParams` initialized to default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `RtProcessingParams` initialized to default values for fluent building.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::prelude::*;
+    ///
+    /// let params = RtProcessingParams::builder()
+    ///     .with_input_gain_db(-3.0)
+    ///     .with_output_gain_db(0.0)
+    ///     .with_oversample(OversampleFactor::X2);
+    ///
+    /// assert_eq!(params.input_gain_db, -3.0);
+    /// assert_eq!(params.oversample, OversampleFactor::X2);
+    /// ```
+    pub fn builder() -> Self {
+        Self::default()
+    }
+
     /// Extract the RT-safe parameters from a full ProcessingParams.
     pub fn from_processing_params(params: &ProcessingParams) -> Self {
         Self {
@@ -259,6 +288,54 @@ impl RtProcessingParams {
             oversample: params.oversample,
             activation_precision: params.activation_precision,
         }
+    }
+
+    /// Sets the input gain in decibels (dB).
+    pub fn with_input_gain_db(mut self, db: f32) -> Self {
+        self.input_gain_db = db;
+        self
+    }
+
+    /// Sets the output gain in decibels (dB).
+    pub fn with_output_gain_db(mut self, db: f32) -> Self {
+        self.output_gain_db = db;
+        self
+    }
+
+    /// Sets the noise gate threshold in decibels (dB).
+    pub fn with_gate_threshold_db(mut self, db: f32) -> Self {
+        self.gate_threshold_db = db;
+        self
+    }
+
+    /// Sets the bypass state.
+    pub fn with_bypass(mut self, bypass: bool) -> Self {
+        self.bypass = bypass;
+        self
+    }
+
+    /// Sets the adaptive compute mode.
+    pub fn with_adaptive_compute(mut self, mode: AdaptiveComputeMode) -> Self {
+        self.adaptive_compute = mode;
+        self
+    }
+
+    /// Sets the slim override mode.
+    pub fn with_slim_override(mut self, slim: SlimOverride) -> Self {
+        self.slim_override = slim;
+        self
+    }
+
+    /// Sets the oversampling factor.
+    pub fn with_oversample(mut self, oversample: OversampleFactor) -> Self {
+        self.oversample = oversample;
+        self
+    }
+
+    /// Sets the activation precision mode.
+    pub fn with_activation_precision(mut self, precision: ActivationPrecision) -> Self {
+        self.activation_precision = precision;
+        self
     }
 }
 
@@ -330,5 +407,28 @@ mod tests {
         assert_eq!(params.ir_path, Some(PathBuf::from("/irs/cab.wav")));
         assert_eq!(params.ir_hash.as_deref(), Some("feedbeefcafe"));
         assert_eq!(params.activation_precision, ActivationPrecision::Fast);
+    }
+
+    #[test]
+    fn test_rt_params_builder() {
+        let params = RtProcessingParams::builder()
+            .with_input_gain_db(3.5)
+            .with_output_gain_db(-2.0)
+            .with_gate_threshold_db(-65.0)
+            .with_bypass(true)
+            .with_adaptive_compute(AdaptiveComputeMode::Conservative)
+            .with_slim_override(SlimOverride::ForceFull)
+            .with_oversample(OversampleFactor::X2)
+            .with_activation_precision(ActivationPrecision::Fast);
+
+        assert_eq!(params.input_gain_db, 3.5);
+        assert_eq!(params.output_gain_db, -2.0);
+        assert_eq!(params.gate_threshold_db, -65.0);
+        assert!(params.bypass);
+        assert_eq!(params.adaptive_compute, AdaptiveComputeMode::Conservative);
+        assert_eq!(params.slim_override, SlimOverride::ForceFull);
+        assert_eq!(params.oversample, OversampleFactor::X2);
+        assert_eq!(params.activation_precision, ActivationPrecision::Fast);
+        assert_eq!(RtProcessingParams::new(), RtProcessingParams::default());
     }
 }

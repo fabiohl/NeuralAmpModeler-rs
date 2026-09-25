@@ -71,8 +71,13 @@ impl NamDiagnostic {
         timestamp()
     }
 
-    /// Generates the formatted technical support block for copying.
-    pub(crate) fn support_block(&self) -> String {
+    /// Renders the formatted technical support block for copying.
+    ///
+    /// Explicit rendering hook for executable tools (`src/bin/*`), diagnostic
+    /// tests, and external hosts: the caller owns the destination (stdout,
+    /// GUI log panel, crash file). Library code must never print this block
+    /// invasively on the host's stderr when returning an error.
+    pub fn support_block(&self) -> String {
         DiagnosticBundle {
             system: self.system.clone(),
             runtime: RuntimeSnapshot::default(),
@@ -87,6 +92,12 @@ impl NamDiagnostic {
     }
 
     /// Prints the complete diagnostic to stderr (user-friendly message + support block).
+    ///
+    /// Intended exclusively for executable tools (`src/bin/*`) and
+    /// panic/crash hooks. Library load paths must not call this method when
+    /// returning an `Err`: they record structured `log::error!`/`log::warn!`
+    /// entries and hand the enriched error back to the host, which decides
+    /// whether (and where) to render [`NamDiagnostic::support_block`].
     pub fn emit(&self) {
         if self.user_hint.is_empty() {
             log::error!("{}", self.user_message);
@@ -97,6 +108,9 @@ impl NamDiagnostic {
     }
 
     /// Prints as a warning (non-fatal) with a distinct visual prefix.
+    ///
+    /// Same executable-tool / crash-hook restriction as [`NamDiagnostic::emit`]:
+    /// library paths log via `log::warn!` instead of painting stderr.
     pub fn emit_warning(&self) {
         if self.user_hint.is_empty() {
             log::warn!("{}", self.user_message);

@@ -45,7 +45,7 @@ unsafe fn conv1d_ch3_k6_f32(
     let w_ptr = weights.as_ptr();
 
     // Pre-compute tap base offsets (in elements, CH=3 stride).
-    // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+    // Defensive clamp: mirrors the pattern from crate::models::wavenet::conv1d (F-01/R-2).
     let t0 = (fi + d * (1 - 6)).max(0) as usize * CH;
     let t1 = (fi + d * (2 - 6)).max(0) as usize * CH;
     let t2 = (fi + d * (3 - 6)).max(0) as usize * CH;
@@ -121,7 +121,7 @@ unsafe fn conv1d_ch3_k15_f32(
 
     macro_rules! tap {
         ($idx:expr) => {
-            // Defensive clamp: mirrors the pattern from wavenet/conv1d.rs:133-142 (F-01/R-2).
+            // Defensive clamp: mirrors the pattern from crate::models::wavenet::conv1d (F-01/R-2).
             (fi + d * (($idx as isize) + 1 - k_limit)).max(0) as usize * CH
         };
     }

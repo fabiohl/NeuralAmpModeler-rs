@@ -196,7 +196,6 @@ impl ActivationConfig {
         }
         if let Some(s) = v.as_str() {
             return match s {
-                "Tanh" => Self::Tanh,
                 "HardTanh" => Self::HardTanh,
                 "FastTanh" => Self::FastTanh,
                 "ReLU" => Self::ReLU,
@@ -213,7 +212,6 @@ impl ActivationConfig {
     pub(crate) fn from_json_obj(obj: &serde_json::Map<String, serde_json::Value>) -> Self {
         let t = obj.get("type").and_then(|v| v.as_str()).unwrap_or("Tanh");
         match t {
-            "Tanh" => Self::Tanh,
             "HardTanh" => Self::HardTanh,
             "FastTanh" => Self::FastTanh,
             "ReLU" => Self::ReLU,
@@ -236,7 +234,7 @@ impl ActivationConfig {
 
     pub(crate) fn apply(&self, z: &mut [f64], activation_mode: ActivationMode) {
         match self {
-            Self::Tanh => {
+            Self::Tanh | Self::FastTanh => {
                 for v in z.iter_mut() {
                     *v = oracle_tanh(*v, activation_mode);
                 }
@@ -244,11 +242,6 @@ impl ActivationConfig {
             Self::HardTanh => {
                 for v in z.iter_mut() {
                     *v = v.clamp(-1.0, 1.0);
-                }
-            }
-            Self::FastTanh => {
-                for v in z.iter_mut() {
-                    *v = oracle_tanh(*v, activation_mode);
                 }
             }
             Self::ReLU => {

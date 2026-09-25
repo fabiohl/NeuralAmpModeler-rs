@@ -4,9 +4,8 @@
 //! LSTM Gate-Major weight transposition.
 //!
 //! **Cross-module dependency:** The output layout must remain in lock-step with
-//! the decoder in `dispatcher/lstm.rs` (weight reading order, bias/state layout).
-//! See `dispatcher/lstm.rs` L154 (state order: hidden_init + cell_init) and
-//! L265 (head_weights + head_bias append).
+//! the decoder in `crate::loader::dispatcher::lstm` (weight reading order in `weights.rs`,
+//! bias/state layout in `static_builder.rs` and `dynamic_builder.rs`).
 
 use crate::loader::nam_json::NamModelData;
 use anyhow::{Context, Result};

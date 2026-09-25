@@ -200,10 +200,14 @@ ok "Phase 2 (measurement oracles) passed (${P2_DUR_STR})"
 emit "PHASE2: PASS golden=${GOLDEN_RAN} cpp_parity=${CPP_PARITY_RAN} log=target/logs/quick-phase2.log"
 
 # ── Phase 3: Parser fuzz (release, capped, --ignored) ───────────────────────
+# No --nocapture: libtest captures proptest output for passing cases (each
+# rejected malformed input used to paint a ~30-line support block on stderr,
+# inflating this log past 800 KB). The `assert_ran_tests` gate below still
+# proves the cases ran via the libtest summary lines.
 phase "Agile parser fuzzing (release, PROPTEST_CASES=${NAM_QUICK_PROPTEST_CASES:-1000})"
 P3_START=$(date +%s%N)
 PROPTEST_CASES="${NAM_QUICK_PROPTEST_CASES:-1000}" \
-    _cargo_meas "proptest_parsers" --ignored --nocapture \
+    _cargo_meas "proptest_parsers" --ignored \
     2>&1 | tee target/logs/quick-phase3.log
 assert_ran_tests target/logs/quick-phase3.log 1
 P3_DUR_MS=$(( ($(date +%s%N) - P3_START) / 1000000 ))
