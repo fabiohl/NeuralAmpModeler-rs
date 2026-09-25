@@ -170,11 +170,15 @@ impl<const CH: usize> WaveNetA2<CH> {
         debug_assert!(bs + nf * ch <= ring_size * 2);
 
         // Copy layer_in → history buffer, then apply conv_pre_film.
+        //
+        // Loop-invariant hoist: `conv_pre_film` presence is fixed at load time,
+        // so testing it per frame punishes the branch predictor on every block.
+        // Evaluate once per layer instead — bit-exact, zero extra allocation.
         {
             let buf = &mut self.layer_buffers[li];
             buf[bs..bs + nf * ch].copy_from_slice(&self.layer_in[..nf * ch]);
-            for f in 0..nf {
-                if let Some(ref mut film) = self.layers[li].conv_pre_film {
+            if let Some(ref mut film) = self.layers[li].conv_pre_film {
+                for f in 0..nf {
                     // SAFETY: `cond` is a 1-element slice of the input, matching this
                     // FiLM layer's `cond_size == 1`, and the input slice is an in-bounds
                     // sub-slice of length `ch` ≤ `channels`; both satisfy

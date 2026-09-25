@@ -237,7 +237,13 @@ pub unsafe fn conv1d_ch3_f32_dispatch(
 ///    [FiLM post-conv] → mixin → [FiLM post-mixin] → LeakyReLU → [FiLM post-activation] →
 ///    head accumulate → l1x1 residual → [FiLM post-l1x1]
 ///
-/// FiLM insertion points are conditionally executed when `film.*_film.is_some()`.
+/// FiLM presence is hoisted once per block into an `active_mask` bitmask
+/// (see `FilmBlock::active_mask`): layers with no FiLM take a single
+/// straight-line fast path with zero per-frame `Option` tests, while
+/// FiLM-active layers pay exactly one predictable `u8` test per insertion
+/// point per frame pair. `is_first` / `is_last` select straight-line
+/// head/l1x1 tails once per block (no per-frame branch). Bit-exact: mask
+/// reflects load-time `Option` presence, no allocation, no arithmetic change.
 ///
 /// ## AVX2 batching (T=2 per YMM)
 ///
@@ -272,6 +278,34 @@ pub unsafe fn layer_forward_ch3_block(
     is_first: bool,
     is_last: bool,
 ) {
+    // Fast path: no FiLM active anywhere in this layer — straight-line SIMD
+    // with zero per-frame `Option` tests. Covers the canonical A2-Lite
+    // fixture (all `active: false`).
+    if film.active_mask() == 0 {
+        // SAFETY: same contract as this function (caller-verified buffer
+        // capacities, linear ring history with lookback + block frames);
+        // `layer_forward_ch3_block_no_film` is the straight-line twin with
+        // identical numerics.
+        unsafe {
+            layer_forward_ch3_block_no_film(
+                conv,
+                mixin_w,
+                l1x1_w,
+                l1x1_b,
+                layer_buffer,
+                frame_start,
+                num_frames,
+                input_cond,
+                head_accum,
+                head_col,
+                layer_in,
+                is_first,
+                is_last,
+            );
+        }
+        return;
+    }
+
     const CH: usize = 3;
     const CH_PAD: usize = 4; // SIMD stride (CH=3 padded to 4)
 
@@ -281,6 +315,22 @@ pub unsafe fn layer_forward_ch3_block(
     debug_assert!(num_frames <= MAX_KERNEL_FRAMES); // process() guarantees ≤ MAX_KERNEL_FRAMES
     debug_assert!(layer_in.len() >= num_frames * CH);
     debug_assert!(input_cond.len() >= num_frames);
+
+    // Snapshot presence once — load-time fixed, one predictable `u8` test
+    // per insertion point instead of an `Option` discriminant per frame.
+    let mask = film.active_mask();
+    const M_CONV_POST: u8 = 1 << 0;
+    const M_MIXIN_PRE: u8 = 1 << 1;
+    const M_MIXIN_POST: u8 = 1 << 2;
+    const M_ACT_PRE: u8 = 1 << 3;
+    const M_ACT_POST: u8 = 1 << 4;
+    const M_L1X1_POST: u8 = 1 << 5;
+    let has_conv_post = mask & M_CONV_POST != 0;
+    let has_mixin_pre = mask & M_MIXIN_PRE != 0;
+    let has_mixin_post = mask & M_MIXIN_POST != 0;
+    let has_act_pre = mask & M_ACT_PRE != 0;
+    let has_act_post = mask & M_ACT_POST != 0;
+    let has_l1x1_post = (mask & M_L1X1_POST != 0) & use_blending;
 
     // ── 1. Conv: frame-by-frame unrolled f32-native kernel ─────────────────
     // z_buf stores conv output: [num_frames][4] (CH=3 + 1 pad lane)
@@ -293,10 +343,10 @@ pub unsafe fn layer_forward_ch3_block(
     }
 
     // 1b. FiLM: conv_post_film (post-conv, pre-mixin).
-    for f in 0..num_frames {
-        let cond = &input_cond[f..f + 1];
-        let z_slice = &mut z_buf[f * CH_PAD..f * CH_PAD + CH];
-        if let Some(ref mut film) = film.conv_post_film {
+    if has_conv_post && let Some(ref mut film) = film.conv_post_film {
+        for f in 0..num_frames {
+            let cond = &input_cond[f..f + 1];
+            let z_slice = &mut z_buf[f * CH_PAD..f * CH_PAD + CH];
             film.process(z_slice, cond);
         }
     }
@@ -334,7 +384,7 @@ pub unsafe fn layer_forward_ch3_block(
 
         // 2a. Apply input_mixin_pre_film to condition values (self-modulation,
         // C++ model.cpp:188-197). For cond_size == 1 this is: cond = scale * cond + shift.
-        if let Some(ref mut film) = film.input_mixin_pre_film {
+        if has_mixin_pre && let Some(ref mut film) = film.input_mixin_pre_film {
             let orig0 = cond0;
             let orig1 = cond1;
             // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
@@ -363,15 +413,13 @@ pub unsafe fn layer_forward_ch3_block(
         _mm256_storeu_ps(mixin_scratch.as_mut_ptr(), mix_v8);
 
         // Apply input_mixin_post_film on isolated mixin scratch buffer.
-        {
-            let cond = &input_cond[f..f + 1];
-            if let Some(ref mut film) = film.input_mixin_post_film {
+        if has_mixin_post && let Some(ref mut film) = film.input_mixin_post_film {
+            {
+                let cond = &input_cond[f..f + 1];
                 film.process(&mut mixin_scratch[0..CH], cond);
             }
-        }
-        {
-            let cond = &input_cond[f + 1..f + 2];
-            if let Some(ref mut film) = film.input_mixin_post_film {
+            {
+                let cond = &input_cond[f + 1..f + 2];
                 film.process(&mut mixin_scratch[CH_PAD..CH_PAD + CH], cond);
             }
         }
@@ -382,15 +430,13 @@ pub unsafe fn layer_forward_ch3_block(
         _mm256_storeu_ps(z_buf.as_mut_ptr().add(z_off), zv);
 
         // Apply activation_pre_film on the summed output.
-        {
-            let cond = &input_cond[f..f + 1];
-            if let Some(ref mut film) = film.activation_pre_film {
+        if has_act_pre && let Some(ref mut film) = film.activation_pre_film {
+            {
+                let cond = &input_cond[f..f + 1];
                 film.process(&mut z_buf[z_off..z_off + CH], cond);
             }
-        }
-        {
-            let cond = &input_cond[f + 1..f + 2];
-            if let Some(ref mut film) = film.activation_pre_film {
+            {
+                let cond = &input_cond[f + 1..f + 2];
                 film.process(&mut z_buf[z_off + CH_PAD..z_off + CH_PAD + CH], cond);
             }
         }
@@ -407,15 +453,13 @@ pub unsafe fn layer_forward_ch3_block(
         _mm256_storeu_ps(z_buf.as_mut_ptr().add(z_off), zv);
 
         // 2b-fiLM: activation_post_film (post-activation).
-        {
-            let cond = &input_cond[f..f + 1];
-            if let Some(ref mut film) = film.activation_post_film {
+        if has_act_post && let Some(ref mut film) = film.activation_post_film {
+            {
+                let cond = &input_cond[f..f + 1];
                 film.process(&mut z_buf[z_off..z_off + CH], cond);
             }
-        }
-        {
-            let cond = &input_cond[f + 1..f + 2];
-            if let Some(ref mut film) = film.activation_post_film {
+            {
+                let cond = &input_cond[f + 1..f + 2];
                 film.process(&mut z_buf[z_off + CH_PAD..z_off + CH_PAD + CH], cond);
             }
         }
@@ -423,7 +467,9 @@ pub unsafe fn layer_forward_ch3_block(
         // Reload zv after FiLM post-activation.
         zv = _mm256_loadu_ps(z_buf.as_ptr().add(z_off));
 
-        // 2c. Head accumulate (both frames).
+        // 2c. Head accumulate (both frames) — `is_first` is loop-invariant
+        // (layer 0 assigns, layers 1-22 accumulate): one predictable branch
+        // per frame-pair, learned by the predictor on the first pair.
         let head_off0 = (head_col + f) * CH;
         let head_off1 = (head_col + f + 1) * CH;
         let zv_lo = _mm256_castps256_ps128(zv);
@@ -472,18 +518,15 @@ pub unsafe fn layer_forward_ch3_block(
             _mm256_storeu_ps(l1x1_scratch.as_mut_ptr(), acc8);
 
             // Apply layer1x1_post_film on isolated l1x1 scratch buffer (blending mode only).
-            if use_blending {
+            // `has_l1x1_post` folds `use_blending` + presence once per block.
+            if has_l1x1_post && let Some(ref mut film) = film.layer1x1_post_film {
                 {
                     let cond = &input_cond[f..f + 1];
-                    if let Some(ref mut film) = film.layer1x1_post_film {
-                        film.process(&mut l1x1_scratch[0..CH], cond);
-                    }
+                    film.process(&mut l1x1_scratch[0..CH], cond);
                 }
                 {
                     let cond = &input_cond[f + 1..f + 2];
-                    if let Some(ref mut film) = film.layer1x1_post_film {
-                        film.process(&mut l1x1_scratch[CH_PAD..CH_PAD + CH], cond);
-                    }
+                    film.process(&mut l1x1_scratch[CH_PAD..CH_PAD + CH], cond);
                 }
             }
 
@@ -513,8 +556,10 @@ pub unsafe fn layer_forward_ch3_block(
         // input_mixin_pre_film is applied to condition below, before mixin.
 
         // 3b. Mixin (isolated) — with optional input_mixin_pre_film on condition.
+        // Hoisted `has_mixin_pre`: single predictable test on the 0/1-frame tail.
         let cond_val = input_cond[f];
-        let cond_for_mixin = if let Some(ref mut film) = film.input_mixin_pre_film {
+        let cond_for_mixin = if has_mixin_pre && let Some(ref mut film) = film.input_mixin_pre_film
+        {
             let mut modulated = cond_val;
             let orig = cond_val;
             // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
@@ -535,7 +580,7 @@ pub unsafe fn layer_forward_ch3_block(
             mixin_scratch[c] = mixin_w[c] * cond_for_mixin;
         }
 
-        if let Some(ref mut film) = film.input_mixin_post_film {
+        if has_mixin_post && let Some(ref mut film) = film.input_mixin_post_film {
             film.process(&mut mixin_scratch, cond);
         }
 
@@ -543,23 +588,25 @@ pub unsafe fn layer_forward_ch3_block(
             z_slice[c] += mixin_scratch[c];
         }
 
-        if let Some(ref mut film) = film.activation_pre_film {
+        if has_act_pre && let Some(ref mut film) = film.activation_pre_film {
             film.process(z_slice, cond);
         }
 
-        // 3c. LeakyReLU.
+        // 3c. LeakyReLU — single-multiply select form (identical numerics to
+        // the scalar `if v < 0 { v * slope }`; LLVM lowers the `if`
+        // expression to a cmov, so no data-dependent branch on the signal).
         for c in 0..CH {
-            if z_slice[c] < 0.0 {
-                z_slice[c] *= A2_LEAKY_SLOPE;
-            }
+            let v = z_slice[c];
+            z_slice[c] = if v < 0.0 { v * A2_LEAKY_SLOPE } else { v };
         }
 
         // 3c-fiLM: activation_post_film.
-        if let Some(ref mut film) = film.activation_post_film {
+        if has_act_post && let Some(ref mut film) = film.activation_post_film {
             film.process(z_slice, cond);
         }
 
-        // 3d. Head accumulate.
+        // 3d. Head accumulate — `is_first` uniform per layer, one predictable
+        // branch on the ≤1-frame tail.
         let head_off = (head_col + f) * CH;
         if is_first {
             head_accum[head_off..head_off + CH].copy_from_slice(z_slice);
@@ -581,16 +628,217 @@ pub unsafe fn layer_forward_ch3_block(
                 l1x1_scratch[c] = sum;
             }
 
-            if let Some(film) = film
-                .layer1x1_post_film
-                .as_deref_mut()
-                .filter(|_| use_blending)
-            {
+            if has_l1x1_post && let Some(ref mut film) = film.layer1x1_post_film {
                 film.process(&mut l1x1_scratch, cond);
             }
 
             for c in 0..CH {
                 layer_in[lin_off + c] += l1x1_scratch[c];
+            }
+        }
+    }
+}
+
+/// Straight-line CH=3 layer forward pass for layers with no active FiLM.
+///
+/// Bit-exact twin of [`layer_forward_ch3_block`] with an empty [`FilmBlock`]
+/// (canonical A2-Lite fixture): f32-native conv → AVX2-paired mixin +
+/// branchless LeakyReLU → head assign/accumulate → l1x1 residual, plus the
+/// ≤1-frame scalar tail. Zero `Option` tests and zero per-pair `is_first`
+/// tests — `is_first` / `is_last` select straight-line tails once per block.
+///
+/// # Safety
+/// Same contract as [`layer_forward_ch3_block`]: caller-verified buffer
+/// capacities and linear ring history with lookback + block frames.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn layer_forward_ch3_block_no_film(
+    conv: &A2Conv1dCh3,
+    mixin_w: &[f32],
+    l1x1_w: &[f32],
+    l1x1_b: &[f32],
+    layer_buffer: &[f32],
+    frame_start: usize,
+    num_frames: usize,
+    input_cond: &[f32],
+    head_accum: &mut [f32],
+    head_col: usize,
+    layer_in: &mut [f32],
+    is_first: bool,
+    is_last: bool,
+) {
+    const CH: usize = 3;
+    const CH_PAD: usize = 4;
+
+    debug_assert!(mixin_w.len() >= CH);
+    debug_assert!(l1x1_w.len() >= CH * CH);
+    debug_assert!(l1x1_b.len() >= CH);
+    debug_assert!(num_frames <= MAX_KERNEL_FRAMES);
+    debug_assert!(layer_in.len() >= num_frames * CH);
+    debug_assert!(input_cond.len() >= num_frames);
+
+    let mut z_buf = [0.0f32; MAX_KERNEL_FRAMES * CH_PAD];
+
+    for f in 0..num_frames {
+        let frame_idx = frame_start + f;
+        let z_slice = &mut z_buf[f * CH_PAD..(f + 1) * CH_PAD];
+        conv1d_ch3_f32_dispatch(conv, layer_buffer, frame_idx, z_slice);
+    }
+
+    let mixin_v4 = _mm_setr_ps(mixin_w[0], mixin_w[1], mixin_w[2], 0.0);
+    let mixin_v8 = _mm256_set_m128(mixin_v4, mixin_v4);
+
+    let l1x1_row0 = _mm_setr_ps(l1x1_w[0], l1x1_w[1], l1x1_w[2], 0.0);
+    let l1x1_row1 = _mm_setr_ps(l1x1_w[CH], l1x1_w[CH + 1], l1x1_w[CH + 2], 0.0);
+    let l1x1_row2 = _mm_setr_ps(l1x1_w[2 * CH], l1x1_w[2 * CH + 1], l1x1_w[2 * CH + 2], 0.0);
+    let l1x1_b_v4 = _mm_setr_ps(l1x1_b[0], l1x1_b[1], l1x1_b[2], 0.0);
+
+    let l1x1_b_v8 = _mm256_set_m128(l1x1_b_v4, l1x1_b_v4);
+    let l1x1_row0_v8 = _mm256_set_m128(l1x1_row0, l1x1_row0);
+    let l1x1_row1_v8 = _mm256_set_m128(l1x1_row1, l1x1_row1);
+    let l1x1_row2_v8 = _mm256_set_m128(l1x1_row2, l1x1_row2);
+
+    let slope_v8 = _mm256_set1_ps(A2_LEAKY_SLOPE);
+    let zero_v8 = _mm256_setzero_ps();
+
+    let n_paired = (num_frames / 2) * 2;
+
+    for f in (0..n_paired).step_by(2) {
+        let z_off = f * CH_PAD;
+        let cond_v8 = _mm256_setr_ps(
+            input_cond[f],
+            input_cond[f],
+            input_cond[f],
+            input_cond[f],
+            input_cond[f + 1],
+            input_cond[f + 1],
+            input_cond[f + 1],
+            input_cond[f + 1],
+        );
+
+        let mut zv = _mm256_loadu_ps(z_buf.as_ptr().add(z_off));
+        zv = _mm256_add_ps(zv, _mm256_mul_ps(mixin_v8, cond_v8));
+        zv = _mm256_blendv_ps(
+            zv,
+            _mm256_mul_ps(zv, slope_v8),
+            _mm256_cmp_ps(zv, zero_v8, _CMP_LT_OS),
+        );
+        _mm256_storeu_ps(z_buf.as_mut_ptr().add(z_off), zv);
+
+        let zv_reload = _mm256_loadu_ps(z_buf.as_ptr().add(z_off));
+        let zv_lo = _mm256_castps256_ps128(zv_reload);
+        let zv_hi = _mm256_extractf128_ps(zv_reload, 1);
+
+        if is_first {
+            let head_off0 = (head_col + f) * CH;
+            let head_off1 = (head_col + f + 1) * CH;
+            *head_accum.get_unchecked_mut(head_off0) = _mm_cvtss_f32(zv_lo);
+            *head_accum.get_unchecked_mut(head_off0 + 1) =
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55));
+            *head_accum.get_unchecked_mut(head_off0 + 2) =
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA));
+            *head_accum.get_unchecked_mut(head_off1) = _mm_cvtss_f32(zv_hi);
+            *head_accum.get_unchecked_mut(head_off1 + 1) =
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55));
+            *head_accum.get_unchecked_mut(head_off1 + 2) =
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA));
+        } else {
+            let head_off0 = (head_col + f) * CH;
+            let head_off1 = (head_col + f + 1) * CH;
+            *head_accum.get_unchecked_mut(head_off0) += _mm_cvtss_f32(zv_lo);
+            *head_accum.get_unchecked_mut(head_off0 + 1) +=
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55));
+            *head_accum.get_unchecked_mut(head_off0 + 2) +=
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA));
+            *head_accum.get_unchecked_mut(head_off1) += _mm_cvtss_f32(zv_hi);
+            *head_accum.get_unchecked_mut(head_off1 + 1) +=
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55));
+            *head_accum.get_unchecked_mut(head_off1 + 2) +=
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA));
+        }
+
+        if !is_last {
+            let zu0_v8 = _mm256_setr_ps(
+                _mm_cvtss_f32(zv_lo),
+                _mm_cvtss_f32(zv_lo),
+                _mm_cvtss_f32(zv_lo),
+                _mm_cvtss_f32(zv_lo),
+                _mm_cvtss_f32(zv_hi),
+                _mm_cvtss_f32(zv_hi),
+                _mm_cvtss_f32(zv_hi),
+                _mm_cvtss_f32(zv_hi),
+            );
+            let zu1_v8 = _mm256_setr_ps(
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0x55)),
+            );
+            let zu2_v8 = _mm256_setr_ps(
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_lo, zv_lo, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA)),
+                _mm_cvtss_f32(_mm_shuffle_ps(zv_hi, zv_hi, 0xAA)),
+            );
+
+            let mut acc8 = l1x1_b_v8;
+            acc8 = _mm256_fmadd_ps(zu0_v8, l1x1_row0_v8, acc8);
+            acc8 = _mm256_fmadd_ps(zu1_v8, l1x1_row1_v8, acc8);
+            acc8 = _mm256_fmadd_ps(zu2_v8, l1x1_row2_v8, acc8);
+
+            let mut l1x1_scratch = [0.0f32; 8];
+            _mm256_storeu_ps(l1x1_scratch.as_mut_ptr(), acc8);
+
+            let lin_off0 = f * CH;
+            let lin_off1 = (f + 1) * CH;
+            *layer_in.get_unchecked_mut(lin_off0) += l1x1_scratch[0];
+            *layer_in.get_unchecked_mut(lin_off0 + 1) += l1x1_scratch[1];
+            *layer_in.get_unchecked_mut(lin_off0 + 2) += l1x1_scratch[2];
+            *layer_in.get_unchecked_mut(lin_off1) += l1x1_scratch[CH_PAD];
+            *layer_in.get_unchecked_mut(lin_off1 + 1) += l1x1_scratch[CH_PAD + 1];
+            *layer_in.get_unchecked_mut(lin_off1 + 2) += l1x1_scratch[CH_PAD + 2];
+        }
+    }
+
+    #[expect(
+        clippy::needless_range_loop,
+        reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
+    )]
+    for f in n_paired..num_frames {
+        let z_off = f * CH_PAD;
+        let z_slice = &mut z_buf[z_off..z_off + CH];
+        for c in 0..CH {
+            z_slice[c] += mixin_w[c] * input_cond[f];
+        }
+        for c in 0..CH {
+            let v = z_slice[c];
+            z_slice[c] = if v < 0.0 { v * A2_LEAKY_SLOPE } else { v };
+        }
+
+        let head_off = (head_col + f) * CH;
+        if is_first {
+            head_accum[head_off..head_off + CH].copy_from_slice(z_slice);
+        } else {
+            for c in 0..CH {
+                head_accum[head_off + c] += z_slice[c];
+            }
+        }
+
+        if !is_last {
+            let lin_off = f * CH;
+            for c in 0..CH {
+                let mut sum = l1x1_b[c];
+                for u in 0..CH {
+                    sum += l1x1_w[u * CH + c] * z_slice[u];
+                }
+                layer_in[lin_off + c] += sum;
             }
         }
     }

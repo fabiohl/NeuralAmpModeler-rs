@@ -125,7 +125,13 @@ pub unsafe fn conv1d_ch8_t8_avx2(
 /// l1x1 residual → [FiLM post-l1x1]. All operations use SIMD block processing
 /// on `__m256` vectors.
 ///
-/// FiLM insertion points are conditionally executed when `film.*_film.is_some()`.
+/// FiLM presence is hoisted once per block into an `active_mask` bitmask
+/// (see `FilmBlock::active_mask`): layers with no FiLM take a single
+/// fast path with zero per-frame `Option` tests, while FiLM-active layers
+/// pay exactly one predictable `u8` test per insertion point per frame.
+/// `is_first` / `is_last` select one of four straight-line head/l1x1 tails
+/// (no per-frame branch). Bit-exact: mask reflects load-time `Option`
+/// presence, no allocation, no arithmetic change.
 ///
 /// # Safety
 /// Buffers must be sized appropriately. Caller ensures linear ring history
@@ -152,6 +158,36 @@ pub unsafe fn layer_forward_ch8_block(
     is_first: bool,
     is_last: bool,
 ) {
+    // Fast path: no FiLM active anywhere in this layer — straight-line SIMD
+    // with zero per-frame `Option` tests. Covers the canonical A2-Full/Lite
+    // fixtures (all `active: false`) and therefore the measured
+    // `WaveNet_A2_64_samp` certification scenario.
+    let mask = film.active_mask();
+    if mask == 0 {
+        // SAFETY: same contract as this function (caller-verified buffer
+        // capacities, linear ring history with lookback + block frames);
+        // `layer_forward_ch8_block_no_film` is the `#[target_feature]`
+        // straight-line twin with identical numerics.
+        unsafe {
+            layer_forward_ch8_block_no_film(
+                conv,
+                mixin_w,
+                l1x1_w,
+                l1x1_b,
+                layer_buffer,
+                frame_start,
+                num_frames,
+                input_cond,
+                head_accum,
+                head_col,
+                layer_in,
+                is_first,
+                is_last,
+            );
+        }
+        return;
+    }
+
     let ch: usize = 8;
     debug_assert!(mixin_w.len() >= ch);
     debug_assert!(l1x1_w.len() >= ch * ch);
@@ -174,16 +210,35 @@ pub unsafe fn layer_forward_ch8_block(
         &mut z_buf[..num_frames * ch],
     );
 
+    // Snapshot presence once per block — the `Option`s below are load-time
+    // fixed, so a single `u8` test per insertion point per frame replaces
+    // 6 pointer-discriminant tests and keeps one predictable branch.
+    const M_CONV_POST: u8 = 1 << 0;
+    const M_MIXIN_PRE: u8 = 1 << 1;
+    const M_MIXIN_POST: u8 = 1 << 2;
+    const M_ACT_PRE: u8 = 1 << 3;
+    const M_ACT_POST: u8 = 1 << 4;
+    const M_L1X1_POST: u8 = 1 << 5;
+
     // 1b. FiLM: conv_post_film (post-conv, pre-mixin).
-    for f in 0..num_frames {
-        let cond = &input_cond[f..f + 1];
-        let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
-        if let Some(ref mut film) = film.conv_post_film {
+    if mask & M_CONV_POST != 0
+        && let Some(ref mut film) = film.conv_post_film
+    {
+        for f in 0..num_frames {
+            let cond = &input_cond[f..f + 1];
+            let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
             film.process(z_slice, cond);
         }
     }
 
     // 2. Post-conv: mixin (isolated scratch buffer).
+    //
+    // Presence is hoisted: `has_*` are plain bools computed once, so the
+    // per-frame loop sees one predictable test per insertion point instead
+    // of an `Option` discriminant load per frame.
+    let has_mixin_pre = mask & M_MIXIN_PRE != 0;
+    let has_mixin_post = mask & M_MIXIN_POST != 0;
+    let has_act_pre = mask & M_ACT_PRE != 0;
     {
         let z = z_buf.as_mut_ptr();
         let mixin_v = _mm256_loadu_ps(mixin_w.as_ptr());
@@ -192,7 +247,7 @@ pub unsafe fn layer_forward_ch8_block(
             // 2a. Apply input_mixin_pre_film to condition (self-modulation,
             // C++ model.cpp:188-197). For cond_size == 1: cond = scale * cond + shift.
             let mut cond_mod = *cond_val;
-            if let Some(ref mut film) = film.input_mixin_pre_film {
+            if has_mixin_pre && let Some(ref mut film) = film.input_mixin_pre_film {
                 let orig = cond_mod;
                 // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
                 // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
@@ -211,7 +266,7 @@ pub unsafe fn layer_forward_ch8_block(
             _mm256_storeu_ps(mixin_scratch.as_mut_ptr(), mix_v);
 
             let cond = &input_cond[f..f + 1];
-            if let Some(ref mut film) = film.input_mixin_post_film {
+            if has_mixin_post && let Some(ref mut film) = film.input_mixin_post_film {
                 film.process(&mut mixin_scratch, cond);
             }
 
@@ -221,7 +276,7 @@ pub unsafe fn layer_forward_ch8_block(
             _mm256_storeu_ps(z.add(off), zv);
 
             let z_slice = &mut z_buf[off..off + ch];
-            if let Some(ref mut film) = film.activation_pre_film {
+            if has_act_pre && let Some(ref mut film) = film.activation_pre_film {
                 film.process(z_slice, cond);
             }
         }
@@ -242,31 +297,39 @@ pub unsafe fn layer_forward_ch8_block(
     }
 
     // 3b. FiLM: activation_post_film (post-activation).
-    for f in 0..num_frames {
-        let cond = &input_cond[f..f + 1];
-        let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
-        if let Some(ref mut film) = film.activation_post_film {
+    if mask & M_ACT_POST != 0
+        && let Some(ref mut film) = film.activation_post_film
+    {
+        for f in 0..num_frames {
+            let cond = &input_cond[f..f + 1];
+            let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
             film.process(z_slice, cond);
         }
     }
 
-    // 4. Head accumulate.
-    {
+    // 4. Head accumulate — `is_first` is loop-invariant (layer 0 assigns,
+    // layers 1-22 accumulate), so split into two straight-line tails instead
+    // of testing it per frame.
+    if is_first {
         let head = head_accum.as_mut_ptr();
         for f in 0..num_frames {
             let head_off = (head_col + f) * ch;
             let zv = _mm256_loadu_ps(z_buf.as_ptr().add(f * ch));
-            if is_first {
-                _mm256_storeu_ps(head.add(head_off), zv);
-            } else {
-                let hv = _mm256_loadu_ps(head.add(head_off));
-                _mm256_storeu_ps(head.add(head_off), _mm256_add_ps(hv, zv));
-            }
+            _mm256_storeu_ps(head.add(head_off), zv);
+        }
+    } else {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            let head_off = (head_col + f) * ch;
+            let zv = _mm256_loadu_ps(z_buf.as_ptr().add(f * ch));
+            let hv = _mm256_loadu_ps(head.add(head_off));
+            _mm256_storeu_ps(head.add(head_off), _mm256_add_ps(hv, zv));
         }
     }
 
     // 5. Layer1x1 residual (skipped on last layer) — isolated scratch buffer.
     if !is_last {
+        let has_l1x1_post = (mask & M_L1X1_POST != 0) & use_blending;
         let lin = layer_in.as_mut_ptr();
         let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
         let l1x1_w_ptr = l1x1_w.as_ptr();
@@ -284,11 +347,7 @@ pub unsafe fn layer_forward_ch8_block(
             _mm256_storeu_ps(l1x1_scratch.as_mut_ptr(), acc);
 
             let cond = &input_cond[f..f + 1];
-            if let Some(film) = film
-                .layer1x1_post_film
-                .as_deref_mut()
-                .filter(|_| use_blending)
-            {
+            if has_l1x1_post && let Some(ref mut film) = film.layer1x1_post_film {
                 film.process(&mut l1x1_scratch, cond);
             }
 
@@ -299,12 +358,217 @@ pub unsafe fn layer_forward_ch8_block(
     }
 }
 
+/// Straight-line CH=8 layer forward pass for layers with no active FiLM.
+///
+/// Bit-exact twin of [`layer_forward_ch8_block`] with `mask == 0` and
+/// `use_blending == false` (canonical A2-Full/Lite fixtures): dilated conv →
+/// mixin → branchless LeakyReLU → head assign/accumulate → l1x1 residual.
+/// Zero `Option` tests and zero per-frame `is_first` tests — `is_first` /
+/// `is_last` select straight-line tails once per block.
+///
+/// # Safety
+/// Same contract as [`layer_forward_ch8_block`]: caller-verified buffer
+/// capacities and linear ring history with lookback + block frames.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
+)]
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn layer_forward_ch8_block_no_film(
+    conv: &A2Conv1dCh8,
+    mixin_w: &[f32],
+    l1x1_w: &[f32],
+    l1x1_b: &[f32],
+    layer_buffer: &[f32],
+    frame_start: usize,
+    num_frames: usize,
+    input_cond: &[f32],
+    head_accum: &mut [f32],
+    head_col: usize,
+    layer_in: &mut [f32],
+    is_first: bool,
+    is_last: bool,
+) {
+    let ch: usize = 8;
+    debug_assert!(mixin_w.len() >= ch);
+    debug_assert!(l1x1_w.len() >= ch * ch);
+    debug_assert!(l1x1_b.len() >= ch);
+    debug_assert!(layer_in.len() >= num_frames * ch);
+    debug_assert!(input_cond.len() >= num_frames);
+    debug_assert!(num_frames <= MAX_KERNEL_FRAMES);
+
+    let mut z_buf = [0.0f32; MAX_KERNEL_FRAMES * 8];
+
+    conv1d_ch8_t8_avx2(
+        &conv.weights,
+        &conv.bias,
+        conv.dilation,
+        conv.kernel,
+        layer_buffer,
+        frame_start,
+        num_frames,
+        &mut z_buf[..num_frames * ch],
+    );
+
+    // Mixin + LeakyReLU fused: one pass, branchless activation.
+    {
+        let z = z_buf.as_mut_ptr();
+        let mixin_v = _mm256_loadu_ps(mixin_w.as_ptr());
+        let slope_v = _mm256_set1_ps(A2_LEAKY_SLOPE);
+        let zero_v = _mm256_setzero_ps();
+        for (f, cond_val) in input_cond.iter().take(num_frames).enumerate() {
+            let off = f * ch;
+            let cond_v = _mm256_set1_ps(*cond_val);
+            let mix_v = _mm256_mul_ps(mixin_v, cond_v);
+            let mut zv = _mm256_loadu_ps(z.add(off));
+            zv = _mm256_add_ps(zv, mix_v);
+            let leaky = _mm256_mul_ps(zv, slope_v);
+            _mm256_storeu_ps(
+                z.add(off),
+                _mm256_blendv_ps(zv, leaky, _mm256_cmp_ps(zv, zero_v, _CMP_LT_OS)),
+            );
+        }
+    }
+
+    // Head accumulate — loop-invariant split, no per-frame branch.
+    if is_first {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            _mm256_storeu_ps(
+                head.add((head_col + f) * ch),
+                _mm256_loadu_ps(z_buf.as_ptr().add(f * ch)),
+            );
+        }
+    } else {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            let head_off = (head_col + f) * ch;
+            let zv = _mm256_loadu_ps(z_buf.as_ptr().add(f * ch));
+            let hv = _mm256_loadu_ps(head.add(head_off));
+            _mm256_storeu_ps(head.add(head_off), _mm256_add_ps(hv, zv));
+        }
+    }
+
+    if !is_last {
+        let lin = layer_in.as_mut_ptr();
+        let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
+        let l1x1_w_ptr = l1x1_w.as_ptr();
+        for f in 0..num_frames {
+            let off = f * ch;
+            let mut acc = l1x1_b_v;
+            for u in 0..ch {
+                let zu_v = _mm256_set1_ps(*z_buf.get_unchecked(off + u));
+                acc = _mm256_fmadd_ps(zu_v, _mm256_loadu_ps(l1x1_w_ptr.add(u * ch)), acc);
+            }
+            let lv = _mm256_loadu_ps(lin.add(off));
+            _mm256_storeu_ps(lin.add(off), _mm256_add_ps(lv, acc));
+        }
+    }
+}
+
+/// Shared straight-line post-conv tail for the SimdMath CH=8 path.
+///
+/// Operates on an already-computed `z_conv` (conv outputs, `num_frames * 8`)
+/// with no FiLM anywhere: fused mixin + branchless LeakyReLU, split head
+/// tails, direct l1x1 accumulation. Bit-exact with the `mask == 0` path of
+/// [`layer_forward_ch8_block`]; factored out so both the AVX2 and SimdMath
+/// entry points share one verified tail.
+///
+/// # Safety
+/// `z_conv` must hold `num_frames * 8` conv outputs; remaining buffers follow
+/// the `no_film` tail contract (same capacities as the caller-verified inputs).
+#[target_feature(enable = "avx2,fma")]
+unsafe fn layer_forward_ch8_postconv_no_film(
+    z_conv: &[f32],
+    mixin_w: &[f32],
+    l1x1_w: &[f32],
+    l1x1_b: &[f32],
+    num_frames: usize,
+    input_cond: &[f32],
+    head_accum: &mut [f32],
+    head_col: usize,
+    layer_in: &mut [f32],
+    is_first: bool,
+    is_last: bool,
+) {
+    const CH: usize = 8;
+    debug_assert!(z_conv.len() >= num_frames * CH);
+    debug_assert!(mixin_w.len() >= CH);
+    debug_assert!(l1x1_w.len() >= CH * CH);
+    debug_assert!(l1x1_b.len() >= CH);
+    debug_assert!(layer_in.len() >= num_frames * CH);
+    debug_assert!(input_cond.len() >= num_frames);
+    debug_assert!(num_frames <= MAX_KERNEL_FRAMES);
+
+    let mut z_buf = [0.0f32; MAX_KERNEL_FRAMES * 8];
+    z_buf[..num_frames * CH].copy_from_slice(&z_conv[..num_frames * CH]);
+
+    {
+        let z = z_buf.as_mut_ptr();
+        let mixin_v = _mm256_loadu_ps(mixin_w.as_ptr());
+        let slope_v = _mm256_set1_ps(A2_LEAKY_SLOPE);
+        let zero_v = _mm256_setzero_ps();
+        for (f, cond_val) in input_cond.iter().take(num_frames).enumerate() {
+            let off = f * CH;
+            let zv = _mm256_add_ps(
+                _mm256_loadu_ps(z.add(off)),
+                _mm256_mul_ps(mixin_v, _mm256_set1_ps(*cond_val)),
+            );
+            let leaky = _mm256_mul_ps(zv, slope_v);
+            _mm256_storeu_ps(
+                z.add(off),
+                _mm256_blendv_ps(zv, leaky, _mm256_cmp_ps(zv, zero_v, _CMP_LT_OS)),
+            );
+        }
+    }
+
+    if is_first {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            _mm256_storeu_ps(
+                head.add((head_col + f) * CH),
+                _mm256_loadu_ps(z_buf.as_ptr().add(f * CH)),
+            );
+        }
+    } else {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            let head_off = (head_col + f) * CH;
+            let zv = _mm256_loadu_ps(z_buf.as_ptr().add(f * CH));
+            _mm256_storeu_ps(
+                head.add(head_off),
+                _mm256_add_ps(_mm256_loadu_ps(head.add(head_off)), zv),
+            );
+        }
+    }
+
+    if !is_last {
+        let lin = layer_in.as_mut_ptr();
+        let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
+        let l1x1_w_ptr = l1x1_w.as_ptr();
+        for f in 0..num_frames {
+            let off = f * CH;
+            let mut acc = l1x1_b_v;
+            for u in 0..CH {
+                let zu_v = _mm256_set1_ps(*z_buf.get_unchecked(off + u));
+                acc = _mm256_fmadd_ps(zu_v, _mm256_loadu_ps(l1x1_w_ptr.add(u * CH)), acc);
+            }
+            let lv = _mm256_loadu_ps(lin.add(off));
+            _mm256_storeu_ps(lin.add(off), _mm256_add_ps(lv, acc));
+        }
+    }
+}
+
 /// SimdMath-dispatched full layer forward pass for CH=8.
 ///
 /// Same semantics as `layer_forward_ch8_block` but uses `M::dot_product_8x_f32`
 /// for the convolution step via monomorphized SimdMath dispatch, enabling ISA-optimal
 /// kernel selection at compile time. Post-conv operations (mixin, LeakyReLU, head,
 /// l1x1) remain on raw `__m256` intrinsics.
+///
+/// Only used for the AVX-512 ISA path in `layer_forward_dispatch`; the AVX2
+/// production path uses [`layer_forward_ch8_block`]. FiLM presence is hoisted
+/// identically (single fast path when `mask == 0`).
 ///
 /// # Safety
 /// Buffers must be sized appropriately. Caller ensures linear ring history
@@ -349,6 +613,32 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
 
     let bias = &conv.bias;
 
+    // Hoisted fast path: no FiLM in this layer — reuse the straight-line
+    // no-Film tail for mixin/activation/head/l1x1. The conv step above used
+    // `M::dot_product_8x_f32`; here only the post-conv tail is shared, which
+    // is bit-exact (mask == 0 ⇒ no FiLM arithmetic, `use_blending` moot).
+    if film.active_mask() == 0 {
+        // SAFETY: `z_buf[..num_frames*ch]` holds the conv outputs computed
+        // above; remaining slices satisfy the `no_film` tail contract
+        // (same capacities as the caller-verified inputs).
+        unsafe {
+            layer_forward_ch8_postconv_no_film(
+                &z_buf[..num_frames * ch],
+                mixin_w,
+                l1x1_w,
+                l1x1_b,
+                num_frames,
+                input_cond,
+                head_accum,
+                head_col,
+                layer_in,
+                is_first,
+                is_last,
+            );
+        }
+        return;
+    }
+
     for f in 0..num_frames {
         let frame_idx = (frame_start + f) as isize;
         let mut acc = [
@@ -378,15 +668,22 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
     }
 
     // 1b. FiLM: conv_post_film (post-conv, pre-mixin).
-    for f in 0..num_frames {
-        let cond = &input_cond[f..f + 1];
-        let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
-        if let Some(ref mut film) = film.conv_post_film {
+    // Hoisted: `mask != 0` here (fast path returned above), so test the
+    // single bit instead of the `Option` discriminant per frame.
+    if film.active_mask() & (1 << 0) != 0
+        && let Some(ref mut film) = film.conv_post_film
+    {
+        for f in 0..num_frames {
+            let cond = &input_cond[f..f + 1];
+            let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
             film.process(z_slice, cond);
         }
     }
 
     // 2. Post-conv: mixin (isolated scratch buffer).
+    let has_mixin_pre = film.active_mask() & (1 << 1) != 0;
+    let has_mixin_post = film.active_mask() & (1 << 2) != 0;
+    let has_act_pre = film.active_mask() & (1 << 3) != 0;
     {
         let z = z_buf.as_mut_ptr();
         let mixin_v = _mm256_loadu_ps(mixin_w.as_ptr());
@@ -395,7 +692,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             // 2a. Apply input_mixin_pre_film to condition (self-modulation,
             // C++ model.cpp:188-197). For cond_size == 1: cond = scale * cond + shift.
             let mut cond_mod = *cond_val;
-            if let Some(ref mut film) = film.input_mixin_pre_film {
+            if has_mixin_pre && let Some(ref mut film) = film.input_mixin_pre_film {
                 let orig = cond_mod;
                 // SAFETY: `from_mut`/`from_ref` on stack-local `f32` values create valid
                 // 1-element slices (cond_size == 1 here); `film.process` reads/writes only
@@ -414,7 +711,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             _mm256_storeu_ps(mixin_scratch.as_mut_ptr(), mix_v);
 
             let cond = &input_cond[f..f + 1];
-            if let Some(ref mut film) = film.input_mixin_post_film {
+            if has_mixin_post && let Some(ref mut film) = film.input_mixin_post_film {
                 film.process(&mut mixin_scratch, cond);
             }
 
@@ -424,7 +721,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             _mm256_storeu_ps(z.add(off), zv);
 
             let z_slice = &mut z_buf[off..off + ch];
-            if let Some(ref mut film) = film.activation_pre_film {
+            if has_act_pre && let Some(ref mut film) = film.activation_pre_film {
                 film.process(z_slice, cond);
             }
         }
@@ -445,31 +742,39 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
     }
 
     // 3b. FiLM: activation_post_film (post-activation).
-    for f in 0..num_frames {
-        let cond = &input_cond[f..f + 1];
-        let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
-        if let Some(ref mut film) = film.activation_post_film {
+    if film.active_mask() & (1 << 4) != 0
+        && let Some(ref mut film) = film.activation_post_film
+    {
+        for f in 0..num_frames {
+            let cond = &input_cond[f..f + 1];
+            let z_slice = &mut z_buf[f * ch..(f + 1) * ch];
             film.process(z_slice, cond);
         }
     }
 
-    // 4. Head accumulate.
-    {
+    // 4. Head accumulate — loop-invariant split, no per-frame branch.
+    if is_first {
+        let head = head_accum.as_mut_ptr();
+        for f in 0..num_frames {
+            let head_off = (head_col + f) * ch;
+            _mm256_storeu_ps(
+                head.add(head_off),
+                _mm256_loadu_ps(z_buf.as_ptr().add(f * ch)),
+            );
+        }
+    } else {
         let head = head_accum.as_mut_ptr();
         for f in 0..num_frames {
             let head_off = (head_col + f) * ch;
             let zv = _mm256_loadu_ps(z_buf.as_ptr().add(f * ch));
-            if is_first {
-                _mm256_storeu_ps(head.add(head_off), zv);
-            } else {
-                let hv = _mm256_loadu_ps(head.add(head_off));
-                _mm256_storeu_ps(head.add(head_off), _mm256_add_ps(hv, zv));
-            }
+            let hv = _mm256_loadu_ps(head.add(head_off));
+            _mm256_storeu_ps(head.add(head_off), _mm256_add_ps(hv, zv));
         }
     }
 
     // 5. Layer1x1 residual (skipped on last layer) — isolated scratch buffer.
     if !is_last {
+        let has_l1x1_post = (film.active_mask() & (1 << 5) != 0) & use_blending;
         let lin = layer_in.as_mut_ptr();
         let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
         let l1x1_w_ptr = l1x1_w.as_ptr();
@@ -487,11 +792,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             _mm256_storeu_ps(l1x1_scratch.as_mut_ptr(), acc);
 
             let cond = &input_cond[f..f + 1];
-            if let Some(film) = film
-                .layer1x1_post_film
-                .as_deref_mut()
-                .filter(|_| use_blending)
-            {
+            if has_l1x1_post && let Some(ref mut film) = film.layer1x1_post_film {
                 film.process(&mut l1x1_scratch, cond);
             }
 

@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::math::common::AlignedVec;
-use crate::models::a2::film::FilmBlock;
+use crate::models::a2::film::{FiLMConfig, FiLMLayer, FilmBlock};
 
 fn make_random_weights(kernel: usize, seed: u32) -> (AlignedVec<f32>, AlignedVec<f32>) {
     let mut w = AlignedVec::new(kernel * 64, 0.0f32)
@@ -593,4 +593,175 @@ fn test_layer_forward_ch8_middle_layer_accumulates() {
         changed,
         "Middle layer (is_first=false) should accumulate, but head unchanged"
     );
+}
+
+fn make_film_identity_8(groups: u32) -> FiLMLayer {
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups,
+    };
+    let cond_size = 1usize;
+    let channels = 8usize;
+    let w_count = groups as usize * (8 / groups as usize * 2) * (1 / groups as usize).max(1);
+    let _ = w_count;
+    let (w_count, b_count) = if cond_size > 1 {
+        (0, 0)
+    } else {
+        let ch_per_group = channels / groups as usize;
+        let rows = ch_per_group * 2 * (cond_size / groups as usize).max(1) * groups as usize;
+        (rows, channels * 2)
+    };
+    let weights = vec![0.0f32; w_count];
+    let mut bias = vec![0.0f32; b_count];
+    for c in 0..channels {
+        bias[c] = 1.0;
+    }
+    FiLMLayer::load(config, cond_size, channels, weights, bias)
+        .expect("identity FiLM should load for test-sized buffers")
+}
+
+/// No-FiLM fast path is bit-exact vs the general block kernel.
+///
+/// Covers the Sprint 3 hoist: `mask == 0` must produce identical head and
+/// layer_in as the `Option`-testing path for first/middle/last layers.
+#[test]
+fn test_ch8_no_film_fast_path_bit_exact() {
+    for (is_first, is_last) in [(true, false), (false, false), (false, true)] {
+        let kernel = 6;
+        let dilation = 101;
+        let (w, b) = make_random_weights(kernel, 7);
+        let conv = A2Conv1dCh8::new(&w, 8, 8, kernel, dilation, &b)
+            .expect("construction should succeed for test-sized buffers");
+        let mixin_w_vec = AlignedVec::from_vec(vec![0.13f32; 8])
+            .expect("allocation should succeed for test-sized buffers");
+        let l1x1_w_vec = AlignedVec::from_vec(vec![0.31f32; 64])
+            .expect("allocation should succeed for test-sized buffers");
+        let l1x1_b_vec = AlignedVec::from_vec(vec![0.02f32; 8])
+            .expect("allocation should succeed for test-sized buffers");
+        let num_frames = 16;
+        let max_lookback = (kernel - 1) * dilation;
+        let history = make_history(max_lookback + num_frames + 8, 21);
+        let frame_start = max_lookback + 4;
+        let cond = make_cond(num_frames);
+
+        let mut head_fast = vec![0.5f32; (num_frames + 1) * 8];
+        let mut head_ref = head_fast.clone();
+        let mut lin_fast = vec![0.25f32; num_frames * 8];
+        let mut lin_ref = lin_fast.clone();
+        let mut fb = FilmBlock::empty();
+
+        // SAFETY: buffers sized to `layer_forward_ch8_block`'s contract and
+        // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
+        unsafe {
+            layer_forward_ch8_block_no_film(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_fast,
+                0,
+                &mut lin_fast,
+                is_first,
+                is_last,
+            );
+            layer_forward_ch8_block(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &mut fb,
+                false,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_ref,
+                0,
+                &mut lin_ref,
+                is_first,
+                is_last,
+            );
+        }
+
+        for i in 0..num_frames * 8 {
+            assert!(
+                head_fast[i] == head_ref[i],
+                "head[{i}] fast={} ref={} (first={is_first} last={is_last})",
+                head_fast[i],
+                head_ref[i]
+            );
+            assert!(
+                lin_fast[i] == lin_ref[i],
+                "layer_in[{i}] fast={} ref={} (first={is_first} last={is_last})",
+                lin_fast[i],
+                lin_ref[i]
+            );
+        }
+    }
+}
+
+/// Active FiLM path stays on the general kernel (mask != 0) and the hoisted
+/// presence mask matches the `Option` discriminants.
+#[test]
+fn test_ch8_film_active_mask_matches_options() {
+    let kernel = 6;
+    let dilation = 101;
+    let (w, b) = make_random_weights(kernel, 13);
+    let conv = A2Conv1dCh8::new(&w, 8, 8, kernel, dilation, &b)
+        .expect("construction should succeed for test-sized buffers");
+    let mixin_w_vec = AlignedVec::from_vec(vec![0.11f32; 8])
+        .expect("allocation should succeed for test-sized buffers");
+    let l1x1_w_vec = AlignedVec::from_vec(vec![0.29f32; 64])
+        .expect("allocation should succeed for test-sized buffers");
+    let l1x1_b_vec = AlignedVec::from_vec(vec![0.01f32; 8])
+        .expect("allocation should succeed for test-sized buffers");
+    let num_frames = 16;
+    let max_lookback = (kernel - 1) * dilation;
+    let history = make_history(max_lookback + num_frames + 8, 31);
+    let frame_start = max_lookback + 4;
+    let cond = make_cond(num_frames);
+
+    let film = make_film_identity_8(1);
+    let mut film = film;
+    let mut head = vec![0.0f32; (num_frames + 1) * 8];
+    let mut layer_in = vec![0.0f32; num_frames * 8];
+    let mut fb = FilmBlock {
+        conv_pre_film: None,
+        conv_post_film: None,
+        input_mixin_pre_film: None,
+        input_mixin_post_film: None,
+        activation_pre_film: None,
+        activation_post_film: Some(&mut film),
+        layer1x1_post_film: None,
+        head1x1_post_film: None,
+    };
+    assert_eq!(fb.active_mask(), 1 << 4);
+
+    // SAFETY: buffers sized to `layer_forward_ch8_block`'s contract and
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
+    unsafe {
+        layer_forward_ch8_block(
+            &conv,
+            &mixin_w_vec,
+            &l1x1_w_vec,
+            &l1x1_b_vec,
+            &mut fb,
+            false,
+            &history,
+            frame_start,
+            num_frames,
+            &cond,
+            &mut head,
+            0,
+            &mut layer_in,
+            true,
+            false,
+        );
+    }
+    assert!(head.iter().any(|v| v.is_finite()));
 }

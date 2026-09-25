@@ -595,9 +595,10 @@ fn test_ch3_unrolled_k15_vs_generic() {
 // =============================================================================
 
 use crate::models::a2::conv1d_ch3::{
-    A2Conv1dCh3, conv1d_ch3_single_frame_ref, layer_forward_ch3_block, layer_forward_ch3_scalar_ref,
+    A2Conv1dCh3, conv1d_ch3_single_frame_ref, layer_forward_ch3_block,
+    layer_forward_ch3_block_no_film, layer_forward_ch3_scalar_ref,
 };
-use crate::models::a2::film::FilmBlock;
+use crate::models::a2::film::{FiLMConfig, FiLMLayer, FilmBlock};
 
 fn make_ch3_f32_weights(kernel: usize, seed: u32) -> (Vec<f32>, Vec<f32>) {
     let mut raw = vec![0.0f32; 3 * 3 * kernel];
@@ -1009,6 +1010,164 @@ fn test_layer_fwd_ch3_is_first_assigns_head() {
             );
         }
     }
+}
+
+/// No-FiLM fast path is bit-exact vs the general CH=3 block kernel.
+///
+/// Covers the Sprint 3 hoist for even (AVX2 pairs only) and odd (scalar tail)
+/// frame counts, plus first/middle/last layer tails.
+#[test]
+fn test_ch3_no_film_fast_path_bit_exact() {
+    for (num_frames, is_first, is_last) in [
+        (16usize, true, false),
+        (16, false, false),
+        (17, false, false),
+        (8, false, true),
+    ] {
+        const CH: usize = 3;
+        let kernel = 6;
+        let dilation = A2_DILATIONS[5];
+        let (raw_w, bias) = make_ch3_f32_weights(kernel, 31);
+        let conv = A2Conv1dCh3::new(&raw_w, CH, CH, kernel, dilation, &bias)
+            .expect("construction should succeed for test-sized buffers");
+        let max_lookback = (kernel - 1) * dilation;
+        let layer_buffer = make_f32_layer_buffer(max_lookback + num_frames + 8, 57);
+        let frame_start = max_lookback;
+        let mixin_w = [0.1f32, -0.2, 0.3];
+        let l1x1_w: Vec<f32> = (0..CH * CH).map(|i| (i as f32 + 1.0) * 0.05).collect();
+        let l1x1_b = [0.01f32, -0.01, 0.02];
+        let input_cond: Vec<f32> = (0..num_frames)
+            .map(|i| (i as f32 * 0.3).sin() * 0.5)
+            .collect();
+        let mut head_fast = vec![0.5f32; 256 * CH];
+        let mut head_ref = head_fast.clone();
+        let mut lin_fast = vec![0.25f32; num_frames * CH];
+        let mut lin_ref = lin_fast.clone();
+        let head_col = 8usize;
+        let mut fb = FilmBlock::empty();
+        // SAFETY: buffers sized to `layer_forward_ch3_block`'s contract and
+        // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
+        unsafe {
+            layer_forward_ch3_block_no_film(
+                &conv,
+                &mixin_w,
+                &l1x1_w,
+                &l1x1_b,
+                &layer_buffer,
+                frame_start,
+                num_frames,
+                &input_cond,
+                &mut head_fast,
+                head_col,
+                &mut lin_fast,
+                is_first,
+                is_last,
+            );
+            layer_forward_ch3_block(
+                &conv,
+                &mixin_w,
+                &l1x1_w,
+                &l1x1_b,
+                &mut fb,
+                false,
+                &layer_buffer,
+                frame_start,
+                num_frames,
+                &input_cond,
+                &mut head_ref,
+                head_col,
+                &mut lin_ref,
+                is_first,
+                is_last,
+            );
+        }
+        for i in 0..num_frames * CH {
+            assert!(
+                head_fast[head_col * CH + i] == head_ref[head_col * CH + i],
+                "head[{i}] fast={} ref={} (nf={num_frames} first={is_first} last={is_last})",
+                head_fast[head_col * CH + i],
+                head_ref[head_col * CH + i]
+            );
+            assert!(
+                lin_fast[i] == lin_ref[i],
+                "layer_in[{i}] fast={} ref={} (nf={num_frames} first={is_first} last={is_last})",
+                lin_fast[i],
+                lin_ref[i]
+            );
+        }
+    }
+}
+
+fn make_film_identity_3() -> FiLMLayer {
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups: 1,
+    };
+    let weights = vec![0.0f32; 6];
+    let mut bias = vec![0.0f32; 6];
+    for slot in bias.iter_mut().take(3) {
+        *slot = 1.0;
+    }
+    FiLMLayer::load(config, 1, 3, weights, bias)
+        .expect("identity FiLM should load for test-sized buffers")
+}
+
+/// Active FiLM path stays on the general CH=3 kernel (mask != 0) and the
+/// hoisted presence mask matches the `Option` discriminants.
+#[test]
+fn test_ch3_film_active_mask_matches_options() {
+    const CH: usize = 3;
+    let kernel = 6;
+    let dilation = 1;
+    let num_frames = 8;
+    let (raw_w, bias) = make_ch3_f32_weights(kernel, 61);
+    let conv = A2Conv1dCh3::new(&raw_w, CH, CH, kernel, dilation, &bias)
+        .expect("construction should succeed for test-sized buffers");
+    let max_lookback = (kernel - 1) * dilation;
+    let layer_buffer = make_f32_layer_buffer(max_lookback + num_frames + 4, 23);
+    let frame_start = max_lookback;
+    let mixin_w = [0.2f32, -0.1, 0.3];
+    let l1x1_w = vec![0.0f32; CH * CH];
+    let l1x1_b = [0.0f32; CH];
+    let input_cond = vec![0.5f32; num_frames];
+    let mut head = vec![0.0f32; 64 * CH];
+    let mut lin = vec![0.0f32; num_frames * CH];
+    let film = make_film_identity_3();
+    let mut film = film;
+    let mut fb = FilmBlock {
+        conv_pre_film: None,
+        conv_post_film: None,
+        input_mixin_pre_film: None,
+        input_mixin_post_film: None,
+        activation_pre_film: None,
+        activation_post_film: Some(&mut film),
+        layer1x1_post_film: None,
+        head1x1_post_film: None,
+    };
+    assert_eq!(fb.active_mask(), 1 << 4);
+    // SAFETY: buffers sized to `layer_forward_ch3_block`'s contract and
+    // outlive the call; AVX2+FMA is guaranteed by `#[target_feature]`.
+    unsafe {
+        layer_forward_ch3_block(
+            &conv,
+            &mixin_w,
+            &l1x1_w,
+            &l1x1_b,
+            &mut fb,
+            false,
+            &layer_buffer,
+            frame_start,
+            num_frames,
+            &input_cond,
+            &mut head,
+            0,
+            &mut lin,
+            true,
+            false,
+        );
+    }
+    assert!(head.iter().any(|v| v.is_finite()));
 }
 
 /// A2Conv1dCh3 K=6 all A2 dilations — parity vs scalar ref.

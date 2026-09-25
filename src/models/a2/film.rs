@@ -267,6 +267,13 @@ impl FiLMLayer {
 /// Used by `layer_forward_ch{3,8}_block` to conditionally apply FiLM
 /// at the correct positions in the signal chain without per-point parameter
 /// explosion.
+///
+/// Callers must hoist presence tests out of per-frame loops: each `Option`
+/// is fixed at load time, so `film.is_active(mask)` is evaluated once per
+/// block and the per-frame path becomes a single predictable `u8` test
+/// (see `layer_forward_ch8_block` / `layer_forward_ch3_block`). This keeps
+/// the hot loop linear in the I-cache and avoids re-testing 8 pointers
+/// per frame.
 pub struct FilmBlock<'a> {
     /// FiLM before dilated convolution.
     pub conv_pre_film: Option<&'a mut FiLMLayer>,
@@ -300,6 +307,27 @@ impl<'a> FilmBlock<'a> {
             layer1x1_post_film: None,
             head1x1_post_film: None,
         }
+    }
+
+    /// Pre-computed per-insertion-point presence mask for one block dispatch.
+    ///
+    /// Bit assignment (LSB-first): 0 = `conv_post`, 1 = `mixin_pre`,
+    /// 2 = `mixin_post`, 3 = `act_pre`, 4 = `act_post`, 5 = `l1x1_post`.
+    /// `conv_pre` is intentionally excluded: it runs once per layer in
+    /// `layer_forward_dispatch`, before the block kernel is entered.
+    ///
+    /// The mask is a plain `u8` snapshot evaluated once per block, so the
+    /// per-frame loops below test a single predictable integer instead of
+    /// 5-6 `Option` discriminants. Bit-exact: presence is load-time fixed,
+    /// no allocation, no behaviour change.
+    #[inline(always)]
+    pub fn active_mask(&self) -> u8 {
+        (self.conv_post_film.is_some() as u8)
+            | ((self.input_mixin_pre_film.is_some() as u8) << 1)
+            | ((self.input_mixin_post_film.is_some() as u8) << 2)
+            | ((self.activation_pre_film.is_some() as u8) << 3)
+            | ((self.activation_post_film.is_some() as u8) << 4)
+            | ((self.layer1x1_post_film.is_some() as u8) << 5)
     }
 }
 
