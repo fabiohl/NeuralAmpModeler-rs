@@ -623,7 +623,7 @@ fn make_film_identity_8(groups: u32) -> FiLMLayer {
 
 /// No-FiLM fast path is bit-exact vs the general block kernel.
 ///
-/// Covers the Sprint 3 hoist: `mask == 0` must produce identical head and
+/// Covers the hoist optimization: `mask == 0` must produce identical head and
 /// layer_in as the `Option`-testing path for first/middle/last layers.
 #[test]
 fn test_ch8_no_film_fast_path_bit_exact() {

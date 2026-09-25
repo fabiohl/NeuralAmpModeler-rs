@@ -1,8 +1,8 @@
 ===============================================================
    NeuralAmpModeler-rs Quality Dashboard
    ------------------------------
-   Commit: 0e22ea4ec247 (dirty)
-   Run ID: 1786537203076204151-15755
+   Commit: 000000000000 (clean)
+   Run ID: 0000000000000000000-00000
    ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI)
    rustc:  rustc 1.97.1 (8bab26f4f 2026-07-14)
    profile: release · target: x86_64-unknown-linux-gnu

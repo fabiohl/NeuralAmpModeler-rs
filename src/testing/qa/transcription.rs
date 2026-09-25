@@ -16,7 +16,6 @@
 //!
 //! Source snapshot: dashboard run (release, clean tree), measured 2026-09-17
 //! 22:04:30 -03, commit `7576d49305bb` (clean), run `1789692961050429696-14880`.
-//! commit `0e22ea4ec247` (dirty), run `1786537203076204151-15755`.
 
 use super::*;
 

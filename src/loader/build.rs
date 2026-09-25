@@ -93,7 +93,7 @@ fn read_and_validate_model_bytes(
 /// - With the `dual-mono` feature enabled (default), both `model_l` and `model_r` are built (`Some`).
 /// - If the `dual-mono` feature is disabled at compile time, a warning is logged via `log::warn!`
 ///   and `pair.model_r` remains `None` to prevent unexpected memory allocation when the engine
-///   is compiled for mono-only operation (Footgun F13).
+///   is compiled for mono-only operation.
 ///
 /// If file reading, format parsing, metadata validation, or architecture dispatching/construction
 /// fails for any requested channel, an error (`Err`) is returned.

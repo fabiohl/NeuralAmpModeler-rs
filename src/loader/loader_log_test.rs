@@ -324,7 +324,7 @@ fn test_json_non_finite_metadata_rejected_with_structured_log() {
     );
 }
 
-/// Footgun F13: requesting dual-mono load when `dual-mono` feature is disabled
+/// Requesting dual-mono load when the `dual-mono` feature is disabled
 /// emits a structured WARN and does not instantiate `model_r`.
 #[test]
 fn test_warn_dual_mono_divergence_when_dual_mono_disabled() {

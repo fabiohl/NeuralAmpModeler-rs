@@ -4,20 +4,33 @@
 # Maintainer entry point. Thin delegation only: every recipe invokes the
 # canonical script in utils/ with the same arguments. No logic duplicated here.
 
-setup:
-	./utils/setup-third-party.sh
+# Run SIMD capability and hardware pre-flight probe
+probe *args:
+	./utils/simd-probe.sh {{args}}
 
-lint:
-	./utils/lints.sh
+# Setup vendor mirrors and third-party dependencies
+setup *args:
+	./utils/setup-third-party.sh {{args}}
 
-test:
-	./utils/tests-quick.sh
+# Run code formatting, cargo clippy, and static analysis lints
+lint *args:
+	./utils/lints.sh {{args}}
 
+# Run agile quick QA test suite (cargo test gate)
+test *args:
+	./utils/tests-quick.sh {{args}}
+
+# Verify quality and fidelity against the baseline contract
 check:
 	./utils/quality-dashboard.sh --check docs/quality-contract.json
 
-bench:
-	./utils/tests-performance-regression.sh --check
+# Run quality dashboard report (supports --fidelity-only, --bench-only, etc.)
+dashboard *args:
+	./utils/quality-dashboard.sh {{args}}
+
+# Run performance regression gate against saved Criterion baseline
+bench *args:
+	./utils/tests-performance-regression.sh {{args}}
 
 # Operator-only: long suite is human-owned (±50 min, unattended). Do not
 # execute it from automation.

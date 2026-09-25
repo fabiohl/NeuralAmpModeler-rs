@@ -68,7 +68,7 @@ fn build_report_fixture() -> String {
 
     // Provenance header.
     lines.push(
-        r#"{"kind":"build_metadata","cargo_profile":"release","target_triple":"x86_64-unknown-linux-gnu","rustflags":"","rustc_version":"rustc 1.97.1 (8bab26f4f 2026-07-14)","git_commit":"0e22ea4ec247","git_dirty_state":true,"run_id":"1786537203076204151-15755","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)"}"#
+        r#"{"kind":"build_metadata","cargo_profile":"release","target_triple":"x86_64-unknown-linux-gnu","rustflags":"","rustc_version":"rustc 1.97.1 (8bab26f4f 2026-07-14)","git_commit":"000000000000","git_dirty_state":false,"run_id":"0000000000000000000-00000","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)"}"#
             .to_string(),
     );
 
@@ -268,8 +268,8 @@ fn parse_routes_every_kind() {
     assert!(report.coverage.is_some());
     assert!(report.test_counts.is_some());
 
-    assert_eq!(report.header.git_commit, "0e22ea4ec247");
-    assert!(report.header.git_dirty);
+    assert_eq!(report.header.git_commit, "000000000000");
+    assert!(!report.header.git_dirty);
     assert_eq!(report.header.effective_isa, "x86-64-v3 (AVX2/FMA/F16C/BMI)");
     assert_eq!(report.phase_status("regression_gate"), "PASS");
     assert!(!report.performance_not_verified());

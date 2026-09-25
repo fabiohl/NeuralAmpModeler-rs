@@ -49,18 +49,35 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
 
         let mut in_c = 0;
         while in_c + 16 <= in_len {
+            // Unrolled step macro: processes 2 input channels across 16 output channels per step.
+            //
+            // Instruction mechanics for `_mm512_dpbf16_ps`:
+            // - Calculates the dot product of two pairs of BF16 values packed into 32-bit dwords:
+            //   `acc[lane] += in_pair.low * weight_pair.low + in_pair.high * weight_pair.high`
+            // - To feed this, we pack adjacent input channels (idx, idx+1) into a single 32-bit dword
+            //   and broadcast it across all 16 SIMD lanes.
+            // - For weights, row `idx` provides the low 16 bits and row `idx+1` provides the high
+            //   16 bits for each of the 16 output channels.
             macro_rules! bf16_gemv_step {
                 ($acc:ident, $k:expr) => {
                     let idx = in_c + ($k) * 2;
+                    // 1. Load two consecutive BF16 inputs as a single 32-bit integer and broadcast:
                     let v_in_raw = _mm256_set1_epi32(*(in_frame.as_ptr().add(idx) as *const i32));
                     let v_in = _mm512_broadcast_i32x8(v_in_raw);
+
+                    // 2. Load 16 BF16 weights for row `idx` (lo) and row `idx+1` (hi):
                     let w_ptr = weights.as_ptr().add(idx * out_len + out_c);
                     let lo = _mm256_loadu_si256(w_ptr as *const __m256i);
                     let hi = _mm256_loadu_si256(w_ptr.add(out_len) as *const __m256i);
+
+                    // 3. Interleave weights into 32-bit dwords: [hi:lo] pair per output channel:
                     let vw = _mm512_or_si512(
                         _mm512_cvtepu16_epi32(lo),
                         _mm512_slli_epi32(_mm512_cvtepu16_epi32(hi), 16),
                     );
+
+                    // 4. Dot product: accumulate 16 pairs of (in[idx]*w[idx] + in[idx+1]*w[idx+1])
+                    // into single-precision f32 registers:
                     $acc = _mm512_dpbf16_ps(
                         $acc,
                         // SAFETY: __m512 → __m512bh is a no-op transmute of 512-bit
@@ -72,6 +89,8 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
                     );
                 };
             }
+            // Execute 8 independent steps (16 input channels total) across 8 accumulator registers
+            // to saturate execution ports and break dependency chains (Instruction Level Parallelism).
             bf16_gemv_step!(acc0, 0);
             bf16_gemv_step!(acc1, 1);
             bf16_gemv_step!(acc2, 2);
@@ -83,6 +102,7 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
             in_c += 16;
         }
 
+        // Tree reduction: sum 8 parallel accumulators into acc0 in a balanced binary tree:
         acc0 = _mm512_add_ps(acc0, acc1);
         acc2 = _mm512_add_ps(acc2, acc3);
         acc4 = _mm512_add_ps(acc4, acc5);
@@ -91,7 +111,7 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
         acc4 = _mm512_add_ps(acc4, acc6);
         acc0 = _mm512_add_ps(acc0, acc4);
 
-        // Process remaining pairs with _mm512_dpbf16_ps.
+        // Process remaining even pairs (step 2 input channels) with _mm512_dpbf16_ps:
         while in_c + 2 <= in_len {
             let v_in_raw = _mm256_set1_epi32(*(in_frame.as_ptr().add(in_c) as *const i32));
             let v_in = _mm512_broadcast_i32x8(v_in_raw);
@@ -112,7 +132,8 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
             in_c += 2;
         }
 
-        // Remaining odd element: simple broadcast + f32 FMA.
+        // Remaining odd element: convert BF16 to f32 (shift left 16 bits to place exponent/mantissa)
+        // and accumulate using standard single-precision FMA:
         if in_c < in_len {
             let si = f32::from_bits((*in_frame.get_unchecked(in_c) as u32) << 16);
             let v_in = _mm512_set1_ps(si);

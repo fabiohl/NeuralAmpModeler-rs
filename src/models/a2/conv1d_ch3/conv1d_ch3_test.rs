@@ -1014,7 +1014,7 @@ fn test_layer_fwd_ch3_is_first_assigns_head() {
 
 /// No-FiLM fast path is bit-exact vs the general CH=3 block kernel.
 ///
-/// Covers the Sprint 3 hoist for even (AVX2 pairs only) and odd (scalar tail)
+/// Covers the hoist optimization for even (AVX2 pairs only) and odd (scalar tail)
 /// frame counts, plus first/middle/last layer tails.
 #[test]
 fn test_ch3_no_film_fast_path_bit_exact() {
