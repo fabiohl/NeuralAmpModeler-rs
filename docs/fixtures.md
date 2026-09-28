@@ -147,6 +147,7 @@ before committing.
 > LSTM-Dyn-Test, LSTM 1×10, LSTM 2×24, LSTM 3×8, A2-FiLM-Chaos-Stress,
 > A2-FiLM-InputMixinPre, WaveNet-Dyn-Free, WaveNet A1 Secondary Act, WaveNet Condition LSTM).
 > The 3 C++ cabsim goldens are reference vectors from upstream.
+
 ## Canonical Reference Architecture Manifesto
 
 To support continuous profiling (such as Profile-Guided Optimization / PGO and BOLT), benchmarking suites, and architectural drift validation across neural inference workloads, the engine defines a canonical reference architecture catalog in `src/testing/catalog.rs` through `reference_architectures()` and `ArchitectureFixtureSpec`.
@@ -155,14 +156,14 @@ To support continuous profiling (such as Profile-Guided Optimization / PGO and B
 
 The engine categorizes inference topologies into five distinct architectural families (`ArchitectureFamily`):
 
-| Architecture Family | Enum Variant | Representative Fixture | Topology Description | Suggested SR / Quantum |
-| ------------------- | ------------ | ---------------------- | -------------------- | ---------------------- |
-| **WaveNet A1** | `ArchitectureFamily::WaveNetA1` | `wavenet_a1_standard.nam` | 16 channels, dilation depth 10, head 8 | 48 kHz / 64 samples |
-| **WaveNet A2** | `ArchitectureFamily::WaveNetA2` | `wavenet_a2_full.nam` | 8 channels, gated activation, 23 layers | 48 kHz / 64 samples |
-| **LSTM** | `ArchitectureFamily::Lstm` | `BossLSTM-1x16.nam` | 1 layer, 16 hidden units | 48 kHz / 64 samples |
-| **ConvNet** | `ArchitectureFamily::ConvNet` | `convnet_test.nam` | 8 channels, 6 blocks | 48 kHz / 64 samples |
-| **Linear (Direct FIR)** | `ArchitectureFamily::Linear` | `linear_test.nam` | RF=4 direct FIR time-domain dot products | 48 kHz / 64 samples |
-| **Linear (Partitioned FFT)** | `ArchitectureFamily::Linear` | `linear_fft_rf320.nam` | RF=320 partitioned frequency-domain convolution | 48 kHz / 64 samples |
+| Architecture Family          | Enum Variant                    | Representative Fixture    | Topology Description                            | Suggested SR / Quantum |
+| ---------------------------- | ------------------------------- | ------------------------- | ----------------------------------------------- | ---------------------- |
+| **WaveNet A1**               | `ArchitectureFamily::WaveNetA1` | `wavenet_a1_standard.nam` | 16 channels, dilation depth 10, head 8          | 48 kHz / 64 samples    |
+| **WaveNet A2**               | `ArchitectureFamily::WaveNetA2` | `wavenet_a2_full.nam`     | 8 channels, gated activation, 23 layers         | 48 kHz / 64 samples    |
+| **LSTM**                     | `ArchitectureFamily::Lstm`      | `BossLSTM-1x16.nam`       | 1 layer, 16 hidden units                        | 48 kHz / 64 samples    |
+| **ConvNet**                  | `ArchitectureFamily::ConvNet`   | `convnet_test.nam`        | 8 channels, 6 blocks                            | 48 kHz / 64 samples    |
+| **Linear (Direct FIR)**      | `ArchitectureFamily::Linear`    | `linear_test.nam`         | RF=4 direct FIR time-domain dot products        | 48 kHz / 64 samples    |
+| **Linear (Partitioned FFT)** | `ArchitectureFamily::Linear`    | `linear_fft_rf320.nam`    | RF=320 partitioned frequency-domain convolution | 48 kHz / 64 samples    |
 
 ### Invariants & Anti-Drift Guarantee
 

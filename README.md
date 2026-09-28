@@ -23,7 +23,7 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 
 * **Pure Rust & Strict Zero-Allocation RT Safety:** Engineered from the ground up for absolute real-time audio determinism — zero heap allocations, zero mutex locks, and zero blocking syscalls on the audio processing thread (verified via `CountingAllocator` in heap audit suites). Parameter updates and model swaps pass through lock-free SPSC channels, while a 3-tier GC cascade (*SPSC queue → 16-slot thread-local parking lot → overwrite ring*) guarantees safe off-RT resource disposal without audio glitches.
 * **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Mandatory `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. The `SimdMath` / `dispatch_simd!` engine is a static match with zero function pointers or vtables. Production inference is native `f32` on the AVX2 kernels (`sum0..sum3` ILP, tap-major tiling). AVX-512 / VL256 / BF16 / VNNI were evaluated against a ≥12% end-to-end `process()` N=64 gate and **are not a production acceleration** (2026-08 Sapphire Rapids receipt: all canonical SKUs failed; see [`docs/architecture.md`](docs/architecture.md) §1.2). The dispatch engine is kept for a possible future backend (e.g. ARM/NEON); AVX-512 sources stay in-tree as test/research, not as a marketed feature.
-* **Uncompromising Dual-Oracle Audio Parity:** Validated against two independent co-equal test oracles: canonical C++ NAMCore f32 (market interop) and double-precision f64 reference oracle (mathematical ideality). Grounded in `docs/quality-contract.json`, BossWN Standard measures `2.31e-14` ESR against NAMCore and `9.05e-15` against the f64 oracle (SNR `136.4 dB`, MR-STFT `6.46e-6`), with ConvNet reaching `4.23e-15` ESR (SNR `143.7 dB`).
+* **Uncompromising Dual-Oracle Audio Parity:** Validated against two independent co-equal test oracles: canonical C++ NAMCore f32 (market interop) and double-precision f64 reference oracle (mathematical ideality). Grounded in `docs/quality-contract.json` (51 model baselines), BossWN Standard measures `2.31e-14` ESR against NAMCore and `9.05e-15` against the f64 oracle (SNR `136.4 dB`, MR-STFT `6.46e-6`), with ConvNet ReLU reaching `9.33e-16` ESR (SNR `150.3 dB`).
 * **Const-Generic Optimization & Dynamic Topology Fallback:** 23 model variants (16 static const-generic profiles + zero-alloc dynamic fallbacks). The static profiles leverage Rust const generics so kernel sizes, receptive fields, and channel counts (`CH=16, 12, 8, 4, 3`) are known at compile time, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies gracefully fallback to zero-allocation dynamic engines (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`, `WaveNetA2Cascade`).
 * **Complete Native DSP Stack (Zero External Audio Crates):** Integrated native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser β=12, >105 dB stopband, zero pre-ringing cepstrum, 0.7–1.3 µs latency, replacing external libraries like `rubato`), UPOLS Partitioned FFT CabSim IR convolution (1.3 µs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, >100 dB attenuation, Kahles et al. JAES 2019).
 * **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load monitoring with hysteresis FSM that gracefully degrades model complexity (Full → Reduced → Minimal) with 32 ms click-free linear crossfades to prevent audio xruns. Binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model hot-swap latency from ~50 ms to <1 ms with mandatory IEEE 802.3 CRC32 integrity validation.
@@ -37,9 +37,9 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 |:-------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Inference Engine**             | Core WaveNet (A1/A2), LSTM (1-layer & 2-layer), ConvNet, and Linear topologies                                                   | Complete model ecosystem compatibility with native Rust DSP speed                                                                          |
 | **RT Safety Determinism**        | Strict Zero Heap Drop, Zero Mutex Locks, 3-Tier Lock-Free GC Cascade                                                             | Guaranteed audio stability without dropouts/xruns under sub-millisecond deadlines                                                          |
-| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) production backend; `dispatch_simd!` engine retained (AVX-512 not promoted)                     | Contract SLA snapshot: WaveNet Std 36.9 µs / LSTM 7.5 µs on Ryzen 7 5700U (`rustc` 1.97.1, 2026-08-12); later `rustc` 1.98 sessions ~43 µs |
+| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) production backend; `dispatch_simd!` engine retained (AVX-512 not promoted)                     | Contract SLA snapshot: WaveNet Std ≈ 43.3 µs / LSTM 1×16 ≈ 6.8 µs on Ryzen 7 5700U (`rustc 1.98.1`, 2026-09-19, `quality-contract.json`)   |
 | **Const-Generic Profiles**       | 23 model variants (16 static const-generic profiles + zero-alloc dynamic fallbacks); channel counts `CH=16`, `12`, `8`, `4`, `3` | Enables compile-time LLVM loop unrolling and register allocation optimization                                                              |
-| **Numerical Parity Oracles**     | Verified against canonical C++ NAMCore f32, double-precision f64, and cross-ISA oracles                                          | Bit/float-exact accuracy matching C++ reference models (`2.31e-14` to `4.23e-15` ESR)                                                      |
+| **Numerical Parity Oracles**     | Verified against canonical C++ NAMCore f32, double-precision f64, and cross-ISA oracles                                          | Bit/float-exact accuracy matching C++ reference models (`2.31e-14` to `9.33e-16` ESR)                                                      |
 | **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)                                               | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                          |
 | **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)                                                       | Ultra-low overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                                                  |
 | **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`off`, `2x`, `4x`, >100 dB stopband)                                                            | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                                                             |
@@ -47,7 +47,7 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 | **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                                                             | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                       |
 | **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32                                                 | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                |
 | **Denormal Armor**               | Symmetric `−220 dBFS` dither injection + hardware MXCSR FTZ/DAZ                                                                  | Prevents 10–100× CPU microcode stalls on silence with zero DC drift                                                                        |
-| **Comprehensive QA Suite**       | 1,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks                                              | Enterprise-grade software stability and strict protection against regressions                                                              |
+| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks                                              | Enterprise-grade software stability and strict protection against regressions                                                              |
 
 ---
 
@@ -286,26 +286,26 @@ NeuralAmpModeler-rs provides several Cargo feature flags to configure capabiliti
 
 ## 🏆 Quality & Performance
 
-* **Numerical Fidelity:** The quality contract (`docs/quality-contract.json`) tracks NAMCore parity, independent f64-oracle error, SNR (110–144 dB), and MR-STFT (< 1e-5) across 584 lines of per-model baseline envelopes.
+* **Numerical Fidelity:** The quality contract (`docs/quality-contract.json`) tracks NAMCore parity, independent f64-oracle error, SNR (103–150 dB), and MR-STFT across 608 lines of per-model baseline envelopes (51 fidelity + 20 performance records).
 
 * **Measured CPU Headroom (Contract SLA Baseline Snapshot):**
 
-  > **Contract Reference:** Frozen snapshot from `docs/quality-contract.json` (captured 2026-08-12 on AMD Ryzen 7 5700U 8C/16T, Zen 2, base 1.8 GHz / boost up to 4.3 GHz, governor `performance`, `rustc 1.97.1`, buffer size N=64 @ 48 kHz, AVX2 baseline).
-  > These figures establish the formal quality and regression baseline envelopes. Ambient thermal conditions, system load, or compiler release shifts (e.g. `rustc 1.98+` observing ~43 µs on WaveNet Std) can modulate raw execution times without representing algorithmic regressions.
+  > **Contract Reference:** Snapshot from `docs/quality-contract.json` (captured 2026-09-19 on AMD Ryzen 7 5700U 8C/16T, Zen 2, base 1.8 GHz / boost up to 4.3 GHz, governor `performance`, `rustc 1.98.1`, buffer size N=64 @ 48 kHz, AVX2 baseline).
+  > These figures establish the formal quality and regression baseline envelopes. Ambient thermal conditions, system load, or compiler release shifts can modulate raw execution times without representing algorithmic regressions.
 
-  * **WaveNet Standard CH16:** **36.9 µs** (**2.8%** of the 1.33 ms deadline)
-  * **WaveNet Feather CH8:** **19.4 µs** (**1.5%**)
-  * **WaveNet Lite CH12:** **52.6 µs** (**3.9%**)
-  * **WaveNet Nano CH4:** **17.4 µs** (**1.3%**)
-  * **WaveNet A2 Full CH8:** **27.6 µs** (**2.1%**)
-  * **WaveNet A2 Lite CH3:** **18.4 µs** (**1.4%**)
-  * **LSTM 1×16:** **7.5 µs** (**0.6%**)
-  * **LSTM 2×8:** **7.6 µs** (**0.6%**)
-  * **ConvNet:** **10.2 µs** (**0.8%**)
+  * **WaveNet Standard CH16:** **43.3 µs** (**3.2%** of the 1.33 ms deadline)
+  * **WaveNet Feather CH8:** **19.9 µs** (**1.5%**)
+  * **WaveNet Lite CH12:** **56.4 µs** (**4.2%**)
+  * **WaveNet Nano CH4:** **17.8 µs** (**1.3%**)
+  * **WaveNet A2 Full CH8:** **25.6 µs** (**1.9%**)
+  * **WaveNet A2 Lite CH3:** **22.6 µs** (**1.7%**)
+  * **LSTM 1×16:** **6.8 µs** (**0.5%**)
+  * **LSTM 2×8:** **7.1 µs** (**0.5%**)
+  * **ConvNet:** **8.7 µs** (**0.7%**)
   * **Linear RF=4 Direct:** **0.3 µs** (**0.02%**)
-  * **Full DSP Pipeline Base (No OS):** **37.2 µs** (**2.8%**)
-  * **Full DSP Pipeline HQ (4× OS):** **150.6 µs** (**11.3%**)
-  * **DSP Resampler (44.1k→48k):** **1.3 µs** | **CabSim IR Medium (512):** **1.3 µs**
+  * **Full DSP Pipeline Base (No OS):** **43.6 µs** (**3.3%**)
+  * **Full DSP Pipeline HQ (4× OS):** **177.4 µs** (**13.3%**)
+  * **DSP Resampler (44.1k→48k):** **1.2 µs** | **CabSim IR Medium:** **1.2 µs**
 
 * **Stress Coverage:** Soak, concurrency, heap-audit, deadline, and model-checking suites exercise long-running and real-time invariants; skipped coverage and failed audit phases must be reviewed separately from passing checks.
 

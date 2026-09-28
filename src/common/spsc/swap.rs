@@ -351,6 +351,20 @@ impl<R: SwapRing> RtSwapDrain<R> {
         self.ring.occupied()
     }
 
+    /// Consumes the drain, returning the owned ring consumer and any payload
+    /// still parked in the deferred slot.
+    ///
+    /// Teardown surface for hosts dismantling the RT thread while a payload
+    /// is parked: the caller resolves the parked payload's obligations off-RT
+    /// (consuming its sequence slot, dropping its heap resources on a
+    /// non-RT thread) and returns the ring to cold storage. The RT path
+    /// itself never uses this: only [`Self::drain`] resolves parked payloads
+    /// on the audio thread.
+    #[inline(always)]
+    pub fn into_parts(self) -> (R, Option<Box<R::Payload>>) {
+        (self.ring, self.deferred)
+    }
+
     /// Runs one callback drain (Phases 0–2 + end-of-drain flush).
     ///
     /// Sets `RT_STATUS_STRUCTURAL_DEFERRED` / `RT_STATUS_STRUCTURAL_SUPERSEDED`

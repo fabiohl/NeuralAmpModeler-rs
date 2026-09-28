@@ -390,7 +390,7 @@ run_spectral_fidelity() {
     local start_t end_t
     start_t=$(date +%s%N)
     run_dashboard_phase "spectral_fidelity" 5 \
-        cargo test --release --features testing --test models spectral_fidelity -- --nocapture || true
+        bash -c 'cargo test --release --features testing --test models spectral_fidelity -- --nocapture && cargo test --release --features testing --test models spectral_fidelity::model_baselines::baseline_ -- --ignored --nocapture' || true
     end_t=$(date +%s%N)
     local dur
     dur=$(awk -v ns=$((end_t - start_t)) 'BEGIN { printf "%.1f", ns / 1000000000 }')

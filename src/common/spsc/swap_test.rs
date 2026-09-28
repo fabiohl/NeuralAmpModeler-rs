@@ -810,3 +810,30 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         4 => Just(Op::Callback),
     ]
 }
+
+/// Teardown — `into_parts` returns the ring consumer and the parked payload
+/// exactly as the drain left them, so a deactivating host can resolve the
+/// parked payload's obligations off-RT (sequence slot, resource drop) and
+/// return the ring to cold storage.
+#[test]
+fn into_parts_returns_ring_and_parked_payload() {
+    let mut h = Harness::new(8, 8, 1, false);
+    for id in 0..2u64 {
+        h.producer
+            .push(TestPayload::structural(id, 100 + id))
+            .unwrap();
+    }
+    let mut handler = TestHandler::new(16);
+    h.callback(&mut handler);
+
+    assert_eq!(handler.installed, vec![0], "the first payload installs");
+    assert!(h.drain.has_deferred(), "the second payload parks");
+
+    let (ring, parked) = h.drain.into_parts();
+    assert_eq!(
+        parked.as_ref().map(|p| p.id),
+        Some(1),
+        "the parked payload is handed back untouched (never installed, never dropped)"
+    );
+    assert_eq!(ring.occupied(), 0, "the ring end keeps its drained state");
+}

@@ -94,13 +94,13 @@ All historical tracking metrics are recorded in local files within your project 
 > **Current vs. historical numbers.** The authoritative *current* per-model latency
 > figures come from a fresh `regression_gate` run — most conveniently via
 > [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) (PERFORMANCE section, median per 64-sample block).
-> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 44.9 µs
-> (3.4%, 2925 µs/MMAC), Feather CH8 ≈ 20.0 µs (1.5%, 5176 µs/MMAC), Lite CH12 ≈ 58.8 µs (4.4%, 6746 µs/MMAC),
-> Nano CH4 ≈ 18.0 µs (1.4%, 18595 µs/MMAC outlier due to layer overhead),
-> A2-Full CH8 ≈ 25.7 µs (1.9%), A2-Lite CH3 ≈ 21.0 µs (1.6%), LSTM 1×16 ≈ 6.7 µs (0.5%),
-> LSTM 2×8 ≈ 7.3 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=4 Direct ≈ 0.3 µs (0.02%),
+> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 43.3 µs
+> (3.2%), Feather CH8 ≈ 19.9 µs (1.5%), Lite CH12 ≈ 56.4 µs (4.2%),
+> Nano CH4 ≈ 17.8 µs (1.3%),
+> A2-Full CH8 ≈ 25.6 µs (1.9%), A2-Lite CH3 ≈ 22.6 µs (1.7%), LSTM 1×16 ≈ 6.8 µs (0.5%),
+> LSTM 2×8 ≈ 7.1 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=4 Direct ≈ 0.3 µs (0.02%),
 > DSP Resampler (44.1k→48k) ≈ 1.2 µs, DSP CabSim IR Medium (2048 taps) ≈ 1.2 µs,
-> Full DSP Pipeline Base (No OS) ≈ 45.6 µs (3.4%), Full DSP Pipeline HQ (4× OS) ≈ 185.6 µs (13.9%).
+> Full DSP Pipeline Base (No OS) ≈ 43.6 µs (3.3%), Full DSP Pipeline HQ (4× OS) ≈ 177.4 µs (13.3%).
 > All ≤ 4.4% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
 > sections further down are **historical point-in-time studies** documenting engineering
 > decisions; their absolute numbers (e.g. WaveNet Std ≈ 92.6 µs) predate later optimizations
@@ -361,12 +361,13 @@ therefore always requires renaming the contract id in the same change.
 #### DSP Infrastructure and Pipeline Benchmarks
 
 The DSP infrastructure targets exercise the audio thread under production conditions:
-- **Resampling**: `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Resampler_96k_to_48k` (batch of 64 blocks, reported per-block).
-- **Cabinet Simulation**: `RT_DSP_CabSim_IR_Medium` (UPOLS partitioned convolution, 64-block batch).
-- **Canonical End-to-End Pipeline**:
-  - `RT_DSP_Pipeline_Base_NoOS`: Base canonical pipeline without oversampling (48 kHz, 64-sample block, `BossWN-standard.nam`).
-  - `RT_DSP_Pipeline_HQ_4xOS`: High-quality 4× oversampled pipeline (half-band polyphase filtering + inference at 192 kHz).
-  - `RT_DSP_Pipeline_AdaptiveOn`: Pipeline with active `AdaptiveCompute` (`AdaptiveComputeMode::Conservative`), exercising real-time host latency telemetry updates, state machine degradation/recovery transitions, crossfade clock advancement, and double-pass WaveNet inference with zero heap allocations.
+
+* **Resampling**: `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Resampler_96k_to_48k` (batch of 64 blocks, reported per-block).
+* **Cabinet Simulation**: `RT_DSP_CabSim_IR_Medium` (UPOLS partitioned convolution, 64-block batch).
+* **Canonical End-to-End Pipeline**:
+  * `RT_DSP_Pipeline_Base_NoOS`: Base canonical pipeline without oversampling (48 kHz, 64-sample block, `BossWN-standard.nam`).
+  * `RT_DSP_Pipeline_HQ_4xOS`: High-quality 4× oversampled pipeline (half-band polyphase filtering + inference at 192 kHz).
+  * `RT_DSP_Pipeline_AdaptiveOn`: Pipeline with active `AdaptiveCompute` (`AdaptiveComputeMode::Conservative`), exercising real-time host latency telemetry updates, state machine degradation/recovery transitions, crossfade clock advancement, and double-pass WaveNet inference with zero heap allocations.
 
 ### Baselines and Renewal
 
@@ -401,12 +402,12 @@ Finding F-PERF-28 (post-audit, 2026-09-19): the quality dashboard flagged
 commit `7576d49`). A controlled same-boot bisect attributed the end-to-end delta to the
 AVX2 vectorization of RFFT `pack_re_im`/`unpack_re_im`:
 
-| Configuration (audit bisect, same boot 2026-09-19)              | RT_Linear (Direct RF=4) median | Verdict                |
-|:----------------------------------------------------------------|:---------------------------|:-----------------------|
-| `36830e2` (scalar baseline)                                     | 269.7 ns                   | baseline level         |
-| HEAD `f44b3fa` (with T4.8 SIMD)                                 | 327–348 ns                 | +22–29%, above limit   |
-| HEAD, only `src/models/linear_fft/process.rs` reverted          | 347.7 ns                   | innocent               |
-| HEAD, only `src/math/dsp/rfft.rs` reverted (T4.8 scalar)        | 278.8 ns (−20.8%)          | "guilty" in isolation  |
+| Configuration (audit bisect, same boot 2026-09-19)       | RT_Linear (Direct RF=4) median | Verdict               |
+|:-------------------------------------------------------- |:------------------------------ |:--------------------- |
+| `36830e2` (scalar baseline)                              | 269.7 ns                       | baseline level        |
+| HEAD `f44b3fa` (with T4.8 SIMD)                          | 327–348 ns                     | +22–29%, above limit  |
+| HEAD, only `src/models/linear_fft/process.rs` reverted   | 347.7 ns                       | innocent              |
+| HEAD, only `src/math/dsp/rfft.rs` reverted (T4.8 scalar) | 278.8 ns (−20.8%)              | "guilty" in isolation |
 
 This report documents the corrective cycle: bench extension (measurement blind-spot
 closure), paired SIMD-vs-scalar A/B per stage and per FFT size, the binding decision,
@@ -418,11 +419,11 @@ The T4.8 micro-bench covered only N=512. Resolving every production `RfftPlanner
 instantiation through its planner (`src/models/linear.rs`, `src/models/linear_fft.rs`,
 `src/dsp/cabsim/conv.rs`):
 
-| Production path                                   | RFFT size N                                            | Covered by bench group `Rfft_stages_by_size` |
-|:--------------------------------------------------|:-------------------------------------------------------|:---------------------------------------------|
-| `linear_test.nam` (the `RT_Linear_Direct_RF4` bench fixture) | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below |
-| Linear FFT path (`receptive_field ≥ 256`), e.g. the synthetic `RT_Linear_Fft_RF2048` target | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048** | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
-| CabSim `ConvEngine::new(ir, 64)` (block 64)       | `(2 × 64).next_power_of_two()` = **N=128**             | yes (N=128)                                   |
+| Production path                                                                             | RFFT size N                                                                                                       | Covered by bench group `Rfft_stages_by_size`                                                 |
+|:------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------- |
+| `linear_test.nam` (the `RT_Linear_Direct_RF4` bench fixture)                                | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below                                                               |
+| Linear FFT path (`receptive_field ≥ 256`), e.g. the synthetic `RT_Linear_Fft_RF2048` target | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048**                 | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
+| CabSim `ConvEngine::new(ir, 64)` (block 64)                                                 | `(2 × 64).next_power_of_two()` = **N=128**                                                                        | yes (N=128)                                                                                  |
 
 The bench group `Rfft_stages_by_size` (`benches/dsp_bench.rs`) replaces the
 single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} for
@@ -459,25 +460,26 @@ single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} f
 * **Stage level** (`benches/dsp_bench.rs::Rfft_stages_by_size`, Δ% = scalar vs SIMD,
   positive = scalar slower; all pooled p ≤ 0.05 unless noted):
 
-| Stage               | N=64     | N=128   | N=256   | N=512   | N=1024   |
-|:--------------------|:---------|:--------|:--------|:--------|:---------|
-| `pack_re_im`        | +123.6%  | +54.8%  | +18.9%  | +7.9%   | **−3.6%** |
-| `unpack_re_im`      | +101.3%  | +27.5%  | +18.3%  | +8.9%   | +4.3%    |
-| `post_twiddle`      | −1.8%    | −3.0%   | +1.2%   | +0.9%   | −0.2%    |
-| `pre_twiddle`       | +0.7%    | +0.4%   | +1.4%   | +0.2%   | +1.0%    |
-| `process_forward_full`  | +3.6% | +2.8%  | +1.6%   | +0.9%   | +1.0%    |
-| `process_inverse_full`  | +0.8% | +7.4%  | +3.0%   | −1.9%   | −0.4%    |
+| Stage                  | N=64    | N=128  | N=256  | N=512 | N=1024    |
+|:---------------------- |:------- |:------ |:------ |:----- |:--------- |
+| `pack_re_im`           | +123.6% | +54.8% | +18.9% | +7.9% | **−3.6%** |
+| `unpack_re_im`         | +101.3% | +27.5% | +18.3% | +8.9% | +4.3%     |
+| `post_twiddle`         | −1.8%   | −3.0%  | +1.2%  | +0.9% | −0.2%     |
+| `pre_twiddle`          | +0.7%   | +0.4%  | +1.4%  | +0.2% | +1.0%     |
+| `process_forward_full` | +3.6%   | +2.8%  | +1.6%  | +0.9% | +1.0%     |
+| `process_inverse_full` | +0.8%   | +7.4%  | +3.0%  | −1.9% | −0.4%     |
 
   Absolute anchors (median-of-3): pack N=128 9.0 → 14.0 ns; pack N=256 17.3 → 20.5 ns;
   full forward N=128 403.6 → 413.7 ns. The isolated AVX2 shuffle kernels do win at
   small N, but pack/unpack are only ~2-5% of a full transform, so the isolated gain
   dilutes to ≤ 3.6% at the transform level.
+
 * **End-to-end** (`benches/regression_gate.rs`, 100 samples × 5 s, `ForceAvx2Guard`):
 
-| Series                     | SIMD (r1/r2/r3)                  | scalar (r1/r2/r3)                | Δ (pooled)        | Welch p |
-|:---------------------------|:---------------------------------|:---------------------------------|:------------------|:--------|
-| `RT_Linear_Direct_RF4`     | 336.9 / 345.3 / 353.6 ns         | 351.1 / 341.3 / 348.3 ns         | +0.9%             | 0.107   |
-| `RT_DSP_CabSim_IR_Medium`  | 82.7 / 85.6 / 85.3 µs            | 84.6 / 83.0 / 83.2 µs            | **−2.5%**         | 0.006   |
+| Series                    | SIMD (r1/r2/r3)          | scalar (r1/r2/r3)        | Δ (pooled) | Welch p |
+|:------------------------- |:------------------------ |:------------------------ |:---------- |:------- |
+| `RT_Linear_Direct_RF4`    | 336.9 / 345.3 / 353.6 ns | 351.1 / 341.3 / 348.3 ns | +0.9%      | 0.107   |
+| `RT_DSP_CabSim_IR_Medium` | 82.7 / 85.6 / 85.3 µs    | 84.6 / 83.0 / 83.2 µs    | **−2.5%**  | 0.006   |
 
 ### Binding decision (T10.2 criteria)
 
@@ -593,23 +595,23 @@ Unlike the static path above, `Conv1dDyn::process_block` has always used **dual-
 
 Dual-frame median vs single-frame median, per independent invocation:
 
-| Geometry | Δ% (dual vs single) | Welch p | Verdict |
-|:---------|:--------------------|:--------|:--------|
-| CH=4     | −8.1%, −5.8%, −8.1%, −5.3% | ≤ 3.5e-08 | dual faster, all runs |
+| Geometry | Δ% (dual vs single)                                                   | Welch p            | Verdict               |
+|:-------- |:--------------------------------------------------------------------- |:------------------ |:--------------------- |
+| CH=4     | −8.1%, −5.8%, −8.1%, −5.3%                                            | ≤ 3.5e-08          | dual faster, all runs |
 | CH=8     | −12.0%, −7.6% (p = 0.13, outlier-contaminated sample), −12.4%, −13.2% | < 1e-4 in 3/4 runs | dual faster, all runs |
-| CH=16    | −12.1%, −9.0%, −9.6%, −11.6% | ≈ 0 | dual faster, all runs |
+| CH=16    | −12.1%, −9.0%, −9.6%, −11.6%                                          | ≈ 0                | dual faster, all runs |
 
 Representative medians (formal run, core 14): CH4 single 1.48 µs / dual 1.36 µs; CH8 single 1.82 µs / dual 1.60 µs; CH16 single 3.32 µs / dual 3.00 µs.
 
 ### Results — kernel-level control (dual kernel vs 2× single kernel)
 
-| Geometry | Δ% (dual vs 2× single) | Interpretation |
-|:---------|:-----------------------|:---------------|
-| CH=4     | **+18.5% to +20.3%** (p < 0.01) | the isolated 4-wide dual kernel loses decisively (doubled scalar state handling) |
-| CH=8     | −0.9% to +1.9% (p = 0.13..7e-04) | statistical tie |
-| CH=16    | −15.3% to +0.1% (drift-dominated) | tie to slightly faster |
+| Geometry | Δ% (dual vs 2× single)            | Interpretation                                                                   |
+|:-------- |:--------------------------------- |:-------------------------------------------------------------------------------- |
+| CH=4     | **+18.5% to +20.3%** (p < 0.01)   | the isolated 4-wide dual kernel loses decisively (doubled scalar state handling) |
+| CH=8     | −0.9% to +1.9% (p = 0.13..7e-04)  | statistical tie                                                                  |
+| CH=16    | −15.3% to +0.1% (drift-dominated) | tie to slightly faster                                                           |
 
-### Analysis and Architectural Decision
+### Analysis & Architectural Decision
 
 The call-level and kernel-level results **diverge**: even where the isolated dual kernel is slower (CH=4), the dual-frame call wins by 5–13%. The dual-frame path amortizes the per-frame fixed overhead that dominates at K=3: the tap-pointer setup loop, the prefetch-strategy call, and the call prologue run **once per frame pair instead of twice**. At CH=16 the wide interleave additionally lets the dual kernel win on its own merits. This mirrors the static-path lesson in inverse: there, register pressure made tiling lose; here, fixed-overhead amortization makes tiling win — the dyn kernels are structurally different (scalar-init accumulators, per-tap pointer arrays), so the static-path result indeed did not transfer.
 
@@ -729,16 +731,16 @@ Benchmark file: [`benches/spsc_swap_bench.rs`](../benches/spsc_swap_bench.rs).
 
 The suite evaluates both the audio callback drain hot-path and the multi-tier GC deferral mechanics:
 
-| Benchmark Function | Domain | Subsystem / Protocol Invariant | Typical Latency (AVX2 / x86-64-v3) |
-|:---|:---|:---|:---|
-| `Swap_Drain_Quiescent` | Audio Thread | Phase 1 empty check under steady state (quiescent) | **~2.7 ns** |
-| `Swap_Drain_LowContention_Single` | Audio Thread | Single pending payload drained, swapped, and installed | **~448 ns** |
-| `Swap_Drain_HighContention_Coalescing` | Audio Thread | 16-burst queue coalesced in 1 callback (latest-wins policy) | **~888 ns** |
-| `Swap_Drain_Budget_Exceeded_Deferred` | Audio Thread | Budget-constrained pop deferral with atomic backlog flag | **~584 ns** |
-| `Gc_Cascade_Tier1_Spsc` | Audio Thread | Primary lock-free SPSC GC channel enqueue | **~212 ns** |
-| `Gc_Cascade_Tier2_ParkingLot` | Audio Thread | Fixed 16-slot parking lot fallback when SPSC is full | **~370 ns** |
-| `Gc_Cascade_Tier3_Overflow` | Audio Thread | Treiber-style lock-free linked list fallback (Tier 3) | **~1.79 µs** |
-| `Gc_Drain_Housekeeping_AllTiers` | Housekeeping (Off-RT) | Sweeps and frees items across all 3 tiers off the audio thread | **~1.53 µs** |
+| Benchmark Function                     | Domain                | Subsystem / Protocol Invariant                                 | Typical Latency (AVX2 / x86-64-v3) |
+|:-------------------------------------- |:--------------------- |:-------------------------------------------------------------- |:---------------------------------- |
+| `Swap_Drain_Quiescent`                 | Audio Thread          | Phase 1 empty check under steady state (quiescent)             | **~2.7 ns**                        |
+| `Swap_Drain_LowContention_Single`      | Audio Thread          | Single pending payload drained, swapped, and installed         | **~448 ns**                        |
+| `Swap_Drain_HighContention_Coalescing` | Audio Thread          | 16-burst queue coalesced in 1 callback (latest-wins policy)    | **~888 ns**                        |
+| `Swap_Drain_Budget_Exceeded_Deferred`  | Audio Thread          | Budget-constrained pop deferral with atomic backlog flag       | **~584 ns**                        |
+| `Gc_Cascade_Tier1_Spsc`                | Audio Thread          | Primary lock-free SPSC GC channel enqueue                      | **~212 ns**                        |
+| `Gc_Cascade_Tier2_ParkingLot`          | Audio Thread          | Fixed 16-slot parking lot fallback when SPSC is full           | **~370 ns**                        |
+| `Gc_Cascade_Tier3_Overflow`            | Audio Thread          | Treiber-style lock-free linked list fallback (Tier 3)          | **~1.79 µs**                       |
+| `Gc_Drain_Housekeeping_AllTiers`       | Housekeeping (Off-RT) | Sweeps and frees items across all 3 tiers off the audio thread | **~1.53 µs**                       |
 
 ### Real-Time Safety Guarantees
 
@@ -869,6 +871,7 @@ To resolve the evidence conflict noted during audit between initial same-window 
 > **Manual Tooling Only:** This bench is **not part** of the automated regression gate (`regression_gate.rs` / `quality-dashboard.sh`) — it is an off-line calibration tool intended for targeted investigation and threshold validation.
 
 * **When to recalibrate:** After changes to `src/math/common/ops.rs` (`prefetch_strategy_simple`), `src/models/wavenet/conv1d.rs`, `src/models/wavenet/conv1d_dual.rs`, `src/models/wavenet/conv1d_dyn.rs`/`conv1d_dyn_dual.rs` (groups `conv1d_dyn_dual_vs_single` / `raw_dual_vs_2x_single`), or when changing the Rust toolchain.
+
 * **How to recalibrate:**
 
   ```bash
@@ -878,8 +881,10 @@ To resolve the evidence conflict noted during audit between initial same-window 
   ```
 
 * **Decision thresholds:**
+
   * Regression > 5% in the 16×16 ($d=1$) kernel motivates an immediate revert.
   * Improvement > 5% in the 8×8 ($d \ge 4$) kernel motivates expanding the prefetch guard.
+
 * **Model-level confirmation:** Always confirm kernel-level results with:
 
   ```bash
@@ -1209,11 +1214,13 @@ Static monomorphization via `dispatch_simd!` generates dedicated machine code pe
 To resolve open architectural questions regarding whether large monomorphized functions (e.g. `WaveNetA2Cascade::process` at ~144.4 KiB or `WaveNetA2Dyn::process` at ~89.3 KiB) induce instruction cache thrashing and tail jitter in real-time DSP loops, an empirical hardware audit was executed on a calibrated testbed.
 
 #### Calibrated Hardware Environment (2026-09-22)
+
 * **Processor**: AMD Ryzen 7 5700U with Radeon Graphics (Zen 2 Lucienne, 8 cores / 16 threads, L1i 32 KiB 8-way per core).
 * **Isolation & Governor**: Pinned to Core 4 (`taskset -c 4`), scaling governor locked to `performance` across all threads, system load idle.
 * **Toolchain & Version**: `rustc 1.98.1` (stable `x86_64-unknown-linux-gnu`), `NeuralAmpModeler-rs v0.8.0`.
 
 #### Measured Code Footprint vs. L1i Capacity (`nm`, `objdump`, `cargo bloat`)
+
 * `WaveNetA2Cascade::process`: **147,883 bytes** (~144.4 KiB, 29,979 instructions) — **4.51×** total L1i cache capacity.
 * `WaveNetA2Dyn::process` (with inlined `process_frame_dyn`): **91,444 bytes** (~89.3 KiB, 18,666 instructions) — **2.79×** L1i cache capacity.
 * `WaveNetA2<8>::process` (Static Full CH8 baseline): **10,697 bytes** (~10.7 KiB, 4,400 instructions) — **0.33×** L1i (fits comfortably inside L1i).
@@ -1221,13 +1228,14 @@ To resolve open architectural questions regarding whether large monomorphized fu
 
 #### Hardware Performance Counter Telemetry (`perf stat`, 100 Criterion samples / 5s capture)
 
-| Benchmark Target | Model / Mode | Block Latency | IPC | L1i Miss Rate | L1i MPKI | iTLB MPKI | Cache Misses / Block | Verdict |
-|:---------------- |:------------ |:------------- |:--- |:------------- |:-------- |:--------- |:-------------------- |:------- |
-| `RT_A2_Dyn_Gated_CH8` | Dynamic Gated (CH=8) | 180.91 µs | **3.05** | **0.419%** | **0.0129** | 0.000063 | ~41 misses / block | **Negligible contention** |
-| `RT_A2_Dyn_Blended_CH3` | Dynamic Blended (CH=3) | 137.18 µs | **2.85** | **0.046%** | **0.0097** | 0.000026 | ~21 misses / block | **Negligible contention** |
-| `RT_A2_Full_CH8` | Static Baseline (CH=8) | 25.93 µs | **2.74** | **0.236%** | **0.0564** | 0.000084 | ~24 misses / block | **Baseline (fits L1i)** |
+| Benchmark Target        | Model / Mode           | Block Latency | IPC      | L1i Miss Rate | L1i MPKI   | iTLB MPKI | Cache Misses / Block | Verdict                   |
+|:----------------------- |:---------------------- |:------------- |:-------- |:------------- |:---------- |:--------- |:-------------------- |:------------------------- |
+| `RT_A2_Dyn_Gated_CH8`   | Dynamic Gated (CH=8)   | 180.91 µs     | **3.05** | **0.419%**    | **0.0129** | 0.000063  | ~41 misses / block   | **Negligible contention** |
+| `RT_A2_Dyn_Blended_CH3` | Dynamic Blended (CH=3) | 137.18 µs     | **2.85** | **0.046%**    | **0.0097** | 0.000026  | ~21 misses / block   | **Negligible contention** |
+| `RT_A2_Full_CH8`        | Static Baseline (CH=8) | 25.93 µs      | **2.74** | **0.236%**    | **0.0564** | 0.000084  | ~24 misses / block   | **Baseline (fits L1i)**   |
 
 #### Microarchitectural Takeaways and Policy Decisions
+
 1. **Static Footprint Does Not Dictate Dynamic Thrashing:**
    Despite `WaveNetA2Cascade::process` occupying 4.51× the physical capacity of L1i, its actual dynamic L1i miss rate is only 0.42%, with an MPKI (misses per 1,000 instructions) of 0.0129. This is **two orders of magnitude below** the empirical cache thrashing threshold ($> 1.0\text{ MPKI}$).
 2. **Streaming Prefetcher & Op-Cache Efficacy in Block Loops:**
@@ -1252,10 +1260,12 @@ cargo bloat --release --example synthetic_model --crates
 ```
 
 #### Interpreting `cargo bloat` Output
+
 * **Function Size Distribution**: Highlights which monomorphized DSP models or mathematical kernels dominate the `.text` segment. Any newly added DSP routine appearing in the top 10 with $> 50\text{ KiB}$ should be audited to verify whether `#[inline(always)]` is strictly necessary on large loops or if standard `#[inline]` achieves identical throughput with lower code density.
 * **Crate Footprint Share**: Confirms that non-DSP utility crates (`std`, formatting, allocators) remain segregated in cold pages and do not contaminate hot-path symbols.
 
 #### System Binutils Fallback
+
 On systems where `cargo-bloat` is not available, equivalent symbol size sorting can be obtained using standard system utilities:
 
 ```bash
@@ -1278,18 +1288,23 @@ To prevent maintenance divergence and unnecessary binary growth, mathematical su
 A critical principle in high-performance digital signal processing is: **Do not apply naive "Don't Repeat Yourself" (DRY) refactoring to performance-critical SIMD kernels.**
 
 #### Architectural Case Study: `film::dot_product_avx2` vs. `gemm::dot_basic::dot_product_avx2`
+
 * **FiLM Layer Kernel (`src/models/a2/film.rs`)**:
   Operates on very short conditioning vectors (`cond_per_group`, typically 1 to 8 elements). It employs 2 YMM accumulators (16-wide unroll), a naive scalar tail loop (`out += a[i] * b[i]`), and an aggressive `#[inline(always)]` annotation to eliminate stack frames inside `FiLMLayer::process`.
 * **GEMM Kernel (`src/math/gemm/dot_basic.rs`)**:
   Operates on general dense matrix multiplication. It uses 4 YMM accumulators (32-wide unroll) and a compensated Kahan summation tail loop (4 arithmetic operations per tail element) to maximize accuracy on large vector reductions.
 
 #### Numerical Divergence from Floating-Point Non-Associativity
+
 In IEEE-754 floating-point arithmetic, addition is non-associative: $(a + b) + c \ne a + (b + c)$. Because the FiLM kernel uses 2 accumulators while GEMM uses 4 accumulators with Kahan tail compensation:
+
 * On vectors with length $\ge 32$, rounding accumulators differ by up to **2 ULPs** (Units in the Last Place) for arbitrary float inputs.
 * Unifying both into a single kernel would force high-overhead branch checks and Kahan tail compensation on ultra-short FiLM vectors (degrading real-time audio latency) and alter the established numerical signature of A2 models.
 
 #### Preservation Defense: Synchronization Comments and Parity Tests
+
 To prevent silent maintenance drift without compromising performance or bit-exactness:
+
 1. **Bidirectional Synchronization Markers**: Both files contain explicit `// KEEP IN SYNC WITH:` header comments.
 2. **Automated Identity Regression Tests**: `src/models/a2/film_test.rs::test_dot_product_avx2_identity_with_gemm` continuously verifies numerical equivalence across vector lengths $0..=128$, guaranteeing bit-exact identity on dyadic progressions and $\le 1\text{ ULP}$ on random float distributions.
 
@@ -1300,7 +1315,9 @@ To prevent silent maintenance drift without compromising performance or bit-exac
 In real-time audio processing, arithmetic operations that execute strictly **once per audio buffer** (in the prologue before the sample/frame processing loop) have a negligible impact on overall computation time.
 
 #### Case Study: Division (`div`) in `WaveNetA2Cascade::process`
+
 Assembly inspection of `WaveNetA2Cascade::process` revealed a hardware integer division instruction (`div %r8d` / `div %r8`) in the prologue calculating buffer limits (`output.len() / out_per_frame`):
+
 * **Execution Frequency**: Exactly 1 invocation per audio block (375 times per second at 48 kHz / 128 samples).
 * **Hardware Latency**: ~15–20 cycles on modern x86-64 CPUs (~4.3–5.7 ns at 3.5 GHz).
 * **Block Workload**: Processing a 128-sample block through WaveNet A2 takes ~100–150 µs (~350,000–525,000 cycles).
@@ -1315,14 +1332,17 @@ Attempting strength reduction via conditional branching (e.g. testing for power-
 Profile-Guided Optimization (PGO) and Post-Link Optimization (such as LLVM BOLT) provide measurable performance benefits in production audio applications (e.g. continuous huge-page mapping via `__bolt_hugify`). However, the boundary between the engine library and downstream consumer hosts must remain strictly defined:
 
 #### Upstream Engine Responsibilities (`NeuralAmpModeler-rs`)
+
 * **Canonical Profiling Catalog**: Expose a host-agnostic, representative fixture manifesto (`reference_architectures()` and `ArchitectureFixtureSpec` in `src/testing/catalog.rs`) covering all five supported model families (WaveNet A1, WaveNet A2, LSTM, ConvNet, and Linear FIR/FFT).
 * **Headless Profiling Harnesses**: Maintain deterministic test and benchmark harnesses that downstream builders can drive during their own packaging pipeline without GUI or audio-server dependencies.
 
 #### Downstream Host & Application Responsibilities
+
 * **Profile Generation & Consumption**: Downstream packaging scripts (e.g. standalone audio hosts or DAW plugins) drive `-Cprofile-generate` and `-Cprofile-use` using their own compiler flags (`-Ctarget-cpu=native`), target frameworks, and runtime environments.
 * **Binary Post-Optimization**: Applying BOLT reordering and `__bolt_hugify` must occur on the final linked ELF binary or shared library (`.so`/`.clap`), as BOLT operates strictly on post-link binaries with relocations (`-Wl,--emit-relocs`), never on intermediate `.rlib` static libraries.
 
 #### Why Upstream Cannot Distribute Pre-Compiled `.profdata` Profiles
+
 1. **Toolchain Version Coupling**: LLVM's `IndexedInstrProf` format changes across compiler releases. A `.profdata` generated on one `rustc` version causes fatal compilation errors on older or newer toolchains.
 2. **CFG Hash Fragility**: LLVM computes a 64-bit structural hash of every function's Control Flow Graph. Any minor variance in Cargo feature flags or dependency versions invalidates the hash, causing LLVM to discard the profile silently.
 3. **Cargo Scope Leakage**: Cargo does not support setting `-Cprofile-use` for a single dependency in `Cargo.toml`. Passing it via `RUSTFLAGS` forces the flag across all dependencies and `std`, degrading compilation across unrelated crates.

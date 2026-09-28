@@ -179,20 +179,28 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
 
     // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
     //
-    // Process the resampled buffers in place — each adapter
-    // consumes the sub-block into its input FIFO before writing back the
-    // causal output, so source and destination may alias. This removes the
-    // up-to-32 KiB copy-back per callback (and the destination scratch).
+    // Process the resampled buffers through the block-size-agnostic stereo
+    // pair driver: each adapter chunks the host sub-block internally against
+    // its fixed UPOLS partition and consumes the samples into its input FIFO
+    // before writing back the causal output, so source and destination may
+    // alias (no copy-back, no destination scratch) and the cab-sim's
+    // algorithmic latency no longer tracks the host block size.
     //
     // Stereo decoupling: the stereo-decoupled pair path runs independent L/R
-    // adapters so no convolucional state is shared between channels. The
-    // shared-state single-adapter path is retained for mono-only consumers.
+    // adapters so no convolucional state is shared between channels. In mono
+    // mode only the left adapter advances (the right channel mirrors the
+    // processed left signal below); the shared-state single-adapter path is
+    // retained for mono-only consumers.
     let convolved = if let Some(ref mut pair) = ctx.conv_pair {
-        pair.l
-            .process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
-        if !*ctx.process_mono {
-            pair.r
-                .process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
+        if *ctx.process_mono {
+            pair.l
+                .process_block(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
+        } else {
+            pair.process_block_stereo(
+                &mut bufs.resamp_out_l[..n_pw],
+                &mut bufs.resamp_out_r[..n_pw],
+                Some(ctx.rt_status),
+            );
         }
         true
     } else if let Some(ref mut conv) = ctx.conv {
@@ -509,12 +517,21 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
     );
 
     // STAGE 3: CAB-SIM (OPTIONAL IR CONVOLUTION)
+    //
+    // Block-size-agnostic stereo pair driver (see the non-streaming stage 3
+    // above): each adapter chunks the host sub-block internally against its
+    // fixed partition, in place, keeping the cab-sim latency decoupled from
+    // the host block size. In mono mode only the left adapter advances.
     let convolved = if let Some(ref mut pair) = ctx.conv_pair {
-        pair.l
-            .process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
-        if !*ctx.process_mono {
-            pair.r
-                .process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
+        if *ctx.process_mono {
+            pair.l
+                .process_block(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
+        } else {
+            pair.process_block_stereo(
+                &mut bufs.resamp_out_l[..n_pw],
+                &mut bufs.resamp_out_r[..n_pw],
+                Some(ctx.rt_status),
+            );
         }
         if n_pw > 0 {
             // Fresh signal reached the convolution: re-arm the IR ring-out

@@ -195,9 +195,10 @@ interposition is confirmed.
   [`src/dsp/oversample_test.rs`](../src/dsp/oversample_test.rs)) now runs unignored, in both debug and
   release, as part of the normal `--lib` unit-test pass exercised by both
   `utils/tests-quick.sh` and `utils/tests-long.sh`. It exercises exactly
-  the code path (a runtime, non-const `f32::log10()` call inside a hot
-  DSP function) that this whole class of bug affects, so it doubles as a
-  living regression check integrated into the normal test suite.
+  the code path (a runtime, non-const `f32::log10()` call in the test's
+  attenuation evaluation) that this whole class of dynamic interposition bug
+  affects, so it doubles as a living regression check integrated into the normal
+  test suite.
 
 ## 5. Guidance for future dependency/toolchain changes
 

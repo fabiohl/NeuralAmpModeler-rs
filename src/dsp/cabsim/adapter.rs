@@ -175,47 +175,50 @@ impl CabSimAdapter {
         self.tail_pending
     }
 
-    /// Feeds one zero-input flush sub-block through the engine, delivering the
+    /// Feeds zero-input flush sub-blocks through the engine, delivering the
     /// decaying IR ring-out into `output`.
     ///
     /// Called after the input went silent (noise gate closed): the convolution
     /// tail is intentional signal, so it is rendered to completion instead of
-    /// being truncated by an instant cut to silence. Each call advances the
-    /// engine FDL by one partition of zeros and consumes up to `output.len()`
-    /// from the remaining
-    /// [`remaining_tail_samples`](Self::remaining_tail_samples) budget; once
-    /// the budget and the FDL are exhausted, further calls emit silence.
+    /// being truncated by an instant cut to silence. Each full partition of
+    /// zeros advances the engine FDL by one step; the tail stream is
+    /// delivered causally into `output` and the remaining
+    /// [`remaining_tail_samples`](Self::remaining_tail_samples) budget is
+    /// consumed by the same amount; once the budget and the FDL are
+    /// exhausted, further calls emit silence.
     ///
     /// Drain never re-arms the budget (no signal reaches the convolution),
     /// guaranteeing termination.
     ///
-    /// # Constraints
-    ///
-    /// *   `output.len() <= partition_size` (same sub-block contract as
-    ///     [`process_in_place`](Self::process_in_place))
+    /// Like [`process_block`](Self::process_block), the drain is
+    /// block-size-agnostic: `output` has **no partition cap** — the driver
+    /// chunks it internally (full partitions first, then the partial
+    /// remainder), so a partition installed below the host quantum (e.g. a
+    /// 128-sample policy under a 512-sample PipeWire buffer) still drains the
+    /// ring-out contiguously per callback instead of clamping the stream and
+    /// raising [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`].
     ///
     /// # RT-Safety
     ///
     /// Zero-alloc, lock-free, never panics.
     pub fn drain_tail(&mut self, output: &mut [f32], rt_status: Option<&RtStatusFlags>) {
-        let sub_n = output.len().min(self.partition);
-        let contract_violation = output.len() > self.partition;
-        if contract_violation && let Some(rt) = rt_status {
-            rt.set_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION);
-        }
-
         if self.engine.is_passthrough() {
             output.fill(0.0);
             return;
         }
 
-        if sub_n > 0 {
+        // Single sweep of zero-input windows: exactly the accumulate/run/
+        // deliver sequence a partition-capped call executes, repeated per
+        // partition-sized window, so the ring-out stream is
+        // blocking-invariant and the budget is consumed by the full block.
+        for chunk in output.chunks_mut(self.partition) {
+            let sub_n = chunk.len();
             self.input_buf[self.input_count..self.input_count + sub_n].fill(0.0);
             self.input_count += sub_n;
+            self.run_partitions(rt_status);
+            self.deliver(sub_n, chunk);
+            self.tail_pending = self.tail_pending.saturating_sub(sub_n);
         }
-        self.run_partitions(rt_status);
-        self.deliver(sub_n, output);
-        self.tail_pending = self.tail_pending.saturating_sub(sub_n);
     }
 
     /// Processes a variable-size sub-block through the convolution engine.
@@ -575,16 +578,14 @@ impl CabSimPair {
         self.r.rearm_tail();
     }
 
-    /// Feeds one zero-input flush sub-block through both channel engines,
+    /// Feeds zero-input flush sub-blocks through both channel engines,
     /// delivering the decaying IR ring-out into `out_l`/`out_r`.
     ///
     /// Both adapters always advance together (their FDLs must flush
     /// independently), even when the pipeline is currently mirroring one
-    /// channel into the other. See [`CabSimAdapter::drain_tail`].
-    ///
-    /// # Constraints
-    ///
-    /// *   `out_l.len() <= partition_size` and `out_r.len() <= partition_size`
+    /// channel into the other. Each slice is block-size-agnostic (no
+    /// partition cap; chunked internally). See
+    /// [`CabSimAdapter::drain_tail`].
     #[inline(always)]
     pub fn drain_tail_stereo(
         &mut self,

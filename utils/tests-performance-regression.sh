@@ -53,7 +53,7 @@ trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" fa
 
 NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
-BENCH_CORE="${NAM_BENCH_CORE:-$DEFAULT_CORE}"
+BENCH_CORE="${NAM_BENCH_CORE:-}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
 BENCH_SUITE="${NAM_BENCH_SUITE:-regression_gate}"
 MODE="${1:---check}"
@@ -72,6 +72,19 @@ esac
 BASELINE_DIR=".performance-baselines"
 FINGERPRINT_FILE="${BASELINE_DIR}/baseline-fingerprint.json"
 CRITERION_BASELINE_TARGET="target/criterion"
+
+# If NAM_BENCH_CORE is not explicitly pinned, check mode adopts the core recorded in
+# the baseline fingerprint (if available and currently online) to prevent false
+# INCOMPARABLE_ENVIRONMENT rejections caused by core-count topology differences.
+if [ -z "$BENCH_CORE" ]; then
+    if [ "$MODE" = "--check" ] && [ -f "$FINGERPRINT_FILE" ]; then
+        BASELINE_CORE=$(sed -n 's/^[[:space:]]*"bench_core":[[:space:]]*"\?\([0-9]\+\)"\?.*/\1/p' "$FINGERPRINT_FILE" 2>/dev/null || true)
+        if [ -n "$BASELINE_CORE" ] && taskset -c "$BASELINE_CORE" true >/dev/null 2>&1; then
+            BENCH_CORE="$BASELINE_CORE"
+        fi
+    fi
+    BENCH_CORE="${BENCH_CORE:-$DEFAULT_CORE}"
+fi
 
 TASKSET=()
 if command -v taskset >/dev/null 2>&1; then

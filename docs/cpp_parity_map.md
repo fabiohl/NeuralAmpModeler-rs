@@ -45,7 +45,7 @@ Este mapa de paridade documenta e audita a correspondência entre a biblioteca c
 
 ### 0.2 Escopo Numérico e Independência de ISA (SIMD)
 
-Este mapa de paridade audita exclusivamente a **semântica numérica e arquitetural** do modelo, independentemente do dispatch SIMD/ISA utilizado internamente pelo Rust (`scalar`, `sse4.2`, `avx2`, e a feature opt-in `avx512`). 
+Este mapa de paridade audita exclusivamente a **semântica numérica e arquitetural** do modelo, independentemente do dispatch SIMD/ISA utilizado internamente pelo Rust (`scalar`, `sse4.2`, `avx2`, e a feature opt-in `avx512`).
 
 Todos os kernels SIMD implementados no Rust devem produzir resultados matematicamente equivalentes e bit-compatíveis com a via escalar de referência do motor. A verificação dessa equivalência entre vias de despacho SIMD e a execução escalar é realizada pelos testes de integridade de ISA (registrados em `target/logs/subphase-isa-parity.log` e pela matriz de testes `isa_parity_full_matrix`), e não por este documento de paridade C++.
 

@@ -916,23 +916,75 @@ fn rearm_tail_after_activity_resets_budget() {
     assert_eq!(adapter.remaining_tail_samples(), adapter.tail_samples());
 }
 
-/// Oversize drain sub-blocks follow the same fail-closed contract as
-/// `process_in_place`: clamp + contract flag, never a panic. Only the clamped
-/// (partition-sized) prefix drains per call, so the budget decreases by
-/// exactly one partition.
+/// Oversize drain blocks are block-agnostic (mirroring `process_block`): the
+/// ring-out is chunked internally against the fixed partition, so a partition
+/// installed below the host quantum never clamps the tail stream and never
+/// raises the contract flag; the budget is consumed by the full block and the
+/// delivered stream is bit-identical to a sequence of partition-sized drains.
 #[test]
-fn drain_tail_oversize_clamps_and_raises_flag() {
+fn drain_tail_oversize_is_block_agnostic() {
     let ir = synth_ir(60, 500.0, 10.0, 48000);
     let partition = 64;
-    let mut adapter = adapter_from_ir(&ir, partition);
-    adapter.rearm_tail();
-    let budget = adapter.remaining_tail_samples();
+    let signal: Vec<f32> = (0..256).map(|i| (i as f32 * 0.05).sin()).collect();
+
+    // Driver: the same compliant active path, then the whole tail drained in
+    // ONE 3×-partition (oversize) closed block.
+    let mut driver = adapter_from_ir(&ir, partition);
+    let mut out = vec![0.0f32; partition];
+    for chunk in signal.chunks(partition) {
+        driver.process_variable(chunk, &mut out[..chunk.len()], None);
+    }
+    driver.rearm_tail();
+    let budget = driver.remaining_tail_samples();
 
     let rt = RtStatusFlags::new();
-    let mut buf = vec![0.0f32; 2 * partition];
-    adapter.drain_tail(&mut buf, Some(&rt));
-    assert!(rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION));
-    assert_eq!(adapter.remaining_tail_samples(), budget - partition);
+    let mut driver_stream = Vec::new();
+    let mut oversize = vec![0.0f32; 3 * partition];
+    driver.drain_tail(&mut oversize, Some(&rt));
+    driver_stream.extend_from_slice(&oversize);
+
+    assert!(
+        !rt.check_flag(RT_STATUS_CABSIM_CONTRACT_VIOLATION),
+        "block-agnostic drain must never flag a contract violation"
+    );
+    assert_eq!(
+        driver.remaining_tail_samples(),
+        budget.saturating_sub(3 * partition),
+        "the budget must be consumed by the full (chunked) block"
+    );
+    assert!(
+        driver_stream.iter().any(|&s| s != 0.0),
+        "the ring-out must reach the whole oversize block (non-vacuous)"
+    );
+
+    // Reference: the identical active path, drained one partition per call
+    // (the legacy compliant sequence), must produce the bit-identical
+    // ring-out stream over the armed budget.
+    let mut reference = adapter_from_ir(&ir, partition);
+    for chunk in signal.chunks(partition) {
+        reference.process_variable(chunk, &mut out[..chunk.len()], None);
+    }
+    reference.rearm_tail();
+    let mut ref_stream = Vec::new();
+    let mut slice = vec![0.0f32; partition];
+    while reference.remaining_tail_samples() > 0 {
+        reference.drain_tail(&mut slice, None);
+        ref_stream.extend_from_slice(&slice);
+    }
+
+    assert!(
+        ref_stream.len() <= driver_stream.len(),
+        "the oversize call may only emit extra post-budget silence"
+    );
+    assert_eq!(
+        &driver_stream[..ref_stream.len()],
+        &ref_stream[..],
+        "an oversize drain must be bit-identical to partition-sized drains"
+    );
+    assert!(
+        driver_stream[ref_stream.len()..].iter().all(|&s| s == 0.0),
+        "post-budget remainder of the oversize block must be silence"
+    );
 }
 
 /// Passthrough adapters have no IR tail: drain must emit silence and the

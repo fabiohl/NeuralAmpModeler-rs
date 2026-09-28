@@ -744,7 +744,7 @@ run_proptests_parity_phase() {
     # provides absolute correctness, so these only guard against silent
     # regressions between two approximate paths (docs/testing.md §8).
     # AVX-512 variants self-skip via `is_x86_feature_detected!` when unsupported.
-    timed_cargo_test "activations_consistency" --release --no-fail-fast --lib -- "math::activations::" --ignored --nocapture || status=1
+    timed_cargo_test "activations_consistency" --release --no-fail-fast --lib -- "math::activations::" --ignored --nocapture --test-threads=1 || status=1
     # Gate FSM envelope continuity proptest (10k cases) — unit-level sibling
     # of tests/gate_fsm_proptest.rs, covers the DynamicHysteresis reversal
     # edge case specifically.

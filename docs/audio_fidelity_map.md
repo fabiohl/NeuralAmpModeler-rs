@@ -18,17 +18,18 @@ of the `.nam` / `.namb` file format contract.
 
 ## Quick Reference
 
-| #   | Factor                                              | Spec? | Mandatory?                         | User-Controllable?       | Quality Impact                                                                          | Status      |
-|:---:|:--------------------------------------------------- |:-----:|:----------------------------------:|:------------------------:|:--------------------------------------------------------------------------------------- |:-----------:|
-| 1   | **Native f32 weights (Weight compression removed)** | ❌    | Was under review — removed         | ❌ No                    | Matches NAMCore native f32 representation; eliminates L1 decompression penalty          | ✅ Active   |
-| 2   | **Activation precision (Standard vs Fast Padé)**    | ❌    | ✅ Default (Standard); Fast opt-in | ✅ Host / CLI            | Standard (exact-grade): ~110–144 dB SNR; Fast: −53 dB error (WaveNet) / degraded (LSTM) | ✅ Active   |
-| 3   | **LSTM recurrent state precision**                  | ❌    | Partial (model-dependent)          | ✅ HF gates + Kahan head | Interop ESR ≈ 7.86e-13 to 1.00e-11 (Standard); vs f64 ideal: 5.68e-13 to 2.71e-12       | ✅ Resolved |
-| 4   | **Host sample rate polyphase resampler**            | ❌    | ✅ When host ≠ 48 kHz              | ❌ No†                   | Passband ripple < 0.05 dB; stopband filter design ≥ 105 dB                              | ✅ Active   |
-| 5   | **Neural stage oversampling (HQ Mode)**             | ❌    | ❌ Off by default                  | ✅ Host / CLI            | Suppresses non-linear aliasing; adds 12/24 samples latency                              | ✅ Active   |
-| 6   | **Denormal prevention (Dither + FTZ/DAZ)**          | ❌    | ✅ Yes                             | ❌ No                    | Zero audible impact (−220 dBFS offset); prevents CPU microcode slowdown                 | ✅ Active   |
-| 7   | **Adaptive Compute (quality fallback FSM)**         | ❌    | ✅ Default                         | 🔶 `--slim` flag         | Prevents xruns under CPU spikes via tier fallback                                       | ✅ Active   |
+| #   | Factor                                                | Spec?  | Mandatory?                         | User-Controllable?       | Quality Impact                                                                          | Status      |
+|:---:|:----------------------------------------------------- |:------:|:----------------------------------:|:------------------------:|:--------------------------------------------------------------------------------------- |:-----------:|
+| 1   | **Native f32 weights (Weight compression removed)**   | ❌     | Was under review — removed         | ❌ No                    | Matches NAMCore native f32 representation; eliminates L1 decompression penalty          | ✅ Active   |
+| 2   | **Activation precision (Standard vs Fast Padé)**      | ❌     | ✅ Default (Standard); Fast opt-in | ✅ Host / CLI            | Standard (exact-grade): ~103–150 dB SNR; Fast: −53 dB error (WaveNet) / degraded (LSTM) | ✅ Active   |
+| 3   | **LSTM recurrent state precision**                    | ❌     | Partial (model-dependent)          | ✅ HF gates + Kahan head | Interop ESR ≈ 7.86e-13 to 1.00e-11 (Standard); vs f64 ideal: 5.68e-13 to 2.71e-12       | ✅ Resolved |
+| 4   | **Host sample rate polyphase resampler**              | ❌     | ✅ When host ≠ 48 kHz              | ❌ No†                   | Passband ripple < 0.05 dB; stopband filter design ≥ 105 dB                              | ✅ Active   |
+| 5   | **Neural stage oversampling (HQ Mode)**               | ❌     | ❌ Off by default                  | ✅ Host / CLI            | Suppresses non-linear aliasing; adds 12/24 samples latency                              | ✅ Active   |
+| 6   | **Denormal prevention (Dither + FTZ/DAZ)**            | ❌     | ✅ Yes                             | ❌ No                    | Zero audible impact (−220 dBFS offset); prevents CPU microcode slowdown                 | ✅ Active   |
+| 7   | **Adaptive Compute (quality fallback FSM)**           | ❌     | ✅ Default                         | 🔶 `--slim` flag         | Prevents xruns under CPU spikes via tier fallback                                       | ✅ Active   |
+| 8   | **Cabinet simulation partitioning (UPOLS trade-off)** | ❌     | ✅ Host policy (default 128)       | ✅ Host / CLI / DAW      | Zero distortion; trades algorithmic latency ($P$ samples) vs RFFT rate ($f_s/P$)        | ✅ Active   |
 
-† Resampler quality (32-tap vs 64-tap) was evaluated and fixed to 64-tap HQ — see §4. Activation precision is exposed via host parameters and CLI (`--activation fast|standard`). Standard (exact-grade) is the universal production default across all model families.
+† Resampler quality (32-tap vs 64-tap) was evaluated and fixed to 64-tap HQ — see §4. Activation precision is exposed via host parameters and CLI (`--activation fast|standard`). Standard (exact-grade) is the universal production default across all model families. Cab-sim partition size is user-configurable via CLI (`--cabsim-partition`) and reported via host latency extensions — see §9.
 
 ---
 
@@ -263,7 +264,85 @@ Reasserted at the start of every audio processing call ([`capture_dsp_pipeline`]
 
 ---
 
-## 9. Governance & Quality Contract Verification
+## 9. Cabinet Simulation — Uniform-Partitioned Overlap-Save (UPOLS) Trade-Off
+
+**What it is.** Impulse response (IR) cabinet simulation uses Uniform-Partitioned Overlap-Save (UPOLS) frequency-domain convolution ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs)). Unlike direct time-domain FIR convolution ($O(L_{IR})$ per sample) or standard unpartitioned FFT convolution (which adds $L_{IR}$ samples of latency), UPOLS segments an impulse response of length $L_{IR}$ into $N_p = \lceil L_{IR} / P \rceil$ equal partitions of length $P$.
+
+### 9.1 Mathematical Foundation & Latency vs FFT Event Rate
+
+Algorithmic latency in UPOLS is bounded strictly by the partition size $P$:
+$$\text{Latency} = P \text{ samples} \quad \left(\tau = \frac{P}{f_s} \text{ seconds}\right)$$
+
+At each partition step, the convolution engine executes:
+
+1. One forward real-to-complex FFT of size $2P$ on the input buffer.
+2. $N_p$ complex multiply-accumulate (MAC) operations across the Frequency Delay Line (FDL).
+3. One inverse real FFT of size $2P$ delivering $P$ output samples.
+
+This cycle occurs at an event frequency proportional to sample rate and inversely proportional to partition size:
+$$f_{\text{event}} = \frac{f_s}{P}$$
+
+The total frequency-domain MAC throughput per second is:
+$$\text{MACs/sec} = N_p \times P \times \frac{f_s}{P} \approx L_{IR} \times f_s$$
+
+While total MAC operations remain asymptotically invariant to $P$, reducing partition size $P$ doubles the event frequency $f_{\text{event}}$ for each halving of $P$ (e.g. at $f_s = 48\text{ kHz}$: 1500 events/sec at $P=32$ vs 187.5 events/sec at $P=256$). Each event incurs fixed computational overhead:
+
+- Twiddle factor tables and FFT butterfly setup overhead.
+- Circular pointer rotations across the FDL complex buffer.
+- Buffer staging, accumulate, and delivery memory transfers.
+
+### 9.2 Empirical Latency and CPU Profile (`benches/cabsim_bench.rs`)
+
+Empirical measurements on x86-64-v3 (AVX2 / FMA) demonstrate the quantitative trade-off across partition sizes for standard guitar cabinet IRs ($L_{IR} = 2048$ samples @ 48 kHz):
+
+| Partition ($P$) | Latency @ 48 kHz | $N_p$ (2048 taps) | FFT Size ($2P$) | Event Rate ($f_s/P$) | Per-Block Time (µs) | CPU Cost @ 48 kHz | Empirical Profile / Use Case |
+|:---------------:|:----------------:|:-----------------:|:---------------:|:--------------------:|:-------------------:|:-----------------:|:---------------------------- |
+| **32**          | **0.67 ms**      | 64                | 64              | 1500 Hz              | ~1.2 µs             | ~1.2%             | Ultra-low latency monitoring |
+| **64**          | **1.33 ms**      | 32                | 128             | 750 Hz               | ~1.22 µs            | ~0.6%             | Live tracking standard       |
+| **128**         | **2.67 ms**      | 16                | 256             | 375 Hz               | ~3.5 µs             | ~0.35%            | Default production balance   |
+| **256**         | **5.33 ms**      | 8                 | 512             | 187.5 Hz             | ~12.58 µs           | ~0.2%             | Offline / multi-track mix    |
+| **512**         | **10.67 ms**     | 4                 | 1024            | 93.75 Hz             | ~26.0 µs            | ~0.1%             | Studio Master export         |
+
+*Note: Benchmarks reflect steady-state execution from `benches/cabsim_bench.rs` and `docs/quality-contract.json`. Construction and FFT partition pre-computation are performed strictly off-RT during loader initialization (~19.6 µs for 2048 taps, ~133.3 µs for 16384 taps).*
+
+### 9.3 Audio Fidelity & Bit-Exact Invariance
+
+Unlike lossy optimizations or non-linear approximations, partition sizing in UPOLS has **zero impact on audio fidelity**:
+
+- **Bit-Exact Frequency Response:** Output is mathematically identical across all partition sizes (modulo floating-point MAC summation order, $\text{ESR} < 10^{-11}$ vs direct convolution).
+- **Zero Phase Distortion:** Full linear-phase FIR reconstruction with zero spectral coloration, zero truncation, and zero frequency warping.
+- **Causal Output & Tail Continuity:** Initial underrun prefix is bounded by $P - 1$ samples of silence; subsequent ring-out when input drops to zero is rendered continuously to full completion via the block-agnostic tail drain.
+
+### 9.4 Block-Agnostic Engine Driver (`CabSimAdapter::process_block` & `drain_tail`)
+
+Historically, cab-sim adapters were pinned to the host audio buffer size ($P = \text{quantum}$), coupling algorithmic latency to host buffer negotiation and forcing costly full-engine rebuilds during quantum changes.
+
+NeuralAmpModeler-rs provides a canonical block-agnostic driver:
+
+- [`CabSimAdapter::process_block`](../src/dsp/cabsim/adapter.rs) and [`CabSimPair::process_block_stereo`](../src/dsp/cabsim/adapter.rs) accept arbitrary host block sizes (e.g. 16, 64, 128, 256, 333, 512 samples) against a fixed partition policy $P$. The driver chunks blocks internally in a single FIFO sweep without contract violation flags.
+- [`CabSimAdapter::drain_tail`](../src/dsp/cabsim/adapter.rs) similarly chunks ring-out rendering across arbitrary block boundaries, eliminating tail distortion and contract flags during noise-gate closure.
+- Host quantum changes at constant sample rate reuse the active adapter instance in-place with zero reallocation, zero rebuilds, and zero audio glitches.
+
+### 9.5 Recommendation Matrix (Live vs Offline / Mastering)
+
+| Mode                          | Recommended $P$ | Added Latency | Target Environment                | Design Rationale                                                                                                                                      |
+|:----------------------------- |:---------------:|:-------------:|:--------------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ultra-Low Latency Live**    | 32              | 0.67 ms       | Live stage, In-Ear Monitors (IEM) | Minimizes physical playing latency; ensures total round-trip latency stays comfortably below the 3–5 ms perception threshold for electric guitarists. |
+| **Live Performance Standard** | 64              | 1.33 ms       | Live tracking, rehearsal          | Balanced low-latency tracking with negligible CPU overhead on modest hardware.                                                                        |
+| **Universal Default**         | 128             | 2.67 ms       | General host use, PipeWire, CLAP  | Safe production standard: imperceptible tactile delay with minimal CPU footprint (< 0.4%).                                                            |
+| **Studio Mixing**             | 256             | 5.33 ms       | Complex DAW projects (30+ tracks) | Maximizes CPU throughput; DAW Plugin Delay Compensation (PDC) automatically aligns tracks, rendering the latency completely transparent.              |
+| **Offline Master Export**     | 512             | 10.67 ms      | Batch bounce, offline rendering   | Optimal CPU throughput and cache efficiency during non-realtime rendering.                                                                            |
+
+**User Control:**
+
+- Standalone CLI: `--cabsim-partition 32|64|128|256` (default: 128).
+- Plugin / DAW: Fixed partition policy configured by host; algorithmic latency reported dynamically to the host timeline via the CLAP latency extension (`HostLatency::changed()`).
+
+**Implementation.** [`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs) (`ConvEngine`), [`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs) (`CabSimAdapter`, `CabSimPair`), [`benches/cabsim_bench.rs`](../benches/cabsim_bench.rs).
+
+---
+
+## 10. Governance & Quality Contract Verification
 
 All fidelity, SNR, and performance claims in this document are governed by the automated testing supply chain specified in [`docs/fixtures.md`](fixtures.md):
 
@@ -279,7 +358,7 @@ Live dashboard measurements are updated via `utils/quality-dashboard.sh` and rec
 
 ---
 
-## 10. Architectural Rationale Archive
+## 11. Architectural Rationale Archive
 
 Key technical trade-offs validated during NeuralAmpModeler-rs development:
 
@@ -287,6 +366,7 @@ Key technical trade-offs validated during NeuralAmpModeler-rs development:
 - **64-Tap Polyphase Resampler:** Benchmark analysis demonstrated that 32-tap filtering saved < 0.1% CPU (~40 ns/block) while causing catastrophic passband SNR degradation (~24 dB vs ≥100 dB).
 - **Exact-Grade Activation Default:** Standard mode Taylor/minimax exp kernels cost +10–15% activation compute while delivering +89.5 dB average SNR improvement across LSTM models.
 - **Half-Band FIR Oversampling:** Selected over Antiderivative Anti-Aliasing (ADAA) to maintain universal compatibility with polymorphically dispatched SIMD neural kernels.
+- **Uniform-Partitioned Convolution (UPOLS):** Selected over direct time-domain FIR ($O(N)$ per sample) and standard unpartitioned overlap-add/save to decouple algorithmic latency ($P$ samples) from total IR length (2048–16384 samples) with zero frequency-domain distortion.
 
 ---
 
