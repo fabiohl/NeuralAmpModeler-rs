@@ -5,30 +5,29 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # Performance Benchmarks (Criterion)
 
-The NeuralAmpModeler-rs project uses **Criterion.rs** as its official performance benchmarking suite. Given the latency-sensitive nature of a real-time audio engine (DSP), conducting measurements with statistical rigor is essential to avoid being misled by operating system variations (noise, context switches, clock fluctuations).
+NeuralAmpModeler-rs uses **Criterion.rs** as its official statistical performance benchmarking suite. In a real-time digital signal processing (DSP) engine, execution latency and timing determinism must be measured with statistical rigor to isolate algorithmic throughput from operating system noise, scheduling jitter, and dynamic frequency scaling.
 
 > [!NOTE]
-> **Document scope.** This is the authoritative reference for Criterion benchmarking in
-> NeuralAmpModeler-rs: how to run/interpret benches, and the full rationale, workflow, and
-> troubleshooting for the performance regression gate ([`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh)).
-> The functional/correctness `cargo test` suites ([`utils/tests-quick.sh`](../utils/tests-quick.sh), [`utils/tests-long.sh`](../utils/tests-long.sh))
-> and their feature/phase architecture are documented separately in [`testing.md`](testing.md);
-> that document only cross-references benchmarks, it does not duplicate this one.
+> **Document Scope.** This document is the authoritative reference for performance benchmarking in NeuralAmpModeler-rs: how to run and interpret benchmarks, the performance regression gate ([`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh)), contract performance baselines ([`docs/quality-contract.json`](quality-contract.json)), and micro-architectural invariants.
+> Functional correctness, mathematical oracle hierarchies, and test suites are documented separately in [`testing.md`](testing.md).
 
-## How to Run the Benchmarks
+---
 
-To execute the performance suite:
+## 1. Running the Benchmarks
+
+All benchmark commands must be executed within the `NeuralAmpModeler-rs/` subproject root:
 
 ```bash
 # Core inference benchmark suite
 cargo bench --bench inference_bench
 
-# Performance regression gate suite
+# Performance regression gate suite (20 canonical targets)
 cargo bench --bench regression_gate
 
 # Specialized DSP, Math & Kernel benchmark suites
 cargo bench --bench cabsim_bench
 cargo bench --bench dsp_bench
+cargo bench --bench dsp_bridge_bench
 cargo bench --bench math_bench
 cargo bench --bench spsc_swap_bench
 cargo bench --bench gemv_bench
@@ -37,1313 +36,429 @@ cargo bench --bench linear
 cargo bench --bench dot_4x_bench
 cargo bench --bench fft_radix4_bench
 cargo bench --bench kahan_conv1d_bench
+cargo bench --bench conv1d_hotpath_bench
 ```
 
-### Long-Duration Benchmarks (Soak Bench)
+### Audio Block Budgets & Soak Benchmarks
 
-To evaluate performance under constant pressure and identify jitter caused by cache misses or TLB misses in large blocks, the project offers a long-duration benchmarking suite (30s+ per function):
+* **Standard Audio Block:** Default benchmarks operate on blocks of **64 samples at 48 kHz** ($\approx 1.333\text{ ms}$ / $1333\text{ µs}$). This is the primary real-time processing deadline.
+* **Long-Duration Soak Benchmarks:** To measure sustained memory throughput and evaluate cache/TLB stability under continuous load, long-duration benchmarks use blocks of **4096 samples** (~85 ms):
 
 ```bash
 cargo bench --features testing --bench long_inference_bench
 ```
 
-Or via the recommended manual trigger script:
+---
 
-```bash
-bash utils/tests-long.sh
-```
+## 2. Interpreting Criterion Output
 
-These benchmarks use blocks of **4096 samples** (~85ms), reducing the relative weight of invocation overhead and focusing purely on the DSP engine's throughput.
-
-## How to Interpret Criterion Output
-
-When you run a benchmark, Criterion reports output similar to this:
+When executing a benchmark, Criterion reports output in this standard format:
 
 ```text
 WaveNet_Standard_CH16_64samp_48kHz
-                        time:   [107.03 µs 107.32 µs 107.61 µs]
-                        change: [−9.3273% −6.2506% −3.5233%] (p = 0.00 < 0.05)
-                        Performance has improved.
-                        Found 5 outliers among 50 measurements (10.00%)
-  ...
+                        time:   [43.15 µs 43.29 µs 43.45 µs]
+                        change: [−1.85% −0.92% +0.12%] (p = 0.11 > 0.05)
+                        Change within noise threshold.
+                        Found 3 outliers among 100 measurements (3.00%)
 ```
 
-### Understanding the Metrics
+### Metrics & Statistical Criteria
 
-1. **`time: [A B C]` (Confidence Interval)**
-   Shows the execution time per iteration, expressed through a **95% confidence interval**.
-   * The central number (`B`, e.g., `107.32 µs`) is the best point estimate of the mean time.
-   * The outer numbers (`A` and `C`) define the lower and upper bounds, statistically guaranteeing (with 95% certainty) that the true performance lies within this margin.
-2. **`change: [...]` and `(p = X < 0.05)` (Statistical Significance)**
-   * `change` displays the percentage difference compared to the last run on the same machine (negative values indicate faster code).
-   * The **p-value** (`p`) indicates the probability that this variation occurred by chance. If `p < 0.05` (5% significance level), Criterion certifies that the observed variation is real and not just operating system noise.
-3. **Textual Conclusions**
-   Based on mathematical calculations, the software summarizes the conclusions:
-   * **Performance has improved / regressed**: The p-value confirmed that the source code change caused a measurable statistical difference (positive or negative).
-   * **Change within noise threshold**: The p-value is high, the error margins overlap, or the variation is negligible. The detected change is noise.
-4. **Outliers (Jitter)**
-   Samples are run hundreds of times, and anomalies are reported. In a critical real-time system like NeuralAmpModeler-rs, occurrences of `high severe` are usually linked to *jitter* (processing glitches, audio thread preemption by the OS kernel, cache misses, etc.). Running benchmarks in shielded environments (SCHED_FIFO and CPU affinity enabled) mitigates outliers.
+1. **Confidence Interval (`time: [A B C]`):**
+   * Expresses execution time per iteration across a **95% confidence interval**.
+   * The central value (`B`) is the bootstrapped point estimate of the mean.
+   * Bounds (`A` and `C`) define the margin within which true mean performance lies with 95% certainty.
+2. **Relative Change & Statistical Significance (`change: [...] (p = X)`):**
+   * Shows the percentage delta against the saved baseline on the same machine (negative values represent speedup).
+   * The **p-value** ($p$) measures the probability that the observed change was accidental. If $p < 0.05$, Criterion considers the variation statistically significant rather than background noise.
+3. **Outliers & Jitter:**
+   * High-severity outliers in real-time DSP often indicate CPU frequency throttling, OS thread preemption, or cache-line invalidation. Core pinning and setting the CPU governor to `performance` mitigate these anomalies.
+4. **Baselines Storage:**
+   * Criterion stores transient working data in `target/criterion/`.
+   * The regression gate persists and restores authoritative baselines to `.performance-baselines/`.
 
-## Temporal History (Baselines)
+---
 
-You do not need to compare times mentally. **Criterion automatically saves the baseline of your last run**.
+## 3. Reference Latency Snapshot (Quality Contract)
 
-All historical tracking metrics are recorded in local files within your project under: `target/criterion/`
+The single canonical source of truth for committed performance baselines is [`docs/quality-contract.json`](quality-contract.json).
 
-> [!IMPORTANT]
-> **Current vs. historical numbers.** The authoritative *current* per-model latency
-> figures come from a fresh `regression_gate` run — most conveniently via
-> [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) (PERFORMANCE section, median per 64-sample block).
-> Reference snapshot (Ryzen 7 5700U, AVX2 @ 64 samples / 48 kHz): WaveNet Std CH16 ≈ 43.3 µs
-> (3.2%), Feather CH8 ≈ 19.9 µs (1.5%), Lite CH12 ≈ 56.4 µs (4.2%),
-> Nano CH4 ≈ 17.8 µs (1.3%),
-> A2-Full CH8 ≈ 25.6 µs (1.9%), A2-Lite CH3 ≈ 22.6 µs (1.7%), LSTM 1×16 ≈ 6.8 µs (0.5%),
-> LSTM 2×8 ≈ 7.1 µs (0.5%), ConvNet ≈ 8.7 µs (0.7%), Linear RF=4 Direct ≈ 0.3 µs (0.02%),
-> DSP Resampler (44.1k→48k) ≈ 1.2 µs, DSP CabSim IR Medium (2048 taps) ≈ 1.2 µs,
-> Full DSP Pipeline Base (No OS) ≈ 43.6 µs (3.3%), Full DSP Pipeline HQ (4× OS) ≈ 177.4 µs (13.3%).
-> All ≤ 4.4% of the 1333 µs RT budget for single-model inference. The "Experiment Report"
-> sections further down are **historical point-in-time studies** documenting engineering
-> decisions; their absolute numbers (e.g. WaveNet Std ≈ 92.6 µs) predate later optimizations
-> and are retained only to justify the decisions, not as current performance claims.
->
-> [!NOTE]
-> **Measurement context and provenance:**
->
-> * Values measured on release build with `rustc 1.98.1` (single-frame processing, AVX2).
-> * Previous snapshot values (~36.9 µs etc.) corresponded to an unrepeatable `rustc 1.97.1` environment with `git_dirty: true` and were never reproduced on clean builds.
-> * The single canonical source of truth for performance is always [`docs/quality-contract.json`](quality-contract.json).
+Below is the committed reference baseline measured on release builds under an isolated x86-64-v3 environment (AMD Ryzen 7 5700U, AVX2/FMA, 64-sample blocks @ 48 kHz):
 
-*(Note: NeuralAmpModeler-rs intentionally disables HTML report generation with temporal charts in `Cargo.toml` (`default-features = false`) to omit downloading extensive visual dependencies, limiting evaluation to the console).*
+| Target ID                      | Description                           | Median Latency  | % of 1.33 ms RT Budget |
+|:------------------------------ |:------------------------------------- |:--------------- |:---------------------- |
+| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)              | 43.29 µs        | 3.25%                  |
+| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                | 19.85 µs        | 1.49%                  |
+| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)       | 56.40 µs        | 4.23%                  |
+| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                   | 17.83 µs        | 1.34%                  |
+| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)        | 25.64 µs        | 1.92%                  |
+| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)         | 22.55 µs        | 1.69%                  |
+| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)          | 6.83 µs         | 0.51%                  |
+| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)           | 7.13 µs         | 0.53%                  |
+| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain) | 0.33 µs         | 0.02%                  |
+| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)      | 4.84 µs         | 0.36%                  |
+| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)              | 8.66 µs         | 0.65%                  |
+| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape            | 21.69 µs        | 1.63%                  |
+| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                      | 8.81 µs         | 0.66%                  |
+| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)               | 188.35 µs       | 14.13%                 |
+| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)             | 147.50 µs       | 11.06%                 |
+| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k   | 1.22 µs / block | 0.09%                  |
+| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k     | 0.62 µs / block | 0.05%                  |
+| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.22 µs / block | 0.09%                  |
+| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)    | 43.57 µs        | 3.27%                  |
+| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS) | 177.39 µs       | 13.31%                 |
 
-## Regression Gate — Catching Latency Degradation Before It Ships
+*Note: All single-model inferences consume $\le 4.3\%$ of the real-time block budget; even dynamic A2 topologies and 4× oversampled pipelines maintain $> 85\%$ real-time headroom.*
 
-[`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) is the **canonical home of benchmark-based
-performance defense** in NeuralAmpModeler-rs: the one script whose entire job is to stand as a
-statistical wall against DSP hot-path decay. It acts as a CI guard — it compares the
-current build against a persisted statistical baseline and fails the pipeline if a
-slowdown is detected. This is your primary tool to ensure that no commit silently pushes
-latency toward the 1.33 ms real-time deadline. It is deliberately narrow in scope (unlike
-[`utils/tests-quick.sh`](../utils/tests-quick.sh) and [`utils/tests-long.sh`](../utils/tests-long.sh), which cover functional/correctness
-regressions): its only mandate is baseline-gated performance.
+---
 
-### How It Works
+## 4. Regression Gate — Automated Performance Defense
 
-1. **Core pinning** — The script uses `taskset -c <core>` (dynamically defaulting to `nproc / 2` to avoid OS/IRQ noise; configurable via `NAM_BENCH_CORE`) to lock the benchmark to a single CPU core, eliminating scheduler noise and cache-line bouncing between cores.
-2. **Statistical rigor** — The `regression_gate` bench suite runs **20** targets (10 static models + 4 dynamic models + 6 DSP infrastructure benches) with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Dispatch is forced to `InstructionSet::Avx2` via `ForceAvx2Guard` so hosts with AVX-512 still measure the x86-64-v3 contract path.
-3. **Machine verdict** — after the run, the script calls `nam_perf_gate verdict`,
-   which parses Criterion's persisted `target/criterion/<id>/change/estimates.json`
-   (the bootstrapped relative mean-change confidence interval) and never the human
-   console wording. When the whole CI lies above the `+5%` noise band, the script
-   exits 1 with `REGRESSION_DETECTED`; a compared benchmark with no readable
-   comparison artifact is fail-closed `REGRESSION_BLIND`, so a truncated/empty log
-   can never turn the gate green. Criterion's `Performance has regressed.` line is
-   kept only as a diagnostic hint.
-4. **Baseline storage** — Baselines are persisted under **`.performance-baselines/`** (repo-local, gitignored). `target/criterion/` is only a **transient** Criterion working area restored from `.performance-baselines/` before each run. Persist/restore use **replace-copy of top-level** `…/<bench>/ci-baseline/` only; nested `ci-baseline/ci-baseline/…` paths (historical `cp -a` into an existing dest) are sanitized and never re-copied. An environment fingerprint (`.performance-baselines/baseline-fingerprint.json`) records CPU model, full x86-64-v3 ISA label (`AVX2/FMA/F16C/BMI`, including LZCNT via `lzcnt` or Linux `abm`), rustc, target triple, governor, bench core, and producing commit.
-5. **Immutability** — `--check` is strictly read-only. It never auto-creates a baseline. If no baseline exists, it fails with `MISSING_BASELINE` and exit code 1, directing the operator to run `--bootstrap-baseline` manually.
-6. **Sub-µs DSP micro-benches** — `RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium` process a fixed batch of **64 blocks** per Criterion sample so timer noise stays under the 5% wall. The quality dashboard divides those medians by 64 and reports **per-block** latency (contract units unchanged). Changing the batch size requires a human baseline renewal.
+[`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) is the canonical benchmark-based performance defense tool. It compares current timings against a persisted statistical baseline and fails closed if latency degrades beyond the allowed threshold.
 
-### Daily Workflow
+### Core Mechanisms
 
-```sh
-# 1. Before starting work: confirm the current baseline is clean.
-utils/tests-performance-regression.sh --check
+1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>` (defaults to `nproc / 2`, configurable via `NAM_BENCH_CORE`) to prevent OS scheduler migrations and cache thrashing.
+2. **Controlled Statistical Rigor:** Executes the `regression_gate` suite with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Enforces `InstructionSet::Avx2` via `ForceAvx2Guard` so that AVX-512 hosts evaluate the exact `x86-64-v3` baseline.
+3. **Machine Verdict (`nam_perf_gate verdict`):** Evaluates Criterion's `target/criterion/<id>/change/estimates.json`. If the bootstrapped mean-change confidence interval lies entirely above the `+5%` noise band, the script exits with `REGRESSION_DETECTED`. If comparison artifacts are missing or unreadable, it fails closed with `REGRESSION_BLIND`.
+4. **Baseline Storage & Fingerprinting:** Authoritative baselines reside in `.performance-baselines/` (gitignored). A machine fingerprint file (`baseline-fingerprint.json`) captures the CPU model, ISA extension flags, compiler version, target triple, governor, pinned core, and producing git commit.
+5. **Sub-Microsecond Batching:** Ultra-fast DSP routines (`RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium`) process batches of **64 blocks** per Criterion sample to maintain timer resolution above the noise floor. Reported values are divided by 64 to represent per-block latency.
 
-# 2. Develop your changes. Run lints and quick tests frequently.
-utils/lints.sh && utils/tests-quick.sh
+### Script Modes & Environment Variables
 
-# 3. Before committing: re-run the regression gate.
-utils/tests-performance-regression.sh --check
+| Mode                | Command                                                      | Behavior                                                                                                                  |
+|:------------------- |:------------------------------------------------------------ |:------------------------------------------------------------------------------------------------------------------------- |
+| **Check** (default) | `utils/tests-performance-regression.sh --check`              | Read-only. Compares against `.performance-baselines/`. Exits non-zero if a regression is detected or baseline is missing. |
+| **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Re-generates `.performance-baselines/` and writes `baseline-fingerprint.json`. **Human-only operation.**                  |
 
-# 4. GREEN  → safe to commit/push.
-#    RED    → investigate the regression before proceeding.
+| Variable                 | Default           | Purpose                                                             |
+|:------------------------ |:----------------- |:------------------------------------------------------------------- |
+| `NAM_BENCH_CORE`         | `nproc / 2`       | Dedicated CPU core to pin benchmarks via `taskset`.                 |
+| `NAM_BASELINE_NAME`      | `ci-baseline`     | Name of the Criterion baseline series.                              |
+| `NAM_BENCH_SUITE`        | `regression_gate` | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
+| `NAM_THERMAL_COOLDOWN_S` | `180`             | Cooldown period before benchmarking to stabilize clock frequencies. |
 
-# 5. Only update the baseline when you intentionally changed performance
-#    (e.g., adding a feature with a measured, understood, acceptable cost)
-#    and all other tests pass. This MUST be performed by a human operator —
-#    automated/bootstrap execution is prohibited.
-utils/tests-performance-regression.sh --bootstrap-baseline
-```
+### Environmental Noise, False Alarms & Hardware Isolation
+
+Because the DSP engine operates in a state of extreme micro-architectural optimization, latency measurements are highly sensitive to thermal throttling, DVFS transitions, and background operating system jitter.
+
+> [!WARNING]
+> **Risk of False Alarms:** In sub-microsecond and microsecond-scale benchmarks (e.g. `RT_Linear_Direct_RF4` at ~340 ns or `RT_LSTM_2x8` at ~7.1 µs), small environmental variations, CPU thermal drift, or concurrent OS tasks can trigger false-positive regression alarms ($+2–4\%$ variation). Exercise caution and do not hastily bootstrap new baselines or revert code without verifying that the result is reproducible under isolated conditions.
+
+#### Recommended Mitigation Measures
+
+1. **Kernel-Level Core Isolation (`isolcpus` & `nohz_full`):**
+   To shield benchmark cores from kernel scheduling ticks, timers, and non-bound user space threads, boot the Linux kernel with CPU isolation parameters (e.g. for cores 8 and 9):
+
+   ```text
+   isolcpus=8,9 nohz_full=8,9
+   ```
+
+   Combined with pinning (`NAM_BENCH_CORE=8 taskset -c 8 ...`), this eliminates OS preemption and thread migration.
+2. **CPU Frequency Scaling (`performance` Governor):**
+   Lock the CPU scaling governor to `performance` across all cores to prevent Dynamic Voltage and Frequency Scaling (DVFS) transition delays:
+
+   ```bash
+   echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+   ```
+
+3. **Thermal Stabilization & Hardware Cooldown:**
+   Allow the CPU to cool down before executing baseline benchmarks (`NAM_THERMAL_COOLDOWN_S=180` by default). The regression gate sleeps between heavy phases to prevent thermal throttling from skewing Criterion iteration times.
+4. **Low Background Load & Host Quiescence:**
+   Ensure workstation background load is minimal ($\text{load average} \ll 1.0$), with browsers, container engines, and heavy background services closed.
+
+### Pre-Flight Checklist
+
+Run this verification before executing `--check` or `--bootstrap-baseline`:
+
+* [ ] **Baseline present:** `.performance-baselines/baseline-fingerprint.json` exists.
+* [ ] **Core isolation active:** Preferred cores isolated via kernel command line (`isolcpus=8,9 nohz_full=8,9`) when available.
+* [ ] **CPU governor locked:** Pinned core shows `performance` in `/sys/devices/system/cpu/cpu<N>/cpufreq/scaling_governor`.
+* [ ] **Low background load:** Workstation load average $\ll 1.0$; heavy background processes and browsers closed.
+* [ ] **Coverage completeness:** Every benchmark target in `regression_gate` has an existing baseline entry.
 
 ### First-Time Setup and Post-Optimization Renewal (Human-Only)
 
-Agents and CI **must not** run `--bootstrap-baseline` or `quality-dashboard.sh --save`.
-Both are deliberate human operations on a machine with governor `performance`,
-low background load, and preferably a single pinned core (`NAM_BENCH_CORE`).
-
-**Canonical sequence after intentional DSP/perf changes (or first clone):**
-
-```sh
-# 0. Optional: commit shell/docs-only fixes first so the tree is clean.
-#    Prefer a clean tree for provenance; dirty state is recorded but harder to audit.
-
-# 1. Create / replace the Criterion baseline under .performance-baselines/
-utils/tests-performance-regression.sh --bootstrap-baseline
-
-# 2. Prove the new baseline is readable (standalone gate must be green)
-utils/tests-performance-regression.sh --check
-# Expected: "No performance regression detected." exit 0
-
-# 3. Only then freeze the integrated fidelity+perf contract
-utils/quality-dashboard.sh --save docs/quality-contract.json
-# Requires ALL dashboard phases PASS (including regression_gate).
-# Fail-closed: if regression_gate != PASS, the file is NOT written.
-
-# 4. Close the loop on the same revision
-utils/quality-dashboard.sh --check docs/quality-contract.json
-# Expected: FIDELITY OK + PERFORMANCE OK + contract satisfied
-```
-
-**Why step 2 can PASS and step 4 still fail:** the dashboard runs ~2 minutes of
-fidelity work (goldens, f64 oracle, quick_parity, …) **before** invoking the
-regression gate. That raises thermals/OS noise versus a cold standalone
-`--check`. Micro-benches near the noise floor (e.g. `RT_LSTM_2x8` ~7.5 µs,
-`RT_Linear_Direct_RF4` ~340 ns) may then report a Criterion "regressed" of a few percent
-even with **no code change**. This is environmental, not a fidelity bug.
-
-**Operator response to a flaky dashboard `--check` after a green standalone gate:**
-
-1. Inspect `target/logs/regression-check.log` for the `"Performance has regressed"` line.
-2. Re-run **only** `utils/tests-performance-regression.sh --check` with load ≪ 1.
-3. If standalone is green again: re-run `utils/quality-dashboard.sh --check …`
-   after a short cool-down; do **not** bootstrap solely to silence noise.
-4. Bootstrap again only when the delta is intentional (real code change) or
-   reproducible under isolation across multiple cold runs.
-
-`--check` never auto-creates a baseline after `cargo clean` or a fresh clone:
-missing `.performance-baselines/` → `MISSING_BASELINE`, exit 1.
-
-### Pre-Flight Checklist (Performance Gate)
-
-Performance measurement is only meaningful under a controlled environment.
-Run this checklist **before** `--check` or `--bootstrap-baseline`:
-
-* [ ] **Baseline present.** `.performance-baselines/baseline-fingerprint.json` exists
-      (and the `ci-baseline` series under `.performance-baselines/`).
-      Absent → the standalone gate fails `MISSING_BASELINE`; the dashboard
-      displays performance as `NOT_VERIFIED`.
-* [ ] **CPU governor = `performance`.** Verify per pinned core with
-      `cat /sys/devices/system/cpu/cpu<N>/cpufreq/scaling_governor`
-      (where `<N>` is the pinned bench core — `BENCH_CORE`/`NAM_BENCH_CORE`,
-      default `nproc / 2`; the QA harness probes that core's path, not a
-      fixed `cpu0`). A different governor (`powersave`,
-      `schedutil`, amd_pstate default) makes measurements incomparable →
-      `INCOMPARABLE_ENVIRONMENT`.
-* [ ] **Low background load.** Close browsers/heavy services; thermals and
-      co-resident load dominate the micro-bench noise floor (see the flaky
-      `--check` note above).
-* [ ] **Core pinning available.** `taskset` present (defaults to `nproc / 2`;
-      override with `NAM_BENCH_CORE`). Same physical core count as the
-      bootstrap machine — it is part of the environment fingerprint.
-* [ ] **Fresh benchmark set.** Every `regression_gate` benchmark must have a
-      saved baseline series: a new/renamed benchmark fails `--check` with
-      `BASELINE_COVERAGE_GAP` until a human re-bootstraps the baseline.
-
-> [!IMPORTANT]
-> **`NOT_VERIFIED` has exactly one semantic.** `MISSING_BASELINE` and
-> `INCOMPARABLE_ENVIRONMENT` both mean "performance could not be verified
-> against the saved baseline". The standalone gate fails typed on both;
-> `quality-dashboard.sh` renders a single unambiguous `NOT_VERIFIED` state
-> (never green, never counted as PASS) and its `--check` mode fails on it.
-> **Baseline bootstrap is always a human operation** — agents and CI are
-> prohibited from `--bootstrap-baseline` and `quality-dashboard.sh --save`.
-
-### Script Modes
-
-| Mode                | Command                                                      | Purpose                                                                                                                                                                                      |
-|:------------------- |:------------------------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Check** (default) | `utils/tests-performance-regression.sh` or `--check`         | Compare against baseline; fail on a machine regression (mean-change CI entirely above the +5% noise band, from `change/estimates.json`). Strictly read-only — never auto-creates a baseline. |
-| **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Create a new baseline and environment fingerprint. Human-only operation.                                                                                                                     |
-
-### Environment Variables
-
-| Variable            | Default       | Purpose                                                 |
-|:------------------- |:------------- |:------------------------------------------------------- |
-| `NAM_BENCH_CORE`    | `nproc / 2`   | CPU core number to pin benchmarks to via `taskset`.     |
-| `NAM_BASELINE_NAME` | `ci-baseline` | Criterion baseline name (allows per-machine baselines). |
-
-### Relationship to Other QA Tools
-
-| Tool                                                                                | Role                                                                                                                                                                                                   |
-|:----------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tests/rt_constraints/rt_deadline.rs`                                               | **Absolute hard gate** — `assert!(p99 < 1330 μs)` for all SKUs. This is the pass/fail ceiling.                                                                                                         |
-| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | **Relative guard, baseline-gated** — the canonical home for perf-regression benchmarking. Catches degradations *within* the safe zone (e.g., 100 μs → 150 μs, still under 1.33 ms but 50% worse).      |
-| [`utils/remote-simd-gate.sh`](../utils/remote-simd-gate.sh)                         | **Remote SIMD Gating Suite** — Automated harness for executing cross-ISA parity validation and Criterion benchmarks on AVX-512 remote hardware, emitting `target/logs/remote-simd-receipt.json`.       |
-| [`utils/tests-long.sh`](../utils/tests-long.sh)                                     | **Nightly Audit Suite** — Focuses on heavy functional, soak, parity, and RT-safety tests; benchmarks are omitted from the nightly runner to optimize execution time.                                   |
-| [`utils/tests-quick.sh`](../utils/tests-quick.sh)                                   | Fast path (approximately 2 minutes, depending on the hardware) — does **not** include benchmarks (would exceed the time budget). Use `utils/tests-performance-regression.sh` directly for perf checks. |
-
-> [!IMPORTANT]
-> **Always run `--check` before pushing.** A passing `utils/tests-quick.sh` and `utils/tests-long.sh` does
-> **not** guarantee the absence of performance regression — only the regression gate provides
-> a statistical comparison against the known-good baseline.
-
-### Interpreting a Failed Gate
-
-If the script exits with `❌ PERFORMANCE REGRESSION DETECTED`:
-
-1. Open `target/logs/regression-check.log` and locate the `"regressed"` entry.
-2. Look at the reported confidence interval for the regressed benchmark(s) — how many μs and what percentage?
-3. Re-run `cargo bench --bench regression_gate -- --baseline ci-baseline` to confirm the result is reproducible (not noise from a transient system load spike).
-4. If the regression is real and unintentional: bisect your recent changes to find the cause.
-5. If the regression is intentional (e.g., a new feature with a measured, accepted overhead): re-save the baseline with `--bootstrap-baseline` **and document the change and its measured cost** in your commit message.
-
-## Quality Contract — Performance Lens
-
-The **Quality Contract** ([`quality-contract.json`](quality-contract.json)) extends the
-regression defense with a dashboard-integrated second line of defense that freezes
-both fidelity and performance metrics into a versioned, machine-readable baseline.
-
-### How It Fits with the Regression Gate
-
-| Tool                                                                                | Statistical Rigor                   | Speed    | Scope                                                                                     |
-|:----------------------------------------------------------------------------------- |:----------------------------------- |:-------- |:----------------------------------------------------------------------------------------- |
-| [`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) | Criterion change-CI machine verdict | ~5-8 min | **Primary authority** — catches slow regressions within the safe zone (e.g., 100→150 µs). |
-| [`utils/quality-dashboard.sh`](../utils/quality-dashboard.sh) `--check`             | Conservative relative margin        | ~3-5 min | **Second line** — integrated with fidelity checks; +10% latency tolerance.                |
-
-The two tools serve complementary roles:
-
-* **`utils/tests-performance-regression.sh`** is the strict, narrow statistical gate —
-  the definitive answer to "did the relative mean latency change land entirely
-  above the ±5% noise band?"
-* **`utils/quality-dashboard.sh --check`** is the broad, integrated check — it answers
-  "do fidelity *and* performance both pass, in one command?" with conservative
-  margins designed to absorb OS scheduling noise without false positives.
-
-### Performance Tolerance in the Contract
-
-The contract applies a **10% margin** on median latency:
-
-```text
-new_lat > contract_lat × 1.10  →  VIOLATION
-```
-
-This is intentionally more conservative than the regression gate's statistical
-test — a 10% margin absorbs transient scheduling noise while still catching
-degradations large enough to matter (e.g., 56 µs → 62 µs is within margin;
-56 µs → 95 µs is a clear violation).
-
-> [!NOTE]
-> The contract's performance section is filled from the same `regression_gate`
-> Criterion run that `utils/tests-performance-regression.sh` drives. The dashboard
-> copies latencies **only** when `regression_gate=PASS` for the current `run_id`
-> (stale `target/logs/regression-check.log` is never reused — PERF-002).
->
-> **Two independent artifacts (both human-renewed when perf intentionally changes):**
->
-> | Artifact           | Path                                           | Role                                                    |
-> | ------------------ | ---------------------------------------------- | ------------------------------------------------------- |
-> | Criterion baseline | `.performance-baselines/` (+ fingerprint JSON) | Statistical relative gate (change CI vs noise band)     |
-> | Quality contract   | `docs/quality-contract.json`                   | Frozen fidelity + median latency snapshot for `--check` |
->
-> Updating one does **not** update the other. Order is always:
-> bootstrap Criterion → standalone `--check` green → dashboard `--save` → dashboard `--check`.
-
-### Contract Performance IDs and Bench-Label Resolution
-
-Every performance `id` in `quality-contract.json` is **identical to the Criterion
-bench label** in [`benches/regression_gate.rs`](../benches/regression_gate.rs).
-Historically four ids diverged from their bench labels
-(`RT_Linear_RF2048`, `RT_DSP_Resampler_44k_to_48k`, `RT_DSP_Pipeline_Base`,
-`RT_DSP_Pipeline_HQ`); they were renamed to the bench-label form
-(`RT_Linear`, `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Pipeline_Base_NoOS`,
-`RT_DSP_Pipeline_HQ_4xOS`), so ids now carry their distinguishing qualifier
-directly (sample-rate variant, oversampling mode). The `RT_Linear` id was later
-renamed again to `RT_Linear_Direct_RF4` (label `Linear RF=4 Direct`) because the
-fixture it benches is a 4-tap model that resolves to `LinearMode::Direct` and
-never executes RFFT — the old `Linear RF=2048` label was a misnomer (F-PERF-02).
-
-The join is kept explicit in `src/testing/qa/ids.rs` — `RT_BENCH_TABLE` maps
-each bench label to its contract id (currently an identity projection) via
-`resolve_rt_contract_id`, the single resolution point used by the verify
-engine and guarded by the
-`rt_table_contract_ids_match_committed_contract` test. Renaming a bench label
-therefore always requires renaming the contract id in the same change.
-
-#### DSP Infrastructure and Pipeline Benchmarks
-
-The DSP infrastructure targets exercise the audio thread under production conditions:
-
-* **Resampling**: `RT_DSP_Resampler_44k1_to_48k`, `RT_DSP_Resampler_96k_to_48k` (batch of 64 blocks, reported per-block).
-* **Cabinet Simulation**: `RT_DSP_CabSim_IR_Medium` (UPOLS partitioned convolution, 64-block batch).
-* **Canonical End-to-End Pipeline**:
-  * `RT_DSP_Pipeline_Base_NoOS`: Base canonical pipeline without oversampling (48 kHz, 64-sample block, `BossWN-standard.nam`).
-  * `RT_DSP_Pipeline_HQ_4xOS`: High-quality 4× oversampled pipeline (half-band polyphase filtering + inference at 192 kHz).
-  * `RT_DSP_Pipeline_AdaptiveOn`: Pipeline with active `AdaptiveCompute` (`AdaptiveComputeMode::Conservative`), exercising real-time host latency telemetry updates, state machine degradation/recovery transitions, crossfade clock advancement, and double-pass WaveNet inference with zero heap allocations.
-
-### Baselines and Renewal
-
-The official performance baseline lives in [`quality-contract.json`](quality-contract.json) alongside
-fidelity metrics. The **full renewal procedure** — including prerequisites, the
-`--bootstrap-baseline` / `--check` cycle, and the mandatory commit-message justification — is
-documented in [`testing.md`](testing.md#95-baseline-renewal-procedure-human-only).
-
 > [!CAUTION]
-> The Criterion baseline (`.performance-baselines/`, managed by
-> `utils/tests-performance-regression.sh --bootstrap-baseline`) and the Quality
-> Contract (`docs/quality-contract.json`) are **independent**. Updating one does
-> not update the other. Criterion data is local/gitignored; the contract file is
-> committed. Both must be renewed (human-only) when latency or fidelity
-> characteristics intentionally change — always Criterion first, then `--save`.
+> AI agents and automated CI runners are **strictly prohibited** from executing `--bootstrap-baseline` or `quality-dashboard.sh --save`. Baseline renewal is exclusively a human operation performed under verified environmental conditions.
 
-#### Operational Protocol & Toolchain Variance Defense (F-SIMD-05)
-
-To maintain absolute reproducibility across development sessions, CI runs, and AI pair-programming:
-
-1. **Toolchain & Thermal Decoupling:** Code correctness and mathematical integrity are evaluated via the fidelity and unit test suites (`utils/tests-quick.sh`), decoupling code verification from thermal fluctuations or compiler toolchain variations (`rustc 1.98` vs `1.97.1`).
-2. **Strict AI Prohibition:** AI agents are **strictly prohibited** from executing `quality-dashboard.sh --save` or `utils/tests-performance-regression.sh --bootstrap-baseline`.
-3. **Operator Renewal Protocol:** Baseline updates to `docs/quality-contract.json` are the exclusive prerogative of the human operator / PO, performed on a cold, isolated machine (`governor=performance`, pinned core, background load < 0.1).
-
----
-
-## Corrective Report: RFFT SIMD Regression Analysis (F-PERF-28)
-
-Finding F-PERF-28 (post-audit, 2026-09-19): the quality dashboard flagged
-`RT_Linear` (now `RT_Linear_Direct_RF4`) at 0.330 µs against the contract limit
-0.310 µs (frozen median 0.260 µs,
-commit `7576d49`). A controlled same-boot bisect attributed the end-to-end delta to the
-AVX2 vectorization of RFFT `pack_re_im`/`unpack_re_im`:
-
-| Configuration (audit bisect, same boot 2026-09-19)       | RT_Linear (Direct RF=4) median | Verdict               |
-|:-------------------------------------------------------- |:------------------------------ |:--------------------- |
-| `36830e2` (scalar baseline)                              | 269.7 ns                       | baseline level        |
-| HEAD `f44b3fa` (with T4.8 SIMD)                          | 327–348 ns                     | +22–29%, above limit  |
-| HEAD, only `src/models/linear_fft/process.rs` reverted   | 347.7 ns                       | innocent              |
-| HEAD, only `src/math/dsp/rfft.rs` reverted (T4.8 scalar) | 278.8 ns (−20.8%)              | "guilty" in isolation |
-
-This report documents the corrective cycle: bench extension (measurement blind-spot
-closure), paired SIMD-vs-scalar A/B per stage and per FFT size, the binding decision,
-and the restored implementation.
-
-### Effective FFT sizes on the production paths (measurement blind spot closed)
-
-The T4.8 micro-bench covered only N=512. Resolving every production `RfftPlanner`
-instantiation through its planner (`src/models/linear.rs`, `src/models/linear_fft.rs`,
-`src/dsp/cabsim/conv.rs`):
-
-| Production path                                                                             | RFFT size N                                                                                                       | Covered by bench group `Rfft_stages_by_size`                                                 |
-|:------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------- |
-| `linear_test.nam` (the `RT_Linear_Direct_RF4` bench fixture)                                | **none** — RF=4 < `FFT_AUTO_THRESHOLD` (256), resolves to `LinearMode::Direct` (no FFT state is ever constructed) | n/a — see mechanism note below                                                               |
-| Linear FFT path (`receptive_field ≥ 256`), e.g. the synthetic `RT_Linear_Fft_RF2048` target | `N = 2P`, `P = select_partition_size(RF)` = largest power of two ≤ RF/2 → RF=2048 uses **N=2048**                 | 64, 128, 256, 512, 1024 (intermediate sizes; the exact N=2048 sits above the parametric set) |
-| CabSim `ConvEngine::new(ir, 64)` (block 64)                                                 | `(2 × 64).next_power_of_two()` = **N=128**                                                                        | yes (N=128)                                                                                  |
-
-The bench group `Rfft_stages_by_size` (`benches/dsp_bench.rs`) replaces the
-single-size `Rfft_stages_512` group and covers N ∈ {64, 128, 256, 512, 1024} for
-`pack_re_im` / `post_twiddle` / `pre_twiddle` / `unpack_re_im` /
-`process_forward_full` / `process_inverse_full`.
-
-> [!IMPORTANT]
-> **Mechanism correction.** `RT_Linear_Direct_RF4` benchmarks `linear_test.nam`, a 4-tap
-> Linear model that runs in **Direct (time-domain) mode and never executes RFFT**. The
-> T4.8 SIMD code therefore cannot have slowed that bench algorithmically. The
-> partitioned-FFT production path has its own dedicated target,
-> `RT_Linear_Fft_RF2048` (synthetic RF=2048 fixture, `LinearImplementation::Auto` →
-> `LinearMode::Fft`), so the FFT path is no longer a measurement blind spot. The
-> whole-binary
-> build of this crate uses `lto = "thin"` with `codegen-units = 1`
-> (`[profile.bench]`), so unrelated source changes shift the layout of the entire
-> `.text` and can move a ~340 ns hot loop by tens of ns. The audit's −20.8% from the
-> whole-file `rfft.rs` revert is reproduced here as a **code-layout artifact**: with
-> the surgical scalar restoration (staged API preserved), RT_Linear_Direct_RF4 stays at the
-> same level as HEAD (paired A/B below, Δ = +0.9%, p = 0.107). The baseline
-> 269.7 ns figure is not reachable by restoring the RFFT algorithm alone on the
-> current toolchain/boot; it reflects a different binary layout of commit `36830e2`.
-
-### Paired A/B protocol and results (2026-09-19)
-
-* **Arms:** SIMD = HEAD `d51fee9` (AVX2 `pack_re_im_f32_avx2` / `unpack_re_im_f32_avx2`);
-  scalar = the restoration (stride-2 de/interleave inside the staged API, AVX2 kernels removed).
-* **Methodology** (T5.1-style): `governor = performance`, `taskset -c 8` core pinning,
-  3 formal Criterion invocations per arm, per-run medians + Welch t-test over pooled
-  per-iteration samples (`sample.json`). Environmental drift was bidirectional
-  (RT_Linear_Direct_RF4 medians drifted 339.7 → 353.9 ns within the SIMD arm), consistent with the
-  ±17% ns-scale drift documented for this desktop host — conclusions rest on pooled
-  Welch tests and on effect sizes an order of magnitude larger than the drift band.
-* **Stage level** (`benches/dsp_bench.rs::Rfft_stages_by_size`, Δ% = scalar vs SIMD,
-  positive = scalar slower; all pooled p ≤ 0.05 unless noted):
-
-| Stage                  | N=64    | N=128  | N=256  | N=512 | N=1024    |
-|:---------------------- |:------- |:------ |:------ |:----- |:--------- |
-| `pack_re_im`           | +123.6% | +54.8% | +18.9% | +7.9% | **−3.6%** |
-| `unpack_re_im`         | +101.3% | +27.5% | +18.3% | +8.9% | +4.3%     |
-| `post_twiddle`         | −1.8%   | −3.0%  | +1.2%  | +0.9% | −0.2%     |
-| `pre_twiddle`          | +0.7%   | +0.4%  | +1.4%  | +0.2% | +1.0%     |
-| `process_forward_full` | +3.6%   | +2.8%  | +1.6%  | +0.9% | +1.0%     |
-| `process_inverse_full` | +0.8%   | +7.4%  | +3.0%  | −1.9% | −0.4%     |
-
-  Absolute anchors (median-of-3): pack N=128 9.0 → 14.0 ns; pack N=256 17.3 → 20.5 ns;
-  full forward N=128 403.6 → 413.7 ns. The isolated AVX2 shuffle kernels do win at
-  small N, but pack/unpack are only ~2-5% of a full transform, so the isolated gain
-  dilutes to ≤ 3.6% at the transform level.
-
-* **End-to-end** (`benches/regression_gate.rs`, 100 samples × 5 s, `ForceAvx2Guard`):
-
-| Series                    | SIMD (r1/r2/r3)          | scalar (r1/r2/r3)        | Δ (pooled) | Welch p |
-|:------------------------- |:------------------------ |:------------------------ |:---------- |:------- |
-| `RT_Linear_Direct_RF4`    | 336.9 / 345.3 / 353.6 ns | 351.1 / 341.3 / 348.3 ns | +0.9%      | 0.107   |
-| `RT_DSP_CabSim_IR_Medium` | 82.7 / 85.6 / 85.3 µs    | 84.6 / 83.0 / 83.2 µs    | **−2.5%**  | 0.006   |
-
-### Binding decision (T10.2 criteria)
-
-Option B (size-gate) required **some** N ≥ 256 with isolated SIMD gain ≥ 10% *and*
-end-to-end corroboration. N=256 shows +18.3..18.9% isolated on pack/unpack, but the
-only production consumer (CabSim) is **faster with scalar** end-to-end (−2.5%, p = 0.006),
-and `RT_Linear_Direct_RF4` is a tie. Corroboration fails by an order of magnitude in the
-end-to-end direction.
-
-**Decision: Option A — full scalar restoration** (executed in the same change):
-`pack_re_im` / `unpack_re_im` restored to the pre-T4.8 scalar stride-2 loops *inside
-the staged API* (`pack_re_im` / `post_twiddle` / `pre_twiddle` / `unpack_re_im` /
-`scratch_buffers_mut` remain public; the T1.4-stage bench consumers are unaffected);
-the AVX2 kernels were deleted (dead `.text` policy); the T4.8(a) `debug_assert!`
-guards and safety documentation were preserved. The twiddle stages were
-already arithmetically identical to the baseline scalar code (same `mul_add`
-sequence — verified by full-file diff against `36830e2`), so the restoration is
-**bit-exact by construction**; C++ NAMCore parity and the f64 oracle pass unchanged.
-`// Measured:` rationale is embedded in the `pack_re_im` / `unpack_re_im` doc comments.
-
-### Consequences for the closing ceremony
-
-The restoration does **not** return `RT_Linear_Direct_RF4` to the 0.26–0.28 µs contract zone on
-this boot (both arms measure ~0.34–0.35 µs; see the mechanism note above — the gap is
-binary-layout/environment, not the T4.8 algorithm). The human re-baseline
-(`--bootstrap-baseline`) will therefore register the current-boot level legitimately:
-the delta is a reproduced, understood codegen-environment shift, and the contract
-median is never hand-edited. If `PERFORMANCE: FAIL` persists on `RT_Linear_Direct_RF4` after the
-re-baseline and `--save`, that is the documented expected state until the contract is
-re-frozen from the new baseline — not a new regression.
-
----
-
-## Comparative Results: Scalar LSTM vs. SIMD (Fused Gates)
-
-Optimizations introduced gate fusion and SIMD activations (AVX2/AVX-512) into the recurrent networks' hot-path. Below are the measured gains on an x86-64-v3 (AVX2/FMA) architecture for 64-sample blocks:
-
-| Topology      | Implementation    | Latency (Average) | Speedup    |
-|:------------- |:----------------- |:----------------- |:---------- |
-| **LSTM 1x8**  | Scalar (Baseline) | ~45.12 µs         | -          |
-| **LSTM 1x8**  | **SIMD Fused**    | **~2.27 µs**      | **19.84x** |
-| **LSTM 2x16** | Scalar (Baseline) | ~45.19 µs         | -          |
-| **LSTM 2x16** | **SIMD Fused**    | **~10.86 µs**     | **4.16x**  |
-
-### Technical Conclusion
-
-The performance gain exceeding **4x** on complex models (2x16) and nearly **20x** on simple models (1x8) validates the kernel fusion strategy. By processing the 4 LSTM gates simultaneously via SIMD vectors and keeping data in registers between the Sigmoid and Tanh activations, we drastically reduce CPU cycles wasted on redundant loads/stores and memory latency.
-
----
-
-## Cycle Budget (WaveNet Hot-Path)
-
-To guide future optimizations, granular instrumentation of the WaveNet hot-path (`WaveNetLayer::process_block_internal`) was performed using hardware cycle counters (**RDTSC**). This measurement identifies where the CPU spends most of its time during audio block processing.
-
-### Cycle Distribution per Stage (Per Layer)
-
-Below is the average percentage distribution of cycles on an x86-64-v3 (AVX2) architecture for a Standard model (CH=16):
-
-| Operational Stage          | Operations Involved                 | Budget (%) | Technical Justification                                              |
-|:-------------------------- |:----------------------------------- |:---------- |:-------------------------------------------------------------------- |
-| **Conv1D (SIMD GEMV)**     | Causal convolution, MACs, dilation  | **~45%**   | Most computationally intensive phase (matrix-vector multiplication). |
-| **1x1 & Residual (Fused)** | Dense projection, residual addition | **~25%**   | High memory pressure (read-modify-write) and channel projection.     |
-| **Mixin (Conditioning)**   | Timbre metadata injection           | **~15%**   | Dense operation applied to the input of each layer.                  |
-| **Act & Head (Fused)**     | Tanh/Sigmoid, Skip-Connections      | **~15%**   | Cost of transcendental functions (approximated via SIMD).            |
-
-### Data Flow Analysis (Array Level)
-
-At the `WaveNetLayerArray` level, the layer cascade dominates processing (**>90% of total time**). Interface stages (input **Rechannel** and output **Head Rechannel**) represent a negligible fixed overhead as the number of layers increases, validating the scalability of the NeuralAmpModeler-rs architecture for complex models.
-
-> [!TIP]
-> Fusing **Tanh** with **Head Accumulation** was the most impactful optimization, reducing the activation stage budget from ~30% to ~15% by eliminating redundant passes through L1 Cache memory.
-
----
-
-## Experiment Report: Temporal Tiling (Dual-Frame) on Conv1D
-
-In the hot-path optimization, a **Temporal Tiling** variant ("Dual-Frame" processing) was designed and tested for `Conv1D` kernels, aiming to maximize L1 Cache weight reuse by processing two frames simultaneously in WaveNet inference.
-
-### Measurement Results (64 samples, 48kHz, CH=16, AVX2)
-
-* **Single-Frame (Baseline):** ~92.6 µs
-* **Dual-Frame Tiling:** ~110 µs (Regression of ~19%)
-
-### Analysis and Architectural Decision
-
-Although theory suggested that loading weights from memory half as often would save bandwidth (L1 cache), in practice the x86-64 architecture (AVX2/FMA) proved to be limited by **Register Pressure**.
-To process two frames in parallel:
-
-1. The number of required SIMD accumulators doubled (from 4 YMM to 8 YMM per channel).
-2. Instruction overhead in the frontend (e.g., broadcasts and blends) outweighed the savings on loads.
-3. The compiler was forced to use register spilling or hit execution port bottlenecks for blend/shuffle instructions (Port 5).
-
-**Conclusion:** The primary bottleneck of `Conv1D` in NeuralAmpModeler-rs is not tied to L1 Cache bandwidth, but rather to computational throughput and register contention in the backend (FMA). Because of this, while the kernel implementation has been kept in the `SimdMath` trait for portability and testing on architectures with more registers (e.g., AVX-512 or ARM NEON), the main loop in `WaveNetLayer` continues to use **Single-Frame processing** to ensure the lowest latency and highest real-time stability.
-
-The main loop in `src/models/wavenet/layer.rs::process_block_internal` uses exclusively `process_single_frame_with_mixin`; any switch to Dual-Frame in that context requires re-running the parity-validation benchmarks before merge.
-
-> [!NOTE]
-> The **dynamic** (`Conv1dDyn`) path reaches the **opposite** conclusion — measured directly in 2026-09-18; see the report below. The two kernels differ structurally (per-tap `dot_product_*x_f32_accumulate` vs `dot_product_*x_f32_dual_accumulate`), so neither result transfers to the other path.
-
----
-
-## Experiment Report: Temporal Tiling (Dual-Frame) on Conv1dDyn (Dynamic Path)
-
-Unlike the static path above, `Conv1dDyn::process_block` has always used **dual-frame tiling as its main loop** (`chunks_exact_mut(2 * out_ch)` → `process_dual_frame`; `process_single_frame` only in the odd-frames remainder). Until now, that choice had **no documented A/B measurement** (audit finding F-PERF-06) — a blind spot given the static path's measured ~19% regression for the same tiling. This section closes the gap.
-
-### Measurement Setup
-
-* **Harness:** `benches/conv1d_hotpath_bench.rs` — group `conv1d_dyn_dual_vs_single` (the full `Conv1dDyn` call, one 64-frame block per iteration) plus the kernel-level control group `raw_dual_vs_2x_single` (one dual kernel call vs two single kernel calls). Geometry CH=4/8/16, K=3, dilation=1, 64-frame block (64 samples @ 48 kHz), interleave width = CH; weights interleaved exactly as the loader produces them.
-* **Environment:** AMD Zen 2 5700U, rustc 1.98.1, AVX2/FMA (x86-64-v3), CPU governor `performance`, `taskset` core pinning, thermal cooldown between invocations.
-* **Noise protocol:** this is a desktop host with co-resident load on SMT siblings; repeated runs showed **bidirectional drift of up to ~±17% per absolute median among formal runs (up to +30% on one ns-scale control bench across exploratory runs)**, largest on the ns-scale raw benches. Conclusions therefore rest on **paired within-run ratios** (each dual/single pair measured seconds apart), replicated across 4 independent invocations (2 exploratory on core 8, 2 formal on idle physical core 7), with Welch t-tests over per-iteration samples and Criterion bootstrap CIs. Absolute medians below are representative, not canonical.
-
-### Results — `Conv1dDyn` call level (per 64-frame block)
-
-Dual-frame median vs single-frame median, per independent invocation:
-
-| Geometry | Δ% (dual vs single)                                                   | Welch p            | Verdict               |
-|:-------- |:--------------------------------------------------------------------- |:------------------ |:--------------------- |
-| CH=4     | −8.1%, −5.8%, −8.1%, −5.3%                                            | ≤ 3.5e-08          | dual faster, all runs |
-| CH=8     | −12.0%, −7.6% (p = 0.13, outlier-contaminated sample), −12.4%, −13.2% | < 1e-4 in 3/4 runs | dual faster, all runs |
-| CH=16    | −12.1%, −9.0%, −9.6%, −11.6%                                          | ≈ 0                | dual faster, all runs |
-
-Representative medians (formal run, core 14): CH4 single 1.48 µs / dual 1.36 µs; CH8 single 1.82 µs / dual 1.60 µs; CH16 single 3.32 µs / dual 3.00 µs.
-
-### Results — kernel-level control (dual kernel vs 2× single kernel)
-
-| Geometry | Δ% (dual vs 2× single)            | Interpretation                                                                   |
-|:-------- |:--------------------------------- |:-------------------------------------------------------------------------------- |
-| CH=4     | **+18.5% to +20.3%** (p < 0.01)   | the isolated 4-wide dual kernel loses decisively (doubled scalar state handling) |
-| CH=8     | −0.9% to +1.9% (p = 0.13..7e-04)  | statistical tie                                                                  |
-| CH=16    | −15.3% to +0.1% (drift-dominated) | tie to slightly faster                                                           |
-
-### Analysis & Architectural Decision
-
-The call-level and kernel-level results **diverge**: even where the isolated dual kernel is slower (CH=4), the dual-frame call wins by 5–13%. The dual-frame path amortizes the per-frame fixed overhead that dominates at K=3: the tap-pointer setup loop, the prefetch-strategy call, and the call prologue run **once per frame pair instead of twice**. At CH=16 the wide interleave additionally lets the dual kernel win on its own merits. This mirrors the static-path lesson in inverse: there, register pressure made tiling lose; here, fixed-overhead amortization makes tiling win — the dyn kernels are structurally different (scalar-init accumulators, per-tap pointer arrays), so the static-path result indeed did not transfer.
-
-**Decision (F-PERF-06 / Epic C): the dual-frame main loop of `Conv1dDyn::process_block` is RETAINED.** Consumers (`layer_dyn.rs`, `post_stack_head.rs`, `convnet/block.rs`) are unchanged. No re-baseline is required (no code change). Correctness of both paths remains exchangeable: kernel-level bit-equality is enforced by `test_dot_{4x,8x,16x}_f32_dual_avx2_single_vs_dual_invariance` (plus vs-scalar and stress variants). Any future swap must re-run this A/B on an idle system and undergo human re-baseline.
-
-* **Future note:** if non-catalog CH=4 dynamic models ever become a relevant workload, the isolated `dot_product_4x_f32_dual_accumulate` kernel (~+19% vs 2× single) is the optimization target — not the tiling, which is already correct.
-
----
-
-## Experiment Report: Stereo Fusion in the Output Stage
-
-The goal was to eliminate redundant memory passes in the final output stage by fusing the gain (Hysteresis/Gate) operations of the L and R channels into a single stereo SIMD call.
-
-### Measurement Results (64 samples, 48kHz, AVX2)
-
-| Topology        | Before Fusion | After Fusion | Gain (%)  |
-|:--------------- |:------------- |:------------ |:--------- |
-| **WaveNet Std** | ~98.0 µs      | ~92.6 µs     | **~5.5%** |
-| **LSTM 2x16**   | ~11.4 µs      | ~10.9 µs     | **~4.5%** |
-
-### Conclusion
-
-Stereo fusion reduces memory traffic in the L1 Cache by reading the L and R channels simultaneously and applying the gain/ramp weights in a single loop. The gain is more pronounced in smaller blocks (e.g., 32 samples, where a **~8.5%** improvement was measured), where dispatch overhead and partial cache misses have a higher relative weight.
-
----
-
-## Criterion A2 Architecture
-
-The A2 architecture introduces per-layer conditioning (FiLM + Gating) and a configurable channel count (CH=3 Lite, CH=8 Full). The implementation focused on a SIMD-heavy hot-path for CH=8 (`A2Conv1dCh8`) with col-major-per-tap weight layout, enabling AVX2 T=4 broadcast-FMA convolution.
-
-### A2-Full (CH=8) — Optimized SIMD Path
-
-A2-Full uses the `A2Conv1dCh8` fast path with f32 weights in col-major layout (`w[k * 64 + in * 8 + out]`), where 8 output-channel weights are contiguous per `(tap, input)` pair. This layout feeds directly into AVX2 broadcast-FMA without transposition.
-
-| Block Size   | Latency (µs) | Per-Sample (ns) | CPU % at 48kHz |
-|:------------ |:------------ |:--------------- |:-------------- |
-| **64 samp**  | **~30.7 µs** | ~480            | ~2.3%          |
-| **128 samp** | ~30.5 µs     | ~238            | ~1.1%          |
-| **256 samp** | ~30.6 µs     | ~120            | ~0.6%          |
-
-### A2-Lite (CH=3) — f32 Native GEMV Path
-
-A2-Lite uses the dedicated `A2Conv1dCh3` fast path ([`src/models/a2/conv1d_ch3/mod.rs`](../src/models/a2/conv1d_ch3/mod.rs)), mirroring the CH=8 kernel design: f32 native weights in col-major-per-tap layout (one `_mm_loadu_ps` load, one `_mm_fmadd_ps` FMA per input channel — no f16 decode). The kernel is a fully unrolled GEMV (18 FMAs for K=6, 45 FMAs for K=15), with post-conv operations (Mixin, LeakyReLU, head, l1x1) batched via AVX2.
-
-| Block Size   | Latency (µs) | Per-Sample (ns) | CPU % at 48kHz |
-|:------------ |:------------ |:--------------- |:-------------- |
-| **64 samp**  | **~16.3 µs** | ~255            | ~1.2%          |
-| **128 samp** | ~16.3 µs     | ~127            | ~0.6%          |
-| **256 samp** | ~16.3 µs     | ~64             | ~0.3%          |
-
-### Comparative Analysis
-
-| Variant | Weights | Channels | Conv Path                   | 64-samp Latency |
-|:------- |:------- |:-------- |:--------------------------- |:--------------- |
-| A2-Full | 12,146  | 8        | f32 col-major SIMD          | **~30.7 µs**    |
-| A2-Lite | 1,871   | 3        | f32 col-major unrolled GEMV | **~16.3 µs**    |
-
----
-
-## Gate FSM (Dynamic Hysteresis)
-
-The gate FSM (`DynamicHysteresis`) runs in the DSP hot-path on every audio callback to decide whether to open or close the noise gate based on detected volume. The benchmark measures `update()` (state machine tick) + `multiplier()` (current gain read) across three steady-state scenarios at realistic DSP block sizes.
-
-### Results (64, 128, 256 samples — x86-64-v3 AVX2/FMA)
-
-| Scenario             | 64 samp  | 128 samp | 256 samp | Steady Path                                  |
-|:-------------------- |:-------- |:-------- |:-------- |:-------------------------------------------- |
-| **Open**             | ~2.11 ns | ~2.16 ns | ~2.17 ns | Volume above open threshold, gate stays open |
-| **Closed**           | ~1.64 ns | ~1.73 ns | ~1.73 ns | Gate already closed, volume stays below      |
-| **FadingOut (ramp)** | ~1.21 µs | ~1.14 µs | ~1.09 µs | Gate actively ramping multiplier toward zero |
-
-### Running Gate_FSM bench
-
-```sh
-cargo bench --bench dsp_bench -- "Gate_FSM"
-```
-
----
-
-## IR Cabsim Convolution
-
-The cabsim engine uses UPOLS (Uniform-Partitioned Overlap-Save) frequency-domain convolution. All FFTs of the kernel partitions are pre-computed at construction time; the `ConvEngine::process()` hot-path performs zero allocations and operates on pre-allocated buffers exclusively.
-
-### Benchmarks (64-sample blocks at 48 kHz)
-
-> [!NOTE]
-> Os valores desta tabela histórica refletem uma versão significativamente anterior
-> do kernel CabSim e não são comparáveis aos valores atuais do `quality-contract.json`.
-> Mantidos apenas como registro arqueológico. Para benchmarks atuais, consultar
-> `docs/quality-contract.json` e `utils/quality-dashboard.sh`.
-
-| Benchmark                 | IR Samples | Partitions | Latency (µs) | CPU % at 48kHz |
-|:------------------------- |:---------- |:---------- |:------------ |:-------------- |
-| ShortIR_64samp            | 64         | 1          | ~1.39        | ~0.1%          |
-| MediumIR_2048_64          | 2,048      | 32         | ~8.15        | ~0.6%          |
-| LongIR_16384_64           | 16,384     | 256        | ~58.34       | ~4.4%          |
-| MediumIR_2048_256samp     | 2,048      | 8          | ~12.58       | ~0.2%          |
-| Engine_Construction_2048  | 2,048      | 32         | ~19.65       | — (load-time)  |
-| Engine_Construction_16384 | 16,384     | 256        | ~133.27      | — (load-time)  |
-
-### RT-Safety Validation
-
-* **Heap-audit tests** ([`tests/rt_constraints.rs`](../tests/rt_constraints.rs)) confirm zero allocations on the `ConvEngine::process()` hot-path.
-* **Golden convolution tests** ([`tests/models/cabsim_golden.rs`](../tests/models/cabsim_golden.rs)) verify UPOLS output against direct convolution reference using deterministic synthetic IRs.
-
----
-
-## Lock-Free SPSC & GC Cascade Benchmark Suite (`spsc_swap_bench`)
-
-### Context & Motivation (F-PERF-32 a, b)
-
-NeuralAmpModeler-rs executes off-RT resource swaps (oversampling mode, neural model instance, CabSim IR) using a non-blocking 3-phase drain protocol on the real-time audio thread, coupled with a 3-tier Garbage Collection (GC) cascade. To mathematically guarantee real-time determinism and eliminate audio dropouts (xruns), all queue operations and GC cascades on the RT thread must execute well within sub-microsecond budgets with zero heap allocations and zero blocking synchronization.
-
-Benchmark file: [`benches/spsc_swap_bench.rs`](../benches/spsc_swap_bench.rs).
-
-### Benchmark Targets & Measured Latencies
-
-The suite evaluates both the audio callback drain hot-path and the multi-tier GC deferral mechanics:
-
-| Benchmark Function                     | Domain                | Subsystem / Protocol Invariant                                 | Typical Latency (AVX2 / x86-64-v3) |
-|:-------------------------------------- |:--------------------- |:-------------------------------------------------------------- |:---------------------------------- |
-| `Swap_Drain_Quiescent`                 | Audio Thread          | Phase 1 empty check under steady state (quiescent)             | **~2.7 ns**                        |
-| `Swap_Drain_LowContention_Single`      | Audio Thread          | Single pending payload drained, swapped, and installed         | **~448 ns**                        |
-| `Swap_Drain_HighContention_Coalescing` | Audio Thread          | 16-burst queue coalesced in 1 callback (latest-wins policy)    | **~888 ns**                        |
-| `Swap_Drain_Budget_Exceeded_Deferred`  | Audio Thread          | Budget-constrained pop deferral with atomic backlog flag       | **~584 ns**                        |
-| `Gc_Cascade_Tier1_Spsc`                | Audio Thread          | Primary lock-free SPSC GC channel enqueue                      | **~212 ns**                        |
-| `Gc_Cascade_Tier2_ParkingLot`          | Audio Thread          | Fixed 16-slot parking lot fallback when SPSC is full           | **~370 ns**                        |
-| `Gc_Cascade_Tier3_Overflow`            | Audio Thread          | Treiber-style lock-free linked list fallback (Tier 3)          | **~1.79 µs**                       |
-| `Gc_Drain_Housekeeping_AllTiers`       | Housekeeping (Off-RT) | Sweeps and frees items across all 3 tiers off the audio thread | **~1.53 µs**                       |
-
-### Real-Time Safety Guarantees
-
-1. **Zero Heap Allocation / Deallocation in Audio Loop**: All payloads tested in `spsc_swap_bench` are pre-allocated and pooled. Popped payloads are retained by the harness and transferred to GC channels without triggering immediate deallocation on the audio thread.
-2. **Deterministic Time Budget**: Under heavy contention bursts (16 consecutive payload updates), latest-wins coalescing drains and updates the engine in under 1 µs (< 0.08% of the 1333 µs RT budget for 64-sample blocks at 48 kHz).
-3. **Graceful Degradation**: Even in extreme saturation where SPSC ring buffer and 16-slot parking lot are both exhausted, Tier 3 atomic overflow enqueues in under 2 µs, preserving real-time safety without memory leaks.
-
-### Integration with Performance Regression Script
-
-The benchmark can be exercised independently or targeted directly with the performance regression runner via the `NAM_BENCH_SUITE` environment variable:
+When an intentional algorithmic optimization or architectural change legitimately shifts latency:
 
 ```bash
-# Standalone execution
-cargo bench --bench spsc_swap_bench
+# 1. Regenerate the local Criterion baseline
+utils/tests-performance-regression.sh --bootstrap-baseline
 
-# Target validation via regression gate runner
-NAM_BENCH_SUITE=spsc_swap_bench bash utils/tests-performance-regression.sh --check
+# 2. Verify that standalone check passes cleanly
+utils/tests-performance-regression.sh --check
+
+# 3. Update the committed quality contract (requires all tests & gates to PASS)
+utils/quality-dashboard.sh --save docs/quality-contract.json
+
+# 4. Validate the loop on the same git revision
+utils/quality-dashboard.sh --check docs/quality-contract.json
 ```
 
----
-
-## Kahan Per-Tap Cost in Conv1d (Removed)
-
-### Context
-
-The static implementation of conv1d ([`src/models/wavenet/conv1d.rs`](../src/models/wavenet/conv1d.rs) and [`src/models/wavenet/conv1d_dual.rs`](../src/models/wavenet/conv1d_dual.rs)) previously executed Kahan compensated summation inside the per-tap loop. For K ≤ 3 (all A1 WaveNet models), simple summation error is O(3·ε) — negligible for audio — making per-tap Kahan unnecessary.
-
-Benchmark file: [`benches/kahan_conv1d_bench.rs`](../benches/kahan_conv1d_bench.rs).
-
-### Decision & Impact
-
-Kahan compensated summation was removed from the static hot-path:
-
-* [`src/models/wavenet/conv1d.rs`](../src/models/wavenet/conv1d.rs): `kahan_add` → `+=`
-* [`src/models/wavenet/conv1d_dual.rs`](../src/models/wavenet/conv1d_dual.rs): `kahan_add` → `+=`
-* [`src/models/wavenet/conv_input.rs`](../src/models/wavenet/conv_input.rs): `store_kahan_4_accums` → `store_4_accums`
+**Flaky dashboard `--check` after a green standalone gate:**
+The quality dashboard runs several minutes of functional fidelity checks prior to executing Criterion. This pre-test workload increases CPU die temperatures and OS noise. Very fast micro-benchmarks near the noise floor (`RT_Linear_Direct_RF4` ~340 ns, `RT_LSTM_2x8` ~7.1 µs) can report a spurious $+2–4\%$ variation. If standalone `--check` passes on a cool machine, do not bootstrap a new baseline solely to silence transient thermal drift.
 
 ---
 
-## WaveNet Lite CH12: Profiling, Memory Stride & Architectural Efficiency
+## 5. Quality Contract — Performance Integration
 
-The WaveNet Lite variant operates with an internal channel dimension of $CH=12$. While it has 25% fewer channels than WaveNet Standard ($CH=16$), its initial latency benchmark reported **64.5 µs**, which was nearly **1.75× slower** than the larger Standard model (~36.6 µs).
+The **Quality Contract** ([`quality-contract.json`](quality-contract.json)) integrates fidelity and performance into a single machine-readable specification:
 
-### 1. Implemented Optimizations & Weight Padding
+* **Regression Gate (`utils/tests-performance-regression.sh`):** Strict relative statistical wall evaluating whether mean latency regressed above the $+5\%$ noise band.
+* **Dashboard Check (`utils/quality-dashboard.sh --check`):** Broad integration check applying a conservative **10% margin** on median latency:
 
-To resolve the initial bottlenecks, structural changes were implemented:
+$$\text{measured\_latency} > \text{contract\_latency} \times 1.10 \implies \text{VIOLATION}$$
 
-* **SIMD 8+4 Store Path:** In `store_16_accums` ([`src/models/wavenet/conv_input.rs`](../src/models/wavenet/conv_input.rs)), scalar stores were replaced with a fused 256-bit YMM store (lanes 0..7) and a 128-bit XMM store (lanes 8..11).
-* **Dedicated 12x12 GEMM Kernel & Weight Padding:** In [`src/math/gemm/gemm_batch/fused_residual_batch/mod.rs`](../src/math/gemm/gemm_batch/fused_residual_batch/mod.rs) and the model loader, residual convolution weights were padded to stride 16.
+This 10% envelope absorbs transient thermal fluctuations while strictly catching meaningful degradations.
 
-These optimizations reduced the global median latency of WaveNet Lite CH12 from **68.5 µs to 52.2 µs** (a **−19.7%** improvement).
+### Bench-Label Mapping
 
-### 2. Structural ASM Analysis
-
-Assembly comparison and stride analysis revealed that fixed setup overhead (prologue, dispatch, bounds checks) accounts for 54% of instructions in Lite CH12 versus 34.5% in Standard CH16. On AVX2, the 8+4 channel split operates with 128-bit XMM instructions for the upper 4 lanes, yielding higher instruction counts per layer than standard 16-channel YMM operations.
-
-**Final Decision:** The WaveNet Lite CH12 SKU operates cleanly at **~52.7 µs** (96.1% headroom from the 1333 µs RT deadline), with 1e-7 parity tolerance restored and zero unneeded technical debt.
-
-### 3. CH=12 lane-route re-validation (kernel-level A/B)
-
-The 8+4 split was re-quantified at the dot-product kernel level with
-`benches/conv1d_hotpath_bench.rs` (group `ch12_lane_route`, IN=12, K=3 → 36
-taps, the WaveNet Lite dilated-conv geometry; AVX2, rustc 1.98.1). The
-padded-16 route runs `dot_product_16x_f32_accumulate` over zero-padded lanes
-12..15; the 8+4 composite runs the 8-wide kernel (lanes 0..8) plus the
-4-wide kernel (lanes 8..12) over the same taps — bit-equal on the 12 useful
-lanes (asserted in the bench). Across three independent builds the padded
-route won 2 of 3 windows (18.0–23.1 ns vs 21.8–24.0 ns for 8+4), matching
-the instruction-count argument above (same FMA count per tap, one extra
-broadcast per tap, duplicated loop/reduction overhead). **Decision
-confirmed: keep the padded 16-lane route for CH=12.**
-
-### 4. Constant-folding of `interleave_width` (verified)
-
-`select_interleave_width` is `const fn` (kept as fold insurance) and
-`OUT` is a const generic, so every per-SKU kernel monomorphizes exactly one
-`match` arm. Verified via `cargo rustc --release --lib -- --emit=asm` on
-rustc 1.98.1: each `WaveNetLayer<IN, OUT, K>::process_block_internal` body
-contains only its own kernel — CH16/CH12 instantiations show zero 128-bit
-FMA ops, while the 4-wide route (`OUT = 6`) shows the 128-bit FMA kernel;
-`select_interleave_width` never appears as a runtime call site. A
-`const`-binding test (`layout_test.rs`) keeps the foldability contract
-enforced by the build.
+Benchmark identifiers in `quality-contract.json` correspond directly to Criterion bench function labels in [`benches/regression_gate.rs`](../benches/regression_gate.rs). The mapping is enforced as an identity projection via `RT_BENCH_TABLE` in [`src/testing/qa/ids.rs`](../src/testing/qa/ids.rs) and validated by the `rt_table_contract_ids_match_committed_contract` regression test.
 
 ---
 
-## Software Prefetch Policy for the Causal Conv1D Tap Loop
+## 6. Micro-Architectural Decisions & Invariants
 
-`prefetch_strategy_simple` (`src/math/common/ops.rs`) is **stride-guarded**:
-the fixed `+16 f32` (one 64-byte line) T0 hint fires only when the tap
-stride `step = dilation * in_ch` fits inside one cache line
-(`step <= 16 f32`). Rationale (measured, AVX2, rustc 1.98.1, Zen 2 5700U —
-`benches/conv1d_hotpath_bench.rs`, group `prefetch_guard`):
+This section records empirical performance findings and micro-architectural invariants to prevent regressions caused by well-intentioned but counterproductive refactorings.
 
-* For `step <= 16 f32` the prefetched line overlaps the next tap's row
-  (exactly for 16x16 d=1 / 8x8 d=2, partially for 12x12 d=1) — removing the
-  hint costs **+3..5%** on those cases (16x16 d=1, 12x12 d=1).
-* For larger strides the prefetched line is never read by any tap
-  (misaligned junk work on a load-port slot): removing it improves the
-  8-wide kernel by **~8-9%** for dilations ≥ 4 and is neutral-to-slightly
-  better on 4-wide/12-wide (the hardware prefetcher streams short strides;
-  the 2-stage strategy owns extreme dilations with a correctly aimed
-  next-tap + next-next lookahead).
-* A pure dilation threshold cannot express this: the same dilation is
-  aligned for CH16 (d=1) and misaligned for CH8 (d=2) because the useful
-  quantity is the byte stride. Model-level gate (same-window A/B):
-  Std CH16 **−4.0%**, Nano CH4 −0.8%, Feather CH8 −0.2% (no change),
-  Dyn_Free +0.2%, Lite CH12 +1.3% (within the ±2% codegen band; the isolated
-  12x12 kernel loop is neutral under the guard).
+### Temporal Tiling (Dual-Frame) on Conv1D
 
-### Empirical Validation and Resolution of Evidence Conflict (2026-09-17)
+Dilated 1D convolution (`Conv1D`) accounts for ~45% of WaveNet inference time. The relationship between temporal tiling (processing two audio frames simultaneously) and latency differs fundamentally between static and dynamic implementations:
 
-To resolve the evidence conflict noted during audit between initial same-window measurements (−4.0%) and cross-run measurements under load (+4.6%), a dedicated A/B re-measurement protocol was executed on an idle system (`NAM_THERMAL_COOLDOWN_S=180`, `taskset -c 12` on AMD Zen 2 5700U):
+1. **Static WaveNet (`WaveNetLayer`): Single-Frame Strictly Preserved**
+   * *Finding:* Dual-frame tiling requires doubling SIMD accumulators (from 4 YMM to 8 YMM per channel). On x86-64-v3, this creates severe register pressure, leading to stack spilling and port contention on shuffle/blend units (Port 5), causing a **~19% latency regression** (~92.6 µs $\to$ ~110 µs for CH=16).
+   * *Invariant:* The static processing loop in `src/models/wavenet/layer.rs::process_block_internal` uses **Single-Frame processing exclusively**.
+2. **Dynamic WaveNet (`Conv1dDyn`): Dual-Frame Tiling Retained**
+   * *Finding:* `Conv1dDyn::process_block` uses runtime-dimensioned channel counts and dynamic tap pointers. Dual-frame tiling amortizes per-frame fixed overhead (tap-pointer array setup and prefetch dispatch) across frame pairs, yielding a **5% to 13% speedup** across CH=4, 8, and 16.
+   * *Invariant:* Dual-frame processing is retained as the primary loop in dynamic convolution (`chunks_exact_mut(2 * out_ch)`), falling back to single-frame only for odd frame remainders.
 
-* **Kernel-level (`conv1d_hotpath_bench`):**
-  * Disabling the `step <= 16` guard in `prefetch_strategy_simple` provoked an immediate **+8.2% to +9.5%** regression across all dilations $\ge 4$ in `8x8` (`dil4_8x8`: +9.42%, `dil8_8x8`: +9.45%, `dil16_8x8`: +8.99%, `dil32_8x8`: +8.21%, $p = 0.00$), corroborating that unconditional prefetch on large strides pollutes the load ports with unread cache lines.
-  * In `16x16`, `12x12`, and `4x4`, differences remained neutral or within the statistical noise threshold ($p > 0.05$).
-* **Model-level (`regression_gate` / `RT_WaveNet_Std_CH16`):**
-  * Measured time: `[46.912 µs 47.434 µs 47.940 µs]`, change: `−0.52%` (`[−1.76%, +0.72%]`, $p = 0.44 > 0.05$).
-  * Verdict: **Neutral (within the ±2% noise threshold)**.
-* **Decision:** In accordance with the decision rule, the stride-guarded prefetch (`step <= 16`) is **retained in HEAD**. The +4.6% divergence observed during the earlier audit run was confirmed to be an environmental artifact of thermal throttling and system load.
+### WaveNet Hot-Path Cycle Budget & Kernel Fusion
+
+Hardware cycle counter (RDTSC) analysis of `WaveNetLayer::process_block_internal` on AVX2 reveals the hot-path execution breakdown:
+
+| Stage              | Operations                            | Cycle Share | Architectural Characteristic                      |
+|:------------------ |:------------------------------------- |:----------- |:------------------------------------------------- |
+| **Conv1D (GEMV)**  | Causal convolution, MACs, dilation    | **~45%**    | Primary compute bottleneck (FMA bound).           |
+| **1×1 & Residual** | Channel projection, residual addition | **~25%**    | Memory pressure and read-modify-write.            |
+| **Mixin**          | Conditioning metadata projection      | **~15%**    | Broadcast and dense channel addition.             |
+| **Act & Head**     | Tanh / Sigmoid, skip accumulation     | **~15%**    | Padé transcendental approximation + accumulation. |
+
+* **Activation & Skip Fusion:** Fusing the Tanh activation with Head skip-connection accumulation halved the activation stage budget (from ~30% to ~15%) by keeping intermediate state in YMM registers, avoiding redundant L1 cache round-trips.
+* **Stereo Output Fusion:** Fusing L/R channel gain and noise gate hysteresis in the output stage reduces memory bandwidth and yields an end-to-end latency reduction of **~4.5% to 5.5%**.
+
+### RFFT Staged Architecture: Scalar Interleaving vs. SIMD
+
+The Real Fast Fourier Transform (`RfftPlanner` in `src/math/dsp/rfft.rs`) handles frequency-domain convolution in partitioned linear models and CabSim UPOLS:
+
+* **Staged Architecture:** Transforms are divided into `pack_re_im`, twiddles, and `unpack_re_im`.
+* **Scalar Packing Retained:** Although isolated AVX2 shuffle kernels (`pack_re_im_f32_avx2`) achieve speedups in standalone micro-benchmarks at small $N$, pack/unpack represents only 2–5% of total transform execution. In end-to-end convolution (`ConvEngine` in CabSim), scalar packing performs identically or slightly faster ($-2.5\%$, $p = 0.006$) while avoiding code-layout disruption and SIMD register pressure.
+* **Separation of Concerns:** `RT_Linear_Direct_RF4` benchmarks time-domain FIR convolution (RF=4, `LinearMode::Direct`) and never touches RFFT. Partitioned FFT convolution is benchmarked independently via `RT_Linear_Fft_RF2048`.
+
+### Recurrent Networks: SIMD Fused Gates (AVX2)
+
+In LSTM models, fusing all four gates ($i, f, c, o$) into a unified matrix-vector multiplication with vectorized activations (AVX2/FMA) delivers substantial throughput gains over scalar execution:
+
+| Topology      | Scalar Baseline | SIMD Fused (AVX2) | Measured Speedup |
+|:------------- |:--------------- |:----------------- |:---------------- |
+| **LSTM 1×8**  | ~45.1 µs        | **~2.27 µs**      | **19.8×**        |
+| **LSTM 2×16** | ~45.2 µs        | **~10.86 µs**     | **4.2×**         |
+
+Simultaneous gate computation eliminates redundant loads/stores and keeps intermediate vectors in YMM registers across the Sigmoid and Tanh activations.
+
+### WaveNet Lite (CH=12) Memory Stride & Constant Folding
+
+WaveNet Lite uses an internal dimension of 12 channels. On 256-bit SIMD (8 lanes), 12 channels do not align naturally to YMM boundaries:
+
+1. **Padded-16 Route:** Residual convolution weights are padded to stride 16 in the model loader. The kernel executes `dot_product_16x_f32_accumulate` with zero-padded lanes 12..15. This route outperforms an 8+4 composite kernel (18–23 ns vs. 22–24 ns per tap) due to lower broadcast overhead and unrolled FMA pipelining.
+2. **Compile-Time Monomorphization:** In `WaveNetLayer<IN, OUT, K>`, `OUT` is a const generic and `select_interleave_width` is a `const fn`. Assembly inspection confirms that the compiler monomorphizes exactly one dispatch arm per SKU without runtime branch overhead.
+
+### Software Prefetch Policy for Causal Conv1D
+
+The causal convolution tap loop uses a guarded software prefetch policy (`prefetch_strategy_simple` in `src/math/common/ops.rs`):
+
+* **Guard Invariant:** `_mm_prefetch` with hint `_MM_HINT_T0` is executed **only when** the tap byte stride satisfies:
+
+$$\text{step} = \text{dilation} \times \text{in\_ch} \le 16\text{ floats (64 bytes / 1 cache line)}$$
+
+* **Rationale:** When $\text{step} \le 16$, the prefetched line overlaps the next tap's required memory, yielding a **3% to 5% improvement**. For larger strides ($\text{step} > 16$), prefetching targets memory that will not be read by subsequent taps, causing load-port contention and an **8% to 9% regression** on dilations $d \ge 4$.
 
 ### Conv1D Hotpath Bench — Calibration Protocol
 
-`benches/conv1d_hotpath_bench.rs` is a dedicated manual micro-calibration tool designed to isolate kernel-level effects of causal convolution prefetching (`prefetch_guard`) and channel lane routing (`ch12_lane_route`).
+[`benches/conv1d_hotpath_bench.rs`](../benches/conv1d_hotpath_bench.rs) is an off-line calibration tool used to verify kernel-level convolution prefetching (`prefetch_guard`) and lane routing (`ch12_lane_route`).
 
-> [!NOTE]
-> **Manual Tooling Only:** This bench is **not part** of the automated regression gate (`regression_gate.rs` / `quality-dashboard.sh`) — it is an off-line calibration tool intended for targeted investigation and threshold validation.
-
-* **When to recalibrate:** After changes to `src/math/common/ops.rs` (`prefetch_strategy_simple`), `src/models/wavenet/conv1d.rs`, `src/models/wavenet/conv1d_dual.rs`, `src/models/wavenet/conv1d_dyn.rs`/`conv1d_dyn_dual.rs` (groups `conv1d_dyn_dual_vs_single` / `raw_dual_vs_2x_single`), or when changing the Rust toolchain.
-
-* **How to recalibrate:**
+* **Execution:**
 
   ```bash
-  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --save-baseline cal-XX
-  # (alterar o código sob teste)
-  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --baseline cal-XX
+  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --save-baseline cal-01
+  # (apply code modifications)
+  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --baseline cal-01
   ```
 
-* **Decision thresholds:**
+* **Decision Rules:**
 
-  * Regression > 5% in the 16×16 ($d=1$) kernel motivates an immediate revert.
-  * Improvement > 5% in the 8×8 ($d \ge 4$) kernel motivates expanding the prefetch guard.
+  * A regression $> 5\%$ in the $16\times 16$ ($d=1$) kernel warrants an immediate revert.
+  * An improvement $> 5\%$ in the $8\times 8$ ($d \ge 4$) kernel warrants adjusting prefetch lookahead.
+  * Always cross-validate kernel changes at the model level via `cargo bench --bench regression_gate -- RT_WaveNet`.
 
-* **Model-level confirmation:** Always confirm kernel-level results with:
+### A2 Architecture Vectorization Paths
 
-  ```bash
-  cargo bench --bench regression_gate -- RT_WaveNet
-  ```
+The second-generation architecture (A2) features per-layer FiLM conditioning and flexible channel counts:
+
+* **A2-Full (CH=8):** Uses `A2Conv1dCh8` with f32 weights stored in column-major-per-tap layout (`w[k * 64 + in * 8 + out]`). Eight contiguous output channels load directly into YMM registers without in-flight transposition (~25.6 µs per block).
+* **A2-Lite (CH=3):** Uses `A2Conv1dCh3` with a fully unrolled GEMV kernel (18 FMAs for $K=6$, 45 FMAs for $K=15$) and AVX2-batched post-convolution stages (~22.6 µs per block).
+* **A2 Dynamic (`WaveNetA2Dyn`):** Employs AVX2+FMA vectorization for runtime-dimensioned models:
+  * Mixin GEMV weights are transposed from row-major to column-major during model loading (`set_weights`), enabling 8-wide broadcast-FMA in the hot-path.
+  * Head 1×1 and L1×1 residual projections execute via 8-wide `_mm256_fmadd_ps` with exact sequential lane reduction to maintain bit-identical golden vector parity.
+
+### IR CabSim Frequency-Domain Convolution (UPOLS)
+
+The cabinet simulator uses Uniform-Partitioned Overlap-Save (UPOLS) convolution:
+
+* Partition FFTs are pre-computed during initialization.
+* `ConvEngine::process()` executes with **zero heap allocations**, operating entirely on pre-allocated aligned buffers.
+* Median processing latency for a 2048-tap impulse response (32 partitions of 64 samples) is **~1.22 µs per block** (~0.09% of RT budget).
+
+### Lock-Free SPSC & Multi-Tier GC Cascade (`spsc_swap_bench`)
+
+Real-time resource updates (model swaps, IR reloading, oversampling mode changes) utilize a non-blocking 3-phase drain protocol on the audio thread combined with a 3-tier Garbage Collection (GC) cascade:
+
+| Operation                              | Domain        | Invariant / Path                             | Latency (AVX2) |
+|:-------------------------------------- |:------------- |:-------------------------------------------- |:-------------- |
+| `Swap_Drain_Quiescent`                 | Audio Thread  | Phase 1 empty check under steady state       | **~2.7 ns**    |
+| `Swap_Drain_LowContention_Single`      | Audio Thread  | Single pending payload drained and installed | **~448 ns**    |
+| `Swap_Drain_HighContention_Coalescing` | Audio Thread  | 16-burst queue coalesced (latest-wins)       | **~888 ns**    |
+| `Gc_Cascade_Tier1_Spsc`                | Audio Thread  | Primary lock-free SPSC channel enqueue       | **~212 ns**    |
+| `Gc_Cascade_Tier2_ParkingLot`          | Audio Thread  | Fixed 16-slot parking lot fallback           | **~370 ns**    |
+| `Gc_Cascade_Tier3_Overflow`            | Audio Thread  | Lock-free linked list overflow queue         | **~1.79 µs**   |
+| `Gc_Drain_Housekeeping_AllTiers`       | Off-RT Thread | Sweeps and deallocates payloads              | **~1.53 µs**   |
+
+*Real-time guarantees:* All queue operations on the audio thread complete in under 2 µs even under extreme saturation, with zero heap allocations or system calls.
+
+### Kahan Summation Policy
+
+Kahan compensated summation is deliberately **omitted from the static Conv1D tap loop**. For filter kernels with $K \le 3$, standard single-precision accumulation error is bounded by $O(3\varepsilon) < 10^{-7}$, which is inaudible and within golden test tolerances. Eliminating per-tap Kahan compensation removed redundant arithmetic operations without degrading audio fidelity. Compensated summation is retained only in dense GEMM reduction tails where accumulation lengths span hundreds of elements.
 
 ---
 
-## WaveNet A2 Dynamic AVX2+FMA Vectorization
+## 7. SIMD Multiversioning ROI & Dispatch Policy
 
-### Context (WaveNet A2 Dynamic AVX2+FMA Vectorization)
+The minimum target architecture for NeuralAmpModeler-rs is **`x86-64-v3`** (AVX2, FMA, BMI2). Code generation unconditionally relies on AVX2 instructions throughout all processing modules.
 
-The WaveNet A2 Dynamic model (`WaveNetA2Dyn`) is the runtime-dimensioned fallback engine for non-catalog A2 geometries (gating, blending, head1x1, heterogeneous activations, FiLM). In earlier baseline implementations, its hot-path was predominantly scalar with compiler auto-vectorization failing on the double-nested GEMV loops (mixin, head1x1, L1x1 residual). Assembly profiling confirmed:
+### The 3-Tier Return on Investment (ROI) Rule
 
-* **Dilated Conv**: Unrolled scalar (optimal for depthwise), with `prefetcht0` L1 prefetch
-* **Mixin GEMV**: Fully scalar with register spills to stack — primary optimization target
-* **Head 1×1 Projection**: Fully scalar — secondary optimization target
-* **L1×1 Residual**: Fully scalar — tertiary optimization target
-* **Activation/Gating**: Vectorized via `SimdMath` trait
+To prevent codebase fragmentation and binary bloat, specialized instruction set implementations (such as AVX-512) are evaluated against a strict 3-tier promotion threshold:
 
-### Implemented Vectorization Architecture
+| Speedup vs. AVX2 Baseline         | Statistical Significance | Action                         | Rationale                                                               |
+|:--------------------------------- |:------------------------ |:------------------------------ |:----------------------------------------------------------------------- |
+| **$\ge 12.0\%$**                  | $p < 0.05$               | **KEEP (Production Dispatch)** | Delivers meaningful CPU headroom in real-time callbacks.                |
+| **$< 5.0\%$**                     | Any                      | **DROP (No Specialization)**   | Duplication overhead outweighs performance difference.                  |
+| **$5.0\% \le \Delta\% < 12.0\%$** | $p < 0.05$               | **DROP / CONDITIONAL**         | Dropped unless significant reduction in tail latency ($p99$) is proven. |
 
-**Head 1×1 & L1×1 Residual Vectorization** ([`src/models/a2/model/dynamic/process_frame.rs`](../src/models/a2/model/dynamic/process_frame.rs)):
+### AVX-512 Evaluation on Physical Silicon
 
-* **Head 1×1**: 8-wide `_mm256_fmadd_ps` over the `h1_in` dimension per output channel. Lane extraction preserves exact left-to-right accumulation order for bit-identical golden vector output.
-* **L1×1 Dense**: 8-wide `_mm256_set1_ps` (broadcast) + `_mm256_fmadd_ps` over contiguous col-major weight rows (`bottleneck × channels`).
-* **L1×1 Grouped**: 8-wide SIMD dot product for `in_pg ≥ 8`, scalar fallback otherwise.
-* **Accumulation loops** (`head_accum += scratch`, `layer_in += scratch`): `_mm256_add_ps` with scalar tail.
+In canonical benchmark audits on native AVX-512 hardware (Intel Xeon Platinum 8488C Sapphire Rapids, 64-sample blocks @ 48 kHz), specialized AVX-512 kernels failed the promotion gate across all primary topologies:
 
-**Mixin GEMV with Off-RT Weight Transposition** ([`src/models/a2/model/dynamic/build.rs`](../src/models/a2/model/dynamic/build.rs), [`src/models/a2/model/dynamic/process_frame.rs`](../src/models/a2/model/dynamic/process_frame.rs)):
+* `LSTM_2x16_64samp_48kHz`: AVX2 = 13.72 µs vs. AVX-512 = 15.49 µs (**−12.87% deficit**, $p < 0.0001$)
+* `LSTM_1x16_64samp_48kHz`: AVX2 = 6.55 µs vs. AVX-512 = 7.67 µs (**−17.18% deficit**, $p < 0.0001$)
+* `A2Full_CH8_64samp_48kHz`: AVX2 = 23.47 µs vs. AVX-512 = 31.29 µs (**−33.31% deficit**, $p < 0.0001$)
+* `A2Lite_CH3_64samp_48kHz`: AVX2 = 20.28 µs vs. AVX-512 = 21.30 µs (**−5.05% deficit**, $p < 0.0001$)
+* `WaveNet_Std_CH16_64samp_48kHz`: AVX2 = 42.05 µs vs. AVX-512 = 42.98 µs (**−2.21% deficit**, $p = 0.0009$)
 
-* **Builder**: One-time per-group transposition from row-major `[out_per_g][in_pg]` to col-major `[in_pg][out_per_g]` during `set_weights`. No transposition in the hot path.
-* **Hot Path**: `_mm256_set1_ps` (broadcast condition) + `_mm256_loadu_ps` (8 contiguous weights) + `_mm256_fmadd_ps` per input channel. Unified flat (groups=1) and grouped (groups>1) paths.
+#### Why 512-bit ZMM Regresses in Compact Neural Audio
 
-### Performance Results (Regression Gate, `--baseline ci-baseline`)
+1. **Register Underutilization:** Audio networks use compact channel geometries ($C = 3, 4, 8, 12, 16$). Fitting these into 512-bit (16-lane) ZMM vectors requires zero-masking overhead and dummy computations.
+2. **Frequency Throttling:** On earlier Intel architectures, executing 512-bit heavy instructions triggers core frequency downclocking.
+3. **AVX2 Cache Density:** AVX2 (256-bit YMM) instructions pack more densely into the Level 1 Instruction Cache (L1i), avoiding pipeline fetch stalls.
 
-| Benchmark               | Scalar Baseline | Vectorized (AVX2+FMA)                   | Change                               | Notes                                              |
-| ----------------------- | --------------- | --------------------------------------- | ------------------------------------ | -------------------------------------------------- |
-| `RT_A2_Dyn_Gated_CH8`   | ~259 µs         | **170.9 µs** (~12.8% of 1.33 ms budget) | **≈ −34%**                           | Primary win; CH=8 fully uses 8-wide FMA paths      |
-| `RT_A2_Dyn_Blended_CH3` | ~133 µs         | **135.9 µs** (~10.2% of budget)         | ≈ +2–3%                              | CH=3 stays on scalar fallbacks; accepted trade-off |
-| `RT_LSTM_Dyn_1x7`       | ~15.8 µs        | **~7.9 µs**                             | **≈ −50%** vs pre-vectorization tail | Dedicated AVX2 H&lt;8 gates                        |
+### Production Policy & Role of `--features avx512`
 
-The **Gated CH=8** path is the design target for the 8-wide kernels. **Blended CH=3** pays a small branch/code-size tax because every SIMD width check falls to the scalar tail; the dynamic engine still serves all geometries from one code path. The Criterion baseline and `docs/quality-contract.json` reflect these post-optimization medians.
+* **Production Builds:** Default builds unconditionally dispatch `Avx2Math`. AVX-512 kernels are excluded from the default compiled binary.
+* **The `avx512` Feature Flag:** Retained as an opt-in research target and multiversioning reference. Enabling this flag in production releases (e.g. DAW plugins or standalone hosts) is **actively discouraged**.
 
-### Fidelity & Invariants
+### Remote SIMD Gating Suite (`utils/remote-simd-gate.sh`)
 
-* **Golden Vectors**: `a2_dynamic_gated_ch8` and `a2_dynamic_blended_ch3` both pass with bit-identical output (MSE=0.0 vs reference).
-* **f64 Oracle**: `test_oracle_vs_python_anchor_a2_gated` and `_blended` pass with exact match.
-* **Block Invariance**: All A2 catalog models pass block-size invariance tests.
-* **Zero-Alloc**: Heap audit confirms zero allocations on the hot path (only YMM registers + stack `[f32; 8]` lane buffers).
-* **`utils/tests-quick.sh`**: Full FIDELITY: OK — structural + measurement oracles + parser fuzzing all green.
-* **No regressions in non-A2Dyn models**: Changes are scoped exclusively to `WaveNetA2Dyn` (dynamic path); static A2 Full/Lite and other model families use separate compilation units.
+To evaluate prospective SIMD extensions or verify cross-ISA parity on remote machines:
 
-### Assembly Confirmation
+1. **Same-VM Measurement Rule:** Never compare cloud VM numbers against bare-metal desktop baselines. AVX-512 vs. AVX2 comparisons must occur on the **same virtual machine instance** using identical compiler configurations.
 
-Post-optimization assembly (`cargo rustc --release --bench regression_gate -- --emit=asm`) confirms:
-
-* **12,594 FMA instructions** in the release binary (vs. 24,342 packed SIMD overall), with `vfmadd231ps` present in the mixin, head1x1, and L1x1 inner loops.
-* **No register spills** in the SIMD paths: accumulators remain in YMM registers throughout the inner loops.
-* **Scalar tail code** retains exact arithmetic order (sequential lane extraction from YMM → `[f32; 8]` on stack), preserving golden vector parity.
-
----
-
-## Cloud AVX-512 Benchmarking & Remote SIMD Gating Protocol
-
-AVX-512 is **not** a production backend (2026-08 receipt failed the ≥12% `process()` N=64 gate; see [`architecture.md`](architecture.md) §1.2). This section is the **re-measurement** protocol only: same-VM AVX2 vs AVX-512 parity and latency, so a future geometry or SKU can be re-evaluated without guessing. It is not a claim that distribution binaries should dispatch AVX-512.
-
-### 1. The Same-VM Measurement Rule
-
-Comparing cloud latency measurements directly against local workstation baselines (such as AMD Ryzen Zen 2) is mathematically invalid due to cross-architecture IPC differences, vCPU virtualization overhead, hypervisor scheduling, and clock frequencies.
-
-Therefore, **AVX-512 speedup gates must be evaluated by comparing AVX-512 vs AVX2 on the SAME cloud virtual machine**:
-
-1. **AVX2 Baseline on Cloud:** Run Criterion benchmarks forcing AVX2 execution path on the cloud VM.
-2. **AVX-512 arm on Cloud:** Force the AVX-512 `SimdMath` monomorph (`ForceAvx512Guard` / `TEST_ISA_OVERRIDE`) on the same binary (`-Ctarget-cpu=x86-64-v3`). Do not compare against a `-Ctarget-cpu=native` build.
-3. **Speedup Gate:** Promote only if $\ge 12\%$ vs AVX2 on the canonical N=64 SKUs (WaveNet Standard CH16, A2-Full CH8, A2-Lite CH3, LSTM 1×16, LSTM 2×16) with Welch's t-test ($p < 0.05$). The 2026-08 receipt failed this gate.
-
-* **Parity Baseline (`-Ctarget-cpu=x86-64-v3`):** What a distribution binary is compiled as. **Policy:** production runs the AVX2 `Avx2Math` path. In default builds, `detect_best_simd()` resolves to `Avx2` and `dispatch_simd!` monomorphizes only `Avx2Math`. AVX-512 research kernels (VL256 for WaveNet `dot_4x`/`accumulate` and LSTM 4-gate GEMV, ZMM for LSTM fused gates and `dot_16x`) are compiled only with `--features avx512`.
-* **Native Ceiling (`-Ctarget-cpu=native`):** Secondary benchmark build compiled with full compiler auto-vectorization (`-Ctarget-cpu=native`) across the entire crate to determine the upper architectural ceiling, kept strictly distinct from the baseline regression gate.
-
-### 3. Recommended Cloud Instances & Target Hardware
-
-For statistically reliable and reproducible SIMD gating, virtual machines should provide dedicated vCPUs with consistent CPU clock pinning and full AVX-512 feature exposure:
-
-| Cloud Provider           | Recommended Instance / SKU                                                  | Microarchitecture                             | SIMD Capabilities Exposed                                              | Notes                                                                  |
-|:------------------------ |:--------------------------------------------------------------------------- |:--------------------------------------------- |:---------------------------------------------------------------------- |:---------------------------------------------------------------------- |
-| **AWS EC2**              | `c7i.large` / `c7i.xlarge`                                                  | Intel Xeon Scalable (4th Gen Sapphire Rapids) | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI, AMX | **Primary Reference Platform**. Predictable turbo and dedicated vCPUs. |
-| **AWS EC2**              | `c7a.large` / `c7a.xlarge`                                                  | AMD EPYC 9004 (Zen 4 "Genoa")                 | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI      | Full AVX-512 throughput with zero frequency downclocking.              |
-| **AWS EC2**              | `c6i.large`                                                                 | Intel Xeon Scalable (3rd Gen Ice Lake)        | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ, AVX-512CD, AVX-512VNNI      | Secondary Intel verification platform.                                 |
-| **GCP**                  | `c3-highcpu-4` / `c3d-highcpu-4`                                            | Intel Sapphire Rapids / AMD Genoa             | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ                              | Ensure dedicated core pinning is configured in VM template.            |
-| **Azure**                | `Standard_F4s_v5` / `Standard_F4as_v6`                                      | Intel Ice Lake / AMD Genoa                    | AVX-512F, AVX-512VL, AVX-512BW, AVX-512DQ                              | Compute-optimized tier recommended.                                    |
-| **On-Prem / Bare-Metal** | AMD Ryzen 7000 / 8000 / 9000 series, Intel Core 11th–14th Gen, Intel Xeon W | AMD Zen 4/5, Intel Golden Cove / Raptor Cove  | Full native AVX-512 execution                                          | Ideal for baseline calibration with zero virtualization jitter.        |
-
-### 4. Step-by-Step Operator & DevOps Runbook
-
-Follow this standard operating procedure when executing the remote SIMD gate on a fresh cloud instance or dedicated runner:
-
-```bash
-# ---------------------------------------------------------------------------
-# 1. Install System Dependencies & Build Tools (Ubuntu 22.04 / 24.04 LTS)
-# ---------------------------------------------------------------------------
-sudo apt-get update && sudo apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    curl \
-    pkg-config \
-    linux-tools-common \
-    linux-tools-generic
-
-# ---------------------------------------------------------------------------
-# 2. Install Stable Rust Toolchain
-# ---------------------------------------------------------------------------
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-source "$HOME/.cargo/env"
-
-# ---------------------------------------------------------------------------
-# 3. CPU Governor Configuration (Minimize Frequency Throttling / DVFS Jitter)
-# ---------------------------------------------------------------------------
-sudo cpupower frequency-set -g performance 2>/dev/null || \
-    echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# 4. Clone Repository and Switch to Development Branch
-# ---------------------------------------------------------------------------
-git clone https://github.com/fabiohl/NeuralAmpModeler-rs.git
-cd NeuralAmpModeler-rs
-git checkout dev
-
-# ---------------------------------------------------------------------------
-# 5. Populate Pinned Third-Party Vendor Mirrors
-# ---------------------------------------------------------------------------
-./utils/setup-third-party.sh
-
-# ---------------------------------------------------------------------------
-# 6. Thermal Stabilization (Hardware Cooldown)
-# ---------------------------------------------------------------------------
-sleep 180
-
-# ---------------------------------------------------------------------------
-# 7. Execute the Automated Remote SIMD Gating Suite
-# ---------------------------------------------------------------------------
-./utils/remote-simd-gate.sh
-```
-
-### 5. Automated Harness Options (`utils/remote-simd-gate.sh`)
-
-The gating harness [`utils/remote-simd-gate.sh`](../utils/remote-simd-gate.sh) supports flexible CLI flags for automated pipelines, remote servers, and local emulation:
-
-```bash
-Usage: utils/remote-simd-gate.sh [OPTIONS]
-
-Options:
-  --sde                Run in Intel SDE emulation mode (auto-configures runner, skips bench/cooldown)
-  --check-only         Run Phase 0 (Preflight) only and exit (0 on AVX-512, 2 on missing ISA)
-  --skip-cooldown      Skip 180s thermal cooldown intervals (useful for fast validation passes)
-  --cooldown <SECS>    Specify custom thermal cooldown in seconds (default: 180)
-  --skip-parity        Skip Phase 1 (mathematical parity test)
-  --skip-bench         Skip Phase 2 (Criterion ISA comparison bench)
-  --out <FILE>         Destination path for receipt JSON (default: target/logs/remote-simd-receipt.json)
-  --help, -h           Show this usage summary
-```
-
-### 6. Local SIMD Emulation via Intel SDE (`sde64`)
-
-For developers working on baseline `x86-64-v3` workstations (e.g. AMD Zen 2/Zen 3 or Intel 10th/11th gen) without native AVX-512 hardware, the full cross-ISA mathematical parity suite can be executed locally via the **Intel Software Development Emulator (SDE)**:
-
-1. **Install Intel SDE:**
-   Download the Linux tarball and add to `PATH`:
-
-   ```bash
-   export PATH="/path/to/sde-external-...-lin:$PATH"
-   ```
-
-2. **Execute Full Mathematical Gating Suite via SDE:**
+2. **Local Intel SDE Emulation:** Developers on AVX2 hardware can run mathematical parity checks via the Intel Software Development Emulator:
 
    ```bash
    ./utils/remote-simd-gate.sh --sde
    ```
 
-   * *Phase 0:* Automatically detects the SDE runner and acknowledges emulated `avx512f` + `avx512vl` + `avx512bw` + `avx512dq`.
-   * *Phase 1:* Executes all 12+ cross-ISA mathematical parity test cases (WaveNet Standard/Feather/Nano, A2 Full/Lite, and LSTM 1x16 / 2x8) with `--include-ignored`.
-   * *Phases 2 & 3:* Skips hardware Criterion microbenchmarks and thermal cooldowns, as software JIT emulation does not measure physical silicon clock cycles.
-
-3. **Direct Cargo Target Runner Integration:**
-
-   ```bash
-   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="sde64 -spr --" cargo test --release --test parity isa_parity -- --ignored --nocapture
-   ```
-
-### 7. Audit Receipt Extraction & PR Attachment Procedure
-
-Upon successful execution on real hardware, the harness invokes `nam_remote_simd_receipt` to evaluate statistical significance and emit the audit receipt:
-
-1. **Receipt File Location:** `NeuralAmpModeler-rs/target/logs/remote-simd-receipt.json`.
-
-2. **Display Formatted Summary Table:**
-
-   ```bash
-   cargo run --features testing --bin nam_remote_simd_receipt -- --table
-   ```
-
-3. **Pull Request & Audit Artifact Inclusion:**
-
-   * Attach `target/logs/remote-simd-receipt.json` as an artifact on the release ticket or CI build.
-   * Copy the formatted Markdown summary table into the PR description.
-   * The receipt contains full cryptographic and environmental provenance: host CPU model, core counts, core frequency, Linux kernel version, rustc release, git commit hash, sample timing distributions, and two-tailed Welch's t-test p-values.
-
-### 8. Statistical Decision Gate & Exit Codes
-
-The gating suite evaluates performance using rigorous statistical thresholds:
-
-* **Phase 0 (Hardware Preflight):** Verifies presence of the full AVX-512 capability matrix `avx512f` + `avx512vl` + `avx512bw` + `avx512dq` (or Intel SDE emulation) — the reachable kernels require all four sub-features (F-ROB-03). If absent, exits cleanly with **code 2** (`Clean skip`).
-* **Phase 1 (Mathematical Parity):** All monomorphized kernels must maintain exact mathematical parity against the baseline and f64 reference oracle (`isa_parity.rs`).
-* **Phase 2 (Criterion Latency Sweeps):** Executes multi-sample inference benchmarks for block sizes $N=1, 8, 64$.
-* **Phase 3 (Welch's t-test Gating):**
-  * **Canonical 64-sample batch ($N=64$):** Must achieve $\ge 12.0\%$ speedup with $p < 0.05$ (two-tailed Welch's t-test) $\rightarrow$ **PASS (Exit Code 0)**.
-  * **Small geometries ($N=1, 8$):** Must achieve $\ge 0.0\%$ speedup (smoke test: zero regression permitted) $\rightarrow$ **PASS (Exit Code 0)**.
-  * **Deficit / Regression:** If speedup $< 12.0\%$ on $N=64$ or any regression is detected on $N=1, 8$, the script exits with **code 1** (`Gate violation`), triggering the post-measurement architectural decision tree.
+3. **Audit Receipt:** Running the suite generates `target/logs/remote-simd-receipt.json`, recording machine provenance, sample distributions, and two-tailed Welch t-test results.
 
 ---
 
-## SIMD Multiversioning ROI & Dispatch Matrix
+## 8. L1i Instruction Cache Budget & Code Size Analysis
 
-The `NeuralAmpModeler-rs` engine enforces a strict, empirically verified Return on Investment (ROI) policy for SIMD specialization. Duplicating mathematical routines for higher instruction set extensions (e.g. AVX-512 VL256 vs. baseline AVX2) introduces maintenance complexity and binary footprint; therefore, specialized kernels are merged into production dispatch only when empirical measurements on real hardware justify the investment.
+Real-time audio callbacks must avoid instruction cache misses (*i-cache thrashing*). On modern x86-64 processors (AMD Zen and Intel Golden Cove / Raptor Cove), the Level 1 Instruction Cache (L1i) is limited to **32 KB per core**.
 
-### 1. Empirical Decision Boundaries (The 3-Tier Rule)
+### Empirical Hardware Telemetry (Calibrated Hardware Audit)
 
-All specialization candidates are evaluated on end-to-end model execution (`NamModel::process()`) using 64-sample audio blocks @ 48 kHz:
+To determine whether monomorphized dispatch functions induce instruction cache thrashing, hardware performance counter telemetry (`perf stat`) was captured during 64-sample block inference:
 
-| Speedup ($\Delta\%$) vs. AVX2 Baseline | Statistical Gate | Decision                       | Rationale                                                                                      |
-|:-------------------------------------- |:---------------- |:------------------------------ |:---------------------------------------------------------------------------------------------- |
-| **$\ge 12\%$**                         | $p < 0.05$       | **KEEP (Production Dispatch)** | Statistically significant throughput win that reduces RT audio CPU load meaningfully.          |
-| **$< 5\%$**                            | Any              | **DROP (No Specialization)**   | Memory-bandwidth bound or already compiler-saturated; duplication overhead exceeds gain.       |
-| **$5\% \le \Delta\% < 12\%$**          | $p < 0.05$       | **DROP / CONDITIONAL**         | Dropped unless significant reduction in real-time latency variance / N=1 jitter is documented. |
+| Benchmark Target        | Topology               | Block Latency | IPC      | L1i Miss Rate | L1i MPKI   | Verdict               |
+|:----------------------- |:---------------------- |:------------- |:-------- |:------------- |:---------- |:--------------------- |
+| `RT_A2_Dyn_Gated_CH8`   | Dynamic Gated (CH=8)   | 180.9 µs      | **3.05** | **0.419%**    | **0.0129** | Negligible contention |
+| `RT_A2_Dyn_Blended_CH3` | Dynamic Blended (CH=3) | 137.2 µs      | **2.85** | **0.046%**    | **0.0097** | Negligible contention |
+| `RT_A2_Full_CH8`        | Static Baseline (CH=8) | 25.9 µs       | **2.74** | **0.236%**    | **0.0564** | Baseline              |
 
-### 2. Domain & Model Topology ROI Matrix (Empirical Hardware Receipt)
-
-> [!NOTE]
-> **Empirical Hardware Measurement (2026-09-09 Canonical Audit Receipt):** `NamModel::process()` on **Intel Xeon Platinum 8488C** (Sapphire Rapids, AWS EC2, 1 physical core, 2 vCPUs, Linux 7.0.0-1006-aws, rustc 1.98.1, git commit `75b0f50`/`838be61`). Cross-ISA mathematical parity passed on 100% of the 23 test suites (`ESR < 1e-11`, `MSE < 1e-12`). Numbers below reflect the canonical Criterion runs saved in `target/logs/remote-simd-receipt.json`. **Policy = Scenario B DROP** (overall gate verdict: FAIL). In default builds, `detect()` and `dispatch_simd!` unconditionally execute `Avx2Math`, with AVX-512 kernels cfg-gated out of default `.text`.
-
-#### Canonical 64-Sample Audio Block Latencies (N=64 @ 48 kHz)
-
-| Kernel / Domain                  | Target Model Family                                     | AVX2 Baseline (v3)     | AVX-512 Measured Latency       | Speedup $\Delta\%$   | Statistical Gate ($p$) | Verdict (policy) vs code status                                                             |
-|:-------------------------------- |:------------------------------------------------------- |:---------------------- |:------------------------------ |:-------------------- |:---------------------- |:------------------------------------------------------------------------------------------- |
-| **LSTM 2x16**                    | `LSTM_2x16_64samp_48kHz`                                | 13.72 µs (YMM FMA)     | 15.49 µs (VL256+ZMM mix)       | **−12.87%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **LSTM 1x16**                    | `LSTM_1x16_64samp_48kHz`                                | 6.55 µs (YMM FMA)      | 7.67 µs (VL256+ZMM mix)        | **−17.18%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in. Small $H=16$ GEMV. |
-| **A2-Full (CH=8)**               | `A2Full_CH8_64samp_48kHz`                               | 23.47 µs (YMM FMA)     | 31.29 µs (VL256)               | **−33.31%**          | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **A2-Lite (CH=3)**               | `A2Lite_CH3_64samp_48kHz`                               | 20.28 µs (YMM FMA)     | 21.30 µs (VL256)               | **−5.05%**           | $p < 0.0001$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **WaveNet Standard (CH=16)**     | `WaveNet_Standard_CH16_64samp_48kHz`                    | 42.05 µs (YMM FMA)     | 42.98 µs (VL256+`dot_16x` ZMM) | **−2.21%**           | $p = 0.0009$           | **DROP.** Default builds dispatch AVX2; AVX-512 arm is cfg-gated opt-in.                    |
-| **WaveNet `dot_8x`**             | WaveNet CH=8 Layers                                     | 10 YMM registers       | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse in `Avx512Math` (true).**                                                      |
-| **WaveNet `dot_16x`**            | WaveNet CH=16 Layers                                    | 2× YMM                 | dedicated `__m512`             | not separately gated | —                      | **Dedicated ZMM kernel** (`dot_product_16x_f32_avx512` under `--features avx512`).          |
-| **Linear / Gain / Dither / Pan** | DSP Pipeline Stages                                     | Streaming FMA          | wraps AVX2                     | **< 2%**             | —                      | **AVX2 reuse (true)** for gain/dither/ramp.                                                 |
-| **CabSim UPOLS FFT**             | CabSim IR Convolver                                     | Radix-4 / Radix-2 AVX2 | wraps AVX2                     | **< 3%**             | —                      | **AVX2 reuse (true)** for MAC/FFT butterflies. Stereo FIR has `convolve_*_avx512` opt-in.   |
-| **Dynamic Topologies**           | `LstmModelDyn` `WaveNetModelDyn` `WaveNetA2Dyn` ConvNet | AVX2 only              | not selected                   | —                    | —                      | **AVX2 in default builds.** All dynamic and ConvNet paths dispatch `Avx2Math`.              |
-| **Non-DSP Off-RT Paths**         | Loaders (`.namb`, `serde_json`, IR WAV, Alloc)          | Standard Rust / libc   | none                           | **< 1%**             | —                      | **NO DUPLICATION.** Off-RT, I/O-bound.                                                      |
-
-#### Multi-Buffer Latency Sweep Across All Geometries (Audit Receipt Summary)
-
-| SKU ID               | N=64 AVX2 / AVX512  | N=64 $\Delta\%$    | N=8 AVX2 / AVX512 | N=8 $\Delta\%$     | N=1 AVX2 / AVX512 | N=1 $\Delta\%$     | Overall Verdict |
-|:-------------------- |:------------------- |:------------------ |:----------------- |:------------------ |:----------------- |:------------------ |:--------------- |
-| **LSTM 2x16**        | 13.72 µs / 15.49 µs | **−12.87%** (FAIL) | 1.70 µs / 1.94 µs | **−14.02%** (FAIL) | 0.22 µs / 0.27 µs | **−23.41%** (FAIL) | **REJECT**      |
-| **LSTM 1x16**        | 6.55 µs / 7.67 µs   | **−17.18%** (FAIL) | 0.81 µs / 0.97 µs | **−18.75%** (FAIL) | 0.10 µs / 0.12 µs | **−21.13%** (FAIL) | **REJECT**      |
-| **A2-Full (CH=8)**   | 23.47 µs / 31.29 µs | **−33.31%** (FAIL) | 3.92 µs / 4.87 µs | **−24.21%** (FAIL) | 2.75 µs / 1.66 µs | **+39.41%** (PASS) | **REJECT**      |
-| **A2-Lite (CH=3)**   | 20.28 µs / 21.30 µs | **−5.05%** (FAIL)  | 3.14 µs / 3.22 µs | **−2.34%** (FAIL)  | 0.94 µs / 1.01 µs | **−7.99%** (FAIL)  | **REJECT**      |
-| **WaveNet Standard** | 42.05 µs / 42.98 µs | **−2.21%** (FAIL)  | 5.64 µs / 5.84 µs | **−3.59%** (FAIL)  | 1.42 µs / 1.62 µs | **−14.37%** (FAIL) | **REJECT**      |
-
-### 3. Why ZMM 512-bit Loses in Small Geometries
-
-In low-latency neural audio, network dimensions are compact ($C=3, 4, 8, 12, 16$). Utilizing full 512-bit ZMM registers (`__m512`) causes:
-
-1. **Register Underutilization:** Padding 3 or 8 channels to 16 lanes introduces zero-masking overhead and false dependency tracking.
-2. **Frequency Downclocking (License Throttling):** On Intel Skylake-SP and Ice Lake architectures, executing 512-bit ZMM instructions drops core turbo frequencies across all threads sharing the core.
-3. **Register File Advantage in VL256:** AVX-512 VL256 provides access to all 32 vector registers (`YMM0`..`YMM31`) in 256-bit width, entirely eliminating stack register spilling in 4-gate GEMV and Conv1D without triggering frequency penalties.
-
-### 4. Role of the `--features avx512` Cargo Flag & Production Policy
-
-The existence of the `avx512` Cargo feature flag in `NeuralAmpModeler-rs` is governed by two clear architectural principles:
-
-1. **Preservation of Engineering Investment & Multiversioning Foundation:**
-   The specialized AVX-512 kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`), the dynamic dispatch table (`dispatch_simd!`), the diagnostic probe CLI (`simd_probe`), and the cross-ISA mathematical parity harness (`isa_parity.rs`) represent substantial engineering effort. Retaining this infrastructure validates the project's ability to host multiple ISA targets simultaneously and serves as the reference implementation for future instruction set additions (such as AVX10 or ARM SVE/Neon).
-2. **Production Usage Is Actively Discouraged:**
-   Enabling `--features avx512` in production builds, release packaging (Flatpak, VST3/CLAP plugins, standalone audio pipe), or daily audio workloads is **actively discouraged**. The empirical benchmarks prove that AVX2 (`x86-64-v3`) is strictly faster and more predictable in 14 of 15 test configurations. The baseline AVX2 path represents the optimal balance of throughput, instruction cache density, and thermal stability for real-time neural audio processing.
-
----
-
-## L1i Instruction Cache Budget & Code Size Analysis
-
-Real-time audio callbacks execute within strict sub-millisecond windows (e.g. 1.33 ms for 64 samples @ 48 kHz). To prevent catastrophic latency spikes (*jitter*) caused by instruction cache misses (*i-cache thrashing*), the hot-path working set must fit comfortably within the Level 1 Instruction Cache (L1i).
-
-### 1. Modern Microarchitecture L1i Budget
-
-Across modern x86-64 processor microarchitectures, the Level 1 Instruction Cache is strictly bounded:
-
-* **AMD Zen 3 / Zen 4 / Zen 5:** 32 KB per core (8-way associative, 64-byte lines).
-* **Intel Golden Cove / Raptor Cove / Sapphire Rapids:** 32 KB per core (8-way associative, 64-byte lines).
-
-### 2. Hot-Path Code Size Measurements (`.text` Section)
-
-Static monomorphization via `dispatch_simd!` generates dedicated machine code per active ISA variant. The table below was produced by static `.text`-size analysis (`llvm-objdump` + binary symbol size):
-
-> [!WARNING]
-> **Not a measured performance claim (2026-08 audit).** These `.text` sizes
-> are static analysis of one build; the **~10.22 KB combined working set and
-> the <32% L1i headroom claims were never measured on AVX-512 hardware** —
-> no receipt exists. Retained as design intent for the L1i budget defense,
-> not as verified numbers.
-
-| Function / Component                     | Monomorphized Instances | Compiled `.text` Size (AVX2) | Compiled `.text` Size (AVX-512) | Combined Working Set |
-|:---------------------------------------- |:----------------------- |:---------------------------- |:------------------------------- |:-------------------- |
-| `NamModel::process()` (Dispatch Table)   | 1                       | 0.42 KB                      | 0.42 KB                         | 0.42 KB              |
-| `gemv_4gate_avx512vl` (LSTM)             | 1                       | 1.84 KB                      | 1.92 KB                         | 1.92 KB              |
-| `dot_4x` (WaveNet A2 Conv1D)             | 1                       | 2.10 KB                      | 2.24 KB                         | 2.24 KB              |
-| `accumulate_avx512` (WaveNet)            | 1                       | 1.45 KB                      | 1.58 KB                         | 1.58 KB              |
-| `simd_tanh` / `simd_sigmoid` (Padé)      | 1                       | 0.88 KB                      | 0.94 KB                         | 0.94 KB              |
-| DSP Pipeline (Input, Gate, Output)       | 1                       | 3.12 KB                      | 3.12 KB                         | 3.12 KB              |
-| **Total Active Audio Callback Hot-Path** | —                       | **~9.81 KB**                 | **~10.22 KB**                   | **~10.22 KB**        |
-
-### 3. Architectural Defenses Against L1i Cache Thrashing
-
-1. **Collapsing `Avx512VnniBf16`:** Unifying the deprecated VNNI/BF16 dispatch branch into `Avx512Math` eliminated an entire 3rd monomorphized variant across all 23 static models, saving **~4.8 KB** of redundant code footprint in the `.text` segment.
-2. **Selective Inlining (`#[inline(always)]` vs. `#[inline]`):** Only inner vector reduction and FMA step functions are aggressively inlined. Model loader setup, validation, and diagnostic error formatters are tagged `#[cold]` and `#[inline(never)]`, placing them in separate cold code pages.
-3. **Headroom Invariant:** The historical "~10.22 KB / <32% of the 32 KB L1i" figures represented static-analysis design intent. As documented in Section 4 below, hardware performance counter telemetry on calibrated hardware has superseded static footprint estimation.
-
-### 4. Empirical Hardware Measurement: I-Cache & Tail Contention (Zen 2 Calibrated Audit)
-
-To resolve open architectural questions regarding whether large monomorphized functions (e.g. `WaveNetA2Cascade::process` at ~144.4 KiB or `WaveNetA2Dyn::process` at ~89.3 KiB) induce instruction cache thrashing and tail jitter in real-time DSP loops, an empirical hardware audit was executed on a calibrated testbed.
-
-#### Calibrated Hardware Environment (2026-09-22)
-
-* **Processor**: AMD Ryzen 7 5700U with Radeon Graphics (Zen 2 Lucienne, 8 cores / 16 threads, L1i 32 KiB 8-way per core).
-* **Isolation & Governor**: Pinned to Core 4 (`taskset -c 4`), scaling governor locked to `performance` across all threads, system load idle.
-* **Toolchain & Version**: `rustc 1.98.1` (stable `x86_64-unknown-linux-gnu`), `NeuralAmpModeler-rs v0.8.0`.
-
-#### Measured Code Footprint vs. L1i Capacity (`nm`, `objdump`, `cargo bloat`)
-
-* `WaveNetA2Cascade::process`: **147,883 bytes** (~144.4 KiB, 29,979 instructions) — **4.51×** total L1i cache capacity.
-* `WaveNetA2Dyn::process` (with inlined `process_frame_dyn`): **91,444 bytes** (~89.3 KiB, 18,666 instructions) — **2.79×** L1i cache capacity.
-* `WaveNetA2<8>::process` (Static Full CH8 baseline): **10,697 bytes** (~10.7 KiB, 4,400 instructions) — **0.33×** L1i (fits comfortably inside L1i).
-* `WaveNetA2<3>::process` (Static Lite CH3 baseline): **10,401 bytes** (~10.5 KiB, 4,281 instructions) — **0.33×** L1i.
-
-#### Hardware Performance Counter Telemetry (`perf stat`, 100 Criterion samples / 5s capture)
-
-| Benchmark Target        | Model / Mode           | Block Latency | IPC      | L1i Miss Rate | L1i MPKI   | iTLB MPKI | Cache Misses / Block | Verdict                   |
-|:----------------------- |:---------------------- |:------------- |:-------- |:------------- |:---------- |:--------- |:-------------------- |:------------------------- |
-| `RT_A2_Dyn_Gated_CH8`   | Dynamic Gated (CH=8)   | 180.91 µs     | **3.05** | **0.419%**    | **0.0129** | 0.000063  | ~41 misses / block   | **Negligible contention** |
-| `RT_A2_Dyn_Blended_CH3` | Dynamic Blended (CH=3) | 137.18 µs     | **2.85** | **0.046%**    | **0.0097** | 0.000026  | ~21 misses / block   | **Negligible contention** |
-| `RT_A2_Full_CH8`        | Static Baseline (CH=8) | 25.93 µs      | **2.74** | **0.236%**    | **0.0564** | 0.000084  | ~24 misses / block   | **Baseline (fits L1i)**   |
-
-#### Microarchitectural Takeaways and Policy Decisions
+### Architectural Conclusions
 
 1. **Static Footprint Does Not Dictate Dynamic Thrashing:**
-   Despite `WaveNetA2Cascade::process` occupying 4.51× the physical capacity of L1i, its actual dynamic L1i miss rate is only 0.42%, with an MPKI (misses per 1,000 instructions) of 0.0129. This is **two orders of magnitude below** the empirical cache thrashing threshold ($> 1.0\text{ MPKI}$).
-2. **Streaming Prefetcher & Op-Cache Efficacy in Block Loops:**
-   Because audio callback loops operate tightly across contiguous 64-sample vectors, modern x86-64 microarchitectures (Zen 2/3/4 and Intel Skylake/Golden Cove) stream instructions smoothly through their decoded Op-Caches and L1i stream prefetchers. The instructions-per-cycle (IPC) metric of **2.85 to 3.05** proves that the SIMD execution pipeline runs at peak efficiency with zero instruction-fetch stalls.
+   Even though dynamic cascade functions may exceed 32 KB on disk, their dynamic Misses Per Kilo-Instructions (MPKI) remains below **0.013** — two orders of magnitude below the thrashing threshold ($> 1.0\text{ MPKI}$). Tight inner loops execute repeatedly from the CPU Op-Cache.
+2. **High IPC Efficiency:**
+   An IPC of **2.74 to 3.05** confirms that the instruction pipeline operates with zero instruction-fetch stalls.
 3. **Rejection of Artificial Function Splitting:**
-   Proposals to partition large monomorphized functions (such as `process_frame_dyn` or `WaveNetA2Cascade::process`) simply to reduce function byte size are **explicitly rejected**. Artificial splitting increases register pressure, inserts function call/return overhead, and disrupts compiler instruction scheduling, yielding zero cache gain while risking numerical regressions.
+   Proposals to partition large monomorphized functions simply to reduce `.text` symbol size are **rejected**. Splitting introduces function call overhead, increases register pressure, and disrupts compiler instruction scheduling without improving cache hit rates.
 
----
+### Code Size Observability
 
-### 5. Continuous Code Size & Monomorphization Observability (QA Tooling)
-
-To maintain visibility into binary code size and avoid accidental bloat from overly aggressive `#[inline(always)]` or unintended monomorphization cascades, developers can inspect symbol footprints natively within the crate:
-
-#### Running `cargo bloat` Diagnostics (Optional, Non-Gating)
+Developers can inspect symbol code footprint using `cargo bloat`:
 
 ```bash
-# Top 50 largest compiled functions across the engine
+# Top 50 largest functions in the binary
 cargo bloat --release --example synthetic_model -n 50 -w
 
 # Crate-level breakdown of the .text section
 cargo bloat --release --example synthetic_model --crates
 ```
 
-#### Interpreting `cargo bloat` Output
-
-* **Function Size Distribution**: Highlights which monomorphized DSP models or mathematical kernels dominate the `.text` segment. Any newly added DSP routine appearing in the top 10 with $> 50\text{ KiB}$ should be audited to verify whether `#[inline(always)]` is strictly necessary on large loops or if standard `#[inline]` achieves identical throughput with lower code density.
-* **Crate Footprint Share**: Confirms that non-DSP utility crates (`std`, formatting, allocators) remain segregated in cold pages and do not contaminate hot-path symbols.
-
-#### System Binutils Fallback
-
-On systems where `cargo-bloat` is not available, equivalent symbol size sorting can be obtained using standard system utilities:
-
-```bash
-nm -C --print-size --size-sort target/release/examples/synthetic_model | tail -n 30
-```
-
 ---
 
-## Non-Duplication Policy for Memory-Bound and Auto-Vectorized DSP
+## 9. Optimization Boundaries & Downstream Integration
 
-To prevent maintenance divergence and unnecessary binary growth, mathematical sub-routines that are memory-bandwidth bound or where LLVM already achieves peak efficiency are explicitly excluded from AVX-512 kernel duplication:
+### Kernel Specialization vs. Naive DRY
 
-1. **Gain, Dither, Pan & Stereo Mixing:** Slices are streamed through L1/L2 cache; arithmetic density is $\le 1$ FLOP per 4 bytes loaded. AVX2 FMA instructions already saturate memory bus throughput; AVX-512 provides zero measurable speedup. Exclusively uses the unified `x86-64-v3` baseline.
-2. **CabSim UPOLS Frequency Delay Line:** Complex multiplication and accumulation (`complex_mac_accumulate`) and FFT stages are memory-access dominated. The convolution engine relies exclusively on the unified `x86-64-v3` AVX2 baseline without specialized AVX-512 duplication.
-3. **Dynamic Topology Handlers:** Rare or non-standard geometries are processed through unified dynamic loops with vectorized vector chunks and scalar tails, avoiding explosive combinatorial monomorphization and reusing the `x86-64-v3` baseline.
-4. **Non-DSP Off-RT Operations (Loaders, Parsers, CRC32, Allocation):** File loading (`.nam`/`.namb`), JSON parsing (`serde_json`), CRC32 calculation, and buffer allocation occur exclusively off the real-time audio thread. They are bounded by disk I/O and memory throughput; manual SIMD specialization yields $< 1\%$ end-to-end impact and is explicitly rejected (*"No candidate"*).
+In performance-critical SIMD, naive deduplication ("Don't Repeat Yourself") must not be applied across divergent operational domains.
 
-### 5. Kernel Specialization vs. Naive Deduplication (FiLM vs. GEMM AVX2 Dot Product)
+* **Case Study (FiLM vs. GEMM Dot Product):**
+  * `film::dot_product_avx2` operates on very short vectors ($1..=8$) using 2 YMM accumulators and an aggressive `#[inline(always)]` annotation.
+  * `gemm::dot_basic::dot_product_avx2` operates on large matrices using 4 YMM accumulators and Kahan compensated summation in the tail.
+* **Floating-Point Non-Associativity:** IEEE-754 floating-point addition is non-associative: $(a + b) + c \ne a + (b + c)$. Forcing short FiLM vectors through the 4-accumulator GEMM kernel alters rounding by up to 2 ULPs and adds unnecessary branch overhead.
+* **Rule:** Kernels with distinct structural profiles remain specialized. Numerical consistency is guarded by automated parity tests (`test_dot_product_avx2_identity_with_gemm`).
 
-A critical principle in high-performance digital signal processing is: **Do not apply naive "Don't Repeat Yourself" (DRY) refactoring to performance-critical SIMD kernels.**
+### Block Prologue Amortization
 
-#### Architectural Case Study: `film::dot_product_avx2` vs. `gemm::dot_basic::dot_product_avx2`
+Operations that execute strictly **once per audio buffer** (in the prologue before the sample processing loop) have negligible performance impact.
 
-* **FiLM Layer Kernel (`src/models/a2/film.rs`)**:
-  Operates on very short conditioning vectors (`cond_per_group`, typically 1 to 8 elements). It employs 2 YMM accumulators (16-wide unroll), a naive scalar tail loop (`out += a[i] * b[i]`), and an aggressive `#[inline(always)]` annotation to eliminate stack frames inside `FiLMLayer::process`.
-* **GEMM Kernel (`src/math/gemm/dot_basic.rs`)**:
-  Operates on general dense matrix multiplication. It uses 4 YMM accumulators (32-wide unroll) and a compensated Kahan summation tail loop (4 arithmetic operations per tail element) to maximize accuracy on large vector reductions.
+* *Example:* An integer division instruction (`div`) in the cascade prologue calculating buffer bounds executes once per block (~375 times/sec at 48 kHz / 128 samples). At ~15–20 cycles (~5 ns), this accounts for only **0.0057%** of the block budget.
+* Attempting strength reduction via conditional branches introduces branch misprediction risks that exceed the cost of the division itself. Prologue arithmetic that amortizes to negligible CPU impact remains unaltered.
 
-#### Numerical Divergence from Floating-Point Non-Associativity
+### Upstream Engine vs. Downstream Application Boundaries
 
-In IEEE-754 floating-point arithmetic, addition is non-associative: $(a + b) + c \ne a + (b + c)$. Because the FiLM kernel uses 2 accumulators while GEMM uses 4 accumulators with Kahan tail compensation:
+Profile-Guided Optimization (PGO) and Post-Link Optimization (such as LLVM BOLT) provide latency advantages, but the boundaries between `NeuralAmpModeler-rs` and downstream consumers are strictly defined:
 
-* On vectors with length $\ge 32$, rounding accumulators differ by up to **2 ULPs** (Units in the Last Place) for arbitrary float inputs.
-* Unifying both into a single kernel would force high-overhead branch checks and Kahan tail compensation on ultra-short FiLM vectors (degrading real-time audio latency) and alter the established numerical signature of A2 models.
-
-#### Preservation Defense: Synchronization Comments and Parity Tests
-
-To prevent silent maintenance drift without compromising performance or bit-exactness:
-
-1. **Bidirectional Synchronization Markers**: Both files contain explicit `// KEEP IN SYNC WITH:` header comments.
-2. **Automated Identity Regression Tests**: `src/models/a2/film_test.rs::test_dot_product_avx2_identity_with_gemm` continuously verifies numerical equivalence across vector lengths $0..=128$, guaranteeing bit-exact identity on dyadic progressions and $\le 1\text{ ULP}$ on random float distributions.
-
----
-
-### 6. Block Prologue Amortization vs. Premature Micro-Optimization
-
-In real-time audio processing, arithmetic operations that execute strictly **once per audio buffer** (in the prologue before the sample/frame processing loop) have a negligible impact on overall computation time.
-
-#### Case Study: Division (`div`) in `WaveNetA2Cascade::process`
-
-Assembly inspection of `WaveNetA2Cascade::process` revealed a hardware integer division instruction (`div %r8d` / `div %r8`) in the prologue calculating buffer limits (`output.len() / out_per_frame`):
-
-* **Execution Frequency**: Exactly 1 invocation per audio block (375 times per second at 48 kHz / 128 samples).
-* **Hardware Latency**: ~15–20 cycles on modern x86-64 CPUs (~4.3–5.7 ns at 3.5 GHz).
-* **Block Workload**: Processing a 128-sample block through WaveNet A2 takes ~100–150 µs (~350,000–525,000 cycles).
-* **Amortized Cost**: The division represents only **0.0057%** of the block's budget, or **0.00021%** of a single CPU core.
-
-Attempting strength reduction via conditional branching (e.g. testing for power-of-two head sizes) introduces branch misprediction risks (~15–20 cycles penalty) and instruction cache jumps. The theoretical gain of ~5–10 cycles (<3 ns) is indistinguishable from system jitter and DRAM refresh cycles. In alignment with the project's zero-regression policy, prologue operations that amortize to negligible CPU impact remain unaltered unless an empirical measurement outside the noise floor proves a measurable benefit.
-
----
-
-### 7. Upstream Engine vs. Downstream Application Boundaries for PGO & BOLT
-
-Profile-Guided Optimization (PGO) and Post-Link Optimization (such as LLVM BOLT) provide measurable performance benefits in production audio applications (e.g. continuous huge-page mapping via `__bolt_hugify`). However, the boundary between the engine library and downstream consumer hosts must remain strictly defined:
-
-#### Upstream Engine Responsibilities (`NeuralAmpModeler-rs`)
-
-* **Canonical Profiling Catalog**: Expose a host-agnostic, representative fixture manifesto (`reference_architectures()` and `ArchitectureFixtureSpec` in `src/testing/catalog.rs`) covering all five supported model families (WaveNet A1, WaveNet A2, LSTM, ConvNet, and Linear FIR/FFT).
-* **Headless Profiling Harnesses**: Maintain deterministic test and benchmark harnesses that downstream builders can drive during their own packaging pipeline without GUI or audio-server dependencies.
-
-#### Downstream Host & Application Responsibilities
-
-* **Profile Generation & Consumption**: Downstream packaging scripts (e.g. standalone audio hosts or DAW plugins) drive `-Cprofile-generate` and `-Cprofile-use` using their own compiler flags (`-Ctarget-cpu=native`), target frameworks, and runtime environments.
-* **Binary Post-Optimization**: Applying BOLT reordering and `__bolt_hugify` must occur on the final linked ELF binary or shared library (`.so`/`.clap`), as BOLT operates strictly on post-link binaries with relocations (`-Wl,--emit-relocs`), never on intermediate `.rlib` static libraries.
-
-#### Why Upstream Cannot Distribute Pre-Compiled `.profdata` Profiles
-
-1. **Toolchain Version Coupling**: LLVM's `IndexedInstrProf` format changes across compiler releases. A `.profdata` generated on one `rustc` version causes fatal compilation errors on older or newer toolchains.
-2. **CFG Hash Fragility**: LLVM computes a 64-bit structural hash of every function's Control Flow Graph. Any minor variance in Cargo feature flags or dependency versions invalidates the hash, causing LLVM to discard the profile silently.
-3. **Cargo Scope Leakage**: Cargo does not support setting `-Cprofile-use` for a single dependency in `Cargo.toml`. Passing it via `RUSTFLAGS` forces the flag across all dependencies and `std`, degrading compilation across unrelated crates.
-4. **Tail Latency Bias in Real-Time DSP**: PGO accelerates hot paths by aggressively segregating cold paths into `.text.unlikely`. A canned profile trained primarily on one topology (e.g. WaveNet) treats other models (e.g. LSTM or ConvNet) as cold code, increasing far-jumps, branch mispredictions, and tail latency jitter ($p99$/$p99.9$) when users switch models.
+1. **Upstream Engine Responsibilities:**
+   * Exposes a host-agnostic, deterministic profiling catalog (`reference_architectures()` in `src/testing/catalog.rs`).
+   * Provides headless profiling harnesses that can be driven without GUI or audio-server dependencies.
+2. **Downstream Application Responsibilities:**
+   * Downstream packaging pipelines (e.g. standalone hosts or DAW plugins) drive `-Cprofile-generate` and `-Cprofile-use` using their own compiler flags and target environments.
+   * Binary post-optimization (BOLT reordering and `__bolt_hugify`) operates strictly on final linked ELF binaries or shared libraries, never on intermediate `.rlib` static libraries.
+3. **No Distribution of Pre-Compiled Profiles:**
+   Upstream does not distribute canned `.profdata` profiles because LLVM profile formats are tightly coupled to specific compiler revisions, CFG hash matching is fragile across dependency updates, and training on a single topology biases PGO branch weights, causing latency spikes when switching models.

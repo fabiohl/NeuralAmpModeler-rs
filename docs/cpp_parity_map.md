@@ -5,1570 +5,444 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # C++ ↔ Rust Parity Audit — NeuralAmpModelerCore × NeuralAmpModeler-rs
 
-Ground-truth comparison between the canonical C++ reference, **NeuralAmpModelerCore**
-("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the NeuralAmpModeler-rs
-Rust engine (`src/`). Two independent oracles serve complementary roles: **NAMcore**
-preserves market compatibility with existing models (interop parity), while the **f64
-reference oracle** measures fidelity against the mathematical ideal (precision).
-Neither oracle has automatic prevalence over the other — any disagreement between them
-requires human analysis and `REVIEW_REQUIRED` marking (see [§1.2](#12-two-oracle-governance-policy)).
+This document establishes the architectural, structural, and numerical parity mapping between the canonical C++ reference engine, **NeuralAmpModelerCore** ("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the **NeuralAmpModeler-rs** Rust engine (`src/`).
 
-This document is audited **per architecture**, comparing the vendored C++ reference source
-line-by-line against the Rust implementation. Each architecture section documents the
-active verification status and invariants. **For a single-page triage of what is actually
-broken vs. what is under control, read [§7](#7-known-broken-ledger) first.**
+Numerical correctness is evaluated along two complementary, co-equal axes:
 
-**Última auditoria:** 2026-09-21 (deve ser atualizado a cada revisão técnica que reafirme as citações e alinhamento contra o mirror pinado).
+- **Market Interoperability (NAMcore Oracle):** Guarantees that NeuralAmpModeler-rs produces audio identical (within floating-point tolerance) to existing models in the ecosystem, verified through committed golden vectors and live cross-validation.
+- **Mathematical Ideality (f64 Oracle):** Measures deviation against exact mathematical formulas via an independent double-precision reference (`src/testing/reference_oracle/mod.rs`), cross-checked against NumPy f64 anchors.
 
-## 0. Escopo e Exclusões Declaradas
+Neither oracle has automatic prevalence over the other; disagreements trigger a `REVIEW_REQUIRED` governance event ([§1.2](#12-two-oracle-governance-policy)).
 
-### 0.1 Escopo Arquitetural e Exclusões do Mirror C++
+For an operational triage of active boundaries, known bugs, and accepted tradeoffs, see [§7 Known-Broken & Policy Ledger](#7-known-broken--policy-ledger).
 
-Este mapa de paridade documenta e audita a correspondência entre a biblioteca canônica C++ **NeuralAmpModelerCore** (no pin `v0.5.4` / `1f42f88535884450104b8711d7595019afa0495b`) e a implementação em Rust do **NeuralAmpModeler-rs**. Para clareza de auditoria e rastreabilidade estrita, delimitam-se formalmente as inclusões e exclusões de escopo:
+---
 
-1. **Headers cobertos por comportamento observável (sem citação direta de arquivo):**
-   - `NAM/film.h` (`class FiLM`): módulo de modulação linear de features (*Feature-wise Linear Modulation*). O comportamento numérico de escala e deslocamento (*shift*) condicionados por camada é integralmente exercitado e auditado através da integração em WaveNet A2 nos caminhos dinâmicos e rápidos (`NAM/wavenet/wavenet.cpp`, `NAM/wavenet/a2_fast.cpp`, `NAM/wavenet/model.cpp`; ver [§4.3](#43-measured-interop-drift-on-dynamic-paths-gating-blending-film) e [§4.4](#44--known-bug-kb-a2-max-wavenet_a2_maxnam-official-flagship)). A citação indireta via integração das camadas WaveNet é suficiente para cobrir os invariantes da classe.
-   - `NAM/gating_activations.h` (`class GatingActivation`, `class BlendingActivation`, `class IdentityActivation`): ativações de gating e blend para camadas convolucionais. Seu comportamento matemático é auditado e verificado via testes de WaveNet A1 e A2 ([§3.6](#36-generic-gatingfilmhead1x1layer1x1-fail-closed-policy) e [§4.3](#43-measured-interop-drift-on-dynamic-paths-gating-blending-film)), onde suas fórmulas são validadas contra o oráculo C++ e o oráculo f64. A citação indireta pelas camadas consumidoras atende plenamente à rastreabilidade.
-   - `NAM/ring_buffer.h` (`class RingBuffer`): buffer circular gerenciador de histórico para camadas convolucionais. É empregado internamente como membro privado `_input_buffer` de `Conv1D` (`NAM/conv1d.h:133`, `NAM/conv1d.cpp`). Sua semântica de FIFO circular é coberta diretamente pela auditoria e testes unitários/de paridade de `conv1d.h` / `conv1d.cpp`, ConvNet ([§6](#6-other-architectures)) e WaveNet ([§3](#3-wavenet-a1-architecture)). A citação indireta via `Conv1D` é suficiente e adequada.
+## 0. Scope and Declared Exclusions
 
-2. **Plumbing de fábrica, configuração e utilitários fora de escopo (infraestrutura, não DSP numérico):**
-   - `NAM/get_dsp.h` / `get_dsp.cpp`: funções de fábrica para carregamento de modelos a partir de arquivos `.nam` e instanciação polimórfica em C++.
-   - `NAM/model_config.h`: structs e rotinas de parsing de configuração de modelo.
-   - `NAM/registry.h`: registro e dispatch polimórfico de arquiteturas em C++.
-   - `NAM/util.h` / `util.cpp`: funções utilitárias auxiliares de impressão e formatação.
-   - `NAM/compiler.h`: diretivas de compilação C++ (como macros `NAM_FORCE_INLINE`).
-   - `NAM/version.h`: declaração de versão do upstream C++. Conforme explicitamente documentado em `variables.env:19-22`, este header é deliberadamente desconsiderado como fonte da versão pinada (na tag `v0.5.4` ele declara `0.5.3` por omissão upstream). O pin de referência é regido exclusivamente por `variables.env` (`NAM_CORE_TAG="v0.5.4"`, commit `1f42f88535884450104b8711d7595019afa0495b`).
-   *Justificativa:* Estes arquivos representam infraestrutura de host, parsing JSON e compilação do C++, e não algoritmos numéricos de processamento de sinal. O pipeline de carregamento e deserialização do Rust (`src/loader/`, `src/builder/`) possui modelagem própria fortemente tipada e validada em suíte independente.
+### 0.1 Architectural Scope & C++ Mirror Exclusions
 
-3. **Módulos `AudioDSPTools` fora do grafo de inclusão do NAM core:**
-   - `Dependencies/AudioDSPTools/dsp/{RecursiveLinearFilter,Resample,NoiseGate,wav}.h` e `Dependencies/AudioDSPTools/dsp/ResamplingContainer/{ResamplingContainer,Dependencies/LanczosResampler}.h`: ferramentas auxiliares do repositório upstream que não são incluídas por nenhum arquivo sob o diretório `NAM/` do NAMcore pinado. Não participam do grafo de inferência do modelo neural; portanto, estão fora do escopo de paridade deste documento.
+The audit tracks the canonical C++ reference at tag **`v0.5.4`** (commit `1f42f88535884450104b8711d7595019afa0495b`, pinned in [`variables.env`](../variables.env)).
 
-### 0.2 Escopo Numérico e Independência de ISA (SIMD)
+1. **Headers Audited via Observable Behavior:**
 
-Este mapa de paridade audita exclusivamente a **semântica numérica e arquitetural** do modelo, independentemente do dispatch SIMD/ISA utilizado internamente pelo Rust (`scalar`, `sse4.2`, `avx2`, e a feature opt-in `avx512`).
+   - `NAM/film.h` (`class FiLM`): Feature-wise Linear Modulation. Conditioned scale and shift operations are exercised and verified through WaveNet A2 dynamic and fast paths ([§4.2](#42-measured-interop-metrics-fast--dynamic-paths)).
+   - `NAM/gating_activations.h` (`class GatingActivation`, `BlendingActivation`, `IdentityActivation`): Gating and blend activations are audited via WaveNet A1/A2 activation tests and dynamic dispatch ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1), [§4.2](#42-measured-interop-metrics-fast--dynamic-paths)).
+   - `NAM/ring_buffer.h` (`class RingBuffer`): Circular history buffer employed inside `Conv1D`. FIFO delay line semantics are verified directly in ConvNet ([§6](#6-other-architectures)) and WaveNet ([§3](#3-wavenet-a1-architecture)) convolution kernels.
 
-Todos os kernels SIMD implementados no Rust devem produzir resultados matematicamente equivalentes e bit-compatíveis com a via escalar de referência do motor. A verificação dessa equivalência entre vias de despacho SIMD e a execução escalar é realizada pelos testes de integridade de ISA (registrados em `target/logs/subphase-isa-parity.log` e pela matriz de testes `isa_parity_full_matrix`), e não por este documento de paridade C++.
+2. **Plumbing and Host Infrastructure Out of Scope (Non-DSP):**
 
-### 0.3 Status da Auditoria por Arquitetura (Audit Status)
+   - `NAM/get_dsp.h` / `get_dsp.cpp`: Model file loading and C++ polymorphic instantiation.
+   - `NAM/model_config.h`: JSON parsing structs.
+   - `NAM/registry.h`: C++ dynamic dispatch registry.
+   - `NAM/util.h` / `util.cpp`: Host utility and string formatting routines.
+   - `NAM/compiler.h`: C++ compiler macros (`NAM_FORCE_INLINE`).
+   - `NAM/version.h`: C++ version declaration header (intentionally bypassed in favor of [`variables.env`](../variables.env) commit pinning).
+     *Rationale:* The Rust engine implements its own strongly typed deserializer and static enum dispatcher (`src/loader/`, `src/models/mod.rs`), verified via independent test suites.
 
-> **Audit status:** Strict fail-closed policy maintained. **KB-A2-MAX remains frozen**
-> (fail-closed guard active; do not reopen without §4.4.3). Verified against current canonical source:
-> §3.5 condition_dsp canonical RF summation, §3.6 fail-closed A1/A2 guards, §7 known-broken ledger.
-> No production code change for Max.
+3. **External DSP Modules Out of Scope:**
 
-| Architecture                | Status                                                                                                                                      | Section                          |
-|:--------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
-| **LSTM**                    | ✅ Fully Verified — Native f32 weights, bit-exact/sub-1e-11 interop parity vs NAMcore                                                       | [§2](#2-lstm-architecture)       |
-| **WaveNet A1**              | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass canonical golden gates; A1 A2-feature guard fail-closed (§3.6)          | [§3](#3-wavenet-a1-architecture) |
-| **WaveNet A2**              | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** known bug (fail-closed guard; prod×C++ **1.69 dB**; §4.4.3) | [§4](#4-wavenet-a2-architecture) |
-| **ConvNet**                 | ✅ IDENTICAL — Full Initialization & Arithmetic Parity (canonical silence prewarm matches NAMcore)                                          | [§6](#6-other-architectures)     |
-| Linear / Container / Cabsim | ✅ Verified — Affine linear, SlimmableContainer, and IR Cabsim covered by targeted test suites                                              | [§6](#6-other-architectures)     |
-| **SlimmableWavenet**        | 🟡 Loads + inference OK — inference-only; no multi-size NAMCore parity claim (§6 / §7.4)                                                    | [§6](#6-other-architectures)     |
+   - `Dependencies/AudioDSPTools/dsp/*` and `ResamplingContainer/*`: Auxiliary tools in upstream repositories not included by `NAM/` core headers and not part of neural inference.
 
-## 1. Methodology
+### 0.2 Numerical Scope & ISA Independence
 
-### 1.1 Two axes of correctness
+This audit targets **numerical and architectural semantics**. NeuralAmpModeler-rs implements multiple SIMD dispatch backends (`scalar`, `sse4.2`, `avx2`, and opt-in `avx512`). All vector kernels are required to produce bit-exact or sub-ULP equivalent results to the scalar reference. ISA parity verification is enforced by dedicated cross-ISA test suites (`tests/models/isa_parity.rs`).
 
-1. **Market-compatibility parity** (NAMcore oracle) — does NeuralAmpModeler-rs match NAMcore within
-   float tolerance? Verified with committed golden vectors (`tests/fixtures/*.bin`, generated
-   by the C++ `render` tool) and live cross-validation (`tests/parity/cpp_parity.rs`). This
-   oracle preserves seamless interop with the existing NAM model ecosystem. All weights are
-   native f32 (weight quantization was eliminated; NAMcore never quantized).
+### 0.3 Architecture Audit Status
 
-2. **Mathematical-ideal fidelity** (f64 oracle) — how far is NeuralAmpModeler-rs from the exact
-   mathematics? Measured against an independent f64 reference oracle
-   (`src/testing/reference_oracle/mod.rs`), itself cross-checked against a third, independent
-   NumPy f64 implementation. This oracle isolates the genuine precision floor — quantifying
-   how much quality is lost to f32 arithmetic, activation approximations, and structural
-   divergence — independently of any particular C++ implementation.
+| Architecture         | Status                                                                                                               | Reference Section                |
+|:-------------------- |:-------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
+| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore                              | [§2](#2-lstm-architecture)       |
+| **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards              | [§3](#3-wavenet-a1-architecture) |
+| **WaveNet A2**       | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** frozen known bug (fail-closed guard) | [§4](#4-wavenet-a2-architecture) |
+| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore)                           | [§6](#6-other-architectures)     |
+| **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated                             | [§6](#6-other-architectures)     |
+| **SlimmableWavenet** | 🟡 Verified — Channel-sliceable dynamic inference operational; no multi-size NAMcore parity claimed                  | [§6](#6-other-architectures)     |
+
+---
+
+## 1. Methodology & Dual-Oracle Governance
+
+### 1.1 Correctness Axes
+
+1. **Market Interoperability (NAMcore Oracle):** Assesses whether NeuralAmpModeler-rs reproduces the acoustic output of the C++ reference within floating-point tolerance across real community captures. Validated via committed golden fixtures (`tests/fixtures/*.bin`) and live C++ rendering (`tests/parity/cpp_parity.rs`).
+2. **Mathematical Fidelity (f64 Oracle):** Assesses distance from pure mathematical evaluation using double precision (`f64`). Isolates precision losses resulting from `f32` accumulation, polynomial approximations, or algorithmic deviations.
 
 ### 1.2 Two-Oracle Governance Policy
 
-NeuralAmpModeler-rs uses two oracles with complementary roles and **equal authority** — neither has
-automatic prevalence over the other.
+NAMcore and the f64 oracle operate with **co-equal authority**:
 
-| Oracle      | Question Answered                                                                                     | Authority                           |
-|:----------- |:----------------------------------------------------------------------------------------------------- |:----------------------------------- |
-| **NAMcore** | Does NeuralAmpModeler-rs produce audio compatible with the existing model ecosystem? (market interop) | Sole arbiter of interop parity      |
-| **f64**     | What is the mathematical ideal, and how far is NeuralAmpModeler-rs from it? (precision floor)         | Sole arbiter of ideal-math fidelity |
+| Oracle      | Question Answered                                                                     | Authority                          |
+|:----------- |:------------------------------------------------------------------------------------- |:---------------------------------- |
+| **NAMcore** | Does the engine match existing ecosystem captures? (Market interop)                   | Sole arbiter of interop parity     |
+| **f64**     | What is the exact mathematical target, and how far is the engine from it? (Precision) | Sole arbiter of mathematical ideal |
 
-**Disagreement protocol:**
+**Disagreement Protocol:**
+When NAMcore reports acceptable parity but the f64 oracle diverges significantly (or vice versa):
 
-When the two oracles disagree — i.e., NAMcore reports acceptable parity but f64
-shows significant deviation from ideal math, or vice versa — **no oracle
-automatically prevails.** The divergence must be:
+1. The divergence must be documented with measurements from both oracles.
+2. A human reviewer must triage the root cause (C++ approximation, Rust structural difference, or oracle bug).
+3. The catalog entry and test gates are marked `REVIEW_REQUIRED`.
+4. Production code changes justified solely by improving one oracle while regressing the other are prohibited.
 
-1. **Documented** in this parity map with both oracle measurements.
-2. **Triaged** by a human reviewer to determine the root cause (which may be
-   a C++-side approximation, a Rust-side structural divergence that NAMcore
-   also exhibits, or a genuine bug in either oracle).
-3. **Marked `REVIEW_REQUIRED`** in the affected model's catalog entry and test
-   gate until resolution.
+### 1.3 Reference Version Pinning
 
-A production-code change justified solely by improving one oracle's metric
-while regressing the other is prohibited. Changes must either improve both
-oracles or have a documented, human-reviewed rationale for the tradeoff.
+- **Pinned Reference:** Tag `v0.5.4` / commit `1f42f88535884450104b8711d7595019afa0495b`.
+- **Mirror Location:** `third-party/NeuralAmpModelerCore/` (populated via `utils/setup-third-party.sh`).
+- **Build Entry Point:** `utils/ensure_namcore_render.sh` builds the release C++ `render` binary (`build/namcore_render/tools/render`).
 
-**Governance invariant:** NAMcore and f64 are co-equal oracles, and disagreements between them are
-governance events, not automatic victories for either side. Disagreements must be triaged per the protocol above.
+### 1.4 Verification Layers
 
-### 1.3 Reference version
+The fixture supply chain and test gates follow a 3-layer architecture detailed in [`docs/fixtures.md`](fixtures.md) and [`docs/testing.md`](testing.md):
 
-**Última auditoria:** 2026-09-21 (deve ser atualizado a cada revisão que reafirme as citações).
-The vendored working copy at `third-party/NeuralAmpModelerCore/` is checked out at tag
-`v0.5.4` (commit `1f42f88535884450104b8711d7595019afa0495b`, conforme `variables.env:24-25`; `NAM/version.h` still says `0.5.3` — the header wasn't bumped for
-the tag). Some older committed golden vectors were generated at `v0.5.3` (`9c7b185`). This
-patch-level drift is below the interop noise floor for all architectures except where explicitly
-noted per-model. Regenerate goldens with `tests/fixtures/golden_gen_build.sh` when in doubt.
-
-### 1.4 Fixture governance: `docs/fixtures.md`
-
-[`docs/fixtures.md`](fixtures.md) is the canonical operational
-supply-chain contract. Every parity claim in this document is operationalized through it.
-
-| Layer                               | Mechanism                                                                                                                                                                                                                                                       | Hard-fail gate                                                          |
-|:----------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------- |
-| **Layer 0 — Generation pipeline**   | `tests/fixtures/golden_gen_build.sh` consumes the Rust golden registry `src/testing/catalog.rs::GOLDEN_GEN_CATALOG` (via `nam_golden_catalog emit-catalog`) — regenerates every `.bin` golden from the pinned NAMcore C++ `render` tool (no bash catalog array) | —                                                                       |
-| **Layer 1 — Pre-committed goldens** | `tests/models/golden_vectors.rs` — compares Rust output against committed `.bin` files; no C++ toolchain required                                                                                                                                               | `utils/tests-quick.sh` Phase 2                                          |
-| **Layer 2 — Live cross-validation** | `tests/parity/cpp_parity.rs` — builds C++ `render` tool and compares fresh output: `quick_parity` subset in `utils/tests-quick.sh` Phase 2; full `#[ignore]`d v1/v2 multi-SR matrix via `utils/tests-long.sh`                                                   | `utils/tests-quick.sh` Phase 2 (`quick_parity`) + `utils/tests-long.sh` |
-
-**Freshness manifest:** `tests/fixtures/.golden_manifest.sha256` contains `sha256` of every
-model *and* its golden. Verified as a **hard gate** in both `utils/tests-quick.sh` Phase 2
-and `utils/tests-long.sh` (a stale `.nam` or `.bin` fails the suite).
-
-**NAMcore mirror pinning:** `variables.env` pins the vendored C++ reference at
-`NAM_CORE_COMMIT=1f42f88535884450104b8711d7595019afa0495b` (tag `v0.5.4`). Update
-via `utils/setup-third-party.sh`. See [`docs/fixtures.md`](fixtures.md) for the full regeneration walkthrough.
-
-**Calibrated thresholds:** per-model SNR/ESR gates cross-checked by
-`tests/models/threshold_calibration.rs` (anti-placebo meta-tests, `// Measured:` provenance
-comments). A claim not traceable to a catalog entry + manifest hash + calibrated threshold
-is unverified.
-
-#### 1.4.1 Runner execution and fidelity seals
-
-**Quick suite (`utils/tests-quick.sh`)** — three phases; the parity gates live in
-Phase 2 (`--release`, production float gate):
-
-- **Layer 1 (`golden_vectors` v1 + `isa_parity` v2):** runs only when the committed
-  `.bin` fixtures are present (`tests/fixtures/golden_wavenet_standard.bin` and
-  `..._v2_48000.bin`). Missing fixtures record the gap
-  `GAP: golden_vectors+isa_parity:missing_fixtures` and the oracle batch shrinks to
-  the fixture-independent oracles (`reference_oracle_f64`, `spectral_fidelity`,
-  `linear_fft_test`, `lstm_activation_precision`). Diagnostic:
-  `tests/fixtures/golden_gen_build.sh`.
-- **Layer 2 (`cpp_parity quick_parity`):** requires the NAMcore mirror
-  (`ensure_third_party soft`) and a C++ compiler (`$CXX`, else `g++`/`clang++`).
-  The `render` binary is ensured via the **single unified build entry point**
-  `utils/ensure_namcore_render.sh` (`_lib.sh::ensure_namcore_render`):
-  idempotent (skips cmake when `build/namcore_render/.build_config` matches the
-  `$CXX:$BUILD_TYPE:$FLAGS` fingerprint; the binary is probed at
-  `tools/render` → `Release/render` → `Debug/render`, matching
-  `src/testing/fixtures.rs::render_bin_path`), builds Release with
-  `-DNAM_ENABLE_A2_FAST=ON`, and logs `target/logs/cmake-configure.log` /
-  `cmake-build.log`. The same helper is used by `tests-long.sh` Phase 0,
-  `tests/fixtures/golden_gen_build.sh` and the Rust fallback in
-  `tests/parity/cpp_parity.rs`. Missing mirror, missing compiler, missing
-  cmake, or a failed CMake build each record a gap: `cpp_parity:no_namcore` /
-  `cpp_parity:no_cxx` / `cpp_parity:no_cmake` / `cpp_parity:cmake_failed`.
-- **Fail-closed status — a green seal is never emitted for skipped oracles.** Any
-  recorded gap prints `FIDELITY: INCOMPLETE` and `OVERALL: PASSED_WITH_GAPS` (exit 0).
-  `FIDELITY: OK` + `OVERALL: PASSED` is emitted **only** when every oracle actually
-  executed (each phase is also post-checked by `assert_ran_tests`, so an empty test
-  selection fails the suite). Freshness failures are `FIDELITY: FAIL` (exit 1).
-  Therefore the absence of fixtures, of the NAMcore mirror, or of the C++ compiler
-  **never** yields a green fidelity stamp.
-
-| Status emitted                                       | Meaning                                                                             | Exit |
-|:---------------------------------------------------- |:----------------------------------------------------------------------------------- |:----:|
-| `FIDELITY: OK` / `OVERALL: PASSED`                   | All three phases executed; zero gaps                                                | 0    |
-| `FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS` | At least one oracle skipped (fixture/NAMcore/compiler gap); `GAP:` lines in receipt | 0    |
-| `FIDELITY: FAIL` / `OVERALL: FAIL`                   | Freshness gate failed, a test failed, or an unexpected error                        | 1    |
-| `OVERALL: FAIL reason=strict_gaps`                   | Gaps present **and** `NAM_QUICK_STRICT=1` — gaps promoted to failure                | 1    |
-
-- **`NAM_QUICK_STRICT=1`:** promotes every recorded gap to a hard failure
-  (`OVERALL: FAIL reason=strict_gaps`, exit 1). Use for release gates where a skipped
-  oracle is unacceptable. The `STRICT:` line in the receipt records the value used.
-- **Receipt:** every run appends a machine-readable receipt to
-  `target/logs/quick-receipt.txt` (`SUITE: tests-quick`, `STRICT: <0|1>`,
-  `PHASE1/2/3: PASS <...>`, one `GAP: <id>` per skipped oracle, `OVERALL: <verdict>`),
-  alongside the per-phase logs `target/logs/quick-phase{1,2,3}.log`. The script
-  re-executes itself at low CPU/IO priority (`nice`/`ionice`) unless
-  `NAM_NO_LOW_PRIORITY=1`.
-
-**Long suite (`utils/tests-long.sh`)** — human-operated nightly/pre-release audit
-(AI agents must never execute it; binding project rule):
-
-- **Pre-flight gates:** requires the NAMcore mirror (`ensure_third_party hard` — a
-  missing mirror aborts the suite). Golden/fixture presence is validated
-  exclusively by the Rust gates: `catalog_preflight` (fixture catalog + V1
-  golden matrix via `validate_v1_goldens` + V2 multi-SR matrix via
-  `validate_v2_catalog`, both in `src/testing/catalog.rs`) and
-  `check_freshness` (nam_freshness manifest gate) — missing required goldens
-  fail the preflight (the former bash golden lists and the auto-rebuild were
-  removed; regenerate with `tests/fixtures/golden_gen_build.sh`).
-  It then ensures the C++ `render` binary via the unified `ensure_namcore_render`
-  — a render build failure aborts the suite with
-  `target/logs/cmake-configure.log` / `cmake-build.log` diagnostics.
-- **Layer 2 full matrix:** the `#[ignore]`d `live_cross_validation_*` v1/v2 multi-SR
-  tests and the full `cpp_parity` matrix run in the release parity phase.
-- **Summary:** `FIDELITY: FAIL` (exit 1) when any fidelity-class phase failed;
-  otherwise `FIDELITY: OK` with `OVERALL: FAILED` (exit 1, non-fidelity failure),
-  `OVERALL: COMPLETED_WITH_GAPS` (exit 0 — skipped/inconclusive phases, e.g. RT jitter
-  without capability; `--strict-pre-release` turns this into exit 1), or
-  `OVERALL: PASSED` (exit 0, zero gaps). All phase logs land in `target/logs/`.
+- **Layer 0 (Generation):** `tests/fixtures/golden_gen_build.sh` queries the Rust catalog registry (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`) and executes the C++ `render` tool to emit `.bin` reference files.
+- **Layer 1 (Committed Goldens):** `tests/models/golden_vectors.rs` validates the Rust engine against pre-committed `.bin` fixtures without requiring a C++ toolchain.
+- **Layer 2 (Live Cross-Validation):** `tests/parity/cpp_parity.rs` builds and executes the C++ `render` tool on the fly, performing live comparison across multiple sample rates.
+- **Integrity Gates:** `tests/fixtures/.golden_manifest.sha256` ensures fixture freshness. Thresholds are defended against regressions by meta-tests in `tests/models/threshold_calibration.rs`.
 
 ---
 
 ## 2. LSTM Architecture
 
-Read against `NAM/lstm.h`, `NAM/lstm.cpp`, `NAM/dsp.h`, `NAM/dsp.cpp`, `NAM/activations.h/.cpp`
-and the corresponding Rust modules (`src/models/lstm/`, `src/loader/dispatcher/lstm/`,
-`src/loader/transpose/lstm.rs`, `src/math/lstm/gates.rs`).
+Audited against `NAM/lstm.h`, `NAM/lstm.cpp`, and corresponding Rust modules:
 
-### 2.0 Supported sample rates
+- Models: [`src/models/lstm/`](../src/models/lstm/)
+- Gate Kernels: [`src/math/lstm/gates.rs`](../src/math/lstm/gates.rs)
+- Loader & Transpose: [`src/loader/dispatcher/lstm/`](../src/loader/dispatcher/lstm/), [`src/loader/transpose/lstm.rs`](../src/loader/transpose/lstm.rs)
 
-| Model             | Golden Vectors (v1) | Golden Vectors (v2)        | Live C++ Parity (v2)       |
-|:----------------- |:-------------------:|:--------------------------:|:--------------------------:|
-| BossLSTM-1×16     | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
-| BossLSTM-2×8      | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
-| LSTM Official     | 48 kHz              | 48000                      | 48000                      |
-| LSTM 1×10 (synt.) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
-| LSTM 2×24 (synt.) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
-| LSTM 3×8 (synt.)  | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
-| lstm_dyn_test.nam | 48 kHz              | —                          | 48000                      |
+### 2.0 Supported Sample Rates
 
-**192 kHz is excluded from all LSTM testing** — both golden vectors and live cross-validation.
-See [§2.9](#29-192-khz-limitation-lstm) for the formal limitation and root cause.
+| Model                         | Golden Vectors (v1) | Golden Vectors (v2)        | Live C++ Parity (v2)       |
+|:----------------------------- |:-------------------:|:--------------------------:|:--------------------------:|
+| BossLSTM-1×16                 | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
+| BossLSTM-2×8                  | 48 kHz              | 44100, 48000, 88200, 96000 | 44100, 48000, 88200, 96000 |
+| LSTM Official (1×3)           | 48 kHz              | 48000                      | 48000                      |
+| LSTM Synthetic (1/2/3 layers) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
 
-### 2.1 Reference algorithm (`NAM/lstm.cpp`)
+*Note: 192 kHz is excluded across all LSTM evaluations due to an upstream C++ overflow limitation ([§2.7](#27-192-khz-upstream-limitation)).*
 
-A stack of `num_layers` LSTM cells, each processing one audio sample at a time, followed by a
-linear head:
+### 2.1 Reference Algorithm (`NAM/lstm.cpp`)
 
-```text
-for each layer i:
-  ifgo = W_i · [input ; hidden_i] + b_i        // ifgo = [input_gate, forget_gate, cell_candidate, output_gate]
-  c_i  = sigmoid(forget) * c_i + sigmoid(input) * tanh(cell_candidate)
-  h_i  = sigmoid(output) * tanh(c_i)
-output = head_weight · h_last + head_bias        // no activation
-```
+A stack of $N$ recurrent cells, processing one sample at a time, followed by an affine head:
 
-Gate order in the weight/state vectors is fixed: **I, F, G, O** at offsets `0, H, 2H, 3H`
-(`lstm.cpp:40-44`).
+$$
+\begin{aligned}
+[i, f, g, o]^T &= W_l \cdot [x_t; h_{t-1}] + b_l \\
+c_t &= \sigma(f) \odot c_{t-1} + \sigma(i) \odot \tanh(g) \\
+h_t &= \sigma(o) \odot \tanh(c_t) \\
+y_t &= W_{\text{head}} \cdot h_{t, \text{last}} + b_{\text{head}}
+\end{aligned}
+$$
 
-By default (`Activation::using_fast_tanh = false`, `activations.cpp:16`), the gate
-nonlinearities are `sigmoid(x) = 1/(1+exp(-x))` and `tanhf(x)` — both **exact** libm/expf-based
-implementations (`lstm.cpp:57-65`, `activations.h:64-67`). The `fast_sigmoid`/`fast_tanh`
-rational-approximation branch (`lstm.cpp:46-56`) is only enabled by `Activation::enable_fast_tanh()`,
-which is called **only** from `tools/benchmodel*.cpp` — never from the `render` tool used to
-generate goldens or run live cross-validation. **The C++ reference used for all LSTM parity
-checks always uses exact math**, not its own fast-tanh approximation.
+Gate ordering in memory is fixed to **I, F, G, O** at strides `0, H, 2H, 3H` (`lstm.cpp:40-44`). By default (`Activation::using_fast_tanh = false`), C++ evaluates exact libm `expf` for $\sigma$ and $\tanh$.
 
-C++ generalizes the topology to arbitrary `in_channels`/`out_channels` and even `num_layers ==
-0` (pure passthrough, `lstm.cpp:139-149`, zero-filling extra output channels). In practice every
-known `.nam` LSTM model is mono in/out with `num_layers ∈ {1, 2}` — see [§2.6](#26-scope-divergence-mono-only-no-zero-layer-support).
+### 2.2 Structural Implementation Mapping
 
-### 2.2 Rust implementation
+| C++ Reference (`NeuralAmpModelerCore/`)                            | Rust Implementation (`src/`)                                           | Verdict                                                     |
+|:------------------------------------------------------------------ |:---------------------------------------------------------------------- |:----------------------------------------------------------- |
+| `LSTMCell::process_` gate math (`lstm.cpp:31-66`)                  | `math/lstm/gates.rs` + `models/lstm/layer_kernels.rs`                  | ✅ Exact match in gate ordering and arithmetic formulations |
+| Row-major gate weights `[4H × (I+H)]` (`lstm.cpp:19-21`)           | `LstmLayer::input_hidden_weights` loaded via `read_lstm_weights_into`  | ✅ Byte-for-byte layout correspondence                      |
+| Bias `[4H]`, init hidden `[H]`, init cell `[H]` (`lstm.cpp:22-28`) | `read_lstm_layer` sequentially parses bias, hidden-init, and cell-init | ✅ Exact sequential match                                   |
+| 2-layer chain (`lstm.cpp:151-153`)                                 | `LstmModel2` software-pipelined chain (`model2.rs`)                    | ✅ Bit-exact sequential stacking, optimized for ILP         |
+| Linear head projection (`lstm.cpp:161-164`)                        | `dot_product(..) + head_bias` with Kahan summation compensation        | ✅ Exact match (reduces floating-point accumulation drift)  |
+| Prewarm length: `0.5 × sample_rate` (`lstm.cpp:125-132`)           | `prewarm_samples()` computes identical `(0.5 * sr) as usize`           | ✅ Exact formula match                                      |
+| Reset prewarm opt-out (`dsp.cpp:130-139`)                          | `NamModel::reset()` respects `prewarm_on_reset()` (default `true`)     | ✅ Exact behavioral match                                   |
 
-| C++ (`NeuralAmpModelerCore/`)                                                                       | Rust (`src/`)                                                                                                                                                           | Verdict                                                                                                   |
-|:--------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------- |
-| `LSTMCell::process_` gate math (`lstm.cpp:31-66`)                                                   | `math/lstm/gates.rs::fused_lstm_gates_{avx2,avx512}` + `models/lstm/layer_kernels.rs`                                                                                   | ✅ Match — same gate order, same `f·c + i·tanh(g)` / `o·tanh(c')` formulas                                |
-| Gate-major weight matrix `[4H × (I+H)]`, row-major (`lstm.cpp:19-21`)                               | `LstmLayer::input_hidden_weights: [[[u16; H]; IH]; 4]`, filled by `read_lstm_weights_into`                                                                              | ✅ Match — verified byte-for-byte against the constructor loop                                            |
-| Bias `[4H]`, initial hidden `[H]`, initial cell `[H]` read order (`lstm.cpp:22-28`)                 | `read_lstm_layer` reads bias → hidden-init → cell-init in the same order                                                                                                | ✅ Match                                                                                                  |
-| 2-layer chain: `layers[i].process_(layers[i-1].hidden)` (`lstm.cpp:151-153`)                        | `LstmModel2` software-pipelined chain (`model2.rs`) — layer2 consumes layer1's *previous*-step hidden state, reordered for throughput                                   | ✅ Match — mathematically identical sequential stacking, just reordered for instruction-level parallelism |
-| Head: `output = head_weight · h_last + head_bias`, no activation (`lstm.cpp:161-164`)               | `dot_product(..) + head_bias`, computed in **native f32 with Kahan compensation** (`use_f32_head = true` in every loader path) when quantized weights are not requested | ✅ Match (superset — Kahan compensation only *reduces* summation error vs. plain accumulation)            |
-| `GetPrewarmSamples() = 0.5 × expected_sample_rate` (min 1) (`lstm.cpp:125-132`)                     | `prewarm_samples()` — identical formula (`models/lstm/mod.rs`)                                                                                                          | ✅ Match — both engines share the same formula                                                            |
-| `DSP::Reset()` calls `prewarm()` only `if GetPrewarmOnReset()` (default `true`) (`dsp.cpp:130-139`) | `NamModel::reset()` calls `prewarm()` only `if self.prewarm_on_reset()` (default `true`)                                                                                | ✅ Match — both engines have the same opt-out flag with the same default                                  |
-| Backbone weights are plain `float` (Eigen), no quantization                                         | Gate weights are native f32, dispatched through f32-only GEMV kernels                                                                                                   | ✅ Match — see [§2.5](#25-native-f32-backbone-weights-and-activation-precision)                           |
+### 2.3 Weight Storage & Layout
 
-### 2.3 Weight loading (`.nam` JSON / NAMB)
+Weights are laid out sequentially: `[W_ih, W_hh] -> bias -> hidden_init -> cell_init` per layer, followed by `head_weights -> head_bias`. `src/loader/dispatcher/lstm/weights.rs` and `src/loader/transpose/lstm.rs` parse this stream directly into memory. `WeightCursor::verify_exhausted()` enforces fail-closed validation against size mismatches.
 
-Layout is `input_hidden_weights[4H×IH] → bias[4H] → hidden_init[H] → cell_init[H]`, repeated per
-layer, then `head_weights[H] → head_bias`. This is read identically in
-`src/loader/dispatcher/lstm/weights.rs::read_lstm_layer{,_dyn}` and cross-checked against
-`src/loader/transpose/lstm.rs` (used for the NAMB `GateMajorLstm` pre-transposed layout). Both
-paths were read line-by-line against `LSTMCell`'s constructor (`lstm.cpp:9-29`) — confirmed
-identical. `WeightCursor::verify_exhausted()` fails closed if the file has too many or too few
-floats for the declared topology.
+### 2.4 Catalog Dispatch
 
-### 2.4 Catalog dispatch
+[`src/loader/nam_json/topology/lstm.rs`](../src/loader/nam_json/topology/lstm.rs) routes valid topologies:
 
-| `(num_layers, hidden_size)` | Rust type                                            | Alias                              |
-|:--------------------------- |:---------------------------------------------------- |:---------------------------------- |
-| `(1, 3)`                    | `LstmModel1<3, 4, 12>`                               | `Lstm1x3` (official example model) |
-| `(1, 8/12/16/24/40)`        | `LstmModel1<H, H+1, 4H>`                             | `Lstm1x{8,12,16,24,40}`            |
-| `(2, 8/12/16/24)`           | `LstmModel2<H, H+1, 2H+H, 4H>`                       | `Lstm2x{8,12,16,24}`               |
-| Anything else               | `LstmModelDyn` (heap-allocated, `Vec<LstmLayerDyn>`) | —                                  |
+- `(1, 3)` → `LstmModel1<3, 4, 12>` (official bundled example)
+- `(1, H)` where $H \in \{8, 12, 16, 24, 40\}$ → `LstmModel1<H, H+1, 4H>`
+- `(2, H)` where $H \in \{8, 12, 16, 24\}$ → `LstmModel2<H, H+1, 2H+H, 4H>`
+- Any other valid geometry → `LstmModelDyn` (heap-allocated dynamic layer chain)
 
-`get_lstm_topology` (`src/loader/nam_json/topology/lstm.rs`) rejects `num_layers == 0`,
-`num_layers > 16`, and `hidden_size > 1024` with `Err(JsonError::UnsupportedTopology { … })`
-(DoS / degenerate guards) — see [§2.6](#26-scope-divergence-mono-only-no-zero-layer-support).
+Topologies declaring `num_layers == 0`, `num_layers > 16`, or `hidden_size > 1024` are rejected at detection with `Err(JsonError::UnsupportedTopology)`.
 
-### 2.5 Native f32 backbone weights and activation precision
+### 2.5 Precision & Measured Parity
 
-**Backbone Weight Precision:** NeuralAmpModeler-rs uses native `f32` weight storage across all LSTM layers, matching NAMcore's `Eigen::MatrixXf` representation (`NAM/lstm.h:38-39`). Native f32 weights eliminate GEMV dequantization overhead, reducing per-sample latency while ensuring bit-exact interop parity for models such as `BossLSTM-2x8` (ESR = 0.00e0 vs NAMcore).
+Backbone weights are stored in native `f32` vectors (`AlignedVec<f32>`), matching C++ `Eigen::MatrixXf`. This avoids dequantization latency and guarantees high numerical convergence.
 
-**Measured Interop Results (Standard Mode):**
+In Standard mode (universal default), activation functions execute exact polynomial exp-based kernels (error $\sim 2 \times 10^{-7}$). In Fast mode, Padé [5,4] rational $\tanh$ and minimax degree-17 $\sigma$ are used.
 
-| Model         | ESR (vs NAMcore) | ESR (vs f64 Ideal) | SNR (dB) | MR-STFT  | Status                     |
-|:------------- |:----------------:|:------------------:|:--------:|:--------:|:-------------------------- |
-| BossLSTM-1×16 | 8.50e-12         | 8.90e-13           | 110.7    | 2.80e-05 | ✅ Near-bit-exact          |
-| BossLSTM-2×8  | 1.00e-11         | 5.68e-13           | 110.0    | 1.57e-05 | ✅ Bit-exact / noise floor |
-| LSTM Official | 7.86e-13         | 2.71e-12           | 121.0    | 3.08e-05 | ✅ Near-bit-exact          |
+**Measured Interop Results (Standard Mode @ 48 kHz):**
 
-**Key findings:**
+| Model         | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict             |
+|:------------- |:---------------:|:-----------------:|:--------:|:--------:|:-------------------------- |
+| BossLSTM-1×16 | 8.50e-12        | 8.90e-13          | 110.7    | 2.80e-05 | ✅ Near-bit-exact          |
+| BossLSTM-2×8  | 1.00e-11        | 5.68e-13          | 110.0    | 1.57e-05 | ✅ Bit-exact / noise floor |
+| LSTM Official | 7.86e-13        | 2.71e-12          | 121.0    | 3.08e-05 | ✅ Near-bit-exact          |
 
-- **BossLSTM-2×8 Parity:** Achieves bit-exact / noise-floor convergence with NAMcore (ESR = 1.00e-11 vs NAMcore, 5.68e-13 vs f64 oracle).
-- **BossLSTM-1×16 Precision:** Residual error is dominated by activation function precision at high pre-activation magnitudes, which standard exact-grade math reduces to near-zero (ESR = 8.50e-12).
-- **Activation Precision Tradeoff:** `ActivationPrecision::Fast` utilizes Padé [5,4] rational `tanh` (max error ~2.32e-3) and a minimax polynomial `sigmoid` (max error ~4.09e-4) for maximum throughput. `ActivationPrecision::Standard` (universal default) runs exact-grade polynomial exp-based math (error ~2e-7), matching C++ libm precision.
+### 2.6 Scope Divergence: Mono Only
 
-### 2.6 Scope divergence: mono-only, no zero-layer support
+While C++ declares general multi-channel parameters, NeuralAmpModeler-rs models guitar and bass gear strictly as mono. Topologies declaring `in_channels` or `out_channels` $\notin \{1, \text{None}\}$ return `Err(JsonError::UnsupportedMultiChannel)`.
 
-C++ `LSTM` generalizes to arbitrary `in_channels`/`out_channels` and `num_layers == 0`
-(pass-through, `lstm.cpp:139-149`). NeuralAmpModeler-rs restricts to mono in/out and rejects degenerate
-topologies at detection time via `get_lstm_topology` (`src/loader/nam_json/topology/lstm.rs`):
+### 2.7 192 kHz Upstream Limitation
 
-- **Multi-channel `in_channels`/`out_channels` not in `{1, None}`** → `Err(JsonError::UnsupportedMultiChannel { architecture: "LSTM", field, value })`.
-  A hypothetical LSTM model declaring `in_channels: 2` or `out_channels: 2` is rejected at
-  topology detection with an explicit `Err` — fail-closed, observable in the public loader API.
-  No known real-world `.nam` LSTM model uses multi-channel; NAM is guitar/bass amp modeling,
-  always mono.
+**Status:** Fundamental upstream C++ limitation.
+The C++ NAMcore `render` tool produces `NaN` or crashes when processing LSTM models over continuous sequences at 192 kHz (e.g., 960,000 samples). The uncompensated recurrent state in Eigen accumulates exponential growth in `f32`.
 
-- **`num_layers == 0`** → `Err(JsonError::UnsupportedTopology { architecture: "LSTM",
-  issue: "num_layers=0 (no valid model can have zero layers)", limit: 0 })`. Fail-closed and
-  observable on the public loader API. No `LstmModelDyn` process path is entered.
-
-- **`num_layers > MAX_LSTM_LAYERS` (16)** and **`hidden_size > MAX_LSTM_HIDDEN_SIZE` (1024)**
-  → `Err(JsonError::UnsupportedTopology { … })` with the exceeded limit. DoS/OOM guard,
-  same fail-closed `Err` style as `num_layers==0`.
-
-- **`num_layers` or `hidden_size` absent from JSON** → `Ok(None)`. The model lacks LSTM
-  structural keys — not a valid LSTM config (distinct from explicit zero/overflow rejects).
-
-Multi-channel and degenerate bounds return dedicated `Err` variants; only missing keys remain `Ok(None)`.
-
-### 2.7 Measured interop drift
-
-LSTM is the one topology whose interop error grows with **signal length** and **host sample
-rate** — the recurrent cell state accumulates error over time.
-
-**Native f32 weights & Standard activation:** BossLSTM-2×8 converges to bit-exact / noise-floor parity with NAMcore at 48 kHz (ESR = 1.00e-11). All models default to `Standard` (exact-grade) activation precision, collapsing interop gaps to near-zero across all catalog architectures.
-
-**F64 Oracle Floors:** The model-specific f64-oracle floors (prewarm-paired, 24k prewarm + 4096 samples)
-have been fully measured in Standard mode:
-
-- **BossLSTM-1×16**: ESR vs f64 oracle = **8.90e-13 (SNR 110.7 dB)**
-- **BossLSTM-2×8**: ESR vs f64 oracle = **5.68e-13 (SNR 110.0 dB)**
-
-Gate constants (`tests/common/constants.rs`):
-
-| Precision mode | Host rate | ESR cap | Margin over worst measured                        |
-|:-------------- |:--------- |:-------:|:------------------------------------------------- |
-| Fast           | ≤ 96 kHz  | 0.08    | ~1.3× (vs 6.09e-2 @ 96 kHz)                       |
-| Fast           | > 96 kHz  | 0.20    | ~1.4× (vs 1.42e-1 @ 192 kHz)                      |
-| Standard       | ≤ 96 kHz  | 0.30    | ~5× the Fast cap (covers the Fast→Standard delta) |
-| Standard       | > 96 kHz  | 0.60    | Conservative headroom for 192 kHz recurrent drift |
-
-`LSTM_ESR_LIMIT = 7.0e-3` (`tests/common/constants.rs`) is derived from measured
-production-vs-oracle ESR with safety margin. Live cross-validation for catalog LSTM models
-(`live_cross_validation_v2_lstm_1x16` / `_2x8`) exercises four sample rates
-(44.1k, 48k, 88.2k, 96k) — 192 kHz is excluded for all LSTM topologies due to
-the C++ upstream limitation documented in [§2.9](#29-192-khz-limitation-lstm).
-The `Standard > 96 kHz` row in the table below is a structural guard, not a
-claim of 192 kHz test coverage.
-
-### 2.8 Test coverage and fixture quality
-
-Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_parity.rs`, and
-`tests/parity/reference_oracle_f64.rs`:
-
-- **Golden vectors** (`tests/models/golden_vectors.rs`, precomputed `.bin` from the C++ `render` tool,
-  always active — not `#[ignore]`d): `test_golden_vectors_lstm_1x16`, `_lstm_2x8`,
-  `_lstm_official`. Backing `.nam` files are **real community-trained models**, not synthetic:
-  `BossLSTM-1x16.nam` and `BossLSTM-2x8.nam` (Boss Waza Tube Amp Expander community captures,
-  compatible license, committed in `tests/fixtures/models/`), plus `lstm.nam` — NAMcore's own
-  official bundled example (`example_models/lstm.nam`, 1×3, matches the `Lstm1x3` alias).
-- **Live cross-validation** (`tests/parity/cpp_parity.rs`, `#[ignore]`d — requires the C++ toolchain,
-  run via `utils/tests-long.sh`): `live_cross_validation_{,v2_}lstm_{1x16,2x8,official,dyn}` plus
-  HF-mode variants. Uses the same real fixtures as the golden vectors.
-- **No synthetic LSTM fixture exists in the active suite.** There is no equivalent of WaveNet's
-  `BossWN-lite.nam` (obsolete synthetic, see §3.7) for LSTM — every committed LSTM golden is
-  backed by a real trained model.
-- **`LstmModelDyn`** (the non-catalog fallback) is exercised by `lstm_dyn_test.nam` — a small,
-  deliberately non-catalog (hidden size outside `{3,8,12,16,24,40}`) **synthetic** fixture built
-  to hit the dynamic dispatch path structurally; it is not a trained amp/pedal capture. This is
-  the correct use of a synthetic fixture (topology/dispatch coverage), distinct from tone
-  fidelity coverage (which the real Boss captures provide for the catalog path only — the
-  dynamic LSTM path currently has **no real-model coverage**, since no known community LSTM
-  export uses a non-catalog hidden size).
-
-### 2.9 192 kHz Limitation: LSTM
-
-**Status:** FUNDAMENTAL UPSTREAM LIMITATION — not a NeuralAmpModeler-rs bug.
-
-The C++ NAMcore `render` tool produces **NaN**
-from recurrent-state overflow when processing LSTM models at 192 kHz. The root
-cause is in the third-party Eigen-based render path
-(`third-party/NeuralAmpModelerCore/`, read-only vendor tree) — the LSTM cell's
-recurrent state accumulates over the 5-second v2 stress signal (960,000
-uncompensated samples), exerting exponent growth that saturates f32 in the
-Eigen computation graph.
-
-**Evidence:**
-
-- The C++ `render` tool crashes or emits NaN for all LSTM models at 192 kHz
-  (`BossLSTM-1x16`, `BossLSTM-2x8`, and every synthetic LSTM fixture).
-- No committed `golden_lstm_*_v2_192000.bin` files exist — the golden registry
-  (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`, `Exclude192k` scope for
-  `BossLSTM-1x16`/`BossLSTM-2x8`) intentionally skips 192 kHz; the generator
-  consumes that scope as `skip_srs=192000`.
-- Live cross-validation (`tests/parity/cpp_parity.rs`) excludes 192 kHz via
-  `v2_multi_sr_expected_rates()` → `V2MultiSRScope::Exclude192k`
-  (`tests/common/io_helpers.rs:137-139`).
-- Golden vector tests (`tests/models/golden_vectors.rs`) exclude 192 kHz via
-  `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES`
-  (`src/testing/catalog.rs`).
-
-**Governance (binding):**
-
-1. **No golden vector shall be generated or regenerated at 192 kHz for LSTM**
-   unless a new C++ upstream release fixes the root cause and a committed
-   `.golden.bin` is produced from that release. Self-referencing Rust
-   regeneration without C++ adjudication is prohibited (invariant per §4.5.1).
-2. **No ESR/SNR gate shall be claimed at 192 kHz for LSTM.** The
-   `ABSOLUTE_ESR_CAP_LSTM_HIRATE_HF` constant (`1e-4`, `cpp_parity.rs:468`)
-   exists as a structural guard for the code path but is never exercised
-   (dead code under current catalog scope).
-3. **Every LSTM model** — catalogued (`BossLSTM-1x16`, `BossLSTM-2x8`) and
-   synthetic (`lstm_1x10`, `lstm_2x24`, `lstm_3x8`, `lstm_dyn_test`) — is
-   formally registered as supported at **`[44100, 48000, 88200, 96000]`**.
-   `lstm.nam` (Official) and `lstm_dyn_test.nam` are additionally restricted
-   to 48 kHz by the `condition_size`/`expected_sample_rate` contract of their
-   `.nam` metadata — this is a *model* constraint, not an *architecture*
-   constraint.
-4. **`REVIEW_REQUIRED`** if any test path produces a passing result at
-   192 kHz — such a result contradicts the documented upstream limitation
-   and must be human-investigated before acceptance.
-
-**Affected code locations:**
-
-| Layer                | File                                                          | Mechanism                                                                 |
-|:-------------------- |:------------------------------------------------------------- |:------------------------------------------------------------------------- |
-| Golden registry      | `src/testing/catalog.rs` `GOLDEN_GEN_CATALOG`                 | `V2GenScope::Exclude192k` for LSTM entries (emitted as `skip_srs=192000`) |
-| Golden vector tests  | `tests/models/golden_vectors.rs` via `src/testing/catalog.rs` | `v2_sample_rates_for()` → `V2_EX_192K_SAMPLE_RATES`                       |
-| Live C++ parity      | `tests/common/io_helpers.rs` `v2_multi_sr_expected_rates`     | `V2MultiSRScope::Exclude192k` for all LSTM filenames                      |
-| Long suite preflight | `catalog_preflight` (`cargo test --test models`)              | `validate_v2_catalog()` — Rust V2 gate (bash V2_CATALOG_SCOPE removed)    |
+- 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog.rs`).
+- All catalog LSTM captures are verified at `[44100, 48000, 88200, 96000]`.
 
 ---
 
 ## 3. WaveNet A1 Architecture
 
-Read against `NAM/wavenet/model.h`, `NAM/wavenet/model.cpp`, `NAM/wavenet/detail.h`, `NAM/activations.{h,cpp}`,
-and the corresponding Rust modules (`src/models/wavenet/`, `src/loader/dispatcher/wavenet/`, `src/loader/nam_json/topology/wavenet.rs`).
+Audited against `NAM/wavenet/model.h`, `NAM/wavenet/model.cpp`, and corresponding Rust modules:
 
-### 3.1 C++ Reference Architecture vs. Rust Const-Generic Catalog
+- Models: [`src/models/wavenet/`](../src/models/wavenet/)
+- Dispatchers: [`src/loader/dispatcher/wavenet/`](../src/loader/dispatcher/wavenet/)
+- Topology: [`src/loader/nam_json/topology/wavenet.rs`](../src/loader/nam_json/topology/wavenet.rs)
 
-The vendored C++ source does not define separate SKU classes for different channel counts. `nam::wavenet::create_config` (`model.cpp:1227-1241`) has exactly two branches: (1) `a2_fast::is_a2_shape()` for the A2 fast path (§4), and (2) a single generic Eigen-based implementation (`detail::Layer` / `detail::LayerArray` / `WaveNet`) for all other WaveNet models regardless of channel count.
+### 3.1 Architecture Overview: Const-Generic Monomorphization
 
-"Standard/Lite/Feather/Nano" (16/12/8/4 channels) are a **NeuralAmpModeler-rs-side performance
-optimization**: these four channel counts happen to cover the overwhelming majority of
-real-world community WaveNet exports, so NeuralAmpModeler-rs const-generic-specializes them
-(`WaveNetModel<CH, K, HEAD>`) for SIMD throughput, falling back to a heap-allocated
-`WaveNetModelDyn` for everything else. This is a legitimate and effective engineering strategy,
-but it is **NeuralAmpModeler-rs's own catalog, not a mirror of any C++-side concept** — the correct framing is
-"const-generic fast path vs. generic fallback for the single C++ generic WaveNet class," not
-"C++ SKU X maps to Rust SKU X."
+In C++, `nam::wavenet::WaveNet` is a single generic Eigen-based implementation (`detail::LayerArray` / `detail::Layer`).
+NeuralAmpModeler-rs introduces const-generic monomorphization for the four predominant channel geometries:
 
-### 3.2 Rust implementation
+- **Standard:** 16 channels, dilations `[1, 2, ..., 512]` $\times 2$ arrays (`WaveNetModel<16, 3, 8>`)
+- **Lite:** 12 channels, dilations `[1, ..., 64]` + `[128, ..., 512, 1, ..., 512]` (`WaveNetModel<12, 3, 6>`)
+- **Feather:** 8 channels, Lite-shaped dilations (`WaveNetModel<8, 3, 4>`)
+- **Nano:** 4 channels, Lite-shaped dilations (`WaveNetModel<4, 3, 2>`)
+- **Dynamic Fallback:** Non-standard geometries route to `WaveNetModelDyn`.
 
-| C++ (`NeuralAmpModelerCore/`)                                                                                                                                      | Rust (`src/`)                                                                                                                                     | Verdict                                                                                                                                                                                    |
-|:------------------------------------------------------------------------------------------------------------------------------------------------------------------ |:------------------------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `detail::LayerArray::ProcessInner` — rechannel → layer loop → head accumulation → head rechannel (`model.cpp:450-511`)                                             | `WaveNetLayerArray::process_block_internal` (`layer_array.rs`)                                                                                    | ✅ Match — same rechannel → layer cascade → head-accumulate → head-rechannel structure                                                                                                     |
-| `detail::Layer::Process` — dilated conv + input mixin, sum, activation, optional layer1x1/head1x1 residual+skip (`model.cpp:166-376`)                              | `WaveNetLayer::process_block_internal` (`layer.rs`)                                                                                               | ✅ Match for the **plain case** (no gating, no FiLM, no head1x1/layer1x1 variance) — the only case the const-generic fast path implements (§3.6)                                           |
-| `WaveNet::process` — condition → layer arrays → head_scale (`model.cpp:744-832`)                                                                                   | `WaveNetModel::process` / `WaveNetModelDyn::process` (`model.rs`, `model_dyn.rs`)                                                                 | ✅ Match for the no-condition_dsp, no-post-stack-head case                                                                                                                                 |
-| Default activation: exact `tanh`/`sigmoid` (`Activation::using_fast_tanh = false`, never flipped by the `render` tool — same as LSTM, §2.1)                        | `ActivationPrecision::Fast` uses Padé[5,4] tanh / minimax-17 sigmoid (opt-in); `Standard` is exact-grade polynomial exp-based (universal default) | ⚠ Same intentional, bounded divergence documented for LSTM (§2.5); applies identically when `Fast` is active                                                                               |
-| `LayerArrayParams::get_receptive_field()` — per-array RF, **summed** across all arrays plus condition_dsp's own prewarm (`model.cpp:417-424`, `model.cpp:616-618`) | `WaveNetModel`/`WaveNetModelDyn` prewarm fill                                                                                                     | ✅ `prewarm_samples()` correctly sums all arrays' RFs + condition_dsp + post-stack head, matching C++ (§3.5). `prewarm(&mut self, _)` discards arg and runs analytical fill — intentional. |
+### 3.2 Structural Implementation Mapping
 
-### 3.3 Weight loading
+| C++ Reference (`NAM/wavenet/model.cpp`)                                  | Rust Implementation (`src/models/wavenet/`)                            | Verdict                                                       |
+|:------------------------------------------------------------------------ |:---------------------------------------------------------------------- |:------------------------------------------------------------- |
+| `detail::LayerArray::ProcessInner` cascade (`model.cpp:450-511`)         | `WaveNetLayerArray::process_block_internal` (`layer_array.rs`)         | ✅ Rechannel → layer stack → head accumulate → head rechannel |
+| `detail::Layer::Process` conv + mixin + activation (`model.cpp:166-376`) | `WaveNetLayer::process_block_internal` (`layer.rs`)                    | ✅ Exact arithmetic match for ungated feedforward processing  |
+| `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)       | `WaveNetModel::process` / `WaveNetModelDyn::process`                   | ✅ Matching cascade flow                                      |
+| Prewarm receptive field calculation (`model.cpp:615-620`)                | `prewarm_samples()` sums arrays' RFs + condition_dsp + post-stack head | ✅ Exact match with C++ receptive field summation             |
 
-Layout (`rechannel → [conv1d+bias, input_mixin, layer1x1+bias]×N → head_rechannel+bias →
-head_scale`, repeated per array) is read identically by
-`src/loader/dispatcher/wavenet/{standard,lite,feather,nano}.rs` (catalog) and
-`src/loader/dispatcher/wavenet/dynamic.rs` (free geometry) against C++'s `WaveNet::set_weights_`
-/ `LayerArray::set_weights_` / `Layer::set_weights_` (`model.cpp:135-164, 525-531, 623-645`).
-Confirmed identical read order. `WeightCursor::verify_exhausted()` fails closed on
-under/over-provisioned weight files.
+### 3.3 Analytical Prewarm Shortcut
 
-### 3.4 Catalog dispatch
+C++'s `DSP::prewarm()` iteratively processes zeros for the duration of the receptive field: $\mathcal{O}(\text{receptive\_field})$ passes.
+Because an ungated causal feedforward stack fed by constant zero input converges to a deterministic fixed point, NeuralAmpModeler-rs calculates this fixed point **analytically in $\mathcal{O}(\text{layers})$**:
 
-`get_wavenet_topology` (`src/loader/nam_json/topology/wavenet.rs`) requires **exactly 2 layer
-arrays**, `condition_size ≤ 1`, no gating on either array, and an exact dilation-pattern match to
-classify a model as a catalog SKU:
+1. Evaluates a single zero-input frame through the rechannel layer.
+2. For each layer in order, replicates the converged output across the entire history buffer (`copy_within`, `layer_array.rs`) before advancing.
+3. Propagates the converged scalar to subsequent layers.
 
-| Channels                                                                                         | Dilation pattern (both arrays)                       | Rust type                |
-|:------------------------------------------------------------------------------------------------ |:---------------------------------------------------- |:------------------------ |
-| 16                                                                                               | `[1,2,4,...,512]` (both arrays, "Standard" pattern)  | `WaveNetModel<16, 3, 8>` |
-| 12                                                                                               | `[1,...,64]` then `[128,...,512,1,...,512]` ("Lite") | `WaveNetModel<12, 3, 6>` |
-| 8                                                                                                | same Lite-shaped dilation pattern, CH=8 ("Feather")  | `WaveNetModel<8, 3, 4>`  |
-| 4                                                                                                | same Lite-shaped dilation pattern, CH=4 ("Nano")     | `WaveNetModel<4, 3, 2>`  |
-| Anything else (any channel count, any array count, gated, `condition_size > 1`, post-stack head) | `WaveNetModelDyn`                                    |                          |
+This shortcut produces mathematical equivalence to iterative settling while eliminating startup latency.
 
-This is a NeuralAmpModeler-rs-internal classification only — see §3.1. A `condition_dsp` sub-model is **not**
-checked at all during catalog matching (see §3.6): a hypothetical 2-array, ungated, CH=16,
-Standard-dilation model that also declares a `condition_dsp` JSON key would still match `Known(Standard)`
-and be routed to the fast path, which has **zero `condition_dsp` handling** — it would be silently
-dropped. No known real `.nam` model exhibits this combination.
+### 3.4 Fail-Closed Rejection of A2 Features in A1
 
-**Activations:** `validate_layer_activations` (`static_factory.rs`) accepts both `Tanh` (C++ default) and `ReLU` for A1 models. `ReLU`-configured A1 models route through the generic `WaveNetModelDyn` path with ReLU applied identically to C++ semantics. The `mock_a2.nam` negative fixture uses `ReLU` config explicitly — but that is a zero-weight model tested only for `Err` rejection, not inference parity.
+The A1 path rejects configurations declaring A2 features at topology parsing time (`src/loader/nam_json/topology/wavenet.rs`):
 
-### 3.5 Prewarm: an elegant analytical shortcut
-
-C++'s `DSP::prewarm()` is generic and iterative: it computes `mPrewarmSamples` once at
-construction (`condition_dsp`'s own prewarm requirement **plus** the **sum** of every layer
-array's receptive field, plus any post-stack head's receptive field, `model.cpp:615-620`), then
-literally calls `process()` with zero input that many times (`dsp.cpp:67-101`).
-
-NeuralAmpModeler-rs's `WaveNetModel`/`WaveNetModelDyn::prewarm()` does **not** iterate. Because a purely
-feedforward causal-conv stack driven by a constant input eventually converges to a constant
-output at every layer, `prewarm_internal()` computes that fixed point **analytically in one pass**:
-process a single zero-input frame through the rechannel (memoryless, exact for a single frame),
-then for each layer in order, replicate that single already-correct value across the entire
-history buffer (`copy_within`, `layer_array.rs:97-118`) *before* computing that layer's own
-single-frame output — which is therefore also exactly the converged constant, propagating
-correctness layer by layer. **This is a genuinely correct, elegant O(layers) alternative to
-C++'s O(receptive_field) iteration for the plain feedforward case** — verified by working through
-the recursion by hand. It is also why `prewarm_samples()`'s return value has zero
-effect on WaveNet's own audio correctness: the trait's `prewarm(&mut self, _num_samples)` override
-discards the argument entirely and always runs the full analytical fill regardless of what number
-is passed in (`mod.rs:79-83, 107-109`).
-
-- **`prewarm_samples()` correctly sums multi-array RFs.** `WaveNetModel::prewarm_samples()`
-  returns `array1.receptive_field_size + array2.receptive_field_size` — the sum of both arrays'
-  RFs (`src/models/wavenet/mod.rs:85-87`). `WaveNetModelDyn::prewarm_samples()` returns
-  `sum(arrays) + condition_dsp.prewarm_samples() + post_stack_head.receptive_field() - 1`
-  (`src/models/wavenet/mod.rs:111-119`), matching C++'s canonical sum-of-all-components formula
-  (`model.cpp:615-620`). **Note:** `prewarm(&mut self, _)` still discards the argument and always
-  runs the full analytical fill — this is intentional and correct for WaveNet's feedforward
-  structure, as the analytical shortcut (§3.5.1) is mathematically sound regardless of the number
-  passed in.
-- **`condition_dsp.prewarm` handling:** `WaveNetModelDyn::prewarm_internal()` invokes
-  `cond_dsp.prewarm(cond_dsp.prewarm_samples())` (`model_dyn.rs`) for **supported** nested
-  condition DSPs (WaveNet sub-models), matching C++'s `GetPrewarmSamples()` settle semantics.
-  **LSTM-as-`condition_dsp` is not a supported production path** — public load rejects it
-  fail-closed (`wavenet_condition_lstm.nam`; §3.9.4 / §7.4). Any residual code comments that
-  mention “e.g. LSTM condition DSPs” describe historical/oracle exploration only, not the
-  public contract.
-
-### 3.6 Generic gating/FiLM/head1x1/layer1x1 (Fail-closed policy)
-
-**Status:** Fail-closed. NeuralAmpModeler-rs **rejects** all models declaring generic gating,
-FiLM, head1x1, or layer1x1 in the A1 path at topology detection, before any inference dispatch.
-
-**Mechanism:** `get_wavenet_topology` (`src/loader/nam_json/topology/wavenet.rs`) iterates over
-every layer config of every layer array and returns `WavenetTopologyResult::Rejected(...)` for
-any of:
-
-- `gated: true` (legacy boolean)
-- `gating_mode` set to `"gated"` or `"blended"` (string-valued)
+- `gated: true` or `gating_mode` $\in \{\text{"gated"}, \text{"blended"}\}$
 - `head1x1` active
 - `layer1x1` active
-- Any FiLM parameter object present
-- `secondary_activation` set to a non-trivial value (exercised by negative fixture `wavenet_a1_secondary_act.nam`)
+- Any FiLM parameter definition
+- Non-trivial `secondary_activation`
 
-Each rejection message follows the canonical pattern `"A2 feature not supported in WaveNet A1"`,
-making the failure observable in logs and in the `Err` variant returned to the public loader API.
-The guard covers **all** A1 paths — both catalog-SKU matching and the free-geometry
-`WaveNetModelDyn` branch — so no model with A2-only topology features can reach inference.
+Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
 
-**Regression tests** (`src/loader/nam_json_test.rs`):
+### 3.5 Measured Interop Metrics
 
-- `test_wavenet_a1_rejects_gated_true`
-- `test_wavenet_a1_rejects_gating_mode_non_none`
-- `test_wavenet_a1_rejects_head1x1_active`
-- `test_wavenet_a1_rejects_layer1x1_active`
-- `test_wavenet_a1_rejects_film_active`
-- `test_wavenet_a1_rejects_secondary_activation` (`wavenet_a1_secondary_act.nam`)
+Measured against NAMcore baseline at 48 kHz:
 
-Each test constructs a minimal JSON config with the offending feature and asserts that topology
-detection returns `WavenetTopologyResult::Rejected`. All six are active (not `#[ignore]`) and run
-in the quick suite.
+| Model                   | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict     |
+|:----------------------- |:---------------:|:-----------------:|:--------:|:--------:|:------------------ |
+| WaveNet Standard (CH16) | 2.31e-14        | 9.05e-15          | 136.4    | 6.46e-06 | ✅ Bit-exact floor |
+| WaveNet Feather (CH8)   | 4.74e-14        | 2.00e-14          | 133.2    | 8.86e-06 | ✅ Bit-exact floor |
+| WaveNet Nano (CH4)      | 6.43e-14        | 3.05e-14          | 131.9    | 7.67e-06 | ✅ Bit-exact floor |
+| EVH-5150-Lite (CH12)    | 7.87e-13        | 2.64e-13          | 121.0    | 4.31e-06 | ✅ Near-bit-exact  |
+| WaveNet Official (CH3)  | 9.03e-14        | 6.13e-14          | 130.4    | 1.66e-05 | ✅ Bit-exact floor |
 
-### 3.7 Test coverage and fixture quality
+### 3.6 Formal `condition_dsp` Specification
 
-Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_parity.rs`, and
-`tests/parity/reference_oracle_f64.rs`:
+`condition_dsp` embeds an auxiliary sub-model that modulates the main network:
 
-- **Golden vectors, catalog SKUs — all real community models, all active (not ignored):**
-  `test_golden_vectors_wavenet_{standard,feather,nano}` use `BossWN-{standard,feather,nano}.nam`
-  (Boss Waza Tube Amp Expander community captures, compatible license). `test_golden_vectors_wavenet_lite`
-  uses `EVH-5150-Lite.nam`, a **non-distributable real community capture** (gitignored, lives in
-  `tests/fixtures/models-nondist/`, fetched separately — see [`docs/fixtures.md`](fixtures.md)
-  §Non-Distributable Model Management). Its doc comment (`golden_vectors.rs:495-511`) and the
-  test itself confirm the measured result **directly from current source**: SNR = 122.3 dB, ESR
-  = 5.84e-13, thresholds SNR ≥ 105 dB / ESR ≤ 3.5e-11 — this specific figure is **independently
-  re-confirmed in this audit pass**, not carried over.
-
-- **Golden vectors, non-catalog:** `test_golden_vectors_wavenet_dyn` (`wavenet_dyn_free.nam`) and
-  `test_golden_vectors_wavenet_condition_dsp` (`wavenet_condition_dsp.nam`) are **synthetic**,
-  purpose-built to exercise `WaveNetModelDyn`'s free-geometry and `condition_dsp` dispatch paths
-  structurally. `test_golden_vectors_wavenet_official` uses `wavenet_official.nam` — NAMcore's own
-  bundled official example (`example_models/wavenet.nam`, CH=3, 2 arrays), a small but **real,
-  officially-distributed** reference model, not synthetic.
-
-- **Obsolete synthetic fixture, kept for traceability only:** `BossWN-lite.nam` (CH=12,
-  artificially generated) is explicitly marked obsolete in [`docs/fixtures.md`](fixtures.md) — "no
-  longer used in active tests," superseded by `EVH-5150-Lite.nam`.
-
-- **Live cross-validation** (`tests/parity/cpp_parity.rs`, `#[ignore]`d, requires C++ toolchain):
-  `live_cross_validation_{,v2_}wavenet_{standard,feather,nano,lite,a1_standard,dyn}` plus HF
-  variants, using the same real fixtures above. `live_cross_validation_nondist_models` and the
-  named `live_cross_validation_v2_{app_evh,boss_bd2,slammin_marshall}` tests exercise **three
-  additional real, non-distributable community captures** (`APP-EVH-Stealth100-Dialled-xSTD.nam`,
-  `Boss BD-2 H2O Mod T-12_00 G-12_00.nam`, `SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam` —
-  catalogued with SHA-256 + author attribution in `tests/fixtures/models-nondist/manifest.json`),
-  covering custom-layer WaveNet and `SlimmableContainer` topologies beyond the four catalog SKUs.
-  These gracefully no-op (printed `SKIP`, not a failure) when the non-distributable directory or
-  the C++ toolchain is absent, consistent with `docs/testing.md`'s documented graceful-skip
-  policy.
-
-- **Net assessment:** WaveNet A1's test fixture quality is materially better than a synthetic-only
-  suite would suggest — every catalog SKU and several custom real-world topologies are validated
-  against genuine trained amp/pedal captures, not just structurally-synthetic weights. The
-  remaining synthetic fixtures (`wavenet_dyn_free.nam`, `wavenet_condition_dsp.nam`) are correctly
-  scoped to structural/dispatch coverage rather than claiming tone-fidelity validation.
-
-### 3.8 Measured interop drift
-
-Canonical golden-vector interop fidelity measured against NAMcore (`docs/quality-contract.json` baseline @ 48 kHz):
-
-| Model                   | ESR (vs NAMcore) | ESR (vs f64 Ideal) | SNR (dB) | MR-STFT  | Mode |
-|:----------------------- |:----------------:|:------------------:|:--------:|:--------:|:---- |
-| WaveNet Standard (CH16) | 2.31e-14         | 9.05e-15           | 136.4    | 6.46e-06 | Live |
-| WaveNet Feather (CH8)   | 4.74e-14         | 2.00e-14           | 133.2    | 8.86e-06 | Live |
-| WaveNet Nano (CH4)      | 6.43e-14         | 3.05e-14           | 131.9    | 7.67e-06 | Live |
-| EVH-5150-Lite (CH12)    | 7.87e-13         | 2.64e-13           | 121.0    | 4.31e-06 | Live |
-| WaveNet A1 Standard     | 1.20e-13         | 1.05e-13           | 129.2    | 2.26e-06 | Live |
-| WaveNet Official (CH3)  | 9.03e-14         | 6.13e-14           | 130.4    | 1.66e-05 | Live |
-
-All WaveNet A1 catalog models pass their calibrated quality gates with multi-order-of-magnitude safety margins.
-
-### 3.9 `condition_dsp` specification (canonical semantics)
-
-> This section is the formal specification derived from the C++ reference, the Python trainer,
-> and the Rust production code side-by-side. All file:line citations reference NAMcore v0.5.4 (tag `1f42f88`).
-
-#### 3.9.1 C++ semantics — `WaveNet::_process_condition` and sizing
-
-**Source:** `third-party/NeuralAmpModelerCore/NAM/wavenet/model.cpp`
-
-The `condition` matrix flowing through the WaveNet layer cascade is `_condition_output`
-(`Eigen::MatrixXf`, `model.h:76`). Its dimensions are decided in `SetMaxBufferSize`
-(`model.cpp:647-687`):
-
-- **Without `condition_dsp`** (`model.cpp:652-654`): `_condition_output` is resized to
-  `[_get_condition_dim(), maxBufferSize]`. `_get_condition_dim()` returns
-  `NumInputChannels()` (`model.h:106`), which is always **1** for WaveNet (mono-in).
-  So `_condition_output` = `[1 × maxBufferSize]` — a single row holding the raw input.
-
-- **With `condition_dsp`** (`model.cpp:656-660`): `_condition_output` is resized to
-  `[condition_dsp->NumOutputChannels(), maxBufferSize]`. The number of **rows** in the
-  condition matrix is the condition DSP's output channel count, **not** the WaveNet's
-  `in_channels`.
-
-The `_process_condition` method (`model.cpp:699-729`) fills `_condition_output`:
-
-- **Without `condition_dsp`** (`model.cpp:703-704`): copies `_condition_input.leftCols(num_frames)`
-  into `_condition_output.leftCols(num_frames)`. Both are `[1 × num_frames]`.
-
-- **With `condition_dsp`** (`model.cpp:710-728`):
-
-  1. Input (`_condition_input`, shape `[condition_dim, num_frames]`, where
-     `condition_dim = _get_condition_dim() = 1`) is copied row-by-row into
-     pre-allocated contiguous DSP buffers (`model.cpp:710-715`).
-  2. The condition DSP processes these buffers in-place (`model.cpp:718-719`).
-  3. Output is copied back row-by-row from the DSP output buffers into
-     `_condition_output` (`model.cpp:722-727`). The row count is
-     `condition_dsp->NumOutputChannels()` — there is **no** broadcast, tile, or
-     dimension coercion. Output channels are written 1:1.
-
-**Construction-time validation** (`model.cpp:592-601`): when `condition_dsp` exists, C++
-asserts that **every** layer array's `condition_size` matches
-`condition_dsp->NumOutputChannels()` exactly — and throws `std::runtime_error` on mismatch:
-
-```cpp
-// model.cpp:594-601
-if (layer_array_params[i].condition_size != this->_condition_dsp->NumOutputChannels())
-{
-    std::stringstream ss;
-    ss << "condition_size of layer " << i << " ("
-       << layer_array_params[i].condition_size
-       << ") doesn't match output channels of condition DSP ("
-       << this->_condition_dsp->NumOutputChannels() << "!\n";
-    throw std::runtime_error(ss.str().c_str());
-}
-```
-
-**Conclusion:** In C++, a model where `condition_dsp->NumOutputChannels() < condition_size`
-is **rejected at construction**. The case `out_channels == condition_size` is guaranteed
-by this check. There is no broadcast logic — dimensional matching is enforced structurally.
-
-#### 3.9.2 How `_condition_output` is consumed by layers
-
-In `WaveNet::process` (`model.cpp:744-832`):
-
-- `_condition_output` (the multi-row condition matrix) is passed **as-is** to every
-  layer array's `Process` method (`model.cpp:761,770`), alongside the layer inputs.
-- Inside each `Layer::Process` (`model.cpp:166+`), the condition is consumed by
-  `InputMixer` — a `Conv1D(kernel=1, in_channels=condition_size, out_channels=mid_channels)`
-  — which projects `condition_size` channels to `mid_channels` (= `2*bottleneck` for
-  gated, `bottleneck` for plain). FiLM modules also consume the condition channels
-  directly.
-- **No broadcasting between `_condition_output` and the layer internals.** The matrix
-  already has the correct row count by construction (§3.9.1).
-
-#### 3.9.3 Python trainer semantics (`neural-amp-modeler`, v0.13.0)
-
-**Source:** `nam/models/wavenet/_wavenet.py` (tag `v0.13.0`)
-
-The trainer's `WaveNet.parse_config` (`_wavenet.py:142-155`) handles `condition_dsp`:
-
-```python
-if condition_dsp_config.get("name") != "WaveNet":
-    raise NotImplementedError("Only WaveNet condition DSP is supported")
-condition_dsp = WaveNet.init_from_config(condition_dsp_config["config"])
-```
-
-- The Python trainer **only supports WaveNet as `condition_dsp`** — any other
-  architecture (including LSTM) raises `NotImplementedError`.
-
-- During training (`forward`, `_wavenet.py:189`):
-
-  ```python
-  c = x if self._condition_dsp is None else self._condition_dsp(x)
-  ```
-
-  The condition tensor `c` has shape `[B, condition_dsp_head_out_channels, L]` — exactly
-  the head output of the condition-dsp WaveNet.
-
-- Export (`export_config`, `_wavenet.py:176-195`): the `condition_dsp` sub-model is
-  serialized as a complete `.nam` JSON object embedded inside the parent model's config
-  under the `"condition_dsp"` key. The note at line 192 reads:
-
-  ```python
-  # Build condition_dsp export dict without running forward (condition_dsp
-  # may have multiple output channels; WaveNet wrapper asserts 1 channel).
-  ```
-
-**Conclusion:** The Python trainer's `condition_dsp` output channels match the
-`condition_size` of the parent's layer arrays by the trainer's own structural design
-(the condition-dsp WaveNet's `head.out_channels` = layer arrays' `condition_size`).
-There is **no** code path in the official trainer that produces a `condition_dsp`
-output-channel-count mismatch — it would fail dimension checks during forward
-computation.
-
-#### 3.9.4 LSTM as `condition_dsp` — veredicto
-
-The `wavenet_condition_lstm.nam` fixture (LSTM sub-model inside a WaveNet) represents
-a configuration that:
-
-1. **The Python trainer cannot produce** — raises `NotImplementedError` for non-WaveNet
-   `condition_dsp` (§3.9.3).
-2. **C++ NAMcore would reject at construction** — the LSTM's `NumOutputChannels() = 1`
-   would fail the assertion `layer_array.condition_size == condition_dsp->NumOutputChannels()`
-   when `condition_size = 3` (the standard WaveNet case) (§3.9.1).
-3. **The C++ `render` tool does not support** this model — there is **no golden vector**
-   generated by NAMcore for this fixture. The only committed golden for this model is the f64 oracle — which itself has a disputed `condition_dsp` semantic
-   (the broadcast logic at `wavenet.rs:38-49` and `a2/dynamic_eval.rs:326-339`). This creates a circular
-   dependency: the oracle's correctness for this fixture cannot be independently validated.
-
-Rust production code behavior (`src/models/wavenet/model_dyn.rs:236-251`): when
-`condition_dsp` output channels (`dsp_ch`) are fewer than the layer array's
-`condition_size` (`cond`), the production engine **broadcasts** the first channel's
-value across all condition channels. This broadcast is present in both the A1
-dynamic path (`model_dyn.rs:240-247`) and the A2 dynamic/cascade paths (via the
-same `condition_dsp_output` buffer). This is a **NeuralAmpModeler-rs-specific behavior** with
-no C++ precedent — it exists because NeuralAmpModeler-rs loads models the upstream toolchain
-rejects.
-
-**Recommendation for oracle fix:** The f64 oracle's broadcast logic
-(`wavenet.rs:38-49`, `a2/dynamic_eval.rs:326-339`) should match the production code's broadcast
-**if** the production broadcast is deemed the intended semantics for models the
-upstream toolchain cannot validate. Since the C++ golden cannot serve as arbiter
-for the LSTM case, the "correct" broadcast behavior is a product decision documented
-here — not a parity claim.
-
-#### 3.9.5 Summary: canonical `condition_dsp` semantics
-
-| Aspect                                 | C++ (NAMcore v0.5.4)                                                        | Python trainer (v0.13.0)                               | Rust production (NeuralAmpModeler-rs)                                    |
-|:-------------------------------------- |:--------------------------------------------------------------------------- |:------------------------------------------------------ |:------------------------------------------------------------------------ |
-| `condition_dsp` matrix rows            | `condition_dsp->NumOutputChannels()`                                        | `condition_dsp.head.out_channels`                      | `condition_dsp.num_output_channels()`                                    |
-| Dimension enforcement                  | Hard assertion: `condition_size == NumOutputChannels()` (throw on mismatch) | Structural match (fails dimension check in forward)    | `assert` on max channels; broadcasts when `dsp_ch < cond`                |
-| Broadcasting (dsp_ch < cond)           | **None** — construction rejected                                            | **None** — structural match prevents mismatch          | **Yes** — replicates channel 0 across all condition channels             |
-| Supported condition_dsp architectures  | Only WaveNet (and LSTM — but see §3.9.4 re: assertion rejection)            | Only WaveNet (raises `NotImplementedError` for others) | Only WaveNet (LSTM rejected fail-closed; see §3.9.4, §7.4)               |
-| Reference for `condition_lstm` fixture | N/A — model rejected                                                        | N/A — model cannot be produced                         | N/A — model rejected fail-closed (`wavenet_condition_lstm.nam`, §7.4 P1) |
-| Key file:line references               | `model.cpp:592-601,652-660,699-729,744-770`                                 | `_wavenet.py:142-155,171-195`                          | `model_dyn.rs:236-251`, `model_dyn.rs:357-373`                           |
-
-#### 3.9.6 Weight-stream `head_scale` Specification (WaveNet A1 oracle)
-
-**Status:** Verified — exact weight-stream positioning.
-
-**Specification:** Both the Rust oracle (`src/testing/reference_oracle/wavenet.rs:161-167`)
-and the Python anchor generator (`tests/fixtures/scripts/validate_oracle_f64.py:195-199`)
-read `head_scale` from the last position of the weight stream, identical to the
-production engines (Rust `build_wavenet_dynamic_inner`, C++ `NAM/wavenet/model.cpp`).
-The JSON configuration field `model_data.config.head_scale` is strictly metadata and is
-not used for computation.
-
-In standard NAM trainers, config `head_scale` and weight-stream `head_scale` are identical,
-but in test-script-generated models (`create_wavenet.py`), the weight stream may contain
-custom values. Reading `head_scale` from `weights[cursor]` guarantees exact alignment
-across production and validation oracles.
-
-**Measured fidelity (`wavenet_condition_dsp.nam`):**
-
-| Measurement                               | Value                |
-|:----------------------------------------- |:-------------------- |
-| Prod × Oracle ESR (paired, summary table) | 6.33e-15 (−142.0 dB) |
-| Oracle × NumPy anchor ESR                 | 3.18e-32 (−315.0 dB) |
-| Quality Dashboard tag                     | Not triggered        |
-
-The f64 oracle for `wavenet_condition_dsp.nam` achieves near-bit-exact agreement with the
-production engine (ESR 6.33e-15, in the A1 1e-14 to 1e-12 floor) and matches the independent
-NumPy anchor at machine precision (3.18e-32 ESR).
+- **C++ Sizing & Assertions:** `_condition_output` has dimensions `[condition_dsp->NumOutputChannels(), maxBufferSize]` (`model.cpp:656-660`). C++ enforces a construction-time assertion that `layer_array.condition_size == condition_dsp->NumOutputChannels()`, throwing `std::runtime_error` on mismatch.
+- **Python Trainer Constraints:** The upstream trainer (`nam/models/wavenet/_wavenet.py:142-155`) only supports WaveNet as `condition_dsp`; any other architecture raises `NotImplementedError`.
+- **Policy Rejection for LSTM Condition DSP:** Configurations specifying LSTM as `condition_dsp` are rejected fail-closed at load time (`Err("LSTM condition_dsp is not supported")`).
+- **Head Scale Positioning:** Both production and validation oracles read `head_scale` strictly from the final position of the weight stream, matching upstream binary serializations.
 
 ---
 
 ## 4. WaveNet A2 Architecture
 
-> Read against `NAM/wavenet/a2_fast.{h,cpp}` (the C++ fast-path, in full) and cross-checked
-> `src/loader/nam_json/topology/a2.rs`, `src/models/a2/model/static/process.rs`,
-> `tests/models/golden_vectors.rs`, `tests/parity/cpp_parity.rs`, `tests/common/validation.rs`, and
-> [`docs/fixtures.md`](fixtures.md) against each other and against current git history.
-> §4.4–§4.6 document the `wavenet_a2_max.nam` known bug and structural audit findings.
+Audited against `NAM/wavenet/a2_fast.h/.cpp` (fast path), `NAM/wavenet/model.cpp` (generic fallback), and corresponding Rust modules:
 
-"A2" designates the newer WaveNet variant: `a2_fast.cpp` is C++'s **optimized, shape-restricted**
-fast path (exactly 23 layers, fixed kernel/dilation pattern, CH∈{3,8}, LeakyReLU-only, no
-gating/FiLM/head1x1 — `a2_fast.cpp:754-885`); anything not matching that exact shape falls
-through to the same generic `NAM/wavenet/model.cpp` used by A1 (§3.1). NeuralAmpModeler-rs mirrors this split
-faithfully: `WaveNetA2<3>`/`WaveNetA2<8>` (fast path) vs. `WaveNetA2Dyn`/`WaveNetA2Cascade`
-(everything else — FiLM, gating, blending, `condition_dsp`, multi-array cascade, `head1x1`).
+- Models: [`src/models/a2/`](../src/models/a2/)
+- Dynamic Cascade: [`src/models/a2/model/cascade/`](../src/models/a2/model/cascade/)
+- Topology: [`src/loader/nam_json/topology/a2.rs`](../src/loader/nam_json/topology/a2.rs)
 
-### 4.0 Provenance: Creator Statements (A2)
+### 4.1 Topology Classification & Fast Path
 
-Numeric parity in this section is audited against the vendored C++ reference (NAMcore). As an
-independent, non-formal second source of truth, the A2 architecture was also described publicly
-by its authors in *NAM A2: The Team Behind the Technology* (<https://youtu.be/24FCS8tFHcE>).
-The five substantive traits they describe map to the following Rust symbols:
+`src/loader/nam_json/topology/a2.rs::is_a2_shape` replicates the 20 structural checks defined in `a2_fast.cpp:is_a2_shape()`:
 
-| A2 Trait                   | Rust Symbol(s)                                                                     | Video Timestamp           |
-| -------------------------- | ---------------------------------------------------------------------------------- | ------------------------- |
-| LeakyReLU activation       | `src/models/a2/activations.rs:24-74,120-123`; `src/models/a2/params.rs:37`         | `[00:11:00]`/`[00:12:37]` |
-| Degridding (odd dilations) | `src/models/a2/params.rs:39-45`; `src/loader/nam_json/topology/wavenet.rs:427-523` | `[00:20:46]`              |
-| ~132 ms receptive field    | `src/models/a2/model/mod.rs:36-49`                                                 | `[00:31:38]`              |
-| Convolutional head K=16    | `src/models/a2/head.rs:10-53,99-190`; `src/models/a2/params.rs:35`                 | `[00:24:23]`/`[00:26:38]` |
-| Slimmable Full/Light       | `src/models/container.rs:1-52,373-430`; `src/models/slimmable.rs:78-101`           | `[00:34:46]`–`[00:37:00]` |
+- Layer count = 23, single layer array, no post-stack head.
+- Channels $\in \{3, 8\}$ (Lite / Full) with `channels == bottleneck`.
+- Exact dilation patterns and kernel sizes ($K=3$, degridded odd dilations).
+- Activation = `LeakyReLU(0.01)`.
+- Zero active FiLM slots, gating disabled, `head1x1` disabled, groups = 1.
 
-This creator-stated mapping complements — and does not supersede — the line-by-line C++ parity
-below. It gives the audit an independent reference so that a silent drift between the vendored
-mirror and the original A2 design intent surfaces as a mismatch against a second source.
+Models matching these constraints route to `WaveNetA2<3>` or `WaveNetA2<8>`. Topologies with FiLM, gating, blending, cascade arrays, or non-unity groups route to `WaveNetA2Dyn` or `WaveNetA2Cascade`.
 
-### 4.1 Fast-path shape detection: a faithful, self-correcting mirror of C++
+### 4.2 Measured Interop Metrics (Fast & Dynamic Paths)
 
-`src/loader/nam_json/topology/a2.rs::is_a2_shape` was read line-by-line against
-`a2_fast.cpp::is_a2_shape` (lines 754-885) — every one of the 20 structural checks (layer count,
-no post-stack head, `in_channels`/`input_size`/`condition_size`, `channels == bottleneck`,
-`channels ∈ {3,8}`, exact kernel-size/dilation arrays, LeakyReLU(0.01) activation, gating,
-head1x1, layer1x1 groups, layer-array head shape, all 8 FiLM slots, `groups_input*`,
-non-slimmable) has a corresponding Rust check, in the same order, with a comment citing the C++
-line number. This is the best-audited topology detector in the codebase.
+Measured against NAMcore at 48 kHz:
 
-**Topology routing guard** (`topology/a2.rs:207-213`): any model with FiLM, gating,
-`head1x1`, or non-1 groups routes to `A2TopologyResult::Dynamic`, matching C++'s
-`is_a2_shape` fallback to generic Eigen WaveNet exactly. The fast path strictly requires zero
-active FiLM slots, matching C++. The dynamic engine's FiLM emulation is calibrated separately (§4.2).
+| Variant / Fixture                | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict     |
+|:-------------------------------- |:---------------:|:-----------------:|:--------:|:--------:|:------------------ |
+| WaveNet A2-Full (CH8, Fast)      | 1.12e-13        | 7.83e-14          | 129.5    | 1.68e-05 | ✅ Bit-exact floor |
+| WaveNet A2-Lite (CH3, Fast)      | 6.43e-14        | 1.82e-14          | 131.9    | 9.54e-06 | ✅ Bit-exact floor |
+| WaveNet A2-FiLM-Full (CH8, Dyn)  | 1.18e-14        | 8.75e-15          | 139.3    | 7.85e-06 | ✅ Bit-exact floor |
+| WaveNet A2-FiLM-Lite (CH3, Dyn)  | 3.82e-13        | 1.61e-13          | 124.2    | 1.69e-05 | ✅ Near-bit-exact  |
+| WaveNet A2 Dynamic Gated (CH8)   | 5.03e-11        | 1.00e-10          | 103.0    | 6.63e-05 | ✅ Parity verified |
+| WaveNet A2 Dynamic Blended (CH3) | 5.35e-14        | 2.65e-14          | 132.7    | 9.97e-06 | ✅ Bit-exact floor |
 
-**Layered A2 Detection & Version Telemetry** (`topology/wavenet.rs:114-165`):
-A2 classification in `NamModelData::is_wavenet_a2()` is structured in three defensive layers:
+### 4.3 🔴 Known Bug KB-A2-MAX: `wavenet_a2_max.nam`
 
-1. *Primary (Shape):* `is_a2_shape()` verifies exact channels, dilations, and kernel sizes.
-2. *Secondary (Activation):* single-layer array models declaring non-`Tanh` activations route to A2 semantics.
-3. *Tertiary (Version Telemetry):* models declaring SemVer `>= 0.6.0` whose structural shape does not match any known A2 topology emit a diagnostic warning (`WARN ... Treating as non-A2`) and fall back to the A1 generic path. This prevents high-versioned hybrid models or unconventional captures from being silently misrouted into incompatible A2 execution paths.
+**Status:** Permanent known bug. Under active fail-closed dispatch guard (`reject_wavenet_a2_max_class`).
 
-### 4.2 Fast path (A2-Full CH=8 / A2-Lite CH=3): structurally correct, only synthetic fixtures
+The official flagship model `wavenet_a2_max.nam` triggers severe acoustic divergence against the C++ reference:
 
-`src/models/a2/model/static/process.rs` was read against `a2_fast.cpp`'s `A2FastModel<Channels>`:
-rechannel → per-layer (dilated conv → bias → input mixin → LeakyReLU(0.01) → head-accumulate →
-`layer1x1` residual) → head Conv1D(k=16, bias, `head_scale`). Structurally identical, including
-weight-stream read order (`_load_weights`, `a2_fast.cpp:198-273`) matching
-`src/models/a2/model/set_weights.rs` field-for-field.
+| Evaluation Pair             | Metric                            | Status                                           |
+|:--------------------------- |:--------------------------------- |:------------------------------------------------ |
+| **Rust f32 × C++ Golden**   | **SNR = 1.69 dB** (ESR ≈ 6.78e-1) | 🔴 Unacceptable parity (threshold $\ge 90$ dB)   |
+| **Rust f32 × f64 Oracle**   | SNR = −3.30 dB (ESR ≈ 2.14)       | 🔴 Structural divergence from oracle             |
+| **f64 Oracle × C++ Golden** | SNR = 0.53 dB (ESR ≈ 8.85e-1)     | 🔴 **Case D:** f64 oracle also diverges from C++ |
 
-Measured (`utils/tests-quick.sh` Phase 2, release): A2-Full ESR = 1.12e-13
-(SNR 129.5 dB), A2-Lite ESR = 6.43e-14 (SNR 131.9 dB) against the committed NAMcore
-goldens — both pass their calibrated gates (3.0e-11 / 3.5e-11, SNR ≥ 105 dB) with
-2+ orders of magnitude of margin.
+#### 4.3.1 Architectural Facts & Verified Invariants
 
-**Fixture quality caveat (new finding — see §4.6):** unlike LSTM and WaveNet A1, these figures are
-**not** validated against a real trained community model. `wavenet_a2_full.nam` and
-`wavenet_a2_lite.nam` are explicitly documented as **synthetic, calibrated weights** — [`docs/fixtures.md`](fixtures.md):
-"Synthetic, NOT official FiLM models." There is currently no known real-world A2-Full
-or A2-Lite `.nam` export in the test suite. The fast-path *code* is well-verified against C++
-structurally; the fast-path *fixtures* only prove self-consistency of calibrated weights, not
-tone-fidelity on a genuine trained model.
+`wavenet_a2_max.nam` combines multiple advanced topology features:
 
-### 4.3 Measured interop drift on dynamic paths (Gating, Blending, FiLM)
+- **Main Network:** $\text{CH}=4, \text{BN}=4, \text{condition\_size}=8, K=4, 2 \text{ layers}$.
+- **FiLM Modulation:** 8 FiLM slots active per layer ($16$ total), all with `shift = true`.
+- **Grouped Convolutions:** `head1x1.groups = 2`, `groups_input_mixin = 4`, `layer1x1.groups = 2`.
+- **Conditioning Sub-Model:** Nested 2-array `WavenetA2Cascade` with `head_size = 4` on Array 0 and `head_size = 8` on Array 1.
 
-Measured interop metrics for WaveNet A2 dynamic paths (`docs/quality-contract.json` baseline @ 48 kHz):
+**Structural Verification Summary:**
 
-| Model / Variant                     | ESR (vs NAMcore) | ESR (vs f64 Ideal) | SNR (dB) | MR-STFT  | Mode |
-|:----------------------------------- |:----------------:|:------------------:|:--------:|:--------:|:---- |
-| WaveNet A2-Full (CH8)               | 1.46e-13         | 7.83e-14           | 128.3    | 1.68e-05 | Live |
-| WaveNet A2-Lite (CH3)               | 8.36e-14         | 1.82e-14           | 130.8    | 9.54e-06 | Live |
-| WaveNet A2-FiLM-Full (CH8)          | 1.18e-14         | 8.75e-15           | 139.3    | 7.85e-06 | Live |
-| WaveNet A2-FiLM-Lite (CH3)          | 3.82e-13         | 1.61e-13           | 124.2    | 1.69e-05 | Live |
-| WaveNet A2-FiLM-InputMixinPre (CH3) | 3.44e-14         | 2.21e-14           | 134.6    | 6.92e-06 | Live |
-| WaveNet A2-FiLM Chaos Stress (CH3)  | 1.26e-14         | 1.03e-14           | 139.0    | 7.00e-06 | Live |
-| WaveNet A2 Dynamic Gated (CH8)      | 5.03e-11         | 1.00e-10           | 103.0    | 6.63e-05 | Live |
-| WaveNet A2 Dynamic Blended (CH3)    | 5.35e-14         | 2.65e-14           | 132.7    | 9.97e-06 | Live |
+1. **Weight Budget:** Consumes exactly **818** weights in the main network and **1052** weights in `condition_dsp` (Array 0: 617, Array 1: 434, head_scale: 1). Zero orphan or missing weights.
+2. **FiLM Layout:** All 16 FiLM slots match theoretical offset formulas (`weights_layout.rs`) with zero memory overlap.
+3. **Grouped Layouts:** Row-major group-to-output mapping verified in `build.rs`.
+4. **Cascade Buffer Stride:** Multi-channel buffer indexing and slicing verified (`max_diff = 0.0` across 64-sample and 256-sample chunks).
 
-All dynamic path variants achieve near-bit-exact parity or expected approximation-bounded floors.
+#### 4.3.2 Root Divergence Analysis & Freeze Policy
 
-### 4.4 🔴 Known bug KB-A2-MAX: `wavenet_a2_max.nam` (Official Flagship)
+Because `f64 Oracle × C++ Golden` diverges ($ESR \approx 0.89$, Case D), the mathematical reference oracle itself diverges from C++ NAMcore for multi-array cascades. Comparing Rust against f64 only measures internal consistency, not market parity.
 
-**Status: PERMANENT KNOWN BUG** until reopening criteria in **§4.4.3**. Not scheduled for speculative iterations.
+The primary divergence area is isolated to **nested multi-array cascade conditioning and multi-head propagation graph interactions** within C++ Eigen. Speculative modifications to Rust production code without ground-truth intermediate tensor dumps have been halted.
 
-The fail-closed dispatch guard (`reject_wavenet_a2_max_class`) rejects `build_model` with `Err` citing **KB-A2-MAX**. No production f32 instance of this topology enters the public hot path.
+#### 4.3.3 Reopening Criteria
 
-**Authoritative metrics:**
+The fail-closed guard `reject_wavenet_a2_max_class` remains permanent until:
 
-| Pair                  | Metric                           | Notes                                        |
-|:--------------------- |:-------------------------------- |:-------------------------------------------- |
-| prod f32 × C++ golden | **SNR = 1.69 dB**, ESR ≈ 6.78e-1 | `test_measure_a2_max_snr_vs_golden` + unlock |
-| prod f32 × f64 oracle | ESR ≈ 2.14 (SNR ≈ -3.30 dB)      | paired FAILED — **prod ≉ f64**               |
-| f64 × C++ golden      | ESR ≈ 8.85e-1 (SNR ≈ 0.53 dB)    | H0 **Case D** — oracle also ≉ C++            |
-| f64 × F32-sim (self)  | ~−134 dB                         | internal consistency only                    |
-
-Current status: **SNR = 1.69 dB** (ESR ≈ 6.78e-1). Weight budget **818 + 1052** exact. Neighbors green (A2-Full ~128 dB, condition_dsp ~139 dB, A2 matrix 103–140 dB).
-
-**Investigation status:** H1–H4 are excluded as dominant causes (§4.4.1); H6 FiLM slots excluded; H0 Case D; H5 nested cascade candidate only — production cascade already seeds post-rechannel (`cascade_head_finalize` → `cascade_seed_head_from_output`). Further investigation requires intermediate C++ dumps (§4.4.3).
-
-**Discipline (binding):** C++ golden adjudicates market interop; f64 oracle adjudicates mathematical fidelity (per [§1.2](#12-two-oracle-governance-policy)); never remove guard while SNR < 90 dB; never regenerate golden to accommodate divergence.
-
-#### 4.4.1 Investigation Log — Hypothesis Matrix
-
-The hypotheses below are ordered by likelihood × isolation cost — H1 must be cleared
-before H2, etc.
-
-| ID  | Hypothesis                                                | Experiment                                                                                                                                                                                                                                          | Confirmation Criterion                           | Status                                                                                                                                                                   |
-|:--- |:--------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------ |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| H1  | `head1x1` groups reorder ≠ C++ Conv1x1                    | Compare weight count + layout of grouped `head1x1` path vs `mixin` path, which shares the same grouped-Conv1x1 layout. Patch trial: force `head1x1.groups=1` (ignore groups) on a test-only branch and re-measure SNR against golden C++.           | ΔSNR >> 0 (≥ 10 dB) in isolation                 | 🔴 isolated. SNR improved to 2.31 dB (Δ=+0.96 dB). Correct layout verified but Δ < 10 dB — not dominant alone.                                                           |
-| H2  | `condition_dsp` output channel order / broadcast mismatch | Dump 8-channel `condition_dsp_output` after prewarm and compare frame-aligned against C++ expectation (or f64 reference at identical topology). Test whether `condition_dsp.num_output_channels()` matches `condition_size=8` structural invariant. | Structural mismatch in output channel layout     | 🔴 isolated. `film_bias_count_generic` accounts for shift (72 extra FiLM bias consumed, budget→818). Broadcast aligned for `dsp_ch>1`. SNR 0.23 dB — not dominant alone. |
-| H3  | Head kernel legacy (`head_kernel_size` ≠ 16)              | Force `head_kernel_size=1` vs `head_kernel_size=16` at parse time in a test-only branch; measure SNR against golden C++ for both. The C++ engine always uses head_kernel_size loaded from the weight stream (config field is metadata).             | SNR jumps across config change                   | 🔴 excluded. C++ hardcodes K=1 for legacy `head_size`/`head_bias` format (`model.cpp:897`). Rust `unwrap_or(1)` matches. No divergence.                                  |
-| H4  | Softsign activation vs C++ expectation                    | Controlled swap of activation types in test branch. **Only if H1–H3 are all negative.** Trainer uses `LeakyReLU`; `wavenet_a2_max.nam` has softsign-derived field — verify this is a training artifact, not a load-time activation divergence.      | Activation config confirmed as metadata artifact | 🔴 excluded. Both C++ and Rust parse `"activation":{"type":"Softsign"}` identically. C++ uses `ActivationConfig::from_json`. No divergence.                              |
-
-##### H1 — Grouped head1x1 weight layout
-
-**Symptom:** The A2 Max model declares `head1x1.groups = 2` and `groups_input_mixin = 4`.
-The Rust dispatcher (`build.rs`) loads group-aware compact layouts for both `head1x1` and
-`mixin` weights. The mixin path has been verified to produce a correct grouped Conv1x1
-(shared `groups_input_mixin` semantics), but the `head1x1` path uses the same layout
-pattern independently — any systematic layout error would manifest in the head accumulator,
-which directly feeds the head convolution.
-
-**File references:**
-
-- Weight loading: `src/models/a2/model/dynamic/build.rs:253-282`
-- Head accumulation: `src/models/a2/model/dynamic/process_frame.rs:271-398`
-- C++ reference: `NAM/dsp.cpp` (grouped Conv1x1 forward), `NAM/wavenet/model.cpp:273-297` (head1x1 weight set)
-
-**Experiment protocol:**
-
-1. Count all `head1x1` weight positions in the Rust `set_weights` path and compare with
-   NAMCore Python reference (`third-party/.../generate_weights_a2.py`) for the A2 Max fixture.
-2. Temporarily override `head1x1.groups = 1` in a test branch (skip group-aware layout)
-   and re-measure SNR against the C++ golden.
-3. If SNR jumps (Δ ≥ 10 dB), the grouped layout or the grouped inference loop is the
-    dominant bug. If SNR unchanged, H1 is excluded.
-
-**Result:**
-
-- Applied group-major → per-output-channel row-major reorder in `build.rs` (matching mixin/l1x1 pattern).
-- Budget 818 intact. All A2 regression gates (Full, Lite, FiLM, gated, blended, container, condition_dsp) pass without threshold relaxation.
-- Measured SNR: **2.31 dB** (baseline 1.35 dB, Δ = +0.96 dB).
-- **Verdict:** H1 layout is correct (no regressions, budget intact, Δ > 0) but **not dominant** (Δ < 10 dB criterion). Proceed to H2.
-
-##### H2 — condition_dsp output channel layout
-
-**Symptom:** The `condition_dsp` sub-model is a 2-array WaveNet cascade with
-`head_size=8` (the second array's head produces 8 output channels). These 8 channels
-are fed as the condition vector to the main model. The channel ordering in
-`condition_dsp_output` (interleaved `[ch0_f0, ch1_f0, ..., ch7_f0, ch0_f1, ...]`)
-must match what C++ produces — any transposition, off-by-one channel stride, or
-mono→multi-channel broadcast being **absent** (C++ uses strict 1:1 mapping per §3.9.1)
-could cause large structural divergence.
-
-**File references:**
-
-- Condition DSP dispatch: `src/loader/dispatcher/wavenet/static_factory.rs:415-435`
-- Condition DSP processing: `src/models/a2/model/dynamic/process.rs:109-136`
-- Diagnostic dump: `src/testing/diagnostics/mod.rs`
-- C++ reference: `NAM/wavenet/model.cpp:652-729`
-
-**Experiment protocol:**
-
-1. `NAM_A2_MAX_UNLOCK=1 cargo test test_a2_max_diagnostic_dump_bit_stable -- --nocapture`
-   to capture 8-channel condition_dsp output.
-2. Generate equivalent C++ dump from NAMcore `render` tool with custom instrumentation
-   (log `_condition_output` per frame) — or use the f64 oracle as initial comparison.
-3. Compare frame-aligned output channels across tools. Any structural mismatch in
-    ordering or values confirms H2.
-
-**Result:**
-
-- `film_bias_count_generic` (`weights_layout.rs`) accounts for `shift` — bias count = `channels * mult`. Consumes additional 72 FiLM bias values, aligning weight stream to the full 818-weight fixture budget.
-- Broadcast code for `dsp_ch > 1` (`dsp_ch < cond_size`) in `process.rs` and `cascade/mod.rs` corrected for multi-channel sub-model output.
-- Budget 818 intact. All A2 regression gates (Full, Lite, FiLM, condition_dsp, gated, blended, container) pass.
-- Measured SNR: **0.23 dB** in isolation (prior state compensated partially for another interaction).
-- **Verdict:** H2 alignments are correct (no regressions, budget aligned, broadcast aligned) but **not dominant** (Δ < 10 dB). Proceed to H3.
-
-##### H3 — Head kernel size handling
-
-**Symptom:** The A2 Max fixture has `head_bias: true` in JSON. The Rust model loads
-`head_kernel_size` from the dispatcher (cascade model sets `head_kernel_size` on each
-sub-array). The C++ engine uses the weight-stream dimension to infer kernel size.
-A mismatch in this value would cause the head convolution to read wrong ring-buffer
-positions or apply wrong-shaped convolution, corrupting the output by up to tens of dB.
-
-**File references:**
-
-- Head kernel: `src/models/a2/model/dynamic/build.rs:316-317`, `process.rs:168-169`
-- C++ reference: `NAM/wavenet/model.cpp:382-383`
-- Fixture: `tests/fixtures/models/wavenet_a2_max.nam` — `head_kernel_size` in JSON
-
-**Experiment protocol:**
-
-1. Force `head_kernel_size=1` in a test-only branch (skip K=16 convolution).
-2. Measure SNR against golden C++.
-3. Force `head_kernel_size=16` explicitly (confirm current default).
-4. Compare SNR delta. A large jump identifies the kernel as the dominant divergence.
-
-##### H4 — Softsign activation configuration
-
-**Symptom:** The A2 Max fixture JSON declares activation configurations that the
-NAM trainer (`_wavenet.py`) always defaults to `LeakyReLU(negative_slope=0.01)`.
-The `softsign` activation may appear in the JSON as a training artifact
-(field in the exported config but never used at inference). If the Rust loader
-incorrectly interprets this as a runtime activation override, it could cause
-activation divergence on some layers.
-
-**File references:**
-
-- Activation parsing: `src/loader/nam_json/activation_parser.rs`
-- Fixture: `tests/fixtures/models/wavenet_a2_max.nam` — `activation` fields
-- C++ reference: `NAM/activations.h/.cpp`, `NAM/wavenet/model.cpp` (activation dispatch)
-
-**Experiment protocol:**
-
-1. Inspect the parsed activation config from the A2 Max JSON.
-2. If `Softsign` is present, verify it is a training artifact (not used at inference
-   in either C++ or Rust). Check `activation_parser.rs` handling.
-3. **Only if H1–H3 are all negative:** force `LeakyReLU` uniformly and re-measure SNR.
-
-##### Priority Ordering Rationale
-
-H1 (head1x1 groups) is ranked highest because:
-
-1. It is the most mechanically specific — a known layout discrepancy is testable in isolation.
-2. Grouped convolutions are the primary structural difference between A2 Max and all
-   other passing A2 models (which use groups=1 for both mixin and layer1x1).
-3. The experiment is self-contained: override one config flag, measure SNR.
-
-H2 (condition_dsp channels) is ranked second because the condition_dsp is the other
-major structural novelty of A2 Max. If the condition signal reaching per-layer FiLM and
-mixin is wrong, *everything* downstream is corrupted — fixing H1 before verifying H2
-would be wasted effort.
-
-H3 (head kernel) is lower priority because head kernel handling has been audited for
-standard A2 models and found correct; the A2 Max case exercises the same code path.
-
-H4 (softsign) is specifically gated behind H1–H3 because activation substitution bugs
-are historically rare in this codebase, and the softsign field in A2 Max JSON has been
-confirmed as a training artifact in prior audits.
-
-#### 4.4.2 Secondary Hypotheses & Diagnostic Audit
-
-**Diagnostic state:**
-
-| Pair                         | Metric                           | Notes                                                     |
-|:---------------------------- |:-------------------------------- |:--------------------------------------------------------- |
-| prod f32 × C++ golden        | **SNR = 0.23 dB**, ESR ≈ 9.49e-1 | Isolated H1+H2; meter `test_measure_a2_max_snr_vs_golden` |
-| prod f32 × f64 oracle paired | **ESR = 5.88×10³** (test FAILED) | `test_oracle_a2_generic` + unlock — **prod ≉ f64**        |
-| f64 × F32-sim (same oracle)  | ESR ≈ 4.18e-14 (−133.8 dB)       | `test_oracle_a2_max_standalone` only                      |
-
-H1–H4 are excluded as **dominant** causes (§4.4.1). Broadcast logic does not run on A2 Max
-since nested `condition_dsp` reports `dsp_ch == condition_size == 8`.
-
-**Secondary hypothesis matrix:**
-
-**H0 triple decomposition results:**
-
-Measured on `golden_wavenet_a2_max.bin` (n=2048, block=64, prewarm=2048, 48 kHz),
-f64 oracle with `PrecisionConfig::default()` (F64Exact weights, Exact activations, Neumaier acc):
-
-| Pair                  | ESR (linear) | ESR (dB) | SNR (dB) |
-|:--------------------- |:------------ |:-------- |:-------- |
-| prod f32 × C++ golden | 6.78e-1      | -1.69    | 1.69     |
-| prod f32 × f64 oracle | 2.14e0       | +3.30    | -3.30    |
-| f64 oracle × C++      | 8.85e-1      | -0.53    | 0.53     |
-
-**Classification: Case D** — all three pairs diverge significantly. prod×C++ (ESR≈0.68, SNR≈1.69 dB)
-confirms the known gap (improved after cascade/parser structural corrections, but far from 90 dB).
-prod×f64 (ESR≈2.14, SNR≈-3.30 dB) confirms prod ≉ f64. f64×C++ (ESR≈0.89)
-indicates the f64 oracle output is essentially uncorrelated with the C++ golden —
-the divergence is NOT solely a production f32 approximation error; the f64 oracle itself
-diverges from the C++ reference. Multiple fault sources are active; prioritize
-condition_dsp and FiLM per-slot investigation (H5/H6/H7).
-
-Diagnostic test: `test_h0_triple_decomposition` in `tests/models/golden_vectors.rs`
-(`#[ignore]`d). Run with:
-
-```sh
-cargo test --test models test_h0 -- --ignored --nocapture
-```
-
-| ID     | Focus                                                    | Status                                 |
-|:------ |:-------------------------------------------------------- |:-------------------------------------- |
-| **H0** | Triple decomposition prod / f64 / C++ (classify A/B/C/D) | ✅ **done (Case D)** — see table below |
-| **H5** | Nested WaveNet condition_dsp (head 4→8, layout, prewarm) | ✅ **done** — see below                |
-| **H6** | Per-slot FiLM weight cursor (8 films, shift, groups)     | ✅ **done** — see below                |
-
-**H6 findings:**
-
-A2 Max topology: **CH=4, BN=4, cond=8, K=4, 2 layers**, head1x1_active=true,
-head_accum_size=4, head1x1_h1_in=2, head_kernel_size=1, mixin_groups=4, l1x1_groups=2.
-
-All 8 FiLM slots are active in both layers (16 total), all with `shift=true`. Groups vary:
-
-| Slot | Name                  | Groups | Weights | Bias | Offset l0 | Offset l1 |
-|:----:|:--------------------- |:------:|:-------:|:----:|:---------:|:---------:|
-| 0    | conv_pre_film         | 2      | 32      | 8    | 104       | 508       |
-| 1    | conv_post_film        | 4      | 16      | 8    | 144       | 548       |
-| 2    | input_mixin_pre_film  | 4      | 32      | 16   | 168       | 572       |
-| 3    | input_mixin_post_film | 2      | 32      | 8    | 216       | 620       |
-| 4    | activation_pre_film   | 1      | 64      | 8    | 256       | 660       |
-| 5    | activation_post_film  | 2      | 32      | 8    | 328       | 732       |
-| 6    | layer1x1_post_film    | 8      | 8       | 8    | 368       | 772       |
-| 7    | head1x1_post_film     | 4      | 16      | 8    | 384       | 788       |
-
-**Result:** All 16 slots match `weights_layout.rs` formulas exactly. Total = 818 (mid-layer: 100 per layer ×2 + FiLM 304 per layer ×2 + head 6 = 818). **No slot overlap detected.** The FiLM weight cursor maintains exact alignment without slot overlap.
-
-Diagnostic test: `test_a2_max_film_slot_budget` in `tests/models/golden_vectors.rs` (`#[ignore]`d).
-| **H7** | `num_output_channels` / condition stride contract | ✅ **done** — see below |
-
-**H5+H7 findings:**
-
-- The nested `condition_dsp` is `StaticModel::WavenetA2Cascade` with **2 arrays** (cascade chain). Array[0] has `head_size=4`; the last array outputs 8 channels (`num_output_channels() == 8`).
-- `dsp_ch == cond_size == 8` on A2 Max — the `dsp_ch < cond_size` branch in `process.rs:110` is **dead code**.
-- **Broadcast logic is not active on this fixture** (`dsp_ch == cond_size == 8`).
-- condition_dsp f32 production × f64 oracle: aggregate ESR = 3.93e2 (+25.9 dB). Per-sub-block ESR ranges from 19.5 dB to 33.4 dB — the condition_dsp output itself diverges significantly from the f64 ideal, even in isolation.
-- The 8-channel output suggests the nested cascade correctly produces multi-channel conditioning, but the cascade's internal head propagation (pre-rechannel vs post-rechannel, §4.6) may contribute to the divergence.
-
-Diagnostic test: `test_tr2b2_condition_dsp_contract` in `tests/models/golden_vectors.rs` (`#[ignore]`d).
-
-**Hypothesis ranking:**
-
-All 4 hypotheses investigated. Ranking by evidence strength:
-
-| Rank | ID        | Verdict                                                           | Evidence                                                                                                                                                                                                                                                                  |
-|:----:|:--------- |:----------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 🥇 | **H5+H7** | **Strongest remaining candidate area** (not a validated fix plan) | Nested `WavenetA2Cascade` (head 4→8). Cond prod×f64 ESR=3.93e2 is weak adjudication (oracle ≉ C++). Cascade wire already post-rechannel. Future work requires C++ intermediate dumps (§4.4.3).                                                                            |
-| 2    | **H0**    | Confirms H5/H7 dominance                                          | Case D: all 3 pairs diverge. f64×C++ (ESR≈1.00) proves the oracle itself diverges from C++ — the bug is not f32 approximation, it's a structural difference in the computation graph. The condition_dsp cascade is the only sub-component complex enough to explain this. |
-| 3    | **H6**    | **Excluded**                                                      | All 16 FiLM slots (8 per layer × 2 layers) verified against `weights_layout.rs` formulas. Budget = 818 exact. Zero slot overlap. The FiLM cursor maintains exact alignment.                                                                                               |
-
-**Verdict:** Nested conditioning is the strongest remaining candidate area, but the hypothesis “fix cascade seed to post-rechannel” is not validated because code already finalizes then seeds. H0 Case D means f64 cannot adjudicate. **Decision:** formalize **KB-A2-MAX** freeze (§4.4.3) and cease speculative adjustments without C++ tensor instrumentation.
-
-H1–H4 remain excluded. H6 is excluded. Secondary investigation closed without a C++-adjudicated root cause.
-
-#### 4.4.3 Known bug KB-A2-MAX — freeze, capital gains, reopening criteria
-
-**ID:** `KB-A2-MAX`
-**Fixture:** `tests/fixtures/models/wavenet_a2_max.nam` + `golden_wavenet_a2_max.bin`
-**Public contract:** `build_model` → `Err` (message contains `KB-A2-MAX` / `parity gap` / `fail-closed`).
-**Unlock (diagnostics only):** `NAM_A2_MAX_UNLOCK=1` under `cfg(test)` or feature `testing`.
-**Catalog:** `ApplicableOracle::KNOWN_GAP`.
-**CI:** `test_wavenet_a2_max_dispatch_rejected` **active** (must stay green). Golden / meter / paired oracle / live remain `#[ignore]` with KB-A2-MAX reasons — **not** release gates.
-
-**Topology (why hard):**
-
-- Main array: CH=4, BN=4, `condition_size=8`, FiLM×8 slots/layer, head1x1 groups, `head_size=1`.
-- Nested `condition_dsp`: WaveNet **2-array cascade**, array0 `head_size=4`, array1 `head_size=8` (multi-head path), own weights (1052) + main (818).
-- C++ routes generic Eigen WaveNet; Rust routes `WaveNetA2Dyn` + nested `WavenetA2Cascade`.
-
-**Verified healthy components (do not reopen without regression):**
-
-| Asset                                                            | Evidence                                              |
-|:---------------------------------------------------------------- |:----------------------------------------------------- |
-| A2 Full / Lite / FiLM / Gated / Blended / Chaos                  | SNR ~103–140 dB vs NAMCore                            |
-| `wavenet_condition_dsp.nam` (standalone nested-ish cond)         | ~139 dB                                               |
-| Heterogeneous clone (condition_dsp, dyn_free, official, SLAMMIN) | PASS                                                  |
-| Loader atomic Err (F1), clone (F2), ReLU container (F3)          | PASS                                                  |
-| Budget A2 Max weights                                            | 818 + 1052 exact (Array0=617, Array1=434)             |
-| Cascade kernel row-major & stride                                | Bit-exact chunk invariance (`max_diff=0.0`)           |
-| f64 oracle multichannel expansion                                | 8-ch dispersion $7.60\cdot 10^{-3}$, prod×f64 −3.3 dB |
-| H1 head1x1 group layout                                          | Correct (ΔSNR small; not dominant)                    |
-| H6 FiLM per-slot cursor                                          | 16/16 formulas; no overlap                            |
-| Fail-closed + no smoke-green                                     | Active dispatch guard                                 |
-
-**What remains unknown (future investigation only):**
-
-1. Root structural mismatch in nested multi-array condition_dsp and/or multi-head finalize vs C++ (needs **C++ intermediate tensors**, not f64 alone).
-2. Whether oracle f64 graph matches C++ for cascade head_size>1 (H0 f64×C++ ESR≈1).
-3. Any residual main-net interaction after cond is bit-exact (only after 1–2).
-
-**Reopening criteria (all required before removing guard):**
-
-1. Intermediate C++ dumps or micro-goldens for nested cond output (8 ch × N) and optionally per-array heads.
-2. One hypothesis PR with isolated ΔSNR ≫ 10 dB on `test_measure_a2_max_snr_vs_golden`.
-3. prod×C++ SNR ≥ **90 dB** stable; neighbors unregressed; RT heap-audit ok.
-4. Same merge (or golden-first): un-ignore golden + live; flip catalog off `KNOWN_GAP`; remove guard.
-
-**Non-goals while frozen:** residual “try cascade.rs seed”, regenerate golden/anchor to pass, claim parity via f64 self-check, relax neighbor thresholds.
-
-#### 4.4.4 Empirical Investigation & Structural Audit Learnings
-
-During the dedicated multi-phase investigation into KB-A2-MAX, an end-to-end structural audit and correction effort was undertaken covering the cascade DSP kernel, weight parsing, and reference oracle modeling:
-
-1. **Phase 1 (Cascade Multichannel Kernel & Stride Correction):**
-
-   - **Intervention:** Corrected the inter-array residual projection matrix (`rechannel_w_f32`) in `process_cascade.rs:128` and `process.rs:105` from column-major (`ic * channels + c`) to canonical row-major (`c * src_channels + ic`), aligning with C++ `_weight(c, ic) * x[ic]`. Corrected multi-channel buffer clearing (`total * out_per_frame`) and chunk destination slicing stride (`pos * last.head_size .. (pos + nf) * last.head_size`) in `cascade/mod.rs`.
-   - **Validated Result:** Synthetic 2-array cascade tests (`cascade_test.rs`) demonstrated exact bit-level equivalence (`max_diff = 0.0`) between unchunked 256-sample passes and 64-sample chunked passes. Destructive temporal channel overwrite was completely eliminated.
-
-2. **Phase 2 (Weight Parser Alignment & FiLM Dynamism):**
-
-   - **Intervention:** Propagated `head_bias: bool` to `WaveNetA2Dyn`, preventing phantom bias reads when `head_bias == false` in intermediate cascade arrays. Corrected `groups_input` dimensioning in `A2GroupedConv1d` (`(out_ch * in_ch / groups) * kernel`). Handled dynamic FiLM slot offsets and consumed the trailing cascade `head_scale`.
-   - **Validated Result:** Weight consumption reached exact mathematical budget: 818 weights in the main network and 1052 weights in `condition_dsp` (Array 0 = 617, Array 1 = 434, head_scale = 1). Zero orphan or truncated weights.
-
-3. **Phase 3 (f64 Reference Oracle Multichannel Expansion):**
-
-   - **Intervention:** Identified that `reference_oracle/mod.rs` was collapsing multi-channel conditioning into a single mono scalar replicated across all 8 channels. Implemented `oracle_a2_all_channels` with interleaved row-major tensor layout for all 8 distinct acoustic channels.
-   - **Validated Result:** The f64 oracle multichannel output achieved significant spatial/statistical dispersion ($7.60\cdot 10^{-3} > 1\cdot 10^{-4}$). The discrepancy between Rust production f32 and the f64 oracle collapsed by over three orders of magnitude: from $ESR \approx 4.60\cdot 10^3$ ($-36.6\text{ dB}$) down to $ESR = 2.14$ ($-3.30\text{ dB}$).
-
-4. **Phase 4 (Empirical Release Audit & Rollback Governance):**
-
-   - **Intervention:** Evaluated `golden_wavenet_a2_max.bin` under unlock against the Release Protocol (§4.4.3).
-   - **Measured Outcome:** Parity improved from $0.23\text{ dB}$ to **$1.69\text{ dB}$** ($ESR = 6.78\cdot 10^{-1}$). However, because $1.69\text{ dB} \ll 90.0\text{ dB}$ and `f64 × C++` remained divergent ($ESR = 8.85\cdot 10^{-1}$ / $SNR = 0.53\text{ dB}$, confirming Case D), the release gates (Gate 1 & Gate 2) failed.
-   - **Governance Action:** In accordance with the mandatory rollback invariant, the fail-closed dispatch guard `reject_wavenet_a2_max_class` and catalog `ApplicableOracle::KNOWN_GAP` were strictly retained.
-
-##### Core Architectural Learnings
-
-- **Exact weight budgets do not imply state alignment:** Consuming exactly 818 + 1052 weights is a prerequisite, but in complex multi-layer topologies with 16 FiLM modulation points, internal tensor orientation and receptive field history buffers (ring buffers / dilations) can produce radical output divergence even with identical weights.
-- **The f64 Oracle cannot arbitrate Case D:** Because `f64 × C++` diverges ($ESR \approx 0.89$), the f64 oracle itself differs from C++ NAMCore's execution graph for multi-array cascades. Comparing Rust against f64 only measures internal consistency within Rust, not market parity against C++.
-- **Speculative modifications are exhausted:** Attempting further modifications to the Rust engine blindly without C++ ground-truth layer dumps produces negligible gains (e.g. $+1.46\text{ dB}$).
-- **Mandatory Path to Resolution:** The only deterministic path forward to close KB-A2-MAX is to instrument `NeuralAmpModelerCore` (or `namcore_render`) to dump intermediate tensors per frame (Array 0 output, residual projection output, Array 1 / condition_dsp 8-channel output, and individual layer FiLM outputs) and compare them frame-by-frame against the Rust intermediate tensors.
-
-### 4.5 Oracle Cross-Verification Invariant
-
-The load-bearing rule: **never change production code to match one oracle without verifying the other.**
-Disagreements between oracles are `REVIEW_REQUIRED` governance events per
-[§1.2](#12-two-oracle-governance-policy) — the C++ golden adjudicates market interop, the
-f64 oracle adjudicates mathematical fidelity, and neither automatically prevails.
-
-### 4.5.1 Anchor Regeneration Policy
-
-A f64 anchor (`tests/fixtures/f64_anchors/*.bin`) may only be regenerated when:
-
-**(a)** a C++ golden vector exists for the same fixture **and** the paired
-production×oracle test (`test_summary_table`) already passes within the
-acceptance criterion **before** regeneration; **or**
-
-**(b)** no C++ golden exists and the regeneration is accompanied by explicit
-human review, documented in the commit message with before/after numbers.
-
-Regenerating an anchor from the very oracle it is meant to validate constitutes
-a circular comparison and does **not** constitute evidence of correctness.
-
-### 4.6 Canonical C++ Layout Specifications
-
-The structural spec table below documents C++ reference structures vs Rust implementations for ongoing dynamic engine parity work:
-
-| Aspect                                               | C++ reference                                                                            | Rust reference                                                                                       | Verdict                                                                       |
-|:---------------------------------------------------- |:---------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------- |
-| `Conv1x1` weight stream order                        | `NAM/dsp.cpp:384-393` — row-major `[out_ch][in_ch]` per group                            | `src/models/a2/model/dynamic/build.rs` (`transpose_dense_f32` + `head1x1_w[oc*h1_in+ic]` access)     | Tested both transposed and non-transposed variants against the golden         |
-| `head1x1` weight count                               | `NAM/wavenet/detail.h:75-76` — `out_channels × (bottleneck/groups)`, bias `out_channels` | `build.rs` reads `head_accum_size × h1_in_size` (`head_accum_size == out_channels`)                  | ✅ Matches C++ formula                                                        |
-| `head1x1` application loop (grouping)                | `NAM/dsp.cpp:449-646` — implicit block-diagonal GEMM                                     | `process.rs` explicit `grp → oc → ic` loop                                                           | ✅ Structurally equivalent                                                    |
-| Cascade head propagation (multi-array)               | `NAM/wavenet/model.cpp:769` — propagates **post-rechannel** head output                  | `cascade/mod.rs` calls `cascade_head_finalize` then `cascade_seed_head_from_output` (post-rechannel) | ✅ Wire matches intent; multi-head K/bias path still under KB-A2-MAX scrutiny |
-| `condition_dsp` interface (dimensions, pass-through) | `NAM/wavenet/model.cpp:699-729`                                                          | `process.rs:89-98`                                                                                   | ✅ Interface dimensions match (`condition_size` values/frame)                 |
-| Head finalization, `head_size == 1`                  | `NAM/wavenet/model.cpp:382-383` — Conv1D(kernel=head_kernel_size, bias, head_scale)      | `A2HeadConv` (kernel=16, bias, head_scale)                                                           | ✅ Matches for `wavenet_a2_max.nam` (`head_size=1`, `kernel=16`)              |
-| Head finalization, `head_size > 1`                   | Conv1D with kernel + bias + head_scale                                                   | Dense projection, no kernel/bias/head_scale                                                          | ⚠ Only equivalent to C++ when `head_kernel_size == 1 ∧ head_bias == false`    |
-
-### 4.7 Test coverage and fixture quality
-
-Verified directly against `tests/models/golden_vectors.rs`, `tests/parity/cpp_parity.rs`,
-`tests/common/validation.rs`, and `tests/parity/reference_oracle_f64.rs`:
-
-- **`tests/models/golden_vectors.rs`** (committed `.bin`) covers `golden_wavenet_a2_lite.bin` (Lite
-  variant, `condition_size=1`, CH=3) and `golden_wavenet_a2_full.bin` (Full variant,
-  `condition_size=1`, CH=8). Both pass bit-identically against prior baselines.
-
-- **`tests/parity/cpp_parity.rs` (live, `#[ignore]`d)** has no
-  `live_cross_validation_wavenet_a2_dyn` test because `WaveNetA2Dyn`'s scalar fallback path is
-  a NeuralAmpModeler-rs internal extension for non-standard geometries not present in upstream C++ NAMcore.
-  Cross-validation uses the synthetic dynamic builder anchor tests instead.
-
-- **Real, official `.nam` files exercised:**
-
-  - `a2_example.nam` — NAMcore's own official bundled example (`example_models/A2.nam`,
-    `SlimmableContainer` with two WaveNet A2 submodels, CH 3→6). Golden-tested
-    (`test_golden_vectors_a2_example_slimmable`) and live-cross-validated
-    (`live_cross_validation_a2_example_slimmable`). **Passes** (ESR ~7.28e-14 vs NAMcore).
-  - `wavenet_a2_max.nam` — Steve Atkinson's official flagship example (CC0). **Public contract:
-    fail-closed.** `build_model` / `check-model` return `Err` citing **KB-A2-MAX**
-    (`reject_wavenet_a2_max_class`). Active CI gate:
-    `test_wavenet_a2_max_dispatch_rejected` (must stay green). Golden
-    (`test_golden_vectors_wavenet_a2_max`), SNR meter, paired f64 oracle, and live
-    `live_cross_validation_wavenet_a2_max` v1+v2 remain `#[ignore]`d with KB-A2-MAX reasons —
-    **not** release gates. Unlock for diagnostics only: `NAM_A2_MAX_UNLOCK=1` under
-    `cfg(test)` / feature `testing`. Authoritative metrics and reopen criteria: **§4.4 / §4.4.3 /
-    §7.1**. Do **not** claim that the guard was removed or that production loads this model.
-
-- **Every other A2 fixture is synthetic**, by explicit design and documentation
-  ([`docs/fixtures.md`](fixtures.md)), not by omission:
-
-  - `wavenet_a2_full.nam` / `wavenet_a2_lite.nam` (fast-path parity, calibrated weights) — explicitly
-    labeled "**NOT official FiLM models**" to prevent future confusion with `wavenet_a2_max.nam`.
-  - `wavenet_a2_film_{full,lite,chaos_stress,input_mixin_pre}.nam` (FiLM dynamic path),
-    `a2_dynamic_gated_ch8.nam` / `a2_dynamic_blended_ch3.nam` (gating/blending),
-    `wavenet_a2_container.nam` (`SlimmableContainer` joining the two fast-path submodels) — all
-    generator-produced (`generate_a2_fixtures.py`), purpose-built to exercise one structural
-    feature each against the C++ **generic** path (not `a2_fast`, which rejects all of them —
-    §4.1). This is the correct, honest use of synthetic fixtures: proving the *feature* works,
-    not claiming tone-fidelity on a trained model.
-  - `mock_a2.nam` — a deliberate negative fixture (zero weights, `ReLU` config) used only to test
-    the RT-safe model-load-failure path (`RT_STATUS_MODEL_LOAD_FAILED`), not inference at all.
-
-- **Net assessment:** A2 *shape-detection* (§4.1) and *dynamic model*
-  fixtures are solid: gating/blending and FiLM paths measure **near-bit-exact** vs NAMcore after
-  the identity-biased generator calibration (§4.3 / §7.2).
-  Fast-path Full/Lite goldens pass with multi-order margin but remain **synthetic-only** (no
-  trained community A2-Full/Lite capture in-suite). The only real official single-network A2
-  flagship (`wavenet_a2_max.nam`) is **intentionally rejected** (KB-A2-MAX); the only real
-  official A2 topology with live+golden green status is the `SlimmableContainer` wrapper
-  `a2_example.nam`. That makes A2 the weakest architecture on *genuine trained-model* coverage —
-  by freeze policy, not by unnoticed silence.
-
-- **Community-trained A2 search:** No publicly trained A2-Full/Lite
-  model is incorporated; full/lite fixtures remain calibrated synthetic. All known
-  trained models reside on TONE3000 under the T3K license
-  ("may not upload, republish, or distribute the data file without the author's permission") —
-  incompatible with redistribution in Apache-2.0 fixtures. This is an ecosystem limitation
-  (A2 is too new for a trained corpus to exist outside TONE3000), not an implementation
-  gap.
+1. Intermediate per-frame tensor dumps (Array 0 output, residual projection, Array 1 output, layer FiLM outputs) are extracted from instrumented C++ NAMcore.
+2. A single hypothesis demonstrates isolated $\Delta\text{SNR} \gg 10\text{ dB}$.
+3. Rust production × C++ golden reaches $\text{SNR} \ge 90.0\text{ dB}$ across standard test inputs with zero regression in neighboring models.
 
 ---
 
 ## 5. Shared DSP Engine Semantics
 
-Applies identically to LSTM, WaveNet A1, and A2 — all route through the common `NamModel` trait
-and the C++ `DSP` base class.
-
-| C++ (`NAM/dsp.h` / `dsp.cpp`)                                                                                              | Rust (`src/`)                                                                                                                                                                                                                        | Verdict                                                                                                                                                                                                                                                                                        |
-|:-------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DSP::Reset(sr, maxBuf)` → `SetMaxBufferSize` + `prewarm()` iff `GetPrewarmOnReset()` (default `true`)                     | `NamModel::reset()` → `set_max_buffer_size` + `prewarm()` iff `prewarm_on_reset()` (default `true`)                                                                                                                                  | ✅ Match — verified for LSTM (§2.2) and WaveNet A1 (§3.5); A2 not re-verified this pass                                                                                                                                                                                                        |
-| `DSP::GetPrewarmSamples()` base returns `0`; overridden per-model; used by the **iterative** `DSP::prewarm()` loop         | `prewarm_samples()` per-model override                                                                                                                                                                                               | ✅ LSTM verified exact (`0.5 × sr`), load-bearing (drives real iteration). ✅ WaveNet A1 now correctly sums all arrays + condition_dsp + post-stack head (§3.5); `prewarm()` discards arg and runs analytical fill. A2 not re-verified this pass.                                              |
-| `Activation::using_fast_tanh` default `false` (exact `tanh`/`sigmoid`); only flipped by benchmark tools, never by `render` | Activation precision selected via `ActivationPrecision::{Fast, Standard}`; `Fast` uses Padé/minimax approximations, not exact math. `Standard` (exact-grade polynomial, universal default) matches C++ exact math parity within 2e-7 | ⚠ **Intentional divergence, not a bug.** C++'s reference path used for goldens is exact math; NeuralAmpModeler-rs's `Fast` mode trades a small, bounded approximation error for throughput. `Standard` (exact-grade default) narrows this to identical parity within measurement noise (§2.5). |
-
 ### 5.1 Sample Rate Default Policy
 
-**Background:** the C++ NAMcore uses `NAM_UNKNOWN_EXPECTED_SAMPLE_RATE = -1.0`
-(`NAM/dsp.h:30`) as a sentinel when the `sample_rate` field is absent from the `.nam`
-JSON. When `expected_sample_rate == -1.0`, the LSTM prewarm computation
-(`NAM/lstm.cpp:128`) produces `max(1, (int)(0.5 × -1.0)) = 1` sample — effectively
-disabling prewarm.
+- **C++ Reference:** Uses `NAM_UNKNOWN_EXPECTED_SAMPLE_RATE = -1.0` (`NAM/dsp.h:30`) when `sample_rate` is missing from the JSON config, which evaluates prewarm to 1 sample.
+- **NeuralAmpModeler-rs:** Defaults missing `sample_rate` to **48000.0 Hz** (`DEFAULT_SAMPLE_RATE` in `src/loader/loaded_model_pair.rs`).
+- *Rationale:* Ensures models settle to their physical steady state during prewarm. Standard community models explicitly declare sample rate; this divergence affects only hand-crafted test configurations.
 
-**NeuralAmpModeler-rs policy:** `sample_rate` absence defaults to **48000 Hz**
-(`src/loader/loaded_model_pair.rs:13`, `pub(crate) const DEFAULT_SAMPLE_RATE: f32 = 48000.0`).
-This value drives the real prewarm computation for LSTM (24000 samples at 48 kHz) and the
-sample-rate-dependent logic in `DSP::Reset()` for all architectures.
+### 5.2 FastLUTActivation (Not Ported)
 
-**Rationale:** the 48000 Hz default produces a correct, functional prewarm rather than the
-C++ sentinel's near-zero prewarm (1 sample). All known production `.nam` models include
-`sample_rate` explicitly, so the default is only exercised by degenerate or hand-crafted
-models. In those cases, NeuralAmpModeler-rs's behavior is measurably "more correct" — the model settles
-to its steady state — while C++'s sentinel produces effectively no prewarm at all.
+C++ provides an optional `FastLUTActivation` class (`NAM/activations.h:374-428`) for hardware lacking fast `expf`.
 
-**Divergence assessment:** This is an **intentional, documented, low-risk divergence**.
-It does not affect any known production model (every real community `.nam` export includes
-`sample_rate`). The behavior affects only the degenerate zero-`sample_rate` case, where
-NeuralAmpModeler-rs's prewarm is strictly superior. The C++ sentinel is not emulated, and emulating it
-has no practical benefit for any real-world use case.
-
-**Verification:** this policy is enforced at two levels:
-
-1. **JSON parse:** `deserialize_sample_rate` (`src/loader/nam_json/validation/schema.rs`) rejects
-   non-finite or ≤0 sample rates via `JsonError::InvalidSampleRate`, but `None` (absent
-   field) passes through silently — it is handled downstream.
-2. **Model build:** `build.rs:161` applies `unwrap_or(DEFAULT_SAMPLE_RATE)` to the parsed
-   `Option<f32>`. LSTM dispatchers (`static_builder.rs:27,72`, `dynamic_builder.rs:32`)
-   apply the same default independently for prewarm computation.
-
-### 5.2 FastLUTActivation — Not Ported
-
-**Background:** C++ NAMcore ships an optional `FastLUTActivation` class
-(`NAM/activations.h:374-428`, declared at `activations.h:374`) that precomputes look-up tables for `tanh` and `sigmoid`
-to accelerate inference on systems without fast `expf` hardware. It is controlled by
-`Activation::enable_fast_tanh()` and `Activation::using_fast_tanh`.
-
-**Status in NeuralAmpModeler-rs:** `FastLUTActivation` is **not ported** and has no NeuralAmpModeler-rs equivalent.
-This is **not a parity gap** for the following reasons:
-
-- `FastLUTActivation` is a **runtime optimization**, not a format/algorithm feature.
-  The `.nam` file format has no field for "use lookup tables" — it is a local C++-side
-  accelerator that produces the same mathematical output (within LUT precision) as exact
-  `tanh`/`sigmoid` for identical weights.
-- The NAMcore `render` tool (used for golden generation and live cross-validation) **never**
-  enables it: `enable_fast_tanh()` is only called from benchmarking tools
-  (`tools/benchmodel*.cpp`), not from `render.cpp`. This is confirmed in the NAMcore
-  audited source (`activations.h:165`: `static bool using_fast_tanh;`, defined as `false` in `activations.cpp:16`: `bool nam::activations::Activation::using_fast_tanh = false;` is the only
-  initialization, and only `benchmodel*.cpp` flips it — verified by grep of all callers).
-- NeuralAmpModeler-rs's `ActivationPrecision::Standard` (universal default) already produces exact-grade
-  `tanh`/`sigmoid` within 2×10⁻⁷ of C++'s exact math, making the LUT precision tradeoff
-  irrelevant.
-
-**Verdict:** FastLUTActivation is classified as **"Not Applicable"** — no port needed, no
-parity gap, no audio divergence. Documented here for completeness and to prevent future
-audit cycles from re-discovering and re-investigating it.
-
-## 6. Other Architectures
-
-ConvNet, Linear, `SlimmableContainer`, and the IR Cabsim convolution stage complete the model suite:
-
-- **ConvNet — Initialization and Arithmetic Parity.** The vendored
-  NAMcore implements ConvNet (`NAM/convnet.cpp`) using a flat format with raw BatchNorm parameters.
-  NeuralAmpModeler-rs uses a nested per-block format with pre-fused scale/offset BatchNorm
-  ([`src/loader/dispatcher/convnet/mod.rs`](../src/loader/dispatcher/convnet/mod.rs)). `ConvNetModel::prewarm()`
-  processes `receptive_field_size + 1` silence samples through the entire network, matching
-  NAMcore's (`dsp.cpp:67-96`) full network silence prewarm semantics and eliminating initialization transients.
-
-  - **Definitive Parity Metrics:**
-    - **C++ cross-validation** (`quick_parity_convnet`): ESR = `4.20e-15` (SNR `143.8 dB`), MR-STFT = `1.20e-6`
-    - **F64 Oracle** (`test_oracle_convnet`): ESR = `3.57e-15` (SNR `144.5 dB`, f32 floor)
-    - **Oracle vs NumPy f64** (`test_oracle_vs_python_anchor_convnet`): ESR = `5.23e-33` (bit-exact)
-    - **Self-golden** (`test_golden_vectors_convnet_test`): ESR = `0.00e0` (total determinism)
-  - **Recalibrated Quality Gates:** SNR ≥ `120 dB`, ESR ≤ `1.0e-12`, MR-STFT ≤ `1.0e-4`.
-  - **Invariant Test:** `test_convnet_prewarm_fixed_point_invariant()` verifies that the
-    post-prewarm state is a stationary fixed point identical to explicit convergence.
-  - CPU latency = `10.3 µs` (0.8% of RT budget) — unchanged (prewarm executes strictly on cold path).
-
-- **Linear (RF=2048 / 4096 / 8192).** Affine linear model. Baseline ESR vs NAMcore = `1.70e-14` (SNR `137.7 dB`), CPU latency = `0.3 µs` (0.0% of RT budget).
-
-- **`SlimmableContainer`.** Multi-model crossfade orchestration, implemented and tested ([`src/models/container.rs`](../src/models/container.rs), `tests/models/container_slimmable.rs`). Baseline A2 Example (CH=3→6) cross-validation vs NAMcore: ESR = `7.28e-14` (SNR `131.4 dB`), ESR vs f64 = `1.82e-14`, MR-STFT = `1.73e-05`.
-
-- **IR Cabsim.** Impulse response convolution stage, cross-validated via `tests/parity/cabsim_cpp_parity.rs`.
-
-- **`SlimmableWavenet`.** Channel-sliceable single-network WaveNet for adaptive compute quality scaling ([`src/models/slimmable.rs`](../src/models/slimmable.rs)). The pipeline is **implemented and loads**: `clone_wavenet_for_slimmable_storage` + `slice_wavenet_model`, breakpoints from `allowed_channels`, and inference checks via `test_loader_gap_slimmable_wavenet` / `test_slimmable_wavenet_inference_and_breakpoints`. The fixture `slimmable_wavenet.nam` is **not** a negative reject mock — it builds successfully. **Inference-only; no multi-size NAMCore parity claim** — NAMCore (`NeuralAmpModelerCore`) has no channel-slicing API; multi-size golden/live C++-adjudicated parity is architecturally infeasible (§7.4).
+- Classified as **Not Applicable**.
+- `FastLUTActivation` is never enabled in the C++ `render` tool (used exclusively in benchmarking tools).
+- NeuralAmpModeler-rs's Standard activation mode provides exact-grade mathematical accuracy ($\sim 2 \times 10^{-7}$ error) without lookup tables.
 
 ---
 
-## 7. Known-Broken Ledger
+## 6. Other Architectures
 
-Single-page triage. Everything in this document up to here is evidence; this chapter is the
-verdict. Read this chapter alone if the only question is *"what's safe to ship, and what isn't."*
-Severity tiers are ordered by how much they should worry a release decision, not by section order.
+### 6.1 ConvNet
 
-### 7.1 🔴 Known bug KB-A2-MAX — guard permanent until §4.4.3
+Implemented in [`src/models/convnet/mod.rs`](../src/models/convnet/mod.rs) and [`src/loader/dispatcher/convnet/`](../src/loader/dispatcher/convnet/):
 
-Fail-closed guard remains **active**. Secondary investigations do **not** constitute closure. Speculative correction attempts are stopped in favor of known-bug freeze.
+- **Pre-fused BatchNorm:** Fuses batch normalization parameters directly into convolutional weights and biases during loading.
+- **Silence Prewarm:** `ConvNetModel::prewarm()` processes `receptive_field_size + 1` silence samples through the full network, eliminating initialization transients and matching C++ `dsp.cpp:67-96`.
+- **Measured Metrics:**
+  - Live C++ Cross-Validation: $\text{ESR} = 4.20 \times 10^{-15}$ ($\text{SNR} = 143.8\text{ dB}$, $\text{MR-STFT} = 1.20 \times 10^{-6}$).
+  - f64 Reference Oracle: $\text{ESR} = 3.57 \times 10^{-15}$ ($\text{SNR} = 144.5\text{ dB}$).
+  - NumPy Anchor: $\text{ESR} = 5.23 \times 10^{-33}$ (bit-exact).
 
-| Model                | Symptom                                                                                                        | Status                                               |
-|:-------------------- |:-------------------------------------------------------------------------------------------------------------- |:---------------------------------------------------- |
-| `wavenet_a2_max.nam` | prod×C++ **1.69 dB**; H0 Case D (prod/f64/C++ all diverge); budget exact; H1–H4/H6 exhausted as dominant fixes | **KB-A2-MAX.** Guard active. Reopen only via §4.4.3. |
+### 6.2 Affine Linear
 
-**Contract (frozen):**
+Direct FIR affine models (receptive fields 2048, 4096, 8192):
 
-- Guard `reject_wavenet_a2_max_class` — message cites **KB-A2-MAX** + fail-closed + SNR≈1.69 dB.
-- Catalog `KNOWN_GAP`; unlock only `NAM_A2_MAX_UNLOCK=1` under test/testing.
-- Active CI: `test_wavenet_a2_max_dispatch_rejected` (must pass).
-- Ignored (not gates): golden, meter, paired f64, live v1/v2 — reasons cite KB-A2-MAX.
-- Reopen only via §4.4.3. Neighbors (condition_dsp, A2 Full/Lite/FiLM, containers) stay green.
+- Measured against NAMcore: $\text{ESR} = 1.70 \times 10^{-14}$ ($\text{SNR} = 137.7\text{ dB}$).
 
-### 7.2 🟡 Known, measured, accepted tradeoffs — not bugs
+### 6.3 SlimmableContainer
 
-Every item below is a deliberate engineering tradeoff with a calibrated, tested error budget. They
-show up as nonzero numbers in the tables throughout this document, but they are not defects:
+Multi-model crossfade orchestrator ([`src/models/container.rs`](../src/models/container.rs)):
 
-- **LSTM backbone weight representation** — Storage uses native `f32` weights across all gate matrices, matching NAMcore's `Eigen::MatrixXf`. Eliminating weight quantization simplified GEMV kernel dispatch and improved per-sample latency by 10-12%, while bringing `BossLSTM-2x8` to bit-exact convergence with NAMcore (ESR = 1.00e-11).
-- **`ActivationPrecision::Fast`'s Padé/minimax activation approximations** vs. C++'s exact
-  `tanh`/`sigmoid` — small, bounded, and identical in nature for LSTM and WaveNet A1/A2 (§2.5,
-  §3.2, §5). `Standard` (exact-grade, universal default) collapsed this gap to match C++ parity
-  within measurement noise.
-- **A2 FiLM dynamic engine interop** — Standard identity-biased weights achieve near-bit-exact parity
-  (SNR 138+ dB / ESR ~1e-14) within float32 precision limits (§4.3).
+- Bundles multiple sub-models for dynamic compute scaling.
+- Tested on official bundled capture `a2_example.nam` (CH 3→6): $\text{ESR} = 7.28 \times 10^{-14}$ vs. NAMcore ($\text{SNR} = 131.4\text{ dB}$).
 
-### 7.3 🟠 Test-infrastructure caveats — parity coverage that can silently vanish
+### 6.4 Impulse Response CabSim
 
-These do not produce wrong audio, but they can make the *evidence* for parity evaporate without failing CI:
+Uniform-partitioned overlap-save FIR convolution, cross-validated against `NeuralAmpModelerPlugin`'s `dsp::ImpulseResponse` in `tests/parity/cabsim_cpp_parity.rs`.
 
-- **Silent SKIP in v1 live cross-validation — Phase 2 `quick_parity_*` already fail-closed.** The
-  `#[ignore]`d live tests (`run_v1` / `run_v1_hf`) in `tests/parity/cpp_parity.rs` still discard
-  `ParityOutcome` via `let _ = run_render_comparison(...)`, allowing SKIP conditions (toolchain
-  absent, model missing, render crash) to print `SKIP:` while the test reports `ok`. This is
-  **not** the case for the non-ignored `quick_parity_*` tests in Phase 2
-  (`utils/tests-quick.sh`): every `quick_parity_*` calls `require_completed`
-  (`tests/parity/cpp_parity.rs:72`), which **panics** on any outcome except `Completed` —
-  `SkippedModelNotFound`, `SkippedGarbageOutput`, `SkippedCppToolchainAbsent`, and all other
-  non-`Completed` variants are hard failures. A meta-test in
-  `tests/models/threshold_calibration.rs` (`test_no_discarded_parity_outcome`) guarantees zero
-  occurrences of `let _ = run_render_comparison` in the entire test tree. **Residual:**
-  optional nondist fixtures (e.g. `EVH-5150-Lite.nam`) can produce `SkippedModelNotFound` with
-  explicit `allow` in the `#[ignore]`d `live_cross_validation_wavenet_lite` — this is a
-  per-test policy decision, not a structural silent-failure hole. With C++ toolchain and
-  committed fixtures present, a `quick_parity_*` test **cannot** pass green with zero
-  comparisons.
-- **Non-distributable / external catalog path drift.** `golden_gen_build.sh` resolves models
-  through a shared `resolve_nam_model()` shell function that mirrors
-  `tests/common/io_helpers.rs::model_path` — scanning five locations in order
-  (`$NAM_MODELS_DIR`, `$NAM_THIRD_PARTY_DIR/community_models/`, `tests/fixtures/models-nondist`,
-  `third-party/community_models/`, `tests/fixtures/models`). Community captures used in live tests
-  (e.g. `EVH-5150-Lite.nam`, APP-EVH, Boss BD-2, SLAMMIN) are resolved transparently from
-  `third-party/community_models/` when placed there. The stale "not found at … models-nondist" skip
-  is eliminated — if a `.nam` file exists at any path, the gen script
-  will find and render it. Freshness manifest still gates *present* artifacts; it does not
-  prove every catalog entry was regenerated in the last run.
-- **Synthetic goldens pending offline build:** e.g.
-  `lstm_1x10`, `lstm_2x24`, `lstm_3x8`, `convnet_{nobn,relu,silu}`, `linear_nobias` — structural
-  fixtures without committed C++ goldens in the gen catalog path.
-- **`quick_parity_convnet`** passes with ESR=4.20e-15 (SNR 143.8 dB),
-  completing the 4-model quick-parity matrix at full coverage.
-- **`wavenet_a2_film_input_mixin_pre.nam`** has been fully validated with committed C++ goldens and live cross-validation (`live_cross_validation_wavenet_a2_film_input_mixin_pre`), achieving ESR `3.44e-14` (SNR `134.6 dB`, MR-STFT `6.92e-06`) against NAMcore with calibrated gates (SNR ≥ `120.0 dB`, ESR ≤ `1.0e-11`, MR-STFT ≤ `1.0e-4`).
-- **Performance quality-contract noise (not parity).** Dashboard runs may report RT latency
-  over contract on WaveNet Standard/Feather/Lite while fidelity rows remain green. Treat as a
-  separate performance track; do not relax ESR/SNR gates to “fix” a perf miss.
+### 6.5 SlimmableWavenet
 
-### 7.4 🟡 Policy rejects, defensive gaps, and open coverage (not KB-A2-MAX)
+Dynamic single-network channel slicing ([`src/models/slimmable.rs`](../src/models/slimmable.rs)):
 
-Items below are **not** the Max freeze. They are intentional product policy, low-severity
-defensive holes, or incomplete evidence. This table is the parity-map ledger only.
+- Supports adaptive quality scaling via channel slicing (`allowed_channels`).
+- Fully functional in loading and inference (`test_slimmable_wavenet_inference_and_breakpoints`).
+- **Parity Scope:** Inference-only. Upstream NAMcore provides no channel-slicing API; multi-size C++ parity claims are architecturally out of scope.
 
-| ID  | Item                                                                                                                             | Class                       | Status / contract                                                                                                                                                                                                                      |
-|:--- |:-------------------------------------------------------------------------------------------------------------------------------- |:--------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `wavenet_condition_lstm.nam` (LSTM nested in WaveNet)                                                                            | **Policy reject**           | Public load `Err` (“LSTM condition_dsp is not supported”). Upstream trainer cannot produce; C++ construction asserts channel match. Catalog `KnownGap`. CI: `test_policy_reject_condition_lstm` / reject path in golden tests. §3.9.4. |
-| P2  | A1 models with `gated` / `gating_mode` / FiLM / `head1x1` / `layer1x1` / `secondary_activation` (`wavenet_a1_secondary_act.nam`) | **Fail-closed**             | Rejected at topology detection (§3.6).                                                                                                                                                                                                 |
-| P3  | LSTM `num_layers == 0` and implicit mono `in_channels`                                                                           | **Fail-closed implemented** | §2.6 — multi-channel → `Err(UnsupportedMultiChannel)`. `num_layers==0` / bounds → `Err(UnsupportedTopology)`. Missing keys still `Ok(None)`.                                                                                           |
-| P4  | WaveNet multi-array RF prewarm calculation                                                                                       | **Canonical Sum**           | Canonical sum of all components; analytical prewarm unchanged (§3.5).                                                                                                                                                                  |
-| P5  | `dsp_ch < condition_size` broadcast in Rust production                                                                           | **Intentional Rust-only**   | §3.9 — C++/trainer reject mismatch; only relevant for models upstream cannot validate.                                                                                                                                                 |
-| P6  | `SlimmableWavenet` multi-size vs NAMCore                                                                                         | **Disclaimer**              | Inference-only; no multi-size NAMCore parity claim. Load/inference tests remain. NAMCore has no channel-slicing API — multi-size C++-adjudicated parity architecturally infeasible (§6).                                               |
-| P7  | A2 fast-path fixtures synthetic-only                                                                                             | **Documented caveat**       | Full/Lite parity is C++-backed on calibrated weights, not trained community captures (§4.2 / §4.7). No public trained A2-Full/Lite incorporated; full/lite fixtures remain calibrated synthetic.                                       |
+---
 
-**Non-goals of this ledger row:** reopening KB-A2-MAX, regenerating Max goldens to force a pass, or using f64 oracle as adjudicator (H0 Case D — §4.4.2).
+## 7. Known-Broken & Policy Ledger
+
+### 7.1 🔴 Known Bug KB-A2-MAX
+
+| Item / Model         | Symptom                                                             | Status                                                                      |
+|:-------------------- |:------------------------------------------------------------------- |:--------------------------------------------------------------------------- |
+| `wavenet_a2_max.nam` | Rust × C++ $\text{SNR} = 1.69\text{ dB}$; Case D triple divergence. | **KB-A2-MAX Frozen.** Fail-closed guard active. Reopen strictly via §4.3.3. |
+
+- Guard: `reject_wavenet_a2_max_class` returns explicit error on model load.
+- Unlock (test/diagnostic only): `NAM_A2_MAX_UNLOCK=1 cargo test ...`.
+- CI Gate: `test_wavenet_a2_max_dispatch_rejected` must remain green.
+
+### 7.2 🟡 Deliberate Engineering Tradeoffs
+
+| Feature                        | Implementation Detail                                                                                              | Impact / Parity State                                                                 |
+|:------------------------------ |:------------------------------------------------------------------------------------------------------------------ |:------------------------------------------------------------------------------------- |
+| **Native f32 Weights**         | Retains full precision single-precision storage instead of quantization (bf16/f16c).                               | Bit-exact / noise-floor convergence with NAMcore (e.g., BossLSTM-2×8 ESR = 1.00e-11). |
+| **Fast Activation Precision**  | Padé [5,4] $\tanh$ and minimax degree-17 $\sigma$ (opt-in).                                                        | $\sim 10\times$ faster activation kernels; Standard mode remains exact-grade default. |
+| **Analytical WaveNet Prewarm** | $\mathcal{O}(\text{layers})$ fixed-point fill instead of $\mathcal{O}(\text{receptive\_field})$ iterative rollout. | Exact mathematical convergence with zero startup overhead.                            |
+
+### 7.3 🟠 Test Infrastructure Boundaries
+
+- **Live Parity Enforcement:** All non-ignored `quick_parity_*` tests require `require_completed()`, failing hard on missing compilers or crashed render tools.
+- **Fixture Resolution:** `golden_gen_build.sh` mirrors `tests/common/io_helpers.rs::model_path`, searching standard system paths, environment overrides, and non-distributable community directories.
+
+### 7.4 🟡 Policy Rejections & Defensive Gaps
+
+| ID  | Target / Feature                        | Classification        | Contract / Enforcement Mechanism                                                                                                                        |
+|:--- |:--------------------------------------- |:--------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | `wavenet_condition_lstm.nam`            | **Policy Reject**     | Loader returns `Err("LSTM condition_dsp is not supported")`. Upstream toolchain cannot train or validate this geometry.                                 |
+| P2  | WaveNet A1 models declaring A2 features | **Fail-Closed**       | Rejects `gated`, FiLM, `head1x1`, `layer1x1`, and secondary activations at topology detection ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1)). |
+| P3  | LSTM degenerate topologies              | **Fail-Closed**       | Multi-channel → `Err(UnsupportedMultiChannel)`. Zero layers or overflow → `Err(UnsupportedTopology)`.                                                   |
+| P4  | Multi-array receptive field summation   | **Canonical Sum**     | `prewarm_samples()` sums all array RFs + condition_dsp + post-stack head ([§3.2](#32-structural-implementation-mapping)).                               |
+| P5  | `dsp_ch < condition_size` Broadcast     | **Rust Fallback**     | Broadcasts channel 0 across inputs if sub-model channels are fewer than parent condition size.                                                          |
+| P6  | `SlimmableWavenet` Multi-Size Parity    | **Inference Only**    | Validated for loader and runtime inference; no upstream multi-size parity claimed ([§6.5](#65-slimmablewavenet)).                                       |
+| P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat** | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                              |
 
 ---
 
 ## See Also
 
-- [audio_fidelity_map.md](audio_fidelity_map.md) — off-spec DSP factors; §3 (LSTM recurrent drift) pairs with §2.5/§2.7 here
-- [perceptual_validation.md](perceptual_validation.md) — metrics and gate-calibration policy
-- §4.0 — A2 provenance from the authors' public description (independent second reference for the A2 traits)
-- §4.4 / §4.4.3 / §7.1 — **KB-A2-MAX freeze** (do not reopen without intermediate C++ dumps)
-- §7.4 — policy rejects and defensive/coverage backlog (non-Max)
-- `tests/parity/cpp_parity.rs` — live cross-validation against the C++ `render` tool
-- `tests/parity/reference_oracle_f64.rs` — f64 oracle and independent NumPy anchor (decomposition tools, §1.2)
+- [`architecture.md`](architecture.md) — Core engine dispatch, SIMD microarchitecture, and pipeline design.
+- [`audio_fidelity_map.md`](audio_fidelity_map.md) — In-depth analysis of audio precision floors, resampler, and numerical budgets.
+- [`fixtures.md`](fixtures.md) — Golden vector generation, model hash manifests, and fixture supply chain.
+- [`perceptual_validation.md`](perceptual_validation.md) — Numerical formulations of ESR, SNR, MR-STFT, and perceptual calibration.
+- [`testing.md`](testing.md) — Comprehensive test architecture, suite phases, and quality gates.

@@ -7,75 +7,68 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 ![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.98.0-informational?logo=rust)
 
-**NeuralAmpModeler-rs** is a high-performance, real-time neural inference DSP engine written in pure Rust. It provides the core DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — as well as impulse response (.wav) cabinet convolution.
+**NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
-Designed for embedding in audio hosts, CLAP plugins, standalone audio hosts, offline renderers, and embedded DSP pipelines, it guarantees **zero heap allocations**, **zero locks**, and **zero blocking system calls** on the real-time audio processing thread.
+Engineered for seamless embedding into audio plugins (CLAP, VST3, AU), standalone real-time hosts, offline renderers, and embedded audio pipelines, it guarantees **strict zero heap allocations**, **zero mutex locks**, and **zero blocking system calls** on the real-time audio thread.
 
-NeuralAmpModeler-rs is an independent public library for the wider audio and Rust communities. Public APIs and policies remain strictly host-agnostic and generally reusable; integration-specific logic belongs in downstream crates (such as standalone audio hosts, CLAP plugins, and real-time processing applications).
-
-> **❤️‍🔥 NeuralAmpModeler-rs is in beta stage.** Feedback, bug reports, performance metrics, and patch contributions are very welcome!
->
-> **Series note:** the current release series is `0.x`; the `3.x` versions on crates.io/docs.rs are yanked leftovers of an [earlier monolithic incarnation](https://github.com/fabiohl/nam-rs) of this project.
+The crate is host-agnostic, standalone, and general-purpose: public APIs remain decoupled from specific plugin wrappers or audio servers, allowing downstream applications to integrate the engine cleanly into any audio processing graph.
 
 ---
 
-## ⚡ Key Strengths & Architectural Highlights
+## ⚡ Key Architectural Highlights
 
-* **Pure Rust & Strict Zero-Allocation RT Safety:** Engineered from the ground up for absolute real-time audio determinism — zero heap allocations, zero mutex locks, and zero blocking syscalls on the audio processing thread (verified via `CountingAllocator` in heap audit suites). Parameter updates and model swaps pass through lock-free SPSC channels, while a 3-tier GC cascade (*SPSC queue → 16-slot thread-local parking lot → overwrite ring*) guarantees safe off-RT resource disposal without audio glitches.
-* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Mandatory `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. The `SimdMath` / `dispatch_simd!` engine is a static match with zero function pointers or vtables. Production inference is native `f32` on the AVX2 kernels (`sum0..sum3` ILP, tap-major tiling). AVX-512 / VL256 / BF16 / VNNI were evaluated against a ≥12% end-to-end `process()` N=64 gate and **are not a production acceleration** (2026-08 Sapphire Rapids receipt: all canonical SKUs failed; see [`docs/architecture.md`](docs/architecture.md) §1.2). The dispatch engine is kept for a possible future backend (e.g. ARM/NEON); AVX-512 sources stay in-tree as test/research, not as a marketed feature.
-* **Uncompromising Dual-Oracle Audio Parity:** Validated against two independent co-equal test oracles: canonical C++ NAMCore f32 (market interop) and double-precision f64 reference oracle (mathematical ideality). Grounded in `docs/quality-contract.json` (51 model baselines), BossWN Standard measures `2.31e-14` ESR against NAMCore and `9.05e-15` against the f64 oracle (SNR `136.4 dB`, MR-STFT `6.46e-6`), with ConvNet ReLU reaching `9.33e-16` ESR (SNR `150.3 dB`).
-* **Const-Generic Optimization & Dynamic Topology Fallback:** 23 model variants (16 static const-generic profiles + zero-alloc dynamic fallbacks). The static profiles leverage Rust const generics so kernel sizes, receptive fields, and channel counts (`CH=16, 12, 8, 4, 3`) are known at compile time, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies gracefully fallback to zero-allocation dynamic engines (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`, `WaveNetA2Cascade`).
-* **Complete Native DSP Stack (Zero External Audio Crates):** Integrated native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser β=12, >105 dB stopband, zero pre-ringing cepstrum, 0.7–1.3 µs latency, replacing external libraries like `rubato`), UPOLS Partitioned FFT CabSim IR convolution (1.3 µs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, >100 dB attenuation, Kahles et al. JAES 2019).
-* **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load monitoring with hysteresis FSM that gracefully degrades model complexity (Full → Reduced → Minimal) with 32 ms click-free linear crossfades to prevent audio xruns. Binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model hot-swap latency from ~50 ms to <1 ms with mandatory IEEE 802.3 CRC32 integrity validation.
-* **Denormal & Subnormal Armor:** Injected symmetric `−220 dBFS` deterministic dither (`1.0e-11`) + SSE2 MXCSR FTZ/DAZ reassertion on every processing call, eliminating 10–100× CPU microcode penalties on digital silence with zero net DC drift.
+* **Pure Rust & Strict Zero-Allocation Real-Time Safety:** Engineered for deterministic audio callbacks under sub-millisecond deadlines. Guarantees zero heap drops, zero locks, and zero blocking syscalls on the audio thread (audited via `CountingAllocator`). Parameter changes and model hot-swaps communicate via lock-free SPSC channels, backed by a 3-tier garbage-collection cascade (*SPSC queue → 16-slot parking lot → overwrite ring*) ensuring safe off-RT resource deallocation without glitches or xruns.
+* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Enforces `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. Wide use of hand written SIMD code. The `dispatch_simd!` engine performs static compile-time monomorphization with zero vtables or indirect function pointer calls. Compute kernels employ tap-major memory layouts and instruction-level parallelism (`sum0..sum3`) unrolling. AVX2 represents the optimal production sweet spot for NAM channel geometries ($C \le 16$); an experimental AVX-512 backend is available for research and cross-ISA validation via the opt-in `avx512` feature.
+* **Dual-Oracle Numerical Parity:** Formally validated against two co-equal reference oracles: canonical C++ NAMCore (ensuring 100% behavioral compatibility with existing market models) and double-precision f64 reference (measuring numerical ideality). Governed by `docs/quality-contract.json` (51 model baselines), typical WaveNet models achieve ESR $< 2.31 \times 10^{-14}$ (SNR $> 136\text{ dB}$, MR-STFT $< 6.5 \times 10^{-6}$), while ConvNet achieves ESR $< 9.33 \times 10^{-16}$ (SNR $> 150\text{ dB}$).
+* **Const-Generic Optimization & Dynamic Topologies:** Provides 23 distinct model variants (16 static const-generic profiles + zero-allocation dynamic fallbacks). Channel counts ($CH=16, 12, 8, 4, 3$), kernel sizes, and receptive fields are known at compile time for canonical configurations, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies automatically route to dynamic zero-alloc fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`).
+* **Complete Native DSP Stack (Zero External Audio Crates):** Includes a native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, $>105\text{ dB}$ stopband attenuation, zero pre-ringing, $0.7\text{–}1.3\text{ µs}$ execution), Uniform-Partitioned Overlap-Save (UPOLS) FFT cabinet IR convolution ($1.3\text{ µs}$ for 512-sample IRs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, $>100\text{ dB}$ stopband).
+* **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load-monitoring state machine with hysteresis that degrades model complexity under load (Full → Reduced → Minimal) using 32 ms click-free linear crossfades to prevent buffer dropouts. The binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model load time from $\sim 50\text{ ms}$ to $< 1\text{ ms}$ with mandatory IEEE 802.3 CRC32 integrity checks.
+* **Denormal & Subnormal Armor:** Injects symmetric $-220\text{ dBFS}$ deterministic dither ($1.0 \times 10^{-11}$) combined with hardware MXCSR FTZ/DAZ reassertion on every processing block, preventing 10–100× CPU microcode penalties during digital silence with zero net DC drift.
 
 ---
 
-## 🥊 Feature Showcase ("Roofshoot")
+## 🥊 Feature Showcase
 
-| Feature / Attribute              | Technical Implementation                                                                                                         | Benefit & Impact                                                                                                                           |
-|:-------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Inference Engine**             | Core WaveNet (A1/A2), LSTM (1-layer & 2-layer), ConvNet, and Linear topologies                                                   | Complete model ecosystem compatibility with native Rust DSP speed                                                                          |
-| **RT Safety Determinism**        | Strict Zero Heap Drop, Zero Mutex Locks, 3-Tier Lock-Free GC Cascade                                                             | Guaranteed audio stability without dropouts/xruns under sub-millisecond deadlines                                                          |
-| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) production backend; `dispatch_simd!` engine retained (AVX-512 not promoted)                     | Contract SLA snapshot: WaveNet Std ≈ 43.3 µs / LSTM 1×16 ≈ 6.8 µs on Ryzen 7 5700U (`rustc 1.98.1`, 2026-09-19, `quality-contract.json`)   |
-| **Const-Generic Profiles**       | 23 model variants (16 static const-generic profiles + zero-alloc dynamic fallbacks); channel counts `CH=16`, `12`, `8`, `4`, `3` | Enables compile-time LLVM loop unrolling and register allocation optimization                                                              |
-| **Numerical Parity Oracles**     | Verified against canonical C++ NAMCore f32, double-precision f64, and cross-ISA oracles                                          | Bit/float-exact accuracy matching C++ reference models (`2.31e-14` to `9.33e-16` ESR)                                                      |
-| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)                                               | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                          |
-| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)                                                       | Ultra-low overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                                                  |
-| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`off`, `2x`, `4x`, >100 dB stopband)                                                            | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                                                             |
-| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)                                                  | User-selectable trade-off between floating-point precision (+89.5 dB SNR) & latency                                                        |
-| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                                                             | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                       |
-| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32                                                 | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                |
-| **Denormal Armor**               | Symmetric `−220 dBFS` dither injection + hardware MXCSR FTZ/DAZ                                                                  | Prevents 10–100× CPU microcode stalls on silence with zero DC drift                                                                        |
-| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks                                              | Enterprise-grade software stability and strict protection against regressions                                                              |
+| Feature / Attribute              | Technical Implementation                                                            | Benefit & Impact                                                                                             |
+|:-------------------------------- |:----------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------ |
+| **Inference Topologies**         | WaveNet (A1/A2), LSTM (1-layer & 2-layer), ConvNet, and Linear FIR/FFT              | Complete NAM ecosystem compatibility with native Rust execution speed                                        |
+| **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                       | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                  |
+| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline; static `dispatch_simd!` dispatch         | WaveNet Standard ≈ 43.3 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                      |
+| **Const-Generic Profiles**       | 23 model variants (16 static const-generic profiles + dynamic fallbacks)            | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$) |
+| **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$        | Bit/float-exact accuracy matching reference models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR)    |
+| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)  | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                            |
+| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)          | Ultra-low-overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                    |
+| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`Off`, `2x`, `4x`, >100 dB stopband)               | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                               |
+| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)     | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                     |
+| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                         |
+| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32    | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                  |
+| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware MXCSR FTZ/DAZ                       | Prevents 10–100× CPU microcode stalls on digital silence with zero DC drift                                  |
+| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks | Enterprise-grade software stability and strict regression protection                                         |
 
 ---
 
 ## 🧠 Supported Architectures
 
-| Architecture            | Static Profiles                                           | Dynamic Fallback  |
-|:----------------------- |:--------------------------------------------------------- |:----------------- |
-| **WaveNet A1**          | Standard (CH=16), Lite (12), Feather (8), Nano (4)        | `WaveNetModelDyn` |
-| **WaveNet A2**          | Full (CH=8), Lite (CH=3), Cascade                         | `WaveNetA2Dyn`    |
-| **LSTM**                | 10 profiles: 1-layer (hidden 3–40), 2-layer (hidden 8–24) | `LstmModelDyn`    |
-| **ConvNet**             | Feed-forward causal conv1d + BatchNorm1D + activation     | —                 |
-| **Linear**              | Direct FIR or Partitioned FFT convolution                 | —                 |
-| **Slimmable Container** | Multi-submodel bundles with runtime quality transitions   | —                 |
+| Architecture            | Static Profiles                                           | Dynamic Fallback  | Notes                                        |
+|:----------------------- |:--------------------------------------------------------- |:----------------- |:-------------------------------------------- |
+| **WaveNet A1**          | Standard (CH=16), Lite (12), Feather (8), Nano (4)        | `WaveNetModelDyn` | Dilated causal 1D convs, gated tanh/sigmoid  |
+| **WaveNet A2**          | Full (CH=8), Lite (CH=3), Cascade                         | `WaveNetA2Dyn`    | Headroom-optimized modern NAM architecture   |
+| **LSTM**                | 10 profiles: 1-layer (hidden 3–40), 2-layer (hidden 8–24) | `LstmModelDyn`    | Pre-transposed gate-major SIMD GEMV kernels  |
+| **ConvNet**             | Causal Conv1D + BatchNorm1D + activation                  | —                 | Fast feed-forward models (clean / overdrive) |
+| **Linear**              | Direct FIR or Partitioned FFT convolution                 | —                 | Clean tone equalization & linear filters     |
+| **Slimmable Container** | Multi-submodel bundles with runtime quality transitions   | —                 | Adaptive compute bundles with crossfading    |
 
 ---
 
-## 🛠️ System Prerequisites
+## 🛠️ System Prerequisites & Build Requirements
 
-| Dependency                | Minimum Version                               | Package / Command     |
-|:------------------------- |:--------------------------------------------- |:--------------------- |
-| **CPU Architecture**      | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | `lscpu`               |
-| **Rust Toolchain**        | ≥ 1.98.0 (Edition 2024)                       | `rustc --version`     |
-| **Development Libraries** | `build-essential`, `pkg-config`, `cmake`      | See apt command below |
+| Dependency           | Minimum Requirement                           | Purpose                               |
+|:-------------------- |:--------------------------------------------- |:------------------------------------- |
+| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | SIMD vectorized DSP kernels           |
+| **Rust Toolchain**   | $\ge 1.98.0$ (Edition 2024)                   | Public MSRV promise                   |
+| **Build Tools**      | `build-essential`, `pkg-config`, `cmake`      | Host build tools & C++ parity oracles |
 
-> **MSRV policy:** `rust-version = "1.98.0"` in `Cargo.toml` is the **public MSRV promise**.
-> Development happens on `stable` (pinned by `rust-toolchain.toml`). The MSRV promise is
-> verified as an **isolated local check** — never mixed with the dev toolchain:
-> `cargo +1.98.0 check --locked` from the repository root.
+> **MSRV Policy:** `rust-version = "1.98.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
 
 ### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
 
@@ -83,349 +76,251 @@ NeuralAmpModeler-rs is an independent public library for the wider audio and Rus
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
 ```
 
-### ✈️ Hardware & Toolchain Pre-Flight Verification
+### Mandatory Vector Target: `x86-64-v3`
 
-NeuralAmpModeler-rs strictly requires an `x86_64` processor with full **`x86-64-v3`** vector extensions (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`). If compiled without these target features enabled, build fails immediately via a compile-time assertion in `src/lib.rs:9-29`:
+NeuralAmpModeler-rs requires an `x86_64` processor supporting the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`). Build-time assertions enforce this target to guarantee SIMD performance across all DSP modules.
 
-```text
-error: NeuralAmpModeler-rs requires full x86-64-v3 target support (avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe). Compile with RUSTFLAGS="-Ctarget-cpu=x86-64-v3"
-```
+Because Cargo does not automatically propagate compiler target flags to downstream dependencies, applications depending on `NeuralAmpModeler-rs` must instruct `rustc` to target `x86-64-v3`:
 
-To verify host hardware and toolchain compatibility **before** integrating the crate:
-
-#### 1. First-Class Pre-Flight Diagnostic Probe (`simd_probe`)
-
-Run the crate's dedicated pre-flight diagnostic CLI:
-
-```bash
-cargo run --bin simd_probe
-```
-
-This probe:
-
-* Inspects CPU hardware feature flags (`avx2`, `fma`, `avx512*`) via `is_x86_feature_detected!`.
-* Validates operating system ZMM register context-saving support via `xgetbv` (`OSXSAVE`).
-* Reports the active monomorphized SIMD backend dispatch (`SIMD_MATH`).
-* Executes a synthetic 64-sample inference smoke test through a monomorphized model to verify that kernels execute deterministically without panics.
-
-#### 2. Manual Target Capability Check
-
-Inspect CPU instruction set support directly from the shell:
-
-```bash
-rustc --print target-features 2>/dev/null | grep -E 'avx2|fma|bmi2'
-```
-
-Or via Linux system utilities:
-
-```bash
-lscpu | grep -E 'avx2|fma|bmi2'
-```
-
-#### 3. Downstream Consumer Target Configuration
-
-Because Cargo does not automatically propagate dependency-level compiler flags to downstream consumers, projects depending on `NeuralAmpModeler-rs` must instruct `rustc` to compile for `x86-64-v3`:
-
-```bash
-RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
-```
-
-Or configure `.cargo/config.toml` in your downstream crate:
+**Option A — In `.cargo/config.toml` (Recommended for downstream crates):**
 
 ```toml
 [build]
 rustflags = ["-Ctarget-cpu=x86-64-v3"]
 ```
 
+**Option B — Via environment variable:**
+
+```bash
+RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
+```
+
+#### Pre-Flight Hardware Verification (`simd_probe`)
+
+Verify your host CPU and toolchain compatibility directly using the built-in diagnostic probe:
+
+```bash
+cargo run --bin simd_probe
+```
+
+The probe validates CPU feature flags, operating system vector context support (`OSXSAVE`), reports the active monomorphized SIMD backend, and executes a synthetic inference smoke test with deterministic checksum verification.
+
 ---
 
 ## 🚀 Quick Start — Installation & Usage
 
-### Add to Your `Cargo.toml`
+### Add Dependency
+
+Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 NeuralAmpModeler-rs = "0.8"
 ```
 
-For off-RT testing utilities and audio signal generators:
+For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
 NeuralAmpModeler-rs = { version = "0.8", features = ["testing"] }
 ```
 
-See [Feature Flags](#-feature-flags) for available compile-time options.
-
-### ⚠️ Consumer Build Requirement (`x86-64-v3`)
-
-`NeuralAmpModeler-rs` enforces `x86-64-v3` (AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE) baseline vectorization. Because Cargo does not propagate dependency target configurations or `.cargo/config.toml` flags to consuming crates, downstream applications and libraries **must** instruct rustc to target `x86-64-v3` during compilation. Otherwise, compilation halts immediately via `compile_error!` in `src/lib.rs:12-29`.
-
-Build with environment variable:
-
-```bash
-RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
-```
-
-Or configure your consumer crate's `.cargo/config.toml`:
-
-```toml
-[build]
-rustflags = ["-Ctarget-cpu=x86-64-v3"]
-```
-
-See [Hardware & Toolchain Pre-Flight Verification](#️-hardware--toolchain-pre-flight-verification) above for pre-flight diagnosis via `simd_probe`.
-
----
-
-### Code Examples
-
-#### 1. Minimal Model Loading & Audio Processing
+### Minimal Code Example: Load & Process Audio
 
 ```rust,no_run
 use std::path::Path;
 use neural_amp_modeler_rs::prelude::*;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Capture system hardware capabilities (SIMD features, CPU topology)
     let sys = SystemSnapshot::capture();
 
-    // 2. Load a .nam or .namb neural model file
+    // 2. Load a .nam (JSON) or .namb (binary) model
     let mut model_pair = load_and_build_model(
         Path::new("models/BossWN-standard.nam"),
         &sys,
-        false, // dual_mono: left-channel only
+        false, // dual_mono: false = mono left-channel only
         LoadOptions::default(),
-    ).expect("Failed to load NAM model");
+    )?;
 
-    // 3. Process audio in block quanta (e.g. 64 samples)
-    let input_buffer = vec![0.0_f32; 64];
-    let mut output_buffer = vec![0.0_f32; 64];
+    // 3. Process an audio block on the real-time thread (zero allocations, zero locks)
+    let input_buffer = [0.0_f32; 64];
+    let mut output_buffer = [0.0_f32; 64];
 
     if let Some(ref mut model) = model_pair.model_l {
         model.process(&input_buffer, &mut output_buffer);
     }
+
+    Ok(())
 }
 ```
 
-#### 2. Full DSP Engine Pipeline (Model + Cab IR + Polyphase Oversampling)
+### Full DSP Pipeline (Model + Cabinet IR + Oversampling)
 
-For the complete pipeline — model, cabinet IR, and 4× polyphase oversampling — see the
-[`offline_render`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/offline_render.rs) example (`cargo run --example offline_render -- <path/to/model.nam>`).
-The API surface used there is documented in the [crate docs](https://docs.rs/NeuralAmpModeler-rs).
+For a complete end-to-end signal processing chain — neural amp model, cabinet impulse response (IR) convolution, and 4× polyphase anti-aliasing oversampling — see the [`offline_render`](examples/offline_render.rs) example:
 
-#### 3. Executable Examples
+```bash
+cargo run --example offline_render -- path/to/model.nam
+```
 
-`NeuralAmpModeler-rs` includes 7 runnable examples in `examples/` demonstrating key features:
+### Executable Examples
 
-| Example                                                                                                     | Description                                                                     | Run Command                                                 |
-|:----------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------- |:----------------------------------------------------------- |
-| [`load_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/load_model.rs)             | Off-RT `.nam`/`.namb` model file loading & SIMD prewarming                      | `cargo run --example load_model -- <path/to/model.nam>`     |
-| [`inspect_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/inspect_model.rs)       | Detailed inspection & metadata report of `.nam`/`.namb` files (Text/JSON/Batch) | `cargo run --example inspect_model -- <path/to/model.nam>`  |
-| [`offline_render`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/offline_render.rs)     | Offline audio rendering with 4× polyphase oversampling (HQ mode)                | `cargo run --example offline_render -- <path/to/model.nam>` |
-| [`cabsim`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution & resampling               | `cargo run --example cabsim -- <path/to/ir.wav>`            |
-| [`diagnostics`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/diagnostics.rs)           | Circular log buffer (`LogBuffer`) & support bundle (`DiagnosticBundle`) export  | `cargo run --example diagnostics`                           |
-| [`math_activations`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/math_activations.rs) | Performance and accuracy comparison of SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`                      |
-| [`synthetic_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/synthetic_model.rs)   | In-memory `StaticModel` construction, zero-dependency (no `.nam` file needed)   | `cargo run --example synthetic_model`                       |
+The crate includes runnable examples demonstrating key features:
+
+| Example                                            | Description                                                                | Command                                             |
+|:-------------------------------------------------- |:-------------------------------------------------------------------------- |:--------------------------------------------------- |
+| [`load_model`](examples/load_model.rs)             | Off-RT model file loading (`.nam`/`.namb`) and SIMD state prewarming       | `cargo run --example load_model -- <model.nam>`     |
+| [`inspect_model`](examples/inspect_model.rs)       | Inspects metadata, architecture, weights, and sample rates (Text/JSON)     | `cargo run --example inspect_model -- <model.nam>`  |
+| [`offline_render`](examples/offline_render.rs)     | Full audio rendering with 4× polyphase oversampling (HQ mode)              | `cargo run --example offline_render -- <model.nam>` |
+| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution and resampling        | `cargo run --example cabsim -- <ir.wav>`            |
+| [`diagnostics`](examples/diagnostics.rs)           | Diagnostic bundle (`DiagnosticBundle`) and log buffer (`LogBuffer`) export | `cargo run --example diagnostics`                   |
+| [`math_activations`](examples/math_activations.rs) | Precision vs speed benchmarks for SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`              |
+| [`synthetic_model`](examples/synthetic_model.rs)   | In-memory `StaticModel` construction without external files                | `cargo run --example synthetic_model`               |
 
 ---
 
 ### Rustdoc Module Map
 
-| Module                                                                          | Purpose                                                      |
-|:------------------------------------------------------------------------------- |:------------------------------------------------------------ |
-| [`loader`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/loader) | Model deserialization & construction (`.nam`, `.namb`)       |
-| [`math`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/math)     | SIMD math primitives, activation approximations, DSP kernels |
-| [`models`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/models) | Neural network architectures & `StaticModel` dispatch        |
-| [`dsp`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/dsp)       | DSP engine: resampling, gating, oversampling, pipeline       |
-| [`common`](https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/src/common) | Diagnostics, atomic bitmasks, lock-free SPSC queues          |
-| `testing`                                                                       | Off-RT test utilities & perceptual metrics (feature-gated)   |
+| Module                 | Purpose                                                                         |
+|:---------------------- |:------------------------------------------------------------------------------- |
+| [`loader`](src/loader) | Model deserialization and construction (`.nam`, `.namb`)                        |
+| [`math`](src/math)     | SIMD math primitives, activation approximations, GEMV/FFT kernels               |
+| [`models`](src/models) | Neural network architectures and `StaticModel` dispatch                         |
+| [`dsp`](src/dsp)       | Complete DSP engine: polyphase resampler, noise gate, oversampling, cabsim      |
+| [`common`](src/common) | System telemetry, diagnostics, lock-free SPSC channels                          |
+| `testing`              | Off-RT testing utilities, perceptual metrics, and test fixtures (feature-gated) |
 
-Full API documentation:
+API Documentation:
 
-* **Local Generation (Standard):** `cargo doc --open`
-
-* **Docs.rs Simulation (Preview feature badges):**
-
-  ```bash
-  # Note: Requires nightly rustc only for rendering experimental doc_cfg feature badges locally.
-  # Production builds, testing, and CI of NeuralAmpModeler-rs remain strictly on stable Rust.
-  RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
-    --no-default-features \
-    --features "dual-mono,testing,heap-audit,fft-radix4-planner,avx512,rt-hardening" \
-    --no-deps
-  ```
-
-* **Online Documentation:** [docs.rs/NeuralAmpModeler-rs](https://docs.rs/NeuralAmpModeler-rs)
-
-> **Note on `docs.rs` Builds and AVX-512:** `NeuralAmpModeler-rs/build.rs` detects `DOCS_RS=1` to early-return before `avx2+fma` CPU target feature assertions. This allows `docs.rs` builders (running on baseline x86-64 without AVX2) to document the API successfully. While the AVX2 baseline already delivers ample headroom for real-time operation (and project benchmarks show AVX-512 yields marginal real-world difference), `avx512` is enabled in `[package.metadata.docs.rs].features` so that the complete API surface remains accessible to users wishing to utilize it. For new `crates.io` releases or manual doc rebuild requests, use the `docs.rs` re-trigger queue at `https://docs.rs/crate/NeuralAmpModeler-rs/latest/builds`.
+* **Online:** [docs.rs/NeuralAmpModeler-rs](https://docs.rs/NeuralAmpModeler-rs)
+* **Local:** `cargo doc --open`
 
 ---
 
 ## 🚩 Feature Flags
 
-NeuralAmpModeler-rs provides several Cargo feature flags to configure capabilities, tooling, and benchmarking:
+NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities, diagnostic tooling, and benchmarking:
 
-| Feature              | Default  | Description                                                                                                              | Category                      |
-|:-------------------- |:-------- |:------------------------------------------------------------------------------------------------------------------------ |:----------------------------- |
-| `dual-mono`          | Enabled  | Enables independent per-channel inference across the DSP pipeline for stereo/dual-mono signals.                          | Production                    |
-| `heap-audit`         | Disabled | Enables real-time allocation tracking to audit zero-heap-allocation invariants.                                          | Production / Diagnostics      |
-| `testing`            | Disabled | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles. | Reusable Tooling              |
-| `fft-radix4-planner` | Disabled | Enables Radix-4 FFT planner benchmarks and execution planning routines.                                                  | Reusable Tooling / Benchmarks |
-| `avx512`             | Disabled | Compiles optional AVX-512 kernels and dynamic runtime dispatch for experimental research and CPU benchmarking.           | Research / Experimental       |
-| `rt-hardening`       | Disabled | Opt-in real-time host hardening (THP disable, mlockall, SCHED_FIFO, DAZ/FTZ, IRQ affinity). Linux-only.                  | Production / Linux RT         |
+| Feature              | Default     | Description                                                                                                                     | Category                |
+|:-------------------- |:----------- |:------------------------------------------------------------------------------------------------------------------------------- |:----------------------- |
+| `dual-mono`          | **Enabled** | Independent per-channel neural inference across the DSP pipeline for stereo/dual-mono signals. Disable for single-channel mono. | Production              |
+| `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                  | Diagnostics             |
+| `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.        | Tooling / QA            |
+| `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                        | Tooling / Benchmarks    |
+| `rt-hardening`       | Disabled    | Opt-in Linux real-time system hardening (THP disable, `mlockall`, `SCHED_FIFO`, MXCSR DAZ/FTZ, CPU affinity). Linux-only.       | Production (Linux RT)   |
+| `avx512`             | Disabled    | Experimental AVX-512 kernels and instruction dispatch for research and cross-ISA validation.                                    | Research / Experimental |
 
-> ⚠️ **Note on `avx512` (Usage Discouraged in Production):** This flag enables upward runtime dispatch to specialized AVX-512 kernels (`Avx512Math`). However, its use in production builds, release packaging, and live audio processing is **actively discouraged**. Empirical hardware benchmarks (canonical 2026-09-09 audit receipt on Sapphire Rapids) demonstrate that the default `x86-64-v3` baseline (AVX2 + FMA) yields superior throughput and lower latency across canonical NAM models (AVX-512 introduced 2% to 33% latency regressions across 14 of 15 configurations due to vector zero-masking and packaging overhead in compact channel geometries C≤16).
->
-> The `avx512` flag is retained strictly to:
->
-> 1. **Preserve engineering investment:** Retain the substantial work invested in specialized vector kernels (`gemv_4gate_avx512vl`, `accumulate_avx512`, `dot_product_16x_f32_avx512`).
-> 2. **Validate multiversioning architecture:** Exercise runtime SIMD multiversioning mechanics (`dispatch_simd!`, `simd_probe`, cross-ISA parity tests) as an architectural template for future instruction set additions and alternative CPU targets (e.g. AVX10, ARM Neon/SVE).
+> **Note on `avx512`:** Production builds target the `x86-64-v3` (AVX2 + FMA) baseline. Benchmarks demonstrate that AVX2 delivers lower latency and higher throughput across canonical NAM channel geometries ($C \le 16$). The opt-in `avx512` feature is maintained for research, hardware benchmarking, and architectural exploration. See [`docs/architecture.md`](docs/architecture.md) and [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ---
 
 ## 🏆 Quality & Performance
 
-* **Numerical Fidelity:** The quality contract (`docs/quality-contract.json`) tracks NAMCore parity, independent f64-oracle error, SNR (103–150 dB), and MR-STFT across 608 lines of per-model baseline envelopes (51 fidelity + 20 performance records).
+### Numerical Parity & Quality Contract
 
-* **Measured CPU Headroom (Contract SLA Baseline Snapshot):**
+The engine's numerical accuracy is strictly enforced through continuous baseline regression testing (`docs/quality-contract.json`), tracking 51 model baseline envelopes against both the C++ NAMCore reference and a double-precision $f64$ mathematical oracle:
 
-  > **Contract Reference:** Snapshot from `docs/quality-contract.json` (captured 2026-09-19 on AMD Ryzen 7 5700U 8C/16T, Zen 2, base 1.8 GHz / boost up to 4.3 GHz, governor `performance`, `rustc 1.98.1`, buffer size N=64 @ 48 kHz, AVX2 baseline).
-  > These figures establish the formal quality and regression baseline envelopes. Ambient thermal conditions, system load, or compiler release shifts can modulate raw execution times without representing algorithmic regressions.
+* **Dual-Oracle Parity:** WaveNet Standard models maintain an ESR of $2.31 \times 10^{-14}$ against NAMCore and $9.05 \times 10^{-15}$ against the $f64$ oracle ($136.4\text{ dB}$ SNR). ConvNet ReLU achieves $9.33 \times 10^{-16}$ ESR ($150.3\text{ dB}$ SNR).
+* **Perceptual Validation:** All models verify multi-resolution STFT distance (MR-STFT $< 6.5 \times 10^{-6}$), spectral convergence, and LUFS loudness constancy.
 
-  * **WaveNet Standard CH16:** **43.3 µs** (**3.2%** of the 1.33 ms deadline)
-  * **WaveNet Feather CH8:** **19.9 µs** (**1.5%**)
-  * **WaveNet Lite CH12:** **56.4 µs** (**4.2%**)
-  * **WaveNet Nano CH4:** **17.8 µs** (**1.3%**)
-  * **WaveNet A2 Full CH8:** **25.6 µs** (**1.9%**)
-  * **WaveNet A2 Lite CH3:** **22.6 µs** (**1.7%**)
-  * **LSTM 1×16:** **6.8 µs** (**0.5%**)
-  * **LSTM 2×8:** **7.1 µs** (**0.5%**)
-  * **ConvNet:** **8.7 µs** (**0.7%**)
-  * **Linear RF=4 Direct:** **0.3 µs** (**0.02%**)
-  * **Full DSP Pipeline Base (No OS):** **43.6 µs** (**3.3%**)
-  * **Full DSP Pipeline HQ (4× OS):** **177.4 µs** (**13.3%**)
-  * **DSP Resampler (44.1k→48k):** **1.2 µs** | **CabSim IR Medium:** **1.2 µs**
+### Measured CPU Headroom (Quality Contract SLA Baselines)
 
-* **Stress Coverage:** Soak, concurrency, heap-audit, deadline, and model-checking suites exercise long-running and real-time invariants; skipped coverage and failed audit phases must be reviewed separately from passing checks.
+Execution times measured per 64-sample block at 48 kHz (1.33 ms real-time deadline budget) on an AMD Ryzen 7 5700U (AVX2 baseline, `rustc 1.98.1`):
 
-* **SIMD Acceleration:** Production math is the AVX2 (`x86-64-v3`) baseline. All production models execute native `f32` (BF16/VNNI retired). The ≥12% `process()` N=64 ROI rule is a **promotion policy**, not a passed measurement: the canonical 2026-09 remote audit receipt on Sapphire Rapids failed every canonical SKU at N=64 (demonstrating that AVX2 is 2% to 33% faster), so AVX-512 is not advertised, its production use is discouraged, and default builds dispatch `Avx2` (`effective_instruction_set()` returns `Avx2` in default builds, with AVX-512 kernels `cfg`-gated behind the opt-in `avx512` feature; see [`docs/architecture.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md) §1.2 and [`docs/benchmarks.md`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md) §4). FastMath activations (tanh, sigmoid) via Padé/minimax, with exact-grade `Standard` mode as default.
+| Component / Profile                            | Execution Time | RT Deadline Budget Used |
+|:---------------------------------------------- |:-------------- |:----------------------- |
+| **WaveNet Standard (CH=16)**                   | **43.3 µs**    | 3.2%                    |
+| **WaveNet Lite (CH=12)**                       | **56.4 µs**    | 4.2%                    |
+| **WaveNet Feather (CH=8)**                     | **19.9 µs**    | 1.5%                    |
+| **WaveNet Nano (CH=4)**                        | **17.8 µs**    | 1.3%                    |
+| **WaveNet A2 Full (CH=8)**                     | **25.6 µs**    | 1.9%                    |
+| **WaveNet A2 Lite (CH=3)**                     | **22.6 µs**    | 1.7%                    |
+| **LSTM 1-Layer (Hidden=16)**                   | **6.8 µs**     | 0.5%                    |
+| **LSTM 2-Layer (Hidden=8)**                    | **7.1 µs**     | 0.5%                    |
+| **ConvNet**                                    | **8.7 µs**     | 0.7%                    |
+| **Linear FIR (RF=4 Direct)**                   | **0.3 µs**     | 0.02%                   |
+| **DSP Resampler (44.1 kHz → 48 kHz)**          | **1.2 µs**     | 0.09%                   |
+| **Cabinet IR Simulation (UPOLS 512)**          | **1.2 µs**     | 0.09%                   |
+| **Full Pipeline Base (Model + CabSim, No OS)** | **43.6 µs**    | 3.3%                    |
+| **Full Pipeline HQ (Model + CabSim + 4× OS)**  | **177.4 µs**   | 13.3%                   |
+
+> Detailed benchmarking methodologies, throughput curves, and regression envelopes are documented in [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ---
 
-## 🧰 Local Development Environment (engine maintainers)
+## 🧰 Developer & Maintainer Tooling
 
-Crate **consumers** only need a Rust toolchain and the published crate — no vendor trees.
-
-Developers working **on NeuralAmpModeler-rs itself** (parity, golden regeneration, cabsim C++
-cross-validation, optional community-model tests) should prepare a local `third-party/` tree
-after clone. That directory is **gitignored** and is never part of the published package:
+Crate consumers only require Cargo and a standard Rust toolchain. Developers contributing to `NeuralAmpModeler-rs` or validating parity against C++ reference implementations should set up the local mirror environment:
 
 ```bash
-# From the NeuralAmpModeler-rs repository root:
+# Clone and configure pinned C++ NAMCore and Plugin mirrors (gitignored):
 ./utils/setup-third-party.sh
 
-# Optional: link a private non-distributable model archive
-NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models ./utils/setup-third-party.sh
-# or: ln -s /path/to/your/nam_models third-party/community_models
+# Optional: Link a local directory of private community test models
+NAM_COMMUNITY_MODELS_SRC=/path/to/models ./utils/setup-third-party.sh
 ```
 
-| Path                                                                                      | Role                                                             |
-|:----------------------------------------------------------------------------------------- |:---------------------------------------------------------------- |
-| `third-party/NeuralAmpModelerCore/`                                                       | Pinned C++ NAMCore mirror (render / parity)                      |
-| `third-party/NeuralAmpModelerPlugin/`                                                     | Pinned C++ plugin mirror (IR / cabsim xref)                      |
-| `third-party/community_models/`                                                           | Optional symlink to local community models (not redistributable) |
-| [`variables.env`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/variables.env) | Version-controlled pin file (tags/commits/URLs)                  |
+### Automation Scripts (`./utils/`)
 
-Tests and scripts **skip gracefully with a declared gap** when these artifacts are missing:
-the quick suite records `GAP:` lines in `target/logs/quick-receipt.txt`, prints
-`FIDELITY: INCOMPLETE` / `OVERALL: PASSED_WITH_GAPS` (exit 0), and **never emits a green
-fidelity seal for skipped oracles** — `NAM_QUICK_STRICT=1` promotes those gaps to FAIL
-(exit 1). The long suite requires the NAMcore mirror outright (hard abort if absent).
-Override locations with `NAM_THIRD_PARTY_DIR`, `NAM_CORE_DIR`, `NAM_PLUGIN_DIR`, or
-`NAM_MODELS_DIR` if needed.
-See [`docs/fixtures.md`](docs/fixtures.md) for the full model search order.
+The `./utils/` suite automates formatting, static analysis, parity verification, and quality gates:
 
-Rust dependency supply-chain updates remain separate: `./utils/mod-update.sh`.
+| Script                                                     | Purpose & Scope                                                                                                                       |
+|:---------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
+| [`utils/lints.sh`](utils/lints.sh)                         | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
+| [`utils/tests-quick.sh`](utils/tests-quick.sh)             | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
+| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh) | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
+| [`utils/check-model.sh`](utils/check-model.sh)             | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
+| [`utils/simd-probe.sh`](utils/simd-probe.sh)               | **SIMD Diagnostic Probe:** Inspects CPU features, OS vector context, and runs deterministic inference smoke tests.                    |
+| [`utils/tests-long.sh`](utils/tests-long.sh)               | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
+| [`utils/setup-third-party.sh`](utils/setup-third-party.sh) | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
+| [`utils/mod-update.sh`](utils/mod-update.sh)               | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
 
----
-
-## 🧪 CI & QA Automation Suite (`./utils/`)
-
-The `./utils/` directory contains maintainer tools and standard scripts for code quality, numerical verification, and continuous integration:
-
-| Script                                                     | Purpose & Execution Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-|:---------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`utils/setup-third-party.sh`](utils/setup-third-party.sh) | **Local env bootstrap:** Clones/syncs pinned NAMCore + Plugin mirrors into `third-party/` and optionally links `community_models`. Required for full parity/golden work; not needed by crate consumers.                                                                                                                                                                                                                                                                                                                                                              |
-| [`utils/mod-update.sh`](utils/mod-update.sh)               | **Rust supply chain:** Updates rustup toolchain, `cargo upgrade`, and `Cargo.lock` (does **not** manage vendor mirrors).                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| [`utils/lints.sh`](utils/lints.sh)                         | **Static Analysis Gate:** Runs `cargo fmt`, strict `cargo clippy`, compilation checks (`cargo check`), zero-warning doc-tests, and verifies SPDX license headers across all repository source files.                                                                                                                                                                                                                                                                                                                                                                 |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)             | **Agile 1st Line QA:** 3 phases — structural tests (debug), measurement oracles + C++ parity `quick_parity` (release), capped parser fuzzing (`NAM_QUICK_PROPTEST_CASES`). Oracle skips are fail-closed: missing fixtures/toolchain print `FIDELITY: INCOMPLETE` + `OVERALL: PASSED_WITH_GAPS` (exit 0) and write the receipt `target/logs/quick-receipt.txt`; `NAM_QUICK_STRICT=1` promotes gaps to FAIL (exit 1). Re-executes itself at low CPU/IO priority unless `NAM_NO_LOW_PRIORITY=1`.                                                                        |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh) | **Regression & Quality Gate:** Executes Criterion benchmarks and verifies audio fidelity against `docs/quality-contract.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| [`utils/remote-simd-gate.sh`](utils/remote-simd-gate.sh)   | **Remote SIMD re-measurement harness** (not a product feature). Same-VM AVX2 vs AVX-512 `process()` gate; writes `target/logs/remote-simd-receipt.json`. Latest receipt (2026-08-22, Xeon 8488C): overall `FAIL` — do not treat a green skip on Zen 2 as a pass.                                                                                                                                                                                                                                                                                                     |
-| [`utils/check-model.sh`](utils/check-model.sh)             | **Model Inspector Wrapper:** Canonical tool backed by `examples/inspect_model.rs`. Inspects `.nam` & `.namb` files, outputting detailed human-readable reports, JSON (`--json`), or batch arrays (`--manifest`).                                                                                                                                                                                                                                                                                                                                                     |
-| [`utils/simd-probe.sh`](utils/simd-probe.sh)               | **SIMD Diagnostic Probe:** Runs the `simd_probe` CLI for rapid capability & dispatch diagnosis — host feature bits (`avx2`, `fma`, `avx512f/vl/bw/dq` via `is_x86_feature_detected!`), OS AVX-512 context state (CPUID.1:ECX.OSXSAVE + `xgetbv(0)`), the Cargo `avx512` feature state, `effective_instruction_set()`, and a real inference smoke cycle with a deterministic checksum. Default runs the standard build; `./utils/simd-probe.sh --avx512` re-runs under `--features avx512`. Also emitted as the non-gating `preflight-simd-probe` in `tests-long.sh`. |
-| [`utils/tests-long.sh`](utils/tests-long.sh)               | **Nightly / Pre-Release Suite:** Rust-gated pre-flight (`catalog_preflight` V1/V2 golden catalogs fail-closed + `check_freshness` manifest; no bash golden lists), soak, full proptest/fuzz, full C++ parity matrix, cross-ISA, RT-safety and heap-audits. Exits `OVERALL: FAILED` (1) / `COMPLETED_WITH_GAPS` (0) / `PASSED` (0); `--strict-pre-release` turns declared gaps into failure. *(AI agents must not run this script directly due to runtime length; ask the human operator.)*                                                                           |
-
-Exact QA commands:
+Standard verification workflow:
 
 ```bash
-# 1. Static analysis (fmt, SPDX, check, clippy)
+# 1. Static analysis & format checks
 ./utils/lints.sh
 
-# 2. Agile first line (AI tasks: at most once, as final validation)
+# 2. Agile QA validation
 ./utils/tests-quick.sh
-
-#    Release-gate mode: skipped oracles (missing fixtures/C++ toolchain) become FAIL
-NAM_QUICK_STRICT=1 ./utils/tests-quick.sh
-
-#    Receipt + per-phase logs of the last run
-cat target/logs/quick-receipt.txt   # plus target/logs/quick-phase{1,2,3}.log
-# 3. Nightly / pre-release audit — HUMAN OPERATOR ONLY (AI agents must never run it)
-
-./utils/tests-long.sh
-./utils/tests-long.sh --strict-pre-release
-
-#    Human certification protocol (checklist + evidence record for both runners)
-#    docs/functional-tests.md
 ```
 
 ---
 
-## 📚 Architecture & Engineering Documentation
+## 📚 Architecture & Technical Documentation
 
-The following technical documents are maintained in the source repository. The public Rust API is documented on [docs.rs](https://docs.rs/NeuralAmpModeler-rs).
+Comprehensive architectural specifications and engineering guides are available in the [`docs/`](docs/) directory:
 
-| Document                                                                                       | Primary Focus & Topic Coverage                                                               |
-|:---------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md)                                                 | Engine architecture, SIMD microarchitecture, mixed precision math, and `.namb` format design |
-| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)                                     | DSP decision quality trade-off matrix and frequency response analysis                        |
-| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md)                           | Activation function approximations (Padé / minimax polynomials) and error bound benchmarks   |
-| [`docs/namb-spec.md`](docs/namb-spec.md)                                                       | Binary `.namb` multi-profile container specification, metadata schema, and CRC32 layout      |
-| [`docs/testing.md`](docs/testing.md)                                                           | Test suite layout, verification phases, oracle hierarchy, and testing policies               |
-| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)                               | Perceptual measurement framework (ESR, MR-STFT, ASR, LUFS) and auditory distance metrics     |
-| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                                             | Bit-exact and float-exact parity audit against canonical C++ NeuralAmpModelerCore            |
-| [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmark methodology, throughput profiles, and performance regression gates       |
-| [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP reference bibliography, and deep learning modeling research       |
-| [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Engine functional test matrix, runner execution protocols, and human certification record    |
-| [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Technical postmortem on libm symbol interposition resolution on Linux dynamic linkers        |
-| [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Quality contract: benchmark and audio fidelity regression baseline thresholds (JSON)         |
-| [`docs/fixtures.md`](docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and non-distributable test model fixtures   |
+| Document                                                             | Topic                                                                          |
+|:-------------------------------------------------------------------- |:------------------------------------------------------------------------------ |
+| [`docs/architecture.md`](docs/architecture.md)                       | Engine architecture, SIMD kernels, memory layout, and DSP pipelines            |
+| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)           | Audio fidelity decisions, frequency response, and quality modes (Live vs HQ)   |
+| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md) | Activation approximations (Padé/minimax), polynomial error bounds, and SNR     |
+| [`docs/namb-spec.md`](docs/namb-spec.md)                             | Binary `.namb` v2 container specification, metadata schema, and memory layout  |
+| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                   | Bit/float-exact parity verification against canonical C++ NeuralAmpModelerCore |
+| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)     | Perceptual audio metrics: ESR, MR-STFT, Spectral Convergence, and LUFS         |
+| [`docs/benchmarks.md`](docs/benchmarks.md)                           | Criterion benchmarks, throughput profiles, and performance regression gates    |
+| [`docs/testing.md`](docs/testing.md)                                 | Test suite organization, oracle hierarchy, and verification policies           |
+| [`docs/fixtures.md`](docs/fixtures.md)                               | Golden vector formats, stress signal generation, and fixture discovery         |
+| [`docs/functional-tests.md`](docs/functional-tests.md)               | Functional test matrix, execution protocols, and certification checklists      |
+| [`docs/research-references.md`](docs/research-references.md)         | Scientific literature, DSP bibliography, and neural audio modeling research    |
+| [`docs/quality-contract.json`](docs/quality-contract.json)           | Regression baseline thresholds: audio fidelity and benchmark SLA envelopes     |
 
 ---
 
-## 🤝 Contributing & Feedback
+## 🤝 Contributing
 
 * **Testing, testing, testing!** Go on, "cargo add NeuralAmpModeler-rs" into your own project and make NeuralAmpModeler-rs live and evolve!
-* **Test Models:** Try your favorite `.nam` models and IR files — share your feedback and performance metrics.
-* **Report Issues:** Submit detailed bug reports or feature suggestions on GitHub.
-* **Code & Docs:** Help me to make NeuralAmpModeler-rs more useful and correct for the community!
+* **Feedback & Issues:** Submit detailed bug reports, questions, or feature requests via GitHub Issues.
+* **Model Compatibility:** Test your favorite `.nam` models and impulse responses, and share your benchmarks or findings.
+* **Code Contributions:** Help me to make NeuralAmpModeler-rs more useful and correct for the community!
 
 ---
 
 ## 🙏 Credits & Acknowledgments
 
-* **Steven Atkinson** — Creator of [Neural Amp Modeler (NAM)](https://github.com/sdatkinson/neural-amp-modeler) for pioneering deep learning amplifier modeling and sharing the ecosystem with the community.
-* **Mike Oliphant** — Author of [NeuralAudio](https://github.com/mikeoliphant/NeuralAudio), whose codebase provided invaluable insight into WaveNet inference in the early stages.
+* **Steven Atkinson** — Creator of [Neural Amp Modeler (NAM)](https://github.com/sdatkinson/neural-amp-modeler) for pioneering deep learning amplifier modeling and generously open-sourcing the ecosystem.
+* **Mike Oliphant** — Author of [NeuralAudio](https://github.com/mikeoliphant/NeuralAudio), whose work provided early insights into WaveNet inference optimization.
 
 ---
 
@@ -433,7 +328,7 @@ The following technical documents are maintained in the source repository. The p
 
 ### AI Transparency Note
 
-The system architecture, core DSP engineering decisions, mathematical verification framework, and project orchestration are the intellectual work (and love) of the maintainer (**Fábio Lima**). The implementation was accelerated through pair programming (*Vibe Coding*) using artificial intelligence models (Gemini, Claude, Grok, DeepSeek and others) within Google Antigravity IDE and Kilo Code. AI is just a tool that works wonders in wise hands.
+The system architecture, DSP design decisions, mathematical verification frameworks, and project orchestration represent the creative and technical direction of the author (**Fábio Henrique de Lima Silva**). Implementation and iterative development were accelerated through human-directed AI pair programming.
 
 ### License
 

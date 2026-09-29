@@ -5,376 +5,266 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # Audio Fidelity Map — Off-Spec DSP Design Decisions
 
-Every engineering decision in NeuralAmpModeler-rs that lies **outside the strict NAM model specification** and
-influences audio fidelity, real-time (RT) safety, or user experience is catalogued here. For each factor:
-what it is, whether it is mandatory or optional, the sonic and performance impact, and where to
-find the implementation.
+This document catalogues all architectural and DSP engineering decisions in `NeuralAmpModeler-rs` that operate **outside the minimal NAM model specification** and influence audio fidelity, real-time (RT) safety, computational overhead, or latency.
 
-The NAM specification defines only: topology (WaveNet, LSTM, A2, ConvNet), stored weight values,
-and the mathematical forward pass. Everything below is a NeuralAmpModeler-rs implementation choice — not part
-of the `.nam` / `.namb` file format contract.
+The upstream `.nam` and `.namb` specifications define only: network topology (WaveNet, LSTM, ConvNet, Linear), stored floating-point weights, and the mathematical forward pass. All buffering, activation kernel approximations, rate conversions, oversampling schemes, denormal prevention, and convolution partitioning choices described below are implementation choices of NeuralAmpModeler-rs.
 
 ---
 
-## Quick Reference
+## Quick Reference Summary
 
-| #   | Factor                                                | Spec?  | Mandatory?                         | User-Controllable?       | Quality Impact                                                                          | Status      |
-|:---:|:----------------------------------------------------- |:------:|:----------------------------------:|:------------------------:|:--------------------------------------------------------------------------------------- |:-----------:|
-| 1   | **Native f32 weights (Weight compression removed)**   | ❌     | Was under review — removed         | ❌ No                    | Matches NAMCore native f32 representation; eliminates L1 decompression penalty          | ✅ Active   |
-| 2   | **Activation precision (Standard vs Fast Padé)**      | ❌     | ✅ Default (Standard); Fast opt-in | ✅ Host / CLI            | Standard (exact-grade): ~103–150 dB SNR; Fast: −53 dB error (WaveNet) / degraded (LSTM) | ✅ Active   |
-| 3   | **LSTM recurrent state precision**                    | ❌     | Partial (model-dependent)          | ✅ HF gates + Kahan head | Interop ESR ≈ 7.86e-13 to 1.00e-11 (Standard); vs f64 ideal: 5.68e-13 to 2.71e-12       | ✅ Resolved |
-| 4   | **Host sample rate polyphase resampler**              | ❌     | ✅ When host ≠ 48 kHz              | ❌ No†                   | Passband ripple < 0.05 dB; stopband filter design ≥ 105 dB                              | ✅ Active   |
-| 5   | **Neural stage oversampling (HQ Mode)**               | ❌     | ❌ Off by default                  | ✅ Host / CLI            | Suppresses non-linear aliasing; adds 12/24 samples latency                              | ✅ Active   |
-| 6   | **Denormal prevention (Dither + FTZ/DAZ)**            | ❌     | ✅ Yes                             | ❌ No                    | Zero audible impact (−220 dBFS offset); prevents CPU microcode slowdown                 | ✅ Active   |
-| 7   | **Adaptive Compute (quality fallback FSM)**           | ❌     | ✅ Default                         | 🔶 `--slim` flag         | Prevents xruns under CPU spikes via tier fallback                                       | ✅ Active   |
-| 8   | **Cabinet simulation partitioning (UPOLS trade-off)** | ❌     | ✅ Host policy (default 128)       | ✅ Host / CLI / DAW      | Zero distortion; trades algorithmic latency ($P$ samples) vs RFFT rate ($f_s/P$)        | ✅ Active   |
-
-† Resampler quality (32-tap vs 64-tap) was evaluated and fixed to 64-tap HQ — see §4. Activation precision is exposed via host parameters and CLI (`--activation fast|standard`). Standard (exact-grade) is the universal production default across all model families. Cab-sim partition size is user-configurable via CLI (`--cabsim-partition`) and reported via host latency extensions — see §9.
+| #     | Design Factor               | Spec? | Mandatory?                       | User Control       | Audio Fidelity & Latency Impact                                                                                             | Operational Status |
+|:-----:|:--------------------------- |:-----:|:--------------------------------:|:------------------:|:--------------------------------------------------------------------------------------------------------------------------- |:------------------:|
+| **1** | **Native f32 Weights**      | ❌    | ✅ Yes                           | ❌ No              | Unquantized FP32 matching NAMCore; eliminates quantization drift and L1 cache decompression penalty.                        | ✅ Active          |
+| **2** | **Activation Precision**    | ❌    | ✅ Default (Standard)            | ✅ Host / CLI      | Standard (exact polynomial): ~103–150 dB SNR; Fast (Padé): −53 dB error (WaveNet) / recurrent drift (LSTM).                 | ✅ Active          |
+| **3** | **LSTM State Precision**    | ❌    | ✅ Yes                           | ❌ No              | Interop ESR $\sim 10^{-11} \text{ to } 10^{-13}$ vs NAMCore; tracks f64 oracle to $\sim 10^{-12} \text{ to } 10^{-13}$.     | ✅ Active          |
+| **4** | **Polyphase Resampler**     | ❌    | ✅ When $f_s \neq 48\text{ kHz}$ | ❌ No              | 64-tap minimum-phase sinc FIR; passband ripple $< 0.05\text{ dB}$; stopband attenuation $\ge 105\text{ dB}$. 48 kHz bypass. | ✅ Active          |
+| **5** | **Neural Oversampling**     | ❌    | ❌ Off by default                | ✅ Host / CLI      | Multi-stage Kaiser half-band FIR; suppresses aliasing; adds 12/24 samples latency; recurrent time-constant shift in LSTMs.  | ✅ Active          |
+| **6** | **Denormal Prevention**     | ❌    | ✅ Yes                           | ❌ No              | Symmetrical $\pm 10^{-11}$ dither offset ($-220\text{ dBFS}$) + hardware MXCSR FTZ/DAZ; zero CPU microcode stalls.          | ✅ Active          |
+| **7** | **Adaptive Compute**        | ❌    | ✅ Default (Auto)                | ✅ `--slim` / Host | Graceful fallback FSM (Full → Reduced → Minimal) under CPU spikes to prevent xruns.                                         | ✅ Active          |
+| **8** | **CabSim UPOLS Partitions** | ❌    | ✅ Host policy                   | ✅ Host / CLI      | Uniform-partitioned overlap-save FIR; zero frequency distortion; trades latency ($P$ samples) vs FFT event rate ($f_s/P$).  | ✅ Active          |
 
 ---
 
-## 1. Native f32 Weight Representation & Numerical Error Budgets
+## 1. Native f32 Weight Representation & Precision Architecture
 
-**What it is.** All neural model weight matrices in NeuralAmpModeler-rs are stored and processed natively as `f32` vectors, matching the reference NAMCore engine (`Eigen::MatrixXf`/`VectorXf`).
+**Architecture:** All neural model weights in NeuralAmpModeler-rs are stored and evaluated in native single-precision floating-point (`f32`) vectors with 64-byte alignment (`AlignedVec<f32>`), matching upstream `NeuralAmpModelerCore` (`Eigen::MatrixXf`/`VectorXf`).
 
-**Rationale for removing weight compression (f16c / bfloat16).** An earlier optimization using half-precision (`f16c`/`bf16`) weight compression and hardware dot-product instructions (`vdpbf16ps`) was thoroughly evaluated and removed from production dispatch:
+### Rejected Alternative: Half-Precision Weight Quantization (f16c / bfloat16)
 
-1. **Mantissa Bit Width & ULP Error:** Standard `f32` provides a 24-bit significand (23 stored + 1 hidden bit) with machine epsilon $\epsilon_{mach} \approx 1.19 \times 10^{-7}$ ($\text{SNR} > 140\text{ dB}$). Conversely, `bfloat16` retains an 8-bit exponent but restricts the significand to only 8 bits (7 stored + 1 hidden bit), yielding $\epsilon_{mach} \approx 3.91 \times 10^{-3}$ and $1\text{ ULP} \approx 0.781\%$ relative precision ($\text{SNR} \approx 45\text{ dB}$).
-2. **Compound Recurrent Drift:** In recurrent architectures (LSTM) and deep convolutional cascades (WaveNet 23-layer), truncation errors at $0.1\%\text{--}0.5\%$ per layer compound multiplicatively, destroying audio fidelity and introducing tone drift.
-3. **Cache & Throughput Penalty:** Quantitative profiling on Intel Xeon Sapphire Rapids confirmed that runtime decompression overhead on L1 cache and EVEX prefix overhead out-taxed any memory bandwidth gains.
+Half-precision weight storage was evaluated and explicitly rejected for production inference:
 
-**Implementation.** Weight loading and vector storage in [src/models/](../src/models/) (`set_weights.rs` and `model.rs` per architecture). Utility modules in [src/math/common/half.rs](../src/math/common/half.rs) and [tests/parity/lstm_gate_bf16_parity.rs](../tests/parity/lstm_gate_bf16_parity.rs) are retained exclusively for benchmark and numerical error decomposition reference, calibrated to a realistic BF16 relative tolerance of $5 \times 10^{-3}$ (0.5%).
+1. **Significand Bit Width & Machine Epsilon:** Standard `f32` provides a 24-bit significand (23 stored + 1 hidden bit) with machine epsilon $\epsilon_{\text{mach}} \approx 1.19 \times 10^{-7}$ ($\text{SNR} > 140\text{ dB}$). Conversely, `bfloat16` allocates only 8 bits to its significand (7 stored + 1 hidden bit), yielding $\epsilon_{\text{mach}} \approx 3.91 \times 10^{-3}$ and $1\text{ ULP} \approx 0.781\%$ relative precision ($\text{SNR} \approx 45\text{ dB}$).
+2. **Multiplicative Error Compounding:** In recurrent topologies (LSTM) and deep convolutional cascades (WaveNet 23-layer), truncation errors compound multiplicatively across layers, degrading audio clarity and causing acoustic drift.
+3. **Cache & SIMD Throughput Penalties:** Profiling on x86-64-v3 architectures demonstrates that on-the-fly decompression overhead in L1 cache and instruction prefix decoding out-tax any memory bandwidth savings.
+4. **Upstream Interoperability:** NAMCore operates natively in `f32`. Quantizing weights introduces an irreducible interop error floor of $\sim -45\text{ to } -65\text{ dB}$.
+
+**Implementation:** Weight loading in [`src/loader/`](../src/loader/) and model storage in [`src/models/`](../src/models/). Utility routines in [`src/math/common/half.rs`](../src/math/common/half.rs) are retained strictly for offline error decomposition benchmarks.
 
 ---
 
-## 2. Activation Precision — Standard (exact-grade) vs Fast (Padé)
+## 2. Activation Precision: Standard (Exact-Grade) vs. Fast (Padé)
 
-**What it is.** Neural models rely on non-linear activations (`tanh`, `sigmoid`). NeuralAmpModeler-rs provides two approximation modes controlled via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS) in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs):
+**Architecture:** Non-linear neural activations (`tanh`, `sigmoid`, `silu`) run in two runtime-selectable modes managed via Thread-Local Storage (`ACTIVE_MODEL_PRECISION` TLS) in [`src/math/activations/mod.rs`](../src/math/activations/mod.rs):
 
-| Mode                   | Activation Kernel                            | Max Absolute Error      | Approx Error (dBFS) | Compute Impact  |
-|:---------------------- |:-------------------------------------------- |:-----------------------:|:-------------------:|:---------------:|
-| **Fast** (opt-in)      | Padé [5,4] `tanh`, clamped \|x\| ≤ 4         | 2.32e-3                 | ≈ −53 dB            | Baseline        |
-| **Fast** (opt-in)      | Minimax degree-17 sigmoid                    | 4.09e-4                 | ≈ −68 dB            | Baseline        |
-| **Standard** (default) | Taylor-based `exp` kernels, degree-6 minimax | ~2.4e-7 (10,000× lower) | ≈ −133 dB           | +10–15% compute |
+| Precision Mode           | Tanh Kernel                                | Sigmoid Kernel               | Max Absolute Error            | Compute Overhead   | Primary Scope                       |
+|:------------------------ |:------------------------------------------ |:---------------------------- |:-----------------------------:|:------------------:|:----------------------------------- |
+| **`Standard`** (Default) | Degree-6 Taylor minimax exp                | Degree-6 Taylor minimax exp  | $\le 2.4 \times 10^{-7}$      | $+10\text{--}15\%$ | Universal default across all models |
+| **`Fast`** (Opt-in)      | Padé [5,4] rational, clamped $\|x\| \le 4$ | Degree-17 minimax polynomial | $\approx 2.32 \times 10^{-3}$ | Baseline           | Low-power CPU fallback              |
 
-The Padé approximation clamp at `|x| > 4` introduces a derivative discontinuity that generates weak spectral aliasing at extreme gain settings. The minimax sigmoid has no clamp discontinuity, and the **Standard** kernels eliminate clamp discontinuities entirely.
+The Padé approximation clamp at $|x| > 4$ introduces a derivative discontinuity that generates weak spectral artifacts at extreme gain. Standard kernels eliminate clamp discontinuities entirely.
 
-### 2.1 Fast mode — opt-in for CPU-constrained setups
+### 2.1 Impact on Recurrent Architectures (LSTM)
 
-Exact scalar `f32::tanh` costs ~150 ns per 256-element AVX2 vector on x86-64. The Padé kernel runs in ~10 ns. For large WaveNet models processing hundreds of thousands of activations per 1.3 ms RT window, Fast mode (`--activation fast`) provides an explicit opt-in performance fallback for low-power CPUs.
+In recurrent networks, hidden state vectors ($h_t$) accumulate activation approximation errors recursively step by step. Under Fast (Padé) mode, gate approximation errors compound, resulting in substantial audio degradation:
 
-**Deprecation Advisory for LSTM models:** In recurrent architectures (LSTM), activation errors accumulate feedback-wise in the hidden state vector $h_t$ over time. Under Fast (Padé) mode, LSTM gate errors compound to ~15.9–29.3 dB SNR vs reference (quality degradation), whereas Standard mode achieves 103.2–120.5 dB SNR:
+| Model Topology          | Fast Mode SNR (Padé) | Standard Mode SNR (Exact) | Δ SNR Gain with Standard |
+|:----------------------- |:--------------------:|:-------------------------:|:------------------------:|
+| **LSTM 1×16**           | $15.9\text{ dB}$     | $103.2\text{ dB}$         | **$+87.3\text{ dB}$**    |
+| **LSTM 2×8**            | $24.1\text{ dB}$     | $114.0\text{ dB}$         | **$+89.9\text{ dB}$**    |
+| **Official lstm (H=3)** | $29.3\text{ dB}$     | $120.5\text{ dB}$         | **$+91.2\text{ dB}$**    |
 
-| Model Topology          | Fast Mode SNR (Padé) | Standard Mode SNR (Exact) | Δ SNR Gain   |
-|:----------------------- |:-------------------- |:------------------------- |:------------ |
-| **LSTM 1×16**           | 15.9 dB              | 103.2 dB                  | **+87.3 dB** |
-| **LSTM 2×8**            | 24.1 dB              | 114.0 dB                  | **+89.9 dB** |
-| **Official lstm (H=3)** | 29.3 dB              | 120.5 dB                  | **+91.2 dB** |
+Because LSTM execution time is dominated by GEMV matrix multiplications rather than activation math, the $10\text{--}15\%$ activation compute saving under Fast mode is negligible compared to the fidelity loss ($+89.5\text{ dB}$ average SNR gain under Standard). The CLI emits an explicit warning when `--activation fast` is applied to an LSTM model.
 
-Because LSTM execution is dominated by GEMV operations rather than activation math, the 10–15% compute saving is negligible compared to the fidelity loss (+89.5 dB average SNR gain with Standard). The CLI emits a warning when `--activation fast` is combined with an LSTM architecture.
+### 2.2 Interaction with Oversampling
 
-### 2.2 Standard mode — universal default
+Standard exact activations and neural stage oversampling operate synergistically: oversampling strips folded non-linear harmonics via half-band decimation filtering, while Standard mode eliminates high-order polynomial approximation errors.
 
-`ActivationPrecision::Standard` uses Taylor-based polynomial `exp` kernels for `tanh` and `sigmoid` (max error ≈ 2.4e-7, ~10,000× lower than Fast mode). It is active by default from engine startup across all model families (WaveNet A1/A2, ConvNet, Linear, LSTM).
-
-Runtime switching is supported without audio thread allocation via host parameters or CLI (`--activation standard|fast`), with offline-render mode enforcing `Standard` automatically.
-
-### 2.3 Interaction with Oversampling
-
-Standard mode is most effective when paired with 4× neural stage oversampling (§5): oversampling suppresses non-linear folded harmonics via half-band filtering, while Standard exact-grade activations eliminate high-order polynomial folding residual errors.
-
-**Implementation.** [`src/math/activations/mod.rs`](../src/math/activations/mod.rs), [`src/math/activations/tanh/production.rs`](../src/math/activations/tanh/production.rs) (Fast mode), [`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs) (Standard mode), [`src/math/activations/sigmoid/production.rs`](../src/math/activations/sigmoid/production.rs) (Fast mode), [`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs) (Standard mode). Full mathematical analysis in [`docs/fastmath-approximations.md`](fastmath-approximations.md).
+**Implementation:** [`src/math/activations/mod.rs`](../src/math/activations/mod.rs), [`src/math/activations/tanh/`](../src/math/activations/tanh/), and [`src/math/activations/sigmoid/`](../src/math/activations/sigmoid/). Mathematical formulations reside in [`docs/fastmath-approximations.md`](fastmath-approximations.md).
 
 ---
 
 ## 3. LSTM Recurrent State Precision & Interop Parity
 
-**Measured Interop Parity.** Under `ActivationPrecision::Standard`, recurrent state drift between NeuralAmpModeler-rs and reference NAMCore is eliminated across all LSTM model variants:
+**Measured Interop Parity:** Under `ActivationPrecision::Standard`, recurrent state drift between NeuralAmpModeler-rs and reference NAMCore is eliminated across all catalogued LSTM models:
 
-| Model                   | ESR vs NAMCore (Standard) | SNR vs NAMCore | ESR vs Ideal (f64 Oracle) | Status                   |
-|:----------------------- |:-------------------------:|:--------------:|:-------------------------:|:------------------------:|
-| **BossLSTM-1×16**       | **8.50e-12**              | 110.7 dB       | **8.90e-13**              | ✅ Bit-identical interop |
-| **BossLSTM-2×8**        | **1.00e-11**              | 110.0 dB       | **5.68e-13**              | ✅ Bit-identical interop |
-| **Official lstm (H=3)** | **7.86e-13**              | 121.0 dB       | **2.71e-12**              | ✅ Bit-identical interop |
+| Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                   |
+|:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:------------------------ |
+| **BossLSTM-1×16**       | **$8.50 \times 10^{-12}$** | $110.7\text{ dB}$ | **$8.90 \times 10^{-13}$** | ✅ Bit-identical interop |
+| **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.68 \times 10^{-13}$** | ✅ Bit-identical interop |
+| **Official lstm (H=3)** | **$7.86 \times 10^{-13}$** | $121.0\text{ dB}$ | **$2.71 \times 10^{-12}$** | ✅ Bit-identical interop |
 
-*Note: All values measured with 24,000-sample warm-up prewarm in canonical live mode ([`docs/quality-contract.json`](quality-contract.json)).*
+*Measurements taken after 24,000-sample warmup prewarm in canonical live mode ([`docs/quality-contract.json`](quality-contract.json)).*
 
-### 3.1 Steady-State Prewarm vs Cold-Start Decomposition
+### 3.1 Steady-State Prewarm vs. Cold-Start Decomposition
 
-A critical distinction must be drawn between steady-state fidelity and cold-start unit testing:
+- **Steady-State (Prewarmed):** Measured after a 24,000-sample warmup period. In this regime, NeuralAmpModeler-rs matches NAMCore to float32 numerical limits (ESR $\sim 10^{-11} \text{ to } 10^{-13}$) and tracks the double-precision f64 oracle to ESR $\sim 10^{-12} \text{ to } 10^{-13}$.
+- **Cold-Start Transients (256 samples without prewarm):** Short-window unit tests (`test_decomposition_*`) measure initial state buffer filling for models whose receptive field or memory exceeds 256 samples. These transient figures reflect initial condition convergence rather than steady-state precision.
 
-1. **Canonical Steady-State (Prewarmed):** Measured after a 24,000-sample warmup period. In steady-state regime, NeuralAmpModeler-rs matches NAMCore to float32 precision limits (ESR ≈ 1e-11 to 1e-13, SNR 110–121 dB) and tracks the mathematical `f64` oracle to ESR ≈ 5.7e-13 to 2.7e-12.
-2. **Cold-Start Decomposition (256 samples without prewarm):** Short-window tests (`test_decomposition_*` in `tests/parity/reference_oracle_f64.rs`) measure initial buffer-filling transients for architectures whose receptive field or recurrent memory exceeds 256 samples. These transient numbers reflect cold state initialization, not the steady-state precision floor. Consult [`docs/perceptual_validation.md`](perceptual_validation.md) §Decomposition Cold-Start for methodological details.
+### 3.2 Key Recurrent Invariants & Mitigations
 
-#### Empirical Cold-Start Error Decomposition (`quality-contract.json`)
+- **Exact-Grade Gate Activations:** Exp-based polynomial kernels ($\le 2.4 \times 10^{-7}$ error) across SIMD dispatch paths prevent error propagation in hidden state $h_t$.
+- **Kahan-Compensated Head Projection:** Head projection accumulation ($H \to 1$) uses Kahan compensated summation, yielding $\sim 2\text{ dB}$ higher SNR in deep projection heads.
+- **Oversampling Interaction:** In feedforward architectures (WaveNet, ConvNet), oversampling is acoustically transparent. In recurrent architectures (LSTM), discrete updates step at $\Delta t = 1/f_s$. Running at $2\times$ or $4\times$ causes the recurrence to step at $\Delta t / 2$ or $\Delta t / 4$, compressing physical decay time and modifying frequency response (typical $\text{ESR} \approx -15 \text{ to } -25\text{ dB}$ vs native rate). For clone fidelity matching analog hardware captures, LSTMs must be run at native sample rate (`Oversample::Off`).
 
-| Model                | Total ESR (f32 vs f64) | ΔESR F16C Weights  | ΔESR BF16 Weights  | ΔESR Padé Activation | ΔESR F32 Accumulation |
-|:-------------------- |:---------------------- |:------------------ |:------------------ |:-------------------- |:--------------------- |
-| **LSTM-H3**          | 2.59e-3 (-25.9 dB)     | 3.64e-5 (-44.4 dB) | 9.97e-5 (-40.0 dB) | 2.58e-3 (-25.9 dB)   | 6.43e-13 (-121.9 dB)  |
-| **BossLSTM-2×8**     | 1.73e-3 (-27.6 dB)     | 4.91e-7 (-63.1 dB) | 5.83e-4 (-32.3 dB) | 1.74e-3 (-27.6 dB)   | 2.00e-13 (-127.0 dB)  |
-| **BossLSTM-1×16**    | 5.06e-2 (-13.0 dB)     | 3.16e-6 (-55.0 dB) | 3.39e-3 (-24.7 dB) | 4.81e-2 (-13.2 dB)   | 2.79e-12 (-115.5 dB)  |
-| **A2-Lite**          | 2.22e-14 (-136.5 dB)   | 2.81e-7 (-65.5 dB) | 8.86e-5 (-40.5 dB) | 0.00e0 (-inf dB)     | 8.02e-14 (-131.0 dB)  |
-| **WaveNet-official** | 1.82e-12 (-117.4 dB)   | 3.71e-6 (-54.3 dB) | 5.41e-4 (-32.7 dB) | 3.66e-14 (-134.4 dB) | 1.03e-12 (-119.9 dB)  |
-| **ConvNet-test**     | 3.57e-15 (-144.5 dB)   | 6.28e-8 (-72.0 dB) | 5.26e-7 (-62.8 dB) | 4.74e-33 (-323.2 dB) | 3.56e-15 (-144.5 dB)  |
+### 3.3 Dynamic Path & Container Regression Fixtures
 
-### 3.2 Key Recurrent Mitigations & Oversampling Trade-Off
+The following dynamic models and container architectures serve as permanent regression fixtures:
 
-Three core mechanisms maintain high recurrent precision in LSTMs:
-
-- **Exact-Grade Gate Activations:** Exp-based polynomial kernels (~2.4e-7 error) across scalar, AVX2, and AVX-512 LSTM gate paths prevent error propagation in state vector $h_t$.
-- **Kahan-Compensated Head Projection:** Head projection accumulation ($H \to 1$) uses Kahan compensated summation, yielding ~2 dB SNR gain in deep heads.
-- **Recurrent State Time-Constant & Oversampling Interaction:** External oversampling behaves fundamentally differently across feedforward and recurrent architectures:
-  - *Feedforward (WaveNet / ConvNet / A2):* Transparent anti-aliasing. Delay-free convolution operates across fixed sample receptive fields without state memory; upsampling suppresses high-frequency folding without altering underlying linear time-invariance.
-  - *Recurrent (LSTM):* Non-transparent timbre modification. LSTM state updates ($c_t = f_t \odot c_{t-1} + i_t \odot \tilde{c}_t$, $h_t = o_t \odot \tanh(c_t)$) operate on discrete sample steps ($\Delta t = 1/f_s$). Upsampling the input by $2\times$ or $4\times$ causes recurrence to step at $T_s/2$ or $T_s/4$, effectively halving or quartering the physical time window of the model's transient memory and envelope decay.
-
-#### Empirical Characterization Findings (`tests/models/oversampling_characterization.rs`)
-
-Formal characterization across official LSTM captures (e.g. `BossBD-2`, `LSTM-1x16`, `LSTM-2x8`) establishes two confirmed behaviors:
-
-1. **Anti-Aliasing Suppression:** Confirmed ($\Delta\text{ASR} < 0\text{ dB}$). Non-harmonic spectral mirrors above Nyquist are aggressively attenuated by the multi-stage half-band filter.
-2. **Timbre Modification:** Confirmed ($\text{ESR} > 10^{-4}$ vs. native rate, typical $\text{ESR} \approx -15\text{ to } -25\text{ dB}$, $\text{MR-STFT} \approx 0.05\text{--}0.15$). The higher internal clock rate shifts the corner frequency and attack envelope.
-
-> **Operational Policy:** External oversampling on LSTMs is an **intentional acoustic choice** (producing a tighter, brighter response with reduced aliasing) rather than a transparent anti-aliasing wrapper. For strict clone fidelity matching the original training hardware capture, run LSTMs at native sample rate (`Oversample::Off`).
-
-**Implementation.** [`src/models/lstm/layer_kernels.rs`](../src/models/lstm/layer_kernels.rs), [`tests/models/oversampling_characterization.rs`](../tests/models/oversampling_characterization.rs).
-
-### 3.3 WaveNet Dynamic Path & Container Interop Parity
-
-The following dynamic models and container architectures are established as permanent regression fixtures. All measurements taken in canonical live mode with 24,000-sample prewarm at 48 kHz:
-
-| Model                     | Topology                                   | ESR vs NAMCore (Standard) | SNR vs NAMCore | ESR vs Ideal (f64 Oracle) | Status                          |
-|:------------------------- |:------------------------------------------ |:-------------------------:|:--------------:|:-------------------------:|:-------------------------------:|
-| **wavenet_official**      | WaveNetDyn (CH=3, free geom, 2 arrays)     | **9.03e-14**              | 130.4 dB       | **1.82e-12**              | ✅ Permanent clone-protection   |
-| **wavenet_condition_dsp** | WaveNetDyn (CH=3, cond=3, FiLM, post-FiLM) | **1.11e-14**              | 139.6 dB       | —                         | ✅ Permanent clone-protection   |
-| **slimmable_container**   | SlimmableContainer (LSTM+WaveNetDyn+Nano)  | **7.28e-14**              | 131.4 dB       | **1.82e-14**              | ✅ Permanent container regress. |
-
-*Note: `mock_a2.nam` is a permanent negative fixture (zero weights, ReLU config) — validates `Err` rejection in the loader but has no fidelity measurements.*
-
-These models are protected by:
-
-- **Clone exact regression** ([`tests/models/wavenet_clone_exact_test.rs`](../tests/models/wavenet_clone_exact_test.rs)) — `test_clone_exact_wavenet_official`, `test_clone_exact_wavenet_condition_dsp`
-- **Loader gap regression** ([`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)) — `test_loader_gap_slimmable_container` (validates ReLU support)
-- **Golden vectors** ([`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)) — v1 golden tests for `wavenet_official` and `wavenet_condition_dsp`
-- **Self-consistency** ([`tests/models/self_consistency.rs`](../tests/models/self_consistency.rs)) — `test_auto_consistency_wavenet_official`
-- **Live cross-validation** ([`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs)) — `live_cross_validation_wavenet_condition_dsp` (v1+v2), `live_cross_validation_wavenet_official`
+| Model                     | Topology                                  | ESR vs NAMCore             | SNR vs NAMCore    | Protection Suite                                                                          |
+|:------------------------- |:----------------------------------------- |:--------------------------:|:-----------------:|:----------------------------------------------------------------------------------------- |
+| **wavenet_official**      | WaveNetDyn (CH=3, free geom, 2 arrays)    | **$9.03 \times 10^{-14}$** | $130.4\text{ dB}$ | [`tests/models/wavenet_clone_exact_test.rs`](../tests/models/wavenet_clone_exact_test.rs) |
+| **wavenet_condition_dsp** | WaveNetDyn (CH=3, cond=3, FiLM)           | **$1.11 \times 10^{-14}$** | $139.6\text{ dB}$ | [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)                     |
+| **slimmable_container**   | SlimmableContainer (LSTM+WaveNetDyn+Nano) | **$7.28 \times 10^{-14}$** | $131.4\text{ dB}$ | [`tests/models/container_slimmable.rs`](../tests/models/container_slimmable.rs)           |
 
 ---
 
 ## 4. Host Sample Rate Adaptation (Polyphase Sinc Resampler)
 
-**What it is.** NAM models are trained at 48 kHz. When host DAW software operates at a different sample rate (e.g., 44.1 kHz, 88.2 kHz, 96 kHz, 192 kHz), NeuralAmpModeler-rs performs rate conversion using a native minimum-phase polyphase FIR sinc resampler ([`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs)).
+**Architecture:** NAM models are trained at 48 kHz. When host audio environments operate at a different sample rate (44.1, 88.2, 96, or 192 kHz), NeuralAmpModeler-rs converts sample rates using a native minimum-phase polyphase FIR sinc resampler ([`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs)).
 
-**Configuration.** 256 phases × 64 taps, Kaiser window ($\beta = 12$), minimum-phase filter by default. A linear-phase variant is available internally for offline processing.
+- **Configuration:** 256 phases × 64 taps, Kaiser window ($\beta = 12$), minimum-phase filter by default (linear-phase variant available for offline renderers).
+- **Bypass:** When host rate equals 48 kHz, a zero-cost bypass path forwards audio buffers directly with zero latency and zero copying.
+- **Passband Ripple:** $< 0.05\text{ dB}$ (from 0 to $0.45 \times \text{Nyquist}$).
+- **Stopband Attenuation:** Filter design attenuation $\ge 105\text{ dB}$; end-to-end multitone SNR $\sim 31\text{ dB}$ (minimum-phase, gate $\ge 25\text{ dB}$).
+- **High-Frequency Rolloff:** $< 0.05\text{ dB}$ at 20 kHz (under 44.1 kHz host rate).
 
-**Bypass path.** When `host_rate == 48 kHz`, a zero-cost bypass path forwards audio buffers directly without filter evaluation or memory copying.
+### Rejected Alternative: 32-Tap Resampling Mode
 
-**Performance & Quality Profile:**
+A 32-tap resampler variant was evaluated and rejected: while saving $\sim 40\text{ ns}$ per 64-sample block ($< 0.1\%$ total pipeline execution time), 32 taps caused passband SNR to collapse from $\ge 100\text{ dB}$ down to $\sim 24\text{ dB}$. The 64-tap configuration is a permanent invariant.
 
-| Metric                 | Value / Benchmark Result                                                              |
-|:---------------------- |:------------------------------------------------------------------------------------- |
-| Passband ripple        | < 0.05 dB (0 to 0.45 × Nyquist)                                                       |
-| Stopband attenuation   | Filter design ≥ 105 dB; end-to-end multitone SNR ~31 dB (minimum-phase, gate ≥ 25 dB) |
-| High-frequency rolloff | < 0.05 dB at 20 kHz (44.1 kHz host rate)                                              |
-| Group delay            | Asymmetric minimum-phase response with minimal high-frequency dispersion              |
-
-**Rejection of 32-tap mode.** A 32-tap resampler variant was benchmarked and discarded. While saving only ~40 ns per 64-sample block (< 0.1% total pipeline execution time), 32 taps degraded passband SNR from $\ge 100\text{ dB}$ down to $\sim 24\text{ dB}$. The 64-tap configuration is the permanent production standard.
-
-**Implementation.** [`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs), [`src/dsp/sinc_kernel.rs`](../src/dsp/sinc_kernel.rs).
+**Implementation:** [`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs), [`src/dsp/sinc_kernel.rs`](../src/dsp/sinc_kernel.rs).
 
 ---
 
 ## 5. Architectural Fidelity Invariants Matrix
 
-Every layer in the DSP pipeline is covered by structural invariance tests that verify mathematically defined boundary conditions:
+Every layer in the DSP pipeline is covered by structural invariance tests validating mathematical boundary conditions:
 
-| Domain               | Invariant                                         | Verified By                                                                             | Failure Mode Prevented                     |
-|:-------------------- |:------------------------------------------------- |:--------------------------------------------------------------------------------------- |:------------------------------------------ |
-| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`src/dsp/pipeline/pipeline_block_test.rs`](../src/dsp/pipeline/pipeline_block_test.rs) | Receptive-field phase drift                |
-| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models.rs`](../tests/models.rs)                                                 | Historical state contamination             |
-| **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                           | RT thread audio click / priority inversion |
-| **Denormal Armor**   | Zero denormal execution penalty                   | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                                   | CPU stall from subnormal float microcode   |
-| **Allocation Guard** | 0 heap allocations on audio callback              | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                                 | RT deadline breach via OS allocator lock   |
+| Domain               | Invariant                                         | Verified By                                                                             | Failure Mode Prevented                |
+|:-------------------- |:------------------------------------------------- |:--------------------------------------------------------------------------------------- |:------------------------------------- |
+| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`src/dsp/pipeline/pipeline_block_test.rs`](../src/dsp/pipeline/pipeline_block_test.rs) | Receptive-field phase drift           |
+| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models.rs`](../tests/models.rs)                                                 | Historical state contamination        |
+| **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                           | RT audio clicks / priority inversions |
+| **Denormal Armor**   | Zero subnormal execution penalty                  | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                                   | Microcode exception CPU stalls        |
+| **Allocation Guard** | Zero heap allocations on audio callback           | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                                 | OS allocator lock RT deadline breach  |
 
 ---
 
 ## 6. Neural Stage Oversampling (HQ Mode)
 
-**What it is.** Optional 2× or 4× oversampling surrounding neural model inference to suppress spectral aliasing generated by non-linear activations (`tanh`, `sigmoid`, `ReLU`). Based on Kahles, Esqueda & Välimäki (JAES 2019).
+**Architecture:** Optional $2\times$ or $4\times$ oversampling surrounding neural inference suppresses spectral aliasing produced by non-linear activations (`tanh`, `sigmoid`, `ReLU`). Based on Kahles, Esqueda & Välimäki (JAES 2019).
 
-**Architecture.** Multi-stage half-band filtering using 25-tap Kaiser FIR filters ($\beta = 12$, >100 dB stopband attenuation). The half-band property zeros alternate coefficients, halving multiplication requirements.
+- **Filter Design:** Multi-stage half-band Kaiser FIR filters (25 taps, $\beta = 12$, $>100\text{ dB}$ stopband attenuation). The half-band property zeros alternate coefficients, halving multiplication requirements.
+- **Pipeline:** `Upsample FIR stage(s) → Model Inference (at 2×/4× rate) → Downsample FIR stage(s)`.
 
-Pipeline: `Upsample FIR stage(s) → Model Inference (at 2×/4× rate) → Downsample FIR stage(s)`.
+| Mode              | Stages | Added Latency                                | Relative CPU Cost           | Architectural Behavior                                              |
+|:----------------- |:------:|:--------------------------------------------:|:---------------------------:|:------------------------------------------------------------------- |
+| **Off** (Default) | 0      | 0 samples                                    | $1.0\times$                 | Native reference (all topologies)                                   |
+| **2×**            | 1      | 12 samples @ native rate (~0.25 ms @ 48 kHz) | $\sim 2.0\times$ model cost | Transparent anti-aliasing (WaveNet/ConvNet/A2); Timbre shift (LSTM) |
+| **4×**            | 2      | 24 samples @ native rate (~0.50 ms @ 48 kHz) | $\sim 4.0\times$ model cost | Transparent anti-aliasing (WaveNet/ConvNet/A2); Timbre shift (LSTM) |
 
-| Mode          | Stages | Added Latency                                | Relative CPU Cost | Architectural Transparency                                         |
-|:------------- |:------:|:--------------------------------------------:|:-----------------:|:------------------------------------------------------------------:|
-| Off (default) | 0      | 0 samples                                    | 1.0×              | Native reference (all topologies)                                  |
-| 2×            | 1      | 12 samples @ native rate (~0.25 ms @ 48 kHz) | ~2.0× model cost  | Bit-transparent for WaveNet/ConvNet/A2; Timbre-modulating for LSTM |
-| 4×            | 2      | 24 samples @ native rate (~0.50 ms @ 48 kHz) | ~4.0× model cost  | Bit-transparent for WaveNet/ConvNet/A2; Timbre-modulating for LSTM |
+Latency is reported dynamically to the host via `OversampleEngine::latency_samples()`.
 
-Latency is reported dynamically to the host via `OversampleEngine::latency_samples()`. Host applications integrate latency announcements and dynamic updates via the SPSC rebuild cascade.
+### Rejected Alternative: Antiderivative Anti-Aliasing (ADAA)
 
-**User Control:**
+ADAA requires analytical antiderivatives per activation function, conflicting with generic polymorphic SIMD vectorization across arbitrary activation graphs. Half-band FIR oversampling is activation-agnostic and universally compatible across all neural topologies.
 
-- CLI: `--oversample off|2x|4x` (alias `--os`)
-- Host parameter: Oversampling parameter (stepped enum, state-persisted)
-- Mode changes trigger lock-free SPSC garbage-collected engine rebuilds off the real-time thread.
-
-**ADAA Rejection Rationale.** Antiderivative Anti-Aliasing (ADAA) requires analytical antiderivatives per activation function, conflicting with NeuralAmpModeler-rs's generic SIMD dispatch macro (`dispatch_simd!`) and multi-architecture model dispatcher. Half-band FIR oversampling is activation-agnostic and universally compatible across all topologies.
-
-**Implementation.** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs) (`OversampleEngine`), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs), [`tests/models/oversampling_characterization.rs`](../tests/models/oversampling_characterization.rs).
+**Implementation:** [`src/dsp/oversample.rs`](../src/dsp/oversample.rs), [`src/dsp/pipeline/stages/inference.rs`](../src/dsp/pipeline/stages/inference.rs).
 
 ---
 
-## 7. Denormal Prevention — Dither + FTZ/DAZ
+## 7. Denormal Prevention: Dither + Hardware FTZ/DAZ
 
-**What it is.** Two complementary mechanisms prevent subnormal (denormal) floating-point numbers from entering neural network state buffers. Denormals cause microcode exceptions on x86-64 processors, causing 10–100× CPU execution spikes that break real-time guarantees.
+**Architecture:** Two complementary defenses prevent subnormal (denormal) floating-point numbers from entering neural network state buffers, avoiding 10–100× microcode execution stalls on x86 processors:
 
-### 7.1 Deterministic Dither Offset
+1. **Deterministic Symmetrical Dither:** A constant offset `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is injected into input samples before inference and subtracted after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)). Symmetrical addition and subtraction provide bit-exact cancellation with zero noise floor elevation.
+2. **Hardware FTZ/DAZ (MXCSR Register):** Configures SSE2 MXCSR control register flags:
+   - **FTZ (Flush-To-Zero):** Output subnormals flush to positive zero.
+   - **DAZ (Denormals-Are-Zero):** Input subnormals are treated as zero.
+     Reasserted at the entry of every audio buffer callback to defend against host environments that fail to configure or reset MXCSR.
 
-A fixed offset `DENORMAL_DITHER_OFFSET = 1.0e-11` (−220 dBFS) is injected into input samples prior to inference and subtracted from output samples after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)).
-
-Because the exact same constant is added and subtracted symmetrically, cancellation is bit-exact with zero residual DC drift or noise floor elevation.
-
-### 7.2 Hardware FTZ/DAZ (MXCSR Register)
-
-The helper `set_daz_ftz()` in [`src/math/common/ops.rs`](../src/math/common/ops.rs) configures SSE2 MXCSR control register flags:
-
-- **FTZ (Flush-To-Zero):** Output subnormals flush to positive zero.
-- **DAZ (Denormals-Are-Zero):** Input subnormals are read as zero.
-
-Reasserted at the start of every audio processing call ([`capture_dsp_pipeline`](../src/dsp/pipeline/capture.rs)) to guard against host threads that reset or never configure MXCSR. Active unconditionally with zero audible impact.
+**Implementation:** [`src/math/common/ops.rs`](../src/math/common/ops.rs) (`set_daz_ftz`).
 
 ---
 
 ## 8. Adaptive Compute (Quality Fallback FSM)
 
-**What it is.** When audio thread p99 block processing latency exceeds real-time safety thresholds (1.33 ms at 48 kHz / 64 samples), the Adaptive Compute finite state machine (FSM) downgrades model quality tiers (Full → Reduced → Minimal) to guarantee uninterrupted audio rendering.
+**Architecture:** When real-time audio thread P99 block processing latency exceeds safety budgets ($1.33\text{ ms}$ at 48 kHz / 64 samples), the Adaptive Compute finite state machine (FSM) downgrades model quality tiers (Full → Reduced → Minimal) to avoid buffer underruns (xruns).
 
-**Transition Mechanics:**
+- **WaveNet A1 Models:** Use double-pass inference during quality tier transitions to crossfade between sub-models smoothly without click artifacts.
+- **WaveNet A2 Models (A2-Full, A2-Lite, A2-Dyn):** Do not support layer-skip mechanisms. A2 models execute single-pass direct state transitions to preserve recurrent history integrity.
+- **Control:** CLI `--slim auto|full|lite`; host parameter exposes adaptive compute mode.
 
-- **WaveNet A1 Models:** Utilize double-pass inference during quality tier changes to crossfade smoothly between sub-models without click artifacts.
-- **WaveNet A2 Models (A2-Full, A2-Lite, A2-Dyn):** Do not support layer-skip mechanisms required for double-pass inference. A2 architectures execute single-pass direct state transitions to preserve recurrent history integrity.
-
-**User Control:**
-
-- CLI: `--slim auto|full|lite`
-- Host parameter: Dedicated adaptive compute control. Setting `--slim full` disables dynamic fallback.
-
-**Implementation.** [`src/dsp/adaptive.rs`](../src/dsp/adaptive.rs), [`src/models/static_model.rs`](../src/models/static_model.rs) (`supports_layer_skip()`).
+**Implementation:** [`src/dsp/adaptive.rs`](../src/dsp/adaptive.rs), [`src/models/static_model.rs`](../src/models/static_model.rs) (`supports_layer_skip`).
 
 ---
 
-## 9. Cabinet Simulation — Uniform-Partitioned Overlap-Save (UPOLS) Trade-Off
+## 9. Cabinet Simulation: Uniform-Partitioned Overlap-Save (UPOLS)
 
-**What it is.** Impulse response (IR) cabinet simulation uses Uniform-Partitioned Overlap-Save (UPOLS) frequency-domain convolution ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs)). Unlike direct time-domain FIR convolution ($O(L_{IR})$ per sample) or standard unpartitioned FFT convolution (which adds $L_{IR}$ samples of latency), UPOLS segments an impulse response of length $L_{IR}$ into $N_p = \lceil L_{IR} / P \rceil$ equal partitions of length $P$.
+**Architecture:** Cabinet impulse response (IR) simulation uses Uniform-Partitioned Overlap-Save (UPOLS) frequency-domain convolution ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs)). Unlike direct FIR convolution ($O(L_{\text{IR}})$ per sample) or unpartitioned FFT convolution (which adds $L_{\text{IR}}$ samples of latency), UPOLS segments an impulse response of length $L_{\text{IR}}$ into $N_p = \lceil L_{\text{IR}} / P \rceil$ equal partitions of length $P$.
 
-### 9.1 Mathematical Foundation & Latency vs FFT Event Rate
+### 9.1 Latency vs. FFT Event Rate Trade-Off
 
-Algorithmic latency in UPOLS is bounded strictly by the partition size $P$:
+Algorithmic latency is strictly bounded by partition size $P$:
 $$\text{Latency} = P \text{ samples} \quad \left(\tau = \frac{P}{f_s} \text{ seconds}\right)$$
 
-At each partition step, the convolution engine executes:
-
-1. One forward real-to-complex FFT of size $2P$ on the input buffer.
-2. $N_p$ complex multiply-accumulate (MAC) operations across the Frequency Delay Line (FDL).
-3. One inverse real FFT of size $2P$ delivering $P$ output samples.
-
-This cycle occurs at an event frequency proportional to sample rate and inversely proportional to partition size:
+At each partition step, the engine executes one forward FFT of size $2P$, $N_p$ complex multiply-accumulates across the Frequency Delay Line (FDL), and one inverse FFT of size $2P$. This cycle occurs at event frequency:
 $$f_{\text{event}} = \frac{f_s}{P}$$
 
-The total frequency-domain MAC throughput per second is:
-$$\text{MACs/sec} = N_p \times P \times \frac{f_s}{P} \approx L_{IR} \times f_s$$
-
-While total MAC operations remain asymptotically invariant to $P$, reducing partition size $P$ doubles the event frequency $f_{\text{event}}$ for each halving of $P$ (e.g. at $f_s = 48\text{ kHz}$: 1500 events/sec at $P=32$ vs 187.5 events/sec at $P=256$). Each event incurs fixed computational overhead:
-
-- Twiddle factor tables and FFT butterfly setup overhead.
-- Circular pointer rotations across the FDL complex buffer.
-- Buffer staging, accumulate, and delivery memory transfers.
+While total MAC throughput per second remains asymptotically constant ($\approx L_{\text{IR}} \times f_s$), reducing $P$ doubles the event rate $f_{\text{event}}$, increasing twiddle-factor setup and circular pointer overhead.
 
 ### 9.2 Empirical Latency and CPU Profile (`benches/cabsim_bench.rs`)
 
-Empirical measurements on x86-64-v3 (AVX2 / FMA) demonstrate the quantitative trade-off across partition sizes for standard guitar cabinet IRs ($L_{IR} = 2048$ samples @ 48 kHz):
+Empirical measurements on x86-64-v3 (AVX2/FMA) for standard guitar cabinet IRs ($L_{\text{IR}} = 2048$ samples @ 48 kHz):
 
-| Partition ($P$) | Latency @ 48 kHz | $N_p$ (2048 taps) | FFT Size ($2P$) | Event Rate ($f_s/P$) | Per-Block Time (µs) | CPU Cost @ 48 kHz | Empirical Profile / Use Case |
-|:---------------:|:----------------:|:-----------------:|:---------------:|:--------------------:|:-------------------:|:-----------------:|:---------------------------- |
-| **32**          | **0.67 ms**      | 64                | 64              | 1500 Hz              | ~1.2 µs             | ~1.2%             | Ultra-low latency monitoring |
-| **64**          | **1.33 ms**      | 32                | 128             | 750 Hz               | ~1.22 µs            | ~0.6%             | Live tracking standard       |
-| **128**         | **2.67 ms**      | 16                | 256             | 375 Hz               | ~3.5 µs             | ~0.35%            | Default production balance   |
-| **256**         | **5.33 ms**      | 8                 | 512             | 187.5 Hz             | ~12.58 µs           | ~0.2%             | Offline / multi-track mix    |
-| **512**         | **10.67 ms**     | 4                 | 1024            | 93.75 Hz             | ~26.0 µs            | ~0.1%             | Studio Master export         |
+| Partition ($P$) | Latency @ 48 kHz | $N_p$ (2048 taps) | FFT Size ($2P$) | Event Rate ($f_s/P$) | Per-Block Time (µs) | CPU Cost @ 48 kHz | Primary Use Case                   |
+|:---------------:|:----------------:|:-----------------:|:---------------:|:--------------------:|:-------------------:|:-----------------:|:---------------------------------- |
+| **32**          | **0.67 ms**      | 64                | 64              | 1500 Hz              | ~1.20 µs            | ~1.2%             | Ultra-low latency monitoring (IEM) |
+| **64**          | **1.33 ms**      | 32                | 128             | 750 Hz               | ~1.22 µs            | ~0.6%             | Live tracking standard             |
+| **128**         | **2.67 ms**      | 16                | 256             | 375 Hz               | ~3.50 µs            | ~0.35%            | **Universal production default**   |
+| **256**         | **5.33 ms**      | 8                 | 512             | 187.5 Hz             | ~12.58 µs           | ~0.2%             | Complex DAW multi-track mixing     |
+| **512**         | **10.67 ms**     | 4                 | 1024            | 93.75 Hz             | ~26.00 µs           | ~0.1%             | Offline export / mastering         |
 
-*Note: Benchmarks reflect steady-state execution from `benches/cabsim_bench.rs` and `docs/quality-contract.json`. Construction and FFT partition pre-computation are performed strictly off-RT during loader initialization (~19.6 µs for 2048 taps, ~133.3 µs for 16384 taps).*
+Partition construction and FFT pre-computation occur strictly off-RT during loader initialization (~19.6 µs for 2048 taps).
 
 ### 9.3 Audio Fidelity & Bit-Exact Invariance
 
-Unlike lossy optimizations or non-linear approximations, partition sizing in UPOLS has **zero impact on audio fidelity**:
+Partition sizing in UPOLS has **zero impact on audio fidelity**:
 
-- **Bit-Exact Frequency Response:** Output is mathematically identical across all partition sizes (modulo floating-point MAC summation order, $\text{ESR} < 10^{-11}$ vs direct convolution).
-- **Zero Phase Distortion:** Full linear-phase FIR reconstruction with zero spectral coloration, zero truncation, and zero frequency warping.
-- **Causal Output & Tail Continuity:** Initial underrun prefix is bounded by $P - 1$ samples of silence; subsequent ring-out when input drops to zero is rendered continuously to full completion via the block-agnostic tail drain.
+- **Bit-Exact Frequency Response:** Output is mathematically identical across all partition sizes ($\text{ESR} < 10^{-11}$ vs direct convolution, bounded only by floating-point MAC summation order).
+- **Linear-Phase FIR Reconstruction:** Zero spectral coloration, zero truncation, zero frequency warping.
+- **Tail Ring-Out Continuity:** When audio input drops to zero, the impulse response tail renders to completion via the block-agnostic tail drain.
 
-### 9.4 Block-Agnostic Engine Driver (`CabSimAdapter::process_block` & `drain_tail`)
+### 9.4 Block-Agnostic Engine Driver
 
-Historically, cab-sim adapters were pinned to the host audio buffer size ($P = \text{quantum}$), coupling algorithmic latency to host buffer negotiation and forcing costly full-engine rebuilds during quantum changes.
+[`CabSimAdapter::process_block`](../src/dsp/cabsim/adapter.rs) and [`CabSimPair::process_block_stereo`](../src/dsp/cabsim/adapter.rs) decouple host audio buffer sizes from partition policy $P$:
 
-NeuralAmpModeler-rs provides a canonical block-agnostic driver:
+- Accepts arbitrary host block sizes (e.g. 16, 64, 128, 256, 333, 512 samples) against fixed partition $P$. The driver chunks blocks internally in a single FIFO pass without reallocation or contract violation flags.
+- Host buffer size changes at constant sample rate reuse the active instance in-place with zero memory allocation and zero audio glitches.
 
-- [`CabSimAdapter::process_block`](../src/dsp/cabsim/adapter.rs) and [`CabSimPair::process_block_stereo`](../src/dsp/cabsim/adapter.rs) accept arbitrary host block sizes (e.g. 16, 64, 128, 256, 333, 512 samples) against a fixed partition policy $P$. The driver chunks blocks internally in a single FIFO sweep without contract violation flags.
-- [`CabSimAdapter::drain_tail`](../src/dsp/cabsim/adapter.rs) similarly chunks ring-out rendering across arbitrary block boundaries, eliminating tail distortion and contract flags during noise-gate closure.
-- Host quantum changes at constant sample rate reuse the active adapter instance in-place with zero reallocation, zero rebuilds, and zero audio glitches.
-
-### 9.5 Recommendation Matrix (Live vs Offline / Mastering)
-
-| Mode                          | Recommended $P$ | Added Latency | Target Environment                | Design Rationale                                                                                                                                      |
-|:----------------------------- |:---------------:|:-------------:|:--------------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Ultra-Low Latency Live**    | 32              | 0.67 ms       | Live stage, In-Ear Monitors (IEM) | Minimizes physical playing latency; ensures total round-trip latency stays comfortably below the 3–5 ms perception threshold for electric guitarists. |
-| **Live Performance Standard** | 64              | 1.33 ms       | Live tracking, rehearsal          | Balanced low-latency tracking with negligible CPU overhead on modest hardware.                                                                        |
-| **Universal Default**         | 128             | 2.67 ms       | General host use, PipeWire, CLAP  | Safe production standard: imperceptible tactile delay with minimal CPU footprint (< 0.4%).                                                            |
-| **Studio Mixing**             | 256             | 5.33 ms       | Complex DAW projects (30+ tracks) | Maximizes CPU throughput; DAW Plugin Delay Compensation (PDC) automatically aligns tracks, rendering the latency completely transparent.              |
-| **Offline Master Export**     | 512             | 10.67 ms      | Batch bounce, offline rendering   | Optimal CPU throughput and cache efficiency during non-realtime rendering.                                                                            |
-
-**User Control:**
-
-- Standalone CLI: `--cabsim-partition 32|64|128|256` (default: 128).
-- Plugin / DAW: Fixed partition policy configured by host; algorithmic latency reported dynamically to the host timeline via the CLAP latency extension (`HostLatency::changed()`).
-
-**Implementation.** [`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs) (`ConvEngine`), [`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs) (`CabSimAdapter`, `CabSimPair`), [`benches/cabsim_bench.rs`](../benches/cabsim_bench.rs).
+**Implementation:** [`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim/conv.rs), [`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs), [`benches/cabsim_bench.rs`](../benches/cabsim_bench.rs).
 
 ---
 
-## 10. Governance & Quality Contract Verification
+## 10. Automated Governance & Quality Contract Verification
 
-All fidelity, SNR, and performance claims in this document are governed by the automated testing supply chain specified in [`docs/fixtures.md`](fixtures.md):
+All fidelity and performance thresholds are governed by the automated verification pipeline:
 
-| Governance Layer                | Verification Mechanism                                                                   | Enforcement Gate                 |
-|:------------------------------- |:---------------------------------------------------------------------------------------- |:-------------------------------- |
-| **Layer 0 — Golden Generation** | `tests/fixtures/golden_gen_build.sh` + pinned reference commit (`1f42f88`, tag `v0.5.4`) | Operational contract             |
-| **Layer 1 — Pre-committed**     | `tests/models/golden_vectors.rs` — verifies Rust output against committed binary goldens | `utils/tests-quick.sh` (Phase 2) |
-| **Layer 2 — Live Parity**       | `tests/parity/cpp_parity.rs` — cross-engine C++ parity execution                         | `utils/tests-long.sh`            |
+| Governance Layer                    | Verification Mechanism                                                                   | Test Suite & Gate                |
+|:----------------------------------- |:---------------------------------------------------------------------------------------- |:-------------------------------- |
+| **Layer 0 — Golden Generation**     | `tests/fixtures/golden_gen_build.sh` + pinned reference commit (`1f42f88`, tag `v0.5.4`) | Contract generation              |
+| **Layer 1 — Pre-committed Goldens** | `tests/models/golden_vectors.rs` — validates Rust output vs binary goldens               | `utils/tests-quick.sh` (Phase 2) |
+| **Layer 2 — Live Parity**           | `tests/parity/cpp_parity.rs` — cross-engine C++ execution                                | `utils/tests-long.sh`            |
 
-**Freshness Manifest:** `tests/fixtures/.golden_manifest.sha256` is enforced as a hard gate by `utils/tests-quick.sh`.
-
-Live dashboard measurements are updated via `utils/quality-dashboard.sh` and recorded in [`docs/quality-contract.json`](quality-contract.json).
+The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforced as a hard gate by `utils/tests-quick.sh`. Regression baselines are recorded in [`docs/quality-contract.json`](quality-contract.json).
 
 ---
 
-## 11. Architectural Rationale Archive
+## 11. Architectural Design Invariants
 
-Key technical trade-offs validated during NeuralAmpModeler-rs development:
-
-- **Native f32 Weights & Offline HQ Render:** The entire inference graph operates in 100% unquantized FP32 precision (`f32`) for both weights and activations. Memory bandwidth performance is achieved via 64-byte aligned vectorization (`AlignedVec<f32>`) and continuous strided AVX2 FMA rather than lossy F16/BF16 truncation. In Offline / Studio Master render mode, this guarantees bit-identical reproduction without the −64.9 dB drift floor seen in half-precision quantized engines.
-- **64-Tap Polyphase Resampler:** Benchmark analysis demonstrated that 32-tap filtering saved < 0.1% CPU (~40 ns/block) while causing catastrophic passband SNR degradation (~24 dB vs ≥100 dB).
-- **Exact-Grade Activation Default:** Standard mode Taylor/minimax exp kernels cost +10–15% activation compute while delivering +89.5 dB average SNR improvement across LSTM models.
-- **Half-Band FIR Oversampling:** Selected over Antiderivative Anti-Aliasing (ADAA) to maintain universal compatibility with polymorphically dispatched SIMD neural kernels.
-- **Uniform-Partitioned Convolution (UPOLS):** Selected over direct time-domain FIR ($O(N)$ per sample) and standard unpartitioned overlap-add/save to decouple algorithmic latency ($P$ samples) from total IR length (2048–16384 samples) with zero frequency-domain distortion.
+1. **Unquantized FP32 Math:** Weight matrices and neural activations evaluate in full 32-bit floating point (`f32`) with 64-byte alignment (`AlignedVec<f32>`). Lossy half-precision weight quantization is rejected.
+2. **Standard Activation Default:** Taylor/minimax polynomial exp kernels deliver $+89.5\text{ dB}$ average SNR improvement across LSTM models over Padé approximations.
+3. **64-Tap Resampler Standard:** 32-tap mode is rejected due to passband SNR collapse to $\sim 24\text{ dB}$.
+4. **Half-Band FIR Oversampling:** Selected over ADAA to preserve generic SIMD dispatch across heterogeneous non-linear neural topologies.
+5. **Uniform-Partitioned Convolution (UPOLS):** Decouples algorithmic latency ($P$ samples) from total impulse response length ($2048\text{--}16384$ samples) with zero frequency-domain distortion.
 
 ---
 
 ## See Also
 
-- [`docs/fastmath-approximations.md`](fastmath-approximations.md) — Detailed Padé/minimax numerical bounds and error profiles
-- [`docs/perceptual_validation.md`](perceptual_validation.md) — Measurement methodology, ESR thresholds, and cold-start analysis
-- [`docs/architecture.md`](architecture.md) — Architectural overview, pipeline flow, and memory layouts
-- [`docs/research-references.md`](research-references.md) — Scientific references (Kahles 2019, Sato & Smith 2025, etc.)
-- [`docs/quality-contract.json`](quality-contract.json) — Automated Quality Dashboard Baseline (JSON)
-- [`docs/fixtures.md`](fixtures.md) — Golden vector test supply chain contract
+- [`docs/fastmath-approximations.md`](fastmath-approximations.md) — Numerical error bounds and polynomial activation kernel specifications.
+- [`docs/perceptual_validation.md`](perceptual_validation.md) — Measurement methodology, ESR thresholds, and oracle calibration governance.
+- [`docs/architecture.md`](architecture.md) — Architectural overview, pipeline lifecycle, and memory layouts.
+- [`docs/quality-contract.json`](quality-contract.json) — Automated Quality Dashboard Baseline (JSON).
+- [`docs/fixtures.md`](fixtures.md) — Golden vector test supply chain contract.
