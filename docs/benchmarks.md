@@ -118,7 +118,7 @@ Below is the committed reference baseline measured on release builds under an is
 
 ### Core Mechanisms
 
-1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>` (defaults to `nproc / 2`, configurable via `NAM_BENCH_CORE`) to prevent OS scheduler migrations and cache thrashing.
+1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>`. The core is resolved automatically via `pick_bench_core` using the 3-step precedence: (1) `NAM_BENCH_CORE` if explicitly set; (2) first online isolated CPU from `/sys/devices/system/cpu/isolated` (preferring core 8 when 8-9 are isolated, with cpu9 offline intentional); (3) fallback `nproc / 2` (integer division). This prevents OS scheduler migrations and cache thrashing.
 2. **Controlled Statistical Rigor:** Executes the `regression_gate` suite with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Enforces `InstructionSet::Avx2` via `ForceAvx2Guard` so that AVX-512 hosts evaluate the exact `x86-64-v3` baseline.
 3. **Machine Verdict (`nam_perf_gate verdict`):** Evaluates Criterion's `target/criterion/<id>/change/estimates.json`. If the bootstrapped mean-change confidence interval lies entirely above the `+5%` noise band, the script exits with `REGRESSION_DETECTED`. If comparison artifacts are missing or unreadable, it fails closed with `REGRESSION_BLIND`.
 4. **Baseline Storage & Fingerprinting:** Authoritative baselines reside in `.performance-baselines/` (gitignored). A machine fingerprint file (`baseline-fingerprint.json`) captures the CPU model, ISA extension flags, compiler version, target triple, governor, pinned core, and producing git commit.
@@ -131,10 +131,10 @@ Below is the committed reference baseline measured on release builds under an is
 | **Check** (default) | `utils/tests-performance-regression.sh --check`              | Read-only. Compares against `.performance-baselines/`. Exits non-zero if a regression is detected or baseline is missing. |
 | **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Re-generates `.performance-baselines/` and writes `baseline-fingerprint.json`. **Human-only operation.**                  |
 
-| Variable                 | Default           | Purpose                                                             |
-|:------------------------ |:----------------- |:------------------------------------------------------------------- |
-| `NAM_BENCH_CORE`         | `nproc / 2`       | Dedicated CPU core to pin benchmarks via `taskset`.                 |
-| `NAM_BASELINE_NAME`      | `ci-baseline`     | Name of the Criterion baseline series.                              |
+| Variable                 | Default                                     | Purpose                                                             |
+|:------------------------ |:------------------------------------------- |:------------------------------------------------------------------- |
+| `NAM_BENCH_CORE`         | `pick_bench_core` (isolated or `nproc / 2`)  | Dedicated CPU core to pin benchmarks via `taskset`.                 |
+| `NAM_BASELINE_NAME`      | `ci-baseline`                               | Name of the Criterion baseline series.                              |
 | `NAM_BENCH_SUITE`        | `regression_gate` | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
 | `NAM_THERMAL_COOLDOWN_S` | `180`             | Cooldown period before benchmarking to stabilize clock frequencies. |
 

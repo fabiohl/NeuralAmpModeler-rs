@@ -183,13 +183,11 @@ fn test_rt_status_flags_provider_populated() {
 fn test_panic_hook_behavior() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     use std::fs;
-    use std::path::PathBuf;
 
-    let home = match std::env::var_os("HOME") {
-        Some(h) => PathBuf::from(h),
+    let cache_dir = match neural_amp_modeler_rs::common::panic_hook::crash_directory() {
+        Some(dir) => dir,
         None => return,
     };
-    let cache_dir = home.join(".cache/neural-amp-modeler-rs");
     let _ = fs::create_dir_all(&cache_dir);
 
     // Part 1: Test persistence when shutdown is NOT in progress.

@@ -5,6 +5,7 @@
 //! and dispatches to the appropriate architecture builder.
 
 use crate::common::diagnostics::{NamErrorCode, SystemSnapshot};
+use crate::loader::nam_json::NamModelData;
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
 use log::{debug, error, info};
@@ -137,11 +138,140 @@ pub fn load_and_build_model(
     // LogBuffer, without the loader painting support blocks on stderr.
     debug!("[Loader] System snapshot: {:?}", sys);
 
-    // 1. Reading and Parsing
-    let (model_data, file_size) = if ext_lower == "namb" {
-        let bytes = read_and_validate_model_bytes(path, &path_str)?;
-        let file_size = bytes.len();
-        let data = namb::parse_namb_typed(&bytes).map_err(|e| {
+    let is_namb = if ext_lower == "namb" {
+        true
+    } else if ext_lower == "nam" {
+        false
+    } else {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
+            path_str,
+            0,
+            NamErrorCode::UnknownExtension
+        );
+        return Err(LoadError::UnsupportedExtension(ext.to_string()));
+    };
+
+    let bytes = read_and_validate_model_bytes(path, &path_str)?;
+    let file_size = bytes.len();
+    let model_data = parse_model_bytes(&bytes, &path_str, is_namb)?;
+    build_model_pair_from_data(model_data, file_size, &path_str, dual_mono, options)
+}
+
+/// Loads and builds a model pair directly from an in-memory byte slice.
+///
+/// Enables loading embedded models (`include_bytes!`), assets received over IPC or network,
+/// or models residing in memory buffers without touching the filesystem.
+///
+/// Automatically detects format:
+/// - If the byte slice starts with `b"NAMB"`, it is parsed as binary `.namb`.
+/// - Otherwise, it is parsed as UTF-8 JSON `.nam`.
+///
+/// Returns `Ok(pair)` guaranteeing that `pair.model_l` is non-null (`Some`) and
+/// ready for real-time audio processing.
+///
+/// When `dual_mono` is `false`, only the left-channel model is built (`model_r` is `None`),
+/// avoiding unnecessary instantiation and prewarming.
+///
+/// When `dual_mono` is `true`:
+/// - With the `dual-mono` feature enabled (default), both `model_l` and `model_r` are built (`Some`).
+/// - If the `dual-mono` feature is disabled at compile time, a warning is logged via `log::warn!`
+///   and `pair.model_r` remains `None`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use neural_amp_modeler_rs::loader::{load_and_build_model_from_bytes, LoadOptions};
+/// use neural_amp_modeler_rs::SystemSnapshot;
+///
+/// let sys = SystemSnapshot::capture();
+/// let model_bytes: &[u8] = b"{}"; // In practice: include_bytes!("path/to/model.nam")
+///
+/// let pair = load_and_build_model_from_bytes(
+///     model_bytes,
+///     &sys,
+///     false, // dual_mono: mono (left-channel only)
+///     LoadOptions::default(),
+/// );
+/// ```
+pub fn load_and_build_model_from_bytes(
+    bytes: &[u8],
+    sys: &SystemSnapshot,
+    dual_mono: bool,
+    options: crate::loader::LoadOptions,
+) -> Result<LoadedModelPair, LoadError> {
+    load_and_build_model_from_bytes_named(bytes, "<memory>", sys, dual_mono, options)
+}
+
+/// Loads and builds a model pair from an in-memory byte slice with a descriptive source label.
+///
+/// Similar to [`load_and_build_model_from_bytes`], but allows attaching an explicit
+/// `source_label` (e.g. filename, preset name, or URI) for structured logging and
+/// diagnostic support bundles (`DiagnosticBundle`).
+///
+/// Format detection:
+/// - If `source_label` ends with `".namb"` (case-insensitive) or the byte slice starts with `b"NAMB"`,
+///   it is parsed as binary `.namb`.
+/// - Otherwise, it is parsed as UTF-8 JSON `.nam`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use neural_amp_modeler_rs::loader::{load_and_build_model_from_bytes_named, LoadOptions};
+/// use neural_amp_modeler_rs::SystemSnapshot;
+///
+/// let sys = SystemSnapshot::capture();
+/// let model_bytes: &[u8] = b"{}"; // In practice: include_bytes!("path/to/model.nam")
+///
+/// let pair = load_and_build_model_from_bytes_named(
+///     model_bytes,
+///     "embedded_wavenet.nam",
+///     &sys,
+///     false,
+///     LoadOptions::default(),
+/// );
+/// ```
+pub fn load_and_build_model_from_bytes_named(
+    bytes: &[u8],
+    source_label: &str,
+    sys: &SystemSnapshot,
+    dual_mono: bool,
+    options: crate::loader::LoadOptions,
+) -> Result<LoadedModelPair, LoadError> {
+    info!(
+        "[Loader] Loading model from bytes: label=\"{}\", size={} bytes",
+        source_label,
+        bytes.len()
+    );
+    debug!("[Loader] System snapshot: {:?}", sys);
+
+    if bytes.len() as u64 > MAX_MODEL_BYTES {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             model file is too large ({} bytes, max is {} bytes). Please check the file \
+             size and ensure it is a valid NAM model.",
+            source_label,
+            bytes.len(),
+            NamErrorCode::ModelTooLarge,
+            bytes.len(),
+            MAX_MODEL_BYTES
+        );
+        return Err(LoadError::ModelTooLarge);
+    }
+
+    let is_namb = source_label.to_lowercase().ends_with(".namb") || bytes.starts_with(b"NAMB");
+    let model_data = parse_model_bytes(bytes, source_label, is_namb)?;
+    build_model_pair_from_data(model_data, bytes.len(), source_label, dual_mono, options)
+}
+
+fn parse_model_bytes(
+    bytes: &[u8],
+    source_label: &str,
+    is_namb: bool,
+) -> Result<NamModelData, LoadError> {
+    let file_size = bytes.len();
+    if is_namb {
+        let data = namb::parse_namb_typed(bytes).map_err(|e| {
             let code = match &e {
                 namb::NambError::Truncated { .. } => NamErrorCode::NambTruncated,
                 namb::NambError::InvalidMagic(_) => NamErrorCode::NambInvalidMagic,
@@ -164,20 +294,18 @@ pub fn load_and_build_model(
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  invalid \".namb\" file (detail: {}).",
-                path_str, file_size, code, e
+                source_label, file_size, code, e
             );
             LoadError::from(e)
         })?;
-        (data, file_size)
-    } else if ext_lower == "nam" {
-        let bytes = read_and_validate_model_bytes(path, &path_str)?;
-        let file_size = bytes.len();
-        let json = String::from_utf8(bytes).map_err(|e| {
+        Ok(data)
+    } else {
+        let json = String::from_utf8(bytes.to_vec()).map_err(|e| {
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  file contains invalid UTF-8 (utf8_error: {}). Only UTF-8 encoded \
                  .nam files are supported.",
-                path_str,
+                source_label,
                 file_size,
                 NamErrorCode::FileReadError,
                 e
@@ -222,7 +350,7 @@ pub fn load_and_build_model(
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  error parsing model JSON (detail: {}).",
-                path_str, file_size, code, e
+                source_label, file_size, code, e
             );
             match e {
                 nam_json::JsonError::WeightsExceedLimit { .. }
@@ -245,17 +373,17 @@ pub fn load_and_build_model(
                 nam_json::JsonError::Serde(_) => LoadError::Json(e),
             }
         })?;
-        (data, file_size)
-    } else {
-        error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?}",
-            path_str,
-            0,
-            NamErrorCode::UnknownExtension
-        );
-        return Err(LoadError::UnsupportedExtension(ext.to_string()));
-    };
+        Ok(data)
+    }
+}
 
+fn build_model_pair_from_data(
+    model_data: NamModelData,
+    file_size: usize,
+    source_label: &str,
+    dual_mono: bool,
+    options: crate::loader::LoadOptions,
+) -> Result<LoadedModelPair, LoadError> {
     let model_version = model_data.version.as_deref().unwrap_or("(unknown)");
     let weights_count = model_data.weights.len();
     let model_sample_rate = model_data.sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
@@ -274,7 +402,7 @@ pub fn load_and_build_model(
         error!(
             "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
              invalid model metadata (detail: {}).",
-            path_str,
+            source_label,
             file_size,
             NamErrorCode::InvalidMetadata,
             e
@@ -315,7 +443,7 @@ pub fn load_and_build_model(
         error!(
             "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
              failed to build model (L) (detail: {}).",
-            path_str, file_size, code, e
+            source_label, file_size, code, e
         );
         if e.to_string().contains("slimmable") {
             LoadError::UnsupportedArchitecture(e.to_string())
@@ -370,7 +498,7 @@ pub fn load_and_build_model(
             error!(
                 "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  failed to build model (R) (detail: {}).",
-                path_str, file_size, code, e
+                source_label, file_size, code, e
             );
             if e.to_string().contains("slimmable") {
                 LoadError::UnsupportedArchitecture(e.to_string())

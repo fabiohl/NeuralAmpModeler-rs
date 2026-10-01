@@ -107,6 +107,8 @@ pub mod rt_hardening;
 /// let _: Option<Box<dyn NamModel>> = None;
 /// let _: Option<StaticModel> = None;
 /// let _ = load_and_build_model;
+/// let _ = load_and_build_model_from_bytes;
+/// let _ = load_and_build_model_from_bytes_named;
 /// ```
 pub mod prelude {
     pub use crate::common::diagnostics::SystemSnapshot;
@@ -123,6 +125,7 @@ pub mod prelude {
     pub use crate::dsp::utils::DelayLine;
     pub use crate::loader::{
         JsonError, LoadError, LoadOptions, LoadedModelPair, NambError, load_and_build_model,
+        load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
     };
     pub use crate::models::{NamModel, StaticModel};
 }

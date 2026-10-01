@@ -2,14 +2,14 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 rust-version = "1.98.0"
 autobins = false
 license = "Apache-2.0"
 repository = "https://github.com/fabiohl/NeuralAmpModeler-rs"
 documentation = "https://docs.rs/NeuralAmpModeler-rs"
-description = "High-performance Neural Amp Modeler DSP core: WaveNet/LSTM/ConvNet inference, requires x86-64-v3 SIMD, .nam/.namb loader, IR, resampling, noise gate."
+description = "NeuralAmpModeler-rs is a high-performance, real-time neural inference DSP library written in pure Rust. It provides the core engine for loading, building, and executing Neural Amp Modeler (NAM) models."
 readme = "README.md"
 authors = ["Fábio Henrique de Lima Silva <fhl.bsb@gmail.com>"]
 keywords = ["audio", "dsp", "nam", "neural-amp-modeler", "guitar"]
@@ -276,5 +276,12 @@ split-debuginfo = "unpacked"
 
 [package.metadata.docs.rs]
 no-default-features = true
-features = ["dual-mono", "testing", "heap-audit", "fft-radix4-planner", "avx512", "rt-hardening"]
+features = [
+    "dual-mono",
+    "testing",
+    "heap-audit",
+    "fft-radix4-planner",
+    "avx512",
+    "rt-hardening",
+]
 rustdoc-args = ["--cfg", "docsrs"]

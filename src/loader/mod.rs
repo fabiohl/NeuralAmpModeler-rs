@@ -24,7 +24,9 @@ pub mod namb_encoder;
 /// Weight matrix transposition utilities for interleaved memory layouts.
 pub mod transpose;
 
-pub use build::load_and_build_model;
+pub use build::{
+    load_and_build_model, load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
+};
 pub use error::LoadError;
 pub use loaded_model_pair::*;
 pub use nam_json::JsonError;

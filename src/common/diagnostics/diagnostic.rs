@@ -124,6 +124,16 @@ impl NamDiagnostic {
     pub fn error_code(&self) -> NamErrorCode {
         self.code
     }
+
+    /// Returns the user-friendly message.
+    pub fn user_message(&self) -> &str {
+        &self.user_message
+    }
+
+    /// Returns the suggested user hint.
+    pub fn user_hint(&self) -> &str {
+        &self.user_hint
+    }
 }
 
 impl fmt::Display for NamDiagnostic {

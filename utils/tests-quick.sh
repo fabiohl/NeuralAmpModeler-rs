@@ -59,7 +59,8 @@ trap cleanup_receipt EXIT
 
 trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line $LINENO status $?.${NC}"; exit 1' ERR
 
-mkdir -p target/logs
+mkdir -p target/logs target/test_crashes
+export NAM_CRASH_DIR="${PROJECT_DIR}/target/test_crashes"
 rm -f target/logs/quick-phase1.log \
       target/logs/quick-phase2.log \
       target/logs/quick-phase3.log \

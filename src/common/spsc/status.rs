@@ -118,6 +118,14 @@ pub const RT_STATUS_STRUCTURAL_SUPERSEDED: u64 = 1 << 29;
 /// for the main thread so the saturation is explicit, never an invisible loss.
 pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
 
+/// Flag indicating that a fatal panic occurred in the RT audio callback.
+/// The RT thread transitions to a poisoned state, emitting silence until
+/// deactivated/reactivated by the host, and off-RT triggers recovery.
+pub const RT_STATUS_PROCESSOR_POISONED: u64 = 1 << 31;
+
+/// Backward-compatible alias for [`RT_STATUS_PROCESSOR_POISONED`].
+pub const RT_STATUS_PANIC_CAPTURED: u64 = RT_STATUS_PROCESSOR_POISONED;
+
 /// Atomic status flags for silent RT→Main communication.
 ///
 /// The DSP thread sets atomic flags instead of calling `println!`/`eprintln!`.
@@ -136,7 +144,7 @@ pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
 /// | 5 | `GC_OVERFLOW` | Garbage Collection channel overflow |
 /// | 6 | `IS_FADING` | Gate transitioning (Fading In/Out) |
 /// | 7 | `MODEL_LOAD_FAILED` | Model load failure on RT thread |
-/// | 8 | `HEAP_ALLOC` | Heap allocation detected on RT thread |
+/// | 8 | `HEAP_ALLOC` | Heap allocation detected onSprint 2 — Contenção de falhas no RT (Épico E2; F-NP-02, F-NP-09) — CRÍTICA RT thread |
 /// | 9 | `NEEDS_CABSIM_REBUILD` | DSP thread requests cabsim engine rebuild |
 /// | 10 | `RESAMP_SWAP_PENDING` | RT callback paused awaiting resampler swap |
 /// | 11 | `HUGEPAGE_OK` | Huge-page allocation confirmed active |
@@ -159,6 +167,7 @@ pub const RT_STATUS_PARAM_QUEUE_BACKLOG: u64 = 1 << 30;
 /// | 28 | `STRUCTURAL_DEFERRED` | Structural command deferred to next callback (budget exhausted) |
 /// | 29 | `STRUCTURAL_SUPERSEDED` | Deferred structural command superseded by newer same-kind; discarded off-RT |
 /// | 30 | `PARAM_QUEUE_BACKLOG` | Scalar param queue still non-empty after the per-callback drain budget |
+/// | 31 | `PROCESSOR_POISONED` | Fatal panic occurred in RT callback; processor poisoned |
 #[repr(C, align(128))]
 pub struct RtStatusFlags {
     // =========================================================================

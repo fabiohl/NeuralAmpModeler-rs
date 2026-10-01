@@ -292,8 +292,19 @@ pub fn format_panic_report_for_audit_test(
     write_panic_report(buf, component, thread_name, location, payload_str)
 }
 
+/// Returns the path to the directory used for crash reports:
+/// 1. `NAM_CRASH_DIR` environment variable, if set and non-empty.
+/// 2. `$HOME/.cache/neural-amp-modeler-rs`, if `HOME` environment variable is set.
+/// 3. `None` if neither is set.
+pub fn crash_directory() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("NAM_CRASH_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/neural-amp-modeler-rs"))
+}
+
 /// Installs a panic hook that writes a zero-alloc crash report to
-/// `~/.cache/neural-amp-modeler-rs/crash-<unix_ts>-<component>.txt`.
+/// `<crash_directory>/crash-<unix_ts>-<component>.txt`.
 pub fn install_panic_hook(component: &'static str) {
     SYSTEM_SNAPSHOT.get_or_init(SystemSnapshot::capture);
 
@@ -343,62 +354,59 @@ pub fn install_panic_hook(component: &'static str) {
             payload_str,
         );
 
-        if let Some(home_dir) = std::env::var_os("HOME") {
-            let mut cache_dir = PathBuf::from(home_dir);
-            cache_dir.push(".cache/neural-amp-modeler-rs");
+        if let Some(cache_dir) = crash_directory()
+            && std::fs::create_dir_all(&cache_dir).is_ok()
+        {
+            #[cfg(unix)]
+            {
+                use std::fs::Permissions;
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&cache_dir, Permissions::from_mode(0o700));
+            }
 
-            if std::fs::create_dir_all(&cache_dir).is_ok() {
-                #[cfg(unix)]
-                {
-                    use std::fs::Permissions;
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&cache_dir, Permissions::from_mode(0o700));
-                }
+            let unix_ts = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
 
-                let unix_ts = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+            let mut ts_buf = NumBuffer::new();
+            let ts_str = unix_ts.format_into(&mut ts_buf);
 
-                let mut ts_buf = NumBuffer::new();
-                let ts_str = unix_ts.format_into(&mut ts_buf);
+            let mut filename_buf = [0u8; 128];
+            let filename = {
+                let mut lw = LimitWriter::new(&mut filename_buf);
+                let _ = write!(lw, "crash-{}-{}.txt", ts_str, component);
+                let len = lw.cursor;
+                std::str::from_utf8(&filename_buf[..len]).unwrap_or("crash-unknown.txt")
+            };
 
-                let mut filename_buf = [0u8; 128];
-                let filename = {
-                    let mut lw = LimitWriter::new(&mut filename_buf);
-                    let _ = write!(lw, "crash-{}-{}.txt", ts_str, component);
-                    let len = lw.cursor;
-                    std::str::from_utf8(&filename_buf[..len]).unwrap_or("crash-unknown.txt")
-                };
+            let mut tmp_buf = [0u8; 128];
+            let tmp_filename = {
+                let mut lw = LimitWriter::new(&mut tmp_buf);
+                let _ = write!(lw, "crash-{}-{}.tmp", ts_str, component);
+                let len = lw.cursor;
+                std::str::from_utf8(&tmp_buf[..len]).unwrap_or("crash-unknown.tmp")
+            };
 
-                let mut tmp_buf = [0u8; 128];
-                let tmp_filename = {
-                    let mut lw = LimitWriter::new(&mut tmp_buf);
-                    let _ = write!(lw, "crash-{}-{}.tmp", ts_str, component);
-                    let len = lw.cursor;
-                    std::str::from_utf8(&tmp_buf[..len]).unwrap_or("crash-unknown.tmp")
-                };
+            let file_path = cache_dir.join(filename);
+            let tmp_file_path = cache_dir.join(tmp_filename);
 
-                let file_path = cache_dir.join(filename);
-                let tmp_file_path = cache_dir.join(tmp_filename);
+            let mut options = OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
 
-                let mut options = OpenOptions::new();
-                options.write(true).create(true).truncate(true);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.mode(0o600);
-                }
-
-                if let Ok(mut file) = options.open(&tmp_file_path) {
-                    if file.write_all(&report_buf[..written]).is_ok() {
-                        let _ = file.sync_all();
-                        drop(file);
-                        let _ = std::fs::rename(&tmp_file_path, &file_path);
-                        prune_old_crash_files(&cache_dir);
-                    } else {
-                        let _ = std::fs::remove_file(&tmp_file_path);
-                    }
+            if let Ok(mut file) = options.open(&tmp_file_path) {
+                if file.write_all(&report_buf[..written]).is_ok() {
+                    let _ = file.sync_all();
+                    drop(file);
+                    let _ = std::fs::rename(&tmp_file_path, &file_path);
+                    prune_old_crash_files(&cache_dir);
+                } else {
+                    let _ = std::fs::remove_file(&tmp_file_path);
                 }
             }
         }

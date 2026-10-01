@@ -336,11 +336,9 @@ impl DiagnosticBundle {
     /// (e.g. during application initialization or periodic housekeeping). Returns the
     /// number of files removed, or `Ok(0)` if the cache directory does not exist.
     pub fn purge_old_reports(max_age_secs: u64) -> std::io::Result<usize> {
-        let Some(home_dir) = std::env::var_os("HOME") else {
+        let Some(cache_dir) = crate::common::panic_hook::crash_directory() else {
             return Ok(0);
         };
-        let mut cache_dir = std::path::PathBuf::from(home_dir);
-        cache_dir.push(".cache/neural-amp-modeler-rs");
         Self::purge_old_reports_in_dir(&cache_dir, max_age_secs)
     }
 

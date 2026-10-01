@@ -382,6 +382,7 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper       | Reports CPU SIMD capabilities, OS AVX-512 state, and active dispatch backend with an inference checksum.                           |
 | **`utils/check-model.sh`**                  | Model inspection CLI wrapper      | Inspects `.nam` (JSON) and `.namb` (binary) models, reporting architecture topology, metadata, and weights.                        |
 | **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking          | Executes automated comparative benchmarking across target hardware architectures via SSH.                                          |
+| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Simulated-sysfs coverage for `pick_bench_core` (isolated/online/fallback branches).                                             |
 
 ---
 

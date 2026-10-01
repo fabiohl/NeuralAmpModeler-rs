@@ -51,8 +51,7 @@ trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" fa
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-NUM_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-DEFAULT_CORE=$(( ${NUM_CORES:-1} / 2 ))
+DEFAULT_CORE="$(pick_bench_core)"
 BENCH_CORE="${NAM_BENCH_CORE:-}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
 BENCH_SUITE="${NAM_BENCH_SUITE:-regression_gate}"

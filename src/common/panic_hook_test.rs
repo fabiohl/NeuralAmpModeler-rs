@@ -78,3 +78,33 @@ fn test_format_panic_report_none_snapshot_is_minimal() {
     assert!(report.contains("os=<unavailable> kernel=<unavailable>"));
     assert!(report.contains("features=<snapshot not initialized>"));
 }
+
+#[test]
+fn test_crash_directory_env_override() {
+    let custom_path = std::path::PathBuf::from("/tmp/nam_test_custom_crash_dir");
+
+    // Override with custom path
+    // SAFETY: isolated unit test thread; setting NAM_CRASH_DIR for this process.
+    unsafe {
+        std::env::set_var("NAM_CRASH_DIR", &custom_path);
+    }
+    assert_eq!(crash_directory(), Some(custom_path.clone()));
+
+    // When empty, falls back to HOME/.cache/neural-amp-modeler-rs
+    // SAFETY: isolated unit test thread; setting NAM_CRASH_DIR for this process.
+    unsafe {
+        std::env::set_var("NAM_CRASH_DIR", "");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        assert_eq!(
+            crash_directory(),
+            Some(std::path::PathBuf::from(home).join(".cache/neural-amp-modeler-rs"))
+        );
+    }
+
+    // Clean up
+    // SAFETY: isolated unit test thread; removing NAM_CRASH_DIR for this process.
+    unsafe {
+        std::env::remove_var("NAM_CRASH_DIR");
+    }
+}

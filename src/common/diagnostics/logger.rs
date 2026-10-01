@@ -518,6 +518,15 @@ impl NamLogger {
         sinks.push((Some(instance_id), Arc::downgrade(sink)));
     }
 
+    /// Unregisters any host-log sinks associated with `instance_id`.
+    ///
+    /// Called by plugin or host instances during teardown/destruction to ensure
+    /// no subsequent log dispatches attempt to notify a dead instance's sink.
+    pub fn unregister_instance_sink(&self, instance_id: u64) {
+        let mut sinks = self.sinks.lock().unwrap_or_else(|e| e.into_inner());
+        sinks.retain(|(sink_inst_id, _)| *sink_inst_id != Some(instance_id));
+    }
+
     /// Updates the maximum log level filter at runtime.
     pub fn set_max_level(&self, level: LevelFilter) {
         *self.max_level.lock().unwrap_or_else(|e| e.into_inner()) = level;

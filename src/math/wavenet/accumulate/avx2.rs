@@ -6,12 +6,40 @@
 use crate::wavenet_simd_avx2;
 use core::arch::x86_64::*;
 
-#[cold]
-#[inline(never)]
-fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
-    for i in 0..dest.len() {
-        let acc = dest[i] as f64 + src[i] as f64;
-        dest[i] = acc as f32;
+/// Builds an AVX2 tail mask with the low `rem` lanes enabled (`-1`) and the rest zero.
+///
+/// Lets remainder paths (`rem < 8`) run the full 256-bit vector kernels without
+/// scalar fallback, heap allocation, or libm calls. Stack-resident only; the
+/// mask lives in a register after load.
+#[target_feature(enable = "avx2")]
+unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
+    let mut vals = [0i32; 8];
+    for item in vals.iter_mut().take(rem) {
+        *item = -1;
+    }
+    // SAFETY: `vals` is an 8-element stack array, so the 256-bit unaligned load stays in bounds.
+    unsafe { _mm256_loadu_si256(vals.as_ptr() as *const __m256i) }
+}
+
+/// Masked tail for head accumulation: `dest[i] += src[i]` in f32.
+///
+/// Matches the vector loop (`_mm256_add_ps`, f32) lane-for-lane. Fractional
+/// blocks run the same vector add under an AVX2 mask, so they accumulate
+/// identically to full vectors.
+#[target_feature(enable = "avx2")]
+unsafe fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
+    let rem = dest.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `src.len() >= dest.len()` (public contract);
+    // the mask enables only the low `rem` lanes, so masked loads/stores touch
+    // exactly `dest[0..rem]` and `src[0..rem]` with fault suppression elsewhere.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let vs = _mm256_maskload_ps(src.as_ptr(), mask);
+        let vd = _mm256_maskload_ps(dest.as_ptr(), mask);
+        _mm256_maskstore_ps(dest.as_mut_ptr(), mask, _mm256_add_ps(vd, vs));
     }
 }
 
@@ -37,18 +65,34 @@ pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
         });
     }
     if i < len {
-        accumulate_head_avx2_tail(&mut dest[i..], &src[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            accumulate_head_avx2_tail(&mut dest[i..], &src[i..]);
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
-    for i in 0..block.len() {
-        let val = block[i].tanh();
-        block[i] = val;
-        let acc = head_input[i] as f64 + val as f64;
-        head_input[i] = acc as f32;
+/// Masked tail for tanh + accumulate: polynomial tanh, f32 accumulation.
+///
+/// Runs the same `simd_tanh_poly_avx2` kernel and `_mm256_add_ps` f32 sum as
+/// the vector loop under an AVX2 mask, so the remainder lanes activate and
+/// accumulate identically to full vectors.
+#[target_feature(enable = "avx2,fma")]
+unsafe fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` (public contract);
+    // the mask enables only the low `rem` lanes, so masked loads/stores touch
+    // exactly `block[0..rem]` and `head_input[0..rem]`.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        let vh = _mm256_maskload_ps(head_input.as_ptr(), mask);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, _mm256_add_ps(vh, vt));
     }
 }
 
@@ -91,13 +135,20 @@ pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
         });
     }
     if i < len {
-        tanh_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            tanh_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn gated_activation_and_accumulate_block_avx2_tail(
+/// Masked tail for gated activation + accumulate: polynomial dual kernel, f32 sum.
+///
+/// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel and f32 add as
+/// the vector loop under an AVX2 mask, so the remainder lanes activate and
+/// accumulate identically to full vectors.
+#[target_feature(enable = "avx2,fma")]
+unsafe fn gated_activation_and_accumulate_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
     ch: usize,
@@ -106,13 +157,30 @@ fn gated_activation_and_accumulate_block_avx2_tail(
 ) {
     let block_offset = f * 2 * ch;
     let head_offset = f * ch;
-    for c in start_c..ch {
-        let z1 = block[block_offset + c];
-        let z2 = block[block_offset + ch + c];
-        let activated = z1.tanh() * (1.0 / (1.0 + (-z2).exp()));
-        block[block_offset + c] = activated;
-        let acc = head_input[head_offset + c] as f64 + activated as f64;
-        head_input[head_offset + c] = acc as f32;
+    let rem = ch - start_c;
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `ch >= 1`, `block.len() >= 2 * ch * num_frames`,
+    // and `start_c <= ch`; the mask enables only the low `rem` lanes, so masked
+    // loads/stores touch exactly the remainder channels.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let z1 = _mm256_maskload_ps(block.as_ptr().add(block_offset + start_c), mask);
+        let z2 = _mm256_maskload_ps(block.as_ptr().add(block_offset + ch + start_c), mask);
+        let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+        let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+        _mm256_maskstore_ps(
+            block.as_mut_ptr().add(block_offset + start_c),
+            mask,
+            activated,
+        );
+        let vh = _mm256_maskload_ps(head_input.as_ptr().add(head_offset + start_c), mask);
+        _mm256_maskstore_ps(
+            head_input.as_mut_ptr().add(head_offset + start_c),
+            mask,
+            _mm256_add_ps(vh, activated),
+        );
     }
 }
 
@@ -156,18 +224,33 @@ pub unsafe fn gated_activation_and_accumulate_block_avx2(
             });
         }
         if c < ch {
-            gated_activation_and_accumulate_block_avx2_tail(head_input, block, ch, f, c);
+            // SAFETY: same channel geometry as the vector loop above; masked tail touches only the remainder channels.
+            unsafe {
+                gated_activation_and_accumulate_block_avx2_tail(head_input, block, ch, f, c);
+            }
         }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
-    for i in 0..block.len() {
-        let val = block[i].tanh();
-        block[i] = val;
-        head_input[i] = val;
+/// Masked tail for tanh + overwrite: polynomial tanh, in-place store.
+///
+/// Runs the same `simd_tanh_poly_avx2` kernel as the vector loop under an AVX2
+/// mask, so the remainder lanes activate identically to full vectors.
+#[target_feature(enable = "avx2,fma")]
+unsafe fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` (public contract);
+    // the mask enables only the low `rem` lanes, so masked loads/stores touch
+    // exactly `block[0..rem]` and `head_input[0..rem]`.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, vt);
     }
 }
 
@@ -205,22 +288,38 @@ pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
         });
     }
     if i < len {
-        tanh_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            tanh_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn tanh_and_accumulate_with_seed_avx2_tail(
+/// Masked tail for fused seed + tanh + accumulate: polynomial tanh, f32 sum.
+///
+/// Runs the same `simd_tanh_poly_avx2` kernel and f32 add as the vector loop
+/// under an AVX2 mask, so the remainder lanes compute `seed + tanh(block)`
+/// identically to full vectors.
+#[target_feature(enable = "avx2,fma")]
+unsafe fn tanh_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
     seed: &[f32],
 ) {
-    for i in 0..block.len() {
-        let val = block[i].tanh();
-        block[i] = val;
-        let acc = seed[i] as f64 + val as f64;
-        head_input[i] = acc as f32;
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` and
+    // `seed.len() >= block.len()` (public contract); the mask enables only the
+    // low `rem` lanes, so masked loads/stores touch exactly `..rem` on all slices.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = crate::math::activations::simd_tanh_poly_avx2(vb);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        let vs = _mm256_maskload_ps(seed.as_ptr(), mask);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, _mm256_add_ps(vs, vt));
     }
 }
 
@@ -271,18 +370,38 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx2(
         });
     }
     if i < len {
-        tanh_and_accumulate_with_seed_avx2_tail(&mut head_input[i..], &mut block[i..], &seed[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            tanh_and_accumulate_with_seed_avx2_tail(
+                &mut head_input[i..],
+                &mut block[i..],
+                &seed[i..],
+            );
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
-    for i in 0..block.len() {
-        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
-        block[i] = val;
-        let acc = head_input[i] as f64 + val as f64;
-        head_input[i] = acc as f32;
+/// Masked tail for ReLU + accumulate: vector max, f32 sum.
+///
+/// Runs the same `_mm256_max_ps` and f32 add as the vector loop under an AVX2
+/// mask, so the remainder lanes activate and accumulate identically to full vectors.
+#[target_feature(enable = "avx2")]
+unsafe fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` (public contract);
+    // the mask enables only the low `rem` lanes, so masked loads/stores touch
+    // exactly `block[0..rem]` and `head_input[0..rem]`.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let zero = _mm256_setzero_ps();
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        let vh = _mm256_maskload_ps(head_input.as_ptr(), mask);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, _mm256_add_ps(vh, vt));
     }
 }
 
@@ -325,17 +444,33 @@ pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
         });
     }
     if i < len {
-        relu_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            relu_and_accumulate_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
-    for i in 0..block.len() {
-        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
-        block[i] = val;
-        head_input[i] = val;
+/// Masked tail for ReLU + overwrite: vector max, in-place store.
+///
+/// Runs the same `_mm256_max_ps` as the vector loop under an AVX2 mask, so the
+/// remainder lanes activate identically to full vectors.
+#[target_feature(enable = "avx2")]
+unsafe fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` (public contract);
+    // the mask enables only the low `rem` lanes, so masked loads/stores touch
+    // exactly `block[0..rem]` and `head_input[0..rem]`.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let zero = _mm256_setzero_ps();
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, vt);
     }
 }
 
@@ -373,22 +508,39 @@ pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
         });
     }
     if i < len {
-        relu_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            relu_and_overwrite_block_avx2_tail(&mut head_input[i..], &mut block[i..]);
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn relu_and_accumulate_with_seed_avx2_tail(
+/// Masked tail for fused seed + ReLU + accumulate: vector max, f32 sum.
+///
+/// Runs the same `_mm256_max_ps` and f32 add as the vector loop under an AVX2
+/// mask, so the remainder lanes compute `seed + max(0, block)` identically to
+/// full vectors.
+#[target_feature(enable = "avx2")]
+unsafe fn relu_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
     seed: &[f32],
 ) {
-    for i in 0..block.len() {
-        let val = if block[i] > 0.0 { block[i] } else { 0.0 };
-        block[i] = val;
-        let acc = seed[i] as f64 + val as f64;
-        head_input[i] = acc as f32;
+    let rem = block.len();
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `head_input.len() >= block.len()` and
+    // `seed.len() >= block.len()` (public contract); the mask enables only the
+    // low `rem` lanes, so masked loads/stores touch exactly `..rem` on all slices.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let zero = _mm256_setzero_ps();
+        let vb = _mm256_maskload_ps(block.as_ptr(), mask);
+        let vt = _mm256_max_ps(vb, zero);
+        _mm256_maskstore_ps(block.as_mut_ptr(), mask, vt);
+        let vs = _mm256_maskload_ps(seed.as_ptr(), mask);
+        _mm256_maskstore_ps(head_input.as_mut_ptr(), mask, _mm256_add_ps(vs, vt));
     }
 }
 
@@ -438,13 +590,24 @@ pub unsafe fn relu_and_accumulate_with_seed_avx2(
         });
     }
     if i < len {
-        relu_and_accumulate_with_seed_avx2_tail(&mut head_input[i..], &mut block[i..], &seed[i..]);
+        // SAFETY: same slice contract as the vector loop above; masked tail touches only `..rem`.
+        unsafe {
+            relu_and_accumulate_with_seed_avx2_tail(
+                &mut head_input[i..],
+                &mut block[i..],
+                &seed[i..],
+            );
+        }
     }
 }
 
-#[cold]
-#[inline(never)]
-fn gated_activation_and_overwrite_block_avx2_tail(
+/// Masked tail for gated activation + overwrite: polynomial dual kernel.
+///
+/// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel as the vector
+/// loop under an AVX2 mask, so the remainder lanes activate identically to
+/// full vectors.
+#[target_feature(enable = "avx2,fma")]
+unsafe fn gated_activation_and_overwrite_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
     ch: usize,
@@ -453,12 +616,29 @@ fn gated_activation_and_overwrite_block_avx2_tail(
 ) {
     let block_offset = f * 2 * ch;
     let head_offset = f * ch;
-    for c in start_c..ch {
-        let z1 = block[block_offset + c];
-        let z2 = block[block_offset + ch + c];
-        let activated = z1.tanh() * (1.0 / (1.0 + (-z2).exp()));
-        block[block_offset + c] = activated;
-        head_input[head_offset + c] = activated;
+    let rem = ch - start_c;
+    if rem == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees `ch >= 1`, `block.len() >= 2 * ch * num_frames`,
+    // and `start_c <= ch`; the mask enables only the low `rem` lanes, so masked
+    // loads/stores touch exactly the remainder channels.
+    unsafe {
+        let mask = avx2_tail_mask(rem);
+        let z1 = _mm256_maskload_ps(block.as_ptr().add(block_offset + start_c), mask);
+        let z2 = _mm256_maskload_ps(block.as_ptr().add(block_offset + ch + start_c), mask);
+        let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+        let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+        _mm256_maskstore_ps(
+            block.as_mut_ptr().add(block_offset + start_c),
+            mask,
+            activated,
+        );
+        _mm256_maskstore_ps(
+            head_input.as_mut_ptr().add(head_offset + start_c),
+            mask,
+            activated,
+        );
     }
 }
 
@@ -497,7 +677,10 @@ pub unsafe fn gated_activation_and_overwrite_block_avx2(
             });
         }
         if c < ch {
-            gated_activation_and_overwrite_block_avx2_tail(head_input, block, ch, f, c);
+            // SAFETY: same channel geometry as the vector loop above; masked tail touches only the remainder channels.
+            unsafe {
+                gated_activation_and_overwrite_block_avx2_tail(head_input, block, ch, f, c);
+            }
         }
     }
 }

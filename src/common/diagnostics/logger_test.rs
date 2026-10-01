@@ -857,3 +857,80 @@ fn test_concurrent_multi_instance_logging() {
         }
     }
 }
+
+#[test]
+fn test_unregister_instance_sink() {
+    let logger = new_nam_logger(false, LevelFilter::Info);
+
+    let logs_inst_1 = Arc::new(Mutex::new(Vec::new()));
+    let logs_inst_2 = Arc::new(Mutex::new(Vec::new()));
+
+    let l1 = Arc::clone(&logs_inst_1);
+    let sink_1: Arc<HostLogFn> = Arc::new(move |_sev, msg| {
+        l1.lock().unwrap().push(msg.to_string());
+    });
+
+    let l2 = Arc::clone(&logs_inst_2);
+    let sink_2: Arc<HostLogFn> = Arc::new(move |_sev, msg| {
+        l2.lock().unwrap().push(msg.to_string());
+    });
+
+    logger.register_instance_sink(10, &sink_1);
+    logger.register_instance_sink(20, &sink_2);
+
+    // Initial log under inst 10 and 20
+    with_instance_id(10, || {
+        let record = build_record(
+            log::Level::Info,
+            "test",
+            format_args!("before unregister 10"),
+        );
+        logger.log(&record);
+    });
+    with_instance_id(20, || {
+        let record = build_record(
+            log::Level::Info,
+            "test",
+            format_args!("before unregister 20"),
+        );
+        logger.log(&record);
+    });
+
+    assert_eq!(logs_inst_1.lock().unwrap().len(), 1);
+    assert_eq!(logs_inst_2.lock().unwrap().len(), 1);
+
+    // Unregister instance 10
+    logger.unregister_instance_sink(10);
+
+    // Subsequent logs
+    with_instance_id(10, || {
+        let record = build_record(
+            log::Level::Info,
+            "test",
+            format_args!("after unregister 10"),
+        );
+        logger.log(&record);
+    });
+    with_instance_id(20, || {
+        let record = build_record(
+            log::Level::Info,
+            "test",
+            format_args!("after unregister 20"),
+        );
+        logger.log(&record);
+    });
+
+    // Instance 10 sink should have received NO new messages
+    assert_eq!(logs_inst_1.lock().unwrap().len(), 1);
+    assert_eq!(
+        logs_inst_1.lock().unwrap()[0],
+        "before unregister 10".to_string()
+    );
+
+    // Instance 20 sink should have received both messages
+    assert_eq!(logs_inst_2.lock().unwrap().len(), 2);
+    assert_eq!(
+        logs_inst_2.lock().unwrap()[1],
+        "after unregister 20".to_string()
+    );
+}

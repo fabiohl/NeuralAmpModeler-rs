@@ -4,7 +4,11 @@
 #[cfg(test)]
 mod tests {
     use crate::common::diagnostics::SystemSnapshot;
-    use crate::loader::{LoadError, LoadOptions, MetadataError, load_and_build_model};
+    use crate::loader::{
+        LoadError, LoadOptions, MetadataError, load_and_build_model,
+        load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
+    };
+    use crate::models::NamModel;
     use crate::testing::fixtures::model_path;
     use std::path::Path;
     use std::path::PathBuf;
@@ -215,5 +219,92 @@ mod tests {
         let data = crate::loader::nam_json::parse_nam_json(&content).expect("JSON must parse");
         let model = crate::loader::dispatcher::build_model(&data);
         assert!(model.is_ok(), "build_model must succeed on supported CPU");
+    }
+
+    #[test]
+    fn test_load_and_build_model_from_bytes_parity() {
+        let sys = SystemSnapshot::capture();
+        let path = model_path("wavenet.nam");
+        let bytes = std::fs::read(&path).expect("fixture must exist");
+
+        let file_pair = load_and_build_model(&path, &sys, false, LoadOptions::default())
+            .expect("file load must succeed");
+        let bytes_pair =
+            load_and_build_model_from_bytes(&bytes, &sys, false, LoadOptions::default())
+                .expect("bytes load must succeed");
+
+        assert_eq!(file_pair.architecture, bytes_pair.architecture);
+        assert_eq!(file_pair.topology, bytes_pair.topology);
+        assert_eq!(file_pair.sample_rate, bytes_pair.sample_rate);
+        assert_eq!(file_pair.weights_layout, bytes_pair.weights_layout);
+        assert_eq!(file_pair.input_mult_adj, bytes_pair.input_mult_adj);
+        assert_eq!(file_pair.output_mult_adj, bytes_pair.output_mult_adj);
+
+        // Run audio block inference through both models and assert bit-exact equality.
+        let mut model_file = file_pair.model_l.expect("model_l must exist");
+        let mut model_bytes = bytes_pair.model_l.expect("model_l must exist");
+
+        let block_size = 256;
+        let mut input = vec![0.0f32; block_size];
+        for (i, sample) in input.iter_mut().enumerate() {
+            *sample = (i as f32 * 0.05).sin() * 0.5;
+        }
+
+        let mut out_file = vec![0.0f32; block_size];
+        let mut out_bytes = vec![0.0f32; block_size];
+
+        model_file.process(&input, &mut out_file);
+        model_bytes.process(&input, &mut out_bytes);
+
+        for (i, (&f_samp, &b_samp)) in out_file.iter().zip(out_bytes.iter()).enumerate() {
+            assert_eq!(
+                f_samp.to_bits(),
+                b_samp.to_bits(),
+                "bit-exact parity mismatch at index {}: file={}, bytes={}",
+                i,
+                f_samp,
+                b_samp
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_and_build_model_from_bytes_namb_format() {
+        let sys = SystemSnapshot::capture();
+        let path = model_path("wavenet.nam");
+        let content = std::fs::read_to_string(&path).expect("fixture must exist");
+        let data = crate::loader::nam_json::parse_nam_json(&content).expect("JSON must parse");
+        let namb_bytes = crate::loader::namb_encoder::encode_namb(
+            &data,
+            2,
+            crate::loader::nam_json::WeightsLayout::Original,
+        )
+        .expect("namb encode must succeed");
+
+        let pair = load_and_build_model_from_bytes_named(
+            &namb_bytes,
+            "test_embedded.namb",
+            &sys,
+            false,
+            LoadOptions::default(),
+        )
+        .expect("namb bytes load must succeed");
+
+        assert!(pair.model_l.is_some());
+        assert_eq!(pair.architecture, "WaveNet");
+    }
+
+    #[test]
+    fn test_load_and_build_model_from_bytes_empty_and_garbage() {
+        let sys = SystemSnapshot::capture();
+        let empty: [u8; 0] = [];
+        let res_empty =
+            load_and_build_model_from_bytes(&empty, &sys, false, LoadOptions::default());
+        assert!(res_empty.is_err(), "empty bytes must fail load");
+
+        let garbage = b"not a valid nam json or namb binary payload";
+        let res_garbage =
+            load_and_build_model_from_bytes(garbage, &sys, false, LoadOptions::default());
+        assert!(res_garbage.is_err(), "garbage bytes must fail load");
     }
 }

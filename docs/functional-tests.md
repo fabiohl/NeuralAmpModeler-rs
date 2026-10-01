@@ -46,7 +46,7 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
    # Expected output: performance
    ```
 
-   The test harness probes the governor of the effective benchmark core (`NAM_BENCH_CORE`, default: `nproc / 2`).
+   The test harness probes the governor of the effective benchmark core (resolved via `pick_bench_core`: explicit `NAM_BENCH_CORE`, online isolated core from `/sys/devices/system/cpu/isolated`, or fallback `nproc / 2`).
 
 2. **System Load & Thermal Stability:**
    Close resource-intensive background processes, IDE indexers, browsers, and background compilers to prevent scheduling interference.

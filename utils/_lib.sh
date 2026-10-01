@@ -603,3 +603,82 @@ check_freshness() {
     fi
     "$bin" --root "$PWD" "$mode"
 }
+
+# ---------------------------------------------------------------------------
+# Benchmark Core Resolution Helper
+# ---------------------------------------------------------------------------
+
+# pick_bench_core [sysfs_cpu_dir]
+#   Resolves the deterministic benchmark CPU core according to policy:
+#     1. $NAM_BENCH_CORE if explicitly set and non-empty.
+#     2. First online isolated CPU from /sys/devices/system/cpu/isolated
+#        (treating 8-9 as a physical core, preferring 8 with cpu9=offline intentional).
+#     3. Fallback to $((nproc / 2)) with a warning.
+pick_bench_core() {
+    local sysfs_cpu="${1:-/sys/devices/system/cpu}"
+
+    # 1. Explicit override
+    if [ -n "${NAM_BENCH_CORE:-}" ]; then
+        echo "$NAM_BENCH_CORE"
+        return 0
+    fi
+
+    # 2. Inspect /sys/devices/system/cpu/isolated
+    local isolated_file="$sysfs_cpu/isolated"
+    if [ -f "$isolated_file" ]; then
+        local raw_isolated
+        raw_isolated=$(cat "$isolated_file" 2>/dev/null | tr -d '[:space:]')
+        if [ -n "$raw_isolated" ]; then
+            local -a candidate_cpus=()
+            local IFS=','
+            local -a parts=($raw_isolated)
+            unset IFS
+            for part in "${parts[@]}"; do
+                if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                    local start="${BASH_REMATCH[1]}"
+                    local end="${BASH_REMATCH[2]}"
+                    for ((c = start; c <= end; c++)); do
+                        candidate_cpus+=("$c")
+                    done
+                elif [[ "$part" =~ ^[0-9]+$ ]]; then
+                    candidate_cpus+=("$part")
+                fi
+            done
+
+            # Special policy: treat 8-9 as a physical core; if 8 is in isolated and online, prefer 8.
+            # Document cpu9=offline intentional.
+            local preferred_8=0
+            for c in "${candidate_cpus[@]}"; do
+                if [ "$c" -eq 8 ]; then
+                    preferred_8=1
+                    break
+                fi
+            done
+
+            if [ "$preferred_8" -eq 1 ]; then
+                local online_file="$sysfs_cpu/cpu8/online"
+                if [ ! -f "$online_file" ] || [ "$(cat "$online_file" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
+                    echo 8
+                    return 0
+                fi
+            fi
+
+            for c in "${candidate_cpus[@]}"; do
+                local online_file="$sysfs_cpu/cpu$c/online"
+                if [ ! -f "$online_file" ] || [ "$(cat "$online_file" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
+                    echo "$c"
+                    return 0
+                fi
+            done
+        fi
+    fi
+
+    # 3. Fallback: nproc / 2
+    local num_cores
+    num_cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+    local fallback_core=$(( ${num_cores:-1} / 2 ))
+    echo -e "  \033[1;33mⓘ WARN: no online isolated CPU found in $sysfs_cpu/isolated; falling back to core $fallback_core (nproc/2)\033[0m" >&2
+    echo "$fallback_core"
+    return 0
+}
+
