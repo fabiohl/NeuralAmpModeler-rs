@@ -48,14 +48,6 @@ macro_rules! impl_avx2_reduce {
             // enables AVX2, satisfying the kernel's `#[target_feature]`.
             super::super::dsp::stereo::compute_peak_abs_stereo_avx2(left, right)
         }
-
-        #[inline(always)]
-        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
-        unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-            // The kernel is safe to call directly: the `x86-64-v3` baseline
-            // enables AVX2, satisfying the kernel's `#[target_feature]`.
-            super::super::dsp::stereo::compute_peak_abs_mono_avx2(data)
-        }
     };
 }
 pub(crate) use impl_avx2_reduce;

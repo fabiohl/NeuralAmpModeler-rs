@@ -462,24 +462,6 @@ fn test_compute_peak_abs_stereo_parity() {
 }
 
 #[test]
-fn test_compute_peak_abs_mono_parity() {
-    let data: Vec<f32> = (0..100).map(|i| (i as f32 * 0.01).sin() * 2.0).collect();
-    // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let expected = unsafe { crate::math::common::compute_peak_abs_mono_fallback(&data) };
-
-    // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-    let res_avx2 = unsafe { Avx2Math::compute_peak_abs_mono(&data) };
-    assert!((res_avx2 - expected).abs() < 1e-6);
-
-    #[cfg(feature = "avx512")]
-    if is_x86_feature_detected!("avx512f") {
-        // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-        let res_avx512 = unsafe { Avx512Math::compute_peak_abs_mono(&data) };
-        assert!((res_avx512 - expected).abs() < 1e-6);
-    }
-}
-
-#[test]
 fn test_convolve_stereo_parity() {
     let coeffs =
         crate::math::common::AlignedVec::from_vec((0..32).map(|i| i as f32 * 0.01).collect())

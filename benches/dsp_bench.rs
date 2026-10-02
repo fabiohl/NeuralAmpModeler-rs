@@ -345,6 +345,54 @@ fn bench_rfft_stages_by_size(c: &mut Criterion) {
     group.finish();
 }
 
+/// Measures the delay line's block API against the per-sample `push`/`pop`
+/// loop on identical bit-level semantics, for the long RT ring shape
+/// (`capacity = 3200`, the engine's worst-case variable delay) across
+/// host-realistic block sizes and three delay classes: zero passthrough,
+/// a mid-class latency and a deep near-capacity latency.
+///
+/// The cycle routes the same 1024-sample signal through the line in every
+/// case (split into `1024/n` blocks of size `n`), so paired
+/// `process_block_*` / `per_sample_*` cases with equal `n`/delay measure
+/// the identical signal path — the delta is the per-sample index
+/// arithmetic replaced by chunked bulk copies. Divide reported times by
+/// 1024 for ns/sample comparisons.
+fn bench_delay_line(c: &mut Criterion) {
+    use neural_amp_modeler_rs::dsp::utils::DelayLine;
+
+    let input: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.03).sin()).collect();
+    let mut out = vec![0.0f32; 1024];
+    let mut group = c.benchmark_group("DelayLine");
+
+    for &delay in &[0usize, 128, 512] {
+        for &n in &[64usize, 128, 512] {
+            group.bench_function(format!("process_block_{}samp_d{}", n, delay), |b| {
+                let mut line = DelayLine::<f32>::with_capacity(3200, delay);
+                b.iter(|| {
+                    for chunk in input.chunks(n) {
+                        line.process_block(std::hint::black_box(chunk), &mut out[..chunk.len()]);
+                    }
+                    std::hint::black_box(out[0]);
+                });
+            });
+            group.bench_function(format!("per_sample_{}samp_d{}", n, delay), |b| {
+                let mut line = DelayLine::<f32>::with_capacity(3200, delay);
+                b.iter(|| {
+                    for chunk in input.chunks(n) {
+                        for (slot, &x) in out[..chunk.len()].iter_mut().zip(chunk) {
+                            line.push(x);
+                            *slot = line.pop();
+                        }
+                    }
+                    std::hint::black_box(out[0]);
+                });
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group! {
     name = dsp_benches;
     config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
@@ -354,7 +402,8 @@ criterion_group! {
     bench_record,
     bench_gate_fsm,
     bench_x2stage_isolated,
-    bench_rfft_stages_by_size
+    bench_rfft_stages_by_size,
+    bench_delay_line
 }
 
 criterion_main!(dsp_benches);

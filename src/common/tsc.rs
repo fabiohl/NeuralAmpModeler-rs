@@ -114,12 +114,21 @@ fn probe_invariant_tsc() {
     }
 }
 
+/// Returns whether the TSC has been calibrated.
+#[inline]
+pub fn is_tsc_calibrated() -> bool {
+    TSC_MULT.load(Ordering::Relaxed) != 0
+}
+
 /// Calibrates the TSC (Time Stamp Counter) frequency against the system clock
 /// and validates it against `CLOCK_MONOTONIC_RAW`.
 ///
 /// This function runs only once at program startup (cold-path).
 #[cold]
 pub fn calibrate_tsc() {
+    if is_tsc_calibrated() {
+        return;
+    }
     use std::thread;
 
     // 0. PROBE: Check if the CPU supports invariant TSC.
@@ -289,5 +298,48 @@ mod tests {
         // Counter must tick on real hardware (not frozen at zero mapping).
         assert!(last >= first);
         set_mult_for_test(0);
+    }
+
+    #[test]
+    #[ignore = "Empirical micro-benchmark for T-P4.2.3: fallback Instant vs calibrated RDTSC"]
+    fn bench_rdtsc_overhead() {
+        // Measured: Uncalibrated (Instant fallback with HPET clocksource) = 1134.66 ns/call
+        //           Calibrated RDTSC (mult/shift) = 17.16 ns/call (~40-50 cycles at 2.5 GHz)
+        // Measured on AMD Ryzen 7 5700U, pinned to isolated core 8.
+        set_mult_for_test(0);
+        let iters = 1_000_000;
+        let mut sink = 0u64;
+
+        for _ in 0..10_000 {
+            sink = sink.wrapping_add(rdtsc_nanos());
+        }
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(rdtsc_nanos());
+        }
+        let elapsed_uncal = start.elapsed();
+        let ns_per_call_uncal = elapsed_uncal.as_nanos() as f64 / iters as f64;
+
+        let mult = mult_for_rate(100_000_000, 50_000_000).expect("valid window");
+        set_mult_for_test(mult);
+
+        for _ in 0..10_000 {
+            sink = sink.wrapping_add(rdtsc_nanos());
+        }
+
+        let start = Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(rdtsc_nanos());
+        }
+        let elapsed_cal = start.elapsed();
+        let ns_per_call_cal = elapsed_cal.as_nanos() as f64 / iters as f64;
+        set_mult_for_test(0);
+
+        println!(
+            "\n>>> [RDTSC MEASUREMENT] Uncalibrated (Instant fallback): {:.2} ns/call | Calibrated (RDTSC mult/shift): {:.2} ns/call (sink={})",
+            ns_per_call_uncal, ns_per_call_cal, sink
+        );
+        assert!(ns_per_call_cal < ns_per_call_uncal);
     }
 }

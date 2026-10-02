@@ -28,10 +28,10 @@ pub use max_diff::compute_max_diff_avx2;
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use max_diff::compute_max_diff_avx512;
-pub use peak::{compute_peak_abs_mono_avx2, compute_peak_abs_stereo_avx2};
+pub use peak::compute_peak_abs_stereo_avx2;
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-pub use peak::{compute_peak_abs_mono_avx512, compute_peak_abs_stereo_avx512};
+pub use peak::compute_peak_abs_stereo_avx512;
 
 /// Computes the maximum energy between two audio channels via SIMD dispatch.
 ///
@@ -58,15 +58,6 @@ pub unsafe fn compute_max_diff(a: &[f32], b: &[f32]) -> (f32, bool) {
 /// so no alignment contract is imposed on the caller.
 pub unsafe fn compute_peak_abs_stereo(left: &[f32], right: &[f32]) -> (f32, f32) {
     crate::math::common::dispatch_simd!(compute_peak_abs_stereo(left, right))
-}
-
-/// Computes the peak absolute value of a single channel via SIMD dispatch.
-///
-/// # Safety
-/// The SIMD backends use unaligned loads; no alignment contract is imposed
-/// on the caller.
-pub unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-    crate::math::common::dispatch_simd!(compute_peak_abs_mono(data))
 }
 
 /// Stereo convolution (used in the resampler) via SIMD dispatch.

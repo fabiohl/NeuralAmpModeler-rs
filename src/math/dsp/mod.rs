@@ -31,4 +31,6 @@ pub mod rfft;
 /// Stereo audio utilities: convolution, energy computation, peak detection.
 pub mod stereo;
 
-pub use nonfinite::{all_finite_f32, sanitize_nonfinite_f32};
+pub use nonfinite::{
+    all_finite_f32, sanitize_copy_peak, sanitize_copy_peak_avx2, sanitize_nonfinite_f32,
+};

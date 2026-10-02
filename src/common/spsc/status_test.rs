@@ -130,3 +130,20 @@ fn test_rt_status_flags_default_values() {
     assert_eq!(flags.rt_tid.load(Ordering::Relaxed), -1);
     assert_eq!(flags.first_block_nanos.load(Ordering::Relaxed), 0);
 }
+
+#[test]
+fn test_rt_status_event_timing_anomaly_flag() {
+    assert_eq!(RT_STATUS_EVENT_TIMING_ANOMALY, 1u64 << 32);
+    assert_eq!(RT_STATUS_OUT_OF_ORDER_EVENT, RT_STATUS_EVENT_TIMING_ANOMALY);
+
+    let flags = RtStatusFlags::new();
+    assert!(!flags.check_flag(RT_STATUS_EVENT_TIMING_ANOMALY));
+
+    flags.set_flag(RT_STATUS_EVENT_TIMING_ANOMALY);
+    assert!(flags.check_flag(RT_STATUS_EVENT_TIMING_ANOMALY));
+    assert!(flags.check_flag(RT_STATUS_OUT_OF_ORDER_EVENT));
+
+    assert!(flags.check_and_clear_flag(RT_STATUS_EVENT_TIMING_ANOMALY));
+    assert!(!flags.check_flag(RT_STATUS_EVENT_TIMING_ANOMALY));
+    assert!(flags.flags_seen.load(Ordering::Relaxed) & RT_STATUS_EVENT_TIMING_ANOMALY != 0);
+}

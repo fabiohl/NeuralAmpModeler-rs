@@ -72,6 +72,102 @@ pub fn apply_input_stage(
     }
 }
 
+/// Stage 1 (Mono): Gate, Input Gain, and Denormal Suppression for a single channel.
+///
+/// Bypasses right-channel energy calculation and stereo difference detection,
+/// locking `*ctx.process_mono = true`.
+#[inline(always)]
+pub fn apply_input_stage_mono(
+    samples_l: &mut [f32],
+    n_samples: usize,
+    ctx: &mut DspPipelineContext<'_>,
+) -> GateState {
+    #[cfg(feature = "avx512")]
+    {
+        use crate::math::common::{
+            Avx2Math, Avx512Math, InstructionSet, effective_instruction_set,
+        };
+        #[expect(deprecated)]
+        match effective_instruction_set() {
+            InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe { apply_input_stage_mono_inner::<Avx512Math>(samples_l, n_samples, ctx) }
+            }
+            InstructionSet::Avx2 => {
+                // SAFETY: inner invariants upheld by caller.
+                unsafe { apply_input_stage_mono_inner::<Avx2Math>(samples_l, n_samples, ctx) }
+            }
+        }
+    }
+    #[cfg(not(feature = "avx512"))]
+    {
+        use crate::math::common::Avx2Math;
+        // SAFETY: inner invariants upheld by caller.
+        unsafe { apply_input_stage_mono_inner::<Avx2Math>(samples_l, n_samples, ctx) }
+    }
+}
+
+/// Inner generic implementation of the mono input stage, monomorphized over SIMD backend.
+///
+/// # Safety
+/// Caller must ensure valid buffer reference and that the SIMD backend is
+/// supported by the CPU.
+#[inline(always)]
+pub(crate) unsafe fn apply_input_stage_mono_inner<M: SimdMath>(
+    samples_l: &mut [f32],
+    n_samples: usize,
+    ctx: &mut DspPipelineContext<'_>,
+) -> GateState {
+    let (mut energy_ms, non_finite_energy) = {
+        // SAFETY: slice is valid.
+        unsafe { M::compute_energy(&samples_l[..n_samples]) }
+    };
+
+    if non_finite_energy {
+        ctx.rt_status
+            .set_flag(crate::common::spsc::RT_STATUS_NON_FINITE_INPUT_DETECTED);
+        energy_ms = 0.0;
+        crate::math::dsp::sanitize_nonfinite_f32(&mut samples_l[..n_samples]);
+    }
+
+    // 1. UPDATE THE NOISE GATE
+    ctx.silence_hysteresis.update(
+        energy_ms,
+        ctx.threshold_open_sq,
+        ctx.threshold_close_sq,
+        ctx.gate_params,
+        n_samples,
+    );
+
+    if ctx.silence_hysteresis.state() == GateState::Closed {
+        #[cfg(feature = "testing")]
+        if DISABLE_GATE.load(Ordering::Relaxed) {
+            return GateState::Open;
+        }
+        return GateState::Closed;
+    }
+
+    // 2. MONO FORCED
+    *ctx.process_mono = true;
+
+    // 3. INPUT VOLUME ADJUSTMENT (GAIN) + DENORMAL SUPPRESSION (FUSED WHEN POSSIBLE)
+    if (ctx.input_gain_mult - 1.0).abs() >= 1e-6 {
+        // SAFETY: `samples_l[..n_samples]` is in-bounds and gain/offset are finite f32 values.
+        unsafe {
+            M::apply_gain_then_dither(
+                &mut samples_l[..n_samples],
+                ctx.input_gain_mult,
+                DENORMAL_DITHER_OFFSET,
+            )
+        };
+    } else {
+        // SAFETY: slice is valid and offset is a finite f32.
+        unsafe { M::apply_dither_add(&mut samples_l[..n_samples], DENORMAL_DITHER_OFFSET) };
+    }
+
+    ctx.silence_hysteresis.state()
+}
+
 /// Inner generic implementation of the input stage, monomorphized over SIMD backend.
 ///
 /// # Safety

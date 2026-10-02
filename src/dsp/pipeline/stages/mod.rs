@@ -29,6 +29,8 @@ pub use input::DISABLE_GATE;
 /// Applies input DSP stage: gate, denormal dither, and silence detection.
 pub use input::apply_input_stage;
 pub(crate) use input::apply_input_stage_inner;
+/// Applies input DSP stage for mono signals without right-channel processing.
+pub use input::apply_input_stage_mono;
 /// Detects silence at the input and bypasses the entire DSP chain for idle blocks.
 pub use input::handle_silence_bypass;
 pub(crate) use output::apply_output_stage_inner;

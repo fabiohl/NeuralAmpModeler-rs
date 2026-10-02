@@ -42,6 +42,8 @@ pub use stages::DENORMAL_DITHER_OFFSET;
 pub use stages::DISABLE_GATE;
 /// Input stage: gate processing, denormal dither, and silence bypass detection.
 pub use stages::apply_input_stage;
+/// Input stage (mono): gate processing, denormal dither, and mono locking.
+pub use stages::apply_input_stage_mono;
 /// Output stage: final volume adjustment, clipping detection, and post-DSP smoothing.
 pub use stages::apply_output_stage;
 /// Output stage with explicit non-finite sample sanitization.

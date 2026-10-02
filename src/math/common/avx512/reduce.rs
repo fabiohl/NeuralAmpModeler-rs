@@ -53,15 +53,6 @@ macro_rules! impl_avx512_reduce {
             // caller must guarantee the CPU supports it (verified by dispatch).
             unsafe { crate::math::dsp::stereo::compute_peak_abs_stereo_avx512(left, right) }
         }
-
-        #[inline(always)]
-        // SAFETY: data is a valid f32 slice; CPU supports AVX-512F (verified by dispatch).
-        unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-            // SAFETY: the kernel is safe, but calling it requires AVX-512F,
-            // which this dispatch impl does not enable in its own codegen: the
-            // caller must guarantee the CPU supports it (verified by dispatch).
-            unsafe { crate::math::dsp::stereo::compute_peak_abs_mono_avx512(data) }
-        }
     };
 }
 
@@ -105,13 +96,6 @@ macro_rules! impl_avx512vnni_bf16_reduce {
         unsafe fn compute_peak_abs_stereo(left: &[f32], right: &[f32]) -> (f32, f32) {
             // SAFETY: left and right satisfy function invariants.
             unsafe { Avx512Math::compute_peak_abs_stereo(left, right) }
-        }
-
-        #[inline(always)]
-        // SAFETY: data is a valid f32 slice; CPU supports AVX-512 VNNI+BF16.
-        unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32 {
-            // SAFETY: data satisfies function invariants.
-            unsafe { Avx512Math::compute_peak_abs_mono(data) }
         }
     };
 }

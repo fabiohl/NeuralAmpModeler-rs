@@ -126,6 +126,14 @@ pub const RT_STATUS_PROCESSOR_POISONED: u64 = 1 << 31;
 /// Backward-compatible alias for [`RT_STATUS_PROCESSOR_POISONED`].
 pub const RT_STATUS_PANIC_CAPTURED: u64 = RT_STATUS_PROCESSOR_POISONED;
 
+/// Flag indicating that a parameter or control event arrived with an anomalous timestamp
+/// (e.g., out-of-order, late/jittered relative to current sub-block offset, or exceeding buffer length).
+/// Handled via defensive clamping to ensure zero silent event loss.
+pub const RT_STATUS_EVENT_TIMING_ANOMALY: u64 = 1 << 32;
+
+/// Backward-compatible alias for [`RT_STATUS_EVENT_TIMING_ANOMALY`].
+pub const RT_STATUS_OUT_OF_ORDER_EVENT: u64 = RT_STATUS_EVENT_TIMING_ANOMALY;
+
 /// Atomic status flags for silent RT→Main communication.
 ///
 /// The DSP thread sets atomic flags instead of calling `println!`/`eprintln!`.
@@ -168,6 +176,7 @@ pub const RT_STATUS_PANIC_CAPTURED: u64 = RT_STATUS_PROCESSOR_POISONED;
 /// | 29 | `STRUCTURAL_SUPERSEDED` | Deferred structural command superseded by newer same-kind; discarded off-RT |
 /// | 30 | `PARAM_QUEUE_BACKLOG` | Scalar param queue still non-empty after the per-callback drain budget |
 /// | 31 | `PROCESSOR_POISONED` | Fatal panic occurred in RT callback; processor poisoned |
+/// | 32 | `EVENT_TIMING_ANOMALY` | Event timing anomaly (out-of-order/late/out-of-bounds); clamped defensively |
 #[repr(C, align(128))]
 pub struct RtStatusFlags {
     // =========================================================================

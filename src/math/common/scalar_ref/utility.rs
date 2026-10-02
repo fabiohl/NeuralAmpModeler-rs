@@ -181,20 +181,6 @@ pub unsafe fn compute_peak_abs_stereo_fallback(left: &[f32], right: &[f32]) -> (
     (peak_l, peak_r)
 }
 
-/// Computes the peak absolute value of a single channel (fallback).
-// SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
-#[inline]
-pub unsafe fn compute_peak_abs_mono_fallback(data: &[f32]) -> f32 {
-    let mut peak = 0.0f32;
-    for i in 0..data.len() {
-        let a = (*data.get_unchecked(i)).abs();
-        if a > peak {
-            peak = a;
-        }
-    }
-    peak
-}
-
 /// Crossfade blend (scalar fallback): `out[i] = out[i] * (1-t) + pending[i] * t`.
 // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
 #[inline]

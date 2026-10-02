@@ -11,12 +11,6 @@ pub trait VectorReduce {
     /// `data` must be a valid slice.
     unsafe fn compute_energy(data: &[f32]) -> (f32, bool);
 
-    /// Computes `max(|x[i]|)` for a single channel.
-    ///
-    /// # Safety
-    /// `data` must be a valid slice.
-    unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32;
-
     /// Computes `max(|a[i] - b[i]|)`, returning (max_diff, has_non_finite).
     ///
     /// # Safety

@@ -634,14 +634,6 @@ pub trait SimdMath {
     /// `left.len() == right.len()`. Both slices must be valid.
     unsafe fn compute_peak_abs_stereo(left: &[f32], right: &[f32]) -> (f32, f32);
 
-    /// Computes `max(|x[i]|)` for a single channel.
-    ///
-    /// No alignment required.
-    ///
-    /// # Safety
-    /// `data` must be a valid slice.
-    unsafe fn compute_peak_abs_mono(data: &[f32]) -> f32;
-
     /// Applies Tanh element-wise to `slice`.
     ///
     /// No alignment required.

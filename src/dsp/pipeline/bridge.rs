@@ -370,7 +370,7 @@ impl DspBridgeWriter {
                 let _ =
                     bridge
                         .dropped_frames
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                             Some(v.saturating_add(1))
                         });
                 return;
@@ -423,7 +423,7 @@ impl DspBridgeWriter {
                 let _ =
                     bridge
                         .dropped_frames
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                             Some(v.saturating_add(1))
                         });
                 return;
