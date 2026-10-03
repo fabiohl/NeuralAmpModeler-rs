@@ -303,7 +303,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
             process_mono: &mut process_mono,
             rt_status: &rt_status,
             adaptive: &mut adaptive,
-            bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
+            bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
             conv: None,
             conv_pair: None,
         };
@@ -344,9 +344,7 @@ fn bench_dsp_pipeline_helper(c: &mut Criterion, label: &str, os_factor: Oversamp
                 process_mono: &mut process_mono,
                 rt_status: &rt_status,
                 adaptive: &mut adaptive,
-                bridge_writer: unsafe {
-                    Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
-                },
+                bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
                 conv: None,
                 conv_pair: None,
             };
@@ -447,7 +445,7 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
             process_mono: &mut process_mono,
             rt_status: &rt_status,
             adaptive: &mut adaptive,
-            bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
+            bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
             conv: None,
             conv_pair: None,
         };
@@ -503,9 +501,7 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
                 process_mono: &mut process_mono,
                 rt_status: &rt_status,
                 adaptive: &mut adaptive,
-                bridge_writer: unsafe {
-                    Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge))
-                },
+                bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
                 conv: None,
                 conv_pair: None,
             };

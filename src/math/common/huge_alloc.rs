@@ -392,6 +392,31 @@ impl<T: Copy> HugePageVec<T> {
             !ptr.is_null(),
             "allocate_huge_pages returned Ok with null pointer"
         );
+        #[cfg(debug_assertions)]
+        {
+            let slice_ptr = std::ptr::slice_from_raw_parts(ptr as *const T, capacity);
+            // SAFETY: `slice_ptr` is constructed from a valid allocated memory region of `capacity` elements.
+            let (align, size) = unsafe {
+                (
+                    std::mem::align_of_val_raw(slice_ptr),
+                    std::mem::size_of_val_raw(slice_ptr),
+                )
+            };
+            debug_assert!(
+                (ptr as usize).is_multiple_of(Self::ALIGN),
+                "HugePageVec pointer {ptr:p} must be {}-byte aligned",
+                Self::ALIGN
+            );
+            debug_assert!(
+                align <= Self::ALIGN,
+                "HugePageVec slice alignment {align} must not exceed Self::ALIGN ({})",
+                Self::ALIGN
+            );
+            debug_assert_eq!(
+                size, size_bytes,
+                "HugePageVec raw slice size ({size}) does not match expected size_bytes ({size_bytes})"
+            );
+        }
         // SAFETY: `allocate_huge_pages()` returns `Err(OutOfMemory)` on null /
         // MAP_FAILED across all three allocation tiers (HugeTLB → THP →
         // posix_memalign).  Reaching this point guarantees `ptr` is non-null.

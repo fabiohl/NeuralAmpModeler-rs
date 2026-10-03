@@ -197,7 +197,7 @@ fn test_zero_alloc_capture_pipeline() {
         process_mono: &mut process_mono,
         rt_status: &rt_status,
         adaptive: &mut adaptive,
-        bridge_writer: unsafe { Some(DspBridgeWriter::new(&mut *bridge as *mut DspBridge)) },
+        bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
         conv: None,
         conv_pair: None,
     };

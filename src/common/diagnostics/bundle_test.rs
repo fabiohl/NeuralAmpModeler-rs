@@ -69,3 +69,17 @@ fn test_purge_old_reports_default_cache_invocable() {
     let res = DiagnosticBundle::purge_old_reports(86400 * 30);
     assert!(res.is_ok(), "purge_old_reports must execute cleanly");
 }
+
+#[test]
+fn test_diagnostic_bundle_renders_model_memory_bytes() {
+    let bundle = DiagnosticBundle::capture().with_model_memory_bytes(1024 * 256);
+    let rendered = bundle.render();
+    assert!(
+        rendered.contains("model.memory_bytes=262144"),
+        "Rendered output must contain model.memory_bytes: {rendered}"
+    );
+    assert!(
+        rendered.contains("Model memory footprint: 262144 bytes (256.0 KiB)"),
+        "Rendered output must contain friendly memory footprint: {rendered}"
+    );
+}

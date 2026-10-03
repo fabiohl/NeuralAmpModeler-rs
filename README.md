@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NeuralAmpModeler-rs
 
-![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.98.0-informational?logo=rust)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust)
 
 **NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
@@ -65,10 +65,10 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 | Dependency           | Minimum Requirement                           | Purpose                               |
 |:-------------------- |:--------------------------------------------- |:------------------------------------- |
 | **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | SIMD vectorized DSP kernels           |
-| **Rust Toolchain**   | $\ge 1.98.0$ (Edition 2024)                   | Public MSRV promise                   |
+| **Rust Toolchain**   | $\ge 1.99.0$ (Edition 2024)                   | Public MSRV promise                   |
 | **Build Tools**      | `build-essential`, `pkg-config`, `cmake`      | Host build tools & C++ parity oracles |
 
-> **MSRV Policy:** `rust-version = "1.98.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
+> **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
 
 ### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
 

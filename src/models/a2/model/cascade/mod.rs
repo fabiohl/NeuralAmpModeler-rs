@@ -301,9 +301,16 @@ impl WaveNetA2Cascade {
     /// Pre-warms all arrays.
     #[cold]
     pub fn prewarm(&mut self) {
-        let zeros = vec![0.0f32; self.receptive_field_size.max(2048)];
-        let mut dummy = vec![0.0f32; zeros.len()];
-        self.process(&zeros, &mut dummy);
+        let prewarm_samples = self.receptive_field_size.max(2048);
+        let block = self.max_buffer_size;
+        let zeros = vec![0.0f32; block];
+        let mut dummy = vec![0.0f32; block];
+        let mut remaining = prewarm_samples;
+        while remaining > 0 {
+            let nf = remaining.min(block);
+            self.process(&zeros[..nf], &mut dummy[..nf]);
+            remaining -= nf;
+        }
     }
 }
 

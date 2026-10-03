@@ -4,7 +4,7 @@
 name = "NeuralAmpModeler-rs"
 version = "0.8.1"
 edition = "2024"
-rust-version = "1.98.0"
+rust-version = "1.99.0"
 autobins = false
 license = "Apache-2.0"
 repository = "https://github.com/fabiohl/NeuralAmpModeler-rs"
@@ -246,6 +246,7 @@ required-features = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+raw_borrows_via_references = "warn"
 
 [lints.clippy]
 allow_attributes = "warn"

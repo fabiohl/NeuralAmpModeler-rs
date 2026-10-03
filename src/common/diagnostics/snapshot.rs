@@ -4,7 +4,7 @@
 //! Runtime snapshot types for diagnostic capture.
 
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 /// Thread-safe global storage for the currently active sample rate (populated in active standalone session).
 pub static ACTIVE_SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
@@ -14,6 +14,9 @@ pub static ACTIVE_MODEL_NAME: RwLock<String> = RwLock::new(String::new());
 
 /// Thread-safe global storage for the currently active model snapshot info.
 pub static ACTIVE_MODEL_INFO: RwLock<Option<ModelInfo>> = RwLock::new(None);
+
+/// Thread-safe global storage for the currently active model memory footprint in bytes.
+pub static ACTIVE_MODEL_MEMORY_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// Detailed model information for runtime diagnostic snapshot.
 #[derive(Debug, Clone, Default)]
@@ -145,6 +148,8 @@ pub struct RuntimeSnapshot {
     pub telemetry: TelemetrySnapshot,
     /// Accumulated OR of all RT_STATUS_* flags ever seen since startup.
     pub flags_seen: u64,
+    /// Model memory footprint in bytes, if known.
+    pub model_memory_bytes: Option<usize>,
 }
 
 impl RuntimeSnapshot {
@@ -156,6 +161,7 @@ impl RuntimeSnapshot {
             rt: provider.rt_info(),
             telemetry: provider.telemetry_snapshot(),
             flags_seen: provider.flags_seen(),
+            model_memory_bytes: provider.model_memory_bytes(),
         }
     }
 }
@@ -172,9 +178,18 @@ pub trait HasRuntimeSnapshot {
     fn telemetry_snapshot(&self) -> TelemetrySnapshot;
     /// Returns OR-accumulated flags seen since startup.
     fn flags_seen(&self) -> u64;
+    /// Returns model memory footprint in bytes, if known.
+    fn model_memory_bytes(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
+    fn model_memory_bytes(&self) -> Option<usize> {
+        let bytes = ACTIVE_MODEL_MEMORY_BYTES.load(Ordering::Relaxed);
+        if bytes > 0 { Some(bytes) } else { None }
+    }
+
     fn model_info(&self) -> Option<ModelInfo> {
         if let Ok(info_guard) = ACTIVE_MODEL_INFO.read() {
             info_guard.clone()

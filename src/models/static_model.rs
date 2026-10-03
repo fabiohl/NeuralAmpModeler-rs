@@ -379,6 +379,42 @@ impl StaticModel {
             Self::ConvNet(m) => m.out_channels(),
         }
     }
+
+    /// Returns a raw pointer to the underlying model as a trait object `*const dyn NamModel`.
+    pub fn as_nam_model_ptr(&self) -> *const dyn NamModel {
+        match self {
+            Self::WavenetStandard(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetLite(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetFeather(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetNano(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetA2Full(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetA2Lite(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetA2Dyn(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetA2Cascade(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::WavenetDyn(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x3(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x8(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x12(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x16(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x24(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm2x8(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm2x12(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm2x16(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm1x40(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Lstm2x24(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::LstmDyn(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Container(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Linear(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::ConvNet(m) => Box::as_ptr(m) as *const dyn NamModel,
+        }
+    }
+
+    /// Returns the memory footprint (in bytes) of the underlying concrete model instance.
+    pub fn memory_footprint(&self) -> usize {
+        let ptr = self.as_nam_model_ptr();
+        // SAFETY: `ptr` is a valid raw pointer to an existing allocated model trait object.
+        unsafe { std::mem::size_of_val_raw(ptr) }
+    }
 }
 
 /// Clones a `StaticModel` for use in `condition_dsp` preservation during

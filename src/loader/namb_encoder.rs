@@ -99,7 +99,7 @@ pub fn encode_namb(
     // `#[repr(C, packed)]` + `Copy` value), so the byte slice is in-bounds.
     let header_bytes = unsafe {
         std::slice::from_raw_parts(
-            (&header as *const NambHeader) as *const u8,
+            &raw const header as *const u8,
             std::mem::size_of::<NambHeader>(),
         )
     };

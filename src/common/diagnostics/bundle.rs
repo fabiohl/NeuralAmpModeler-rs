@@ -7,7 +7,9 @@
 use super::error_codes::NamErrorCode;
 use super::format::{format_model_path, redact_path, redact_text, timestamp};
 use super::logger::NamLogger;
-use super::snapshot::{ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE, RuntimeSnapshot};
+use super::snapshot::{
+    ACTIVE_MODEL_MEMORY_BYTES, ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE, RuntimeSnapshot,
+};
 use super::system_info::SystemSnapshot;
 use std::sync::atomic::Ordering;
 
@@ -135,6 +137,20 @@ impl DiagnosticBundle {
         self
     }
 
+    /// Builder method to specify model memory footprint in bytes.
+    pub fn with_model_memory_bytes(mut self, bytes: usize) -> Self {
+        self.runtime.model_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// Returns the model memory footprint in bytes, if known.
+    pub fn model_memory_bytes(&self) -> Option<usize> {
+        self.runtime.model_memory_bytes.or_else(|| {
+            let b = ACTIVE_MODEL_MEMORY_BYTES.load(Ordering::Relaxed);
+            if b > 0 { Some(b) } else { None }
+        })
+    }
+
     /// Renders the support block as a formatted string.
     pub fn render(&self) -> String {
         let separator = "────────────────────────────────────────────────";
@@ -240,6 +256,16 @@ impl DiagnosticBundle {
                 model.model_sample_rate,
                 model.weights_layout,
                 path_val
+            ));
+            model_printed = true;
+        }
+
+        if let Some(bytes) = self.model_memory_bytes() {
+            block.push_str(&format!("model.memory_bytes={}\n", bytes));
+            block.push_str(&format!(
+                "  Model memory footprint: {} bytes ({:.1} KiB)\n",
+                bytes,
+                bytes as f64 / 1024.0
             ));
             model_printed = true;
         }

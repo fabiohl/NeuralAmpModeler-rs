@@ -11,7 +11,7 @@ fn new_bridge() -> Box<DspBridge> {
 fn test_bridge_reader_interleaved_writer_race() {
     let mut bridge = new_bridge();
 
-    let bridge_ptr = &mut *bridge as *mut DspBridge;
+    let bridge_ptr = &raw mut *bridge;
     // SAFETY: Pointer is valid and points to a allocated DspBridge instance.
     let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
     // SAFETY: Pointer is valid and points to a allocated DspBridge instance.
@@ -54,7 +54,7 @@ fn test_bridge_reader_interleaved_writer_race() {
 fn test_bridge_reset_to_silence_teardown_only() {
     let mut bridge = new_bridge();
 
-    let bridge_ptr = &mut *bridge as *mut DspBridge;
+    let bridge_ptr = &raw mut *bridge;
     // SAFETY: Pointer is valid and points to a allocated DspBridge instance.
     let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
 

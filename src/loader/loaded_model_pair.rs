@@ -197,6 +197,11 @@ impl LoadedModelPair {
             path_basename: path.to_string_lossy().into_owned(),
         }
     }
+
+    /// Returns the memory footprint (in bytes) of the active model, if loaded.
+    pub fn model_memory_bytes(&self) -> Option<usize> {
+        self.model_l.as_ref().map(|m| m.memory_footprint())
+    }
 }
 
 impl std::fmt::Debug for LoadedModelPair {

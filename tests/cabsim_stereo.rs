@@ -134,7 +134,7 @@ impl CabsimPipeline {
 
     fn process(&mut self, in_l: &mut [f32], in_r: &mut [f32], n: usize, rate: u32) -> usize {
         // SAFETY: `self.bridge` is owned and outlives the writer's use.
-        let bridge_ref = unsafe { BridgeRef::new(&mut *self.bridge as *mut DspBridge) };
+        let bridge_ref = unsafe { BridgeRef::new(&raw mut *self.bridge) };
         let writer = DspBridgeWriter::from_ref(bridge_ref).expect("bridge non-null");
         let ctx = DspPipelineContext {
             resampler: &mut self.resampler,

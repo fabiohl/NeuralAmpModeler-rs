@@ -75,7 +75,7 @@ graph LR
 8. **`[8/9] doc(cfg) Annotation Consistency:`**
    Cross-references all `#[doc(cfg(feature = "..."))]` annotations against the declared features in [Cargo.toml](../Cargo.toml) to prevent orphan or mistyped documentation tags.
 9. **`[9/9] Version & MSRV Synchronization:`**
-   Asserts that the version and Minimum Supported Rust Version (MSRV `1.98.0`) stated in `README.md` exactly match [Cargo.toml](../Cargo.toml).
+   Asserts that the version and Minimum Supported Rust Version (MSRV `1.99.0`) stated in `README.md` exactly match [Cargo.toml](../Cargo.toml).
 
 ### 2.2 Developer Usage & Flags
 

@@ -70,7 +70,7 @@ fn bench_kahan_inner_loop_isolated(c: &mut Criterion) {
         let mut w_taps: Vec<&[[u16; 4]]> = Vec::with_capacity(k);
         for tap in 0..k {
             let start = tap * in_ch * 4;
-            let ptr = &raw[start] as *const u16 as *const [u16; 4];
+            let ptr = &raw const raw[start] as *const [u16; 4];
             unsafe {
                 w_taps.push(core::slice::from_raw_parts(ptr, in_ch));
             }

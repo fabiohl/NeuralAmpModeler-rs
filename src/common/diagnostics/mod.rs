@@ -30,8 +30,8 @@ pub use logger::{
     current_instance_id, scope_instance, set_current_instance_id, with_instance_id,
 };
 pub use snapshot::{
-    ACTIVE_MODEL_INFO, ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE, AudioInfo, AudioMetadata,
-    HasRuntimeSnapshot, ModelInfo, RtInfo, RuntimeSnapshot, TelemetrySnapshot,
+    ACTIVE_MODEL_INFO, ACTIVE_MODEL_MEMORY_BYTES, ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE, AudioInfo,
+    AudioMetadata, HasRuntimeSnapshot, ModelInfo, RtInfo, RuntimeSnapshot, TelemetrySnapshot,
 };
 pub use system_info::SystemSnapshot;
 pub use system_info::set_host_library_version;

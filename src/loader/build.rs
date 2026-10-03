@@ -594,6 +594,45 @@ fn build_model_pair_from_data(
         architecture, topology, channels, weights_layout_str, nam_rate
     );
 
+    #[cfg(debug_assertions)]
+    {
+        let raw_ptr_l = model_l.as_nam_model_ptr();
+        // SAFETY: `raw_ptr_l` is a valid pointer to the allocated `StaticModel`.
+        let (align_l, size_l) = unsafe {
+            (
+                std::mem::align_of_val_raw(raw_ptr_l),
+                std::mem::size_of_val_raw(raw_ptr_l),
+            )
+        };
+        debug_assert!(
+            align_l >= 8,
+            "Model L minimum alignment requirement not met: align={align_l}"
+        );
+        debug_assert!(
+            size_l > 0,
+            "Model L instance memory footprint must be greater than zero: size={size_l}"
+        );
+
+        if let Some(ref r) = model_r {
+            let raw_ptr_r = r.as_nam_model_ptr();
+            // SAFETY: `raw_ptr_r` is a valid pointer to the allocated `StaticModel`.
+            let (align_r, size_r) = unsafe {
+                (
+                    std::mem::align_of_val_raw(raw_ptr_r),
+                    std::mem::size_of_val_raw(raw_ptr_r),
+                )
+            };
+            debug_assert!(
+                align_r >= 8,
+                "Model R minimum alignment requirement not met: align={align_r}"
+            );
+            debug_assert!(
+                size_r > 0,
+                "Model R instance memory footprint must be greater than zero: size={size_r}"
+            );
+        }
+    }
+
     Ok(LoadedModelPair {
         model_l: Some(model_l),
         model_r,

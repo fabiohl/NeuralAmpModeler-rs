@@ -22,7 +22,7 @@ fn bench_bridge_write(c: &mut Criterion) {
             &block_size,
             |b, &_bs| {
                 let mut bridge = DspBridge::new_boxed();
-                let bridge_ptr = &mut *bridge as *mut DspBridge;
+                let bridge_ptr = &raw mut *bridge;
                 let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
 
                 b.iter(|| {
@@ -56,7 +56,7 @@ fn bench_bridge_read(c: &mut Criterion) {
             &block_size,
             |b, &_bs| {
                 let mut bridge = DspBridge::new_boxed();
-                let bridge_ptr = &mut *bridge as *mut DspBridge;
+                let bridge_ptr = &raw mut *bridge;
                 let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
                 let reader = unsafe { DspBridgeReader::new(bridge_ptr) };
                 let mut last_gen = 0u64;
