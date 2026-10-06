@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "0.8.1"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -45,7 +45,7 @@ thiserror = "2.0"
 # POSIX calls: mirror/huge-page allocation, TSC clock, scheduler introspection,
 # and the opt-in `rt-hardening` module (`set_cpu_affinity`, `mlockall`,
 # `sched_setscheduler`, THP `prctl`, `/dev/cpu_dma_latency`).
-libc = "0.2.189"
+libc = "0.2.190"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
 rtrb = "0.4.0"
 # .nam (JSON) model deserialization.

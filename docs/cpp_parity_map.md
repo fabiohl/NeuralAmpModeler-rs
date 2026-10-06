@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # C++ ↔ Rust Parity Audit — NeuralAmpModelerCore × NeuralAmpModeler-rs
 
-This document establishes the architectural, structural, and numerical parity mapping between the canonical C++ reference engine, **NeuralAmpModelerCore** ("NAMcore", vendored read-only at `third-party/NeuralAmpModelerCore/`), and the **NeuralAmpModeler-rs** Rust engine (`src/`).
+This document establishes the architectural, structural, and numerical parity mapping between the canonical C++ reference engine, **NeuralAmpModelerCore** ("NAMcore" vendored read-only at `third-party/NeuralAmpModelerCore/`), and the **NeuralAmpModeler-rs** Rust engine (`src/`).
 
 Numerical correctness is evaluated along two complementary, co-equal axes:
 
@@ -22,7 +22,7 @@ For an operational triage of active boundaries, known bugs, and accepted tradeof
 
 ### 0.1 Architectural Scope & C++ Mirror Exclusions
 
-The audit tracks the canonical C++ reference at tag **`v0.5.4`** (commit `1f42f88535884450104b8711d7595019afa0495b`, pinned in [`variables.env`](../variables.env)).
+The audit tracks the canonical C++ reference at tag **`v0.6.0`** (commit `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`, pinned in [`variables.env`](../variables.env)).
 
 1. **Headers Audited via Observable Behavior:**
 
@@ -50,14 +50,15 @@ This audit targets **numerical and architectural semantics**. NeuralAmpModeler-r
 
 ### 0.3 Architecture Audit Status
 
-| Architecture         | Status                                                                                                               | Reference Section                |
-|:-------------------- |:-------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
-| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore                              | [§2](#2-lstm-architecture)       |
-| **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards              | [§3](#3-wavenet-a1-architecture) |
-| **WaveNet A2**       | 🟡 Verified Dynamic/Fast paths — 🔴 Flagship `wavenet_a2_max.nam` **KB-A2-MAX** frozen known bug (fail-closed guard) | [§4](#4-wavenet-a2-architecture) |
-| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore)                           | [§6](#6-other-architectures)     |
-| **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated                             | [§6](#6-other-architectures)     |
-| **SlimmableWavenet** | 🟡 Verified — Channel-sliceable dynamic inference operational; no multi-size NAMcore parity claimed                  | [§6](#6-other-architectures)     |
+| Architecture         | Status                                                                                                                    | Reference Section                |
+|:-------------------- |:------------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
+| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore                                   | [§2](#2-lstm-architecture)       |
+| **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards                   | [§3](#3-wavenet-a1-architecture) |
+| **WaveNet A2**       | 🟡 Verified Dynamic/Fast paths — 🔴 Legacy fixture `wavenet_a2_max.nam` (reclassified upstream as feature test in v0.6.0) | [§4](#4-wavenet-a2-architecture) |
+| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore)                                | [§6](#6-other-architectures)     |
+| **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated (v0.6.0 multi-channel tracked)   | [§6](#6-other-architectures)     |
+| **SlimmableWavenet** | 🟡 Verified — Channel-sliceable dynamic inference operational; no multi-size NAMcore parity claimed                       | [§6](#6-other-architectures)     |
+| **Sequential**       | 📋 Target Candidate (v0.6.0) — Serial DSP composition model architecture                                                  | [§6](#6-other-architectures)     |
 
 ---
 
@@ -87,7 +88,7 @@ When NAMcore reports acceptable parity but the f64 oracle diverges significantly
 
 ### 1.3 Reference Version Pinning
 
-- **Pinned Reference:** Tag `v0.5.4` / commit `1f42f88535884450104b8711d7595019afa0495b`.
+- **Pinned Reference:** Tag `v0.6.0` / commit `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`.
 - **Mirror Location:** `third-party/NeuralAmpModelerCore/` (populated via `utils/setup-third-party.sh`).
 - **Build Entry Point:** `utils/ensure_namcore_render.sh` builds the release C++ `render` binary (`build/namcore_render/tools/render`).
 
@@ -378,6 +379,10 @@ Implemented in [`src/models/convnet/mod.rs`](../src/models/convnet/mod.rs) and [
 Direct FIR affine models (receptive fields 2048, 4096, 8192):
 
 - Measured against NAMcore: $\text{ESR} = 1.70 \times 10^{-14}$ ($\text{SNR} = 137.7\text{ dB}$).
+- **NAMcore v0.6.0 Updates:**
+  - Upstream added 1-to-N (split) and N-to-1 (sum) multi-channel convolution configurations. Equal channel counts share a single impulse response; unequal counts require `1` on either input or output.
+  - Upstream added runtime arbitrary sample rate adaptation via cubic Hermite/spline interpolation with sample-rate gain compensation (`SupportsArbitrarySampleRate()` / `Reset()`).
+  - Upstream introduced optimized partitioned FFT convolution scheduling (`LinearFFTPlan`) for long impulse responses.
 
 ### 6.3 SlimmableContainer
 
@@ -397,6 +402,17 @@ Dynamic single-network channel slicing ([`src/models/slimmable.rs`](../src/model
 - Supports adaptive quality scaling via channel slicing (`allowed_channels`).
 - Fully functional in loading and inference (`test_slimmable_wavenet_inference_and_breakpoints`).
 - **Parity Scope:** Inference-only. Upstream NAMcore provides no channel-slicing API; multi-size C++ parity claims are architecturally out of scope.
+
+### 6.6 Sequential (NAMcore v0.6.0)
+
+Upstream v0.6.0 introduced the `"Sequential"` top-level architecture:
+
+- Serial pipeline of discrete child models (`config.models`).
+- Top-level `weights` array is required to be empty (`[]`); weights belong entirely to child models.
+- Validates that consecutive stage channel counts match (`output_channels(i) == input_channels(i+1)`).
+- Validates homogeneous expected sample rates across all child models.
+- Allocates intermediate buffers during `SetMaxBufferSize`.
+- Prewarm sample count is the sum of child model prewarm counts.
 
 ---
 

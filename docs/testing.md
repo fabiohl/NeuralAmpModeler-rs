@@ -373,16 +373,17 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | Script                                      | Responsibility                    | Guarantees & Operation                                                                                                             |
 |:------------------------------------------- |:--------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------- |
 | **[`utils/lints.sh`](../utils/lints.sh)**   | Static analysis & quality defense | 9 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, `cargo doc`+doctests, SPDX, and policy checks (§2). |
-| **`utils/tests-quick.sh`**                  | Agile first-line test suite       | Three-phase gate (debug structural, release float oracles, capped parser fuzzing). Runs in ~2 minutes (§3).                        |
-| **`utils/tests-long.sh`**                   | Nightly & pre-release audit suite | 6 preflights + 7 exhaustive stress and verification phases (~10 min). Emits structured JSONL receipts (§5).                        |
+| **`utils/tests-quick.sh`**                  | Agile first-line test suite       | Three-phase gate (Phase 1: unit + structural integration `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `freshness_guard`, `isa_contract`, `pipeline_capture_test`, `state_compat`; Phase 2: release float oracles; Phase 3: capped parser fuzzing). Runs in ~2 minutes (§3). |
+| **`utils/tests-long.sh`**                   | Nightly & pre-release audit suite | 6 preflights + 7 exhaustive stress and verification phases (~10 min). Emits structured JSONL receipts (§5). Operador humano / noturno. |
 | **`utils/_lib.sh`**                         | Shared shell library              | Dynamic project path resolution, log formatting, process priority management, and typed receipt helpers.                           |
-| **`utils/quality-dashboard.sh`**            | Quality contract manager          | Executes fidelity and latency matrices; verifies or updates `docs/quality-contract.json` (§10).                                    |
-| **`utils/tests-performance-regression.sh`** | Performance regression wall       | Baseline-gated Criterion evaluation; statistical confidence interval verification against ±5% noise bands.                         |
+| **`utils/quality-dashboard.sh`**            | Quality contract manager          | Executes fidelity and latency matrices; verifies or updates `docs/quality-contract.json` (§10). Uso pontual / sob demanda.         |
+| **`utils/tests-performance-regression.sh`** | Performance regression wall       | Baseline-gated Criterion evaluation; statistical confidence interval verification against ±5% noise bands. Uso sob demanda.       |
 | **`utils/setup-third-party.sh`**            | Upstream vendor mirror manager    | Clones or updates pinned commits of `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin`.                                           |
-| **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper       | Reports CPU SIMD capabilities, OS AVX-512 state, and active dispatch backend with an inference checksum.                           |
-| **`utils/check-model.sh`**                  | Model inspection CLI wrapper      | Inspects `.nam` (JSON) and `.namb` (binary) models, reporting architecture topology, metadata, and weights.                        |
-| **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking          | Executes automated comparative benchmarking across target hardware architectures via SSH.                                          |
-| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Simulated-sysfs coverage for `pick_bench_core` (isolated/online/fallback branches).                                             |
+| **`utils/ensure_namcore_render.sh`**        | C++ Reference Render Builder      | Compila de forma idempotente o binário C++ de renderização NAMCore para oráculos de paridade.                                     |
+| **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper       | Uso pontual / diagnóstico: relata capacidades SIMD da CPU, estado AVX-512 do SO e backend de dispatch ativo com checksum.         |
+| **`utils/check-model.sh`**                  | Model inspection CLI wrapper      | Uso pontual / diagnóstico: inspeciona modelos `.nam` (JSON) e `.namb` (binário), relatando topologia, metadados e tensores.       |
+| **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking          | Uso estritamente pontual: executa benchmarking comparativo automatizado em instâncias de hardware remoto com AVX-512 via SSH.     |
+| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Uso estritamente pontual: teste sintético com mock de sysfs para validar os branches de `pick_bench_core` em `utils/_lib.sh`.      |
 
 ---
 

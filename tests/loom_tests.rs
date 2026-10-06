@@ -289,7 +289,7 @@ fn test_dsp_bridge_production() {
                 boxed.assume_init()
             }
         };
-        let ptr = (&mut *bridge as *mut DspBridge) as usize;
+        let ptr = core::ptr::addr_of_mut!(*bridge) as usize;
 
         let writer = unsafe { DspBridgeWriter::new(ptr as *mut DspBridge) };
         let reader = unsafe { DspBridgeReader::new(ptr as *mut DspBridge) };

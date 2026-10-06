@@ -51,3 +51,41 @@ pub use core::sync::atomic::AtomicUsize;
 /// Atomic pointer-width unsigned integer: loom-instrumented under `--cfg loom`.
 #[cfg(loom)]
 pub use loom::sync::atomic::AtomicUsize;
+
+use core::sync::atomic::Ordering;
+
+/// Extension trait providing cross-compatibility between Loom and modern `core::sync::atomic`.
+///
+/// Modern `core::sync::atomic` deprecated `fetch_update` in favor of `try_update`,
+/// whereas `loom` only provides `fetch_update`. This trait bridges the two.
+pub trait AtomicExt<T> {
+    /// Performs an atomic update compatible with both `std` and `loom`.
+    fn atomic_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> Result<T, T>
+    where
+        F: FnMut(T) -> Option<T>;
+
+    /// Atomically increments the value saturating at maximum.
+    fn saturating_inc(&self, set_order: Ordering, fetch_order: Ordering) -> Result<T, T>;
+}
+
+impl AtomicExt<u32> for AtomicU32 {
+    #[inline]
+    fn atomic_update<F>(&self, set_order: Ordering, fetch_order: Ordering, f: F) -> Result<u32, u32>
+    where
+        F: FnMut(u32) -> Option<u32>,
+    {
+        #[cfg(not(loom))]
+        {
+            self.try_update(set_order, fetch_order, f)
+        }
+        #[cfg(loom)]
+        {
+            self.fetch_update(set_order, fetch_order, f)
+        }
+    }
+
+    #[inline]
+    fn saturating_inc(&self, set_order: Ordering, fetch_order: Ordering) -> Result<u32, u32> {
+        self.atomic_update(set_order, fetch_order, |v| Some(v.saturating_add(1)))
+    }
+}

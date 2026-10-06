@@ -243,7 +243,7 @@ All fidelity and performance thresholds are governed by the automated verificati
 
 | Governance Layer                    | Verification Mechanism                                                                   | Test Suite & Gate                |
 |:----------------------------------- |:---------------------------------------------------------------------------------------- |:-------------------------------- |
-| **Layer 0 — Golden Generation**     | `tests/fixtures/golden_gen_build.sh` + pinned reference commit (`1f42f88`, tag `v0.5.4`) | Contract generation              |
+| **Layer 0 — Golden Generation**     | `tests/fixtures/golden_gen_build.sh` + pinned reference commit (`0b3d3c9`, tag `v0.6.0`) | Contract generation              |
 | **Layer 1 — Pre-committed Goldens** | `tests/models/golden_vectors.rs` — validates Rust output vs binary goldens               | `utils/tests-quick.sh` (Phase 2) |
 | **Layer 2 — Live Parity**           | `tests/parity/cpp_parity.rs` — cross-engine C++ execution                                | `utils/tests-long.sh`            |
 

@@ -85,7 +85,7 @@ impl<const CH: usize, const K: usize, const HEAD: usize> NamModel
     /// Deferred split flow for hard-deadline consumers: this family's
     /// stabilization is a single one-shot backfill pass (no separate zero
     /// phase), so it is armed as one pending unit and executed on the first
-    /// [`NamModel::prewarm_step`](NamModel::prewarm_step) call.
+    /// [`NamModel::prewarm_step`] call.
     fn prewarm_reset(&mut self) {
         self.prewarm_pending = true;
     }
@@ -95,8 +95,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> NamModel
     fn prewarm_step(&mut self, samples: usize) -> usize {
         if self.prewarm_pending && samples > 0 {
             self.prewarm();
+            self.prewarm_pending = false;
         }
-        0
+        if self.prewarm_pending { 1 } else { 0 }
     }
 
     /// Deferred pass pending? (`true` when nothing is armed/left.)
@@ -133,7 +134,7 @@ impl NamModel for model_dyn::WaveNetModelDyn {
     /// Deferred split flow for hard-deadline consumers: this family's
     /// stabilization is a single one-shot backfill pass (no separate zero
     /// phase), so it is armed as one pending unit and executed on the first
-    /// [`NamModel::prewarm_step`](NamModel::prewarm_step) call.
+    /// [`NamModel::prewarm_step`] call.
     fn prewarm_reset(&mut self) {
         self.prewarm_pending = true;
     }
@@ -143,8 +144,9 @@ impl NamModel for model_dyn::WaveNetModelDyn {
     fn prewarm_step(&mut self, samples: usize) -> usize {
         if self.prewarm_pending && samples > 0 {
             self.prewarm();
+            self.prewarm_pending = false;
         }
-        0
+        if self.prewarm_pending { 1 } else { 0 }
     }
 
     /// Deferred pass pending? (`true` when nothing is armed/left.)

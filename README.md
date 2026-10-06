@@ -115,14 +115,14 @@ Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "0.8"
+NeuralAmpModeler-rs = "1.0"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "0.8", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "1.0", features = ["testing"] }
 ```
 
 ### Minimal Code Example: Load & Process Audio

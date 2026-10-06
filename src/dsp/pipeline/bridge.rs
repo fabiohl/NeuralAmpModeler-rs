@@ -6,7 +6,7 @@
 //! Contains `DspBridge`, `BridgeBuffer`, `BridgeRef`, `DspBridgeWriter`,
 //! `DspBridgeReader` and the constants `MAX_BRIDGE_BUF` / `MAX_RESAMP_BUF`.
 
-use crate::common::atomics::{AtomicU32, AtomicU64, AtomicUsize};
+use crate::common::atomics::{AtomicExt, AtomicU32, AtomicU64, AtomicUsize};
 use core::sync::atomic::Ordering;
 
 /// Maximum intermediate buffer size between the two streams (capture → playback).
@@ -367,12 +367,9 @@ impl DspBridgeWriter {
             let current_gen = bridge.generation.load(Ordering::Relaxed);
             let consumed_gen = bridge.consumed_gen.load(Ordering::Acquire);
             if current_gen > consumed_gen {
-                let _ =
-                    bridge
-                        .dropped_frames
-                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                            Some(v.saturating_add(1))
-                        });
+                let _ = bridge
+                    .dropped_frames
+                    .saturating_inc(Ordering::Relaxed, Ordering::Relaxed);
                 return;
             }
 
@@ -420,12 +417,9 @@ impl DspBridgeWriter {
             let current_gen = bridge.generation.load(Ordering::Relaxed);
             let consumed_gen = bridge.consumed_gen.load(Ordering::Acquire);
             if current_gen > consumed_gen {
-                let _ =
-                    bridge
-                        .dropped_frames
-                        .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                            Some(v.saturating_add(1))
-                        });
+                let _ = bridge
+                    .dropped_frames
+                    .saturating_inc(Ordering::Relaxed, Ordering::Relaxed);
                 return;
             }
 

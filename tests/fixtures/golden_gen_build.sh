@@ -43,7 +43,7 @@
 #   golden_wavenet_standard.bin, golden_wavenet_lite.bin, golden_wavenet_feather.bin, golden_wavenet_nano.bin
 #   golden_lstm_1x16.bin, golden_lstm_2x8.bin, golden_lstm_official.bin
 #   golden_wavenet_a2_full.bin, golden_wavenet_a2_lite.bin
-#   (A2 goldens are cross-reference Rust↔C++ v0.5.4 via ESR/SNR scale-invariant
+#   (A2 goldens are cross-reference Rust↔C++ v0.6.0 via ESR/SNR scale-invariant
 #    gate — self-goldens removed.)
 #   golden_convnet_test.bin, golden_wavenet_dyn_free.bin, golden_lstm_dyn_test.bin
 #   (ConvNet and dynamic model goldens from dynamic architecture fixtures — sample_rate=48000)
@@ -241,13 +241,13 @@ python3 "$S3_FIXTURES_PY"
 echo "  Synthetic .nam fixtures regenerated in $MODELS_DIR/"
 
 # =============================================================================
-# Build render tool (single unified binary at v0.5.4 with A2-fast)
+# Build render tool (single unified binary at v0.6.0 with A2-fast)
 # =============================================================================
 # Delegates to the single entry point _lib.sh::ensure_namcore_render,
 # shared with tests-quick.sh / tests-long.sh / tests/parity/cpp_parity.rs.
 # Idempotent: skips cmake entirely when the binary is up-to-date. The vendor
 # tree is never patched (read-only boundary); `-w` in the unified flags keeps
-# the pinned NAMCore v0.5.4 compiling under GCC >= 15 without touching it.
+# the pinned NAMCore v0.6.0 compiling under GCC >= 15 without touching it.
 phase "Building render tool..."
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 export NAM_RENDER_BUILD_TYPE="$BUILD_TYPE"

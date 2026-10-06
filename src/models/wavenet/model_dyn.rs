@@ -124,7 +124,7 @@ pub struct WaveNetModelDyn {
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
     /// Deferred-stabilization pending unit armed by the split flow
-    /// ([`NamModel::prewarm_reset`](crate::models::NamModel::prewarm_reset)).
+    /// ([`NamModel::prewarm_reset`]).
     /// This family's stabilization is a single one-shot backfill pass (no
     /// separate zero phase), so the pending unit is boolean. Always `false`
     /// for freshly built models; the integral

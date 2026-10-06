@@ -91,7 +91,8 @@ P1_START=$(date +%s%N)
     cargo test --features testing --lib \
         --test models --test perf_soak --test parity --test dsp_core \
         --test cabsim_stereo \
-        --test target_features_compliance_test --test libm_export_guard -- \
+        --test target_features_compliance_test --test libm_export_guard \
+        --test freshness_guard --test isa_contract --test pipeline_capture_test --test state_compat -- \
         --skip golden_vectors:: --skip linear_fft_test:: \
         --skip spectral_fidelity:: --skip reference_oracle_f64:: \
         --skip cpp_parity:: --skip isa_parity:: \
