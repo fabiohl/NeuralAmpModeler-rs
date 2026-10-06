@@ -100,6 +100,13 @@ pub struct WaveNetA2<const CH: usize> {
     pub rt_status: Option<Arc<crate::common::spsc::RtStatusFlags>>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Zeroed-sample stabilization work still pending for the deferred split
+    /// pass armed by [`Self::prewarm_reset`](super::super::NamModel::prewarm_reset).
+    /// Always `0` for freshly built models; the integral
+    /// [`Self::prewarm`](super::super::NamModel::prewarm) /
+    /// [`Self::reset`](super::super::NamModel::reset) paths complete it by
+    /// construction and never consult or alter it otherwise.
+    pub prewarm_pending: usize,
 }
 
 impl<const CH: usize> WaveNetA2<CH> {
@@ -149,6 +156,7 @@ impl<const CH: usize> WaveNetA2<CH> {
             z_scratch: AlignedVec::new(CH, 0.0f32)?,
             rt_status: None,
             prewarm_on_reset: true,
+            prewarm_pending: 0,
         })
     }
 

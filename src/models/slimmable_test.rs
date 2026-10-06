@@ -132,6 +132,7 @@ fn make_full_model(ch: usize, head: usize) -> WaveNetModelDyn {
         head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         slimmable_capable: true,
         allowed_channels: None,
         pending_slim_channel: None,

@@ -71,6 +71,12 @@ pub struct LinearModel {
     double_limit: usize,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Zeroed-sample stabilization work still pending for the deferred split
+    /// pass armed by [`Self::prewarm_reset`](NamModel::prewarm_reset).
+    /// Always `0` for freshly built models; the integral
+    /// [`Self::prewarm`](NamModel::prewarm) / [`Self::reset`](NamModel::reset)
+    /// paths neither consult nor alter it.
+    pub prewarm_pending: usize,
     /// Convolution implementation mode as configured in the JSON.
     pub implementation: LinearImplementation,
     /// Runtime convolution mode — `Direct` or `Fft` with partitioned FFT state.
@@ -151,6 +157,7 @@ impl LinearModel {
             receptive_field,
             double_limit,
             prewarm_on_reset: true,
+            prewarm_pending: 0,
             implementation,
             mode,
         })
@@ -203,6 +210,57 @@ impl NamModel for LinearModel {
     #[cold]
     fn prewarm(&mut self, num_samples: usize) {
         self.prewarm(num_samples);
+    }
+
+    /// Zero phase of the deferred split flow: zeroes history/FFT state in
+    /// place and arms the pending unit. Real-time safe.
+    ///
+    /// Design note: the family is stateless-by-construction after the zeroing
+    /// (FIR history + FFT state are deterministic functions of the input
+    /// stream alone), so the zeroed-model state already equals the integral
+    /// post-`prewarm` state — the integral `prewarm` is itself a pure zeroing
+    /// with no feed (`prewarm_samples() == 0`). The pending unit exists only
+    /// to satisfy the split-flow accounting (`prewarm_complete() == false`
+    /// until stepped), and stepping it feeds zeros through the family's own
+    /// `process` path exactly like any other input: subsequent live samples
+    /// then behave as if the stream had those leading zeros. Callers that
+    /// need integral-equivalent output must drain the feed before live audio
+    /// (same rule as every other family); the zeroed state's feed-sensitivity
+    /// is inherent to the convolution (verified: any nonzero feed length
+    /// advances the delay line and changes subsequent output).
+    fn prewarm_reset(&mut self) {
+        // Zero phase: bit-exact with the integral `reset()` zeroing.
+        self.reset(0, 0);
+        // Arm exactly one stabilization unit; stepping it feeds a single zero
+        // through the family's `process` path (accounting only).
+        self.prewarm_pending = 1;
+    }
+
+    /// Advances the armed feed by up to `samples` zeros through the family's
+    /// own `process` path; returns the work still pending.
+    /// Real-time safe.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        let n = samples.min(self.prewarm_pending);
+        if n > 0 {
+            const CHUNK: usize = 512;
+            let zeros = [0.0f32; CHUNK];
+            let mut sink = [0.0f32; CHUNK];
+            let mut fed = 0usize;
+            while fed < n {
+                let take = (n - fed).min(CHUNK);
+                // SAFETY: weights are 64-byte aligned (AlignedVec), same
+                // precondition as the `process` trait entry above.
+                unsafe { self.process(&zeros[..take], &mut sink[..take]) };
+                fed += take;
+            }
+            self.prewarm_pending -= n;
+        }
+        self.prewarm_pending
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
     }
 
     fn reset(&mut self, sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {

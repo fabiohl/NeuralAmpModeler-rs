@@ -50,6 +50,7 @@ pub(crate) fn build_lstm_dynamic(
         head_bias,
         prewarm_on_reset: true,
         expected_sample_rate: sample_rate,
+        prewarm_pending: 0,
     };
 
     info!(

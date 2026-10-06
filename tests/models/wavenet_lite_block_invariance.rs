@@ -188,6 +188,7 @@ fn build_tiny_lite_wavenet() -> WaveNetModel<12, 3, 6> {
         head_scale: 0.02,
         receptive_field_size: rf1.max(rf2),
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 

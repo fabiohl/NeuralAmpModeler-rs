@@ -206,6 +206,7 @@ fn build_const_generic_model<const CH: usize, const K: usize, const HEAD: usize>
         head_scale: 0.02,
         receptive_field_size: rf1.max(rf2),
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 
@@ -335,6 +336,7 @@ fn build_dynamic_model(ch: usize, k: usize, head: usize) -> WaveNetModelDyn {
         head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         slimmable_capable: false,
         allowed_channels: None,
         pending_slim_channel: None,

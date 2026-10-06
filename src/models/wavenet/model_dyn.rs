@@ -123,6 +123,14 @@ pub struct WaveNetModelDyn {
     pub head_output_scratch: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Deferred-stabilization pending unit armed by the split flow
+    /// ([`NamModel::prewarm_reset`](crate::models::NamModel::prewarm_reset)).
+    /// This family's stabilization is a single one-shot backfill pass (no
+    /// separate zero phase), so the pending unit is boolean. Always `false`
+    /// for freshly built models; the integral
+    /// [`Self::prewarm`](crate::models::NamModel::prewarm) completes it by
+    /// construction and never consults it otherwise.
+    pub prewarm_pending: bool,
     /// Whether this dynamic WaveNet model explicitly supports dynamic channel slimming.
     pub slimmable_capable: bool,
     /// Allowed channel breakpoints for slimmable channel slicing.
@@ -153,6 +161,7 @@ impl Clone for WaveNetModelDyn {
             post_stack_head: self.post_stack_head.clone(),
             head_output_scratch: self.head_output_scratch.clone(),
             prewarm_on_reset: self.prewarm_on_reset,
+            prewarm_pending: false,
             slimmable_capable: self.slimmable_capable,
             allowed_channels: self.allowed_channels.clone(),
             pending_slim_channel: self.pending_slim_channel,
@@ -383,6 +392,8 @@ impl WaveNetModelDyn {
         unsafe {
             self.prewarm_internal::<crate::math::common::Avx2Math>();
         }
+        // The integral one-shot pass completes any armed deferred unit.
+        self.prewarm_pending = false;
     }
 
     /// Prewarm strictly optimized for AVX2 architecture.

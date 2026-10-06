@@ -364,6 +364,7 @@ fn build_wavenet_dynamic_inner(
         post_stack_head,
         head_output_scratch,
         prewarm_on_reset: true,
+        prewarm_pending: false,
         slimmable_capable: data.is_slimmable_capable() || geom.allowed_channels.is_some(),
         allowed_channels: geom.allowed_channels.clone(),
         pending_slim_channel: None,

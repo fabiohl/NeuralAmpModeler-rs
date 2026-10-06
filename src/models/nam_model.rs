@@ -123,6 +123,99 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Zero phase of the deferred split stabilization: clears temporal state
+    /// and arms the pending zeroed-sample feed. Real-time safe (no heap, no
+    /// locks, no I/O); the caller controls amortization via
+    /// [`prewarm_step`](Self::prewarm_step).
+    fn prewarm_reset(&mut self) {
+        match self {
+            Self::WavenetStandard(m) => m.prewarm_reset(),
+            Self::WavenetLite(m) => m.prewarm_reset(),
+            Self::WavenetFeather(m) => m.prewarm_reset(),
+            Self::WavenetNano(m) => m.prewarm_reset(),
+            Self::WavenetA2Full(m) => m.prewarm_reset(),
+            Self::WavenetA2Lite(m) => m.prewarm_reset(),
+            Self::WavenetA2Dyn(m) => m.prewarm_reset(),
+            Self::WavenetA2Cascade(m) => m.prewarm_reset(),
+            Self::WavenetDyn(m) => m.prewarm_reset(),
+            Self::Container(m) => m.prewarm_reset(),
+            Self::Lstm1x3(m) => m.prewarm_reset(),
+            Self::Lstm1x8(m) => m.prewarm_reset(),
+            Self::Lstm1x12(m) => m.prewarm_reset(),
+            Self::Lstm1x16(m) => m.prewarm_reset(),
+            Self::Lstm1x24(m) => m.prewarm_reset(),
+            Self::Lstm2x8(m) => m.prewarm_reset(),
+            Self::Lstm2x12(m) => m.prewarm_reset(),
+            Self::Lstm2x16(m) => m.prewarm_reset(),
+            Self::Lstm1x40(m) => m.prewarm_reset(),
+            Self::Lstm2x24(m) => m.prewarm_reset(),
+            Self::LstmDyn(m) => m.prewarm_reset(),
+            Self::Linear(m) => m.prewarm_reset(),
+            Self::ConvNet(m) => m.prewarm_reset(),
+        }
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples;
+    /// returns the family's pending unit count (0 = converged). Real-time
+    /// safe (no heap, no locks, no I/O).
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        match self {
+            Self::WavenetStandard(m) => m.prewarm_step(samples),
+            Self::WavenetLite(m) => m.prewarm_step(samples),
+            Self::WavenetFeather(m) => m.prewarm_step(samples),
+            Self::WavenetNano(m) => m.prewarm_step(samples),
+            Self::WavenetA2Full(m) => m.prewarm_step(samples),
+            Self::WavenetA2Lite(m) => m.prewarm_step(samples),
+            Self::WavenetA2Dyn(m) => m.prewarm_step(samples),
+            Self::WavenetA2Cascade(m) => m.prewarm_step(samples),
+            Self::WavenetDyn(m) => m.prewarm_step(samples),
+            Self::Container(m) => m.prewarm_step(samples),
+            Self::Lstm1x3(m) => m.prewarm_step(samples),
+            Self::Lstm1x8(m) => m.prewarm_step(samples),
+            Self::Lstm1x12(m) => m.prewarm_step(samples),
+            Self::Lstm1x16(m) => m.prewarm_step(samples),
+            Self::Lstm1x24(m) => m.prewarm_step(samples),
+            Self::Lstm2x8(m) => m.prewarm_step(samples),
+            Self::Lstm2x12(m) => m.prewarm_step(samples),
+            Self::Lstm2x16(m) => m.prewarm_step(samples),
+            Self::Lstm1x40(m) => m.prewarm_step(samples),
+            Self::Lstm2x24(m) => m.prewarm_step(samples),
+            Self::LstmDyn(m) => m.prewarm_step(samples),
+            Self::Linear(m) => m.prewarm_step(samples),
+            Self::ConvNet(m) => m.prewarm_step(samples),
+        }
+    }
+
+    /// Deferred pass pending? Always `true` for freshly built models; armed
+    /// exclusively by [`prewarm_reset`](Self::prewarm_reset).
+    fn prewarm_complete(&self) -> bool {
+        match self {
+            Self::WavenetStandard(m) => m.prewarm_complete(),
+            Self::WavenetLite(m) => m.prewarm_complete(),
+            Self::WavenetFeather(m) => m.prewarm_complete(),
+            Self::WavenetNano(m) => m.prewarm_complete(),
+            Self::WavenetA2Full(m) => m.prewarm_complete(),
+            Self::WavenetA2Lite(m) => m.prewarm_complete(),
+            Self::WavenetA2Dyn(m) => m.prewarm_complete(),
+            Self::WavenetA2Cascade(m) => m.prewarm_complete(),
+            Self::WavenetDyn(m) => m.prewarm_complete(),
+            Self::Container(m) => m.prewarm_complete(),
+            Self::Lstm1x3(m) => m.prewarm_complete(),
+            Self::Lstm1x8(m) => m.prewarm_complete(),
+            Self::Lstm1x12(m) => m.prewarm_complete(),
+            Self::Lstm1x16(m) => m.prewarm_complete(),
+            Self::Lstm1x24(m) => m.prewarm_complete(),
+            Self::Lstm2x8(m) => m.prewarm_complete(),
+            Self::Lstm2x12(m) => m.prewarm_complete(),
+            Self::Lstm2x16(m) => m.prewarm_complete(),
+            Self::Lstm1x40(m) => m.prewarm_complete(),
+            Self::Lstm2x24(m) => m.prewarm_complete(),
+            Self::LstmDyn(m) => m.prewarm_complete(),
+            Self::Linear(m) => m.prewarm_complete(),
+            Self::ConvNet(m) => m.prewarm_complete(),
+        }
+    }
+
     /// Queries whether internal recurrent states should be prewarmed when the DSP pipeline resets.
     ///
     /// When `true`, subsequent invocations of [`reset`](Self::reset) will automatically flush

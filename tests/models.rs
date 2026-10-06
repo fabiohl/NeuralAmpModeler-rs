@@ -98,6 +98,8 @@ mod quality_cli_test;
 mod self_consistency;
 #[path = "models/spectral_fidelity.rs"]
 mod spectral_fidelity;
+#[path = "models/split_prewarm_equiv.rs"]
+mod split_prewarm_equiv;
 #[path = "models/thp_coherence.rs"]
 mod thp_coherence;
 #[path = "models/threshold_calibration.rs"]

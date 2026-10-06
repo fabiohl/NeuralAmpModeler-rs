@@ -393,6 +393,7 @@ pub fn slice_wavenet_model(
         post_stack_head: model.post_stack_head.clone(),
         head_output_scratch,
         prewarm_on_reset: model.prewarm_on_reset,
+        prewarm_pending: false,
         slimmable_capable: model.slimmable_capable,
         allowed_channels: model.allowed_channels.clone(),
         pending_slim_channel: None,

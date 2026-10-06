@@ -138,6 +138,83 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     ///   argument. The value passed is irrelevant to the outcome.
     fn prewarm(&mut self, num_samples: usize);
 
+    /// Clears temporal state to the freshly-built condition, leaving the
+    /// stabilization pass outstanding.
+    ///
+    /// This is the frontier splitting an integral [`prewarm`](Self::prewarm)
+    /// pass in two phases for real-time consumers with hard per-block
+    /// deadlines:
+    ///
+    /// 1. **State-clearing phase (this method):** resets every temporal
+    ///    buffer to the condition a just-constructed-and-stabilized model
+    ///    reaches — delay/ring/recurrent state, ring write cursors, and the
+    ///    metric preamble of the integral pass — while performing *none* of
+    ///    the zeroed-sample stabilization work. Bounded O(ring clearing).
+    /// 2. **Stabilization phase ([`prewarm_step`](Self::prewarm_step)):**
+    ///    consumes zeroed samples toward convergence until
+    ///    [`prewarm_complete`](Self::prewarm_complete) reports `true`.
+    ///
+    /// After this call, [`prewarm_complete`](Self::prewarm_complete) reports
+    /// `false` whenever the stabilization work is not reduced to zero, and
+    /// progress is made **exclusively** via
+    /// [`prewarm_step`](Self::prewarm_step) calls. The state *pending* is
+    /// internal to the model; the integral paths
+    /// ([`prewarm`](Self::prewarm) / [`reset`](Self::reset)) are not altered
+    /// by or observed through this split state.
+    ///
+    /// # Real-Time Safety
+    /// Zero-allocation, lock-free, no I/O, bounded by the model's ring sizes
+    /// — safe on the audio thread. The caller controls the step budget via
+    /// [`prewarm_step`](Self::prewarm_step).
+    ///
+    /// # Per-family semantics
+    /// Every concrete family implements the frontier so that
+    /// `prewarm_reset()` followed by `prewarm_step` calls until completion
+    /// reproduces the *bit-exact* post-stabilization state of the integral
+    /// flow, independently of how the zeroed samples are chunked (validated
+    /// by the engine's split-vs-integral equivalence tests).
+    fn prewarm_reset(&mut self) {}
+
+    /// Advances the outstanding split-stabilization pass by at most
+    /// `samples` zeroed samples.
+    ///
+    /// Returns the stabilization work still pending after the call (in the
+    /// family's own zeroed-sample unit of account; `0` = converged). The
+    /// caller bounds its per-clock budget by the `samples` argument; the
+    /// family clamps its work to that budget.
+    ///
+    /// # Real-Time Safety
+    /// This method MUST NOT allocate on the heap, acquire locks, or perform
+    /// blocking I/O — it is the same contract as [`process`](Self::process).
+    /// Implementations drive the stabilization exclusively through the
+    /// family's own `process` path or backfill kernels, so the resulting
+    /// state is bit-equal to the integral stabilization regardless of the
+    /// chunking the caller chooses.
+    ///
+    /// Default: performs the integral stabilization pass over
+    /// [`prewarm_samples`](Self::prewarm_samples) and reports convergence.
+    /// This is the conservative fallback for families without a split
+    /// implementation; overriding it makes the stabilization amortizable.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        let _ = samples;
+        core::hint::cold_path();
+        self.prewarm(self.prewarm_samples());
+        0
+    }
+
+    /// Reports whether the split-stabilization pass requested by
+    /// [`prewarm_reset`](Self::prewarm_reset) has fully converged.
+    ///
+    /// Always `true` for a freshly built model — the pending state is armed
+    /// exclusively by [`prewarm_reset`](Self::prewarm_reset) and cleared when
+    /// the stabilization work reaches zero. The integral paths
+    /// ([`prewarm`](Self::prewarm) / [`reset`](Self::reset)) do not consult
+    /// or alter it: a family that stabilizes during those calls converges by
+    /// construction.
+    fn prewarm_complete(&self) -> bool {
+        true
+    }
+
     /// Returns whether prewarm should be executed on [`reset`](NamModel::reset).
     ///
     /// Default: `true` (prewarm on every reset).

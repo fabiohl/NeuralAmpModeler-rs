@@ -175,10 +175,29 @@ pub fn prefetch_strategy_2stage(
     }
 }
 
-/// Enables DAZ (Denormals-Are-Zero) and FTZ (Flush-To-Zero) in the MXCSR register.
+/// Sets the FTZ (bit 15) and DAZ (bit 6) control bits of the calling thread's
+/// MXCSR control word (x86_64: `stmxcsr`/`ldmxcsr` on a stack-local `u32`).
 ///
 /// # Safety
-/// SSE2 is implicit on x86-64.
+///
+/// - The operation reads and writes **no process memory** (the MXCSR value is
+///   staged in a stack local), performs no allocation, cannot unwind, and
+///   terminates in constant time — callable from lock-free real-time contexts.
+/// - The mutation is confined to the **calling thread**: MXCSR is per-thread
+///   CPU state; other threads' floating-point environments are untouched.
+/// - The operation is **idempotent**: it ORs `0x8040` into the current control
+///   word, so repeated calls cannot accumulate state and a single call fully
+///   re-asserts the policy.
+/// - Numerical effect on the caller's thread: denormal inputs/outputs of
+///   subsequent scalar/SSE floating point code on this thread are flushed to
+///   zero in constant time instead of being handled as microcoded denormals.
+///   The caller must intend exactly this — this is why the function must
+///   remain `unsafe` rather than `safe`: calling it as safe from library code
+///   would let one crate silently change the floating-point environment (and
+///   therefore the numerical results of denormal-tail math) of unrelated code
+///   scheduled later on the same thread.
+/// - Preconditions: zero. SSE2 is guaranteed by the x86-64 baseline (the crate
+///   targets x86-64-v3), so no runtime feature check is ever needed.
 pub unsafe fn set_daz_ftz() {
     // SAFETY: MXCSR manipulation via stmxcsr/ldmxcsr is always safe on x86-64
     // (SSE2 is guaranteed by the x86-64-v3 target). The asm! block uses a properly

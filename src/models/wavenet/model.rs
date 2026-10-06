@@ -27,6 +27,13 @@ pub struct WaveNetModel<const CH: usize, const K: usize, const HEAD: usize> {
     pub receptive_field_size: usize,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Pending deferred-stabilization unit armed by
+    /// [`Self::prewarm_reset`](super::NamModel::prewarm_reset) (this family's
+    /// stabilization is a single one-shot backfill pass). Always `false` for
+    /// freshly built models; the integral
+    /// [`Self::prewarm`](super::NamModel::prewarm) completes it by
+    /// construction.
+    pub prewarm_pending: bool,
 }
 
 impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEAD> {
@@ -169,6 +176,8 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
         unsafe {
             crate::math::common::dispatch_simd!(self, prewarm_internal);
         }
+        // The integral one-shot pass completes any armed deferred unit.
+        self.prewarm_pending = false;
     }
 
     /// Prewarm strictly optimized for AVX-512 architecture.

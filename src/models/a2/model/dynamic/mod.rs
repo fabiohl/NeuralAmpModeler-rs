@@ -196,6 +196,13 @@ pub struct WaveNetA2Dyn {
 
     /// Off-RT diagnostic capture state (zero-cost in release builds).
     pub diag: DiagnosticState,
+    /// Zeroed-sample stabilization work still pending for the deferred split
+    /// pass armed by [`Self::prewarm_reset`](super::super::NamModel::prewarm_reset).
+    /// Always `0` for freshly built models; the integral
+    /// [`Self::prewarm`](super::super::NamModel::prewarm) /
+    /// [`Self::reset`](super::super::NamModel::reset) paths complete it by
+    /// construction and never consult or alter it otherwise.
+    pub prewarm_pending: usize,
 }
 
 impl WaveNetA2Dyn {
@@ -405,6 +412,7 @@ impl WaveNetA2Dyn {
             cond_scratch: AlignedVec::new(1, 0.0f32)?,
             head1x1_scratch,
             prewarm_on_reset: true,
+            prewarm_pending: 0,
             condition_dsp: None,
             condition_dsp_output: AlignedVec::new(0, 0.0f32)?,
             diag: DiagnosticState::default(),

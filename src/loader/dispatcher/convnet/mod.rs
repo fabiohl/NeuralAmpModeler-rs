@@ -156,6 +156,7 @@ fn build_convnet_flat_cpp(
         scratch_a,
         scratch_b,
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head,
     };
 
@@ -360,6 +361,7 @@ fn build_convnet_layers(
         scratch_a,
         scratch_b,
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     };
 

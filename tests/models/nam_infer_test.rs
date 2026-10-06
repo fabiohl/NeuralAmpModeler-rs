@@ -229,6 +229,7 @@ fn build_synthetic_wavenet_standard() -> WaveNetStandard {
         head_scale: 0.02,
         receptive_field_size: final_rf,
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 

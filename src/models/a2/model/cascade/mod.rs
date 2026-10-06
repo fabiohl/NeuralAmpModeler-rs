@@ -51,6 +51,13 @@ pub struct WaveNetA2Cascade {
     max_buffer_size: usize,
     /// Model-level head scale multiplier applied to final output (C++ NAMCore `WaveNet::_head_scale`).
     pub head_scale: f32,
+    /// Zeroed-sample stabilization work still pending for the deferred split
+    /// pass armed by [`Self::prewarm_reset`](super::super::NamModel::prewarm_reset).
+    /// Always `0` for freshly built models; the integral
+    /// [`Self::prewarm`](super::super::NamModel::prewarm) /
+    /// [`Self::reset`](super::super::NamModel::reset) paths complete it by
+    /// construction and never consult or alter it otherwise.
+    pub prewarm_pending: usize,
 }
 
 impl WaveNetA2Cascade {
@@ -104,6 +111,7 @@ impl WaveNetA2Cascade {
             max_head_size: max_hs,
             max_buffer_size: WAVENET_MAX_NUM_FRAMES,
             head_scale: 1.0f32,
+            prewarm_pending: 0,
         })
     }
 
@@ -298,18 +306,103 @@ impl WaveNetA2Cascade {
         Ok(())
     }
 
+    /// Zero phase of the deferred split stabilization: clears the cascade
+    /// scratch buffers in place (via the shrink-equivariant
+    /// `set_max_buffer_size`, which zeroes the subarray states in place), arms
+    /// the per-subarray split passes (without integral prewarm), and records
+    /// the cascade-level zero-feed units. Allocation- and lock-free: a
+    /// real-time consumer may call it on its audio thread and amortize
+    /// [`WaveNetA2Cascade::prewarm_step`] within per-callback budgets.
+    pub fn prewarm_reset(&mut self) {
+        // Order matters (A2-Max class): the subarray zero-feeds must run
+        // BEFORE the cascade-level scratch is touched, because the subarray
+        // `prewarm_reset()` calls `set_max_buffer_size(max)` on models whose
+        // nested condition path is only valid at their build size — the same
+        // sizing the old integral cascade prewarm relied on (it fed
+        // `max_buffer_size`-sized blocks from a fresh build without
+        // re-sizing). Re-sizing the cascade level first (which recreates
+        // level scratch at a larger `max_buffer_size`) would leave the
+        // subarrays' condition paths undersized for the blocks the armed
+        // feeds later process.
+        for arr in &mut self.arrays {
+            // NOTE: `arr.reset()` would invoke the subarray's own integral
+            // `prewarm()` (a full RF feed through the subarray), which is
+            // exactly what the split flow must NOT do — the subarray feeds
+            // stay armed and drain through `prewarm_step`. `reset()` is also
+            // wrong for a second reason: the integral `prewarm()` panics on
+            // models whose nested condition path is not yet fully sized (the
+            // A2-Max class: `cond_dsp` cascade whose subarrays were built at
+            // `max_buf=64` while the parent processes larger blocks; the old
+            // integral cascade prewarm only ever fed `max_buffer_size`-sized
+            // blocks and never hit this). The split flow therefore reproduces
+            // only the *zeroing* half of the integral reset here (`arr` was
+            // already sized by the `set_max_buffer_size` above, which takes
+            // the in-place zeroing path when the size is unchanged) and arms
+            // the subarray feed via `prewarm_reset()`.
+            if arr.set_max_buffer_size(self.max_buffer_size).is_err() {
+                return;
+            }
+            arr.set_prewarm_on_reset(false);
+            arr.prewarm_reset();
+            arr.set_prewarm_on_reset(true);
+        }
+
+        self.prewarm_pending = self.receptive_field_size.max(2048);
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples
+    /// (counted across subarrays and level) and returns the work still pending
+    /// (0 = converged). The integral order is preserved: subarray feeds
+    /// complete first — driven through the chained [`Self::process`] path
+    /// (never by direct subarray `process`, which would feed mono zeros into
+    /// a multi-channel residual input and index out of bounds) — then the
+    /// cascade-level feed continues through the same chained path.
+    /// Allocation- and lock-free.
+    pub fn prewarm_step(&mut self, samples: usize) -> usize {
+        // Subarray zero-feeds run *through the chain*: each chained `process`
+        // advances every subarray's feed by `nf` (each subarray's
+        // `prewarm_step` is driven by the chained call below, not here —
+        // calling `arr.prewarm_step` directly would feed mono zeros into
+        // residual inputs of width `input_channels > 1`). Drive the chain in
+        // `WAVENET_MAX_NUM_FRAMES`-capped blocks until either the caller's
+        // `samples` budget or all pending work (subarrays + level) drains.
+        let mut budget = samples;
+        loop {
+            let sub_pending: usize = self
+                .arrays
+                .iter()
+                .map(|a| a.prewarm_pending_stabilization())
+                .max()
+                .unwrap_or(0);
+            let total = sub_pending + self.prewarm_pending;
+            if total == 0 || budget == 0 {
+                return total;
+            }
+            let nf = budget.min(total).min(WAVENET_MAX_NUM_FRAMES);
+            let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+            let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+            self.process(&zeros[..nf], &mut discard[..nf]);
+            // The chained pass advances each subarray feed by exactly `nf`.
+            for arr in &mut self.arrays {
+                arr.prewarm_advance(nf);
+            }
+            self.prewarm_pending = self.prewarm_pending.saturating_sub(nf);
+            budget -= nf;
+        }
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    pub fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0 && self.arrays.iter().all(|a| a.prewarm_complete())
+    }
+
     /// Pre-warms all arrays.
     #[cold]
     pub fn prewarm(&mut self) {
-        let prewarm_samples = self.receptive_field_size.max(2048);
-        let block = self.max_buffer_size;
-        let zeros = vec![0.0f32; block];
-        let mut dummy = vec![0.0f32; block];
-        let mut remaining = prewarm_samples;
-        while remaining > 0 {
-            let nf = remaining.min(block);
-            self.process(&zeros[..nf], &mut dummy[..nf]);
-            remaining -= nf;
+        self.prewarm_reset();
+        while !self.prewarm_complete() {
+            let take = self.prewarm_pending;
+            self.prewarm_step(take);
         }
     }
 }

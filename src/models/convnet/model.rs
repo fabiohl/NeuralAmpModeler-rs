@@ -35,6 +35,14 @@ pub struct ConvNetModel {
     pub(crate) scratch_b: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
+    /// Deferred-stabilization pending unit armed by the split flow
+    /// ([`NamModel::prewarm_reset`](crate::models::NamModel::prewarm_reset)).
+    /// This family's stabilization is a single one-shot feed (no separate
+    /// zero phase), so the pending unit is boolean. Always `false` for
+    /// freshly built models; the integral
+    /// [`Self::prewarm`](crate::models::NamModel::prewarm) completes it by
+    /// construction and never consults it otherwise.
+    pub prewarm_pending: bool,
     /// Optional C++ flat-format linear head weights (no activation).
     /// Used when `post_stack_head` is `None` but the model has a separate
     /// linear projection from `in_ch → out_ch`.
@@ -246,6 +254,8 @@ impl ConvNetModel {
         let zeros = vec![0.0f32; n];
         let mut sink = vec![0.0f32; n * self.out_channels()];
         self.process(&zeros, &mut sink);
+        // The integral one-shot pass completes any armed deferred unit.
+        self.prewarm_pending = false;
     }
 }
 

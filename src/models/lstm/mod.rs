@@ -133,6 +133,24 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> NamModel
         Ok(())
     }
 
+    /// Deferred split flow for hard-deadline consumers: clears recurrent
+    /// state (the integral reset's zero phase) and arms the pending
+    /// zeroed-sample stabilization budget without feeding silence.
+    fn prewarm_reset(&mut self) {
+        lstm_prewarm_split_reset(self);
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples;
+    /// returns the work still pending (0 = converged).
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        lstm_prewarm_split_step(self, samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
+    }
+
     fn prewarm_samples(&self) -> usize {
         let result = (0.5 * self.expected_sample_rate) as isize;
         if result <= 0 { 1 } else { result as usize }
@@ -175,6 +193,24 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize> 
         Ok(())
     }
 
+    /// Deferred split flow for hard-deadline consumers: clears recurrent
+    /// state (the integral reset's zero phase) and arms the pending
+    /// zeroed-sample stabilization budget without feeding silence.
+    fn prewarm_reset(&mut self) {
+        lstm_prewarm_split_reset(self);
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples;
+    /// returns the work still pending (0 = converged).
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        lstm_prewarm_split_step(self, samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
+    }
+
     fn prewarm_samples(&self) -> usize {
         let result = (0.5 * self.expected_sample_rate) as isize;
         if result <= 0 { 1 } else { result as usize }
@@ -213,6 +249,24 @@ impl NamModel for LstmModelDyn {
             self.prewarm(self.prewarm_samples());
         }
         Ok(())
+    }
+
+    /// Deferred split flow for hard-deadline consumers: clears recurrent
+    /// state (the integral reset's zero phase) and arms the pending
+    /// zeroed-sample stabilization budget without feeding silence.
+    fn prewarm_reset(&mut self) {
+        lstm_prewarm_split_reset(self);
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples;
+    /// returns the work still pending (0 = converged).
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        lstm_prewarm_split_step(self, samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
     }
 
     fn prewarm_samples(&self) -> usize {

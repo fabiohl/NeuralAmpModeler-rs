@@ -34,6 +34,12 @@ pub struct LstmModelDyn {
     pub prewarm_on_reset: bool,
     /// Expected sample rate (Hz) for prewarm calculation. Default: `48000.0`.
     pub expected_sample_rate: f64,
+    /// Zeroed-sample stabilization work still pending for the deferred split
+    /// pass armed by [`Self::prewarm_reset`](super::NamModel::prewarm_reset).
+    /// Always `0` for freshly built models; the integral
+    /// [`Self::prewarm`](super::NamModel::prewarm) / [`Self::reset`](super::NamModel::reset)
+    /// paths neither consult nor alter it.
+    pub prewarm_pending: usize,
 }
 
 impl LstmModelDyn {
@@ -55,6 +61,7 @@ impl LstmModelDyn {
             head_bias: 0.0,
             prewarm_on_reset: true,
             expected_sample_rate: 48000.0,
+            prewarm_pending: 0,
         })
     }
 

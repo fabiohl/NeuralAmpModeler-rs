@@ -85,6 +85,23 @@ impl<const CH: usize> NamModel for model::WaveNetA2<CH> {
         self.prewarm();
     }
 
+    /// Zero phase of the deferred split flow (buffer clearing in place; the
+    /// RF zero-feed pends). Real-time safe.
+    fn prewarm_reset(&mut self) {
+        self.prewarm_reset();
+    }
+
+    /// Advances the armed RF zero-feed by up to `samples` zeroed samples;
+    /// returns the remaining count. Real-time safe.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        self.prewarm_step(samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
+    }
+
     fn prewarm_samples(&self) -> usize {
         self.receptive_field_size
     }
@@ -115,6 +132,23 @@ impl NamModel for model::dynamic::WaveNetA2Dyn {
 
     fn prewarm(&mut self, _num_samples: usize) {
         self.prewarm();
+    }
+
+    /// Zero phase of the deferred split flow (buffer clearing + condition
+    /// sub-model pre-configuration; the RF zero-feed pends). Real-time safe.
+    fn prewarm_reset(&mut self) {
+        self.prewarm_reset();
+    }
+
+    /// Advances the armed RF zero-feed by up to `samples` zeroed samples;
+    /// returns the remaining count. Real-time safe.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        self.prewarm_step(samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
     }
 
     fn prewarm_samples(&self) -> usize {

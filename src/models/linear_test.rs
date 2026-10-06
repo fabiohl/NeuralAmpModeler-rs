@@ -141,6 +141,7 @@ fn test_fft_long_tail_many_partitions() {
         receptive_field: 2048,
         double_limit: limit.saturating_mul(2),
         prewarm_on_reset: true,
+        prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state)),
     };
@@ -541,6 +542,7 @@ fn test_equivalence_multi_partition_manual() {
         receptive_field: 1024,
         double_limit: limit.saturating_mul(2),
         prewarm_on_reset: true,
+        prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state)),
     };
@@ -567,6 +569,7 @@ fn test_equivalence_multi_partition_manual() {
         receptive_field: 1024,
         double_limit: limit2.saturating_mul(2),
         prewarm_on_reset: true,
+        prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state2)),
     };

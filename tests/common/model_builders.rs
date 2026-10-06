@@ -204,6 +204,7 @@ pub fn build_soak_wavenet() -> WaveNetModel<16, 3, 8> {
         head_scale: 0.1,
         receptive_field_size: rf,
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 
@@ -379,6 +380,7 @@ pub fn build_k5_large_rf_wavenet() -> WaveNetModel<4, 5, 2> {
         head_scale: 0.02,
         receptive_field_size: rf1.max(rf2),
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 

@@ -19,6 +19,11 @@
 //! output sample. Fixed by making Rust `prewarm()` run `process()` with zeros for
 //! `receptive_field_size` frames after the zero-fill, mirroring the C++ DSP::Reset
 //! → prewarm() flow exactly.
+//!
+//! The zero-feed is an exact sequence of per-frame `process()` calls, so the
+//! integral pass is implemented over the split primitives
+//! (`prewarm_reset` + `prewarm_step` until `prewarm_pending == 0`); any
+//! chunking of the zeroed frames reproduces the integral result bit-exactly.
 
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
@@ -27,9 +32,12 @@ use super::super::a2_prewarm_common;
 use super::WaveNetA2;
 
 impl<const CH: usize> WaveNetA2<CH> {
-    /// Pre-warms the model by filling the receptive field with silence.
-    #[cold]
-    pub fn prewarm(&mut self) {
+    /// Zero phase of the deferred split stabilization: clears every buffer in
+    /// place (the integral prewarm's preamble) and arms the pending
+    /// zeroed-sample feed without running it. Zero-allocation and lock-free:
+    /// a real-time consumer may call it on its audio thread and amortize
+    /// [`WaveNetA2::prewarm_step`] within per-callback budgets.
+    pub fn prewarm_reset(&mut self) {
         a2_prewarm_common(
             A2_NUM_LAYERS,
             self.receptive_field_size,
@@ -41,17 +49,39 @@ impl<const CH: usize> WaveNetA2<CH> {
             &mut self.head_write_pos,
         );
 
-        if self.has_weights() {
-            let prewarm_samples = self.receptive_field_size;
-            let block = WAVENET_MAX_NUM_FRAMES;
+        self.prewarm_pending = if self.has_weights() {
+            self.receptive_field_size
+        } else {
+            0
+        };
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples
+    /// and returns the work still pending (0 = converged). Zero-allocation
+    /// and lock-free, sharing the same per-frame kernels as [`Self::process`].
+    pub fn prewarm_step(&mut self, samples: usize) -> usize {
+        let n = samples.min(self.prewarm_pending);
+        if n > 0 {
             let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
             let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-            let mut remaining = prewarm_samples;
-            while remaining > 0 {
-                let nf = remaining.min(block);
+            let mut fed = 0usize;
+            while fed < n {
+                let nf = (n - fed).min(WAVENET_MAX_NUM_FRAMES);
                 self.process(&zeros[..nf], &mut discard[..nf]);
-                remaining -= nf;
+                fed += nf;
             }
+            self.prewarm_pending -= n;
+        }
+        self.prewarm_pending
+    }
+
+    /// Pre-warms the model by filling the receptive field with silence.
+    #[cold]
+    pub fn prewarm(&mut self) {
+        self.prewarm_reset();
+        while self.prewarm_pending > 0 {
+            let take = self.prewarm_pending;
+            self.prewarm_step(take);
         }
     }
 }

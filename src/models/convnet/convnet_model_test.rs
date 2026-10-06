@@ -27,6 +27,7 @@ fn build_single_block_model() -> ConvNetModel {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     }
 }
@@ -87,6 +88,7 @@ fn test_linear_head_flat_cpp_parity() {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: Some(linear_head),
     };
 
@@ -117,6 +119,7 @@ fn test_empty_model_outputs_silence() {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     };
 
@@ -175,6 +178,7 @@ fn test_two_block_chain() {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     };
 
@@ -228,6 +232,7 @@ fn test_post_stack_head_integration() {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     };
 
@@ -273,6 +278,7 @@ fn test_prewarm_with_head() {
         scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
+        prewarm_pending: false,
         linear_head: None,
     };
 
@@ -310,6 +316,7 @@ fn test_convnet_prewarm_fixed_point_invariant() {
             scratch_a: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).expect("scratch_a"),
             scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).expect("scratch_b"),
             prewarm_on_reset: true,
+            prewarm_pending: false,
             linear_head: None,
         }
     }

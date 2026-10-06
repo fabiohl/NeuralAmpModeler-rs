@@ -331,6 +331,30 @@ impl NamModel for ContainerModel {
         }
     }
 
+    /// Zero phase of the deferred split flow: every submodel runs its own
+    /// zero phase; their feeds stay armed and drain through
+    /// [`prewarm_step`](Self::prewarm_step). Real-time safe.
+    fn prewarm_reset(&mut self) {
+        for (_, model) in &mut self.submodels {
+            model.prewarm_reset();
+        }
+    }
+
+    /// Advances every armed submodel feed and returns the maximum pending
+    /// count (0 = all converged). Real-time safe.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        let mut rem = 0usize;
+        for (_, model) in &mut self.submodels {
+            rem = rem.max(model.prewarm_step(samples));
+        }
+        rem
+    }
+
+    /// Deferred pass pending? (`true` when no submodel has work left.)
+    fn prewarm_complete(&self) -> bool {
+        self.submodels.iter().all(|(_, m)| m.prewarm_complete())
+    }
+
     fn reset(&mut self, sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         self.sample_rate = sample_rate;
         self.max_buffer_size = max_buffer_size;

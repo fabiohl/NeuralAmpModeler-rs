@@ -210,6 +210,7 @@ fn build_tiny_wavenet() -> WaveNetModel<4, 3, 2> {
         // The global RF is the largest among the arrays (usually Array1's RF dominates).
         receptive_field_size: rf1.max(rf2),
         prewarm_on_reset: true,
+        prewarm_pending: false,
     }
 }
 
