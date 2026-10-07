@@ -16,7 +16,7 @@ pub(crate) mod schema;
 pub(crate) mod semantic;
 
 pub(crate) use schema::*;
-pub use schema::{MAX_HIDDEN_SIZE, MAX_LAYERS};
+pub use schema::{MAX_HIDDEN_SIZE, MAX_LAYERS, validate_envelope};
 pub use semantic::*;
 
 // Side channel for typed parse errors produced by serde visitors.

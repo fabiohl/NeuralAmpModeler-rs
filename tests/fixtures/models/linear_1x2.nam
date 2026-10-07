@@ -1,0 +1,35 @@
+{
+  "version": "0.6.0",
+  "architecture": "Linear",
+  "config": {
+    "receptive_field": 8,
+    "bias": true,
+    "in_channels": 1,
+    "out_channels": 2
+  },
+  "weights": [
+    0.041828,
+    -0.142497,
+    -0.067491,
+    -0.083037,
+    0.070941,
+    0.05301,
+    0.117654,
+    -0.123918,
+    -0.023423,
+    -0.141061,
+    -0.084409,
+    0.001607,
+    -0.142039,
+    -0.090349,
+    0.044965,
+    0.013482,
+    -0.083868,
+    0.02678
+  ],
+  "metadata": {
+    "name": "Linear 1->2",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

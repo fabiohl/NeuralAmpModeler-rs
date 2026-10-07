@@ -144,6 +144,10 @@ fn test_fft_long_tail_many_partitions() {
         prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state)),
+        in_channels: 1,
+        out_channels: 1,
+        biases: vec![0.0],
+        multichannel: None,
     };
     model.prewarm(0);
 
@@ -545,6 +549,10 @@ fn test_equivalence_multi_partition_manual() {
         prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state)),
+        in_channels: 1,
+        out_channels: 1,
+        biases: vec![0.0],
+        multichannel: None,
     };
     fft_model.prewarm(0);
 
@@ -572,6 +580,10 @@ fn test_equivalence_multi_partition_manual() {
         prewarm_pending: 0,
         implementation: LinearImplementation::Fft,
         mode: LinearMode::Fft(Box::new(fft_state2)),
+        in_channels: 1,
+        out_channels: 1,
+        biases: vec![0.1],
+        multichannel: None,
     };
     fft_model2.prewarm(0);
 
@@ -744,4 +756,390 @@ fn test_reset_cleans_state_with_prewarm_disabled() {
             );
         }
     }
+}
+
+// ── Multichannel tests ──
+
+fn make_synthetic_test_input(num_samples: usize) -> Vec<f32> {
+    (0..num_samples)
+        .map(|i| 0.2 * (0.013 * i as f32).sin() + 0.05 * (0.071 * i as f32).cos())
+        .collect()
+}
+
+fn make_synthetic_test_weights(receptive_field: usize) -> Vec<f32> {
+    (0..receptive_field)
+        .map(|i| (-0.001 * i as f32).exp() * (0.037 * (i as f32 + 1.0)).sin() * 0.01)
+        .collect()
+}
+
+#[test]
+fn test_multichannel_channel_mappings() {
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch) in [(1, 1), (2, 2), (1, 3), (3, 1)] {
+            for taps in [3, 1536] {
+                for has_bias in [false, true] {
+                    let paths = in_ch.max(out_ch);
+                    let num_kernels = if in_ch == out_ch { 1 } else { paths };
+                    let mut weights = Vec::new();
+
+                    for k in 0..num_kernels {
+                        let mut kernel = make_synthetic_test_weights(taps);
+                        let scale = if k % 2 == 0 {
+                            k as f32 + 1.0
+                        } else {
+                            -(k as f32) - 1.0
+                        };
+                        for v in &mut kernel {
+                            *v *= scale;
+                        }
+                        weights.extend_from_slice(&kernel);
+                    }
+
+                    let num_biases = if in_ch == out_ch { 1 } else { out_ch };
+                    let biases: Vec<f32> = if has_bias {
+                        (0..num_biases)
+                            .map(|ch| 0.125 * (ch as f32 + 1.0))
+                            .collect()
+                    } else {
+                        vec![0.0; num_biases]
+                    };
+
+                    let topo = LinearTopology {
+                        in_channels: in_ch,
+                        out_channels: out_ch,
+                        receptive_field: taps,
+                        has_bias,
+                        implementation,
+                    };
+
+                    let mut model =
+                        LinearModel::new_with_topology(topo, weights.clone(), biases.clone())
+                            .unwrap();
+                    model.set_prewarm_on_reset(false);
+                    model.reset(48000, 127);
+
+                    let frames = 4096;
+                    let mut inputs: Vec<Vec<f32>> = (0..in_ch)
+                        .map(|_| make_synthetic_test_input(frames))
+                        .collect();
+                    for (ch, inp_ch) in inputs.iter_mut().enumerate().take(in_ch) {
+                        for (i, val) in inp_ch.iter_mut().enumerate().take(frames) {
+                            *val *= if ch == 0 && in_ch > 1 && i < 512 {
+                                0.0
+                            } else {
+                                ch as f32 + 1.0
+                            };
+                        }
+                    }
+
+                    // Compute ground-truth reference using mono LinearModel on each path
+                    let mut expected: Vec<Vec<f32>> = vec![vec![0.0f32; frames]; out_ch];
+                    if has_bias {
+                        for ch in 0..out_ch {
+                            let b = biases[if in_ch == out_ch { 0 } else { ch }];
+                            expected[ch].fill(b);
+                        }
+                    }
+
+                    for path in 0..paths {
+                        let k = if num_kernels == 1 { 0 } else { path };
+                        let kernel = weights[k * taps..(k + 1) * taps].to_vec();
+                        let mut ref_mono =
+                            LinearModel::new(kernel, 0.0, LinearImplementation::Direct).unwrap();
+                        ref_mono.set_prewarm_on_reset(false);
+                        ref_mono.reset(48000, 127);
+
+                        let in_c = if in_ch == 1 { 0 } else { path };
+                        let out_c = if out_ch == 1 { 0 } else { path };
+
+                        let mut ref_out = vec![0.0f32; frames];
+                        // SAFETY: Valid buffer sizes for test
+                        unsafe { ref_mono.process(&inputs[in_c], &mut ref_out) };
+
+                        for i in 0..frames {
+                            expected[out_c][i] += ref_out[i];
+                        }
+                    }
+
+                    // Process through model using irregular block sizes
+                    let mut actual: Vec<Vec<f32>> = vec![vec![0.0f32; frames]; out_ch];
+                    let mut in_slices: Vec<&[f32]> = Vec::with_capacity(in_ch);
+
+                    let mut offset = 0;
+                    while offset < frames {
+                        let chunk = ((offset % 127) + 1).min(frames - offset);
+                        in_slices.clear();
+                        for inp in inputs.iter().take(in_ch) {
+                            in_slices.push(&inp[offset..offset + chunk]);
+                        }
+                        let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+                        for ch in 0..out_ch {
+                            out_ptrs[ch] = actual[ch][offset..offset + chunk].as_mut_ptr();
+                        }
+                        let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+                        for ch in 0..in_ch {
+                            in_ptrs[ch] = in_slices[ch].as_ptr();
+                        }
+                        // SAFETY: Valid raw pointers for test
+                        unsafe {
+                            model.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), chunk);
+                        }
+                        offset += chunk;
+                    }
+
+                    for ch in 0..out_ch {
+                        let mut max_diff = 0.0f32;
+                        for i in 0..frames {
+                            let diff = (actual[ch][i] - expected[ch][i]).abs();
+                            if diff > max_diff {
+                                max_diff = diff;
+                            }
+                        }
+                        assert!(
+                            max_diff < 5e-5,
+                            "Mismatch for {in_ch}->{out_ch}, taps={taps}, bias={has_bias}, impl={implementation:?}, ch={ch}: max_diff={max_diff}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_multichannel_in_place() {
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch) in [(1, 2), (2, 1), (2, 2)] {
+            let taps = 1536;
+            let frames = 4096;
+            let num_kernels = if in_ch == out_ch {
+                1
+            } else {
+                in_ch.max(out_ch)
+            };
+            let mut weights = vec![0.0f32; num_kernels * taps];
+            weights[0] = 0.5;
+            weights[500] = 0.25;
+            if num_kernels >= 2 {
+                weights[taps] = -0.25;
+                weights[taps + 900] = 0.125;
+            }
+
+            let topo = LinearTopology {
+                in_channels: in_ch,
+                out_channels: out_ch,
+                receptive_field: taps,
+                has_bias: false,
+                implementation,
+            };
+
+            let mut model_oop =
+                LinearModel::new_with_topology(topo, weights.clone(), vec![0.0; out_ch]).unwrap();
+            let mut model_ip =
+                LinearModel::new_with_topology(topo, weights.clone(), vec![0.0; out_ch]).unwrap();
+            model_oop.set_prewarm_on_reset(false);
+            model_oop.reset(48000, 64);
+            model_ip.set_prewarm_on_reset(false);
+            model_ip.reset(48000, 64);
+
+            let max_ch = in_ch.max(out_ch);
+            let mut buffers: Vec<Vec<f32>> = (0..max_ch)
+                .map(|ch| {
+                    let mut sig = make_synthetic_test_input(frames);
+                    for v in &mut sig {
+                        *v *= ch as f32 + 1.0;
+                    }
+                    sig
+                })
+                .collect();
+
+            let orig_buffers = buffers.clone();
+            let mut out_oop: Vec<Vec<f32>> = vec![vec![0.0f32; frames]; out_ch];
+
+            // Run out-of-place block by block (64 samples)
+            for offset in (0..frames).step_by(64) {
+                let count = 64.min(frames - offset);
+                let in_refs: Vec<&[f32]> = (0..in_ch)
+                    .map(|ch| &orig_buffers[ch][offset..offset + count])
+                    .collect();
+                let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+                for ch in 0..out_ch {
+                    out_ptrs[ch] = out_oop[ch][offset..offset + count].as_mut_ptr();
+                }
+                let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+                for ch in 0..in_ch {
+                    in_ptrs[ch] = in_refs[ch].as_ptr();
+                }
+                // SAFETY: Valid raw pointers for out-of-place test
+                unsafe {
+                    model_oop.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), count);
+                }
+            }
+
+            // Run in-place block by block on `buffers`
+            for offset in (0..frames).step_by(64) {
+                let count = 64.min(frames - offset);
+                let mut ptrs = [core::ptr::null_mut::<f32>(); 16];
+                for ch in 0..max_ch {
+                    ptrs[ch] = buffers[ch][offset..offset + count].as_mut_ptr();
+                }
+                // SAFETY: Valid raw pointers for in-place test
+                unsafe {
+                    model_ip.process_raw(ptrs.as_ptr() as *const *const f32, ptrs.as_ptr(), count);
+                }
+            }
+
+            for ch in 0..out_ch {
+                for i in 0..frames {
+                    let actual = buffers[ch][i];
+                    let expected = out_oop[ch][i];
+                    assert!(
+                        (actual - expected).abs() < 1e-6,
+                        "In-place mismatch for {in_ch}->{out_ch}, impl={implementation:?}, ch={ch}, sample={i}: actual={actual}, expected={expected}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_multichannel_many_to_one_summation_order() {
+    // Verifies that for N->1, summation order is strictly:
+    // bias[0] + ch_0 + ch_1 + ... + ch_{N-1}
+    let in_ch = 3;
+    let out_ch = 1;
+    let taps = 4;
+    let topo = LinearTopology {
+        in_channels: in_ch,
+        out_channels: out_ch,
+        receptive_field: taps,
+        has_bias: true,
+        implementation: LinearImplementation::Direct,
+    };
+    let mut weights = vec![0.0f32; in_ch * taps];
+    weights[0] = 1e7;
+    weights[taps] = -1e7;
+    weights[2 * taps] = 1e-4;
+    let bias = 0.5f32;
+
+    let mut model = LinearModel::new_with_topology(topo, weights, vec![bias]).unwrap();
+    model.set_prewarm_on_reset(false);
+    model.reset(48000, 16);
+
+    let input0 = [1.0f32; 16];
+    let input1 = [1.0f32; 16];
+    let input2 = [1.0f32; 16];
+    let mut output = [0.0f32; 16];
+
+    let in_slices = [&input0[..], &input1[..], &input2[..]];
+    let mut out_slices = [&mut output[..]];
+    model.process_multichannel(&in_slices, &mut out_slices);
+
+    let mut expected_sample = bias;
+    expected_sample += 1e7;
+    expected_sample += -1e7;
+    expected_sample += 1e-4;
+
+    for sample in &output {
+        assert_eq!(
+            *sample, expected_sample,
+            "Summation order mismatch: got {}, expected {}",
+            *sample, expected_sample
+        );
+    }
+}
+
+#[test]
+fn test_multichannel_reset_clears_all_channels() {
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch) in [(1, 2), (2, 1), (2, 2)] {
+            let taps = 512;
+            let paths = in_ch.max(out_ch);
+            let num_kernels = if in_ch == out_ch { 1 } else { paths };
+            let weights = vec![1.0f32; num_kernels * taps];
+            let biases = vec![0.1f32; out_ch];
+
+            let topo = LinearTopology {
+                in_channels: in_ch,
+                out_channels: out_ch,
+                receptive_field: taps,
+                has_bias: true,
+                implementation,
+            };
+
+            let mut model = LinearModel::new_with_topology(topo, weights, biases.clone()).unwrap();
+            model.set_prewarm_on_reset(false);
+            model.reset(48000, 128);
+
+            // Feed nonzero signal
+            let sig = vec![1.0f32; 256];
+            let in_slices: Vec<&[f32]> = (0..in_ch).map(|_| &sig[..]).collect();
+            let mut out_buf: Vec<Vec<f32>> = vec![vec![0.0f32; 256]; out_ch];
+            let mut out_slices: Vec<&mut [f32]> = out_buf.iter_mut().map(|b| &mut b[..]).collect();
+            model.process_multichannel(&in_slices, &mut out_slices);
+
+            // Reset
+            model.reset(48000, 128);
+
+            // Feed silence
+            let silence = vec![0.0f32; 128];
+            let silence_in: Vec<&[f32]> = (0..in_ch).map(|_| &silence[..]).collect();
+            let mut post_buf: Vec<Vec<f32>> = vec![vec![0.0f32; 128]; out_ch];
+            let mut post_slices: Vec<&mut [f32]> =
+                post_buf.iter_mut().map(|b| &mut b[..]).collect();
+            model.process_multichannel(&silence_in, &mut post_slices);
+
+            // Output must be purely the bias on each channel
+            for ch in 0..out_ch {
+                let b = biases[ch];
+                for (i, &val) in post_buf[ch].iter().enumerate() {
+                    assert!(
+                        (val - b).abs() < 1e-4,
+                        "Post-reset residual on {in_ch}->{out_ch}, impl={implementation:?}, ch={ch}, sample={i}: got {val}, expected {b}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_static_model_multichannel_dispatch() {
+    let topo = LinearTopology {
+        in_channels: 2,
+        out_channels: 2,
+        receptive_field: 64,
+        has_bias: false,
+        implementation: LinearImplementation::Direct,
+    };
+    let weights = vec![0.5f32; 64];
+    let biases = vec![0.0f32; 2];
+    let mut model = LinearModel::new_with_topology(topo, weights, biases).unwrap();
+    model.set_prewarm_on_reset(false);
+    model.reset(48000, 32);
+    let mut static_model = crate::models::StaticModel::Linear(Box::new(model));
+
+    assert_eq!(static_model.in_channels(), 2);
+    assert_eq!(static_model.num_output_channels(), 2);
+    assert_eq!(static_model.channels(), 2);
+
+    let ch0 = [1.0f32; 32];
+    let ch1 = [2.0f32; 32];
+    let mut out0 = [0.0f32; 32];
+    let mut out1 = [0.0f32; 32];
+
+    static_model.process_multichannel(&[&ch0[..], &ch1[..]], &mut [&mut out0[..], &mut out1[..]]);
+    assert_eq!(out0[0], 0.5);
+    assert_eq!(out1[0], 1.0);
+
+    // Reset before in-place test so history does not accumulate
+    static_model.reset(48000, 32).unwrap();
+
+    // Test in-place
+    let mut in_out0 = [1.0f32; 32];
+    let mut in_out1 = [2.0f32; 32];
+    static_model.process_multichannel_in_place(&mut [&mut in_out0[..], &mut in_out1[..]]);
+    assert_eq!(in_out0[0], 0.5);
+    assert_eq!(in_out1[0], 1.0);
 }

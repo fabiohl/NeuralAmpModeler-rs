@@ -936,7 +936,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                             src_idx += 1
             else:
                 n_mixin = conv_out * cond_size
-                mixin_w = weights[cursor : cursor + n_mixin].copy()
+                mixin_w = weights[cursor : cursor + n_mixin].reshape(conv_out, cond_size).copy()
                 cursor += n_mixin
 
             # L1x1: group-aware.
@@ -957,7 +957,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                             src_idx += 1
             else:
                 n_l1x1 = bottleneck * ch
-                l1x1_w = weights[cursor : cursor + n_l1x1].copy()
+                l1x1_w = weights[cursor : cursor + n_l1x1].reshape(ch, bottleneck).copy()
                 cursor += n_l1x1
             l1x1_b = weights[cursor : cursor + ch].copy()
             cursor += ch
@@ -1273,9 +1273,8 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                                 residual[oc] = s
                     else:
                         residual = z[:bottleneck] @ lw["l1x1_w"].T + lw["l1x1_b"]
-                    if use_blending:
-                        if film[6] is not None:
-                            film[6].apply(residual, condition)
+                    if film[6] is not None:
+                        film[6].apply(residual, condition)
                     layer_in = layer_in + residual
                     layer_bufs[li + 1][fi * ch : fi * ch + ch] = layer_in
 

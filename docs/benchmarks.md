@@ -257,6 +257,40 @@ The Real Fast Fourier Transform (`RfftPlanner` in `src/math/dsp/rfft.rs`) handle
 * **Scalar Packing Retained:** Although isolated AVX2 shuffle kernels (`pack_re_im_f32_avx2`) achieve speedups in standalone micro-benchmarks at small $N$, pack/unpack represents only 2–5% of total transform execution. In end-to-end convolution (`ConvEngine` in CabSim), scalar packing performs identically or slightly faster ($-2.5\%$, $p = 0.006$) while avoiding code-layout disruption and SIMD register pressure.
 * **Separation of Concerns:** `RT_Linear_Direct_RF4` benchmarks time-domain FIR convolution (RF=4, `LinearMode::Direct`) and never touches RFFT. Partitioned FFT convolution is benchmarked independently via `RT_Linear_Fft_RF2048`.
 
+### Linear Multichannel Architectures: Throughput, In-Place Safety, and Direct vs. FFT Crossover
+
+The Linear model family supports multichannel FIR convolution across $1 \to N$ (`LinearOneToMany`), $N \to 1$ (`LinearManyToOne`), and $N \to N$ shared (`LinearManyToManyShared`) geometries ([`benches/linear.rs`](../benches/linear.rs)).
+
+1. **Strict Zero-Regression on Legacy Mono ($1 \to 1$):**
+   * Legacy mono models build with `multichannel = None`, preserving the original branch-free, time-domain and partitioned FFT inner loops.
+   * Under regression gate auditing (`regression_gate`), `RT_Linear_Direct_RF4` executes in **~134 ns** (well beneath the 330 ns contract threshold), and `RT_Linear_Fft_RF2048` executes in **~4.85 µs** (statistically identical to the 4.84 µs baseline, delta = 0.0%).
+
+2. **Multichannel Allocation Isolation & Throughput Scaling:**
+   * Audio callback routines invoke `process_raw(*const *const f32, *const *mut f32, usize)` or `process_multichannel` using stack-allocated pointer arrays (`[*const f32; 16]`, `[*mut f32; 16]`), guaranteeing **zero heap allocations** and zero GC jitter.
+   * At 64 samples @ 48 kHz (1.33 ms deadline), latency scales linearly with active convolution operations:
+
+     | Topology Geometry | Receptive Field (Taps) | Direct Latency (64 samp) | FFT Latency (64 samp) | % of 1.33 ms RT Budget (FFT) |
+     | :--- | :--- | :--- | :--- | :--- |
+     | **Mono $1 \to 1$** | RF = 2048 | 8.86 µs | 4.85 µs | 0.36% |
+     | **OneToMany $1 \to 2$** | RF = 2048 | 18.15 µs | 10.01 µs | 0.75% |
+     | **ManyToOne $2 \to 1$** | RF = 2048 | 18.73 µs | 10.21 µs | 0.77% |
+     | **ManyToManyShared $2 \to 2$** | RF = 2048 | 18.65 µs | 10.21 µs | 0.77% |
+
+3. **In-Place (`input == output`) vs. Out-of-Place Overhead:**
+   * In DAW and low-latency host environments (CLAP, PipeWire, JACK), channel buffers frequently alias. All multichannel variants employ early circular buffer absorption (`MirroredBuffer`) where input frames are absorbed into the ring buffer *before* computing output samples.
+   * Benchmarks comparing in-place aliasing against separate out-of-place buffers show **virtually 0.0% overhead** (within ±1–2% environmental noise). In partitioned FFT mode, buffer address reuse slightly improves L1/L2 cache hit rate (e.g. 10.17 µs in-place vs 10.34 µs out-of-place for $2 \to 2$).
+
+4. **Direct vs. FFT Crossover Across Block Sizes:**
+   * For short impulse responses (RF $\le 128$), time-domain direct convolution outperforms FFT due to zero transform latency and unrolled SIMD dot-products.
+   * For longer impulse responses (RF = 2048), partitioned FFT convolution delivers a sustained **~1.8× speedup** over Direct across all block sizes:
+
+     | Block Size ($B$) | ManyToMany $2 \to 2$ Direct (RF=2048) | ManyToMany $2 \to 2$ FFT (RF=2048) | Measured Speedup |
+     | :--- | :--- | :--- | :--- |
+     | **64 samples** (1.33 ms) | 18.80 µs | 10.61 µs | **1.77×** |
+     | **256 samples** (5.33 ms) | 76.80 µs | 41.40 µs | **1.85×** |
+     | **1024 samples** (21.33 ms) | 300.65 µs | 163.82 µs | **1.84×** |
+     | **2048 samples** (42.67 ms) | 600.21 µs | 326.41 µs | **1.84×** |
+
 ### Recurrent Networks: SIMD Fused Gates (AVX2)
 
 In LSTM models, fusing all four gates ($i, f, c, o$) into a unified matrix-vector multiplication with vectorized activations (AVX2/FMA) delivers substantial throughput gains over scalar execution:

@@ -130,6 +130,7 @@ declare -A LONG_ENTRY_MAP=(
     [resampler_heap_audit]="rt_constraints"
     [cabsim_heap_audit]="rt_constraints"
     [a2_heap_audit]="rt_constraints"
+    [sequential_heap_audit]="rt_constraints"
     [rt_deadline]="rt_constraints"
     [rt_jitter]="rt_constraints"
 )
@@ -765,17 +766,20 @@ fi
 # --- Phase 3: RT-Safety Heap-Audit (release, heap-audit) ---
 # Zero-alloc verification under the global counting allocator. No quick-suite
 # equivalent — the `heap-audit` feature is exclusively a long-suite concern.
+# The Sequential audit is `#[ignore]`d (testing rules: RT-safety/heap-audit
+# run exclusively here), so it needs the explicit `-- --ignored` flag.
 run_heap_audit_phase() {
     local status=0
     timed_cargo_test "resampler_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag resampler_heap_audit) || status=1
     timed_cargo_test "cabsim_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag cabsim_heap_audit) || status=1
     timed_cargo_test "a2_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag a2_heap_audit) || status=1
+    timed_cargo_test "sequential_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag sequential_heap_audit) -- --ignored || status=1
     timed_cargo_test "diagnostic_bundle_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag diagnostic_bundle) -- heap_audit || status=1
     return $status
 }
 # Continue-on-failure: run_phase records FAILED in PHASE_STATUS; the suite
 # runs every phase and the final verdict fails — errexit must not abort here.
-run_phase "Resampler, Cabsim & A2 Heap-Audit" "run_heap_audit_phase" "phase3-heap-audit.log" || true
+run_phase "Resampler, Cabsim, A2 & Sequential Heap-Audit" "run_heap_audit_phase" "phase3-heap-audit.log" || true
 emit_long_phase_receipt "$((PHASE_COUNT - 1))" "phase3-heap-audit.log" || true
 
 # --- Phase 4: RT Deadline Gate (deterministic, hard assertion) ---

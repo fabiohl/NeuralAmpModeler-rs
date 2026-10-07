@@ -39,6 +39,7 @@ pub fn build_model(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
         "SlimmableContainer" => container::build_container(data),
         "Linear" => linear::build_linear(data),
         "ConvNet" => convnet::build_convnet(data),
+        "Sequential" => sequential::build_sequential(data),
         other => bail!("Unsupported architecture: '{}'", other),
     }
 }
@@ -53,6 +54,8 @@ pub mod convnet;
 pub mod linear;
 /// LSTM model builder module
 pub mod lstm;
+/// Sequential model builder module
+pub mod sequential;
 /// WaveNet model builder module
 pub mod wavenet;
 /// WeightCursor — Deterministic sequential reading of flattened weights

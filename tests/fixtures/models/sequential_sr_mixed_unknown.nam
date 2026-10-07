@@ -1,0 +1,53 @@
+{
+  "version": "0.6.0",
+  "architecture": "Sequential",
+  "config": {
+    "models": [
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          -0.069897,
+          -0.022558,
+          0.002759,
+          -0.086618,
+          -0.031093
+        ],
+        "metadata": {
+          "name": "Stage Unknown SR",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        }
+      },
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          0.114691,
+          -0.14002,
+          0.119828,
+          -0.081632,
+          -0.075606
+        ],
+        "metadata": {
+          "name": "Stage 48k 2",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        },
+        "sample_rate": 48000.0
+      }
+    ]
+  },
+  "weights": [],
+  "metadata": {
+    "name": "Sequential Mixed Unknown SR",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

@@ -36,10 +36,12 @@ use crate::models::a2::weights_layout::FILM_KEYS;
 
 pub(crate) use a2::{oracle_a2_all_channels, oracle_a2_forward};
 pub(crate) use convnet::oracle_convnet_forward;
+pub use linear::{oracle_linear_forward, oracle_linear_multichannel};
 pub(crate) use lstm::oracle_lstm_forward;
 pub(crate) use wavenet::{oracle_wavenet_all_channels, oracle_wavenet_forward};
 pub mod a2;
 pub mod convnet;
+pub mod linear;
 pub mod lstm;
 pub mod wavenet;
 
@@ -338,6 +340,7 @@ pub fn oracle_forward(
         }
         "LSTM" => oracle_lstm_forward(model_data, input, config),
         "ConvNet" => oracle_convnet_forward(model_data, input, config),
+        "Linear" => oracle_linear_forward(model_data, input, config),
         _ => vec![0.0; input.len()],
     }
 }

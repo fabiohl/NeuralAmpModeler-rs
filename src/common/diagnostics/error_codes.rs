@@ -48,6 +48,7 @@ use std::fmt;
 /// (E2200) and [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize) (E2202),
 /// both DSP constructor-parameter validation errors. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NamErrorCode {
     // E1xxx — Model Loading
     /// Model file not found on the filesystem.
@@ -58,6 +59,8 @@ pub enum NamErrorCode {
     UnknownExtension,
     /// Failed to parse JSON in .nam format.
     NamJsonParseError,
+    /// Model JSON envelope is invalid or missing required keys (version, architecture, config, weights).
+    NamJsonInvalidEnvelope,
     /// JSON `weights` array exceeds float limit (MAX_WEIGHTS).
     NamJsonWeightsExceedLimit,
     /// JSON `metadata.training` field exceeds size limit (1 MiB).
@@ -110,6 +113,31 @@ pub enum NamErrorCode {
     /// Model topology metadata is invalid or inconsistent (slimmable channel
     /// mismatch, non-divisor convolution `groups`, empty allowed list, etc.).
     InvalidModelTopology,
+    /// Sequential configuration contains an empty models array.
+    SequentialEmptyModels,
+    /// Sequential child model is missing required envelope fields.
+    SequentialIncompleteChild,
+    /// Sequential adjacent model stages have mismatched channel counts.
+    SequentialChannelMismatch,
+    /// Sequential child models have conflicting sample rates.
+    SequentialSampleRateMismatch,
+    /// Sequential root model must not contain top-level weights.
+    SequentialTopLevelWeightsNotEmpty,
+    /// Sequential nesting depth exceeds maximum limit.
+    SequentialRecursionDepthExceeded,
+    /// Linear architecture requires equal channel counts or one input/output channel.
+    LinearInvalidChannels,
+    /// Linear weights count does not match channel configuration.
+    LinearWeightCountMismatch,
+    /// Sequential child budget is breached: per-level `config.models` count,
+    /// total tree child count, or aggregate child weights exceeds the Rust
+    /// DoS-hardening caps (C++ NAMcore applies no limit; declared robustness
+    /// divergence).
+    SequentialChildrenExceedLimit,
+    /// WAV audio file format is invalid or unsupported.
+    WavInvalidFormat,
+    /// WAV audio file is truncated, corrupt, or contains invalid chunks.
+    WavInvalidFile,
 
     // E2xxx — Audio Backend / Processing
     // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts).
@@ -205,6 +233,7 @@ impl NamErrorCode {
             Self::NamJsonUnsupportedVersion => "E1217",
             Self::NamJsonUnsupportedMultiChannel => "E1218",
             Self::InvalidMetadata => "E1219",
+            Self::NamJsonInvalidEnvelope => "E1220",
             Self::NambNonFiniteWeight => "E1212",
             Self::NambInvalidHeaderField => "E1213",
             Self::NambCrc32Mismatch => "E1201",
@@ -218,6 +247,17 @@ impl NamErrorCode {
             Self::ModelBuildFailed => "E1303",
             Self::ModelTooLarge => "E1304",
             Self::InvalidModelTopology => "E1305",
+            Self::SequentialEmptyModels => "E1306",
+            Self::SequentialIncompleteChild => "E1307",
+            Self::SequentialChannelMismatch => "E1308",
+            Self::SequentialSampleRateMismatch => "E1309",
+            Self::SequentialTopLevelWeightsNotEmpty => "E1310",
+            Self::SequentialRecursionDepthExceeded => "E1311",
+            Self::LinearInvalidChannels => "E1312",
+            Self::LinearWeightCountMismatch => "E1313",
+            Self::SequentialChildrenExceedLimit => "E1314",
+            Self::WavInvalidFormat => "E1400",
+            Self::WavInvalidFile => "E1401",
             Self::AudioInitFailed => "E2100",
             Self::StreamError => "E2101",
             Self::ResamplerBuildFailed => "E2200",
@@ -247,6 +287,9 @@ impl NamErrorCode {
             Self::FileReadError => "File read error",
             Self::UnknownExtension => "Unknown extension",
             Self::NamJsonParseError => "Invalid JSON format",
+            Self::NamJsonInvalidEnvelope => {
+                "Model JSON envelope is invalid or missing required keys (version, architecture, config, weights)"
+            }
             Self::NamJsonWeightsExceedLimit => "JSON weights exceed limit",
             Self::NamJsonTrainingTooLarge => "Training metadata too large",
             Self::NamJsonTrainingTooDeep => "Training metadata too deeply nested",
@@ -282,6 +325,35 @@ impl NamErrorCode {
             Self::ModelBuildFailed => "Model build failed",
             Self::ModelTooLarge => "Model file too large",
             Self::InvalidModelTopology => "Invalid model topology",
+            Self::SequentialEmptyModels => {
+                "Sequential configuration contains an empty models array"
+            }
+            Self::SequentialIncompleteChild => {
+                "Sequential child model is missing required envelope fields"
+            }
+            Self::SequentialChannelMismatch => {
+                "Sequential adjacent model stages have mismatched channel counts"
+            }
+            Self::SequentialSampleRateMismatch => {
+                "Sequential child models have conflicting sample rates"
+            }
+            Self::SequentialTopLevelWeightsNotEmpty => {
+                "Sequential root model must not contain top-level weights"
+            }
+            Self::SequentialRecursionDepthExceeded => {
+                "Sequential nesting depth exceeds maximum limit"
+            }
+            Self::LinearInvalidChannels => {
+                "Linear architecture requires equal channel counts or one input/output channel"
+            }
+            Self::LinearWeightCountMismatch => {
+                "Linear weights count does not match channel configuration"
+            }
+            Self::SequentialChildrenExceedLimit => {
+                "Sequential child budget exceeded (models array / tree count / aggregate weights)"
+            }
+            Self::WavInvalidFormat => "WAV file format is invalid or unsupported",
+            Self::WavInvalidFile => "WAV file is truncated, corrupt, or contains invalid chunks",
             Self::AudioInitFailed => "Audio backend initialization failed",
             Self::StreamError => "Audio stream error",
             Self::ResamplerBuildFailed => "Resampler build failed",
@@ -317,6 +389,7 @@ impl NamErrorCode {
             Self::FileReadError => "FILE_READ_ERROR",
             Self::UnknownExtension => "UNKNOWN_EXTENSION",
             Self::NamJsonParseError => "NAM_JSON_PARSE_ERROR",
+            Self::NamJsonInvalidEnvelope => "NAM_JSON_INVALID_ENVELOPE",
             Self::NamJsonWeightsExceedLimit => "NAM_JSON_WEIGHTS_EXCEED_LIMIT",
             Self::NamJsonTrainingTooLarge => "NAM_JSON_TRAINING_TOO_LARGE",
             Self::NamJsonTrainingTooDeep => "NAM_JSON_TRAINING_TOO_DEEP",
@@ -342,6 +415,17 @@ impl NamErrorCode {
             Self::ModelBuildFailed => "MODEL_BUILD_FAILED",
             Self::ModelTooLarge => "MODEL_TOO_LARGE",
             Self::InvalidModelTopology => "INVALID_MODEL_TOPOLOGY",
+            Self::SequentialEmptyModels => "SEQUENTIAL_EMPTY_MODELS",
+            Self::SequentialIncompleteChild => "SEQUENTIAL_INCOMPLETE_CHILD",
+            Self::SequentialChannelMismatch => "SEQUENTIAL_CHANNEL_MISMATCH",
+            Self::SequentialSampleRateMismatch => "SEQUENTIAL_SAMPLE_RATE_MISMATCH",
+            Self::SequentialTopLevelWeightsNotEmpty => "SEQUENTIAL_TOP_LEVEL_WEIGHTS_NOT_EMPTY",
+            Self::SequentialRecursionDepthExceeded => "SEQUENTIAL_RECURSION_DEPTH_EXCEEDED",
+            Self::LinearInvalidChannels => "LINEAR_INVALID_CHANNELS",
+            Self::LinearWeightCountMismatch => "LINEAR_WEIGHT_COUNT_MISMATCH",
+            Self::SequentialChildrenExceedLimit => "SEQUENTIAL_CHILDREN_EXCEED_LIMIT",
+            Self::WavInvalidFormat => "WAV_INVALID_FORMAT",
+            Self::WavInvalidFile => "WAV_INVALID_FILE",
             Self::AudioInitFailed => "AUDIO_INIT_FAILED",
             Self::StreamError => "STREAM_ERROR",
             Self::ResamplerBuildFailed => "RESAMPLER_BUILD_FAILED",

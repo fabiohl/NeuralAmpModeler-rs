@@ -87,6 +87,45 @@ pub const MAX_CONVNET_KERNEL_SIZE: usize = 64;
 /// Limited by the weight array cap (MAX_WEIGHTS) plus a generous margin.
 pub const MAX_RECEPTIVE_FIELD: usize = 65536;
 
+/// Maximum number of channels for the Linear architecture (in_channels / out_channels).
+pub const MAX_LINEAR_CHANNELS: usize = 512;
+
+/// Maximum depth of nested `Sequential` chains accepted from `.nam` JSON files.
+///
+/// The C++ reference (`sequential.cpp` `build_models`) applies no nesting
+/// limit and lets a `Sequential` child recursively construct arbitrary
+/// `Sequential` descendants. This Rust-only cap is a declared robustness
+/// divergence (DoS hardening, see `docs/cpp_parity_map.md` §6.6): it bounds
+/// the recursive builder stack and the topology scan budget. The root
+/// `Sequential` is level 1; a nesting level above this constant is rejected
+/// with `NamErrorCode::SequentialRecursionDepthExceeded` before any child
+/// model allocation.
+pub const MAX_SEQUENTIAL_DEPTH: usize = 8;
+
+/// Maximum total number of child models counted across an entire `Sequential`
+/// tree (nested `Sequential` descendants included).
+///
+/// Without a budget, nesting multiplied by per-level child counts could raise
+/// an exponential number of nodes (depth 8 × 8 children per level). The C++
+/// reference applies no limit; this Rust-only cap is a declared robustness
+/// divergence (DoS hardening, see `docs/cpp_parity_map.md` §6.6). Counted
+/// with checked arithmetic during the pre-build topology scan; a tree whose
+/// child count exceeds this constant, or whose bookkeeping overflows, is
+/// rejected with `NamErrorCode::SequentialChildrenExceedLimit` before any
+/// child model allocation.
+pub const MAX_SEQUENTIAL_TOTAL_CHILDREN: usize = 64;
+
+/// Aggregate weight budget across all children of a `Sequential` tree.
+///
+/// The C++ reference assigns every weight tensor to its own child model; the
+/// union of all children must stay within the single-model floats cap. This
+/// Rust-only aggregate check is a declared robustness divergence (DoS
+/// hardening, see `docs/cpp_parity_map.md` §6.6) evaluated with checked
+/// arithmetic during the pre-build topology scan; breaching it rejects the
+/// model with `NamErrorCode::SequentialChildrenExceedLimit` before any child
+/// tensor is decoded. Aliases the canonical per-file weights cap.
+pub const MAX_SEQUENTIAL_TOTAL_WEIGHTS: usize = super::schema::MAX_WEIGHTS;
+
 /// Aggregate cap for all WaveNet layer state frames (pre-allocated mirrored buffers).
 /// Prevents DoS via receptive-field amplification. Default: 64 Mi frames ≈ 256 MB @ f32.
 /// Each "frame" represents one sample per channel across all layer delay-line buffers.

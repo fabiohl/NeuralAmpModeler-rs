@@ -429,3 +429,44 @@ fn test_load_error_structured_json_inspection() {
         panic!("expected LoadError::Json, got: {err:?}");
     }
 }
+
+/// Verifies that loading a model with an invalid envelope records the structured
+/// `NamErrorCode::NamJsonInvalidEnvelope` (E1220) into `LogBuffer` and is rendered
+/// in `DiagnosticBundle` (testing rules §4 / NC-1.2).
+#[test]
+fn test_loader_rejects_invalid_envelope_logs_to_buffer() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let json = r#"{"version": "0.5.4", "architecture": "WaveNet", "config": {}}"#;
+    let path = temp_path("invalid_envelope_log", "nam");
+    write_temp(&path, json.as_bytes());
+
+    let sys = SystemSnapshot::capture();
+    let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+    std::fs::remove_file(&path).ok();
+
+    let err = res.expect_err("missing weights envelope must fail");
+    match &err {
+        LoadError::Json(crate::loader::JsonError::InvalidEnvelope { reason }) => {
+            assert!(
+                reason.contains("weights"),
+                "reason should mention missing weights, got: {reason}"
+            );
+        }
+        other => panic!("expected LoadError::Json(InvalidEnvelope), got: {other:?}"),
+    }
+
+    let snap = log_snapshot();
+    assert!(
+        buffer_has(&snap, "ERROR", "NamJsonInvalidEnvelope"),
+        "LogBuffer must capture NamJsonInvalidEnvelope code"
+    );
+
+    let bundle = crate::common::diagnostics::DiagnosticBundle::capture();
+    let rendered = bundle.render();
+    assert!(
+        rendered.contains("NamJsonInvalidEnvelope"),
+        "DiagnosticBundle::render() must include NamJsonInvalidEnvelope in recent log trace"
+    );
+}

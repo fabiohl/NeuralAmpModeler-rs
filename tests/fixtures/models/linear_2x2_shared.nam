@@ -1,0 +1,26 @@
+{
+  "version": "0.6.0",
+  "architecture": "Linear",
+  "config": {
+    "receptive_field": 8,
+    "bias": true,
+    "in_channels": 2,
+    "out_channels": 2
+  },
+  "weights": [
+    -0.14037,
+    -0.055364,
+    -0.069678,
+    -0.086705,
+    0.132873,
+    0.11291,
+    -0.055597,
+    0.046632,
+    -0.03131
+  ],
+  "metadata": {
+    "name": "Linear 2->2 Shared IR",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

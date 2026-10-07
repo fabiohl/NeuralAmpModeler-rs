@@ -6,6 +6,7 @@
 use super::loaded_model_pair::MetadataError;
 use super::nam_json::JsonError;
 use super::namb::NambError;
+use super::wav::WavError;
 use thiserror::Error;
 
 /// Public error returned by [`load_and_build_model`](crate::loader::load_and_build_model)
@@ -32,6 +33,10 @@ pub enum LoadError {
     /// Structured `.nam` JSON format error.
     #[error("NAM JSON format error: {0}")]
     Json(#[from] JsonError),
+
+    /// Structured `.wav` impulse response format error.
+    #[error("WAV impulse response format error: {0}")]
+    Wav(#[from] WavError),
 
     /// The `.nam` JSON data is malformed or violates the expected schema.
     #[deprecated(since = "0.8.0", note = "use LoadError::Json instead")]

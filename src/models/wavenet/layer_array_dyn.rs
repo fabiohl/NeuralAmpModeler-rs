@@ -2,11 +2,32 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::common::{WaveNetLayerState, WavenetProcessContext};
+use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;
 use super::layer_dyn::WaveNetLayerDyn;
 use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;
 use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+
+/// Final tensor closure generating Head projection (Dense or 1D Conv).
+#[derive(Clone)]
+pub enum HeadRechannelDyn {
+    /// 1x1 matrix multiplication (legacy models with head kernel=1, dilation=1).
+    Dense(DenseLayerDyn),
+    /// Temporal 1D convolution with delay line state (head kernel > 1 or dilation > 1).
+    Conv1d {
+        /// 1D convolution layer weights and configuration.
+        conv: Conv1dDyn,
+        /// State buffer for receptive field history.
+        state: WaveNetLayerState,
+    },
+}
+
+impl From<DenseLayerDyn> for HeadRechannelDyn {
+    fn from(dense: DenseLayerDyn) -> Self {
+        HeadRechannelDyn::Dense(dense)
+    }
+}
 
 /// Grouped Multi-Layer WaveNet Unit with runtime dimensions.
 #[derive(Clone)]
@@ -28,7 +49,7 @@ pub struct WaveNetLayerArrayDyn {
     /// Initial `Dense` tensor opening.
     pub rechannel: DenseLayerDyn,
     /// Final tensor closure generating Head projection.
-    pub head_rechannel: DenseLayerDyn,
+    pub head_rechannel: HeadRechannelDyn,
     /// Pre-allocated temporary output array.
     pub array_outputs: AlignedVec<f32>,
     /// CH-sized intermediate accumulator for layer contributions before the Head projection.
@@ -163,11 +184,48 @@ impl WaveNetLayerArrayDyn {
                 }
             }
 
-            self.head_rechannel.process_block::<M>(
-                &self.head_accum[0..num_frames * ch],
-                &mut self.head_outputs[0..num_frames * head],
-                num_frames,
-            );
+            match &mut self.head_rechannel {
+                HeadRechannelDyn::Dense(dense) => {
+                    dense.process_block::<M>(
+                        &self.head_accum[0..num_frames * ch],
+                        &mut self.head_outputs[0..num_frames * head],
+                        num_frames,
+                    );
+                }
+                HeadRechannelDyn::Conv1d { conv, state } => {
+                    let start = state.buffer_start * ch;
+                    state.layer_buffer[start..start + num_frames * ch]
+                        .copy_from_slice(&self.head_accum[0..num_frames * ch]);
+
+                    if PREWARM {
+                        let src_range = start..start + ch;
+                        for offset in 1..=state.receptive_field_size {
+                            debug_assert!(
+                                state.buffer_start >= offset,
+                                "head backfill underflow: bs={}, off={}",
+                                state.buffer_start,
+                                offset
+                            );
+                            let dst_start = state.buffer_start - offset;
+                            state
+                                .layer_buffer
+                                .copy_within(src_range.clone(), dst_start * ch);
+                        }
+                    }
+
+                    conv.process_block::<M>(
+                        &state.layer_buffer,
+                        &mut self.head_outputs[0..num_frames * head],
+                        state.buffer_start,
+                        num_frames,
+                        None,
+                    );
+
+                    if !PREWARM {
+                        state.advance_frames(num_frames, ch);
+                    }
+                }
+            }
         }
     }
 

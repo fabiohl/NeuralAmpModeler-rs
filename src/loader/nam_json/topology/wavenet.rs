@@ -53,6 +53,10 @@ pub struct FreeWavenetGeometry {
     /// `head_sizes.last()` determines `NumOutputChannels()` for the model
     /// (C++ `wave_net_output_channels` returns `layer_array_params.back().head_size`).
     pub head_sizes: Vec<usize>,
+    /// Head convolution kernel size per layer-array (default 1).
+    pub head_kernel_sizes: Vec<usize>,
+    /// Head convolution dilation per layer-array (default 1).
+    pub head_dilations: Vec<usize>,
     /// Per-layer-array head_bias flag. `head_biases.last()` determines whether
     /// the final head_rechannel has a bias term (C++ `LayerArrayParams::HasHeadBias`).
     pub head_biases: Vec<bool>,
@@ -75,6 +79,38 @@ pub struct FreeWavenetGeometry {
     /// Each subsequent element defines a lower-quality tier (fewer channels).
     /// `None` means the model is not slimmable-capable.
     pub allowed_channels: Option<Vec<usize>>,
+}
+
+impl FreeWavenetGeometry {
+    /// Computes the total receptive field for the free WaveNet geometry.
+    pub fn receptive_field(&self) -> usize {
+        let mut rf = 0;
+        for i in 0..self.num_arrays {
+            let k = self
+                .kernel_sizes
+                .get(i)
+                .copied()
+                .unwrap_or(self.kernel_size);
+            let head_k = self.head_kernel_sizes.get(i).copied().unwrap_or(1);
+            let head_dil = self.head_dilations.get(i).copied().unwrap_or(1);
+            let head_rf = (head_k.saturating_sub(1)).saturating_mul(head_dil);
+            let layer_rf: usize = self
+                .dilations
+                .get(i)
+                .map(|dils| {
+                    dils.iter()
+                        .map(|&d| (k.saturating_sub(1)) * d)
+                        .sum::<usize>()
+                })
+                .unwrap_or(0);
+            rf += layer_rf + head_rf;
+        }
+        if let Some(ref post) = self.post_stack_head {
+            let post_k = post.kernel_size.unwrap_or(1);
+            rf += post_k.saturating_sub(1);
+        }
+        rf
+    }
 }
 
 /// Result of WaveNet topology detection.
@@ -213,9 +249,13 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     };
 
     // ── Aggregate state budget check ──
-    if let Err(reason) =
-        compute_state_budget(&extract.dilations, &extract.kernel_sizes, &extract.channels)
-    {
+    if let Err(reason) = compute_state_budget(
+        &extract.dilations,
+        &extract.kernel_sizes,
+        &extract.channels,
+        &extract.head_kernel_sizes,
+        &extract.head_dilations,
+    ) {
         return WavenetTopologyResult::Rejected(reason);
     }
 
@@ -238,7 +278,9 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             && layers[1].head_bias.unwrap_or(false)
             && condition_size <= 1
             && data.config.condition_dsp.is_none()
-            && allowed_channels.is_none();
+            && allowed_channels.is_none()
+            && extract.head_kernel_sizes.iter().all(|&k| k == 1)
+            && extract.head_dilations.iter().all(|&d| d == 1);
 
         if catalog_compatible
             && let Some(sku) = try_match_catalog_sku(extract.first_channels, &extract.dilations)
@@ -288,6 +330,8 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         kernel_size,
         kernel_sizes: extract.kernel_sizes,
         head_sizes: extract.head_sizes,
+        head_kernel_sizes: extract.head_kernel_sizes,
+        head_dilations: extract.head_dilations,
         head_biases: extract.head_biases,
         condition_size,
         num_arrays: layers.len(),
@@ -305,6 +349,8 @@ struct LayerMetadata {
     first_head_size: Option<usize>,
     dilations: Vec<Vec<usize>>,
     head_sizes: Vec<usize>,
+    head_kernel_sizes: Vec<usize>,
+    head_dilations: Vec<usize>,
     channels: Vec<usize>,
     kernel_sizes: Vec<usize>,
     head_biases: Vec<bool>,
@@ -318,6 +364,8 @@ fn extract_layer_metadata(
     let mut first_head_size: Option<usize> = None;
     let mut dilations = Vec::with_capacity(layers.len());
     let mut head_sizes = Vec::with_capacity(layers.len());
+    let mut head_kernel_sizes = Vec::with_capacity(layers.len());
+    let mut head_dilations = Vec::with_capacity(layers.len());
     let mut channels = Vec::with_capacity(layers.len());
     let mut kernel_sizes = Vec::with_capacity(layers.len());
     let mut head_biases = Vec::with_capacity(layers.len());
@@ -390,9 +438,32 @@ fn extract_layer_metadata(
                 i, hd, MAX_HEAD_SIZE
             ));
         }
+        let head_k = layer.head_kernel_size.unwrap_or(1);
+        if head_k == 0 {
+            return Err(format!("Layer {} has invalid head_kernel_size=0.", i));
+        }
+        if head_k > MAX_KERNEL_SIZE {
+            return Err(format!(
+                "Layer {} head_kernel_size ({}) exceeds maximum {} — DoS/OOM protection.",
+                i, head_k, MAX_KERNEL_SIZE
+            ));
+        }
+        let head_dil = layer.head_dilation.unwrap_or(1);
+        if head_dil == 0 {
+            return Err(format!("Layer {} has invalid head_dilation=0.", i));
+        }
+        if head_dil > MAX_DILATION {
+            return Err(format!(
+                "Layer {} head_dilation ({}) exceeds maximum {} — DoS/OOM protection.",
+                i, head_dil, MAX_DILATION
+            ));
+        }
+
         channels.push(ch);
         kernel_sizes.push(k.unwrap_or(0));
         head_sizes.push(hd);
+        head_kernel_sizes.push(head_k);
+        head_dilations.push(head_dil);
         head_biases.push(layer.head_bias.unwrap_or(i == layers.len() - 1));
         dilations.push(dils);
     }
@@ -409,6 +480,8 @@ fn extract_layer_metadata(
         first_head_size,
         dilations,
         head_sizes,
+        head_kernel_sizes,
+        head_dilations,
         channels,
         kernel_sizes,
         head_biases,
@@ -420,6 +493,7 @@ fn extract_layer_metadata(
 /// Resolved A2 layer-array topology vectors, mirroring the resolution performed
 /// by `build_wavenet_a2_dynamic` (scalar `kernel_size`, plural `kernel_sizes`,
 /// or the canonical A2 constant table).
+#[derive(Debug, Clone, PartialEq)]
 pub struct A2TopologyVectors {
     /// Effective per-layer kernel sizes.
     pub kernel_sizes: Vec<usize>,
@@ -500,12 +574,17 @@ pub fn validate_a2_layer_topology(layer: &NamLayerConfig) -> Result<A2TopologyVe
     }
 
     let head_kernel_size = layer
-        .layer_raw
-        .as_ref()
-        .and_then(|raw| raw.get("head"))
-        .and_then(|h| h.get("kernel_size"))
-        .and_then(|k| k.as_u64())
-        .unwrap_or(1) as usize;
+        .head_kernel_size
+        .or_else(|| {
+            layer
+                .layer_raw
+                .as_ref()
+                .and_then(|raw| raw.get("head"))
+                .and_then(|h| h.get("kernel_size"))
+                .and_then(|k| k.as_u64())
+                .map(|k| k as usize)
+        })
+        .unwrap_or(1);
     if head_kernel_size == 0 {
         return Err("A2 layer-array head kernel_size must be >= 1".to_string());
     }
@@ -513,6 +592,29 @@ pub fn validate_a2_layer_topology(layer: &NamLayerConfig) -> Result<A2TopologyVe
         return Err(format!(
             "A2 layer-array head kernel_size ({head_kernel_size}) exceeds maximum {MAX_KERNEL_SIZE}"
         ));
+    }
+
+    // C++ model.cpp:1228-1232: layer1x1_post_film cannot be active when layer1x1.active is false
+    let layer1x1_active = layer
+        .layer_raw
+        .as_ref()
+        .and_then(|raw| raw.get("layer1x1"))
+        .and_then(|l| l.get("active"))
+        .and_then(|a| a.as_bool())
+        .unwrap_or(false);
+
+    let layer1x1_post_film_active = layer
+        .layer_raw
+        .as_ref()
+        .and_then(|raw| raw.get("layer1x1_post_film"))
+        .and_then(|l| l.get("active"))
+        .and_then(|a| a.as_bool())
+        .unwrap_or(false);
+
+    if layer1x1_post_film_active && !layer1x1_active {
+        return Err(
+            "layer1x1_post_film cannot be active when layer1x1.active is false".to_string(),
+        );
     }
 
     // F-02: when activation/gating/secondary vectors are present as arrays,
@@ -545,16 +647,23 @@ fn compute_state_budget(
     dilations: &[Vec<usize>],
     kernel_sizes: &[usize],
     channels: &[usize],
+    head_kernel_sizes: &[usize],
+    head_dilations: &[usize],
 ) -> Result<(), String> {
     let total_state_frames: usize = dilations
         .iter()
         .zip(kernel_sizes.iter())
         .zip(channels.iter())
-        .try_fold(0usize, |acc, ((dils, &k), &ch)| {
+        .zip(head_kernel_sizes.iter())
+        .zip(head_dilations.iter())
+        .try_fold(0usize, |acc, ((((dils, &k), &ch), &head_k), &head_dil)| {
             let rf = k.saturating_sub(1);
-            dils.iter().try_fold(acc, |a, &d| {
+            let head_rf = head_k.saturating_sub(1).saturating_mul(head_dil);
+            let head_state = head_rf.saturating_mul(ch);
+            let array_state = dils.iter().try_fold(0usize, |a, &d| {
                 a.checked_add(rf.saturating_mul(d).saturating_mul(ch))
-            })
+            })?;
+            acc.checked_add(array_state)?.checked_add(head_state)
         })
         .unwrap_or(usize::MAX);
     if total_state_frames > MAX_TOTAL_STATE_FRAMES {

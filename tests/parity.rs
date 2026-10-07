@@ -15,6 +15,8 @@ mod cabsim_cpp_parity;
 mod cpp_parity;
 #[path = "parity/isa_parity.rs"]
 mod isa_parity;
+#[path = "parity/sequential_cpp_parity.rs"]
+mod sequential_cpp_parity;
 
 // ── Low-Level & Quantization Parity Submodules ──────────────────────────────
 #[path = "parity/lstm_gate_bf16_parity.rs"]

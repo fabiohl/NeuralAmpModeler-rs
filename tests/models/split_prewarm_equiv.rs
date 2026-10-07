@@ -8,7 +8,7 @@
 //! bit-identical to the state produced by the deferred split flow
 //! (`prewarm_reset()` + `prewarm_step` chunks until `prewarm_complete()`),
 //! independently of how the zeroed samples are chunked. This is the
-//! stabilization-correctness contract the NAM-Plug reset window relies on:
+//! stabilization-correctness contract host reset windows rely on:
 //! the RT thread runs only the cheap zero phase inside `reset()` and
 //! amortizes the expensive feed over subsequent process() blocks without
 //! changing a single output sample.

@@ -459,7 +459,7 @@ ensure_namcore_render() {
     if [ -z "$build_dir" ] || [ "$build_dir" = "/" ] || [ "$build_dir" = "." ]; then
         die "invalid or dangerous NAM_RENDER_BUILD_DIR: '$build_dir'"
     fi
-    local logs_dir="$PROJECT_DIR/target/logs"
+    local logs_dir="${NAM_RENDER_LOGS_DIR:-$PROJECT_DIR/target/logs}"
     local build_type="${NAM_RENDER_BUILD_TYPE:-Release}"
     local flags="-w -fno-fast-math -ffp-contract=off"
     local jobs="${NAM_RENDER_JOBS:-}"
@@ -575,6 +575,23 @@ ensure_namcore_render() {
 
     printf '%s\n' "$fingerprint" > "$config_file"
     echo -e "  ${GREEN}OK C++ render binary: $bin${NC}" >&2
+
+    local mc_cpp="$PROJECT_DIR/tests/fixtures/render_multichannel.cpp"
+    local mc_bin="$build_dir/render_multichannel"
+    if [ -f "$mc_cpp" ]; then
+        local obj_files
+        obj_files=$(find "$build_dir/CMakeFiles/NeuralAmpModelerCore.dir" -name "*.o" 2>/dev/null || true)
+        if [ -n "$obj_files" ]; then
+            "$CXX" -std=c++20 -O3 \
+                -I "$NAM_CORE_DIR" \
+                -I "$NAM_CORE_DIR/Dependencies/eigen" \
+                -I "$NAM_CORE_DIR/Dependencies/AudioDSPTools" \
+                -I "$NAM_CORE_DIR/Dependencies/nlohmann" \
+                "$mc_cpp" $obj_files \
+                -o "$mc_bin" > "$logs_dir/compile-render-multichannel.log" 2>&1 || true
+        fi
+    fi
+
     echo "$bin"
     return 0
 }

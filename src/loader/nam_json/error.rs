@@ -87,6 +87,19 @@ pub enum JsonError {
         /// The non-mono channel value found.
         value: usize,
     },
+    /// The model JSON envelope is missing required fields or has invalid types.
+    InvalidEnvelope {
+        /// Description of why the envelope is invalid.
+        reason: String,
+    },
+    /// The `Sequential` child budget is breached (per-level `config.models`
+    /// count, total tree child count, or aggregate child weights).
+    SequentialChildrenExceedLimit {
+        /// Number of children (or weights) counted when the check fired.
+        got: usize,
+        /// Maximum allowed by the breached budget.
+        max: usize,
+    },
     /// Generic serde_json parse error, preserving the original cause.
     Serde(serde_json::Error),
 }
@@ -177,6 +190,11 @@ impl PartialEq for JsonError {
                     value: f,
                 },
             ) => a == d && b == e && c == f,
+            (Self::InvalidEnvelope { reason: a }, Self::InvalidEnvelope { reason: b }) => a == b,
+            (
+                Self::SequentialChildrenExceedLimit { got: a, max: b },
+                Self::SequentialChildrenExceedLimit { got: c, max: d },
+            ) => a == c && b == d,
             // serde_json::Error is not PartialEq; compare the rendered messages.
             (Self::Serde(a), Self::Serde(b)) => a.to_string() == b.to_string(),
             _ => false,
@@ -262,6 +280,16 @@ impl std::fmt::Display for JsonError {
                     f,
                     "{architecture} {field}={value} is not supported — NeuralAmpModeler-rs only supports mono models. \
                      C++ NAMcore accepts multi-channel LSTM but no known production .nam model uses this feature."
+                )
+            }
+            Self::InvalidEnvelope { reason } => {
+                write!(f, "invalid model envelope: {reason}")
+            }
+            Self::SequentialChildrenExceedLimit { got, max } => {
+                write!(
+                    f,
+                    "sequential child budget exceeded ({} children/weights, max is {})",
+                    got, max
                 )
             }
             Self::Serde(e) => write!(f, "JSON parse error: {}", e),

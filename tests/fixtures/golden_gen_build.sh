@@ -78,7 +78,7 @@ mkdir -p "$LOGS_DIR"
 
 # Load common utilities (phase helper, color vars, third-party resolution:
 # THIRD_PARTY_DIR, NAM_CORE_DIR, NAM_PLUGIN_DIR, VARIABLES_ENV).
-PHASE_TOTAL=13
+PHASE_TOTAL=14
 source "$PROJECT_ROOT/utils/_lib.sh"
 
 # Shell shared resolve — mirrors src/testing/fixtures.rs::model_path order.
@@ -239,6 +239,19 @@ if [ ! -f "$S3_FIXTURES_PY" ]; then
 fi
 python3 "$S3_FIXTURES_PY"
 echo "  Synthetic .nam fixtures regenerated in $MODELS_DIR/"
+
+# =============================================================================
+# Generate NAMCore v0.6.0 synthetic fixtures (multichannel linear, sequential,
+# head dilation WaveNet)
+# =============================================================================
+phase "Generating NAMCore v0.6.0 synthetic fixtures (Python)..."
+V060_FIXTURES_PY="$FIXTURES_DIR/generate_namcore_v060_fixtures.py"
+if [ ! -f "$V060_FIXTURES_PY" ]; then
+    echo "ERROR: generate_namcore_v060_fixtures.py not found at $V060_FIXTURES_PY"
+    exit 1
+fi
+python3 "$V060_FIXTURES_PY"
+echo "  NAMCore v0.6.0 synthetic .nam fixtures regenerated in $MODELS_DIR/"
 
 # =============================================================================
 # Build render tool (single unified binary at v0.6.0 with A2-fast)
@@ -738,6 +751,7 @@ GENERATOR_FILES=(
     "tests/fixtures/render_ir.cpp"
     # Python fixture generators
     "tests/fixtures/generate_a2_fixtures.py"
+    "tests/fixtures/generate_namcore_v060_fixtures.py"
     "tests/fixtures/generate_b1_2_fixtures.py"
     "tests/fixtures/generate_ebu_sequences.py"
     "tests/fixtures/generate_resampler_reference.py"
@@ -781,6 +795,28 @@ EXTRA_MODELS=(
     "slimmable_wavenet.nam"
     "wavenet.nam"
     "wavenet_a2_container.nam"
+    "linear_1x2.nam"
+    "linear_1x2_nobias.nam"
+    "linear_2x1.nam"
+    "linear_2x1_nobias.nam"
+    "linear_2x2_shared.nam"
+    "linear_2x2_shared_nobias.nam"
+    "linear_1x2_fft.nam"
+    "linear_1x2_fft_nobias.nam"
+    "linear_2x1_fft.nam"
+    "linear_2x1_fft_nobias.nam"
+    "linear_2x2_shared_fft.nam"
+    "linear_2x2_shared_fft_nobias.nam"
+    "sequential_linear_chain.nam"
+    "sequential_multichannel.nam"
+    "sequential_nested.nam"
+    "sequential_sr_homogeneous.nam"
+    "sequential_linear2.nam"
+    "sequential_linear_wavenet.nam"
+    "sequential_double_lstm.nam"
+    "sequential_sr_mixed_unknown.nam"
+    "sequential_sr_conflict.nam"
+    "wavenet_head_dilation.nam"
 )
 for nam in "${EXTRA_MODELS[@]}"; do
     if [ -f "$MODELS_DIR/$nam" ]; then

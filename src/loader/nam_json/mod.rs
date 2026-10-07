@@ -18,8 +18,10 @@ pub use validation::{
     MAX_A2_DYN_BOTTLENECK, MAX_A2_DYN_CHANNELS, MAX_A2_HEAD_CHANNELS, MAX_CONDITION_SIZE,
     MAX_CONVNET_CHANNELS, MAX_CONVNET_KERNEL_SIZE, MAX_DILATION, MAX_DILATIONS_PER_ARRAY,
     MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, MAX_HEAD_SIZE, MAX_HIDDEN_SIZE,
-    MAX_KERNEL_SIZE, MAX_LAYERS, MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_LAYERS, MAX_RECEPTIVE_FIELD,
-    MAX_TOTAL_STATE_FRAMES, MAX_WAVENET_ARRAYS, MAX_WAVENET_FREE_CHANNELS,
+    MAX_KERNEL_SIZE, MAX_LAYERS, MAX_LINEAR_CHANNELS, MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_LAYERS,
+    MAX_RECEPTIVE_FIELD, MAX_SEQUENTIAL_DEPTH, MAX_SEQUENTIAL_TOTAL_CHILDREN,
+    MAX_SEQUENTIAL_TOTAL_WEIGHTS, MAX_TOTAL_STATE_FRAMES, MAX_WAVENET_ARRAYS,
+    MAX_WAVENET_FREE_CHANNELS,
 };
 
 pub use activation_parser::{
@@ -36,9 +38,11 @@ pub(crate) use parse::validate_model_data;
 pub(crate) use topology::parse_semver;
 pub use topology::{
     A2TopologyResult, A2TopologyVectors, ConvNetFormat, ConvNetTopology, FreeWavenetGeometry,
-    NamWavenetTopology, WavenetTopologyResult, get_convnet_topology, get_linear_topology,
-    get_lstm_topology, get_wavenet_topology, is_a2_shape, validate_a2_layer_topology,
+    LinearTopology, NamWavenetTopology, SequentialChildTopology, SequentialTopology,
+    WavenetTopologyResult, get_convnet_topology, get_linear_topology, get_lstm_topology,
+    get_sequential_topology, get_wavenet_topology, is_a2_shape, validate_a2_layer_topology,
 };
+pub use validation::validate_envelope;
 
 #[cfg(test)]
 #[path = "../nam_json_test.rs"]

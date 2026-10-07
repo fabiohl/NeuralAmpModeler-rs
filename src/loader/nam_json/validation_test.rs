@@ -426,3 +426,155 @@ fn test_sample_rate_nan_rejected() {
         "error should contain sample rate info, got: {err_msg}"
     );
 }
+
+// — Envelope validation tests (NC-1.1 / GAP-06) ——————————————
+
+#[test]
+fn test_validate_envelope_rejects_non_object_root() {
+    use super::validation::validate_envelope;
+    use serde_json::json;
+
+    let cases = vec![
+        json!([1, 2, 3]),
+        json!("not an object"),
+        json!(42),
+        json!(true),
+        json!(null),
+    ];
+
+    for c in cases {
+        let res = validate_envelope(&c);
+        assert!(res.is_err(), "expected rejection for non-object: {c:?}");
+        match res.unwrap_err() {
+            crate::loader::nam_json::JsonError::InvalidEnvelope { reason } => {
+                assert!(
+                    reason.contains("object"),
+                    "expected reason to mention 'object', got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidEnvelope, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_validate_envelope_rejects_missing_keys() {
+    use super::validation::validate_envelope;
+    use serde_json::json;
+
+    let keys = ["version", "architecture", "config", "weights"];
+    for key in keys {
+        let mut map = serde_json::Map::new();
+        map.insert("version".to_string(), json!("0.5.4"));
+        map.insert("architecture".to_string(), json!("LSTM"));
+        map.insert("config".to_string(), json!({}));
+        map.insert("weights".to_string(), json!([]));
+
+        map.remove(key);
+        let val = serde_json::Value::Object(map);
+
+        let res = validate_envelope(&val);
+        assert!(res.is_err(), "missing key {key} must fail");
+        match res.unwrap_err() {
+            crate::loader::nam_json::JsonError::InvalidEnvelope { reason } => {
+                assert!(
+                    reason.contains(key) && reason.contains("missing"),
+                    "expected reason to mention missing key {key}, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidEnvelope, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_validate_envelope_rejects_null_keys() {
+    use super::validation::validate_envelope;
+    use serde_json::json;
+
+    let keys = ["version", "architecture", "config", "weights"];
+    for key in keys {
+        let mut map = serde_json::Map::new();
+        map.insert("version".to_string(), json!("0.5.4"));
+        map.insert("architecture".to_string(), json!("LSTM"));
+        map.insert("config".to_string(), json!({}));
+        map.insert("weights".to_string(), json!([]));
+
+        map.insert(key.to_string(), serde_json::Value::Null);
+        let val = serde_json::Value::Object(map);
+
+        let res = validate_envelope(&val);
+        assert!(res.is_err(), "null key {key} must fail");
+        match res.unwrap_err() {
+            crate::loader::nam_json::JsonError::InvalidEnvelope { reason } => {
+                assert!(
+                    reason.contains(key) && reason.contains("null"),
+                    "expected reason to mention null key {key}, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidEnvelope, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_validate_envelope_rejects_invalid_types() {
+    use super::validation::validate_envelope;
+    use serde_json::json;
+
+    let test_cases = vec![
+        ("version", json!(123)),
+        ("version", json!([])),
+        ("version", json!({})),
+        ("architecture", json!(456)),
+        ("architecture", json!([])),
+        ("architecture", json!({})),
+        ("config", json!("not an object")),
+        ("config", json!([])),
+        ("config", json!(789)),
+        ("weights", json!("not an array")),
+        ("weights", json!({})),
+        ("weights", json!(999)),
+    ];
+
+    for (key, bad_val) in test_cases {
+        let mut map = serde_json::Map::new();
+        map.insert("version".to_string(), json!("0.5.4"));
+        map.insert("architecture".to_string(), json!("LSTM"));
+        map.insert("config".to_string(), json!({}));
+        map.insert("weights".to_string(), json!([]));
+
+        map.insert(key.to_string(), bad_val);
+        let val = serde_json::Value::Object(map);
+
+        let res = validate_envelope(&val);
+        assert!(res.is_err(), "invalid type for key {key} must fail");
+        match res.unwrap_err() {
+            crate::loader::nam_json::JsonError::InvalidEnvelope { reason } => {
+                assert!(
+                    reason.contains(key),
+                    "expected reason to mention key {key}, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidEnvelope, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_validate_envelope_accepts_valid() {
+    use super::validation::validate_envelope;
+    use serde_json::json;
+
+    let valid = json!({
+        "version": "0.5.4",
+        "architecture": "LSTM",
+        "config": {
+            "num_layers": 1
+        },
+        "weights": [0.1, 0.2],
+        "sample_rate": 48000
+    });
+
+    assert!(validate_envelope(&valid).is_ok());
+}

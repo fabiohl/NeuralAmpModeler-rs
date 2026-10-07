@@ -6,9 +6,14 @@
 use super::data::{JsonError, NamModelData};
 use super::validation::{
     MAX_HIDDEN_SIZE, MAX_LAYERS, clear_last_typed_parse_error, take_last_typed_parse_error,
+    validate_envelope,
 };
 
 /// Raw universal deserialization of the JSON string via `serde_json`.
+///
+/// First parses the string as a generic JSON value and enforces envelope
+/// structure ([`validate_envelope`]) before attempting heavyweight tensor/weight
+/// deserialization.
 ///
 /// After deserialization, performs post-parse OOM-safety validation of the
 /// declared topology: layer count must not exceed [`MAX_LAYERS`] and
@@ -22,7 +27,9 @@ use super::validation::{
 /// the exact `NamErrorCode` instead of falling back to `JsonError::Serde`.
 pub fn parse_nam_json(json_str: &str) -> Result<NamModelData, JsonError> {
     clear_last_typed_parse_error();
-    let data: NamModelData = match serde_json::from_str(json_str) {
+    let val: serde_json::Value = serde_json::from_str(json_str).map_err(JsonError::Serde)?;
+    validate_envelope(&val)?;
+    let data: NamModelData = match serde_json::from_value(val) {
         Ok(data) => data,
         Err(e) => {
             return Err(take_last_typed_parse_error().unwrap_or(JsonError::Serde(e)));

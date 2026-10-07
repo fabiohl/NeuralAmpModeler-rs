@@ -204,10 +204,118 @@ impl super::LinearModel {
         }
     }
 
+    /// Processes a block of audio samples via raw multichannel pointers.
+    ///
+    /// For mono models (`in_channels == 1 && out_channels == 1`), delegates to mono `process`
+    /// using `*input` and `*output`.
+    /// For multichannel models, delegates to `self.multichannel`.
+    ///
+    /// # Safety
+    /// - `input` must point to an array of at least `in_channels` valid non-null `*const f32` pointers,
+    ///   each pointing to at least `num_frames` samples.
+    /// - `output` must point to an array of at least `out_channels` valid non-null `*mut f32` pointers,
+    ///   each pointing to at least `num_frames` writable samples.
+    /// - In-place processing (`input == output` or aliasing between input and output channels) is
+    ///   fully supported and guaranteed not to corrupt data.
+    #[inline(always)]
+    pub unsafe fn process_raw(
+        &mut self,
+        input: *const *const f32,
+        output: *const *mut f32,
+        num_frames: usize,
+    ) {
+        if let Some(ref mut mc) = self.multichannel {
+            // SAFETY: Caller guarantees input and output pointers point to valid channel buffers of length num_frames.
+            unsafe { mc.process_raw(input, output, num_frames) };
+        } else {
+            // SAFETY: Caller guarantees input pointer array has at least one valid channel of length num_frames.
+            let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
+            // SAFETY: Caller guarantees output pointer array has at least one valid mutable channel of length num_frames.
+            let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
+            // SAFETY: in_slice and out_slice are valid slices of length num_frames.
+            unsafe { self.process(in_slice, out_slice) };
+        }
+    }
+
+    /// Safe multichannel processing helper taking slices of channel slices.
+    ///
+    /// Uses a stack buffer of up to 16 channels for zero heap allocations.
+    pub fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
+        let in_ch = input.len();
+        let out_ch = output.len();
+        if in_ch == 0 || out_ch == 0 {
+            return;
+        }
+        let num_frames = input.iter().map(|s| s.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        for out in output.iter() {
+            assert!(out.len() >= num_frames);
+        }
+        if in_ch <= 16 && out_ch <= 16 {
+            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+            for i in 0..in_ch {
+                in_ptrs[i] = input[i].as_ptr();
+            }
+            for i in 0..out_ch {
+                out_ptrs[i] = output[i].as_mut_ptr();
+            }
+            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        } else {
+            let in_ptrs: Vec<*const f32> = input.iter().map(|s| s.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> = output.iter_mut().map(|s| s.as_mut_ptr()).collect();
+            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        }
+    }
+
+    /// Safe multichannel in-place processing helper.
+    ///
+    /// Uses a stack buffer of up to 16 channels for zero heap allocations.
+    pub fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
+        let ch = buffers.len();
+        if ch == 0 {
+            return;
+        }
+        let num_frames = buffers.iter().map(|s| s.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        if ch <= 16 {
+            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+            for i in 0..ch {
+                in_ptrs[i] = buffers[i].as_ptr();
+                out_ptrs[i] = buffers[i].as_mut_ptr();
+            }
+            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        } else {
+            let in_ptrs: Vec<*const f32> = buffers.iter().map(|s| s.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> = buffers.iter_mut().map(|s| s.as_mut_ptr()).collect();
+            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        }
+    }
+
     /// Fills the history buffer with zeros, resets the write pointer, and
     /// reinitializes the FFT state (if active).
     #[cold]
-    pub fn prewarm(&mut self, _num_samples: usize) {
+    pub fn prewarm(&mut self, num_samples: usize) {
+        if let Some(ref mut mc) = self.multichannel {
+            mc.prewarm(num_samples);
+        }
         let size = self.history.size();
         for i in 0..(size * 2) {
             self.history[i] = 0.0;
@@ -222,6 +330,9 @@ impl super::LinearModel {
     /// and FFT state (if active).
     #[cold]
     pub fn reset(&mut self, _sample_rate: u32, _max_buffer_size: usize) {
+        if let Some(ref mut mc) = self.multichannel {
+            mc.reset();
+        }
         let size = self.history.size();
         for i in 0..(size * 2) {
             self.history[i] = 0.0;

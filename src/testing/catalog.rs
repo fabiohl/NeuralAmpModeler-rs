@@ -1498,16 +1498,21 @@ pub enum ArchitectureFamily {
     /// Linear FIR / Linear-FFT partitioned convolution architecture.
     #[serde(rename = "linear")]
     Linear,
+    /// Sequential chain architecture: serial composition of independent
+    /// validated stages (freshly-registered model family).
+    #[serde(rename = "sequential")]
+    Sequential,
 }
 
 impl ArchitectureFamily {
-    /// Array of all five architecture families supported by the engine.
+    /// Array of all six architecture families supported by the engine.
     pub const ALL: &'static [ArchitectureFamily] = &[
         ArchitectureFamily::WaveNetA1,
         ArchitectureFamily::WaveNetA2,
         ArchitectureFamily::Lstm,
         ArchitectureFamily::ConvNet,
         ArchitectureFamily::Linear,
+        ArchitectureFamily::Sequential,
     ];
 
     /// Returns a static slice of all architecture families.
@@ -1523,6 +1528,7 @@ impl ArchitectureFamily {
             Self::Lstm => "lstm",
             Self::ConvNet => "convnet",
             Self::Linear => "linear",
+            Self::Sequential => "sequential",
         }
     }
 
@@ -1534,6 +1540,7 @@ impl ArchitectureFamily {
             Self::Lstm => "LSTM",
             Self::ConvNet => "ConvNet",
             Self::Linear => "Linear",
+            Self::Sequential => "Sequential",
         }
     }
 }
@@ -1571,6 +1578,7 @@ impl std::str::FromStr for ArchitectureFamily {
             "lstm" => Ok(Self::Lstm),
             "convnet" => Ok(Self::ConvNet),
             "linear" | "linear_fft" => Ok(Self::Linear),
+            "sequential" => Ok(Self::Sequential),
             _ => Err(ParseArchitectureFamilyError(s.to_string())),
         }
     }
@@ -1615,13 +1623,14 @@ impl ArchitectureFixtureSpec {
 
 /// Canonical static array of reference architecture fixture specifications.
 ///
-/// Covers all five supported model architecture families with at least one
+/// Covers all six supported model architecture families with at least one
 /// committed, verified fixture file:
 /// - [`ArchitectureFamily::WaveNetA1`]: WaveNet A1 Standard (`wavenet_a1_standard.nam`)
 /// - [`ArchitectureFamily::WaveNetA2`]: WaveNet A2 Full (`wavenet_a2_full.nam`)
 /// - [`ArchitectureFamily::Lstm`]: LSTM 1×16 (`BossLSTM-1x16.nam`)
 /// - [`ArchitectureFamily::ConvNet`]: ConvNet 6-block (`convnet_test.nam`)
 /// - [`ArchitectureFamily::Linear`]: Linear direct FIR (`linear_test.nam`) and Linear FFT (`linear_fft_rf320.nam`)
+/// - [`ArchitectureFamily::Sequential`]: Sequential two-stage chain (`sequential_linear_chain.nam`)
 pub static REFERENCE_ARCHITECTURES: &[ArchitectureFixtureSpec] = &[
     ArchitectureFixtureSpec {
         family: ArchitectureFamily::WaveNetA1,
@@ -1671,13 +1680,21 @@ pub static REFERENCE_ARCHITECTURES: &[ArchitectureFixtureSpec] = &[
         suggested_quantum: 64,
         description: "Linear FFT partitioned frequency-domain convolution reference model (RF=320)",
     },
+    ArchitectureFixtureSpec {
+        family: ArchitectureFamily::Sequential,
+        nam_file: "sequential_linear_chain.nam",
+        canonical_path: "tests/fixtures/models/sequential_linear_chain.nam",
+        suggested_sample_rate: 48000,
+        suggested_quantum: 64,
+        description: "Sequential two-stage chain reference model (validated serial composition)",
+    },
 ];
 
 /// Returns the canonical slice of reference architecture fixture specifications.
 ///
 /// Guaranteed to contain at least one representative model fixture for each of the
-/// five supported neural network architecture families ([`ArchitectureFamily`]):
-/// WaveNet A1, WaveNet A2, LSTM, ConvNet, and Linear.
+/// six supported neural network architecture families ([`ArchitectureFamily`]):
+/// WaveNet A1, WaveNet A2, LSTM, ConvNet, Linear, and Sequential.
 ///
 /// # Examples
 ///

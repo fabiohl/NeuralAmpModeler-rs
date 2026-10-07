@@ -58,7 +58,7 @@ This audit targets **numerical and architectural semantics**. NeuralAmpModeler-r
 | **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore)                                | [§6](#6-other-architectures)     |
 | **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated (v0.6.0 multi-channel tracked)   | [§6](#6-other-architectures)     |
 | **SlimmableWavenet** | 🟡 Verified — Channel-sliceable dynamic inference operational; no multi-size NAMcore parity claimed                       | [§6](#6-other-architectures)     |
-| **Sequential**       | 📋 Target Candidate (v0.6.0) — Serial DSP composition model architecture                                                  | [§6](#6-other-architectures)     |
+| **Sequential**       | ✅ Fully Verified — Whole-chain live cross-validation vs C++ render (mono-interior/exterior composites, 44.1–192 kHz sweeps), f64 composition oracle, single-prewarm transient identity + detection-power control (NC-3.4) | [§6](#66-sequential-namcore-v060) |
 
 ---
 
@@ -216,9 +216,11 @@ NeuralAmpModeler-rs introduces const-generic monomorphization for the four predo
 | C++ Reference (`NAM/wavenet/model.cpp`)                                  | Rust Implementation (`src/models/wavenet/`)                            | Verdict                                                       |
 |:------------------------------------------------------------------------ |:---------------------------------------------------------------------- |:------------------------------------------------------------- |
 | `detail::LayerArray::ProcessInner` cascade (`model.cpp:450-511`)         | `WaveNetLayerArray::process_block_internal` (`layer_array.rs`)         | ✅ Rechannel → layer stack → head accumulate → head rechannel |
+| `detail::LayerArray` head rechannel `Conv1D` (`model.cpp:399-404, 955-990`) | `HeadRechannelDyn` (`layer_array_dyn.rs`)                             | ✅ Bit-identical Dense ($k=1, dil=1$) or dilated Conv1d ($k>1 \lor dil>1$) |
 | `detail::Layer::Process` conv + mixin + activation (`model.cpp:166-376`) | `WaveNetLayer::process_block_internal` (`layer.rs`)                    | ✅ Exact arithmetic match for ungated feedforward processing  |
+| `detail::Layer` `layer1x1_post_film` execution (`model.cpp:285-291, 1228-1232`)| `WaveNetA2Dyn::process_frame`, `conv1d_ch{3,8}` simd                 | ✅ Unconditionally applied outside gating mode; fails closed if `!layer1x1` |
 | `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)       | `WaveNetModel::process` / `WaveNetModelDyn::process`                   | ✅ Matching cascade flow                                      |
-| Prewarm receptive field calculation (`model.cpp:615-620`)                | `prewarm_samples()` sums arrays' RFs + condition_dsp + post-stack head | ✅ Exact match with C++ receptive field summation             |
+| Prewarm receptive field calculation (`model.cpp:436-442, 615-620`)       | `FreeWavenetGeometry::receptive_field()`, dynamic prewarm backfill    | ✅ Exact match with C++ receptive field summation ($\Sigma dil \cdot (k-1) + dil_{head} \cdot (k_{head}-1)$) |
 
 ### 3.3 Analytical Prewarm Shortcut
 
@@ -345,11 +347,30 @@ The fail-closed guard `reject_wavenet_a2_max_class` remains permanent until:
 
 ## 5. Shared DSP Engine Semantics
 
-### 5.1 Sample Rate Default Policy
+### 5.1 Sample Rate Default Policy & Decision DEC-01
 
 - **C++ Reference:** Uses `NAM_UNKNOWN_EXPECTED_SAMPLE_RATE = -1.0` (`NAM/dsp.h:30`) when `sample_rate` is missing from the JSON config, which evaluates prewarm to 1 sample.
-- **NeuralAmpModeler-rs:** Defaults missing `sample_rate` to **48000.0 Hz** (`DEFAULT_SAMPLE_RATE` in `src/loader/loaded_model_pair.rs`).
+- **NeuralAmpModeler-rs Standalone Policy:** Defaults missing `sample_rate` to **48000.0 Hz** (`DEFAULT_SAMPLE_RATE` in `src/loader/loaded_model_pair.rs`).
 - *Rationale:* Ensures models settle to their physical steady state during prewarm. Standard community models explicitly declare sample rate; this divergence affects only hand-crafted test configurations.
+
+#### DEC-01 Decision Record — Missing Sample Rate in Sequential Models
+
+When composing child models inside `Sequential`, interaction between missing rates and child rate reconciliation is governed by **DEC-01**:
+
+- **Decision Choice:** **Option A (Recommended & Adopted)** — Propagate `Option<f32>` (where `None` represents unknown/undeclared rate) strictly through model configuration parsing up to the `Sequential` resolver. Standalone models preserve the 48000 Hz global default when instantiated individually.
+- **Sequential Resolution Logic (mirrors C++ `sequential.cpp::resolve_expected_sample_rate` L36–62):**
+  1. If top-level declares `sample_rate`, all child models with known rates must match it exactly. Children with missing rate (`None`) inherit the top-level rate.
+  2. If top-level omits `sample_rate`, the expected rate is resolved to the first known child rate encountered. Subsequent children with known rates must match this resolved rate; children with missing rates are ignored during validation and adopt the resolved rate.
+  3. Any conflict between known declared rates (child vs. child or child vs. top-level) triggers immediate fail-closed rejection (`Err(SampleRateMismatch)`).
+  4. If all children and top-level omit `sample_rate`, the resolved rate falls back to 48000.0 Hz (`DEFAULT_SAMPLE_RATE`).
+
+| Child 1 Rate | Child 2 Rate | Top-Level Rate | Resolved Rate / Behavior | Rationale |
+|:---:|:---:|:---:|:---|:---|
+| ∅ | ∅ | ∅ | **48000 Hz** | All rates undeclared; global steady-state default applied |
+| ∅ | 44100 Hz | ∅ | **44100 Hz** | Child 1 unknown ignored; Child 2 establishes 44.1 kHz chain |
+| 44100 Hz | 48000 Hz | ∅ | **REJECTED** | Conflict between known child rates (`SampleRateMismatch`) |
+| ∅ | ∅ | 48000 Hz | **48000 Hz** | Top-level dictates 48 kHz; unknown children conform |
+| 44100 Hz | ∅ | 48000 Hz | **REJECTED** | Conflict between Child 1 (44.1 kHz) and Top-Level (48 kHz) |
 
 ### 5.2 FastLUTActivation (Not Ported)
 
@@ -378,11 +399,36 @@ Implemented in [`src/models/convnet/mod.rs`](../src/models/convnet/mod.rs) and [
 
 Direct FIR affine models (receptive fields 2048, 4096, 8192):
 
-- Measured against NAMcore: $\text{ESR} = 1.70 \times 10^{-14}$ ($\text{SNR} = 137.7\text{ dB}$).
-- **NAMcore v0.6.0 Updates:**
-  - Upstream added 1-to-N (split) and N-to-1 (sum) multi-channel convolution configurations. Equal channel counts share a single impulse response; unequal counts require `1` on either input or output.
-  - Upstream added runtime arbitrary sample rate adaptation via cubic Hermite/spline interpolation with sample-rate gain compensation (`SupportsArbitrarySampleRate()` / `Reset()`).
-  - Upstream introduced optimized partitioned FFT convolution scheduling (`LinearFFTPlan`) for long impulse responses.
+- Measured against NAMcore (mono): $\text{ESR} = 1.70 \times 10^{-14}$ ($\text{SNR} = 137.7\text{ dB}$).
+
+#### 6.2.1 NAMcore v0.6.0 Multichannel Topology & Weight Specification
+
+Upstream NAMcore v0.6.0 (`linear.cpp` L120–147) generalized `Linear` to multichannel configurations:
+
+- **Permitted Topologies:** Valid if `in_channels == out_channels` (arbitrary $N \ge 1$), `in_channels == 1` ($1 \to N$ split), or `out_channels == 1` ($N \to 1$ sum).
+- **Prohibited Topologies:** Any configuration where both `in_channels > 1` and `out_channels > 1` with `in_channels != out_channels` (e.g. $2 \to 3$) is rejected fail-closed with `"Linear requires equal channel counts or one input/output channel"` (`linear.cpp` L127–128).
+- **Kernel Count Formula:**
+  $$\text{kernels} = (in == out) \ ? \ 1 : \max(in, out)$$
+  *Crucial Invariant:* For $N \to N$ ($N > 1$), all $N$ channels **share a single impulse response** ($\text{kernels} = 1$).
+- **Bias Count Formula:**
+  $$\text{biases} = (in == out) \ ? \ 1 : out\_channels$$
+- **Total Weight Count:**
+  $$N_{\text{weights}} = \text{receptive\_field} \times \text{kernels} + (\text{bias} \ ? \ \text{biases} : 0)$$
+- **Weight Layout:** Kernel $k \in [0, \text{kernels})$ occupies slice `weights[k * L .. (k + 1) * L)`. If `bias` is enabled, biases are placed at the end of the weight stream.
+- **Execution & Partitioning:** Short receptive fields execute via time-domain direct convolution (`LinearImplementation::Direct`); long receptive fields select partitioned FFT convolution (`LinearImplementation::FFT`) via `select_implementation()` (`linear.h` L125).
+
+#### 6.2.2 Decision DEC-02 — Sample Rate Adaptation of Linear Models
+
+Upstream NAMcore v0.6.0 introduced arbitrary sample-rate adaptation inside `Linear::Reset(sampleRate)` (`linear.cpp` L165–185) via `_resample_impulse_response` (L46–72):
+
+- **C++ Mechanism:** When `sampleRate != training_rate`, C++ resamples the stored impulse response taps using Catmull-Rom cubic Hermite interpolation with gain compensation `(original_rate / desired_rate)` and pads boundaries with zero.
+- **NeuralAmpModeler-rs Mechanism:** NeuralAmpModeler-rs keeps stored impulse response taps identical to training data and performs sample-rate conversion on the streaming audio signal via the 256-phase minimum-phase / linear-phase polyphase sinc FIR resampler (`src/dsp/resampler/`, stopband attenuation $\ge 105\text{ dB}$, passband ripple $< 0.05\text{ dB}$).
+- **Quantitative Measurement (DEC-02 Audit):**
+  Comparison of C++ cubic Hermite resampled IR ($44.1\text{ kHz} \to 48.0\text{ kHz}$) against bandlimited sinc reference:
+  - **256 taps:** $\text{ESR} = 4.63 \times 10^{-4}$ ($\text{SNR} = 33.34\text{ dB}$); Audible band (20 Hz – 20 kHz) $\text{Max } |\Delta\text{Mag}| = 32.11\text{ dB}$, $\text{Mean } |\Delta\text{Mag}| = 1.35\text{ dB}$.
+  - **2048 taps:** $\text{ESR} = 7.34 \times 10^{-4}$ ($\text{SNR} = 31.34\text{ dB}$); Audible band (20 Hz – 20 kHz) $\text{Max } |\Delta\text{Mag}| = 22.74\text{ dB}$, $\text{Mean } |\Delta\text{Mag}| = 0.96\text{ dB}$.
+- **Decision Outcome:** **Option (a) — Intentional Divergence Documented**.
+  Resampling IR taps via cubic interpolation degrades audio fidelity down to $\sim 31\text{--}33\text{ dB}$ SNR with severe high-frequency roll-off and imaging near Nyquist. NeuralAmpModeler-rs's polyphase streaming audio resampler maintains $>105\text{ dB}$ fidelity without coloring the acoustic signature of captured cabinets or analog preamps. No baseline thresholds altered.
 
 ### 6.3 SlimmableContainer
 
@@ -405,14 +451,48 @@ Dynamic single-network channel slicing ([`src/models/slimmable.rs`](../src/model
 
 ### 6.6 Sequential (NAMcore v0.6.0)
 
-Upstream v0.6.0 introduced the `"Sequential"` top-level architecture:
+Upstream v0.6.0 introduced the `"Sequential"` serial pipeline model architecture (`sequential.cpp`):
 
-- Serial pipeline of discrete child models (`config.models`).
-- Top-level `weights` array is required to be empty (`[]`); weights belong entirely to child models.
-- Validates that consecutive stage channel counts match (`output_channels(i) == input_channels(i+1)`).
-- Validates homogeneous expected sample rates across all child models.
-- Allocates intermediate buffers during `SetMaxBufferSize`.
-- Prewarm sample count is the sum of child model prewarm counts.
+- **Architecture Registration:** Top-level identifier `"Sequential"` (case-sensitive; lowercase `"sequential"` rejected fail-closed).
+- **Submodel Array:** `config.models` is mandatory and must be a non-empty array (`sequential.cpp` L82–89).
+- **Top-Level Weights Empty Invariant:** Top-level `weights` array must be empty (`[]`); any weights present at top-level trigger immediate runtime error (`sequential.cpp` L224–227). All weights belong strictly to child models.
+- **Child Envelope Completeness:** Each child model must be a complete, self-contained `.nam` envelope containing `"version"`, `"architecture"`, `"config"`, and `"weights"` (`sequential.cpp` L93–103). Legacy bare child configs are rejected fail-closed.
+- **Recursive Composition:** Child models are constructed recursively via `nam::get_dsp(json)`, allowing nested `Sequential` children (`sequential.cpp` L104).
+- **Stage Channel Alignment:** Stage $i$ output channels must match stage $i+1$ input channels (`output_channels(i) == input_channels(i+1)`) (`sequential.cpp` L64–78). Model input channels equal stage 0 input channels; model output channels equal the final stage output channels.
+- **Sample Rate Reconciliation:** Resolved via `resolve_expected_sample_rate` (DEC-01): unknown rates (`-1` / `None`) are ignored; conflict between known child rates or between child rate and top-level rate triggers immediate error (`sequential.cpp` L36–62).
+- **Prewarm Semantics:** `GetPrewarmSamples()` is the saturating sum of child prewarm sample counts (`sequential.cpp` L189–199). On `Reset()`, child `PrewarmOnReset` flags are saved and disabled, all children are reset, child flags are restored, and a single overall chain prewarm is executed (`sequential.cpp` L152–180). `SetPrewarmOnReset` propagates to all child models (L182–187).
+- **Real-Time Safety & Buffering:** Intermediate ping-pong buffers (`stages - 1` buffers $\times$ stage output channels) are allocated off-RT during `SetMaxBufferSize()` (`sequential.cpp` L202–222). Hot-path `process()` operates zero-alloc. The final stage writes directly to the caller's output buffer.
+
+**Rust Robustness Hardening (declared divergences):** Upstream applies no recursion or size limits to `Sequential` trees. The Rust loader fail-closes hostile topologies before any child allocation ([§6.6](#66-sequential-namcore-v060)): maximum nesting depth (`MAX_SEQUENTIAL_DEPTH` = 8, `E1311`), maximum total child count across the whole tree (`MAX_SEQUENTIAL_TOTAL_CHILDREN` = 64, checked arithmetic, `E1314`), and an aggregate child weight budget (`MAX_SEQUENTIAL_TOTAL_WEIGHTS`, the single-model float cap, `E1314`). Every child envelope is additionally validated with the strict `validate_envelope` schema (types enforced; C++ checks key presence only at `build_models` L93–103) — a superset that preserves upstream rejection outcomes with typed diagnostics.
+
+**Rust Status (NC-3.2, 2026-10-07):** The chain engine is registered (`models::SequentialModel` behind `StaticModel::Sequential`, static enum dispatch — no `dyn` on the hot path; stages stored as plain `StaticModel` children). Construction performs the C++ ctor validations in order: presence (`E1306`), DEC-01 rate resolution (`E1309`), channel-link validation (`E1308`) — asymmetric `LinearOneToMany`/`LinearManyToOne` geometries (NC-2.2) compose freely. Prewarm mirrors the C++ lifecycle: saturating child sum (`usize::MAX` vs the C++ `i32::MAX` — engine-independent overflow point), child flag save/disable/reset/restore with the single chain-wide stabilization pass, and a split flow (`prewarm_reset`/`prewarm_step`/`prewarm_complete`) that is bit-exact against the integral path under arbitrary caller chunking. Inter-stage planes and channel pointer tables are pre-allocated off-RT (`set_max_buffer_size` and the constructor's engine-max default), the last stage writes directly into the caller's output, and blocks beyond the negotiated maximum are truncated with a symmetric `debug_assert!` (trait block contract) — the formal RT error contract and the heap-audit/deadline proofs are NC-3.3 deliverables; layer-skip adaptivity remains stage-local (does not descend into chains).
+
+#### 6.6.1 Live C++ v0.6.0 Cross-Validation & Single-Prewarm Proof (NC-3.4, 2026-10-07)
+
+The `tests/parity/sequential_cpp_parity.rs` module cross-validates whole chains against the C++ `render` tool at engine level and against the double-precision composition oracle, on committed deterministic fixtures (`tests/fixtures/models/sequential_*.nam`, NC-3.4 batch). The f64 oracle mirrors the C++ `get_dsp` recursion: each child is re-parsed as a standalone envelope, nested `Sequential` children recurse, `Linear` children route through `oracle_linear_multichannel` (channel planes), and neural children route through the shared f64 kernels; the chain-wide stabilization budget (`model.prewarm_samples()`, the exact mirror of the C++ saturating child sum) is replayed as the same zero-feed the engines execute inside `Reset`, and the pre-signal slice is dropped. The **single-prewarm invariant** is validated on the initial transient — the first 256 frames of the real signal, not just steady state — with a positive control proving the gate has detection power: a no-warm chain (prewarm disabled) drifts the transient six orders of magnitude above the warmed floor (2.291e-3 vs 7.451e-9, double-LSTM fixture).
+
+Block-schedule invariance (fixed 64-frame wheel mirroring `render.cpp` vs irregular 1..=64 chunking) is asserted bit-equal on every run.
+
+Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
+
+| Fixture (chain)                     | Rate              | Rust × C++ ESR¹ | Rust × C++ SNR | Rust × f64 ESR | Rust × f64 SNR | C++ × f64 ESR | C++ × f64 SNR | Transient² max abs diff | Prewarm frames |
+|:------------------------------------|:------------------|:----------------|:---------------|:---------------|:---------------|:--------------|:--------------|:------------------------|:---------------|
+| `sequential_linear2.nam` (L→L)      | 44.1k–192k sweep  | 3.21–3.27e-16   | 154.9–155.0    | 4.40–4.53e-16  | 153.4–153.6    | 3.85–3.94e-16 | 154.1         | 7.451e-9              | 0              |
+| `sequential_linear_chain.nam` (L→L) | 48k               | 1.572e-15       | 148.0          | 1.997e-15      | 147.0          | 1.470e-15     | 148.3         | 3.725e-9              | 0              |
+| `sequential_nested.nam` (L→S[L])    | 48k               | 1.572e-15       | 148.0          | 1.997e-15      | 147.0          | 1.470e-15     | 148.3         | 3.725e-9              | 0              |
+| `sequential_multichannel.nam` (1→2→1)| 48k              | 3.749e-15       | 144.3          | 3.945e-15      | 144.0          | 3.480e-15     | 144.6         | 1.490e-8              | 0              |
+| `sequential_linear_wavenet.nam` (L→WN)| 44.1k–192k sweep | 3.46e-15        | 144.6          | 3.86e-15       | 144.1          | 1.42e-15      | 148.5         | 2.328e-10             | 6              |
+| `sequential_double_lstm.nam` (LSTM→LSTM) | 48k          | 1.023e-14       | 139.9          | 1.022e-14      | 139.9          | 9.217e-16     | 150.4         | 7.451e-9              | 48000          |
+| positive control (no prewarm, double LSTM × same renders) | 48k | —      |                 |                 |               |              |               | 2.291e-3              | 0 (defect)     |
+
+¹ ESR floors (error-to-signal ratio: noise-to-signal energy, 0 = bit-exact). Gates calibrated in the test module header (`MONO_*_LIMITS`) at the task-proposed norms — ESR < 1e-12 / SNR > 120 dB — with ≥ 260× / ≥ 20 dB margins over every measured cell, including the recurrent chain.
+² First 256 signal frames after the single chain-wide warm (windowed SNR gates ≥ 110 dB round-trip at the f32 kernel noise; the WaveNet child's windowed SNR resolved to inf — zero abs diff within the window at the ULP of the chained response).
+
+**Prewarm count arithmetic verified:** Linear contributes 0 (`dsp.h` default), WaveNet contributes 1 + Σ array RFs (`wavenet/model.cpp` L656–660, RUST mirror = RF-sum), LSTM contributes 0.5·declared rate (24000 @ 48 kHz, `lstm.cpp` L127–133). C++ `DSP::prewarm` feeds whole 64-frame chunks (overshoot tolerance, `dsp.cpp` L95–99) while the Rust chain feeds the exact saturating sum — the divergence is latent only: the chains' zero responds are count-invariant at the settling depth both engines feed (bias constants for Linear; tap-line tails for WaveNet any depth ≥ RF; geometric fixed-point convergence for LSTM), and the double-LSTM fixture additionally uses a 48000 = 750·64 frame budget, exact at the C++ chunk granularity. Initial transients therefore measured **identical** between engines at every fixture and rate.
+
+**DEC-01/DEC-02 live semantics:** `sequential_linear2.nam`/`sequential_linear_wavenet.nam` declare no rate anywhere (all-unknown branch): the C++ `render` accepts any input WAV rate and runs at it; the Rust chain resets operationally at the WAV rate. The declared-rate double-LSTM chain keeps the DEC-02 contract live: the C++ render rejects non-48k inputs (exit 1, mirrored probe) while the Rust engine accepts and reconfigures — no reinstability at the operational rate.
+
+**Note:** the small WaveNet child of `sequential_linear_wavenet.nam` (Linear → WaveNet) is canonical two-array A1 (correct f64-oracle routing requires `.layers.len() >= 2` for single-layer WaveNets, which the A1 oracle bail-outs to silence).
 
 ---
 
@@ -435,11 +515,14 @@ Upstream v0.6.0 introduced the `"Sequential"` top-level architecture:
 | **Native f32 Weights**         | Retains full precision single-precision storage instead of quantization (bf16/f16c).                               | Bit-exact / noise-floor convergence with NAMcore (e.g., BossLSTM-2×8 ESR = 1.00e-11). |
 | **Fast Activation Precision**  | Padé [5,4] $\tanh$ and minimax degree-17 $\sigma$ (opt-in).                                                        | $\sim 10\times$ faster activation kernels; Standard mode remains exact-grade default. |
 | **Analytical WaveNet Prewarm** | $\mathcal{O}(\text{layers})$ fixed-point fill instead of $\mathcal{O}(\text{receptive\_field})$ iterative rollout. | Exact mathematical convergence with zero startup overhead.                            |
+| **Linear Sample Rate (DEC-02)**| Preserves native IR taps and resamples audio via polyphase sinc FIR (`NamResampler`).                              | $>105\text{ dB}$ SNR vs $\sim 31\text{--}33\text{ dB}$ for C++ cubic tap interpolation ([§6.2.2](#622-decision-dec-02--sample-rate-adaptation-of-linear-models)). |
+| **Sequential Rate (DEC-01)**   | Option A: ignores unknown rates inside Sequential resolution; defaults to 48 kHz if all absent.                   | Full upstream interop for multi-rate child chains ([§5.1](#dec-01-decision-record--missing-sample-rate-in-sequential-models)). |
 
 ### 7.3 🟠 Test Infrastructure Boundaries
 
 - **Live Parity Enforcement:** All non-ignored `quick_parity_*` tests require `require_completed()`, failing hard on missing compilers or crashed render tools.
 - **Fixture Resolution:** `golden_gen_build.sh` mirrors `tests/common/io_helpers.rs::model_path`, searching standard system paths, environment overrides, and non-distributable community directories.
+- **Multichannel Render Oracle Fallback:** The upstream C++ `render` CLI supports mono input only and outputs channel 0 only. For multichannel **exterior** models ($1 \to N$, $N \to 1$, $N \to N$), live `render` cannot serve as oracle; the double-precision (f64) mathematical reference oracle and algebraic invariants from C++ `test_linear.cpp` serve as co-equal oracles. Chains whose **exterior** is mono but whose interior stages cross channel boundaries ($1 \to 2 \to 1$, `sequential_multichannel.nam`) remain fully dispatchable by live `render` and are cross-validated there (NC-3.4: ESR = 3.749e-15, SNR = 144.3 dB at 48 kHz).
 
 ### 7.4 🟡 Policy Rejections & Defensive Gaps
 
@@ -452,6 +535,8 @@ Upstream v0.6.0 introduced the `"Sequential"` top-level architecture:
 | P5  | `dsp_ch < condition_size` Broadcast     | **Rust Fallback**     | Broadcasts channel 0 across inputs if sub-model channels are fewer than parent condition size.                                                          |
 | P6  | `SlimmableWavenet` Multi-Size Parity    | **Inference Only**    | Validated for loader and runtime inference; no upstream multi-size parity claimed ([§6.5](#65-slimmablewavenet)).                                       |
 | P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat** | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                              |
+| P8  | Linear $M \to N$ Channel Mismatch       | **Fail-Closed**       | Rejects topologies where both $in > 1$ and $out > 1$ with $in \neq out$ (e.g. $2 \to 3$) ([§6.2.1](#621-namcore-v060-multichannel-topology--weight-specification)). |
+| P9  | Sequential Child & Top-Level Invariants | **Fail-Closed**       | Rejects non-empty top-level weights, non-matching inter-stage channels, and conflicting known sample rates ([§6.6](#66-sequential-namcore-v060)).       |
 
 ---
 

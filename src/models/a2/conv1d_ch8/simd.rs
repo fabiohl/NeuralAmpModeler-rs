@@ -147,7 +147,7 @@ pub unsafe fn layer_forward_ch8_block(
     l1x1_w: &[f32],
     l1x1_b: &[f32],
     film: &mut FilmBlock<'_>,
-    use_blending: bool,
+    _use_blending: bool,
     layer_buffer: &[f32],
     frame_start: usize,
     num_frames: usize,
@@ -329,7 +329,7 @@ pub unsafe fn layer_forward_ch8_block(
 
     // 5. Layer1x1 residual (skipped on last layer) — isolated scratch buffer.
     if !is_last {
-        let has_l1x1_post = (mask & M_L1X1_POST != 0) & use_blending;
+        let has_l1x1_post = mask & M_L1X1_POST != 0;
         let lin = layer_in.as_mut_ptr();
         let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
         let l1x1_w_ptr = l1x1_w.as_ptr();
@@ -584,7 +584,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
     l1x1_w: &[f32],
     l1x1_b: &[f32],
     film: &mut FilmBlock<'_>,
-    use_blending: bool,
+    _use_blending: bool,
     layer_buffer: &[f32],
     frame_start: usize,
     num_frames: usize,
@@ -774,7 +774,7 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
 
     // 5. Layer1x1 residual (skipped on last layer) — isolated scratch buffer.
     if !is_last {
-        let has_l1x1_post = (film.active_mask() & (1 << 5) != 0) & use_blending;
+        let has_l1x1_post = film.active_mask() & (1 << 5) != 0;
         let lin = layer_in.as_mut_ptr();
         let l1x1_b_v = _mm256_loadu_ps(l1x1_b.as_ptr());
         let l1x1_w_ptr = l1x1_w.as_ptr();

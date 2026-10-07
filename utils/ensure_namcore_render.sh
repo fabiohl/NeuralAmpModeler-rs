@@ -12,8 +12,8 @@
 # Usage:
 #   ./utils/ensure_namcore_render.sh
 #
-# Knobs: CXX, NAM_RENDER_BUILD_TYPE, NAM_RENDER_BUILD_DIR, NAM_RENDER_JOBS,
-# NAM_RENDER_FORCE=1 (see _lib.sh for the documented exit codes and logs).
+# Knobs: CXX, NAM_RENDER_BUILD_TYPE, NAM_RENDER_BUILD_DIR, NAM_RENDER_LOGS_DIR,
+# NAM_RENDER_JOBS, NAM_RENDER_FORCE=1 (see _lib.sh for the documented exit codes and logs).
 
 set -euo pipefail
 

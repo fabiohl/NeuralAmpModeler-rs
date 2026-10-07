@@ -96,6 +96,7 @@ P1_START=$(date +%s%N)
         --skip golden_vectors:: --skip linear_fft_test:: \
         --skip spectral_fidelity:: --skip reference_oracle_f64:: \
         --skip cpp_parity:: --skip isa_parity:: \
+        --skip sequential_cpp_parity:: \
         --skip rt_deadline:: --skip rt_jitter:: \
         --skip lstm_activation_precision::test_lstm_activation_precision_gain
 } 2>&1 | tee target/logs/quick-phase1.log
@@ -112,6 +113,7 @@ P2_START=$(date +%s%N)
 
 GOLDEN_RAN=0
 CPP_PARITY_RAN=0
+SEQ_PARITY_RAN=0
 MISSING_FIXTURES=0
 declare -a GAPS=()
 
@@ -194,12 +196,22 @@ if [ "$SKIP_CPP" -eq 0 ]; then
         2>&1 | tee -a target/logs/quick-phase2.log
     CPP_PARITY_RAN=1
     assert_ran_tests target/logs/quick-phase2.log 1
+
+    # NC-3.4: Sequential live cross-validation (C++ render ↔ Rust ↔ f64
+    # composition oracle). Same render binary, same phase — the chain module
+    # is measurement-oracle work and runs --release only (Axis B).
+    echo -e "  ${BLUE}→ sequential_cpp_parity test_sequential (render: $RENDER_BIN)${NC}"
+    cargo test --features testing --release --test parity -- \
+        test_sequential --nocapture \
+        2>&1 | tee -a target/logs/quick-phase2.log
+    SEQ_PARITY_RAN=1
+    assert_ran_tests target/logs/quick-phase2.log 1
 fi
 
 P2_DUR_MS=$(( ($(date +%s%N) - P2_START) / 1000000 ))
 P2_DUR_STR=$(format_duration_ms "$P2_DUR_MS")
 ok "Phase 2 (measurement oracles) passed (${P2_DUR_STR})"
-emit "PHASE2: PASS golden=${GOLDEN_RAN} cpp_parity=${CPP_PARITY_RAN} log=target/logs/quick-phase2.log"
+emit "PHASE2: PASS golden=${GOLDEN_RAN} cpp_parity=${CPP_PARITY_RAN} seq_parity=${SEQ_PARITY_RAN} log=target/logs/quick-phase2.log"
 
 # ── Phase 3: Parser fuzz (release, capped, --ignored) ───────────────────────
 # No --nocapture: libtest captures proptest output for passing cases (each

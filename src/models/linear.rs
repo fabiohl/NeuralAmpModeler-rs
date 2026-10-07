@@ -27,9 +27,12 @@ use super::linear_fft::LinearFftState;
 use super::sealed;
 use crate::common::diagnostics::NamErrorCode;
 use crate::dsp::mirror_buf::MirroredBuffer;
-use crate::loader::nam_json::LinearImplementation;
+use crate::loader::nam_json::{LinearImplementation, LinearTopology};
 use crate::math::common::AlignedVec;
 use log::warn;
+
+pub(crate) mod multichannel;
+pub use multichannel::{LinearMultichannel, MultichannelMode};
 
 /// Runtime convolution mode for the Linear model.
 ///
@@ -81,16 +84,24 @@ pub struct LinearModel {
     pub implementation: LinearImplementation,
     /// Runtime convolution mode — `Direct` or `Fft` with partitioned FFT state.
     pub mode: LinearMode,
+    /// Number of input channels (1 for legacy mono).
+    pub in_channels: usize,
+    /// Number of output channels (1 for legacy mono).
+    pub out_channels: usize,
+    /// Output biases per channel.
+    pub biases: Vec<f32>,
+    /// Specialized multichannel processing engine (Some for multichannel, None for mono).
+    pub multichannel: Option<Box<LinearMultichannel>>,
 }
 
 /// Minimum receptive field (taps) for auto-selecting FFT partitioned convolution.
 ///
 /// Below this threshold, time-domain direct convolution is more efficient
 /// due to FFT overhead.
-const FFT_AUTO_THRESHOLD: usize = 256;
+pub(crate) const FFT_AUTO_THRESHOLD: usize = 256;
 
 /// Largest power of two ≤ `n`.
-const fn largest_power_of_two_le(n: usize) -> usize {
+pub(crate) const fn largest_power_of_two_le(n: usize) -> usize {
     if n == 0 {
         return 0;
     }
@@ -108,7 +119,7 @@ const fn largest_power_of_two_le(n: usize) -> usize {
 /// Returns the largest power of two ≤ `receptive_field / 2`, guaranteeing
 /// that `2 * P ≤ receptive_field` — which ensures the `block_start`
 /// subtraction never underflows in the hot-path.
-fn select_partition_size(receptive_field: usize) -> usize {
+pub(crate) fn select_partition_size(receptive_field: usize) -> usize {
     let max_p = receptive_field / 2;
     largest_power_of_two_le(max_p.max(1))
 }
@@ -138,17 +149,68 @@ impl LinearModel {
         bias: f32,
         implementation: LinearImplementation,
     ) -> std::io::Result<Self> {
-        let receptive_field = weights.len();
-        let mode = Self::resolve_mode(implementation, receptive_field, &weights)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+        let topo = LinearTopology {
+            in_channels: 1,
+            out_channels: 1,
+            receptive_field: weights.len(),
+            has_bias: bias != 0.0,
+            implementation,
+        };
+        Self::new_with_topology(topo, weights, vec![bias])
+    }
+
+    /// Creates a new LinearModel configured with a given [`LinearTopology`],
+    /// impulse response weights, and channel biases.
+    ///
+    /// Weights are expected in **forward-time order** per kernel as stored
+    /// in the `.nam` JSON. Each kernel of length `receptive_field` is reversed
+    /// internally to match the C++ `nam::Linear` layout (`linear.cpp:136-140, 201-210`).
+    ///
+    /// # Errors
+    /// Returns `std::io::Error` if memory allocation fails for aligned weights
+    /// or `MirroredBuffer`.
+    pub fn new_with_topology(
+        topo: LinearTopology,
+        weights: Vec<f32>,
+        biases: Vec<f32>,
+    ) -> std::io::Result<Self> {
+        let receptive_field = topo.receptive_field;
+        let mode = if topo.in_channels != 1 || topo.out_channels != 1 {
+            // Multichannel FFT state will be wired in NC-2.2; default to Direct.
+            LinearMode::Direct
+        } else {
+            let kernel_slice = if weights.len() >= receptive_field {
+                &weights[..receptive_field]
+            } else {
+                &weights[..]
+            };
+            Self::resolve_mode(topo.implementation, receptive_field, kernel_slice)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?
+        };
+
+        let multichannel = if topo.in_channels != 1 || topo.out_channels != 1 {
+            Some(Box::new(LinearMultichannel::new(topo, &weights, &biases)?))
+        } else {
+            None
+        };
+
         let mut aligned = AlignedVec::from_vec(weights)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
-        aligned.reverse();
+
+        if receptive_field > 0 {
+            for chunk in aligned.chunks_exact_mut(receptive_field) {
+                chunk.reverse();
+            }
+        }
+
         let history = MirroredBuffer::<f32>::new(receptive_field)?;
         let limit = history.size();
         let double_limit = limit.checked_mul(2).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "Limit overflow")
         })?;
+
+        let bias = biases.first().copied().unwrap_or(0.0);
+
         Ok(Self {
             weights: aligned,
             bias,
@@ -158,9 +220,33 @@ impl LinearModel {
             double_limit,
             prewarm_on_reset: true,
             prewarm_pending: 0,
-            implementation,
+            implementation: topo.implementation,
             mode,
+            in_channels: topo.in_channels,
+            out_channels: topo.out_channels,
+            biases,
+            multichannel,
         })
+    }
+
+    /// Validates Linear topology channel and parameter counts against C++ NAMCore invariants.
+    pub fn validate_parameters(
+        in_channels: usize,
+        out_channels: usize,
+        receptive_field: usize,
+        has_bias: bool,
+        weights_len: usize,
+    ) -> Result<LinearTopology, NamErrorCode> {
+        let topo = LinearTopology {
+            in_channels,
+            out_channels,
+            receptive_field,
+            has_bias,
+            implementation: LinearImplementation::default(),
+        };
+        topo.validate_channels()?;
+        topo.validate_weights_count(weights_len)?;
+        Ok(topo)
     }
 
     /// Resolves which convolution mode to use based on the requested
@@ -205,6 +291,17 @@ impl NamModel for LinearModel {
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
         // SAFETY: weights are 64-byte aligned (AlignedVec).
         unsafe { self.process(input, output) };
+    }
+
+    #[inline(always)]
+    unsafe fn process_raw(
+        &mut self,
+        input: *const *const f32,
+        output: *const *mut f32,
+        num_frames: usize,
+    ) {
+        // SAFETY: Caller guarantees input and output pointers satisfy safety contract.
+        unsafe { self.process_raw(input, output, num_frames) };
     }
 
     #[cold]

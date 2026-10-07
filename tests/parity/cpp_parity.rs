@@ -52,6 +52,17 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+// Render-tool plumbing shared with the sibling Sequential parity module
+// (`sequential_cpp_parity.rs`); the unified build dir and idempotent helper
+// stay single-sourced.
+pub(crate) fn cpp_render_bin() -> PathBuf {
+    render_bin()
+}
+
+pub(crate) fn cpp_render_available() -> bool {
+    ensure_render_compiled()
+}
+
 static TEST_WAV_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1860,4 +1871,904 @@ fn live_cross_validation_nondist_models() {
             Err(e) => std::panic::resume_unwind(e),
         }
     }
+}
+
+// =============================================================================
+// Multichannel C++ & f64 Oracle Parity Tests (NC-2.3)
+// =============================================================================
+
+fn render_multichannel_bin() -> PathBuf {
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    project_root.join(BUILD_DIR).join("render_multichannel")
+}
+
+fn ensure_render_multichannel_compiled() -> bool {
+    if !ensure_render_compiled() {
+        return false;
+    }
+    let mc_bin = render_multichannel_bin();
+    if mc_bin.exists() {
+        return true;
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let nam_core = nam_core_dir();
+    let mc_cpp = project_root.join("tests/fixtures/render_multichannel.cpp");
+
+    fn collect_objs(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut res = Vec::new();
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    res.extend(collect_objs(&p));
+                } else if p.extension().and_then(|e| e.to_str()) == Some("o") {
+                    res.push(p);
+                }
+            }
+        }
+        res
+    }
+
+    let obj_dir = project_root
+        .join(BUILD_DIR)
+        .join("CMakeFiles/NeuralAmpModelerCore.dir");
+    let obj_files = collect_objs(&obj_dir);
+    if obj_files.is_empty() {
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"namcore_objs_not_found\"");
+        return false;
+    }
+
+    let cxx = std::env::var("CXX").unwrap_or_else(|_| "g++".to_string());
+    let mut cmd = Command::new(cxx);
+    cmd.arg("-std=c++20")
+        .arg("-O3")
+        .arg("-I")
+        .arg(&nam_core)
+        .arg("-I")
+        .arg(nam_core.join("Dependencies/eigen"))
+        .arg("-I")
+        .arg(nam_core.join("Dependencies/AudioDSPTools"))
+        .arg("-I")
+        .arg(nam_core.join("Dependencies/nlohmann"))
+        .arg(&mc_cpp);
+    for obj in &obj_files {
+        cmd.arg(obj);
+    }
+    cmd.arg("-o").arg(&mc_bin);
+
+    match cmd.output() {
+        Ok(out) if out.status.success() => mc_bin.exists(),
+        Ok(out) => {
+            eprintln!(
+                "Failed to compile render_multichannel: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("Failed to run C++ compiler for render_multichannel: {e}");
+            false
+        }
+    }
+}
+
+fn write_multichannel_bin(path: &std::path::Path, channels: &[Vec<f32>]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = fs::File::create(path)?;
+    let num_channels = channels.len() as u32;
+    let num_frames = channels.first().map_or(0, |c| c.len()) as u32;
+
+    file.write_all(&num_channels.to_le_bytes())?;
+    file.write_all(&num_frames.to_le_bytes())?;
+
+    for ch in channels {
+        assert_eq!(
+            ch.len(),
+            num_frames as usize,
+            "All channels must have the same length"
+        );
+        for &s in ch {
+            file.write_all(&s.to_le_bytes())?;
+        }
+    }
+    file.flush()?;
+    Ok(())
+}
+
+fn read_multichannel_bin(path: &std::path::Path) -> std::io::Result<(usize, usize, Vec<Vec<f32>>)> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut u32_buf = [0u8; 4];
+
+    file.read_exact(&mut u32_buf)?;
+    let num_channels = u32::from_le_bytes(u32_buf) as usize;
+
+    file.read_exact(&mut u32_buf)?;
+    let num_frames = u32::from_le_bytes(u32_buf) as usize;
+
+    let mut channels = Vec::with_capacity(num_channels);
+    for _ in 0..num_channels {
+        let mut ch_data = Vec::with_capacity(num_frames);
+        let mut f_buf = [0u8; 4];
+        for _ in 0..num_frames {
+            file.read_exact(&mut f_buf)?;
+            ch_data.push(f32::from_le_bytes(f_buf));
+        }
+        channels.push(ch_data);
+    }
+    Ok((num_channels, num_frames, channels))
+}
+
+fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
+    if !ensure_render_multichannel_compiled() {
+        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
+            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render_multichannel tool unavailable");
+        }
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_multichannel_tool_unavailable\"");
+        return;
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = project_root
+        .join("tests/fixtures/models")
+        .join(fixture_filename);
+    assert!(fixture_path.exists(), "Fixture missing: {fixture_path:?}");
+
+    let json_str = fs::read_to_string(&fixture_path).expect("Failed to read fixture JSON");
+    let model_data = parse_nam_json(&json_str).expect("Failed to parse fixture JSON");
+    let mut rust_model = build_model(&model_data).expect("Failed to build Rust static model");
+
+    let in_channels = rust_model.in_channels();
+    let out_channels = rust_model.num_output_channels();
+
+    let temp_dir = project_root.join("tests/fixtures/.temp_live");
+    fs::create_dir_all(&temp_dir).ok();
+
+    let frames = 4096;
+    let base_stress = generate_stress_signal_v1();
+    let actual_frames = frames.min(base_stress.len());
+    let base = &base_stress[..actual_frames];
+
+    // Generate independent channels to avoid symmetrical cancellation
+    let mut in_channels_f32: Vec<Vec<f32>> = Vec::with_capacity(in_channels);
+    for ch in 0..in_channels {
+        if ch == 0 {
+            in_channels_f32.push(base.to_vec());
+        } else {
+            let ch_sig: Vec<f32> = base
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| (-x * 0.75) + 0.15 * ((i as f32 * 0.03).sin()))
+                .collect();
+            in_channels_f32.push(ch_sig);
+        }
+    }
+
+    let seq = TEST_WAV_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let temp_tag = fixture_filename.replace('.', "_");
+    let temp_in = temp_dir.join(format!("mc_in_{temp_tag}_{pid}_{seq}.bin"));
+    let temp_out_cpp = temp_dir.join(format!("mc_out_cpp_{temp_tag}_{pid}_{seq}.bin"));
+    let temp_out_cpp_ip = temp_dir.join(format!("mc_out_cpp_ip_{temp_tag}_{pid}_{seq}.bin"));
+
+    write_multichannel_bin(&temp_in, &in_channels_f32).expect("Write input multichannel bin");
+
+    // 1. C++ Out-of-place execution
+    let render_mc = render_multichannel_bin();
+    let cpp_res = Command::new(&render_mc)
+        .arg(&fixture_path)
+        .arg(&temp_in)
+        .arg(&temp_out_cpp)
+        .arg("--chunk")
+        .arg("64")
+        .output()
+        .expect("Execute render_multichannel");
+
+    if !cpp_res.status.success() {
+        let stderr = String::from_utf8_lossy(&cpp_res.stderr);
+        panic!("render_multichannel failed for {fixture_filename}: {stderr}");
+    }
+
+    let (cpp_ch, cpp_fr, cpp_out) =
+        read_multichannel_bin(&temp_out_cpp).expect("Read C++ multichannel output");
+    assert_eq!(cpp_ch, out_channels, "C++ channel count mismatch");
+    assert_eq!(cpp_fr, actual_frames, "C++ frame count mismatch");
+
+    // 2. C++ In-place execution (if in_channels == out_channels)
+    let cpp_inplace_out = if in_channels == out_channels {
+        let cpp_ip_res = Command::new(&render_mc)
+            .arg(&fixture_path)
+            .arg(&temp_in)
+            .arg(&temp_out_cpp_ip)
+            .arg("--in-place")
+            .arg("--chunk")
+            .arg("64")
+            .output()
+            .expect("Execute render_multichannel --in-place");
+
+        if !cpp_ip_res.status.success() {
+            let stderr = String::from_utf8_lossy(&cpp_ip_res.stderr);
+            panic!("render_multichannel --in-place failed for {fixture_filename}: {stderr}");
+        }
+
+        let (cpp_ip_ch, cpp_ip_fr, ip_out) =
+            read_multichannel_bin(&temp_out_cpp_ip).expect("Read C++ in-place output");
+        assert_eq!(cpp_ip_ch, out_channels);
+        assert_eq!(cpp_ip_fr, actual_frames);
+        Some(ip_out)
+    } else {
+        None
+    };
+
+    if let Some(ref ip_out) = cpp_inplace_out {
+        for ch in 0..out_channels {
+            for i in 0..actual_frames {
+                let diff = (cpp_out[ch][i] - ip_out[ch][i]).abs();
+                assert!(
+                    diff < 1e-6,
+                    "C++ out-of-place vs in-place mismatch in channel {ch} at sample {i}: diff={diff}"
+                );
+            }
+        }
+    }
+
+    // 3. Rust Engine: process_multichannel chunked (64 frames)
+    let expected_sr = model_data.sample_rate.unwrap_or(48000.0) as u32;
+    rust_model
+        .reset(expected_sr, 127)
+        .expect("Model reset failed");
+    let mut rust_out_chunked: Vec<Vec<f32>> = vec![vec![0.0f32; actual_frames]; out_channels];
+    let chunk_size = 64;
+    let mut offset = 0;
+    while offset < actual_frames {
+        let count = chunk_size.min(actual_frames - offset);
+        let in_slices: Vec<&[f32]> = in_channels_f32
+            .iter()
+            .map(|ch| &ch[offset..offset + count])
+            .collect();
+        let mut out_slices: Vec<&mut [f32]> = rust_out_chunked
+            .iter_mut()
+            .map(|ch| &mut ch[offset..offset + count])
+            .collect();
+        rust_model.process_multichannel(&in_slices, &mut out_slices);
+        offset += count;
+    }
+
+    // 4. Rust Engine: process_multichannel irregular chunk scheduling
+    rust_model
+        .reset(expected_sr, 127)
+        .expect("Model reset failed");
+    let mut rust_out_irregular: Vec<Vec<f32>> = vec![vec![0.0f32; actual_frames]; out_channels];
+    let mut offset_ir = 0;
+    while offset_ir < actual_frames {
+        let count = ((offset_ir % 127) + 1).min(actual_frames - offset_ir);
+        let in_slices: Vec<&[f32]> = in_channels_f32
+            .iter()
+            .map(|ch| &ch[offset_ir..offset_ir + count])
+            .collect();
+        let mut out_slices: Vec<&mut [f32]> = rust_out_irregular
+            .iter_mut()
+            .map(|ch| &mut ch[offset_ir..offset_ir + count])
+            .collect();
+        rust_model.process_multichannel(&in_slices, &mut out_slices);
+        offset_ir += count;
+    }
+    for ch in 0..out_channels {
+        for i in 0..actual_frames {
+            let diff = (rust_out_chunked[ch][i] - rust_out_irregular[ch][i]).abs();
+            assert!(
+                diff < 1e-6,
+                "Rust irregular chunk mismatch in channel {ch} at sample {i}: diff={diff}"
+            );
+        }
+    }
+
+    // 5. Rust Engine: process_raw pointer API equivalence
+    rust_model
+        .reset(expected_sr, 127)
+        .expect("Model reset failed");
+    let mut rust_out_raw: Vec<Vec<f32>> = vec![vec![0.0f32; actual_frames]; out_channels];
+    let mut offset_raw = 0;
+    while offset_raw < actual_frames {
+        let count = chunk_size.min(actual_frames - offset_raw);
+        let in_ptrs: Vec<*const f32> = in_channels_f32
+            .iter()
+            .map(|ch| ch[offset_raw..].as_ptr())
+            .collect();
+        let mut out_ptrs: Vec<*mut f32> = rust_out_raw
+            .iter_mut()
+            .map(|ch| ch[offset_raw..].as_mut_ptr())
+            .collect();
+        unsafe {
+            rust_model.process_raw(in_ptrs.as_ptr(), out_ptrs.as_mut_ptr(), count);
+        }
+        offset_raw += count;
+    }
+    for ch in 0..out_channels {
+        for i in 0..actual_frames {
+            let diff = (rust_out_chunked[ch][i] - rust_out_raw[ch][i]).abs();
+            assert_eq!(
+                diff, 0.0,
+                "Rust process_raw != process_multichannel in channel {ch} at sample {i}"
+            );
+        }
+    }
+
+    // 6. Rust Engine: process_multichannel_in_place (when in_channels == out_channels)
+    if in_channels == out_channels {
+        rust_model
+            .reset(expected_sr, 127)
+            .expect("Model reset failed");
+        let mut rust_in_place = in_channels_f32.clone();
+        let mut offset_ip = 0;
+        while offset_ip < actual_frames {
+            let count = chunk_size.min(actual_frames - offset_ip);
+            let mut io_slices: Vec<&mut [f32]> = rust_in_place
+                .iter_mut()
+                .map(|ch| &mut ch[offset_ip..offset_ip + count])
+                .collect();
+            rust_model.process_multichannel_in_place(&mut io_slices);
+            offset_ip += count;
+        }
+        for ch in 0..out_channels {
+            for i in 0..actual_frames {
+                let diff = (rust_out_chunked[ch][i] - rust_in_place[ch][i]).abs();
+                assert!(
+                    diff < 1e-6,
+                    "Rust in-place != out-of-place in channel {ch} at sample {i}: diff={diff}"
+                );
+            }
+        }
+    }
+
+    // 7. Rust f64 Reference Oracle
+    use neural_amp_modeler_rs::testing::reference_oracle::oracle_linear_multichannel;
+    let oracle_in_f64: Vec<Vec<f64>> = in_channels_f32
+        .iter()
+        .map(|ch| ch.iter().map(|&s| s as f64).collect())
+        .collect();
+    let oracle_out_f64 = oracle_linear_multichannel(&model_data, &oracle_in_f64);
+    assert_eq!(oracle_out_f64.len(), out_channels);
+
+    // 8. Cross-validation metrics and gate assertions
+    use common::metrics::compute_esr;
+    use neural_amp_modeler_rs::testing::perceptual::compute_snr_db;
+    for ch in 0..out_channels {
+        let oracle_ch_f32: Vec<f32> = oracle_out_f64[ch].iter().map(|&x| x as f32).collect();
+        let rust_ch = &rust_out_chunked[ch];
+        let cpp_ch = &cpp_out[ch];
+
+        let esr_rust_vs_cpp = compute_esr(cpp_ch, rust_ch);
+        let snr_rust_vs_cpp = compute_snr_db(cpp_ch, rust_ch);
+
+        let esr_rust_vs_oracle = compute_esr(&oracle_ch_f32, rust_ch);
+        let snr_rust_vs_oracle = compute_snr_db(&oracle_ch_f32, rust_ch);
+
+        let esr_cpp_vs_oracle = compute_esr(&oracle_ch_f32, cpp_ch);
+        let snr_cpp_vs_oracle = compute_snr_db(&oracle_ch_f32, cpp_ch);
+
+        println!(
+            "[{label}] ch {ch}: Rust vs C++: ESR={esr_rust_vs_cpp:.3e}, SNR={snr_rust_vs_cpp:.1} dB | \
+             Rust vs f64: ESR={esr_rust_vs_oracle:.3e}, SNR={snr_rust_vs_oracle:.1} dB | \
+             C++ vs f64: ESR={esr_cpp_vs_oracle:.3e}, SNR={snr_cpp_vs_oracle:.1} dB"
+        );
+
+        // Agreement between C++ and f64 oracle
+        assert!(
+            esr_cpp_vs_oracle < 1e-12,
+            "[{label}] ch {ch}: C++ disagrees with f64 oracle: ESR={esr_cpp_vs_oracle:.3e}"
+        );
+
+        // Strict parity: ESR < 1e-13 / SNR > 130 dB (or measured limits)
+        assert!(
+            esr_rust_vs_cpp < 1e-12,
+            "[{label}] ch {ch}: Rust vs C++ ESR exceedance: {esr_rust_vs_cpp:.3e}"
+        );
+        assert!(
+            snr_rust_vs_cpp > 120.0,
+            "[{label}] ch {ch}: Rust vs C++ SNR below floor: {snr_rust_vs_cpp:.1} dB"
+        );
+        assert!(
+            esr_rust_vs_oracle < 1e-12,
+            "[{label}] ch {ch}: Rust vs f64 ESR exceedance: {esr_rust_vs_oracle:.3e}"
+        );
+        assert!(
+            snr_rust_vs_oracle > 120.0,
+            "[{label}] ch {ch}: Rust vs f64 SNR below floor: {snr_rust_vs_oracle:.1} dB"
+        );
+    }
+
+    // Cleanup temporary files
+    fs::remove_file(&temp_in).ok();
+    fs::remove_file(&temp_out_cpp).ok();
+    fs::remove_file(&temp_out_cpp_ip).ok();
+}
+
+#[test]
+fn test_linear_multichannel_1x2_direct() {
+    // Measured: ESR=2.95e-15, SNR=145.3 dB
+    run_linear_multichannel_parity("linear_1x2.nam", "Linear 1x2 Direct (with bias)");
+}
+
+#[test]
+fn test_linear_multichannel_1x2_direct_nobias() {
+    // Measured: ESR=7.54e-14, SNR=131.2 dB
+    run_linear_multichannel_parity("linear_1x2_nobias.nam", "Linear 1x2 Direct (no bias)");
+}
+
+#[test]
+fn test_linear_multichannel_2x1_direct() {
+    // Measured: ESR=2.57e-15, SNR=145.9 dB
+    run_linear_multichannel_parity("linear_2x1.nam", "Linear 2x1 Direct (with bias)");
+}
+
+#[test]
+fn test_linear_multichannel_2x1_direct_nobias() {
+    // Measured: ESR=2.94e-15, SNR=145.3 dB
+    run_linear_multichannel_parity("linear_2x1_nobias.nam", "Linear 2x1 Direct (no bias)");
+}
+
+#[test]
+fn test_linear_multichannel_2x2_shared_direct() {
+    // Measured: ESR=2.56e-15, SNR=145.9 dB
+    run_linear_multichannel_parity(
+        "linear_2x2_shared.nam",
+        "Linear 2x2 Shared Direct (with bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_2x2_shared_direct_nobias() {
+    // Measured: ESR=3.93e-15, SNR=144.1 dB
+    run_linear_multichannel_parity(
+        "linear_2x2_shared_nobias.nam",
+        "Linear 2x2 Shared Direct (no bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_1x2_fft() {
+    // Measured: ESR=1.19e-13, SNR=129.2 dB
+    run_linear_multichannel_parity(
+        "linear_1x2_fft.nam",
+        "Linear 1x2 Partitioned FFT (with bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_1x2_fft_nobias() {
+    // Measured: ESR=1.52e-13, SNR=128.2 dB
+    run_linear_multichannel_parity(
+        "linear_1x2_fft_nobias.nam",
+        "Linear 1x2 Partitioned FFT (no bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_2x1_fft() {
+    // Measured: ESR=1.49e-13, SNR=128.3 dB
+    run_linear_multichannel_parity(
+        "linear_2x1_fft.nam",
+        "Linear 2x1 Partitioned FFT (with bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_2x1_fft_nobias() {
+    // Measured: ESR=6.19e-14, SNR=132.1 dB
+    run_linear_multichannel_parity(
+        "linear_2x1_fft_nobias.nam",
+        "Linear 2x1 Partitioned FFT (no bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_2x2_shared_fft() {
+    // Measured: ESR=1.54e-13, SNR=128.1 dB
+    run_linear_multichannel_parity(
+        "linear_2x2_shared_fft.nam",
+        "Linear 2x2 Shared Partitioned FFT (with bias)",
+    );
+}
+
+#[test]
+fn test_linear_multichannel_2x2_shared_fft_nobias() {
+    // Measured: ESR=8.09e-14, SNR=130.9 dB
+    run_linear_multichannel_parity(
+        "linear_2x2_shared_fft_nobias.nam",
+        "Linear 2x2 Shared Partitioned FFT (no bias)",
+    );
+}
+
+// ── WAV Impulse Response C++ Parity Tests (GAP-05 / NC-5.3) ──────────────────
+
+fn make_test_wav_bytes(
+    channels: u16,
+    sample_rate: u32,
+    ch0: &[f32],
+    ch1: Option<&[f32]>,
+) -> Vec<u8> {
+    let tap_count = ch0.len();
+    let total_samples = tap_count * (channels as usize);
+    let data_size = (total_samples * 4) as u32;
+    let file_size = 36 + data_size;
+    let byte_rate = sample_rate * (channels as u32) * 4;
+    let block_align = channels * 4;
+    let bits_per_sample = 32u16;
+
+    let mut buf = Vec::with_capacity((file_size + 8) as usize);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&file_size.to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+
+    if let Some(ch1_data) = ch1 {
+        for i in 0..tap_count {
+            buf.extend_from_slice(&ch0[i].to_le_bytes());
+            buf.extend_from_slice(&ch1_data[i].to_le_bytes());
+        }
+    } else {
+        for &s in ch0 {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+    }
+    buf
+}
+
+fn run_wav_ir_mono_parity(taps: &[f32], sample_rate: u32, label: &str) {
+    if !ensure_render_compiled() {
+        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
+            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render tool unavailable");
+        }
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        return;
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let temp_dir = project_root.join("tests/fixtures/.temp_live");
+    fs::create_dir_all(&temp_dir).ok();
+
+    let seq = TEST_WAV_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let ir_path = temp_dir.join(format!("ir_mono_{pid}_{seq}.wav"));
+    let in_path = temp_dir.join(format!("in_mono_{pid}_{seq}.wav"));
+    let out_cpp_path = temp_dir.join(format!("out_cpp_mono_{pid}_{seq}.wav"));
+
+    let wav_bytes = make_test_wav_bytes(1, sample_rate, taps, None);
+    fs::write(&ir_path, &wav_bytes).expect("Write IR WAV");
+
+    let stress_signal = generate_stress_signal_v2(sample_rate);
+    let frames = 4096.min(stress_signal.len());
+    let input = &stress_signal[..frames];
+    common::wav::write_wav_f32(&in_path, input, sample_rate).expect("Write stress WAV");
+
+    let bin = render_bin();
+    let output = Command::new(&bin)
+        .arg(&ir_path)
+        .arg(&in_path)
+        .arg(&out_cpp_path)
+        .output()
+        .expect("Execute render tool");
+    assert!(
+        output.status.success(),
+        "render tool failed for mono WAV IR: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let (cpp_out, cpp_sr) = common::wav::read_wav_f32(&out_cpp_path).expect("Read C++ output WAV");
+    assert_eq!(cpp_sr, sample_rate);
+    assert_eq!(cpp_out.len(), frames);
+
+    // Load and build Rust model
+    let sys = neural_amp_modeler_rs::SystemSnapshot::capture();
+    let pair = neural_amp_modeler_rs::loader::load_and_build_wav_ir(
+        &ir_path,
+        &sys,
+        false,
+        neural_amp_modeler_rs::loader::LoadOptions::default(),
+    )
+    .expect("Failed to load WAV IR in Rust");
+    let mut rust_model = pair.model_l.expect("Rust model_l must exist");
+    assert_eq!(rust_model.in_channels(), 1);
+    assert_eq!(rust_model.num_output_channels(), 1);
+
+    rust_model
+        .reset(sample_rate, 64)
+        .expect("Model reset failed");
+    let mut rust_out = vec![0.0f32; frames];
+    let mut offset = 0;
+    while offset < frames {
+        let count = 64.min(frames - offset);
+        rust_model.process(
+            &input[offset..offset + count],
+            &mut rust_out[offset..offset + count],
+        );
+        offset += count;
+    }
+
+    // f64 reference oracle
+    let wav_data = neural_amp_modeler_rs::loader::parse_wav_ir(&wav_bytes).expect("parse wav");
+    let model_data = neural_amp_modeler_rs::loader::wav_ir_to_model_data(wav_data);
+    let input_f64: Vec<f64> = input.iter().map(|&x| x as f64).collect();
+    let oracle_out_f64 =
+        neural_amp_modeler_rs::testing::reference_oracle::oracle_linear_multichannel(
+            &model_data,
+            &[input_f64],
+        );
+    let oracle_out_f32: Vec<f32> = oracle_out_f64[0].iter().map(|&x| x as f32).collect();
+
+    let esr_rust_vs_cpp = common::metrics::compute_esr(&cpp_out, &rust_out);
+    let snr_rust_vs_cpp =
+        neural_amp_modeler_rs::testing::perceptual::compute_snr_db(&cpp_out, &rust_out);
+    let esr_rust_vs_oracle = common::metrics::compute_esr(&oracle_out_f32, &rust_out);
+    let snr_rust_vs_oracle =
+        neural_amp_modeler_rs::testing::perceptual::compute_snr_db(&oracle_out_f32, &rust_out);
+    let esr_cpp_vs_oracle = common::metrics::compute_esr(&oracle_out_f32, &cpp_out);
+
+    println!(
+        "[{label}] Rust vs C++: ESR={esr_rust_vs_cpp:.3e}, SNR={snr_rust_vs_cpp:.1} dB | \
+         Rust vs f64: ESR={esr_rust_vs_oracle:.3e}, SNR={snr_rust_vs_oracle:.1} dB | \
+         C++ vs f64: ESR={esr_cpp_vs_oracle:.3e}"
+    );
+
+    assert!(
+        esr_cpp_vs_oracle < 1e-12,
+        "[{label}] C++ disagrees with f64 oracle: ESR={esr_cpp_vs_oracle:.3e}"
+    );
+    assert!(
+        esr_rust_vs_cpp < 1e-12,
+        "[{label}] Rust vs C++ ESR exceedance: {esr_rust_vs_cpp:.3e}"
+    );
+    assert!(
+        snr_rust_vs_cpp > 120.0,
+        "[{label}] Rust vs C++ SNR below floor: {snr_rust_vs_cpp:.1} dB"
+    );
+    assert!(
+        esr_rust_vs_oracle < 1e-12,
+        "[{label}] Rust vs f64 ESR exceedance: {esr_rust_vs_oracle:.3e}"
+    );
+    assert!(
+        snr_rust_vs_oracle > 120.0,
+        "[{label}] Rust vs f64 SNR below floor: {snr_rust_vs_oracle:.1} dB"
+    );
+
+    fs::remove_file(&ir_path).ok();
+    fs::remove_file(&in_path).ok();
+    fs::remove_file(&out_cpp_path).ok();
+}
+
+fn run_wav_ir_stereo_parity(ch0_taps: &[f32], ch1_taps: &[f32], sample_rate: u32, label: &str) {
+    if !ensure_render_multichannel_compiled() {
+        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
+            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render_multichannel tool unavailable");
+        }
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_multichannel_tool_unavailable\"");
+        return;
+    }
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let temp_dir = project_root.join("tests/fixtures/.temp_live");
+    fs::create_dir_all(&temp_dir).ok();
+
+    let seq = TEST_WAV_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let ir_path = temp_dir.join(format!("ir_stereo_{pid}_{seq}.wav"));
+    let in_bin_path = temp_dir.join(format!("in_mc_{pid}_{seq}.bin"));
+    let out_bin_path = temp_dir.join(format!("out_mc_cpp_{pid}_{seq}.bin"));
+
+    let wav_bytes = make_test_wav_bytes(2, sample_rate, ch0_taps, Some(ch1_taps));
+    fs::write(&ir_path, &wav_bytes).expect("Write stereo IR WAV");
+
+    let stress_signal = generate_stress_signal_v2(sample_rate);
+    let frames = 4096.min(stress_signal.len());
+    let input = &stress_signal[..frames];
+
+    // Multichannel input: 1 channel, `frames` samples
+    write_multichannel_bin(&in_bin_path, &[input.to_vec()]).expect("Write input bin");
+
+    let render_mc = render_multichannel_bin();
+    let cpp_res = Command::new(&render_mc)
+        .arg(&ir_path)
+        .arg(&in_bin_path)
+        .arg(&out_bin_path)
+        .arg("--chunk")
+        .arg("64")
+        .output()
+        .expect("Execute render_multichannel");
+    assert!(
+        cpp_res.status.success(),
+        "render_multichannel failed for stereo WAV IR: {}",
+        String::from_utf8_lossy(&cpp_res.stderr)
+    );
+
+    let (cpp_ch, cpp_fr, cpp_out) =
+        read_multichannel_bin(&out_bin_path).expect("Read C++ multichannel output");
+    assert_eq!(cpp_ch, 2, "C++ channel count must be 2");
+    assert_eq!(cpp_fr, frames, "C++ frame count mismatch");
+
+    // Load and build Rust model
+    let sys = neural_amp_modeler_rs::SystemSnapshot::capture();
+    let pair = neural_amp_modeler_rs::loader::load_and_build_wav_ir(
+        &ir_path,
+        &sys,
+        false,
+        neural_amp_modeler_rs::loader::LoadOptions::default(),
+    )
+    .expect("Failed to load stereo WAV IR in Rust");
+    let mut rust_model = pair.model_l.expect("Rust model_l must exist");
+    assert_eq!(rust_model.in_channels(), 1);
+    assert_eq!(rust_model.num_output_channels(), 2);
+
+    rust_model
+        .reset(sample_rate, 64)
+        .expect("Model reset failed");
+    let mut rust_ch0 = vec![0.0f32; frames];
+    let mut rust_ch1 = vec![0.0f32; frames];
+    let mut offset = 0;
+    while offset < frames {
+        let count = 64.min(frames - offset);
+        let in_slice = &input[offset..offset + count];
+        let mut out0_slice = &mut rust_ch0[offset..offset + count];
+        let mut out1_slice = &mut rust_ch1[offset..offset + count];
+        rust_model.process_multichannel(&[in_slice], &mut [&mut out0_slice, &mut out1_slice]);
+        offset += count;
+    }
+
+    // f64 reference oracle
+    let wav_data = neural_amp_modeler_rs::loader::parse_wav_ir(&wav_bytes).expect("parse wav");
+    let model_data = neural_amp_modeler_rs::loader::wav_ir_to_model_data(wav_data);
+    let input_f64: Vec<f64> = input.iter().map(|&x| x as f64).collect();
+    let oracle_out_f64 =
+        neural_amp_modeler_rs::testing::reference_oracle::oracle_linear_multichannel(
+            &model_data,
+            &[input_f64],
+        );
+    assert_eq!(oracle_out_f64.len(), 2);
+
+    let rust_outputs = [&rust_ch0, &rust_ch1];
+    for ch in 0..2 {
+        let oracle_ch_f32: Vec<f32> = oracle_out_f64[ch].iter().map(|&x| x as f32).collect();
+        let esr_rust_vs_cpp = common::metrics::compute_esr(&cpp_out[ch], rust_outputs[ch]);
+        let snr_rust_vs_cpp = neural_amp_modeler_rs::testing::perceptual::compute_snr_db(
+            &cpp_out[ch],
+            rust_outputs[ch],
+        );
+        let esr_rust_vs_oracle = common::metrics::compute_esr(&oracle_ch_f32, rust_outputs[ch]);
+        let snr_rust_vs_oracle = neural_amp_modeler_rs::testing::perceptual::compute_snr_db(
+            &oracle_ch_f32,
+            rust_outputs[ch],
+        );
+        let esr_cpp_vs_oracle = common::metrics::compute_esr(&oracle_ch_f32, &cpp_out[ch]);
+
+        println!(
+            "[{label}] ch {ch}: Rust vs C++: ESR={esr_rust_vs_cpp:.3e}, SNR={snr_rust_vs_cpp:.1} dB | \
+             Rust vs f64: ESR={esr_rust_vs_oracle:.3e}, SNR={snr_rust_vs_oracle:.1} dB | \
+             C++ vs f64: ESR={esr_cpp_vs_oracle:.3e}"
+        );
+
+        assert!(
+            esr_cpp_vs_oracle < 1e-12,
+            "[{label}] ch {ch}: C++ disagrees with f64 oracle: ESR={esr_cpp_vs_oracle:.3e}"
+        );
+        assert!(
+            esr_rust_vs_cpp < 1e-12,
+            "[{label}] ch {ch}: Rust vs C++ ESR exceedance: {esr_rust_vs_cpp:.3e}"
+        );
+        assert!(
+            snr_rust_vs_cpp > 120.0,
+            "[{label}] ch {ch}: Rust vs C++ SNR below floor: {snr_rust_vs_cpp:.1} dB"
+        );
+        assert!(
+            esr_rust_vs_oracle < 1e-12,
+            "[{label}] ch {ch}: Rust vs f64 ESR exceedance: {esr_rust_vs_oracle:.3e}"
+        );
+        assert!(
+            snr_rust_vs_oracle > 120.0,
+            "[{label}] ch {ch}: Rust vs f64 SNR below floor: {snr_rust_vs_oracle:.1} dB"
+        );
+    }
+
+    fs::remove_file(&ir_path).ok();
+    fs::remove_file(&in_bin_path).ok();
+    fs::remove_file(&out_bin_path).ok();
+}
+
+#[test]
+fn test_wav_ir_mono_cpp_parity() {
+    // Measured: ESR=6.704e-15, SNR=141.7 dB
+    let taps: Vec<f32> = (0..32)
+        .map(|i| 0.5 * (-0.15 * i as f32).exp() * ((i as f32 * 0.5).cos()))
+        .collect();
+    run_wav_ir_mono_parity(&taps, 48000, "WAV IR Mono 48kHz Parity");
+}
+
+#[test]
+fn test_wav_ir_stereo_cpp_parity() {
+    // Measured: ch 0: ESR=7.879e-15, SNR=141.0 dB | ch 1: ESR=3.415e-15, SNR=144.7 dB
+    let ch0_taps: Vec<f32> = (0..32)
+        .map(|i| 0.5 * (-0.12 * i as f32).exp() * ((i as f32 * 0.4).cos()))
+        .collect();
+    let ch1_taps: Vec<f32> = (0..32)
+        .map(|i| -0.4 * (-0.18 * i as f32).exp() * ((i as f32 * 0.6).sin()))
+        .collect();
+    run_wav_ir_stereo_parity(&ch0_taps, &ch1_taps, 48000, "WAV IR Stereo 48kHz Parity");
+}
+
+#[test]
+fn test_wav_ir_cross_rate_mismatch_parity() {
+    // Measured: Rust loads 48kHz IR and executes cleanly at 44.1kHz operational SR; C++ rejects mismatched SR with exit code 1.
+    let ir_sr = 48000;
+    let input_sr = 44100;
+
+    let taps: Vec<f32> = (0..32).map(|i| 0.5 * (-0.1 * i as f32).exp()).collect();
+    let wav_bytes = make_test_wav_bytes(1, ir_sr, &taps, None);
+
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let temp_dir = project_root.join("tests/fixtures/.temp_live");
+    fs::create_dir_all(&temp_dir).ok();
+
+    let seq = TEST_WAV_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let ir_path = temp_dir.join(format!("ir_rate_{pid}_{seq}.wav"));
+    let in_path = temp_dir.join(format!("in_rate_{pid}_{seq}.wav"));
+    let out_cpp_path = temp_dir.join(format!("out_cpp_rate_{pid}_{seq}.wav"));
+
+    fs::write(&ir_path, &wav_bytes).expect("Write IR WAV");
+
+    let stress_signal = generate_stress_signal_v2(input_sr);
+    let frames = 2048.min(stress_signal.len());
+    let input = &stress_signal[..frames];
+    common::wav::write_wav_f32(&in_path, input, input_sr).expect("Write stress WAV");
+
+    // 1. C++ upstream behavior verification:
+    // C++ render checks `if (expectedRate > 0 && std::abs(inputSampleRate - expectedRate) > 0.5) return 1;`
+    // and terminates with exit code 1.
+    if ensure_render_compiled() {
+        let bin = render_bin();
+        let output = Command::new(&bin)
+            .arg(&ir_path)
+            .arg(&in_path)
+            .arg(&out_cpp_path)
+            .output()
+            .expect("Execute render tool");
+        assert!(
+            !output.status.success(),
+            "C++ render tool must reject mismatched sample rates (DEC-02)"
+        );
+    }
+
+    // 2. Rust behavior verification (DEC-01 / DEC-02):
+    // Rust loader sets `expected_sample_rate = 48000.0`.
+    let sys = neural_amp_modeler_rs::SystemSnapshot::capture();
+    let pair = neural_amp_modeler_rs::loader::load_and_build_wav_ir(
+        &ir_path,
+        &sys,
+        false,
+        neural_amp_modeler_rs::loader::LoadOptions::default(),
+    )
+    .expect("Rust loader accepts WAV IR");
+    assert_eq!(pair.sample_rate, ir_sr);
+
+    let mut rust_model = pair.model_l.expect("Rust model exists");
+    // Engine can be reset and run at 44100 Hz safely without crash
+    rust_model
+        .reset(input_sr, 64)
+        .expect("Rust engine reset at operational rate succeeds");
+    let mut rust_out = vec![0.0f32; frames];
+    rust_model.process(input, &mut rust_out);
+    assert!(rust_out.iter().all(|s| s.is_finite()));
+
+    fs::remove_file(&ir_path).ok();
+    fs::remove_file(&in_path).ok();
+    fs::remove_file(&out_cpp_path).ok();
 }

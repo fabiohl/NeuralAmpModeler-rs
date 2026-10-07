@@ -7,6 +7,8 @@ mod tests {
     use crate::loader::{
         LoadError, LoadOptions, MetadataError, load_and_build_model,
         load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
+        load_and_build_wav_ir, load_and_build_wav_ir_from_bytes,
+        load_and_build_wav_ir_from_bytes_named,
     };
     use crate::models::NamModel;
     use crate::testing::fixtures::model_path;
@@ -306,5 +308,105 @@ mod tests {
         let res_garbage =
             load_and_build_model_from_bytes(garbage, &sys, false, LoadOptions::default());
         assert!(res_garbage.is_err(), "garbage bytes must fail load");
+    }
+
+    fn create_test_wav_bytes(channels: u16, sample_rate: u32, samples: &[f32]) -> Vec<u8> {
+        let num_samples = samples.len() as u32;
+        let data_size = num_samples * 4;
+        let file_size = 36 + data_size;
+        let byte_rate = sample_rate * (channels as u32) * 4;
+        let block_align = channels * 4;
+        let bits_per_sample = 32u16;
+
+        let mut buf = Vec::with_capacity((file_size + 8) as usize);
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for &s in samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn test_load_and_build_wav_ir_from_bytes_mono_and_stereo() {
+        let sys = SystemSnapshot::capture();
+
+        // Mono WAV IR (1 tap: 0.5)
+        let mono_bytes = create_test_wav_bytes(1, 48000, &[0.5f32, -0.25f32, 0.125f32]);
+        let mono_pair =
+            load_and_build_wav_ir_from_bytes(&mono_bytes, &sys, false, LoadOptions::default())
+                .expect("Failed to load mono WAV IR from bytes");
+        assert_eq!(mono_pair.architecture, "Linear");
+        assert_eq!(mono_pair.sample_rate, 48000);
+        let model_l = mono_pair.model_l.expect("model_l must exist");
+        assert_eq!(model_l.in_channels(), 1);
+        assert_eq!(model_l.num_output_channels(), 1);
+
+        // Stereo WAV IR (interleaved: ch0, ch1)
+        let stereo_samples = [0.5f32, -0.5f32, -0.25f32, 0.25f32, 0.125f32, -0.125f32];
+        let stereo_bytes = create_test_wav_bytes(2, 44100, &stereo_samples);
+        let stereo_pair = load_and_build_wav_ir_from_bytes_named(
+            &stereo_bytes,
+            "stereo_ir.wav",
+            &sys,
+            false,
+            LoadOptions::default(),
+        )
+        .expect("Failed to load stereo WAV IR from bytes");
+        assert_eq!(stereo_pair.architecture, "Linear");
+        assert_eq!(stereo_pair.sample_rate, 44100);
+        let stereo_model = stereo_pair.model_l.expect("stereo model must exist");
+        assert_eq!(stereo_model.in_channels(), 1);
+        assert_eq!(stereo_model.num_output_channels(), 2);
+    }
+
+    #[test]
+    fn test_load_and_build_model_auto_detects_wav() {
+        let sys = SystemSnapshot::capture();
+        let mono_bytes = create_test_wav_bytes(1, 48000, &[0.5f32, -0.25f32]);
+
+        // Auto-detect by RIFF/WAVE header even without .wav in name
+        let pair_unnamed =
+            load_and_build_model_from_bytes(&mono_bytes, &sys, false, LoadOptions::default())
+                .expect("Auto-detection from RIFF header must succeed");
+        assert_eq!(pair_unnamed.architecture, "Linear");
+
+        // Named with .wav extension
+        let pair_named = load_and_build_model_from_bytes_named(
+            &mono_bytes,
+            "cab_sim.wav",
+            &sys,
+            false,
+            LoadOptions::default(),
+        )
+        .expect("Named .wav load must succeed");
+        assert_eq!(pair_named.architecture, "Linear");
+
+        // Disk-based load via temporary file for both load_and_build_wav_ir and load_and_build_model
+        let temp_path = std::env::temp_dir().join(format!("test_ir_{}.wav", std::process::id()));
+        std::fs::write(&temp_path, &mono_bytes).expect("Write temp wav");
+
+        let pair_file_direct =
+            load_and_build_wav_ir(&temp_path, &sys, false, LoadOptions::default())
+                .expect("load_and_build_wav_ir from file must succeed");
+        assert_eq!(pair_file_direct.architecture, "Linear");
+
+        let pair_file_general =
+            load_and_build_model(&temp_path, &sys, false, LoadOptions::default())
+                .expect("load_and_build_model with .wav extension must succeed");
+        assert_eq!(pair_file_general.architecture, "Linear");
+
+        std::fs::remove_file(&temp_path).ok();
     }
 }

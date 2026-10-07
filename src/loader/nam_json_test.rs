@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::models::NamModel as _;
 
 #[test]
 fn test_parse_feather_wavenet() {
@@ -849,8 +850,9 @@ fn test_version_missing_rejected() {
     let err = parse_nam_json(json).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("version field is required"),
-        "Expected 'version field is required' error, got: {msg}"
+        msg.contains("version field is required")
+            || (msg.contains("missing required field") && msg.contains("version")),
+        "Expected version missing/required error, got: {msg}"
     );
 }
 
@@ -1885,10 +1887,10 @@ fn test_linear_implementation_case_insensitive_roundtrip() {
     // "auto" lowercase (as exported by C++ trainer) → LinearImplementation::Auto
     let json = make_linear_json("auto", 128);
     let parsed = parse_nam_json(&json).expect("parse");
-    let (rf, has_bias, imp) = get_linear_topology(&parsed).expect("Linear topology");
-    assert_eq!(rf, 128);
-    assert!(has_bias);
-    assert_eq!(imp, LinearImplementation::Auto);
+    let topo = get_linear_topology(&parsed).expect("Linear topology");
+    assert_eq!(topo.receptive_field, 128);
+    assert!(topo.has_bias);
+    assert_eq!(topo.implementation, LinearImplementation::Auto);
 }
 
 #[test]
@@ -1900,10 +1902,11 @@ fn test_linear_implementation_all_variants_lowercase() {
     ] {
         let json = make_linear_json(input, 64);
         let parsed = parse_nam_json(&json).expect("parse");
-        let (_, _, imp) = get_linear_topology(&parsed).expect("Linear topology");
+        let topo = get_linear_topology(&parsed).expect("Linear topology");
         assert_eq!(
-            imp, *expected,
-            "implementation=\"{input}\" should parse as {expected:?}, got {imp:?}"
+            topo.implementation, *expected,
+            "implementation=\"{input}\" should parse as {expected:?}, got {:?}",
+            topo.implementation
         );
     }
 }
@@ -1920,10 +1923,11 @@ fn test_linear_implementation_mixed_case_roundtrip() {
     ] {
         let json = make_linear_json(input, 32);
         let parsed = parse_nam_json(&json).expect("parse");
-        let (_, _, imp) = get_linear_topology(&parsed).expect("Linear topology");
+        let topo = get_linear_topology(&parsed).expect("Linear topology");
         assert_eq!(
-            imp, *expected,
-            "implementation=\"{input}\" should parse as {expected:?}, got {imp:?}"
+            topo.implementation, *expected,
+            "implementation=\"{input}\" should parse as {expected:?}, got {:?}",
+            topo.implementation
         );
     }
 }
@@ -1943,8 +1947,8 @@ fn test_linear_implementation_missing_defaults_to_auto() {
         "weights": [0.0]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    let (_, _, imp) = get_linear_topology(&parsed).expect("Linear topology");
-    assert_eq!(imp, LinearImplementation::Auto);
+    let topo = get_linear_topology(&parsed).expect("Linear topology");
+    assert_eq!(topo.implementation, LinearImplementation::Auto);
 }
 
 #[test]
@@ -1952,8 +1956,210 @@ fn test_linear_implementation_invalid_falls_back_to_auto() {
     // Legacy/unexpected values should fallback to Auto (via unwrap_or_default)
     let json = make_linear_json("legacy", 100);
     let parsed = parse_nam_json(&json).expect("parse");
-    let (_, _, imp) = get_linear_topology(&parsed).expect("Linear topology");
-    assert_eq!(imp, LinearImplementation::Auto);
+    let topo = get_linear_topology(&parsed).expect("Linear topology");
+    assert_eq!(topo.implementation, LinearImplementation::Auto);
+}
+
+#[test]
+fn test_linear_topology_channel_defaults() {
+    // Mirrors test_linear.cpp:537: default channels are 1 -> 1
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {
+            "receptive_field": 3,
+            "bias": false
+        },
+        "weights": [1.0, 0.0, 0.0]
+    }"#;
+    let parsed = parse_nam_json(json).expect("parse");
+    let topo = get_linear_topology(&parsed).expect("Linear topology");
+    assert_eq!(topo.in_channels, 1);
+    assert_eq!(topo.out_channels, 1);
+    assert_eq!(topo.receptive_field, 3);
+    assert!(!topo.has_bias);
+    assert_eq!(topo.num_kernels(), 1);
+    assert_eq!(topo.num_biases(), 1);
+    assert_eq!(topo.validate_channels(), Ok(()));
+    assert_eq!(topo.expected_weights(), Ok(3));
+}
+
+#[test]
+fn test_linear_channel_validation_cpp_parity() {
+    // Mirrors test_linear.cpp:535 test_channel_validation
+    // Valid shapes: 1->1, 1->2, 2->1, 2->2, 3->3
+    for (in_ch, out_ch, expected_kernels, expected_biases) in &[
+        (1, 1, 1, 1),
+        (1, 2, 2, 2),
+        (2, 1, 2, 1),
+        (2, 2, 1, 1), // N -> N shared 1 IR kernel, 1 shared bias
+        (3, 3, 1, 1), // N -> N shared 1 IR kernel, 1 shared bias
+    ] {
+        let topo = crate::loader::nam_json::LinearTopology {
+            in_channels: *in_ch,
+            out_channels: *out_ch,
+            receptive_field: 3,
+            has_bias: true,
+            implementation: LinearImplementation::Direct,
+        };
+        assert_eq!(topo.validate_channels(), Ok(()));
+        assert_eq!(topo.num_kernels(), *expected_kernels);
+        assert_eq!(topo.num_biases(), *expected_biases);
+    }
+
+    // Invalid shapes from C++: (2, 3), (3, 2), (0, 1), (1, 0)
+    for (in_ch, out_ch) in &[(2, 3), (3, 2), (0, 1), (1, 0), (0, 0), (513, 1), (1, 513)] {
+        let topo = crate::loader::nam_json::LinearTopology {
+            in_channels: *in_ch,
+            out_channels: *out_ch,
+            receptive_field: 3,
+            has_bias: false,
+            implementation: LinearImplementation::Direct,
+        };
+        assert_eq!(
+            topo.validate_channels(),
+            Err(crate::common::diagnostics::NamErrorCode::LinearInvalidChannels),
+            "Shape ({in_ch}, {out_ch}) should be rejected with LinearInvalidChannels"
+        );
+    }
+}
+
+#[test]
+fn test_linear_weight_count_validation_cpp_parity() {
+    // Mirrors test_linear.cpp:554-569: for shapes {1, 2} and {2, 1}, bias {false, true}, delta {-1, 1}
+    for (in_ch, out_ch) in &[(1, 2), (2, 1)] {
+        for bias in [false, true] {
+            let topo = crate::loader::nam_json::LinearTopology {
+                in_channels: *in_ch,
+                out_channels: *out_ch,
+                receptive_field: 3,
+                has_bias: bias,
+                implementation: LinearImplementation::Direct,
+            };
+            let expected = topo.expected_weights().expect("expected weights");
+            let expected_calc = 3 * 2 + if bias { topo.num_biases() } else { 0 };
+            assert_eq!(expected, expected_calc);
+
+            // Exact count succeeds
+            assert_eq!(topo.validate_weights_count(expected), Ok(()));
+
+            // Deltas {-1, +1} must fail with LinearWeightCountMismatch
+            for delta in [-1isize, 1isize] {
+                let actual = (expected as isize + delta) as usize;
+                assert_eq!(
+                    topo.validate_weights_count(actual),
+                    Err(crate::common::diagnostics::NamErrorCode::LinearWeightCountMismatch),
+                    "Weight count delta {delta} for ({in_ch}, {out_ch}, bias={bias}) should be rejected"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_build_linear_end_to_end_multichannel() {
+    // 1 -> 2 with bias: RF=3 => 2 kernels * 3 = 6 coeffs + 2 biases = 8 weights
+    let json_1x2 = r#"{
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {
+            "in_channels": 1,
+            "out_channels": 2,
+            "receptive_field": 3,
+            "bias": true
+        },
+        "weights": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1, 0.2]
+    }"#;
+    let parsed = parse_nam_json(json_1x2).expect("parse");
+    let static_model = crate::loader::dispatcher::build_model(&parsed).expect("build model");
+    match *static_model {
+        crate::models::StaticModel::Linear(m) => {
+            assert_eq!(m.in_channels, 1);
+            assert_eq!(m.out_channels, 2);
+            assert_eq!(m.receptive_field, 3);
+            assert_eq!(m.biases, vec![0.1, 0.2]);
+            assert_eq!(m.bias, 0.1);
+            // Weights should be reversed per kernel:
+            // Kernel 0: [1, 2, 3] -> [3, 2, 1]
+            // Kernel 1: [4, 5, 6] -> [6, 5, 4]
+            assert_eq!(&m.weights[0..3], &[3.0, 2.0, 1.0]);
+            assert_eq!(&m.weights[3..6], &[6.0, 5.0, 4.0]);
+        }
+        _ => panic!("Expected StaticModel::Linear"),
+    }
+
+    // 2 -> 2 with bias: RF=3 => 1 shared kernel * 3 = 3 coeffs + 1 shared bias = 4 weights
+    let json_2x2 = r#"{
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {
+            "in_channels": 2,
+            "out_channels": 2,
+            "receptive_field": 3,
+            "bias": true
+        },
+        "weights": [1.0, 2.0, 3.0, 0.5]
+    }"#;
+    let parsed_2x2 = parse_nam_json(json_2x2).expect("parse");
+    let static_model_2x2 =
+        crate::loader::dispatcher::build_model(&parsed_2x2).expect("build model");
+    match *static_model_2x2 {
+        crate::models::StaticModel::Linear(m) => {
+            assert_eq!(m.in_channels, 2);
+            assert_eq!(m.out_channels, 2);
+            assert_eq!(m.receptive_field, 3);
+            assert_eq!(m.biases, vec![0.5, 0.5]); // shared bias replicated across both channels
+            assert_eq!(m.bias, 0.5);
+            assert_eq!(&m.weights[0..3], &[3.0, 2.0, 1.0]);
+        }
+        _ => panic!("Expected StaticModel::Linear"),
+    }
+
+    // Reject 2 -> 3 with LinearInvalidChannels
+    let json_invalid_shape = r#"{
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {
+            "in_channels": 2,
+            "out_channels": 3,
+            "receptive_field": 3,
+            "bias": false
+        },
+        "weights": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+    }"#;
+    let parsed_invalid = parse_nam_json(json_invalid_shape).expect("parse");
+    let err = match crate::loader::dispatcher::build_model(&parsed_invalid) {
+        Ok(_) => panic!("Expected build_model to fail for invalid shape"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("E1312") || err.to_string().contains("equal channel counts"),
+        "Expected LinearInvalidChannels, got: {err}"
+    );
+
+    // Reject 1 -> 2 with wrong weight count
+    let json_wrong_weights = r#"{
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {
+            "in_channels": 1,
+            "out_channels": 2,
+            "receptive_field": 3,
+            "bias": true
+        },
+        "weights": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1]
+    }"#;
+    let parsed_wrong_weights = parse_nam_json(json_wrong_weights).expect("parse");
+    let err_w = match crate::loader::dispatcher::build_model(&parsed_wrong_weights) {
+        Ok(_) => panic!("Expected build_model to fail for wrong weights"),
+        Err(e) => e,
+    };
+    assert!(
+        err_w.to_string().contains("E1313")
+            || err_w.to_string().contains("Weight count")
+            || err_w.to_string().contains("weights count"),
+        "Expected LinearWeightCountMismatch, got: {err_w}"
+    );
 }
 
 #[test]
@@ -2009,4 +2215,859 @@ fn test_reject_bool_activation_fail_closed() {
         msg.contains("unsupported activation format"),
         "expected 'unsupported activation format' error, got: {msg}"
     );
+}
+
+// ── NC-4: WaveNet layer-array head config (GAP-03) & FiLM (GAP-04) ───────────
+
+#[test]
+fn test_layer_head_config_legacy_head_size_and_head_bias_implies_kernel_one() {
+    // Mirrors C++ test_layer_head_config.cpp::test_legacy_head_size_and_head_bias_implies_kernel_one
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1,
+                "condition_size": 1,
+                "head_size": 2,
+                "channels": 2,
+                "kernel_size": 1,
+                "dilations": [1],
+                "activation": "ReLU",
+                "head_bias": false
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+
+    let parsed = parse_nam_json(json).expect("parse legacy head config");
+    let p = &parsed.config.layers[0];
+    assert_eq!(p.head_size, Some(2));
+    assert_eq!(p.head_kernel_size, None);
+    assert_eq!(p.head_dilation, None);
+    assert_eq!(p.head_bias, Some(false));
+
+    let topo = get_wavenet_topology(&parsed);
+    match topo {
+        WavenetTopologyResult::Free(ref geom) => {
+            assert_eq!(geom.head_sizes, vec![2]);
+            assert_eq!(geom.head_kernel_sizes, vec![1]);
+            assert_eq!(geom.head_dilations, vec![1]);
+            assert_eq!(geom.head_biases, vec![false]);
+            assert_eq!(geom.receptive_field(), 0); // (1 - 1)*1 + (1 - 1)*1 = 0
+        }
+        other => panic!("Expected Free topology, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_layer_head_config_nested_head_with_kernel_size_three() {
+    // Mirrors C++ test_layer_head_config.cpp::test_nested_head_with_kernel_size_three
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1,
+                "condition_size": 1,
+                "head": {"out_channels": 1, "kernel_size": 3, "bias": true},
+                "channels": 2,
+                "kernel_size": 1,
+                "dilations": [1],
+                "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+
+    let parsed = parse_nam_json(json).expect("parse nested head kernel 3");
+    let p = &parsed.config.layers[0];
+    assert_eq!(p.head_size, Some(1));
+    assert_eq!(p.head_kernel_size, Some(3));
+    assert_eq!(p.head_dilation, None);
+    assert_eq!(p.head_bias, Some(true));
+
+    let topo = get_wavenet_topology(&parsed);
+    match topo {
+        WavenetTopologyResult::Free(ref geom) => {
+            assert_eq!(geom.head_sizes, vec![1]);
+            assert_eq!(geom.head_kernel_sizes, vec![3]);
+            assert_eq!(geom.head_dilations, vec![1]);
+            assert_eq!(geom.head_biases, vec![true]);
+            // one dilated layer: 0 + (3 - 1) head rechannel = 2
+            assert_eq!(geom.receptive_field(), 2);
+        }
+        other => panic!("Expected Free topology, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_layer_head_config_nested_head_with_dilation_three() {
+    // Mirrors C++ test_layer_head_config.cpp::test_nested_head_with_dilation_three
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1,
+                "condition_size": 1,
+                "head": {"out_channels": 1, "kernel_size": 3, "head_dilation": 3, "bias": true},
+                "channels": 2,
+                "kernel_size": 1,
+                "dilations": [1],
+                "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+
+    let parsed = parse_nam_json(json).expect("parse nested head dilation 3");
+    let p = &parsed.config.layers[0];
+    assert_eq!(p.head_size, Some(1));
+    assert_eq!(p.head_kernel_size, Some(3));
+    assert_eq!(p.head_dilation, Some(3));
+    assert_eq!(p.head_bias, Some(true));
+
+    let topo = get_wavenet_topology(&parsed);
+    match topo {
+        WavenetTopologyResult::Free(ref geom) => {
+            assert_eq!(geom.head_sizes, vec![1]);
+            assert_eq!(geom.head_kernel_sizes, vec![3]);
+            assert_eq!(geom.head_dilations, vec![3]);
+            assert_eq!(geom.head_biases, vec![true]);
+            // one dilated layer: 0 + (3 - 1) * 3 head rechannel = 6
+            assert_eq!(geom.receptive_field(), 6);
+        }
+        other => panic!("Expected Free topology, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_layer_head_config_dilations_sweep_1_to_4() {
+    // Tests head_dilation in {1, 2, 3, 4} with varying layer dilations
+    for head_dil in 1..=4 {
+        let json = format!(
+            r#"{{
+                "version": "0.5.4",
+                "architecture": "WaveNet",
+                "config": {{
+                    "layers": [{{
+                        "input_size": 1,
+                        "condition_size": 1,
+                        "head": {{"out_channels": 4, "kernel_size": 3, "head_dilation": {head_dil}, "bias": true}},
+                        "channels": 4,
+                        "kernel_size": 3,
+                        "dilations": [1, 2, 4],
+                        "activation": "Tanh"
+                    }}],
+                    "head_scale": 1.0
+                }},
+                "weights": [0.0]
+            }}"#
+        );
+
+        let parsed = parse_nam_json(&json).expect("parse head_dil sweep");
+        let topo = get_wavenet_topology(&parsed);
+        match topo {
+            WavenetTopologyResult::Free(ref geom) => {
+                // layer rf = (3 - 1)*(1 + 2 + 4) = 14
+                // head rf = (3 - 1) * head_dil = 2 * head_dil
+                let expected_rf = 14 + 2 * head_dil;
+                assert_eq!(
+                    geom.receptive_field(),
+                    expected_rf,
+                    "RF mismatch for head_dilation {head_dil}"
+                );
+            }
+            other => panic!("Expected Free topology, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_layer_head_config_rejection_of_invalid_fields() {
+    // 1. Non-object head
+    let json_bad_head = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1,
+                "head": 42,
+                "channels": 2, "kernel_size": 1, "dilations": [1], "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+    assert!(parse_nam_json(json_bad_head).is_err());
+
+    // 2. Zero kernel_size in head
+    let json_zero_k = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1,
+                "head": {"out_channels": 1, "kernel_size": 0},
+                "channels": 2, "kernel_size": 1, "dilations": [1], "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+    assert!(parse_nam_json(json_zero_k).is_err());
+
+    // 3. Zero head_dilation
+    let json_zero_dil = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1,
+                "head": {"out_channels": 1, "kernel_size": 3, "head_dilation": 0},
+                "channels": 2, "kernel_size": 1, "dilations": [1], "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+    assert!(parse_nam_json(json_zero_dil).is_err());
+
+    // 4. Excessive head_dilation (> 4096)
+    let json_huge_dil = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "input_size": 1, "condition_size": 1,
+                "head": {"out_channels": 1, "kernel_size": 3, "head_dilation": 5000},
+                "channels": 2, "kernel_size": 1, "dilations": [1], "activation": "ReLU"
+            }],
+            "head_scale": 1.0
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json_huge_dil).expect("parse huge dilation");
+    match get_wavenet_topology(&parsed) {
+        WavenetTopologyResult::Rejected(msg) => {
+            assert!(msg.contains("exceeds maximum"));
+        }
+        other => panic!("Expected Rejected topology for huge dilation, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_layer1x1_post_film_inactive_with_layer1x1_inactive_rejected() {
+    // NC-4.4 / C++ detail.h:67-70 & model.cpp:1228-1232:
+    // layer1x1_post_film cannot be active when layer1x1 is not active.
+    let json = serde_json::json!({
+        "kernel_sizes": [3],
+        "dilations": [1],
+        "layer1x1": {"active": false},
+        "layer1x1_post_film": {"active": true, "shift": true, "groups": 1}
+    });
+
+    let layer: crate::loader::nam_json::model::NamLayerConfig =
+        serde_json::from_value(json).expect("deserialize layer");
+    let result = crate::loader::nam_json::topology::validate_a2_layer_topology(&layer);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("layer1x1_post_film cannot be active when layer1x1.active is false"),
+        "expected rejection of active post_film without active layer1x1, got: {err}"
+    );
+}
+
+#[test]
+fn test_a1_rejects_film_in_layer() {
+    // NC-4.4: A1 models strictly reject FiLM via validate_a1_guardrail
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [{
+                "channels": 8, "kernel_size": 3, "head_size": 4,
+                "dilations": [1, 2, 4], "gated": false, "head_bias": false,
+                "layer1x1_post_film": {"active": true}
+            }],
+            "head": null, "head_scale": 0.02
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).expect("parse A1 with FiLM");
+    let topo = get_wavenet_topology(&parsed);
+    match topo {
+        WavenetTopologyResult::Rejected(msg) => {
+            assert!(msg.contains("layer1x1_post_film") || msg.contains("A2 feature"));
+        }
+        other => panic!("Expected Rejected topology for A1 with FiLM, got {other:?}"),
+    }
+}
+
+/// Minimal complete Linear child envelope, building a stage of a Sequential
+/// chain (mirrors `make_linear_model` at test_sequential.cpp:38).
+fn make_linear_child_json(weights: &[f64], receptive_field: usize) -> String {
+    let weights_csv = weights
+        .iter()
+        .map(|weight| weight.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{
+            "version": "0.6.0",
+            "architecture": "Linear",
+            "config": {{"receptive_field": {receptive_field}, "bias": false, "implementation": "direct"}},
+            "weights": [{weights_csv}]
+        }}"#
+    )
+}
+
+/// Minimal Sequential root envelope (mirrors `make_sequential_model` at
+/// test_sequential.cpp:54). `models_csv` is the rendered JSON of the child
+/// array body (may be empty for the empty-array case).
+fn make_sequential_root_json(models_csv: &str) -> String {
+    format!(
+        r#"{{
+            "version": "0.6.0",
+            "architecture": "Sequential",
+            "metadata": {{}},
+            "config": {{"models": [{models_csv}]}},
+            "weights": [],
+            "sample_rate": 48000
+        }}"#
+    )
+}
+
+/// Builds a Sequential chain of `depth` Sequential levels ending in one
+/// Linear leaf (depth == 1 degenerates to a flat single-leaf chain).
+fn make_nested_sequential_json(depth: usize) -> String {
+    if depth == 0 {
+        make_linear_child_json(&[1.0], 1)
+    } else {
+        make_sequential_root_json(&make_nested_sequential_json(depth - 1))
+    }
+}
+
+/// Parses a Sequential root and extracts the typed topology rejection code.
+fn sequential_topology_error(root_json: &str) -> crate::common::diagnostics::NamErrorCode {
+    let parsed = parse_nam_json(root_json).expect("root envelope must parse");
+    match get_sequential_topology(&parsed) {
+        Err(code) => code,
+        Ok(Some(_)) => panic!("expected a topology rejection"),
+        Ok(None) => panic!("root is not a Sequential architecture"),
+    }
+}
+
+#[test]
+fn test_sequential_canonical_container_envelope_accepted() {
+    // Mirrors test_sequential.cpp:141 test_sequential_loads_canonical_container_envelope:
+    // canonical envelope shape parses and the topology scan reports the two
+    // Linear stages with their weight counts.
+    let json = make_sequential_root_json(&format!(
+        "{}, {}",
+        make_linear_child_json(&[0.5], 1),
+        make_linear_child_json(&[-2.0], 1)
+    ));
+    let parsed = parse_nam_json(&json).expect("canonical Sequential envelope must parse");
+    assert_eq!(parsed.architecture, "Sequential");
+    assert!(parsed.weights.is_empty());
+    assert!(parsed.config.models.is_some());
+
+    let topo = get_sequential_topology(&parsed)
+        .expect("Sequential root")
+        .expect("validated topology");
+    assert_eq!(topo.children.len(), 2);
+    assert_eq!(topo.children[0].architecture, "Linear");
+    assert_eq!(topo.children[1].architecture, "Linear");
+    assert!(!topo.children[0].is_sequential);
+    assert_eq!(topo.children[0].weights_len, 1);
+    assert_eq!(topo.children[1].weights_len, 1);
+    assert_eq!(topo.total_models, 2);
+    assert_eq!(topo.max_depth_reached, 1);
+    assert_eq!(topo.aggregate_weights, 2);
+}
+
+#[test]
+fn test_sequential_accepts_nested_sequential_child() {
+    // Mirrors test_sequential.cpp:233 test_sequential_accepts_nested_sequential_child:
+    // a nested Sequential child is accepted (recursion allowed within budgets).
+    let inner = make_sequential_root_json(&format!(
+        "{}, {}",
+        make_linear_child_json(&[1.0], 1),
+        make_linear_child_json(&[1.0], 1)
+    ));
+    let outer =
+        make_sequential_root_json(&format!("{}, {}", inner, make_linear_child_json(&[1.0], 1)));
+    let parsed = parse_nam_json(&outer).expect("nested Sequential envelope must parse");
+    let topo = get_sequential_topology(&parsed)
+        .expect("Sequential root")
+        .expect("validated topology");
+    assert!(topo.children[0].is_sequential);
+    assert_eq!(topo.total_models, 4);
+    assert_eq!(topo.max_depth_reached, 2);
+}
+
+#[test]
+fn test_sequential_rejects_lowercase_architecture() {
+    // Mirrors test_sequential.cpp:224 test_sequential_rejects_lowercase_architecture:
+    // architecture matching is case-sensitive ("sequential" is not registered).
+    let json = make_sequential_root_json(&make_linear_child_json(&[1.0], 1))
+        .replace("\"Sequential\"", "\"sequential\"");
+    let parsed = parse_nam_json(&json).expect("parse succeeds; rejection is at dispatch");
+    let err = match crate::loader::dispatcher::build_model(&parsed) {
+        Ok(_) => panic!("lowercase architecture must be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string()
+            .contains("Unsupported architecture: 'sequential'"),
+        "expected the registry-miss rejection, got: {err}"
+    );
+}
+
+#[test]
+fn test_sequential_rejects_empty_models() {
+    // Mirrors test_sequential.cpp:244 test_sequential_rejects_empty_models.
+    let json_empty = make_sequential_root_json("");
+    assert_eq!(
+        sequential_topology_error(&json_empty),
+        crate::common::diagnostics::NamErrorCode::SequentialEmptyModels
+    );
+
+    // Missing `models` key mirrors C++ build_models missing-key branch instead.
+    let json_missing = r#"{
+        "version": "0.6.0",
+        "architecture": "Sequential",
+        "config": {},
+        "weights": [],
+        "sample_rate": 48000
+    }"#;
+    assert_eq!(
+        sequential_topology_error(json_missing),
+        crate::common::diagnostics::NamErrorCode::SequentialEmptyModels
+    );
+}
+
+#[test]
+fn test_sequential_rejects_nonempty_top_level_weights() {
+    // Mirrors test_sequential.cpp:251 test_sequential_rejects_nonempty_top_level_weights:
+    // top-level weights must be empty; weights belong to the child models.
+    let json = format!(
+        r#"{{
+            "version": "0.6.0",
+            "architecture": "Sequential",
+            "config": {{"models": [{}, {}]}},
+            "weights": [1.0],
+            "sample_rate": 48000
+        }}"#,
+        make_linear_child_json(&[1.0], 1),
+        make_linear_child_json(&[1.0], 1)
+    );
+    assert_eq!(
+        sequential_topology_error(&json),
+        crate::common::diagnostics::NamErrorCode::SequentialTopLevelWeightsNotEmpty
+    );
+
+    // A nested Sequential child carries the same invariant at its own level:
+    // the outer weights stay empty while the nested chain root declares a
+    // non-empty weights array.
+    let nested_root = make_nested_sequential_json(1);
+    let nested_failing_level = nested_root.replacen("\"weights\": [],", "\"weights\": [0.5],", 1);
+    let json = make_sequential_root_json(&nested_failing_level);
+    assert_eq!(
+        sequential_topology_error(&json),
+        crate::common::diagnostics::NamErrorCode::SequentialTopLevelWeightsNotEmpty,
+        "nested level must enforce its own top-level weights invariant"
+    );
+}
+
+#[test]
+fn test_sequential_rejects_legacy_bare_child_configs() {
+    // Mirrors test_sequential.cpp:259 test_sequential_rejects_legacy_bare_child_configs:
+    // bare legacy configs (no envelope) are rejected.
+    let json = make_sequential_root_json(
+        r#"{"receptive_field": 1, "bias": false}, {"receptive_field": 1, "bias": false}"#,
+    );
+    assert_eq!(
+        sequential_topology_error(&json),
+        crate::common::diagnostics::NamErrorCode::SequentialIncompleteChild
+    );
+}
+
+#[test]
+fn test_sequential_recursion_depth_budget() {
+    // Rust-only hardening mirrored by the upstream "+ profundidade excedida"
+    // acceptance: nesting up to MAX_SEQUENTIAL_DEPTH is accepted; one more
+    // level is rejected with SequentialRecursionDepthExceeded.
+    for depth in 1..=MAX_SEQUENTIAL_DEPTH {
+        let json = make_nested_sequential_json(depth);
+        let parsed = parse_nam_json(&json).expect("nested chain must parse");
+        let topo = get_sequential_topology(&parsed)
+            .expect("Sequential root")
+            .expect("valid within the depth budget");
+        assert_eq!(topo.max_depth_reached, depth, "depth {depth} within budget");
+    }
+
+    let json_over = make_nested_sequential_json(MAX_SEQUENTIAL_DEPTH + 1);
+    let parsed = parse_nam_json(&json_over).expect("nested chain must parse");
+    match get_sequential_topology(&parsed) {
+        Err(crate::common::diagnostics::NamErrorCode::SequentialRecursionDepthExceeded) => {}
+        other => panic!(
+            "depth {} must exceed the nesting budget, got: {other:?}",
+            MAX_SEQUENTIAL_DEPTH + 1
+        ),
+    }
+}
+
+#[test]
+fn test_sequential_rejects_children_count_exceeded() {
+    // Rust-only hardening: the total child budget (64) across the tree
+    // (root 1 nested Sequential + 64 leaves = 65) fails with
+    // SequentialChildrenExceedLimit before any child model allocation.
+    let leaves = (0..MAX_SEQUENTIAL_TOTAL_CHILDREN)
+        .map(|_| make_linear_child_json(&[1.0], 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let json = make_sequential_root_json(&make_sequential_root_json(&leaves));
+    let parsed = parse_nam_json(&json).expect("tree must parse");
+    match get_sequential_topology(&parsed) {
+        Err(crate::common::diagnostics::NamErrorCode::SequentialChildrenExceedLimit) => {}
+        other => panic!("65 total children must exceed the tree budget, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_sequential_models_serde_budget() {
+    // Parse-time guard: a per-level `models` array over the tree budget is
+    // rejected with the typed error before the topology scan runs.
+    let children = (0..MAX_SEQUENTIAL_TOTAL_CHILDREN + 1)
+        .map(|_| make_linear_child_json(&[1.0], 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let json = make_sequential_root_json(&children);
+    let err = parse_nam_json(&json).expect_err("65 children must breach the parse budget");
+    match &err {
+        JsonError::SequentialChildrenExceedLimit { got, max } => {
+            assert_eq!(
+                (*got, *max),
+                (
+                    MAX_SEQUENTIAL_TOTAL_CHILDREN + 1,
+                    MAX_SEQUENTIAL_TOTAL_CHILDREN
+                )
+            );
+        }
+        other => panic!("expected SequentialChildrenExceedLimit, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_sequential_dispatch_rejects_empty_models() {
+    // The dispatcher recognizes "Sequential" case-sensitively: typed codes
+    // surface through the standard anyhow pipeline exactly like the Linear
+    // builder's codes. An empty `config.models` rejects fail-closed with
+    // SequentialEmptyModels before any child allocation.
+    let direct_code = |err: &anyhow::Error| -> crate::common::diagnostics::NamErrorCode {
+        match err.downcast_ref::<crate::common::diagnostics::NamErrorCode>() {
+            Some(code) => *code,
+            None => panic!("expected a typed NamErrorCode, got: {err}"),
+        }
+    };
+
+    // Rejected at topology level: typed codes flow through the dispatcher.
+    let json_empty = make_sequential_root_json("");
+    let parsed = parse_nam_json(&json_empty).expect("parse");
+    let err = match crate::loader::dispatcher::build_model(&parsed) {
+        Ok(_) => panic!("empty models must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        direct_code(&err),
+        crate::common::diagnostics::NamErrorCode::SequentialEmptyModels,
+        "got: {err}"
+    );
+}
+
+#[test]
+fn test_sequential_dispatch_builds_valid_chain() {
+    // The chain engine is registered: a validated topology builds into a
+    // `Sequential` static variant with the DEC-01-resolved rate applied and
+    // the prewarm sum of its stages, and it processes audio fail-free.
+    let canonical = make_sequential_root_json(&format!(
+        "{}, {}",
+        make_linear_child_json(&[0.5], 1),
+        make_linear_child_json(&[-2.0], 1)
+    ));
+    let parsed = parse_nam_json(&canonical).expect("parse");
+    let mut model = crate::loader::dispatcher::build_model(&parsed)
+        .expect("sequential chain engine is registered; a validated chain builds");
+    assert!(
+        model.class_label().starts_with("Sequential"),
+        "chain must classify as Sequential, got: {}",
+        model.class_label()
+    );
+    assert_eq!(model.in_channels(), 1);
+    assert_eq!(model.num_output_channels(), 1);
+    assert_eq!(
+        model.prewarm_samples(),
+        0,
+        "two RF=1 Linear stages stabilize in zero samples"
+    );
+    model.set_max_buffer_size(64).expect("scratch negotiation");
+    model.reset(48000, 64).expect("reset");
+    let input = vec![0.1f32; 64];
+    let mut output = vec![0.0f32; 64];
+    model.process(&input, &mut output);
+    for sample in &output {
+        assert!(sample.is_finite(), "chain output must stay finite");
+    }
+}
+
+#[test]
+fn test_sequential_fixture_loads_and_processes() {
+    // Full pipeline over the committed deterministic fixture: the committed
+    // chain loads, classifies, and processes audio blocks fail-free.
+    let mut models_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    models_dir.push("tests/fixtures/models");
+    let path = models_dir.join("sequential_linear_chain.nam");
+    if !path.exists() {
+        eprintln!(
+            "[STATUS] SKIP_CAPABILITY reason=\"fixture_not_found:sequential_linear_chain.nam\""
+        );
+        eprintln!(
+            "Generate fixtures by running: python3 tests/fixtures/generate_namcore_v060_fixtures.py"
+        );
+        return;
+    }
+    let bytes = std::fs::read(&path).expect("read fixture");
+    let sys = crate::common::diagnostics::SystemSnapshot::capture();
+    let result = crate::loader::load_and_build_model_from_bytes_named(
+        &bytes,
+        "sequential_linear_chain.nam",
+        &sys,
+        false,
+        crate::loader::LoadOptions::default(),
+    );
+    let mut pair = match result {
+        Ok(pair) => pair,
+        Err(other) => panic!("committed sequenced chain must load, got: {other}"),
+    };
+    let model = pair.model_l.as_mut().expect("mono load yields model_l");
+    assert!(
+        model.class_label().starts_with("Sequential"),
+        "fixture must classify as Sequential, got: {}",
+        model.class_label()
+    );
+    assert_eq!(model.in_channels(), 1);
+    assert_eq!(model.num_output_channels(), 1);
+    model.reset(48000, 64).expect("reset");
+    let input = vec![0.05f32; 64];
+    let mut output = vec![0.0f32; 64];
+    model.process(&input, &mut output);
+    for sample in &output {
+        assert!(
+            sample.is_finite(),
+            "chain output must stay finite: {sample}"
+        );
+    }
+}
+
+/// Builds a Linear child envelope with explicit channel geometry and declared
+/// sample rate (the generator's `make_linear_nam` json shape: identity
+/// kernels, `bias: true` terms appended after the kernel weights, `sample_rate`
+/// omitted when unknown — C++ `-1.0` marker is equivalent per DEC-01).
+fn make_linear_child_value(in_ch: usize, out_ch: usize, sample_rate: f64) -> serde_json::Value {
+    let rf = 1usize;
+    let kernels = if in_ch == out_ch {
+        1
+    } else {
+        in_ch.max(out_ch)
+    };
+    let bias_count = if in_ch == out_ch { 1 } else { out_ch };
+    let mut weights: Vec<f64> = vec![1.0; rf * kernels];
+    weights.extend(std::iter::repeat_n(0.5f64, bias_count));
+    let mut model = serde_json::json!({
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+            "receptive_field": rf,
+            "bias": true,
+        },
+        "weights": weights,
+        "metadata": {},
+    });
+    if in_ch != 1 || out_ch != 1 {
+        model["config"]["in_channels"] = in_ch.into();
+        model["config"]["out_channels"] = out_ch.into();
+    }
+    if sample_rate > 0.0 {
+        model["sample_rate"] = sample_rate.into();
+    }
+    model
+}
+
+/// like [make_sequential_root_json] with an arbitrary root sample rate
+/// (`<= 0.0` = the `-1.0` unknown marker).
+fn make_sequential_root_json_rates(models_csv: &str, root_sample_rate: f64) -> String {
+    format!(
+        r#"{{
+            "version": "0.6.0",
+            "architecture": "Sequential",
+            "metadata": {{}},
+            "config": {{"models": [{models_csv}]}},
+            "weights": [],
+            "sample_rate": {root_sample_rate}
+        }}"#
+    )
+}
+
+/// Serializes an inline child list into a root json body.
+fn make_sequential_root_json_values(
+    children: &[serde_json::Value],
+    root_sample_rate: f64,
+) -> String {
+    let children_csv = children
+        .iter()
+        .map(|child| child.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    make_sequential_root_json_rates(&children_csv, root_sample_rate)
+}
+
+#[test]
+fn test_sequential_rejects_child_channel_mismatch() {
+    // Mirrors test_sequential.cpp:284 test_sequential_rejects_channel_mismatch:
+    // stage 0 (1->2) feeding stage 1 (1->1) breaks `out(0) == in(1)` and
+    // rejects with SequentialChannelMismatch at build time.
+    let json = make_sequential_root_json_values(
+        &[
+            make_linear_child_value(1, 2, -1.0),
+            make_linear_child_value(1, 1, -1.0),
+        ],
+        -1.0,
+    );
+    let parsed = parse_nam_json(&json).expect("parse");
+    let err = crate::loader::dispatcher::build_model(&parsed)
+        .err()
+        .expect("channel link mismatch must reject");
+    match err.downcast_ref::<crate::common::diagnostics::NamErrorCode>() {
+        Some(crate::common::diagnostics::NamErrorCode::SequentialChannelMismatch) => {}
+        other => panic!("expected SequentialChannelMismatch, got {other:?}"),
+    }
+
+    // Mirrored geometry (mono stage feeding a 2-input stage): out(0) = 1
+    // versus in(1) = 2 breaks the same link (C++ L291 reverse case).
+    let json = make_sequential_root_json_values(
+        &[
+            make_linear_child_value(1, 1, -1.0),
+            make_linear_child_value(2, 1, -1.0),
+        ],
+        -1.0,
+    );
+    let parsed = parse_nam_json(&json).expect("parse");
+    let err = crate::loader::dispatcher::build_model(&parsed)
+        .err()
+        .expect("channel link mismatch must reject");
+    match err.downcast_ref::<crate::common::diagnostics::NamErrorCode>() {
+        Some(crate::common::diagnostics::NamErrorCode::SequentialChannelMismatch) => {}
+        other => panic!("expected SequentialChannelMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_sequential_rejects_sample_rate_mismatch() {
+    // Mirrors test_sequential.cpp:268: two children declaring conflicting
+    // rates (48000 versus 44100; root unspecified) reject with
+    // SequentialSampleRateMismatch (DEC-01).
+    let json = make_sequential_root_json_values(
+        &[
+            make_linear_child_value(1, 1, 48000.0),
+            make_linear_child_value(1, 1, 44100.0),
+        ],
+        -1.0,
+    );
+    let parsed = parse_nam_json(&json).expect("parse");
+    let err = crate::loader::dispatcher::build_model(&parsed)
+        .err()
+        .expect("child rate conflict must reject");
+    match err.downcast_ref::<crate::common::diagnostics::NamErrorCode>() {
+        Some(crate::common::diagnostics::NamErrorCode::SequentialSampleRateMismatch) => {}
+        other => panic!("expected SequentialSampleRateMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_sequential_rejects_top_level_sample_rate_mismatch() {
+    // Mirrors test_sequential.cpp:276: the root declares 44100 while the
+    // children declare 48000 — the top-vs-child conflict rejects with
+    // SequentialSampleRateMismatch (DEC-01).
+    let json = make_sequential_root_json_values(
+        &[
+            make_linear_child_value(1, 1, 48000.0),
+            make_linear_child_value(1, 1, 48000.0),
+        ],
+        44100.0,
+    );
+    let parsed = parse_nam_json(&json).expect("parse");
+    let err = crate::loader::dispatcher::build_model(&parsed)
+        .err()
+        .expect("top-vs-child rate conflict must reject");
+    match err.downcast_ref::<crate::common::diagnostics::NamErrorCode>() {
+        Some(crate::common::diagnostics::NamErrorCode::SequentialSampleRateMismatch) => {}
+        other => panic!("expected SequentialSampleRateMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_sequential_fixture_dec01_parametrized() {
+    // DEC-01 load-level acceptance over the committed generator fixtures:
+    // homogeneous/mixed-unknown chains load; the conflicting one fails
+    // closed; the multichannel and nested chains load through the full
+    // recursive builder.
+    let mut models_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    models_dir.push("tests/fixtures/models");
+    let cases: [(&str, bool); 5] = [
+        ("sequential_sr_homogeneous.nam", true),
+        ("sequential_sr_mixed_unknown.nam", true),
+        ("sequential_sr_conflict.nam", false),
+        ("sequential_multichannel.nam", true),
+        ("sequential_nested.nam", true),
+    ];
+    let sys = crate::common::diagnostics::SystemSnapshot::capture();
+    for (fixture, expect_load) in cases {
+        let path = models_dir.join(fixture);
+        if !path.exists() {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"fixture_not_found:{fixture}\"");
+            eprintln!(
+                "Generate fixtures by running: python3 tests/fixtures/generate_namcore_v060_fixtures.py"
+            );
+            continue;
+        }
+        let bytes = std::fs::read(&path).expect("read fixture");
+        let result = crate::loader::load_and_build_model_from_bytes_named(
+            &bytes,
+            fixture,
+            &sys,
+            false,
+            crate::loader::LoadOptions::default(),
+        );
+        match (result, expect_load) {
+            (Ok(_), true) => {}
+            (Err(crate::loader::LoadError::ModelBuildFailed(detail)), false) => {
+                assert!(
+                    detail.contains("E1309 SEQUENTIAL_SAMPLE_RATE_MISMATCH"),
+                    "{fixture} must report the resolved-rate rejection, got: {detail}"
+                );
+            }
+            (Err(other), expect_load) => {
+                panic!(
+                    "[{fixture}] unexpected load failure: {other} (expected a load: {expect_load})"
+                )
+            }
+            (Ok(_), false) => panic!("[{fixture}] conflicting chain must fail closed"),
+        }
+    }
 }

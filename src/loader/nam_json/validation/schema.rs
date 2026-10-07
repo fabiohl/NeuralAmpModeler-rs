@@ -11,9 +11,10 @@ use serde::{Deserialize, Deserializer};
 
 use super::super::error::JsonError;
 use super::record_last_typed_parse_error;
+use super::semantic::MAX_SEQUENTIAL_TOTAL_CHILDREN;
 
 /// Maximum number of floats in the `weights` array (MAX_MODEL_BYTES / 4).
-const MAX_WEIGHTS: usize = (256 * 1024 * 1024 / 4) as usize; // 64 Mi floats
+pub(crate) const MAX_WEIGHTS: usize = (256 * 1024 * 1024 / 4) as usize; // 64 Mi floats
 
 /// Maximum number of layers across any architecture at parse time.
 /// Universal OOM guard applied immediately after JSON deserialization.
@@ -407,6 +408,66 @@ impl<'de> serde::de::Visitor<'de> for SubmodelsOptionVisitor {
     }
 }
 
+/// Custom deserializer for `config.models: Option<Vec<serde_json::Value>>`
+/// (Sequential architecture) that enforces the per-level child-count cap.
+/// The aggregate tree budget (total children and total weights across nested
+/// `Sequential` descendants) is enforced by the topology scan
+/// (`topology/sequential.rs`) with checked arithmetic.
+pub(crate) fn deserialize_models<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<serde_json::Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_option(ModelsOptionVisitor)
+}
+
+struct ModelsOptionVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ModelsOptionVisitor {
+    type Value = Option<Vec<serde_json::Value>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an optional array of sequential child models")
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(None)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(None)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let arr: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+
+        if arr.len() > MAX_SEQUENTIAL_TOTAL_CHILDREN {
+            record_last_typed_parse_error(JsonError::SequentialChildrenExceedLimit {
+                got: arr.len(),
+                max: MAX_SEQUENTIAL_TOTAL_CHILDREN,
+            });
+            return Err(serde::de::Error::custom(
+                JsonError::SequentialChildrenExceedLimit {
+                    got: arr.len(),
+                    max: MAX_SEQUENTIAL_TOTAL_CHILDREN,
+                },
+            ));
+        }
+
+        Ok(Some(arr))
+    }
+}
+
 /// Custom deserializer for `sample_rate: Option<f32>`.
 ///
 /// RFC 7.1: `sample_rate = -1.0` is the NAMcore C++ sentinel for "unknown"
@@ -471,4 +532,103 @@ where
     }
 
     deserializer.deserialize_option(SampleRateOptionVisitor)
+}
+
+/// Validates the top-level or child envelope of a `.nam` model JSON representation.
+///
+/// Ensures that:
+/// - The value is a JSON object.
+/// - Required fields `version`, `architecture`, `config`, and `weights` are present and non-null.
+/// - `version` is a JSON string.
+/// - `architecture` is a JSON string.
+/// - `config` is a JSON object.
+/// - `weights` is a JSON array.
+///
+/// This validation is reusable for both top-level model files and child model
+/// definitions in `Sequential` containers (NC-3). Error messages never leak
+/// local file system paths.
+pub fn validate_envelope(value: &serde_json::Value) -> Result<(), JsonError> {
+    let Some(obj) = value.as_object() else {
+        return Err(JsonError::InvalidEnvelope {
+            reason: "model envelope must be a JSON object".to_string(),
+        });
+    };
+
+    match obj.get("version") {
+        None => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "missing required field 'version'".to_string(),
+            });
+        }
+        Some(serde_json::Value::Null) => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'version' cannot be null".to_string(),
+            });
+        }
+        Some(v) if !v.is_string() => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'version' must be a JSON string".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    match obj.get("architecture") {
+        None => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "missing required field 'architecture'".to_string(),
+            });
+        }
+        Some(serde_json::Value::Null) => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'architecture' cannot be null".to_string(),
+            });
+        }
+        Some(v) if !v.is_string() => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'architecture' must be a JSON string".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    match obj.get("config") {
+        None => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "missing required field 'config'".to_string(),
+            });
+        }
+        Some(serde_json::Value::Null) => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'config' cannot be null".to_string(),
+            });
+        }
+        Some(v) if !v.is_object() => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'config' must be a JSON object".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    match obj.get("weights") {
+        None => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "missing required field 'weights'".to_string(),
+            });
+        }
+        Some(serde_json::Value::Null) => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'weights' cannot be null".to_string(),
+            });
+        }
+        Some(v) if !v.is_array() => {
+            return Err(JsonError::InvalidEnvelope {
+                reason: "field 'weights' must be a JSON array".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    Ok(())
 }

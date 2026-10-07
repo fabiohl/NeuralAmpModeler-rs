@@ -151,6 +151,9 @@ pub fn v2_multi_sr_expected_rates(model_filename: &str) -> Vec<u32> {
         | "wavenet_a2_full.nam" | "wavenet_a2_lite.nam"
         | "wavenet_official.nam" | "lstm.nam" | "lstm_official.nam"
         | "wavenet_condition_dsp.nam" | "wavenet_condition_lstm.nam"
+        // Declared-rate Sequential/LSTM chain — the C++ render rejects
+        // non-48k inputs (DEC-02), so only 48k is a live-contract rate.
+        | "sequential_double_lstm.nam"
         | "convnet_test.nam" | "convnet_nobn.nam" | "convnet_relu.nam" | "convnet_silu.nam"
         | "wavenet_dyn_free.nam" | "lstm_dyn_test.nam"
         | "a2_dynamic_gated_ch8.nam" | "a2_dynamic_blended_ch3.nam"
@@ -314,6 +317,9 @@ pub static FIXTURE_CATALOG: FixtureCatalog = FixtureCatalog {
         FixtureEntry { name: "slimmable_wavenet.nam",      origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::NAMCORE_F32, description: "Slimmable single-net WaveNet — inference-only; no multi-size NAMCore parity claim" },
         FixtureEntry { name: "wavenet_a2_max.nam",         origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::KNOWN_GAP, description: "WaveNet A2 Max — KB-A2-MAX known bug (prod×C++ ~0.23 dB; fail-closed TR1.1; §4.4.3)" },
         FixtureEntry { name: "a2_dynamic_gated_ch8.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2 Dynamic Gated CH=8" },
+        FixtureEntry { name: "sequential_linear2.nam",     origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "Sequential Linear 1x1 -> Linear 1x1, all rates unknown (DEC-01, multi-SR sweep)" },
+        FixtureEntry { name: "sequential_linear_wavenet.nam", origin: FixtureOrigin::DistributedCore,    execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "Sequential Linear -> WaveNet CH=4, all rates unknown (DEC-01, multi-SR sweep)" },
+        FixtureEntry { name: "sequential_double_lstm.nam", origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "Sequential LSTM 1x8 -> LSTM 1x8 @ 48k — single-prewarm transient instrument (48000 = 750 * 64)" },
         FixtureEntry { name: "a2_dynamic_blended_ch3.nam", origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2 Dynamic Blended CH=3" },
         FixtureEntry { name: "wavenet_a2_film_lite.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2-FiLM-Lite CH=3" },
         FixtureEntry { name: "wavenet_a2_film_full.nam",   origin: FixtureOrigin::DistributedCore,       execution_profile: ExecutionProfile::RequiredLocal,  applicable_oracles: ApplicableOracle::BOTH, description: "A2-FiLM-Full CH=8" },

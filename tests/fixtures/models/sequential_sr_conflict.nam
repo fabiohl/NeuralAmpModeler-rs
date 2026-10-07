@@ -1,0 +1,54 @@
+{
+  "version": "0.6.0",
+  "architecture": "Sequential",
+  "config": {
+    "models": [
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          0.043384,
+          0.049762,
+          -0.143324,
+          -0.028635,
+          0.060253
+        ],
+        "metadata": {
+          "name": "Stage 44.1k",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        },
+        "sample_rate": 44100.0
+      },
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          0.114691,
+          -0.14002,
+          0.119828,
+          -0.081632,
+          -0.075606
+        ],
+        "metadata": {
+          "name": "Stage 48k 2",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        },
+        "sample_rate": 48000.0
+      }
+    ]
+  },
+  "weights": [],
+  "metadata": {
+    "name": "Sequential Conflicting SR",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

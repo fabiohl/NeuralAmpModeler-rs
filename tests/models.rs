@@ -10,10 +10,31 @@ mod common;
 
 use common::alloc_audit::CountingAllocator;
 
-#[cfg_attr(not(feature = "heap-audit"), global_allocator)]
-// Global allocator fixture retained across all feature configurations.
-#[allow(dead_code, clippy::allow_attributes)]
+// Global allocator fixture unconditionally installed so the `heap-audit`
+// configuration (diagnostic-bundle audit, `tests-long` phase 3) actually
+// counts through `TrackingGuard`: the previous
+// `cfg_attr(not(feature = "heap-audit"), ...)` gating stripped the attribute
+// exactly in the audited configuration and left the System allocator blind.
+#[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
+
+/// Affirmative regression guard for the `heap-audit` phases (see the twin
+/// smoke test in `tests/rt_constraints.rs`): proves the counting allocator is
+/// installed and counting in every feature configuration.
+#[test]
+fn audit_harness_counts_allocations() {
+    let count = {
+        let _guard = common::alloc_audit::TrackingGuard::new();
+        let probe: Vec<Box<usize>> = (0..8).map(Box::new).collect();
+        std::hint::black_box(&probe);
+        common::alloc_audit::get_alloc_count()
+    };
+    assert!(
+        count >= 8,
+        "audit harness must count allocations (got {count}) — \
+         counting allocator is not installed; zero-alloc audits would be vacuous"
+    );
+}
 
 // ── Model Loading & Parsing Submodules ────────────────────────────────────────
 #[path = "models/a2_loader.rs"]
@@ -106,6 +127,8 @@ mod thp_coherence;
 mod threshold_calibration;
 #[path = "models/wavenet_dual_frame_guard.rs"]
 mod wavenet_dual_frame_guard;
+#[path = "models/wavenet_head_config_parity.rs"]
+mod wavenet_head_config_parity;
 #[path = "models/wavenet_lite_block_invariance.rs"]
 mod wavenet_lite_block_invariance;
 #[path = "models/wavenet_prewarm_edge.rs"]

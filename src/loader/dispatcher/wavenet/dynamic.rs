@@ -30,8 +30,8 @@ use crate::math::common::AlignedVec;
 use crate::models::a2::activations::ActivationType;
 use crate::models::wavenet::post_stack_head::parse_activation;
 use crate::models::wavenet::{
-    DenseLayerDyn, PostStackHead, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn, WaveNetLayerDyn,
-    WaveNetLayerState, WaveNetModelDyn,
+    DenseLayerDyn, HeadRechannelDyn, PostStackHead, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn,
+    WaveNetLayerDyn, WaveNetLayerState, WaveNetModelDyn,
 };
 use log::info;
 
@@ -61,6 +61,8 @@ fn build_wavenet_array_dyn(
     ch: usize,
     k: usize,
     head: usize,
+    head_k: usize,
+    head_dilation: usize,
     dilations: &[usize],
     has_head_bias: bool,
     alloc_num: &mut usize,
@@ -90,10 +92,31 @@ fn build_wavenet_array_dyn(
         *alloc_num += 1;
     }
 
-    let head_rechannel =
-        layout::read_dense_head_weights_typed::<DenseLayerDyn>(cursor, ch, head, has_head_bias)?;
+    let (head_rechannel, head_rf) = if head_k == 1 && head_dilation == 1 {
+        let dense = layout::read_dense_head_weights_typed::<DenseLayerDyn>(
+            cursor,
+            ch,
+            head,
+            has_head_bias,
+        )?;
+        (HeadRechannelDyn::Dense(dense), 0)
+    } else {
+        let conv = layout::read_conv1d_weights_typed::<crate::models::wavenet::Conv1dDyn>(
+            cursor,
+            ch,
+            head,
+            head_k,
+            head_dilation,
+            has_head_bias,
+        )?;
+        let rf = (head_k - 1) * head_dilation;
+        let state = WaveNetLayerState::new(ch, rf, *alloc_num)?;
+        *alloc_num += 1;
+        (HeadRechannelDyn::Conv1d { conv, state }, rf)
+    };
 
-    let receptive_field_size: usize = dilations.iter().map(|&d| (k - 1) * d).sum();
+    let receptive_field_size: usize =
+        dilations.iter().map(|&d| (k - 1) * d).sum::<usize>() + head_rf;
 
     let block_size = ch;
     let block_buffer = AlignedVec::new(block_size * WAVENET_MAX_NUM_FRAMES, 0.0)?;
@@ -202,6 +225,8 @@ fn build_wavenet_dynamic_inner(
     debug_assert_eq!(geom.channels.len(), geom.num_arrays);
     debug_assert_eq!(geom.head_sizes.len(), geom.num_arrays);
     debug_assert_eq!(geom.head_biases.len(), geom.num_arrays);
+    debug_assert_eq!(geom.head_kernel_sizes.len(), geom.num_arrays);
+    debug_assert_eq!(geom.head_dilations.len(), geom.num_arrays);
     debug_assert_eq!(geom.dilations.len(), geom.num_arrays);
     debug_assert_eq!(geom.kernel_sizes.len(), geom.num_arrays);
 
@@ -212,6 +237,8 @@ fn build_wavenet_dynamic_inner(
         let in_ch = if i == 0 { 1 } else { geom.channels[i - 1] };
         let array_ch = geom.channels[i];
         let array_head = geom.head_sizes[i];
+        let array_head_k = geom.head_kernel_sizes.get(i).copied().unwrap_or(1);
+        let array_head_dilation = geom.head_dilations.get(i).copied().unwrap_or(1);
         let dilations = &geom.dilations[i];
         let has_head_bias = *geom.head_biases.get(i).unwrap_or(&false);
         let array_k = if geom.kernel_sizes[i] > 0 {
@@ -236,6 +263,8 @@ fn build_wavenet_dynamic_inner(
             array_ch,
             array_k,
             array_head,
+            array_head_k,
+            array_head_dilation,
             dilations,
             has_head_bias,
             &mut alloc_num,

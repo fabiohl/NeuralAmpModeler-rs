@@ -580,6 +580,8 @@ fn ensure_namcore_render_exit_codes() {
     let script = render_script();
     let bash = bash_abs();
     let bin_dir = fake_toolchain_bin(&work);
+    let test_logs_dir = work.join("logs");
+    fs::create_dir_all(&test_logs_dir).unwrap();
 
     // rc 2: cmake absent from PATH. Keep only `dirname` (via symlink) so the
     // script still resolves its own location.
@@ -596,6 +598,7 @@ fn ensure_namcore_render_exit_codes() {
     let out = Command::new(&bash)
         .arg(&script)
         .env("PATH", &emptybin)
+        .env("NAM_RENDER_LOGS_DIR", &test_logs_dir)
         .output()
         .expect("render script must run");
     assert_eq!(
@@ -610,6 +613,7 @@ fn ensure_namcore_render_exit_codes() {
         .arg(&script)
         .env("PATH", path_with_prefix(&bin_dir))
         .env("CXX", work.join("missing-cxx"))
+        .env("NAM_RENDER_LOGS_DIR", &test_logs_dir)
         .output()
         .expect("render script must run");
     assert_eq!(
@@ -625,6 +629,7 @@ fn ensure_namcore_render_exit_codes() {
         .env("PATH", path_with_prefix(&bin_dir))
         .env("CXX", "fake-cxx")
         .env("NAM_CORE_DIR", work.join("nonexistent-core"))
+        .env("NAM_RENDER_LOGS_DIR", &test_logs_dir)
         .output()
         .expect("render script must run");
     assert_eq!(
@@ -648,6 +653,8 @@ fn ensure_namcore_render_fake_toolchain_flows() {
     fs::create_dir_all(&core).unwrap();
     let rb = work.join("rb");
     let call_log = work.join("cmake-calls.log");
+    let test_logs_dir = work.join("logs");
+    fs::create_dir_all(&test_logs_dir).unwrap();
 
     let run = |extra: &[(&str, &str)]| {
         let mut cmd = Command::new(&bash);
@@ -656,6 +663,7 @@ fn ensure_namcore_render_fake_toolchain_flows() {
             .env("CXX", "fake-cxx")
             .env("NAM_CORE_DIR", &core)
             .env("NAM_RENDER_BUILD_DIR", &rb)
+            .env("NAM_RENDER_LOGS_DIR", &test_logs_dir)
             .env("CMAKE_CALL_LOG", &call_log)
             .env_remove("NAM_RENDER_FORCE")
             .env_remove("NAM_RENDER_BUILD_TYPE");
@@ -692,6 +700,14 @@ fn ensure_namcore_render_fake_toolchain_flows() {
     );
     let cold = cmake_calls();
     assert_eq!(cold, 2, "cold build invokes cmake twice");
+    assert!(
+        test_logs_dir.join("cmake-configure.log").exists(),
+        "cold build must emit cmake-configure.log in isolated NAM_RENDER_LOGS_DIR"
+    );
+    assert!(
+        test_logs_dir.join("cmake-build.log").exists(),
+        "cold build must emit cmake-build.log in isolated NAM_RENDER_LOGS_DIR"
+    );
 
     // Warm run: fingerprint matches -> no cmake invocation at all.
     let out = run(&[]);

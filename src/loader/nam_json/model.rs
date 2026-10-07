@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::validation::{
-    MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, deserialize_sample_rate,
-    deserialize_submodels, deserialize_training, deserialize_weights,
+    MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, deserialize_models,
+    deserialize_sample_rate, deserialize_submodels, deserialize_training, deserialize_weights,
 };
 
 /// Slimmable configuration extracted from per-layer metadata.
@@ -88,6 +88,8 @@ struct NamLayerConfigHelper {
     input_size: Option<usize>,
     condition_size: Option<usize>,
     head_size: Option<usize>,
+    head_kernel_size: Option<usize>,
+    head_dilation: Option<usize>,
     channels: Option<usize>,
     kernel_size: Option<usize>,
     kernel_sizes: Option<Vec<usize>>,
@@ -97,6 +99,7 @@ struct NamLayerConfigHelper {
     head_bias: Option<bool>,
     bottleneck: Option<usize>,
     slimmable: Option<SlimmableConfig>,
+    head: Option<serde_json::Value>,
 }
 
 /// The structural configuration of a single layer of the network (whether WaveNet or LSTM).
@@ -108,6 +111,10 @@ pub struct NamLayerConfig {
     pub condition_size: Option<usize>,
     /// Optional: Output tensor size (head size).
     pub head_size: Option<usize>,
+    /// Optional: Head convolution kernel size (default 1).
+    pub head_kernel_size: Option<usize>,
+    /// Optional: Head convolution dilation (default 1).
+    pub head_dilation: Option<usize>,
     /// Optional: Number of internal channels (e.g. 16 or 24).
     pub channels: Option<usize>,
     /// Optional: Convolutional kernel size.
@@ -173,17 +180,76 @@ impl<'de> Deserialize<'de> for NamLayerConfig {
             }
         };
 
+        // Prefer nested "head" (matches trainer export). Legacy .nam uses head_size + head_bias (implicit kernel 1).
+        let (head_size, head_bias, head_kernel_size, head_dilation) = match helper.head {
+            Some(serde_json::Value::Object(ref obj)) => {
+                let out_ch = if let Some(v) = obj.get("out_channels") {
+                    let ch_i = v.as_i64().ok_or_else(|| {
+                        serde::de::Error::custom("head.out_channels must be an integer")
+                    })?;
+                    if ch_i < 0 {
+                        return Err(serde::de::Error::custom("head.out_channels must be >= 0"));
+                    }
+                    Some(ch_i as usize)
+                } else {
+                    helper.head_size
+                };
+
+                let k = if let Some(v) = obj.get("kernel_size") {
+                    let k_i = v.as_i64().ok_or_else(|| {
+                        serde::de::Error::custom("head.kernel_size must be an integer")
+                    })?;
+                    if k_i < 1 {
+                        return Err(serde::de::Error::custom("head.kernel_size must be >= 1"));
+                    }
+                    Some(k_i as usize)
+                } else {
+                    helper.head_kernel_size
+                };
+
+                let dil = if let Some(v) = obj.get("head_dilation") {
+                    let d_i = v.as_i64().ok_or_else(|| {
+                        serde::de::Error::custom("head_dilation must be an integer")
+                    })?;
+                    if d_i < 1 {
+                        return Err(serde::de::Error::custom("head_dilation must be >= 1"));
+                    }
+                    Some(d_i as usize)
+                } else {
+                    helper.head_dilation
+                };
+
+                let bias = obj
+                    .get("bias")
+                    .and_then(|v| v.as_bool())
+                    .or(helper.head_bias);
+
+                (out_ch, bias, k, dil)
+            }
+            Some(serde_json::Value::Null) | None => (
+                helper.head_size,
+                helper.head_bias,
+                helper.head_kernel_size,
+                helper.head_dilation,
+            ),
+            Some(_) => {
+                return Err(serde::de::Error::custom("'head' must be a JSON object"));
+            }
+        };
+
         Ok(NamLayerConfig {
             input_size: helper.input_size,
             condition_size: helper.condition_size,
-            head_size: helper.head_size,
+            head_size,
+            head_kernel_size,
+            head_dilation,
             channels: helper.channels,
             kernel_size: helper.kernel_size,
             kernel_sizes: helper.kernel_sizes,
             dilations: helper.dilations,
             activation,
             gated: helper.gated,
-            head_bias: helper.head_bias,
+            head_bias,
             bottleneck: helper.bottleneck,
             slimmable: helper.slimmable,
             layer_raw: Some(raw_value),
@@ -287,6 +353,19 @@ pub struct NamConfig {
         deserialize_with = "deserialize_submodels"
     )]
     pub submodels: Option<Vec<serde_json::Value>>,
+    /// Child model envelopes for the Sequential architecture (`config.models`).
+    ///
+    /// Each entry is a complete, self-contained `.nam` JSON object
+    /// (`version`, `architecture`, `config`, `weights`); nested `Sequential`
+    /// chains are allowed subject to the depth/child budgets validated by the
+    /// topology scan (`topology/sequential.rs`). The count cap applied here
+    /// bounds hostile per-level arrays before the topology scan runs.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_models"
+    )]
+    pub models: Option<Vec<serde_json::Value>>,
     /// Nested condition DSP sub-model (raw JSON).
     ///
     /// Self-contained `.nam` model with its own `version`, `architecture`,

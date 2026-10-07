@@ -4,8 +4,8 @@
 use super::*;
 use crate::math::common::AlignedVec;
 use crate::models::wavenet::{
-    Conv1dDyn, DenseLayerDyn, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn, WaveNetLayerDyn,
-    WaveNetLayerState, WaveNetModelDyn,
+    Conv1dDyn, DenseLayerDyn, HeadRechannelDyn, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn,
+    WaveNetLayerDyn, WaveNetLayerState, WaveNetModelDyn,
 };
 
 const TEST_KERNEL: usize = 3;
@@ -98,7 +98,7 @@ fn make_wavenet_array(
         layers,
         states,
         rechannel,
-        head_rechannel,
+        head_rechannel: HeadRechannelDyn::Dense(head_rechannel),
         array_outputs: AlignedVec::new(ch * WAVENET_MAX_NUM_FRAMES, 0.0)
             .expect("allocation should succeed for test-sized buffers"),
         head_accum: AlignedVec::new(ch * WAVENET_MAX_NUM_FRAMES, 0.0)
@@ -360,8 +360,13 @@ fn test_slice_wavenet_array_dims() {
     assert_eq!(sliced.states.len(), 3);
     assert_eq!(sliced.rechannel.in_ch, 1);
     assert_eq!(sliced.rechannel.out_ch, CH_SLIM);
-    assert_eq!(sliced.head_rechannel.in_ch, CH_SLIM);
-    assert_eq!(sliced.head_rechannel.out_ch, 4);
+    match &sliced.head_rechannel {
+        HeadRechannelDyn::Dense(dense) => {
+            assert_eq!(dense.in_ch, CH_SLIM);
+            assert_eq!(dense.out_ch, 4);
+        }
+        HeadRechannelDyn::Conv1d { .. } => panic!("expected Dense head_rechannel"),
+    }
     assert_eq!(sliced.array_outputs.len(), CH_SLIM * WAVENET_MAX_NUM_FRAMES);
     assert_eq!(sliced.head_accum.len(), CH_SLIM * WAVENET_MAX_NUM_FRAMES);
     assert_eq!(sliced.block_size, CH_SLIM);
@@ -387,8 +392,14 @@ fn test_slice_wavenet_array_preserves_weights() {
         );
     }
 
-    let head_expected = slice_dense(&array.head_rechannel, CH_SLIM, 4).unwrap();
-    assert_eq!(&*sliced.head_rechannel.weights, &*head_expected.weights);
+    let (head_weights, head_expected) = match (&array.head_rechannel, &sliced.head_rechannel) {
+        (HeadRechannelDyn::Dense(orig), HeadRechannelDyn::Dense(slic)) => {
+            let exp = slice_dense(orig, CH_SLIM, 4).unwrap();
+            (&slic.weights, exp.weights)
+        }
+        _ => panic!("expected Dense head_rechannel"),
+    };
+    assert_eq!(&**head_weights, &*head_expected);
 }
 
 // =====================================================================

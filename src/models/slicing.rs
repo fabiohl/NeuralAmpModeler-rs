@@ -11,8 +11,8 @@ use crate::common::spsc::GcItem;
 use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
 use crate::math::common::AlignedVec;
 use crate::models::wavenet::{
-    Conv1dDyn, DenseLayerDyn, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn, WaveNetLayerDyn,
-    WaveNetLayerState, WaveNetModelDyn,
+    Conv1dDyn, DenseLayerDyn, HeadRechannelDyn, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn,
+    WaveNetLayerDyn, WaveNetLayerState, WaveNetModelDyn,
 };
 use crate::models::{NamModel, StaticModel};
 
@@ -284,13 +284,33 @@ pub fn slice_wavenet_array(
         *alloc_num += 1;
     }
 
-    let head_rechannel = slice_dense(&array.head_rechannel, new_ch, array.head)?;
+    let (head_rechannel, head_rf) = match &array.head_rechannel {
+        HeadRechannelDyn::Dense(dense) => (
+            HeadRechannelDyn::Dense(slice_dense(dense, new_ch, array.head)?),
+            0,
+        ),
+        HeadRechannelDyn::Conv1d { conv, state } => {
+            let sliced_conv = slice_conv1d(conv, new_ch, array.head)?;
+            let rf = state.receptive_field_size;
+            let new_state = WaveNetLayerState::new(new_ch, rf, *alloc_num)
+                .map_err(|_| SlicingError::Allocation(NamErrorCode::OutOfMemory))?;
+            *alloc_num += 1;
+            (
+                HeadRechannelDyn::Conv1d {
+                    conv: sliced_conv,
+                    state: new_state,
+                },
+                rf,
+            )
+        }
+    };
 
     let receptive_field_size: usize = array
         .layers
         .iter()
         .map(|l| (l.conv1d.kernel - 1) * l.conv1d.dilation)
-        .sum();
+        .sum::<usize>()
+        + head_rf;
 
     let block_size = new_ch;
     let num_layers = layers.len();

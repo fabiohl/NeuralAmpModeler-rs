@@ -1,0 +1,51 @@
+{
+  "version": "0.6.0",
+  "architecture": "Sequential",
+  "config": {
+    "models": [
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          0.019866,
+          0.000988,
+          0.115707,
+          0.131139,
+          0.045045
+        ],
+        "metadata": {
+          "name": "Stage A (1->1, no rate)",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        }
+      },
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          -0.023217,
+          0.039702,
+          0.12397,
+          -0.014251,
+          -0.117362
+        ],
+        "metadata": {
+          "name": "Stage B (1->1, no rate)",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        }
+      }
+    ]
+  },
+  "weights": [],
+  "metadata": {
+    "name": "Sequential Linear x2 (rates unknown)",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  }
+}

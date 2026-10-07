@@ -1,0 +1,68 @@
+{
+  "version": "0.6.0",
+  "architecture": "Sequential",
+  "config": {
+    "models": [
+      {
+        "version": "0.6.0",
+        "architecture": "Linear",
+        "config": {
+          "receptive_field": 4,
+          "bias": true
+        },
+        "weights": [
+          -0.132057,
+          -0.014157,
+          0.127351,
+          -0.099919,
+          0.102937
+        ],
+        "metadata": {
+          "name": "Stage A (1->1)",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        },
+        "sample_rate": 48000.0
+      },
+      {
+        "version": "0.6.0",
+        "architecture": "Sequential",
+        "config": {
+          "models": [
+            {
+              "version": "0.6.0",
+              "architecture": "Linear",
+              "config": {
+                "receptive_field": 4,
+                "bias": true
+              },
+              "weights": [
+                -0.146672,
+                0.005107,
+                -0.049644,
+                0.059251,
+                0.044944
+              ],
+              "metadata": {
+                "name": "Stage B (1->1)",
+                "modeled_by": "generate_namcore_v060_fixtures.py"
+              },
+              "sample_rate": 48000.0
+            }
+          ]
+        },
+        "weights": [],
+        "metadata": {
+          "name": "Inner Sequential",
+          "modeled_by": "generate_namcore_v060_fixtures.py"
+        },
+        "sample_rate": 48000.0
+      }
+    ]
+  },
+  "weights": [],
+  "metadata": {
+    "name": "Nested Sequential",
+    "modeled_by": "generate_namcore_v060_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

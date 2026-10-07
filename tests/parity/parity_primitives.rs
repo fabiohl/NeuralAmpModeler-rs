@@ -164,3 +164,192 @@ fn test_mr_stft_parity_with_python() {
         "  test_mr_stft_parity_with_python: expected {expected_loss:.6e}, got {computed:.6e} ✓"
     );
 }
+
+/// Tests that NAMCore v0.6.0 synthetic fixtures exist, have valid JSON structure,
+/// and exhibit expected topologies and weight sizing.
+#[test]
+fn test_namcore_v060_synthetic_fixtures_deterministic() {
+    let mut models_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    models_dir.push("tests/fixtures/models");
+
+    let required_fixtures = [
+        ("linear_1x2.nam", "Linear"),
+        ("linear_1x2_nobias.nam", "Linear"),
+        ("linear_2x1.nam", "Linear"),
+        ("linear_2x1_nobias.nam", "Linear"),
+        ("linear_2x2_shared.nam", "Linear"),
+        ("linear_2x2_shared_nobias.nam", "Linear"),
+        ("linear_1x2_fft.nam", "Linear"),
+        ("linear_1x2_fft_nobias.nam", "Linear"),
+        ("linear_2x1_fft.nam", "Linear"),
+        ("linear_2x1_fft_nobias.nam", "Linear"),
+        ("linear_2x2_shared_fft.nam", "Linear"),
+        ("linear_2x2_shared_fft_nobias.nam", "Linear"),
+        ("sequential_linear_chain.nam", "Sequential"),
+        ("sequential_multichannel.nam", "Sequential"),
+        ("sequential_nested.nam", "Sequential"),
+        ("sequential_sr_homogeneous.nam", "Sequential"),
+        ("sequential_sr_mixed_unknown.nam", "Sequential"),
+        ("sequential_sr_conflict.nam", "Sequential"),
+        ("sequential_linear2.nam", "Sequential"),
+        ("sequential_linear_wavenet.nam", "Sequential"),
+        ("sequential_double_lstm.nam", "Sequential"),
+        ("wavenet_head_dilation.nam", "WaveNet"),
+    ];
+
+    for (filename, expected_arch) in required_fixtures {
+        let path = models_dir.join(filename);
+        if !path.exists() {
+            eprintln!("[STATUS] SKIP_CAPABILITY reason=\"fixture_not_found:{filename}\"");
+            eprintln!(
+                "Generate fixtures by running: python3 tests/fixtures/generate_namcore_v060_fixtures.py"
+            );
+            continue;
+        }
+
+        let content =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {filename}: {e}"));
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse JSON in {filename}: {e}"));
+
+        assert_eq!(
+            json["version"].as_str(),
+            Some("0.6.0"),
+            "{filename} should specify version 0.6.0"
+        );
+        assert_eq!(
+            json["architecture"].as_str(),
+            Some(expected_arch),
+            "{filename} architecture mismatch"
+        );
+
+        match filename {
+            "linear_1x2.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(1));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(18));
+            }
+            "linear_1x2_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(1));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(16));
+            }
+            "linear_2x1.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(1));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(17));
+            }
+            "linear_2x1_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(1));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(16));
+            }
+            "linear_2x2_shared.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(9));
+            }
+            "linear_2x2_shared_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(8));
+            }
+            "linear_1x2_fft.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(1));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(4098));
+            }
+            "linear_1x2_fft_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(1));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(4096));
+            }
+            "linear_2x1_fft.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(1));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(4097));
+            }
+            "linear_2x1_fft_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(1));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(4096));
+            }
+            "linear_2x2_shared_fft.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(2049));
+            }
+            "linear_2x2_shared_fft_nobias.nam" => {
+                assert_eq!(json["config"]["in_channels"].as_u64(), Some(2));
+                assert_eq!(json["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(json["weights"].as_array().map(|a| a.len()), Some(2048));
+            }
+            "sequential_linear_chain.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models.len(), 2);
+            }
+            "sequential_multichannel.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models[0]["config"]["out_channels"].as_u64(), Some(2));
+                assert_eq!(sub_models[1]["config"]["in_channels"].as_u64(), Some(2));
+            }
+            "sequential_nested.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models[1]["architecture"].as_str(), Some("Sequential"));
+            }
+            "sequential_sr_homogeneous.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models[0]["sample_rate"].as_f64(), Some(48000.0));
+                assert_eq!(sub_models[1]["sample_rate"].as_f64(), Some(48000.0));
+            }
+            "sequential_sr_mixed_unknown.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert!(sub_models[0].get("sample_rate").is_none());
+                assert_eq!(sub_models[1]["sample_rate"].as_f64(), Some(48000.0));
+            }
+            "sequential_sr_conflict.nam" => {
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models[0]["sample_rate"].as_f64(), Some(44100.0));
+                assert_eq!(sub_models[1]["sample_rate"].as_f64(), Some(48000.0));
+            }
+            "sequential_linear2.nam" => {
+                // DEC-01 all-unknown branch: the root and both children omit
+                // `sample_rate` (the multi-rate parity sweep instrument).
+                assert!(json.get("sample_rate").is_none());
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models.len(), 2);
+                assert!(sub_models[0].get("sample_rate").is_none());
+                assert!(sub_models[1].get("sample_rate").is_none());
+            }
+            "sequential_linear_wavenet.nam" => {
+                assert!(json.get("sample_rate").is_none());
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models.len(), 2);
+                assert_eq!(sub_models[0]["architecture"].as_str(), Some("Linear"));
+                assert_eq!(sub_models[1]["architecture"].as_str(), Some("WaveNet"));
+                assert!(sub_models[0].get("sample_rate").is_none());
+                assert!(sub_models[1].get("sample_rate").is_none());
+            }
+            "sequential_double_lstm.nam" => {
+                // Declared-rate chain: children stabilize 0.5 * 48000 = 24000
+                // samples each, so the chain sums to 48000 = 750 * 64 — the
+                // C++ whole-chunk prewarm feed has no chunk overshoot.
+                assert_eq!(json["sample_rate"].as_f64(), Some(48000.0));
+                let sub_models = json["config"]["models"].as_array().expect("models");
+                assert_eq!(sub_models.len(), 2);
+                for sub in sub_models {
+                    assert_eq!(sub["architecture"].as_str(), Some("LSTM"));
+                    assert_eq!(sub["sample_rate"].as_f64(), Some(48000.0));
+                    assert_eq!(sub["config"]["num_layers"].as_u64(), Some(1));
+                    assert_eq!(sub["config"]["hidden_size"].as_u64(), Some(8));
+                }
+            }
+            "wavenet_head_dilation.nam" => {
+                let head = &json["config"]["layers"][0]["head"];
+                assert_eq!(head["kernel_size"].as_u64(), Some(3));
+                assert_eq!(head["head_dilation"].as_u64(), Some(2));
+            }
+            _ => {}
+        }
+    }
+}

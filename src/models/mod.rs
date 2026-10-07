@@ -18,6 +18,10 @@ pub mod linear;
 pub mod linear_fft;
 /// LSTM recurrent architecture: configurable layers × hidden units, gate-level SIMD acceleration.
 pub mod lstm;
+/// Sequential chain composition: serial pipeline of independent DSP stages
+/// with validated channel links, resolved expected sample rate (DEC-01), and
+/// single-pass chain-wide stabilization.
+pub mod sequential;
 /// Slimmable channel-slicing dispatcher for WaveNet quality-tier transitions.
 pub mod slimmable;
 /// WaveNet dilated convolution architecture: Standard, Lite, Feather, Nano, Dynamic variants.
@@ -122,6 +126,105 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// model.process(&input, &mut output);
     /// ```
     fn process(&mut self, input: &[f32], output: &mut [f32]);
+
+    /// Processes a block of multichannel audio samples via raw channel pointers.
+    ///
+    /// # Safety
+    /// - `input` must point to an array of at least `in_channels` valid non-null `*const f32` pointers,
+    ///   each pointing to at least `num_frames` samples.
+    /// - `output` must point to an array of at least `out_channels` valid non-null `*mut f32` pointers,
+    ///   each pointing to at least `num_frames` writable samples.
+    /// - In-place processing (`input == output` or aliasing between input and output channels) is
+    ///   fully supported and guaranteed not to corrupt data.
+    #[inline(always)]
+    unsafe fn process_raw(
+        &mut self,
+        input: *const *const f32,
+        output: *const *mut f32,
+        num_frames: usize,
+    ) {
+        // SAFETY: Caller guarantees input pointer array has at least one valid buffer of num_frames.
+        let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
+        // SAFETY: Caller guarantees output pointer array has at least one valid mutable buffer of num_frames.
+        let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
+        self.process(in_slice, out_slice);
+    }
+
+    /// Safe multichannel processing helper taking slices of channel slices.
+    ///
+    /// # Real-Time Safety Note
+    /// Zero heap allocation when channel count <= 16. For higher channel counts,
+    /// prefer [`process_raw`](Self::process_raw).
+    fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
+        let in_ch = input.len();
+        let out_ch = output.len();
+        if in_ch == 0 || out_ch == 0 {
+            return;
+        }
+        let num_frames = input.iter().map(|s| s.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        for out in output.iter() {
+            assert!(out.len() >= num_frames);
+        }
+        if in_ch <= 16 && out_ch <= 16 {
+            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+            for i in 0..in_ch {
+                in_ptrs[i] = input[i].as_ptr();
+            }
+            for i in 0..out_ch {
+                out_ptrs[i] = output[i].as_mut_ptr();
+            }
+            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        } else {
+            let in_ptrs: Vec<*const f32> = input.iter().map(|s| s.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> = output.iter_mut().map(|s| s.as_mut_ptr()).collect();
+            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        }
+    }
+
+    /// Safe multichannel in-place processing helper.
+    ///
+    /// # Real-Time Safety Note
+    /// Zero heap allocation when channel count <= 16. For higher channel counts,
+    /// prefer [`process_raw`](Self::process_raw).
+    fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
+        let ch = buffers.len();
+        if ch == 0 {
+            return;
+        }
+        let num_frames = buffers.iter().map(|s| s.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        if ch <= 16 {
+            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
+            for i in 0..ch {
+                in_ptrs[i] = buffers[i].as_ptr();
+                out_ptrs[i] = buffers[i].as_mut_ptr();
+            }
+            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        } else {
+            let in_ptrs: Vec<*const f32> = buffers.iter().map(|s| s.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> = buffers.iter_mut().map(|s| s.as_mut_ptr()).collect();
+            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            unsafe {
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            }
+        }
+    }
 
     /// Primes internal state buffers by processing zeroed input off-RT.
     ///
@@ -354,6 +457,9 @@ pub enum StaticModel {
     Linear(Box<linear::LinearModel>),
     /// ConvNet feed-forward model (F4).
     ConvNet(Box<convnet::ConvNetModel>),
+    /// Sequential — serial chain of independent DSP stages (validated
+    /// channel links, resolved sample rate, single-pass chain stabilization).
+    Sequential(Box<sequential::SequentialModel>),
 }
 
 impl sealed::Sealed for StaticModel {}

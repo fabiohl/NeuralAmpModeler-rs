@@ -268,7 +268,7 @@ fn build_dynamic_model(ch: usize, k: usize, head: usize) -> WaveNetModelDyn {
         states: states_1,
         effective_layers: num_layers_1,
         rechannel: make_dense_dyn(1, ch, false),
-        head_rechannel: make_dense_dyn(ch, head, false),
+        head_rechannel: make_dense_dyn(ch, head, false).into(),
         array_outputs: AlignedVec::from_vec(vec![0.0; ch * WAVENET_MAX_NUM_FRAMES])
             .expect("allocation should succeed for test-sized buffers"),
         head_accum: AlignedVec::from_vec(vec![0.0; ch * WAVENET_MAX_NUM_FRAMES])
@@ -309,7 +309,7 @@ fn build_dynamic_model(ch: usize, k: usize, head: usize) -> WaveNetModelDyn {
         states: states_2,
         effective_layers: num_layers_2,
         rechannel: make_dense_dyn(ch, head, false),
-        head_rechannel: make_dense_dyn(head, 1, true),
+        head_rechannel: make_dense_dyn(head, 1, true).into(),
         array_outputs: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])
             .expect("allocation should succeed for test-sized buffers"),
         head_accum: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])

@@ -355,6 +355,8 @@ fn test_anti_drift_engine_models_match_architecture_families() {
 
             StaticModel::Linear(_) => ArchitectureFamily::Linear,
 
+            StaticModel::Sequential(_) => ArchitectureFamily::Sequential,
+
             StaticModel::Container(_) => {
                 // SlimmableContainer bundles WaveNet / A2 models
                 ArchitectureFamily::WaveNetA2

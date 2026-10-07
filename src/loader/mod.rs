@@ -23,14 +23,19 @@ pub mod namb;
 pub mod namb_encoder;
 /// Weight matrix transposition utilities for interleaved memory layouts.
 pub mod transpose;
+/// WAV impulse response parser and Linear model converter.
+pub mod wav;
 
 pub use build::{
     load_and_build_model, load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
+    load_and_build_wav_ir, load_and_build_wav_ir_from_bytes,
+    load_and_build_wav_ir_from_bytes_named,
 };
 pub use error::LoadError;
 pub use loaded_model_pair::*;
 pub use nam_json::JsonError;
 pub use namb::NambError;
+pub use wav::{WavError, WavIrData, parse_wav_ir, wav_ir_to_model_data};
 
 #[cfg(test)]
 #[path = "loader_malformed_test.rs"]

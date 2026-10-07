@@ -198,7 +198,7 @@ pub use dense::DenseLayer;
 pub use dense_dyn::DenseLayerDyn;
 pub use layer::WaveNetLayer;
 pub use layer_array::WaveNetLayerArray;
-pub use layer_array_dyn::WaveNetLayerArrayDyn;
+pub use layer_array_dyn::{HeadRechannelDyn, WaveNetLayerArrayDyn};
 pub use layer_dyn::WaveNetLayerDyn;
 pub use model::WaveNetModel;
 pub use model_dyn::WaveNetModelDyn;

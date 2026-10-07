@@ -427,7 +427,7 @@ fn oracle_a2_forward_internal(
                             }
                         }
                     }
-                    if use_blending && lw.film[6].is_some() {
+                    if lw.film[6].is_some() {
                         let film = lw.film[6].as_mut().unwrap();
                         film.apply(&mut l1x1_contrib, condition);
                     }

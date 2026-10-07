@@ -123,6 +123,15 @@ The following dynamic models and container architectures serve as permanent regr
 
 A 32-tap resampler variant was evaluated and rejected: while saving $\sim 40\text{ ns}$ per 64-sample block ($< 0.1\%$ total pipeline execution time), 32 taps caused passband SNR to collapse from $\ge 100\text{ dB}$ down to $\sim 24\text{ dB}$. The 64-tap configuration is a permanent invariant.
 
+### 4.1 Linear & FIR CabSim Rate Adaptation Policy (Decision DEC-02)
+
+Upstream NAMcore v0.6.0 introduced impulse response tap resampling via cubic Hermite interpolation (`_resample_impulse_response`, `linear.cpp:46–72`) during `Linear::Reset()`. NeuralAmpModeler-rs intentionally diverges (**DEC-02 (a)**) by retaining stored impulse response taps untouched and delegating sample-rate conversion to the streaming audio pipeline via `NamResampler`:
+
+- **Measured Fidelity Gap:**
+  - Resampling an IR from 44.1 kHz to 48.0 kHz using cubic Hermite interpolation limits time-domain convolution SNR to **$33.34\text{ dB}$** (256 taps, $\text{ESR} = 4.63 \times 10^{-4}$) and **$31.34\text{ dB}$** (2048 taps, $\text{ESR} = 7.34 \times 10^{-4}$).
+  - Frequency response analysis reveals up to **$32.1\text{ dB}$** peak deviation near Nyquist due to cubic interpolation roll-off and imaging artifacts.
+- **Engine Invariant:** Audio-domain polyphase sinc filtering preserves $>105\text{ dB}$ stopband rejection and $<0.05\text{ dB}$ passband ripple, protecting the acoustic signature of captured cabinets and analog preamplifiers. See [`cpp_parity_map.md §6.2.2`](cpp_parity_map.md#622-decision-dec-02--sample-rate-adaptation-of-linear-models).
+
 **Implementation:** [`src/dsp/resampler/mod.rs`](../src/dsp/resampler/mod.rs), [`src/dsp/sinc_kernel.rs`](../src/dsp/sinc_kernel.rs).
 
 ---

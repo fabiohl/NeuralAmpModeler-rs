@@ -65,7 +65,8 @@ impl StaticModel {
             Self::WavenetFeather(m) => m.set_effective_layers(n),
             Self::WavenetNano(m) => m.set_effective_layers(n),
             Self::WavenetDyn(m) => m.set_effective_layers(n),
-            // LSTM, A2, Container, and Linear: no-op — reduction handled at pipeline level
+            // LSTM, A2, Container, Linear, and Sequential: no-op — reduction
+            // handled at pipeline level (stage-local for Sequential chains)
             Self::WavenetA2Cascade(_)
             | Self::WavenetA2Full(_)
             | Self::WavenetA2Lite(_)
@@ -84,6 +85,7 @@ impl StaticModel {
             | Self::LstmDyn(_) => {}
             Self::Linear(_) => {}
             Self::ConvNet(_) => {}
+            Self::Sequential(_) => {}
         }
     }
 
@@ -171,6 +173,9 @@ impl StaticModel {
             | Self::Lstm1x40(_) => 1,
             Self::Linear(_) => 0,
             Self::ConvNet(m) => m.blocks.len(),
+            // Adaptive layer reduction is stage-local; it does not descend
+            // into a chain container.
+            Self::Sequential(_) => 0,
         }
     }
 
@@ -217,6 +222,7 @@ impl StaticModel {
             Self::LstmDyn(m) => format!("LSTM {}x{}", m.layers.len(), m.head_weights_f32.len()),
             Self::Linear(_) => "Linear".into(),
             Self::ConvNet(m) => format!("ConvNet (CH={})", m.in_channels()),
+            Self::Sequential(m) => format!("Sequential ({} stages)", m.num_stages()),
         }
     }
 
@@ -297,8 +303,11 @@ impl StaticModel {
             Self::Lstm1x24(_) | Self::Lstm2x24(_) => 24,
             Self::Lstm1x40(_) => 40,
             Self::LstmDyn(m) => m.head_weights_f32.len(),
-            Self::Linear(_) => 1,
+            Self::Linear(m) => m.in_channels.max(m.out_channels),
             Self::ConvNet(m) => m.in_channels(),
+            // Chain width: widest stage plane (in–out extremes, mirroring
+            // the Linear variant's max convention).
+            Self::Sequential(m) => m.in_channels().max(m.out_channels()),
         }
     }
 
@@ -306,6 +315,7 @@ impl StaticModel {
     ///
     /// - WaveNet variants and LSTM: always 1 (single sample per frame).
     /// - ConvNet: `in_channels` from configuration (defaults to 1).
+    /// - Linear: `in_channels` from configuration.
     /// - Container: delegates to active sub-model.
     pub fn in_channels(&self) -> usize {
         match self {
@@ -330,8 +340,10 @@ impl StaticModel {
             | Self::Lstm1x40(_)
             | Self::Lstm2x24(_)
             | Self::LstmDyn(_) => 1,
-            Self::Linear(_) => 1,
+            Self::Linear(m) => m.in_channels,
             Self::ConvNet(m) => m.in_channels(),
+            // Chain input channels = first stage input channels.
+            Self::Sequential(m) => m.in_channels(),
         }
     }
 
@@ -350,7 +362,7 @@ impl StaticModel {
     /// Mirrors C++ `DSP::NumOutputChannels()`:
     /// - WaveNet A1 without post-stack head: last array's `head_size` (`wave_net_output_channels`)
     /// - LSTM: `hidden_size`
-    /// - Linear: 1
+    /// - Linear: `out_channels`
     /// - Container: delegates to active sub-model
     pub fn num_output_channels(&self) -> usize {
         match self {
@@ -371,13 +383,42 @@ impl StaticModel {
             | Self::Lstm1x24(_)
             | Self::Lstm2x24(_)
             | Self::Lstm1x40(_)
-            | Self::LstmDyn(_)
-            | Self::Linear(_) => 1,
+            | Self::LstmDyn(_) => 1,
+            Self::Linear(m) => m.out_channels,
             Self::WavenetA2Cascade(m) => m.arrays.last().map(|a| a.head_size).unwrap_or(1),
             Self::WavenetDyn(m) => m.arrays.last().map(|a| a.head).unwrap_or(0),
             Self::Container(c) => c.active().num_output_channels(),
             Self::ConvNet(m) => m.out_channels(),
+            // Chain output channels = last stage output channels.
+            Self::Sequential(m) => m.out_channels(),
         }
+    }
+
+    /// Processes a block of multichannel audio samples via raw channel pointers.
+    ///
+    /// # Safety
+    /// See [`NamModel::process_raw`].
+    #[inline(always)]
+    pub unsafe fn process_raw(
+        &mut self,
+        input: *const *const f32,
+        output: *const *mut f32,
+        num_frames: usize,
+    ) {
+        // SAFETY: Caller guarantees input and output pointer arrays are valid for num_frames elements.
+        unsafe { <Self as NamModel>::process_raw(self, input, output, num_frames) }
+    }
+
+    /// Safe multichannel processing helper taking slices of channel slices.
+    #[inline(always)]
+    pub fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
+        <Self as NamModel>::process_multichannel(self, input, output)
+    }
+
+    /// Safe multichannel in-place processing helper.
+    #[inline(always)]
+    pub fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
+        <Self as NamModel>::process_multichannel_in_place(self, buffers)
     }
 
     /// Returns a raw pointer to the underlying model as a trait object `*const dyn NamModel`.
@@ -406,6 +447,7 @@ impl StaticModel {
             Self::Container(m) => Box::as_ptr(m) as *const dyn NamModel,
             Self::Linear(m) => Box::as_ptr(m) as *const dyn NamModel,
             Self::ConvNet(m) => Box::as_ptr(m) as *const dyn NamModel,
+            Self::Sequential(m) => Box::as_ptr(m) as *const dyn NamModel,
         }
     }
 

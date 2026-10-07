@@ -624,17 +624,28 @@ fn test_wavenet_a2_dyn_bug_b2_l1x1_gating_modes() {
     let out_blended_with = run_model(GatingMode::Blended, true);
     let out_blended_without = run_model(GatingMode::Blended, false);
 
-    // Assert that FiLM has no effect in GatingMode::None and GatingMode::Gated
-    assert_eq!(
-        out_none_with, out_none_without,
-        "None mode: expected output to be identical regardless of FiLM layer activity"
+    // GAP-04 / NC-4.4: In C++ (model.cpp:285-291, test_layer1x1.cpp:342-354),
+    // layer1x1_post_film is independent of gating mode and must be applied in
+    // None, Gated, and Blended whenever layer1x1 and layer1x1_post_film are active.
+    assert!(
+        (out_none_with - 60.0).abs() < 1e-4,
+        "None mode with FiLM: expected 60.0, got {}",
+        out_none_with
     );
-    assert_eq!(
-        out_gated_with, out_gated_without,
-        "Gated mode: expected output to be identical regardless of FiLM layer activity"
+    assert!(
+        (out_none_without - 11.5).abs() < 1e-4,
+        "None mode without FiLM: expected 11.5, got {}",
+        out_none_without
     );
 
-    // Assert that FiLM is applied in GatingMode::Blended (changing the output from 11.5 to 60.0)
+    // Gated mode: with FiLM and without FiLM must be different (FiLM changes the output)
+    assert!(
+        (out_gated_with - out_gated_without).abs() > 1.0,
+        "Gated mode: FiLM must move output! with={}, without={}",
+        out_gated_with,
+        out_gated_without
+    );
+
     assert!(
         (out_blended_with - 60.0).abs() < 1e-4,
         "Blended mode with FiLM: expected 60.0, got {}",

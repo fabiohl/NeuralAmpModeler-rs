@@ -306,3 +306,130 @@ fn test_reject_oversized_condition_size_a1_free_geometry() {
         "error should describe the condition_size cap, got: {msg}"
     );
 }
+
+// ── Envelope Schema Validation Negative Tests (NC-1.1 / GAP-06) ──
+
+#[test]
+fn test_reject_envelope_missing_weights() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {}
+    }"#;
+    let t0 = Instant::now();
+    let res = crate::loader::nam_json::parse_nam_json(json);
+    let elapsed = t0.elapsed();
+
+    assert!(
+        matches!(
+            res,
+            Err(crate::loader::nam_json::JsonError::InvalidEnvelope { ref reason }) if reason.contains("weights")
+        ),
+        "expected InvalidEnvelope missing weights, got: {res:?}"
+    );
+    assert!(
+        elapsed.as_micros() < 50_000,
+        "rejection took {} µs, expected < 50 ms",
+        elapsed.as_micros()
+    );
+}
+
+#[test]
+fn test_reject_envelope_non_object_root() {
+    let json = r#"["not", "an", "object"]"#;
+    let t0 = Instant::now();
+    let res = crate::loader::nam_json::parse_nam_json(json);
+    let elapsed = t0.elapsed();
+
+    assert!(
+        matches!(
+            res,
+            Err(crate::loader::nam_json::JsonError::InvalidEnvelope { ref reason }) if reason.contains("must be a JSON object")
+        ),
+        "expected InvalidEnvelope non-object root, got: {res:?}"
+    );
+    assert!(
+        elapsed.as_micros() < 50_000,
+        "rejection took {} µs, expected < 50 ms",
+        elapsed.as_micros()
+    );
+}
+
+#[test]
+fn test_reject_envelope_wrong_types_and_nulls() {
+    let cases = [
+        (
+            r#"{"version": null, "architecture": "WaveNet", "config": {}, "weights": []}"#,
+            "version",
+        ),
+        (
+            r#"{"version": 123, "architecture": "WaveNet", "config": {}, "weights": []}"#,
+            "version",
+        ),
+        (
+            r#"{"version": "0.5.4", "architecture": ["WaveNet"], "config": {}, "weights": []}"#,
+            "architecture",
+        ),
+        (
+            r#"{"version": "0.5.4", "architecture": "WaveNet", "config": "not_obj", "weights": []}"#,
+            "config",
+        ),
+        (
+            r#"{"version": "0.5.4", "architecture": "WaveNet", "config": {}, "weights": "not_arr"}"#,
+            "weights",
+        ),
+    ];
+
+    for (json, field) in cases {
+        let t0 = Instant::now();
+        let res = crate::loader::nam_json::parse_nam_json(json);
+        let elapsed = t0.elapsed();
+
+        assert!(
+            matches!(
+                res,
+                Err(crate::loader::nam_json::JsonError::InvalidEnvelope { ref reason }) if reason.contains(field)
+            ),
+            "expected InvalidEnvelope for field {field}, got: {res:?}"
+        );
+        assert!(
+            elapsed.as_micros() < 50_000,
+            "rejection took {} µs, expected < 50 ms",
+            elapsed.as_micros()
+        );
+    }
+}
+
+#[test]
+fn test_load_and_build_model_rejects_missing_envelope_keys() {
+    let temp_dir = std::env::temp_dir();
+    let test_file = temp_dir.join(format!("nam_invalid_envelope_{}.nam", std::process::id()));
+    let json = r#"{"version": "0.5.4", "architecture": "WaveNet", "config": {}}"#;
+    std::fs::write(&test_file, json).expect("failed to write test file");
+
+    let sys = crate::common::diagnostics::SystemSnapshot::capture();
+    let res = crate::loader::load_and_build_model(
+        &test_file,
+        &sys,
+        false,
+        crate::loader::LoadOptions::default(),
+    );
+    let _ = std::fs::remove_file(&test_file);
+
+    match res {
+        Err(crate::loader::LoadError::Json(
+            crate::loader::nam_json::JsonError::InvalidEnvelope { reason },
+        )) => {
+            assert!(
+                reason.contains("weights"),
+                "error message must mention weights, got: {reason}"
+            );
+            // Verify message does not leak local filesystem path
+            assert!(
+                !reason.contains(&test_file.to_string_lossy().into_owned()),
+                "reason must not leak file path"
+            );
+        }
+        other => panic!("expected LoadError::Json(InvalidEnvelope), got: {other:?}"),
+    }
+}

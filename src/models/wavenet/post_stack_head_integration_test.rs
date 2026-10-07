@@ -108,7 +108,8 @@ fn build_minimal_model_with_head() -> WaveNetModelDyn {
             bias: AlignedVec::new(head, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
-        },
+        }
+        .into(),
         array_outputs: AlignedVec::new(ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
             .expect("allocation should succeed for test-sized buffers"),
         head_accum: AlignedVec::new(ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -370,7 +371,7 @@ fn test_post_stack_head_multi_array_determinism() {
             states: vec![WaveNetLayerState::new(CH, RF, 0).expect("state")],
             effective_layers: 1,
             rechannel: make_dense(1, CH, false),
-            head_rechannel: make_dense(CH, HEAD, false),
+            head_rechannel: make_dense(CH, HEAD, false).into(),
             array_outputs: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
             head_accum: AlignedVec::new(CH * WAVENET_MAX_NUM_FRAMES, 0.0f32)
@@ -401,7 +402,7 @@ fn test_post_stack_head_multi_array_determinism() {
             states: vec![WaveNetLayerState::new(HEAD, RF, 0).expect("state")],
             effective_layers: 1,
             rechannel: make_dense(CH, HEAD, false),
-            head_rechannel: make_dense(HEAD, 1, true),
+            head_rechannel: make_dense(HEAD, 1, true).into(),
             array_outputs: AlignedVec::new(HEAD * WAVENET_MAX_NUM_FRAMES, 0.0f32)
                 .expect("allocation should succeed for test-sized buffers"),
             head_accum: AlignedVec::new(HEAD * WAVENET_MAX_NUM_FRAMES, 0.0f32)

@@ -267,7 +267,7 @@ pub unsafe fn layer_forward_ch3_block(
     l1x1_w: &[f32],  // [9] f32 col-major l1x1 weights (padded to [12]? no, use 3×3)
     l1x1_b: &[f32],  // [3] f32 l1x1 bias
     film: &mut FilmBlock<'_>,
-    use_blending: bool,
+    _use_blending: bool,
     layer_buffer: &[f32],
     frame_start: usize,
     num_frames: usize,
@@ -330,7 +330,7 @@ pub unsafe fn layer_forward_ch3_block(
     let has_mixin_post = mask & M_MIXIN_POST != 0;
     let has_act_pre = mask & M_ACT_PRE != 0;
     let has_act_post = mask & M_ACT_POST != 0;
-    let has_l1x1_post = (mask & M_L1X1_POST != 0) & use_blending;
+    let has_l1x1_post = mask & M_L1X1_POST != 0;
 
     // ── 1. Conv: frame-by-frame unrolled f32-native kernel ─────────────────
     // z_buf stores conv output: [num_frames][4] (CH=3 + 1 pad lane)

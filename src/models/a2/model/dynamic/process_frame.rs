@@ -496,7 +496,7 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
                 }
             }
         }
-        if let Some(ref mut film) = layer.layer1x1_post_film.as_mut().filter(|_| use_blending) {
+        if let Some(ref mut film) = layer.layer1x1_post_film.as_mut() {
             // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
             // layer's `cond_size`) and `l1x1_scratch[..channels]` is a valid in-bounds
             // sub-slice of length ≤ `channels`; both satisfy `film.process`'s

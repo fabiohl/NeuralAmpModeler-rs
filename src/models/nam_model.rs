@@ -76,6 +76,34 @@ impl NamModel for StaticModel {
             // `&mut [f32]` borrows already held by this function (see module docs).
             Self::Linear(m) => unsafe { m.process(input, output) },
             Self::ConvNet(m) => m.process(input, output),
+            Self::Sequential(m) => m.process(input, output),
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn process_raw(
+        &mut self,
+        input: *const *const f32,
+        output: *const *mut f32,
+        num_frames: usize,
+    ) {
+        match self {
+            Self::Linear(m) => {
+                // SAFETY: Caller guarantees input and output pointers are valid for num_frames elements.
+                unsafe { m.process_raw(input, output, num_frames) }
+            }
+            Self::Sequential(m) => {
+                // SAFETY: Caller guarantees input and output pointers are valid for num_frames elements
+                // over the chain's declared channel geometry.
+                unsafe { m.process_raw(input, output, num_frames) }
+            }
+            _ => {
+                // SAFETY: Caller guarantees input pointer array has at least one valid buffer of num_frames.
+                let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
+                // SAFETY: Caller guarantees output pointer array has at least one valid mutable buffer of num_frames.
+                let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
+                self.process(in_slice, out_slice);
+            }
         }
     }
 
@@ -120,6 +148,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm(num_samples),
             Self::Linear(m) => m.prewarm(num_samples),
             Self::ConvNet(m) => m.prewarm(),
+            Self::Sequential(m) => m.prewarm(num_samples),
         }
     }
 
@@ -152,6 +181,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm_reset(),
             Self::Linear(m) => m.prewarm_reset(),
             Self::ConvNet(m) => m.prewarm_reset(),
+            Self::Sequential(m) => m.prewarm_reset(),
         }
     }
 
@@ -183,6 +213,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm_step(samples),
             Self::Linear(m) => m.prewarm_step(samples),
             Self::ConvNet(m) => m.prewarm_step(samples),
+            Self::Sequential(m) => m.prewarm_step(samples),
         }
     }
 
@@ -213,6 +244,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm_complete(),
             Self::Linear(m) => m.prewarm_complete(),
             Self::ConvNet(m) => m.prewarm_complete(),
+            Self::Sequential(m) => m.prewarm_complete(),
         }
     }
 
@@ -245,6 +277,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm_on_reset(),
             Self::Linear(m) => m.prewarm_on_reset(),
             Self::ConvNet(m) => m.prewarm_on_reset(),
+            Self::Sequential(m) => m.prewarm_on_reset(),
         }
     }
 
@@ -277,6 +310,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.set_prewarm_on_reset(val),
             Self::Linear(m) => m.set_prewarm_on_reset(val),
             Self::ConvNet(m) => m.set_prewarm_on_reset(val),
+            Self::Sequential(m) => m.set_prewarm_on_reset(val),
         }
     }
 
@@ -305,6 +339,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.reset(sample_rate, max_buffer_size),
             Self::Linear(m) => NamModel::reset(m.as_mut(), sample_rate, max_buffer_size),
             Self::ConvNet(m) => NamModel::reset(m.as_mut(), sample_rate, max_buffer_size),
+            Self::Sequential(m) => NamModel::reset(m.as_mut(), sample_rate, max_buffer_size),
         }
     }
 
@@ -333,6 +368,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.set_max_buffer_size(max_buf),
             Self::Linear(m) => NamModel::set_max_buffer_size(m.as_mut(), max_buf),
             Self::ConvNet(m) => NamModel::set_max_buffer_size(m.as_mut(), max_buf),
+            Self::Sequential(m) => NamModel::set_max_buffer_size(m.as_mut(), max_buf),
         }
     }
 
@@ -361,6 +397,7 @@ impl NamModel for StaticModel {
             Self::LstmDyn(m) => m.prewarm_samples(),
             Self::Linear(m) => m.prewarm_samples(),
             Self::ConvNet(m) => m.prewarm_samples(),
+            Self::Sequential(m) => m.prewarm_samples(),
         }
     }
 
