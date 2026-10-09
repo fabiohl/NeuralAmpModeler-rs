@@ -87,11 +87,9 @@ done
 # AI NOTE: Due to the long runtime by design, AI agents MUST NOT execute this script directly.
 # Ask the human operator to run it and report the results if needed.
 #
-# Known bug KB-A2-MAX (`wavenet_a2_max.nam`, docs/cpp_parity_map.md §4.4.3):
-#   - NOT in the validated V2 golden catalog (src/testing/catalog.rs
-#     GOLDEN_GEN_CATALOG, in_v2_catalog=false) by design.
-#   - Public path is fail-closed; golden/live/paired tests stay #[ignore].
-#   - Do not add a2_max to long parity phases as a green gate until §4.4.3 reopening.
+# WaveNet A2 Max (`wavenet_a2_max.nam`):
+#   - Parity verified (Fase 3, 2026-10-08): prod×C++ SNR 135.90 dB (V1) / 135.97 dB (V2).
+#   - Former fail-closed guard retired. Registered in V2 catalog (src/testing/catalog.rs, Sr48kOnly).
 #   - Neighbor A2 Full/Lite + condition_dsp remain first-class long/quick gates.
 
 # ── Test-to-entry-point module mapping ──────────────────────────────────────
@@ -148,8 +146,9 @@ source "$(dirname "$0")/_lib.sh"
 # `--simulate` / `--dry-run` registers the full receipt structure (6 preflights
 # + 7 timed phases) as SIMULATED with tests_executed=0 in ~50ms, without
 # executing any test. Safe structural surface for AI/CI and for the workspace
-# bootstrap pre-registration. A simulated receipt NEVER passes strict mode:
-# SIMULATED is a declared gap, so `summary` derives COMPLETED_WITH_GAPS and
+# bootstrap pre-registration. A simulated receipt NEVER passes strict mode and
+# never prints a green verdict: `summary` derives an overall SIMULATED line with
+# NOT_RUN verdicts (FIDELITY / RT_DEADLINE / RT_JITTER / PERF_REGRESSION), and
 # `--strict-pre-release` exits 1.
 if [ "${SIMULATE:-0}" = "1" ]; then
     if [ "${STRICT_PRE_RELEASE:-0}" = "1" ]; then
@@ -680,8 +679,8 @@ run_proptests_parity_phase() {
     # Golden vectors v2 (multi-SR); v1 already covered by quick's Phase 2.
     # Filter MUST be a single libtest substring after `--`. Do not also pass
     # `golden_vectors` as a cargo TESTNAME: multiple filters are OR'd by libtest,
-    # which previously pulled in KB-A2-MAX ignored diagnostics
-    # (`test_golden_vectors_wavenet_a2_max`, H0/H5 meters) and failed Phase 2.
+    # which historically pulled in ad-hoc diagnostics
+    # (such as H0/H5 meters or uncalibrated sweeps) and failed Phase 2.
     # Match only multi-SR v2 goldens: test_golden_vectors_v2_*.
     timed_cargo_test "golden_vectors_v2" --release --no-fail-fast --test models \
         -- test_golden_vectors_v2_ --ignored --nocapture || status=1

@@ -20,7 +20,10 @@ pub const RT_STATUS_NEEDS_RESAMPLER_REBUILD: u64 = 1 << 0;
 pub const RT_STATUS_RESAMPLER_REBUILD_FAILED: u64 = 1 << 1;
 /// `true` if the DSP thread confirmed operation under `SCHED_FIFO`.
 pub const RT_STATUS_RT_IS_FIFO: u64 = 1 << 2;
-/// Flag indicating that saturation (clipping) occurred on the output audio.
+/// Flag indicating that a delivered sample exceeded full-scale (±1.0).
+/// With a steady gate the detection observes the post-gate (fused) signal;
+/// while the gate is fading it observes the pre-gate signal. A model with a
+/// large constant offset therefore flags truthfully at unity gain on silence.
 pub const RT_STATUS_HAS_CLIPPED: u64 = 1 << 3;
 /// Flag indicating that the current buffer is completely silent (Gate closed).
 pub const RT_STATUS_IS_SILENT: u64 = 1 << 4;

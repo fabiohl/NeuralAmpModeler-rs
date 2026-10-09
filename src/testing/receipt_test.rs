@@ -576,6 +576,120 @@ fn verdict_lines_preserve_pre_s5_mappings() {
 }
 
 #[test]
+fn simulated_receipt_never_prints_green_verdicts() {
+    // F-07: `--simulate` / `--dry-run` pre-registers every phase as SIMULATED
+    // with zero tests executed. The derived overall line must be SIMULATED
+    // and every verdict line must read NOT_RUN — an `OK`/`PASS` would be a
+    // vacuous green on a run that measured nothing.
+    let mk = |phase_id: &str| LongPhaseReceipt {
+        phase_id: phase_id.to_string(),
+        name: phase_id.to_string(),
+        status: LongPhaseStatus::Simulated,
+        duration_ms: 0,
+        tests_executed: 0,
+        gaps: vec!["simulated".to_string()],
+        timestamp: "t".to_string(),
+    };
+    let receipt = LongAuditReceipt {
+        phases: vec![
+            mk("preflight-render"),
+            mk("phase1"),
+            mk("phase5"),
+            mk("phase6"),
+        ],
+    };
+    assert!(receipt.is_simulated_only());
+    assert_eq!(receipt.summary_receipt().status, LongPhaseStatus::Simulated);
+    assert!(receipt.strict_verdict().is_err());
+
+    let lines = receipt.human_summary_lines();
+    assert!(lines.iter().any(|l| l == "OVERALL: SIMULATED"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "FIDELITY: NOT_RUN"), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l == "RT_DEADLINE: NOT_RUN"),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l == "RT_JITTER: NOT_RUN"), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l == "PERF_REGRESSION: NOT_RUN"),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.ends_with(": OK") || l.ends_with(": PASS")),
+        "simulated receipt must never print a green verdict: {lines:?}"
+    );
+
+    // A mixed receipt is not "simulated only": the SIMULATED phases stay
+    // declared gaps (COMPLETED_WITH_GAPS), and a simulated fidelity-class
+    // phase still suppresses the vacuous `FIDELITY: OK`.
+    let mixed = LongAuditReceipt {
+        phases: vec![
+            LongPhaseReceipt {
+                phase_id: "phase2".to_string(),
+                name: "Defense".to_string(),
+                status: LongPhaseStatus::Passed,
+                duration_ms: 10,
+                tests_executed: 3,
+                gaps: vec![],
+                timestamp: "t".to_string(),
+            },
+            mk("phase6"),
+        ],
+    };
+    assert!(!mixed.is_simulated_only());
+    assert_eq!(
+        mixed.summary_receipt().status,
+        LongPhaseStatus::CompletedWithGaps
+    );
+    assert_eq!(mixed.fidelity_verdict(), "OK");
+    assert_eq!(mixed.rt_jitter_verdict(), "NOT_RUN");
+}
+
+#[test]
+fn partial_simulated_receipt_never_prints_green_verdicts() {
+    // F-07 robustness: even an all-SIMULATED receipt that omits the
+    // performance/fidelity phases (e.g. only phase5) must report NOT_RUN on
+    // every verdict line — a missing phase is not a green verdict.
+    let only_phase5 = LongAuditReceipt {
+        phases: vec![mk_phase(
+            "phase5",
+            LongPhaseStatus::Simulated,
+            0,
+            &["simulated"],
+        )],
+    };
+    assert!(only_phase5.is_simulated_only());
+    assert_eq!(
+        only_phase5.summary_receipt().status,
+        LongPhaseStatus::Simulated
+    );
+    assert_eq!(only_phase5.fidelity_verdict(), "NOT_RUN");
+    assert_eq!(only_phase5.rt_deadline_verdict(), "NOT_RUN");
+    assert_eq!(only_phase5.rt_jitter_verdict(), "NOT_RUN");
+
+    let only_phase6 = LongAuditReceipt {
+        phases: vec![mk_phase(
+            "phase6",
+            LongPhaseStatus::Simulated,
+            0,
+            &["simulated"],
+        )],
+    };
+    assert_eq!(only_phase6.fidelity_verdict(), "NOT_RUN");
+    assert_eq!(only_phase6.rt_jitter_verdict(), "NOT_RUN");
+
+    let lines = only_phase5.human_summary_lines();
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.ends_with(": OK") || l.ends_with(": PASS")),
+        "partial simulated receipt must never print a green verdict: {lines:?}"
+    );
+}
+
+#[test]
 fn preflight_ids_are_canonical_and_roundtrip() {
     for id in PREFLIGHT_PHASE_IDS {
         assert!(is_preflight_id(id), "{id} must be a preflight id");
@@ -896,10 +1010,11 @@ fn gap_family_prefix_matching_survives_details() {
 }
 
 #[test]
-fn simulated_preregistration_derives_completed_with_gaps_and_rejects_strict() {
-    // T2.1 / F-03: `--simulate` pre-registers every phase as SIMULATED with
-    // zero executed tests. The summary must derive COMPLETED_WITH_GAPS (never
-    // PASSED) and `strict_verdict` must reject it fail-closed.
+fn simulated_preregistration_derives_simulated_and_rejects_strict() {
+    // T2.1 / F-03 + F-07: `--simulate` pre-registers every phase as
+    // SIMULATED with zero executed tests. The summary must derive SIMULATED
+    // (never PASSED, never a green verdict) and `strict_verdict` must reject
+    // it fail-closed.
     let phases = vec![
         mk_phase(
             "preflight-render",
@@ -912,7 +1027,7 @@ fn simulated_preregistration_derives_completed_with_gaps_and_rejects_strict() {
     ];
     let receipt = LongAuditReceipt { phases };
     let summary = receipt.summary_receipt();
-    assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
+    assert_eq!(summary.status, LongPhaseStatus::Simulated);
     assert_eq!(
         summary.gaps,
         vec![

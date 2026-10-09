@@ -4,8 +4,8 @@
 //! Structured catalog and SHA-256 registry for test fixtures and community models.
 //!
 //! Provides a canonical, deduplicated registry of all 61 catalog paths mapped to
-//! 51 unique SHA-256 identities. Classifies support status (45 supported, 3 intentional
-//! negative fixtures, 3 known gaps) and tracks all 10 redundant file aliases.
+//! 51 unique SHA-256 identities. Classifies support status (47 supported, 2 intentional
+//! negative fixtures, 2 known gaps) and tracks all 10 redundant file aliases.
 //!
 //! Also hosts the **V2 golden catalog** — the single source of truth for which
 //! models participate in the V2 multi-SR golden vector matrix, which sample
@@ -365,8 +365,8 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         canonical_path: "tests/fixtures/models/wavenet_a2_max.nam",
         aliases: &["third-party/NeuralAmpModelerCore/example_models/wavenet_a2_max.nam"],
         architecture: "{'channels': None, 'topology': 'A2-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
-        support: ModelSupportKind::KnownGap,
-        description: "Known architectural gap (wavenet_a2_max.nam)",
+        support: ModelSupportKind::Supported,
+        description: "WaveNet A2 Max (A2-Dynamic, CH=4, cond=8, FiLM) — KB-A2-MAX retired (Fase 3, 2026-10-08); prod×C++ SNR 135.90 dB V1 / 135.97 dB V2",
     },
     ModelCatalogEntry {
         sha256: "1af5a5d4eb079b894e095882738c102fd2d9eeced387a16d0d24cd73a07de718",
@@ -559,7 +559,7 @@ pub fn unsupported_count() -> usize {
         .count()
 }
 
-/// Total number of intentional negative fixtures (3).
+/// Total number of intentional negative fixtures (2).
 pub fn intentional_negative_count() -> usize {
     MODEL_CATALOG
         .iter()
@@ -567,7 +567,7 @@ pub fn intentional_negative_count() -> usize {
         .count()
 }
 
-/// Total number of known architectural gaps (3).
+/// Total number of known architectural gaps (2).
 pub fn known_gap_count() -> usize {
     MODEL_CATALOG
         .iter()
@@ -835,8 +835,8 @@ pub static GOLDEN_GEN_CATALOG: &[GoldenGenEntry] = &[
     },
     // ── v1-only models (in_v2_catalog = false) ────────────────────────────
     // wavenet_dyn_free / lstm_dyn_test / convnet_test carry an incidental
-    // unrequired v2@48k golden; wavenet_a2_max is excluded by design
-    // (KB-A2-MAX, docs/cpp_parity_map.md §4.4.3 — never a preflight gate).
+    // unrequired v2@48k golden; wavenet_a2_max carries an unrequired v2@48k
+    // golden (parity verified, not a preflight gate).
     GoldenGenEntry {
         nam_file: "wavenet_dyn_free.nam",
         golden_name: "golden_wavenet_dyn_free",

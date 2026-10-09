@@ -185,6 +185,162 @@ pub fn make_wavenet_a2_dyn_data() -> NamModelData {
     }
 }
 
+/// Group count shared by every FiLM slot of the synthetic grouped-FiLM
+/// A2-Dynamic fixtures (exact divisor of `condition_size=4` and of every
+/// slot width, so the grouped row layout is fully populated).
+const SYNTH_A2_DYN_FILM_GROUPS: u32 = 2;
+
+/// Builds synthetic `NamModelData` for a WaveNet A2 Dynamic control model
+/// (CH=4, `condition_size=4`, Linear `condition_dsp`) with **no FiLM slots**.
+///
+/// Identical twin of [`make_wavenet_a2_dyn_film_grouped_data`] minus the FiLM
+/// weights: same topology, same conditioning path, same weight stream order.
+/// The latency delta between the two targets isolates the grouped-FiLM
+/// hot-path cost from the `condition_dsp` cost.
+///
+/// `condition_size=4` requires the Linear `condition_dsp` (receptive field 8):
+/// the single condition output is broadcast to 4 channels at runtime, matching
+/// the multi-channel condition contract the FiLM layers read.
+pub fn make_wavenet_a2_dyn_cond_dsp_data() -> NamModelData {
+    make_wavenet_a2_dyn_cond_data(false)
+}
+
+/// Builds synthetic `NamModelData` for a WaveNet A2 Dynamic model (CH=4) with
+/// **grouped FiLM** (all 8 insertion slots active, `shift=true`,
+/// `groups=2`) plus a Linear `condition_dsp`.
+///
+/// CH=4 is not in the A2 const-generic dispatch table ({3, 8}), forcing
+/// routing to `WaveNetA2Dyn`. All 8 FiLM slots run the grouped
+/// `cond_to_scale_shift` + global-row modulation path with per-layer weight
+/// extents `film_weight_count_generic(groups, 4, slot_width, true)` — the
+/// exact stream layout `load_film_for_layer_dynamic` consumes.
+///
+/// Control counterpart: [`make_wavenet_a2_dyn_cond_dsp_data`].
+pub fn make_wavenet_a2_dyn_film_grouped_data() -> NamModelData {
+    make_wavenet_a2_dyn_cond_data(true)
+}
+
+/// Shared builder for the synthetic conditioned A2-Dynamic pair above.
+///
+/// Weight stream order mirrors `WaveNetA2Dyn::load_weights_inner`:
+/// rechannel → per layer (conv_w, conv_b, mixin_w, l1x1_w, l1x1_b,
+/// head1x1_w, head1x1_b, then FiLM w/b per active slot in `FILM_KEYS`
+/// order) → head_w, head_b, head_scale.
+fn make_wavenet_a2_dyn_cond_data(with_grouped_film: bool) -> NamModelData {
+    use neural_amp_modeler_rs::models::a2::params::{A2_DILATIONS, A2_KERNEL_SIZES};
+
+    let channels = 4usize;
+    let bottleneck = 4usize;
+    let cond_size = 4usize;
+    let head_k = neural_amp_modeler_rs::models::a2::params::A2_HEAD_KERNEL_SIZE;
+    let head1x1_out = 4usize;
+    let h1_in = bottleneck;
+    let groups = SYNTH_A2_DYN_FILM_GROUPS as usize;
+
+    // FiLM slot widths in `FILM_KEYS` order (conv_pre, conv_post,
+    // input_mixin_pre, input_mixin_post, activation_pre, activation_post,
+    // layer1x1_post, head1x1_post) — see `load_film_for_layer_dynamic`.
+    let film_slot_widths = [
+        channels,
+        bottleneck,
+        cond_size,
+        bottleneck,
+        bottleneck,
+        bottleneck,
+        channels,
+        head1x1_out,
+    ];
+
+    let mut total_weights = channels;
+    for &ksize in A2_KERNEL_SIZES.iter() {
+        total_weights += channels * bottleneck * ksize;
+        total_weights += bottleneck;
+        total_weights += bottleneck * cond_size;
+        total_weights += bottleneck * channels;
+        total_weights += channels;
+        total_weights += head1x1_out * h1_in;
+        total_weights += head1x1_out;
+        if with_grouped_film {
+            for &slot_ch in &film_slot_widths {
+                total_weights += slot_ch * 2 * cond_size / groups;
+                total_weights += slot_ch * 2;
+            }
+        }
+    }
+    total_weights += head_k * head1x1_out;
+    total_weights += 1;
+    total_weights += 1;
+
+    let mut layer_raw = serde_json::json!({
+        "head": {
+            "out_channels": 1,
+            "kernel_size": head_k,
+            "bias": true
+        },
+        "head1x1": {
+            "active": true,
+            "out_channels": head1x1_out,
+            "groups": 1
+        },
+        "layer1x1": {
+            "active": true,
+            "groups": 1
+        }
+    });
+    if with_grouped_film {
+        let film = serde_json::json!({
+            "active": true,
+            "shift": true,
+            "groups": SYNTH_A2_DYN_FILM_GROUPS
+        });
+        let obj = layer_raw
+            .as_object_mut()
+            .expect("synthetic A2-Dyn layer_raw is a JSON object");
+        for key in [
+            "conv_pre_film",
+            "conv_post_film",
+            "input_mixin_pre_film",
+            "input_mixin_post_film",
+            "activation_pre_film",
+            "activation_post_film",
+            "layer1x1_post_film",
+            "head1x1_post_film",
+        ] {
+            obj.insert(key.to_string(), film.clone());
+        }
+    }
+
+    let cond_dsp = serde_json::to_value(make_linear_data(8, true))
+        .expect("synthetic Linear condition_dsp must serialize to JSON");
+
+    NamModelData {
+        version: Some("0.5.4".to_string()),
+        architecture: "WaveNet".to_string(),
+        config: NamConfig {
+            layers: vec![NamLayerConfig {
+                input_size: Some(1),
+                condition_size: Some(cond_size),
+                channels: Some(channels),
+                bottleneck: Some(bottleneck),
+                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+                dilations: Some(A2_DILATIONS.to_vec()),
+                activation: Some("LeakyReLU".to_string()),
+                head_bias: Some(true),
+                layer_raw: Some(layer_raw),
+                ..Default::default()
+            }],
+            head: None,
+            head_scale: Some(0.02),
+            condition_dsp: Some(cond_dsp),
+            ..Default::default()
+        },
+        weights: vec![0.01; total_weights],
+        weights_layout: neural_amp_modeler_rs::loader::nam_json::WeightsLayout::Original,
+        sample_rate: Some(48000.0),
+        metadata: None,
+    }
+}
+
 /// Builds synthetic `NamModelData` for a `Linear` FIR model with the given
 /// receptive field and optional bias scalar.
 ///

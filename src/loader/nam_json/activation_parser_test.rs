@@ -176,6 +176,33 @@ fn test_parse_secondary_activations_absent() {
 }
 
 #[test]
+fn test_parse_a2_max_secondary_activation_forms() {
+    let scalar = serde_json::json!({ "secondary_activation": "Hardswish" });
+    assert_eq!(
+        parse_secondary_activations_from_json(&scalar, 2),
+        vec![Some(ActivationType::HardSwish); 2]
+    );
+    let mixed = serde_json::json!({ "secondary_activation": [
+        { "type": "LeakyHardtanh", "min_val": 0.0, "max_val": 0.9,
+          "min_slope": 0.0, "max_slope": 0.02 },
+        "ReLU", "Sigmoid"
+    ] });
+    assert_eq!(
+        parse_secondary_activations_from_json(&mixed, 3),
+        vec![
+            Some(ActivationType::LeakyHardTanh {
+                min_val: 0.0,
+                max_val: 0.9,
+                min_slope: 0.0,
+                max_slope: 0.02,
+            }),
+            Some(ActivationType::ReLU),
+            Some(ActivationType::Sigmoid),
+        ]
+    );
+}
+
+#[test]
 fn test_parse_activations_wrong_length_rejected() {
     let raw = serde_json::json!({
         "activation": [

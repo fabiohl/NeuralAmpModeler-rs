@@ -223,26 +223,37 @@ fn oracle_a2_forward_internal(
                     film.apply(&mut fwd_bufs[li][fi * ch..fi * ch + ch], condition);
                 }
 
-                // Conv1d
+                // Conv1d — grouped (`groups_input`): block-diagonal, no
+                // cross-group links. Mirrors production C++ Conv1D groups:
+                // group g reads in_ch/g inputs, writes out_ch/g outputs.
                 z_scratch.fill(0.0);
-                for oc in 0..z_out_ch {
-                    let mut sum = lw.conv_b[oc];
-                    let wb = oc * ch * lw.ks;
-                    for kt in 0..lw.ks {
-                        let off = (lw.dil as isize) * ((kt as isize) + 1 - (lw.ks as isize));
-                        let ins = ((fi as isize) + off) as usize * ch;
-                        for ic in 0..ch {
-                            if ins + ic < fwd_bufs[li].len() {
-                                sum = mul_add_f64(
-                                    fwd_bufs[li][ins + ic],
-                                    lw.conv_w[wb + ic * lw.ks + kt],
-                                    sum,
-                                    acc_mode,
-                                );
+                let gi = lw.groups_input.max(1) as usize;
+                let in_pg = ch / gi;
+                let out_pg = z_out_ch / gi;
+                for g in 0..gi {
+                    let in_start = g * in_pg;
+                    let out_start = g * out_pg;
+                    for oc in out_start..out_start + out_pg {
+                        let mut sum = lw.conv_b[oc];
+                        // Compact storage `[out_ch][in_pg]` row-major per
+                        // group; group offset = g * out_pg * in_pg * ks.
+                        let w_base = g * out_pg * in_pg * lw.ks + (oc - out_start) * in_pg * lw.ks;
+                        for kt in 0..lw.ks {
+                            let off = (lw.dil as isize) * ((kt as isize) + 1 - (lw.ks as isize));
+                            let ins = ((fi as isize) + off) as usize * ch + in_start;
+                            for ic in 0..in_pg {
+                                if ins + ic < fwd_bufs[li].len() {
+                                    sum = mul_add_f64(
+                                        fwd_bufs[li][ins + ic],
+                                        lw.conv_w[w_base + ic * lw.ks + kt],
+                                        sum,
+                                        acc_mode,
+                                    );
+                                }
                             }
                         }
+                        z_scratch[oc] = sum;
                     }
-                    z_scratch[oc] = sum;
                 }
 
                 // conv_post_film (slot 1)
@@ -390,8 +401,13 @@ fn oracle_a2_forward_internal(
                     }
                 }
 
-                // L1x1 residual
-                if li < num_layers - 1 {
+                // L1x1 residual — skipped only on the last layer of the
+                // LAST array (production `skip_last_residual=true` standalone,
+                // `false` in `cascade_layer_loop`: the next array consumes
+                // even the last layer's residual).
+                let is_last_layer = li + 1 == num_layers;
+                let skip_residual = is_last_layer && ai + 1 == num_arrays;
+                if !skip_residual {
                     let mut l1x1_contrib = vec![0.0f64; ch];
                     if lw.l1x1_groups <= 1 {
                         for oc in 0..ch {
@@ -435,8 +451,14 @@ fn oracle_a2_forward_internal(
                     for oc in 0..ch {
                         next[oc] = accum_f64(layer_in[oc], l1x1_contrib[oc], acc_mode);
                     }
-                    for c in 0..ch {
-                        fwd_bufs[li + 1][fi * ch + c] = next[c];
+                    // Last layer of a non-last array: the residual feeds the
+                    // next array's cascade input (production `residual =
+                    // process_frame(...)`); there is no `bufs[li+1]` — only
+                    // update `layer_in`, never write out of bounds.
+                    if li + 1 < num_layers {
+                        for c in 0..ch {
+                            fwd_bufs[li + 1][fi * ch + c] = next[c];
+                        }
                     }
                     layer_in = next;
                 }

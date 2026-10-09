@@ -1184,14 +1184,19 @@ fn test_combined_simulation_a2_film() {
 
 use common::A2_GENERIC_ESR_LIMIT;
 
-// on-demand: KB-A2-MAX paired prod×f64 vs NumPy anchor; not a nightly gate (H0 Case D)
+// on-demand: Python anchor reconciliation pending (§4.4 condition_dsp multi-channel cascade); standalone f64 oracle gate active
 #[test]
-#[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
+#[ignore = "External NumPy anchor reconciliation pending: validate_oracle_f64.py condition_dsp multi-channel cascade gap (§4.4)"]
 fn test_oracle_vs_python_anchor_a2_generic() {
+    let anchor_path = anchors_dir().join("a2_max_256_f64.bin");
+    if !anchor_path.exists() {
+        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"anchor_not_found:a2_max_256_f64.bin\"");
+        return;
+    }
     let path = models_dir().join("wavenet_a2_max.nam");
     let md = load_and_parse(&path);
     let input_f64 = load_f64_binary(&anchors_dir().join("sweep_256_48k.bin"));
-    let anchor = load_f64_binary(&anchors_dir().join("a2_max_256_f64.bin"));
+    let anchor = load_f64_binary(&anchor_path);
 
     let oracle = oracle_forward(&md, &input_f64, &PrecisionConfig::default());
     let esr = compute_esr_f64(&oracle, &anchor);
@@ -1208,9 +1213,8 @@ fn test_oracle_vs_python_anchor_a2_generic() {
     );
 }
 
-// on-demand: KB-A2-MAX paired prod×f64 ESR; not a nightly gate (H0 Case D)
+// Measured: ESR = 1.66e-14 (-137.8 dB), SNR = 137.8 dB, limit = 1e-11
 #[test]
-#[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_oracle_a2_generic() {
     let esr = run_oracle_esr_paired("wavenet_a2_max.nam", "A2-Generic");
     assert!(
@@ -1221,9 +1225,8 @@ fn test_oracle_a2_generic() {
     );
 }
 
-// on-demand: KB-A2-MAX paired decomposition; not a nightly gate (H0 Case D)
+// Measured: paired ESR = 1.66e-14, combined ΔESR = 1.59e-7
 #[test]
-#[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_decomposition_a2_generic() {
     let path = models_dir().join("wavenet_a2_max.nam");
     let md = load_and_parse(&path);
@@ -1249,9 +1252,8 @@ fn test_decomposition_a2_generic() {
     );
 }
 
-// on-demand: KB-A2-MAX combined paired simulation; not a nightly gate (H0 Case D)
+// Measured: ΔESR(combined vs oracle) = 1.53e-7 (-68.2 dB), ESR(combined vs production) = 1.53e-7 (-68.1 dB)
 #[test]
-#[ignore = "KB-A2-MAX known bug §4.4: fail-closed TR1.1; paired prod×f64 not a gate (H0 Case D)"]
 fn test_combined_simulation_a2_generic() {
     run_combined_paired_test("wavenet_a2_max.nam", "A2-Generic");
 }
@@ -1431,6 +1433,7 @@ const SUMMARY_MODELS: &[(&str, &str)] = &[
     ("wavenet_dyn_free.nam", "WaveNetDynFree"),
     ("wavenet_condition_dsp.nam", "WaveNetCondDSP"),
     ("EVH-5150-Lite.nam", "EVH-5150-Lite"),
+    ("wavenet_a2_max.nam", "A2Max"),
 ];
 
 /// Every fixture that `nam_quality ingest` keys the `esr_f64` join on must be

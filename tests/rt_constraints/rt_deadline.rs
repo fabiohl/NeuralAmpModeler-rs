@@ -334,3 +334,9 @@ fn test_rt_deadline_lstm_dynamic() {
 fn test_rt_deadline_a2_dynamic() {
     run_deadline_test("a2_dynamic_gated_ch8.nam", "A2-Dynamic-Gated");
 }
+
+#[test]
+#[ignore]
+fn test_rt_deadline_a2_max() {
+    run_deadline_test("wavenet_a2_max.nam", "A2-Max");
+}

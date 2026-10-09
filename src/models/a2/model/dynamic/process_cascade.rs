@@ -40,6 +40,7 @@ impl WaveNetA2Dyn {
                 use_cond_dsp,
                 cond_size,
                 is_first_array,
+                false, // The next array consumes even the last layer's residual.
             );
         }
 
@@ -171,7 +172,9 @@ impl WaveNetA2Dyn {
         prev_head_size: usize,
     ) {
         let copy_ch = prev_head_size.min(self.head_accum_size);
-        let curr_wp = self.head_write_pos;
+        // Match the layer loop's write position before seeding: wrapping after
+        // this copy would leave the incoming head at the old ring position.
+        let curr_wp = self.advance_head_ring(nf);
         let curr_head = &mut self.head_accum;
         for f in 0..nf {
             let prev_off = f * prev_head_size;

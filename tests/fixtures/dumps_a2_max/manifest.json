@@ -1,0 +1,193 @@
+{
+  "frames": 2048,
+  "sample_rate": 48000,
+  "tensors": [
+    {
+      "file": "dump_array0.bin",
+      "channels": 3,
+      "sha256": "8764236e76c9f2f5ff68daff1a720aea35f7f1e840eece929cb72d62860acf4a"
+    },
+    {
+      "file": "dump_rechannel.bin",
+      "channels": 4,
+      "sha256": "0552afcaebbc1fd45526b6dbcfb8c072d0193a2a91355227338806f107b41ec0"
+    },
+    {
+      "file": "dump_condition_dsp.bin",
+      "channels": 8,
+      "sha256": "1227723e1466f390b60601f285bd744c204dfe21bf09cf75ffedd2e7eef1dceb"
+    },
+    {
+      "file": "dump_film.bin",
+      "channels": 72,
+      "sha256": "b30a14a1aa1cd6d91d6331f54013f9cdc0fd0b4b518abfbf107329546a4d1587"
+    }
+  ],
+  "model": "tests/fixtures/models/wavenet_a2_max.nam",
+  "reference_input": "tests/fixtures/stress_signal.wav (golden input; equals the golden_wavenet_a2_max.bin input section bit-exactly)",
+  "reference_output": "golden_wavenet_a2_max.bin (instrumented render reproduced byte-identically)",
+  "layout": "all tensors frame-major f32 little-endian",
+  "frame_layouts": {
+    "dump_array0.bin": "index = frame*3 + channel",
+    "dump_rechannel.bin": "index = frame*4 + channel",
+    "dump_condition_dsp.bin": "index = frame*8 + channel",
+    "dump_film.bin": "index = frame*72 + channel"
+  },
+  "capture_scope": "rendered frames only; DSP::prewarm silent frames are excluded",
+  "film_layout": {
+    "packing": "frame-major: [frame: slot 0..15 concatenated]; slots have variable channels; per-frame floats = 72",
+    "slot_order": "slot = layer_ordinal*8 + family_index (single main LayerArray, 2 layers); family order conv_pre_film, conv_post_film, input_mixin_pre_film, input_mixin_post_film, activation_pre_film, activation_post_film, layer1x1_post_film, head1x1_post_film",
+    "film_slots": [
+      {
+        "slot": 0,
+        "layer_ordinal": 0,
+        "family_index": 0,
+        "family": "conv_pre_film",
+        "channels": 4,
+        "float_offset_in_frame": 0,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 1,
+        "layer_ordinal": 0,
+        "family_index": 1,
+        "family": "conv_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 4,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 2,
+        "layer_ordinal": 0,
+        "family_index": 2,
+        "family": "input_mixin_pre_film",
+        "channels": 8,
+        "float_offset_in_frame": 8,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 3,
+        "layer_ordinal": 0,
+        "family_index": 3,
+        "family": "input_mixin_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 16,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 4,
+        "layer_ordinal": 0,
+        "family_index": 4,
+        "family": "activation_pre_film",
+        "channels": 4,
+        "float_offset_in_frame": 20,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 5,
+        "layer_ordinal": 0,
+        "family_index": 5,
+        "family": "activation_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 24,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 6,
+        "layer_ordinal": 0,
+        "family_index": 6,
+        "family": "layer1x1_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 28,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 7,
+        "layer_ordinal": 0,
+        "family_index": 7,
+        "family": "head1x1_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 32,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 8,
+        "layer_ordinal": 1,
+        "family_index": 0,
+        "family": "conv_pre_film",
+        "channels": 4,
+        "float_offset_in_frame": 36,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 9,
+        "layer_ordinal": 1,
+        "family_index": 1,
+        "family": "conv_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 40,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 10,
+        "layer_ordinal": 1,
+        "family_index": 2,
+        "family": "input_mixin_pre_film",
+        "channels": 8,
+        "float_offset_in_frame": 44,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 11,
+        "layer_ordinal": 1,
+        "family_index": 3,
+        "family": "input_mixin_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 52,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 12,
+        "layer_ordinal": 1,
+        "family_index": 4,
+        "family": "activation_pre_film",
+        "channels": 4,
+        "float_offset_in_frame": 56,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 13,
+        "layer_ordinal": 1,
+        "family_index": 5,
+        "family": "activation_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 60,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 14,
+        "layer_ordinal": 1,
+        "family_index": 6,
+        "family": "layer1x1_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 64,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      },
+      {
+        "slot": 15,
+        "layer_ordinal": 1,
+        "family_index": 7,
+        "family": "head1x1_post_film",
+        "channels": 4,
+        "float_offset_in_frame": 68,
+        "note": "post-modulation FiLM output (input*scale+shift); slot 2/10 modulate the condition tensor itself (8 channels)"
+      }
+    ]
+  },
+  "dump_semantics": {
+    "dump_array0.bin": "condition_dsp LayerArray 0 residual output (GetLayerOutputs; last-layer residual = input + layer1x1), 3 channels \u2014 NOT the head path",
+    "dump_rechannel.bin": "condition_dsp LayerArray 0 _head_rechannel output (Conv1D 6->4, kernel 1, no bias, dilation 1) after skip accumulation; delivered to Array 1 as head_inputs",
+    "dump_condition_dsp.bin": "main WaveNet _condition_output (already includes the condition DSP's own head_scale; NOT the main head_scale)",
+    "dump_film.bin": "post-modulation outputs of the 16 main-net FiLM slots"
+  }
+}

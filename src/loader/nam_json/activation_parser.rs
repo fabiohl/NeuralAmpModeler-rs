@@ -130,17 +130,25 @@ pub fn parse_secondary_activations_from_json(
     raw: &serde_json::Value,
     num_layers: usize,
 ) -> Vec<Option<ActivationType>> {
+    let parse = |value: &serde_json::Value| {
+        // ActivationType is internally tagged; NAM also permits a bare name.
+        let tagged = match value.as_str() {
+            Some(name) => serde_json::json!({ "type": name }),
+            None => value.clone(),
+        };
+        serde_json::from_value(tagged).ok()
+    };
     // Single-value secondary activation (object or string): replicate across all layers.
     if let Some(v) = raw.get("secondary_activation") {
         if let Some(s) = v.as_str() {
             if s.is_empty() || s.eq_ignore_ascii_case("none") {
                 return vec![None; num_layers];
             }
-            let at = serde_json::from_value(serde_json::Value::String(s.to_string())).ok();
+            let at = parse(v);
             return vec![at; num_layers];
         }
         if v.is_object() {
-            let at = serde_json::from_value(v.clone()).ok();
+            let at = parse(v);
             return vec![at; num_layers];
         }
     }
@@ -159,7 +167,7 @@ pub fn parse_secondary_activations_from_json(
         if entry.is_null() {
             out.push(None);
         } else {
-            let at = serde_json::from_value(entry.clone()).ok();
+            let at = parse(entry);
             out.push(at);
         }
     }

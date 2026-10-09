@@ -136,6 +136,31 @@ fn test_cascade_residual_projection_row_major() {
 }
 
 #[test]
+fn test_cascade_preserves_last_layer_residual() {
+    let mut first = make_test_dyn_array(1, 1, 2, 1);
+    let mut second = make_test_dyn_array(1, 1, 2, 1);
+    first.rechannel_w_f32[0] = 1.0;
+    second.rechannel_w_f32[0] = 1.0;
+    let mut cascade = WaveNetA2Cascade::try_new(vec![first, second], None, 1).unwrap();
+    cascade.process(&[1.0], &mut [0.0; 2]);
+    // z0 = 0.5*x + x; residual0 = x + 0.5*z0, consumed by array 1.
+    assert_eq!(cascade.arrays[0].layer_in[0], 1.75);
+    assert_eq!(cascade.arrays[1].layer_in[0], 2.6875);
+}
+
+#[test]
+fn test_cascade_head_seed_survives_ring_wrap() {
+    let mut array = make_test_dyn_array(1, 1, 2, 3);
+    array.head_write_pos = array.head_ring_mask;
+    let wp = array.head_write_pos;
+    array.head_accum[wp - 2..wp].copy_from_slice(&[4.0, 5.0]);
+    array.cascade_seed_head_from_output(&[10.0, 11.0, 12.0, 13.0], 4, 1);
+    let processing_wp = array.advance_head_ring(4);
+    assert_eq!(processing_wp, 2);
+    assert_eq!(&array.head_accum[..6], &[4.0, 5.0, 10.0, 11.0, 12.0, 13.0]);
+}
+
+#[test]
 fn test_process_rechannel_prescale_row_major() {
     let mut arr = make_test_dyn_array(3, 4, 1, 1);
 

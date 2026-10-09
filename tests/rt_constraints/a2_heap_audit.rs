@@ -7,6 +7,9 @@
 
 #[cfg(feature = "heap-audit")]
 mod audit_tests {
+    use neural_amp_modeler_rs::loader::dispatcher::build_model;
+    use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
+    use neural_amp_modeler_rs::models::NamModel;
     use neural_amp_modeler_rs::models::a2::{A2_KERNEL_SIZES, WaveNetA2, a2_weight_count};
 
     use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
@@ -103,5 +106,66 @@ mod audit_tests {
     #[test]
     fn test_a2_lite_heap_audit() {
         run_a2_audit::<3>("Lite");
+    }
+
+    /// Dynamic/cascade path heap-audit using `wavenet_a2_max.nam`.
+    ///
+    /// Exercises `WaveNetA2Dyn` (cascaded FiLM condition_dsp with groups > 1,
+    /// head1x1, skip_last_residual=false) on the production model graph to certify
+    /// zero heap allocations on the hot-path after prewarm.
+    #[test]
+    #[ignore]
+    fn test_a2_dyn_max_heap_audit() {
+        let path = crate::common::model_path("wavenet_a2_max.nam");
+        if !path.exists() {
+            println!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:wavenet_a2_max.nam\"");
+            return;
+        }
+        let json_data = std::fs::read_to_string(&path).expect("Failed to read wavenet_a2_max.nam");
+        let model_data = parse_nam_json(&json_data).expect("Failed to parse wavenet_a2_max.nam");
+        let mut model = build_model(&model_data).expect("Dispatcher failed for wavenet_a2_max.nam");
+        model.prewarm(2048);
+
+        let block_sizes = [1usize, 16, 32, 48, 64];
+
+        // Pre-allocate buffers outside the audit guard
+        let mut inputs: Vec<Vec<f32>> = block_sizes.iter().map(|&bs| vec![0.0f32; bs]).collect();
+        let mut outputs: Vec<Vec<f32>> = block_sizes.iter().map(|&bs| vec![0.0f32; bs]).collect();
+
+        let mut sample_offset = 0usize;
+        for (bi, &block_size) in block_sizes.iter().enumerate() {
+            for (i, v) in inputs[bi].iter_mut().enumerate().take(block_size) {
+                let t = (sample_offset + i) as f32;
+                *v = (2.0 * std::f32::consts::PI * 440.0 * t / 48000.0).sin();
+            }
+            model.process(&inputs[bi], &mut outputs[bi]);
+            sample_offset += block_size;
+        }
+
+        // Audit — must have zero allocations on hot-path
+        let iters = if cfg!(debug_assertions) { 50 } else { 1000 };
+        let count = {
+            let _guard = TrackingGuard::new();
+            for _ in 0..iters {
+                for (bi, &block_size) in block_sizes.iter().enumerate() {
+                    for (i, v) in inputs[bi].iter_mut().enumerate().take(block_size) {
+                        let t = (sample_offset + i) as f32;
+                        *v = (2.0 * std::f32::consts::PI * 440.0 * t / 48000.0).sin();
+                    }
+                    model.process(
+                        std::hint::black_box(&inputs[bi]),
+                        std::hint::black_box(&mut outputs[bi]),
+                    );
+                    sample_offset += block_size;
+                }
+            }
+            get_alloc_count()
+        };
+
+        assert_eq!(
+            count, 0,
+            "Heap allocations detected on A2-Max dynamic hot-path! count={}",
+            count
+        );
     }
 }

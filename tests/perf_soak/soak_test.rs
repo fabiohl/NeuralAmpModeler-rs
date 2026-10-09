@@ -1776,12 +1776,37 @@ fn test_wavenet_drift_decomposition() {
 // B.3.1 — Soak Tests for New Paths (ConvNet, WaveNetDyn, LstmDyn, WaveNetA2Dyn)
 // =============================================================================
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SoakSignal {
+    Silence,
+    Noise,
+    Alternating,
+}
+
 fn run_model_soak(
     fixture: &str,
     label: &str,
     num_frames: usize,
     block_size: usize,
     output_is_multichannel: bool,
+) {
+    run_model_soak_signal(
+        fixture,
+        label,
+        num_frames,
+        block_size,
+        output_is_multichannel,
+        SoakSignal::Alternating,
+    );
+}
+
+fn run_model_soak_signal(
+    fixture: &str,
+    label: &str,
+    num_frames: usize,
+    block_size: usize,
+    output_is_multichannel: bool,
+    signal: SoakSignal,
 ) {
     let path = model_path(fixture);
     assert!(path.exists(), "Fixture {} not found at {:?}", fixture, path);
@@ -1813,10 +1838,16 @@ fn run_model_soak(
 
     let mut processed = 0;
     let mut zero_alloc_checked = false;
+    let mut min_val = f32::INFINITY;
+    let mut max_val = f32::NEG_INFINITY;
 
     let start = Instant::now();
     while processed < num_frames {
-        let is_noise = (processed / 100_000) % 2 == 0;
+        let is_noise = match signal {
+            SoakSignal::Silence => false,
+            SoakSignal::Noise => true,
+            SoakSignal::Alternating => (processed / 100_000) % 2 == 0,
+        };
         if is_noise {
             for v in &mut input {
                 *v = pcg.next_f32();
@@ -1825,7 +1856,7 @@ fn run_model_soak(
             input.fill(0.0);
         }
 
-        // Zero-alloc audit: verify during one noise frame (post-prewarm)
+        // Zero-alloc audit: verify during first frame (post-prewarm)
         if !zero_alloc_checked {
             {
                 let _guard = TrackingGuard::new();
@@ -1862,17 +1893,29 @@ fn run_model_soak(
                 processed,
                 v.to_bits()
             );
+            min_val = min_val.min(v);
+            max_val = max_val.max(v);
         }
         if is_noise {
             let rms =
                 (output.iter().map(|x| (x * x) as f64).sum::<f64>() / output.len() as f64).sqrt();
             assert!(
-                rms > 0.0001 && rms < 10.0,
+                rms > 0.0001 && rms < 20.0,
                 "{} RMS do loop out of range: {} at {} frames",
                 label,
                 rms,
                 processed
             );
+        } else {
+            for &v in &output {
+                assert!(
+                    (-20.0..=20.0).contains(&v),
+                    "{} silence residue diverged excessively: {} after {} frames",
+                    label,
+                    v,
+                    processed
+                );
+            }
         }
 
         processed += block_size;
@@ -1882,6 +1925,7 @@ fn run_model_soak(
     println!("--- {} Soak ---", label);
     println!("Duration: {:?}", duration);
     println!("Frames processed: {}", processed);
+    println!("Min output: {:.6e}, Max output: {:.6e}", min_val, max_val);
     println!("Zero-alloc verified: ✓");
 }
 
@@ -1932,5 +1976,33 @@ fn test_a2_dyn_blended_soak() {
         10_000_000,
         64,
         false,
+    );
+}
+
+/// Soak Test: WaveNetA2Dyn (A2-Max) silence endurance — 10M frames.
+#[test]
+#[ignore]
+fn test_a2_max_silence_soak() {
+    run_model_soak_signal(
+        "wavenet_a2_max.nam",
+        "A2-Max-Silence",
+        10_000_000,
+        64,
+        false,
+        SoakSignal::Silence,
+    );
+}
+
+/// Soak Test: WaveNetA2Dyn (A2-Max) noise endurance — 10M frames.
+#[test]
+#[ignore]
+fn test_a2_max_noise_soak() {
+    run_model_soak_signal(
+        "wavenet_a2_max.nam",
+        "A2-Max-Noise",
+        10_000_000,
+        64,
+        false,
+        SoakSignal::Noise,
     );
 }

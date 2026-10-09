@@ -47,6 +47,8 @@ mod catalog_test;
 mod condition_broadcast_test;
 #[path = "models/container_slimmable.rs"]
 mod container_slimmable;
+#[path = "models/dc_offset_clipping_proof.rs"]
+mod dc_offset_clipping_proof;
 #[path = "models/deterministic_energy_test.rs"]
 mod deterministic_energy_test;
 #[path = "models/diagnostic_bundle.rs"]

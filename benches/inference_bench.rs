@@ -18,6 +18,11 @@
 //! | `LSTM_Dynamic_1x7_64samp_48kHz`         | LSTM Dynamic 1×7 inference              | Fallback for non-cataloged LSTM geom     |
 //! | `ConvNet_Model_64samp_48kHz`            | ConvNet end-to-end model inference      | Full pipeline: 2 blocks CH=8→4 + head    |
 //! | `A2Dyn_Gated_64samp_48kHz`              | A2 Dynamic CH=4 gated inference         | Fallback for non-cataloged A2 geom       |
+//! | `A2Dyn_CondDsp_CH4_64samp_48kHz`        | A2 Dynamic CH=4 + condition_dsp (control) | Control twin of the grouped-FiLM target |
+//! | `A2Dyn_FiLM_Grouped_CH4_64samp_48kHz`   | A2 Dynamic CH=4 + grouped FiLM (G2×8)   | Grouped-FiLM hot path, 8 slots / layer   |
+//! | `A2Dyn_FiLM_Dense_CH8_64samp_48kHz`     | A2 Dynamic Full (CH=8) + dense FiLM     | FiLM cost at full dimensions (groups=1)  |
+//! | `A2Dyn_FiLM_Dense_CH3_64samp_48kHz`     | A2 Dynamic Lite (CH=3) + dense FiLM     | FiLM cost at lite dimensions (groups=1)  |
+//! | `A2Dyn_FiLM_Grouped_A2Max_64samp_48kHz` | A2-Max flagship: grouped FiLM + cascade | Grouped FiLM + last-layer residual path  |
 //!
 //! ## Interpreting the results
 //!
@@ -80,6 +85,10 @@ criterion_group!(
     wavenet::bench_wavenet_dynamic_process,
     misc::bench_lstm_dynamic_process,
     misc::bench_wavenet_a2_dyn_gated_process,
+    misc::bench_wavenet_a2_dyn_cond_dsp_process,
+    misc::bench_wavenet_a2_dyn_film_grouped_process,
+    misc::bench_wavenet_a2_dyn_film_dense_process,
+    misc::bench_wavenet_a2_max_film_grouped_process,
     wavenet::bench_wavenet_comparison,
     a2::bench_a2_comparison,
     misc::bench_nondist_models,

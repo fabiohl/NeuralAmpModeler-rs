@@ -46,6 +46,7 @@ $$\text{ESR} = \frac{\sum_{i=0}^{N-1} (r_i - t_i)^2}{\sum_{i=0}^{N-1} r_i^2}, \q
 Where $r_i$ is the reference sample and $t_i$ is the test sample.
 
 - **Scale-Robustness:** Absolute Mean Squared Error (MSE) is sensitive to arbitrary signal scaling (e.g., a gain change yields large MSE even when correlation is high). ESR normalizes squared error by reference energy, making it invariant to absolute signal level.
+- **DC Offset Masking & Diagnostic DC-Free ESR:** When a golden vector contains a pronounced DC offset (notably `golden_wavenet_a2_max.bin` with mean $\mu \approx 8.19$ and standard deviation $\sigma \approx 2.45$), over $90\%$ of total signal energy ($P_{\text{sig}} \approx 73$) resides in the DC constant. In such cases, standard raw ESR is dominated by the constant term and can mask divergence in the dynamic AC components. To maintain diagnostic rigor, the test harness evaluates both raw ESR and DC-free ESR ($\text{ESR}_{\text{dc-free}}$ after mean removal from reference and test vectors). For `wavenet_a2_max`, raw ESR is $2.57 \times 10^{-14}$ while DC-free ESR is $3.08 \times 10^{-13}$ (~12× ratio, still $\approx -125\text{ dB}$, confirming that both AC and DC components remain at the float32 numerical noise floor). The DC-free metric serves as an informational diagnostic and does not replace the raw ESR parity gate.
 - **Limitation:** ESR is a global time-domain metric. It cannot separate harmonic generation from inharmonic aliasing artifacts (Sato & Smith, DAFx 2025) and correlates non-linearly with human loudness perception (Wright & Välimäki, ICASSP 2020). For this reason, NeuralAmpModeler-rs supplements ESR with spectral metrics (MR-STFT, ASR).
 
 | ESR (Linear)                | ESR (dB)                       | Practical Interpretation                                          |
@@ -123,7 +124,7 @@ Results populate `FarinaResult`: impulse response `ir_linear`, `fr_magnitude_db`
 
 **File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)
 
-- **Integrated Loudness (ITU-R BS.1770-4):** Two-pass K-weighted filtering with absolute gating ($-70\text{ LUFS}$) and relative gating ($-10\text{ LU}$). Used in the plausibility sanity gate (`LUFS_PLAUSIBLE_MIN = -50.0`, `LUFS_PLAUSIBLE_MAX = 10.0`). Signals shorter than $400\text{ ms}$ or impulse responses bypass this gate via `report_dsp_fidelity_no_lufs`.
+- **Integrated Loudness (ITU-R BS.1770-4):** Two-pass K-weighted filtering with absolute gating ($-70\text{ LUFS}$) and relative gating ($-10\text{ LU}$). Used in the plausibility sanity gate (`LUFS_PLAUSIBLE_MIN = -50.0`, `LUFS_PLAUSIBLE_MAX = 10.0`). Signals shorter than $400\text{ ms}$ bypass the gate (non-finite LUFS); fixtures with legitimately out-of-window loudness bypass it explicitly through `report_dsp_fidelity_no_lufs`, whose skip message reports the measured LUFS, the window side, and the margin — above the $+10$ ceiling for high-gain IR-convolution goldens, below the $-50$ floor for inherently low-loudness model output (dynamic/free-shape, large-hidden LSTM, ReLU-without-BatchNorm).
 - **Loudness Range (EBU Tech 3342):** Macro-dynamic loudness distribution between the $10^{\text{th}}$ and $95^{\text{th}}$ percentiles of gated loudness.
 - **True-Peak (ITU-R BS.1770-4 Annex 2):** $4\times$ oversampled polyphase FIR ($48$ taps) measuring inter-sample peaks. **Strictly off-RT only:** hot-path DSP uses sample-peak detection to avoid thread deadline misses.
 
@@ -174,7 +175,7 @@ Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_c
 | **WaveNet A2-FiLM InputMixinPre**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Single-slot FiLM ($134.4\text{ dB}$ measured)      |
 | **WaveNet A2 Dynamic Gated CH=8**            | 85.0         | $1.0 \times 10^{-9}$  | 0.05                 | Dynamic Gating + LeakyReLU                         |
 | **WaveNet A2 Dynamic Blended CH=3**          | 110.0        | $1.0 \times 10^{-12}$ | 0.05                 | Dynamic Blending + Tanh gate                       |
-| **WaveNet A2 Max (CH=4, cond=8)**            | 90.0         | $1.0 \times 10^{-9}$  | 0.05                 | Fail-closed guard active (KB-A2-MAX)               |
+| **WaveNet A2 Max (CH=4, cond=8)**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Generic WaveNet + FiLM ($135.9\text{ dB}$ measured) |
 | **SlimmableContainer A2 Example**            | 120.0        | $3.5 \times 10^{-12}$ | 0.08                 | Multi-submodel container                           |
 | **LSTM 1×16**                                | 93.0         | $1.5 \times 10^{-9}$  | 0.20                 | Standard exact activations ($108.5\text{ dB}$)     |
 | **LSTM 2×8**                                 | 93.0         | $1.7 \times 10^{-9}$  | 0.12                 | Standard exact activations ($107.8\text{ dB}$)     |

@@ -402,7 +402,12 @@ run_spectral_fidelity() {
 run_activation_precision() {
     local start_t end_t
     start_t=$(date +%s%N)
-    run_dashboard_phase "lstm_activation_precision" 5 \
+    # The activation oracles sink `kind: "activation"` rows into the metrics
+    # stream (F-08); without the forwarding the phase PASSes with zero
+    # records and the render shows "No activation-precision results
+    # available". The JSONL gate (min_jsonl=1) fails the phase closed when
+    # no metric was emitted — a PASS always carries ≥1 activation record.
+    NAM_METRICS_JSONL="$NAM_METRICS_JSONL" run_dashboard_phase "lstm_activation_precision" 5 1 \
         cargo test --release --features testing --test models lstm_activation_precision -- --nocapture || true
     end_t=$(date +%s%N)
     local dur

@@ -37,6 +37,7 @@ pub const V2_STRESS_DURATION_SECS: f64 = 5.0;
 //   ConvNet: ESR = 1.83e-14  →  CONVNET_ESR_LIMIT = 1e-12 (numerical floor)
 //   A2-FiLM-Lite:  ESR = 9.52e-15  →  A2_FILM_ESR_LIMIT = 1e-12 (numerical floor)
 //   A2-FiLM-Full:  ESR = 1.15e-14  →  A2_FILM_ESR_LIMIT = 1e-12 (numerical floor)
+//   A2-Generic:    ESR = 2.57e-14  →  A2_GENERIC_ESR_LIMIT = 1e-11 (calibrated parity floor, ~389× margin)
 
 /// Calibrated ESR limit for WaveNet model oracle parity (see methodology above).
 pub const WAVENET_ESR_LIMIT: f64 = 1e-12;
@@ -48,10 +49,10 @@ pub const A2_ESR_LIMIT: f64 = 1e-12;
 pub const CONVNET_ESR_LIMIT: f64 = 1e-12;
 /// Calibrated ESR limit for WaveNet A2-FiLM model oracle parity (see methodology above).
 pub const A2_FILM_ESR_LIMIT: f64 = 1e-9;
-// A2 Generic (wavenet_a2_max.nam) — KB-A2-MAX known bug; fail-closed TR1.1; threshold
-// recalibration only after RF5 close when production×C++ ≥ 90 dB SNR.
-/// Calibrated ESR limit for WaveNet A2 Generic — pending RF5 parity close (guard TR1.1 active).
-pub const A2_GENERIC_ESR_LIMIT: f64 = 1e-9;
+// A2 Generic (wavenet_a2_max.nam) — calibrated from empirical measurement (F-03).
+// Measured: ESR = 2.57e-14 (V1) / 2.53e-14 (V2), SNR = 135.90 dB (V1) / 135.97 dB (V2)
+/// Calibrated ESR limit for WaveNet A2 Generic oracle parity — parity verified (Fase 3, 2026-10-08).
+pub const A2_GENERIC_ESR_LIMIT: f64 = 1e-11;
 
 // ── Recurrent State Drift Diagnostic Limits ──
 // Methodology: 5.0s of stress signal v2 (240k samples) comparing production f32 vs oracle f64.

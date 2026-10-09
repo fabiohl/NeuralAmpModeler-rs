@@ -57,11 +57,11 @@ fn fixture_label_lookup_covers_known_and_unknown_labels() {
     assert_eq!(resolve_fixture_by_label(""), None);
 }
 
-/// All 20 bench labels of `benches/regression_gate.rs` are registered.
+/// All 21 bench labels of `benches/regression_gate.rs` are registered.
 #[test]
 fn rt_table_covers_every_regression_gate_bench() {
     let bench_labels: Vec<&str> = RT_BENCH_TABLE.iter().map(|e| e.bench_label).collect();
-    assert_eq!(bench_labels.len(), 20);
+    assert_eq!(bench_labels.len(), 21);
     for expected in [
         "RT_WaveNet_Std_CH16",
         "RT_WaveNet_Feather_CH8",
@@ -78,6 +78,7 @@ fn rt_table_covers_every_regression_gate_bench() {
         "RT_LSTM_Dyn_1x7",
         "RT_A2_Dyn_Gated_CH8",
         "RT_A2_Dyn_Blended_CH3",
+        "RT_A2_Max_CH4",
         "RT_DSP_Resampler_44k1_to_48k",
         "RT_DSP_Resampler_96k_to_48k",
         "RT_DSP_CabSim_IR_Medium",

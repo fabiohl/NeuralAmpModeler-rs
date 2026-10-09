@@ -158,6 +158,10 @@ fn bench_a2_dyn_blended(c: &mut Criterion) {
     regression_bench!(c, "RT_A2_Dyn_Blended_CH3", "a2_dynamic_blended_ch3.nam");
 }
 
+fn bench_a2_max(c: &mut Criterion) {
+    regression_bench!(c, "RT_A2_Max_CH4", "wavenet_a2_max.nam");
+}
+
 // ── DSP Infrastructure ───────────────────────────────────────────────────────
 
 // Sub-µs kernels need batched work per Criterion sample; the batch size is
@@ -570,6 +574,7 @@ criterion_group!(
         bench_lstm_dyn_1x7,
         bench_a2_dyn_gated,
         bench_a2_dyn_blended,
+        bench_a2_max,
         bench_dsp_resampler_44k1_to_48k,
         bench_dsp_resampler_96k_to_48k,
         bench_dsp_cabsim_ir_medium,

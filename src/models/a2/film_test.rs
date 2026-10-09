@@ -15,12 +15,11 @@ fn cond_to_scale_shift_ref(
     groups: u32,
 ) -> Vec<f32> {
     let g = groups as usize;
-    let ch_per_group = channels / g;
     let cond_per_group = cond_size / g;
     let out_per_group = if shift {
-        ch_per_group * 2
+        channels * 2 / g
     } else {
-        ch_per_group
+        channels / g
     };
     let mut out = vec![0.0f32; channels * 2];
 
@@ -29,11 +28,7 @@ fn cond_to_scale_shift_ref(
         let w_offset = grp * out_per_group * cond_per_group;
 
         for row in 0..out_per_group {
-            let global_out = if row < ch_per_group {
-                grp * ch_per_group + row
-            } else {
-                channels + grp * ch_per_group + (row - ch_per_group)
-            };
+            let global_out = grp * out_per_group + row;
             let mut sum = bias[global_out];
             let w_start = w_offset + row * cond_per_group;
             for i in 0..cond_per_group {
@@ -63,6 +58,25 @@ fn test_film_config_default() {
     assert!(!config.active);
     assert!(config.shift);
     assert_eq!(config.groups, 1);
+}
+
+#[test]
+fn test_film_groups_partition_scale_shift_output_rows() {
+    // C++ Conv1x1: eight output rows, one per group. The first four
+    // conditions drive scale; the last four independently drive shift.
+    let config = FiLMConfig {
+        active: true,
+        shift: true,
+        groups: 8,
+    };
+    assert!(FiLMLayer::load(config, 8, 4, vec![1.0; 7], vec![0.0; 8]).is_err());
+    let mut layer = FiLMLayer::load(config, 8, 4, vec![1.0; 8], vec![0.0; 8]).unwrap();
+    let mut input = [2.0, 3.0, 4.0, 5.0];
+    // SAFETY: exact feature and condition dimensions for this layer.
+    unsafe {
+        layer.process(&mut input, &[1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0]);
+    }
+    assert_eq!(input, [12.0, 26.0, 42.0, 60.0]);
 }
 
 #[test]

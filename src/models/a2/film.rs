@@ -118,14 +118,14 @@ impl FiLMLayer {
         if groups == 0 {
             return Err(NamErrorCode::InvalidModelTopology);
         }
-        let ch_per_group = channels / groups;
         let cond_per_group = cond_size / groups;
-        let out_per_group = if config.shift {
-            ch_per_group.checked_mul(2)
+        let out_rows = if config.shift {
+            channels.checked_mul(2)
         } else {
-            Some(ch_per_group)
+            Some(channels)
         };
-        let needed_rows = out_per_group
+        let needed_rows = out_rows
+            .map(|rows| rows / groups)
             .and_then(|rows| rows.checked_mul(cond_per_group))
             .and_then(|rows| rows.checked_mul(groups));
         let Some(needed_rows) = needed_rows else {
@@ -182,12 +182,11 @@ impl FiLMLayer {
             self.cond_size
         );
         let g = self.config.groups as usize;
-        let ch_per_group = self.channels / g;
         let cond_per_group = self.cond_size / g;
         let out_per_group = if self.config.shift {
-            ch_per_group * 2
+            self.channels * 2 / g
         } else {
-            ch_per_group
+            self.channels / g
         };
 
         for grp in 0..g {
@@ -196,11 +195,9 @@ impl FiLMLayer {
             let w_offset = grp * out_per_group * cond_per_group;
 
             for row in 0..out_per_group {
-                let global_out = if row < ch_per_group {
-                    grp * ch_per_group + row
-                } else {
-                    self.channels + grp * ch_per_group + (row - ch_per_group)
-                };
+                // Conv1x1 groups partition all output rows; scale/shift are
+                // split only after projection, not within each group.
+                let global_out = grp * out_per_group + row;
 
                 let mut sum = *self.bias.get_unchecked(global_out);
                 let w_start = w_offset + row * cond_per_group;

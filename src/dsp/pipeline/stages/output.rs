@@ -49,6 +49,16 @@ pub fn apply_output_stage_sanitized(
 }
 
 /// Stage 3: Output Gain, Fading, Clipping Detection, and Degrade Crossfade.
+///
+/// Clipping-flag semantics (`RT_STATUS_HAS_CLIPPED`): the flag reports a
+/// sample that exceeded full-scale (±1.0) at the detection point.
+/// Steady gate: detection runs on the fused signal (`output_gain * gate`),
+/// i.e. the delivered sample. A closed gate mutes to zero without flagging.
+/// Fading gate: detection runs on the pre-gate signal (`output_gain` only)
+/// before the fade ramp is applied, so a supra-FS pre-gate sample flags
+/// even when the ramped delivery stays below FS.
+/// A model carrying a large constant offset therefore flags truthfully at
+/// unity gain while the gate is open: the delivered sample really exceeds FS.
 #[inline(always)]
 #[expect(
     clippy::too_many_arguments,

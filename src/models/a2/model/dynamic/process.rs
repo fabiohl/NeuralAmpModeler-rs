@@ -166,6 +166,7 @@ impl WaveNetA2Dyn {
                     use_cond_dsp,
                     cond_size,
                     true,
+                    true,
                 );
 
                 #[cfg(any(test, feature = "testing"))]
@@ -315,11 +316,12 @@ impl WaveNetA2Dyn {
         use_cond_dsp: bool,
         cond_size: usize,
         is_first_array: bool,
+        skip_last_residual: bool,
     ) {
         let channels = self.channels;
         let bottleneck = self.bottleneck;
         let is_first = is_first_array && li == 0;
-        let is_last = li == self.num_layers - 1;
+        let is_last = skip_last_residual && li == self.num_layers - 1;
         let ring_size = self.layer_ring_sizes[li];
         let lookback = self.layer_lookbacks[li];
         let max_lookback_cols = lookback / channels;

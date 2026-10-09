@@ -68,6 +68,10 @@ tests/fixtures/f64_anchors/*.bin.old
 tests/fixtures/f64_anchors/*.bin.old.backup
 tests/fixtures/f64_anchors/*.backup
 
+# A2-Max forensic C++ dumps (Épico 1 Sprint 1.3): reproducible via
+# utils/render-a2-dumps.sh; SHAs recorded in docs/fixtures.md — never commit bins.
+tests/fixtures/dumps_a2_max/*.bin
+
 # Python bytecode from fixture/utility scripts
 __pycache__/
 *.pyc

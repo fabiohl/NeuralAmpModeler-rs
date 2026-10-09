@@ -1002,45 +1002,28 @@ fn test_golden_vectors_a2_example_slimmable() {
     );
 }
 
-/// Test 8k: `wavenet_a2_max.nam` dispatch is fail-closed (TR1.1 / KB-A2-MAX).
+/// Test 8k: `wavenet_a2_max.nam` dispatch succeeds — parity verified (Fase 3, 2026-10-08).
 ///
-/// Known bug: prod×C++ SNR ≈ 1.69 dB (structural). `build_model` must
-/// return `Err` — no production f32 instance of this topology enters
-/// the public hot path.
+/// Historical fail-closed guard TR1.1 (KB-A2-MAX) retired: prod f32 × C++ golden
+/// SNR 135.90 dB (V1) / 135.97 dB (V2). `build_model` must return `Ok`.
 #[test]
-fn test_wavenet_a2_max_dispatch_rejected() {
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
+fn test_wavenet_a2_max_dispatch_accepted() {
     let path = model_path("wavenet_a2_max.nam");
     assert!(path.exists());
     let json = fs::read_to_string(&path).expect("Failed to read wavenet_a2_max.nam");
     let data = parse_nam_json(&json).expect("Failed to parse wavenet_a2_max.nam");
     let result = build_model(&data);
-    let err = match result {
-        Err(e) => e,
-        Ok(_) => panic!("wavenet_a2_max.nam must be rejected fail-closed (TR1.1)"),
-    };
-    let msg = err.to_string();
     assert!(
-        msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
-        "Error message must cite KB-A2-MAX / parity gap, got: {msg}"
-    );
-    assert!(
-        msg.contains("fail-closed"),
-        "Error message must cite fail-closed, got: {msg}"
+        result.is_ok(),
+        "wavenet_a2_max.nam must build after KB-A2-MAX retirement (Fase 3). Error: {:?}",
+        result.err()
     );
 }
 
-/// Test 8k-1: `wavenet_condition_dsp.nam` still loads — non-regression guard.
+/// Test 8k-1: `wavenet_condition_dsp.nam` loads — non-regression verification.
 ///
-/// Proves that the fail-closed dispatch guard in `is_disabled_broken_a2_flagship`
-/// does **not** block valid neighboring models. The `wavenet_condition_dsp.nam`
-/// model is a multi-array cascade with `condition_dsp` and `condition_size=3`,
-/// which does not match the broken-flagship signature (it has `num_arrays=2`,
-/// which falls outside the `num_arrays==1` predicate).
-///
-/// If this test fails, the guard is over-broad and must be narrowed.
+/// Verifies dispatch and loading of neighboring cascade model `wavenet_condition_dsp.nam`
+/// (multi-array cascade with embedded `condition_dsp` and `condition_size=3`).
 #[test]
 fn test_wavenet_condition_dsp_still_loads() {
     let path = model_path("wavenet_condition_dsp.nam");
@@ -1050,20 +1033,19 @@ fn test_wavenet_condition_dsp_still_loads() {
     let result = build_model(&data);
     assert!(
         result.is_ok(),
-        "wavenet_condition_dsp.nam must load successfully (guard is over-broad). Error: {:?}",
+        "wavenet_condition_dsp.nam must load successfully. Error: {:?}",
         result.err()
     );
 }
 
 /// Test TR2.2: weight budget checkpoints for A2 Max (818 main + 1052 condition_dsp).
 ///
-/// Under `NAM_A2_MAX_UNLOCK=1`, verifies that the dispatcher consumes every f32
+/// Verifies that the dispatcher consumes every f32
 /// in the weight stream — the main model builds with exactly 818 weights consumed
 /// and the condition_dsp sub-model with exactly 1052. Per-component checkpoints
 /// are asserted against the NAMCore reference (`third-party/.../generate_weights_a2.py`).
 ///
 /// **Invariant:** any residual weight ≠ 0 fails the layout test before comparing audio.
-/// **Rollback:** remove this test; the guard remains unchanged.
 #[test]
 fn test_a2_max_weight_budget_818_1052() {
     let path = model_path("wavenet_a2_max.nam");
@@ -1095,13 +1077,7 @@ fn test_a2_max_weight_budget_818_1052() {
     );
 
     // --- Build model (implicitly verifies all weights consumed) ---
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
-    let model = build_model(&data).expect("A2 Max must build under NAM_A2_MAX_UNLOCK=1");
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
+    let model = build_model(&data).expect("A2 Max must build");
 
     let wad = match &*model {
         StaticModel::WavenetA2Dyn(wad) => wad,
@@ -1259,15 +1235,15 @@ fn test_a2_max_weight_budget_818_1052() {
 
 /// Checkpoints FiLM por slot (H6).
 ///
-/// Under unlock, builds A2 Max and registers per-layer, per-FiLM-slot:
+/// Builds A2 Max and registers per-layer, per-FiLM-slot:
 /// (groups, shift, w_count, b_count, stream offset). Verifies the total
 /// weight budget = 818 and each slot matches the `weights_layout.rs` formula.
 ///
 /// ## How to run
 /// ```sh
-/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_a2_max_film_slot_budget -- --ignored --exact --nocapture
+/// cargo test --test models test_a2_max_film_slot_budget -- --ignored --exact --nocapture
 /// ```
-// on-demand: KB-A2-MAX FiLM slot budget diagnostic (TR2b.3/H6); unlock-only, not a nightly gate
+// on-demand: A2-Max FiLM slot budget diagnostic (TR2b.3/H6); not a nightly gate
 #[test]
 #[ignore = "TR2b.3 (H6): FiLM budget check — not a CI gate; run manually"]
 fn test_a2_max_film_slot_budget() {
@@ -1281,13 +1257,7 @@ fn test_a2_max_film_slot_budget() {
     let total_weights = data.weights.len();
     assert_eq!(total_weights, 818, "Main model weight budget mismatch");
 
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
-    let model = build_model(&data).expect("A2 Max must build under unlock");
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
+    let model = build_model(&data).expect("A2 Max must build successfully");
 
     let wad = match &*model {
         StaticModel::WavenetA2Dyn(wad) => wad,
@@ -1609,7 +1579,7 @@ fn test_a2_max_film_slot_budget() {
 
 /// Test TR2.3: diagnostic dump harness — deterministic, bit-stable across two runs.
 ///
-/// Under `NAM_A2_MAX_UNLOCK=1`, builds A2 Max, prewarms, and processes
+/// Builds A2 Max, prewarms, and processes
 /// a deterministic test signal twice with full diagnostic capture enabled.
 /// Verifies that condition_dsp output, head-per-layer snapshots, and final
 /// output have identical bit-stable hashes in both runs (zero non-determinism).
@@ -1625,13 +1595,7 @@ fn test_a2_max_diagnostic_dump_bit_stable() {
     let data = parse_nam_json(&json).expect("Parse failed");
 
     let run_dump = || -> u64 {
-        unsafe {
-            std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-        }
-        let model = build_model(&data).expect("Build failed under unlock");
-        unsafe {
-            std::env::remove_var("NAM_A2_MAX_UNLOCK");
-        }
+        let model = build_model(&data).expect("Build failed");
         let mut wad = match *model {
             StaticModel::WavenetA2Dyn(w) => w,
             _ => panic!("Expected WavenetA2Dyn"),
@@ -1677,10 +1641,6 @@ fn test_a2_max_diagnostic_dump_bit_stable() {
         "Diagnostic dump must be bit-stable across two identical runs: \
          run1={h1:#016x}, run2={h2:#016x}"
     );
-
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
 }
 
 /// Test 8k-1b: `wavenet_condition_lstm.nam` fail-closed rejection.
@@ -3232,23 +3192,12 @@ fn test_golden_vectors_convnet_test() {
 
 /// Test 10d: Golden — WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1)
 ///
-/// ## Gate state: `#[ignore = "KB-A2-MAX known bug: prod×C++ ~0.23 dB; guard TR1.1"]`
+/// ## Gate state: parity verified (Fase 3, 2026-10-08) — active CI gate.
 ///
-/// **Why ignored (KB-A2-MAX):** Permanent known bug until reopening criteria
-/// in `docs/cpp_parity_map.md` §4.4.3. HEAD meter prod×C++ **SNR ≈ 0.23 dB**
-/// (ESR ≈ 9.49e-1). Guard TR1.1 rejects `build_model`. Not a CI parity gate.
-/// Diagnostic path: `NAM_A2_MAX_UNLOCK=1` + feature `testing` / `cfg(test)`.
-///
-/// **What the test validates when un-ignored:** Compares Rust DSP against
-/// `golden_wavenet_a2_max.bin` (NAMCore C++). Do not un-ignore without
-/// meeting §4.4.3 (SNR≥90 dB + intermediate C++ dumps).
-// on-demand: KB-A2-MAX golden compare; known bug until §4.4.3 reopen; not a nightly gate
+/// Prod f32 × C++ golden: **SNR 135.90 dB** (ESR 2.57e-14, V1) /
+/// **SNR 135.97 dB** (ESR 2.53e-14, V2 48 kHz). KB-A2-MAX retired.
 #[test]
-#[ignore = "KB-A2-MAX known bug: prod×C++ ~1.69 dB; guard TR1.1 — not a CI parity gate"]
 fn test_golden_vectors_wavenet_a2_max() {
-    // Permanent known bug until docs/cpp_parity_map.md §4.4.3.
-    // Default path (no unlock): assert fail-closed and return — never a red gate.
-    // Full golden compare only under NAM_A2_MAX_UNLOCK=1 (manual reopen diagnostics).
     let nam_path = model_path("wavenet_a2_max.nam");
     assert!(
         nam_path.exists(),
@@ -3258,22 +3207,6 @@ fn test_golden_vectors_wavenet_a2_max() {
 
     let json_data = fs::read_to_string(&nam_path).expect("Failed to read WaveNet A2 Max model");
     let model_data = parse_nam_json(&json_data).expect("Failed in JSON parser");
-
-    let unlocked = std::env::var("NAM_A2_MAX_UNLOCK").as_deref() == Ok("1");
-    if !unlocked {
-        let err = match build_model(&model_data) {
-            Err(e) => e,
-            Ok(_) => panic!(
-                "KB-A2-MAX: build_model must Err without NAM_A2_MAX_UNLOCK=1 (fail-closed TR1.1)"
-            ),
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
-            "KB-A2-MAX: reject message must cite known bug, got: {msg}"
-        );
-        return;
-    }
 
     let golden_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
@@ -3287,8 +3220,7 @@ fn test_golden_vectors_wavenet_a2_max() {
     let (input, expected) =
         read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
 
-    let mut model = build_model(&model_data)
-        .expect("Dispatcher failed to build A2 Max under NAM_A2_MAX_UNLOCK=1");
+    let mut model = build_model(&model_data).expect("Dispatcher failed to build A2 Max");
 
     model.prewarm(2048);
     let mut output = vec![0.0f32; input.len()];
@@ -3307,51 +3239,126 @@ fn test_golden_vectors_wavenet_a2_max() {
         "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference",
         STRESS_SAMPLE_RATE,
     );
+    let (esr_raw, esr_dc_free, mean_ref, std_ref) = compute_esr_dc_free(&expected, &output);
+    println!(
+        "// Measured: ESR (raw) = {esr_raw:.2e}, ESR (dc-free) = {esr_dc_free:.2e} | \
+         golden mean = {mean_ref:.2}, std = {std_ref:.2}"
+    );
 }
 
-/// A2 Max SNR/ESR vs C++ golden (n=2048, block=64, prewarm=2048) — tracking meter.
+/// Computes raw ESR, DC-free ESR, reference mean, and reference standard deviation.
 ///
-/// **Ignored by default** — does not fail CI. Run manually:
-/// ```sh
-/// cargo test --test models test_measure_a2_max_snr_vs_golden -- --ignored --exact --nocapture
-/// ```
+/// Diagnostic helper (F-03, T1.3.1): reveals the AC-only error floor when a golden
+/// vector contains a dominant DC offset (e.g. golden_wavenet_a2_max has mean ≈ 8.19).
+fn compute_esr_dc_free(reference: &[f32], test: &[f32]) -> (f64, f64, f64, f64) {
+    assert_eq!(
+        reference.len(),
+        test.len(),
+        "Vectors of different sizes for ESR"
+    );
+    let n = reference.len() as f64;
+    let mean_ref = reference.iter().map(|&x| x as f64).sum::<f64>() / n;
+    let mean_test = test.iter().map(|&x| x as f64).sum::<f64>() / n;
+
+    let var_ref = reference
+        .iter()
+        .map(|&x| {
+            let d = x as f64 - mean_ref;
+            d * d
+        })
+        .sum::<f64>()
+        / n;
+    let std_ref = var_ref.sqrt();
+
+    let sig_raw: f64 = reference.iter().map(|&x| (x as f64).powi(2)).sum();
+    let noise_raw: f64 = reference
+        .iter()
+        .zip(test.iter())
+        .map(|(&r, &t)| ((r - t) as f64).powi(2))
+        .sum();
+
+    let esr_raw = if sig_raw <= f64::EPSILON {
+        if noise_raw <= f64::EPSILON {
+            0.0
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        noise_raw / sig_raw
+    };
+
+    let sig_ac: f64 = reference
+        .iter()
+        .map(|&x| {
+            let d = x as f64 - mean_ref;
+            d * d
+        })
+        .sum();
+    let noise_ac: f64 = reference
+        .iter()
+        .zip(test.iter())
+        .map(|(&r, &t)| {
+            let diff = (r as f64 - mean_ref) - (t as f64 - mean_test);
+            diff * diff
+        })
+        .sum();
+
+    let esr_dc_free = if sig_ac <= f64::EPSILON {
+        if noise_ac <= f64::EPSILON {
+            0.0
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        noise_ac / sig_ac
+    };
+
+    (esr_raw, esr_dc_free, mean_ref, std_ref)
+}
+
+/// A2 Max SNR/ESR vs C++ golden (n=2048, block=64, prewarm=2048) — active CI gate (Fase 3).
 ///
-/// Provenance (do not treat the println label as a frozen “pass” baseline):
+/// Provenance:
 /// - Pre-R3 audit (TR2.5): SNR ≈ **1.35 dB**, ESR ≈ 7.4e-1
 /// - H1-only (TR3.1): SNR ≈ **2.31 dB**
-/// - H1+H2 tree (re-audit 2026-08-09): SNR ≈ **0.23 dB**, ESR ≈ 9.49e-1  ← current HEAD
-///
-/// Fail-closed guard remains active; unlock via `NAM_A2_MAX_UNLOCK=1` inside the test.
-// on-demand: KB-A2-MAX SNR/ESR meter vs C++ golden; diagnostic only, not a nightly gate
+/// - H1+H2 tree (re-audit 2026-08-09): SNR ≈ **0.23 dB**, ESR ≈ 9.49e-1
+/// - Fase 2 (2026-10-07): SNR **135.90 dB**, ESR 2.57e-14 ← parity verified
 #[test]
-#[ignore = "KB-A2-MAX meter only: prod×C++ ~1.69 dB; unlock diagnostics — not a CI gate"]
 fn test_measure_a2_max_snr_vs_golden() {
-    let golden_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_wavenet_a2_max.bin");
+    measure_a2_max_snr_vs_golden("golden_wavenet_a2_max.bin");
+}
+
+#[test]
+fn test_measure_a2_max_v2_snr_vs_golden() {
+    measure_a2_max_snr_vs_golden("golden_wavenet_a2_max_v2_48000.bin");
+}
+
+fn measure_a2_max_snr_vs_golden(golden_filename: &str) {
+    let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(golden_filename);
     assert!(golden_path.exists());
-    let (input, expected) =
-        read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
+    let (input, expected) = read_golden_bin(&golden_path).expect("Failed to read A2 Max golden");
 
     let nam_path = model_path("wavenet_a2_max.nam");
     assert!(nam_path.exists());
     let json_data = fs::read_to_string(&nam_path).expect("Failed to read A2 Max model");
     let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
 
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
     let mut model = build_model(&model_data).expect("Failed to build A2 Max under unlock");
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
 
     model.prewarm(2048);
     let mut output = vec![0.0f32; input.len()];
-    process_in_blocks(&mut model, &input, &mut output, 64);
+    let allocations = {
+        let _guard = common::alloc_audit::TrackingGuard::new();
+        process_in_blocks(&mut model, &input, &mut output, 64);
+        common::alloc_audit::get_alloc_count()
+    };
+    assert_eq!(allocations, 0, "A2 Max: allocation on the processing path");
 
     let n = input.len() as f64;
     let mse = common::metrics::compute_mse(&expected, &output);
-    let esr = common::metrics::compute_esr(&expected, &output);
+    let (esr_raw, esr_dc_free, mean_ref, std_ref) = compute_esr_dc_free(&expected, &output);
 
     let signal_power: f64 = expected.iter().map(|&x| x as f64 * x as f64).sum::<f64>() / n;
     let snr_db = if mse > 0.0 && signal_power > 0.0 {
@@ -3366,9 +3373,11 @@ fn test_measure_a2_max_snr_vs_golden() {
     //   TR3.1 H1-only:     SNR ≈ 2.31 dB
     //   HEAD H1+H2 tree:   SNR ≈ 0.23 dB, ESR ≈ 9.49e-1  (re-audit 2026-08-09)
     //   Structural audit:  SNR ≈ 1.69 dB, ESR ≈ 6.78e-1 (measured 2026-09-07)
+    //   Fase 2 (2026-10-07): SNR 135.90 dB, ESR 2.57e-14 (V1) / SNR 135.97 dB, ESR 2.53e-14 (V2)
     println!(
-        "// Measured: SNR = {snr_db:.2} dB, ESR = {esr:.2e} | \
-         n={} block=64 prewarm=2048 48kHz | HEAD meter (see history in test docs)",
+        "// Measured: SNR = {snr_db:.2} dB, ESR (raw) = {esr_raw:.2e}, ESR (dc-free) = {esr_dc_free:.2e} | \
+         mean = {mean_ref:.2}, std = {std_ref:.2} | \
+         n={} block=64 prewarm=2048 48kHz | {golden_filename}",
         input.len()
     );
 
@@ -3378,13 +3387,20 @@ fn test_measure_a2_max_snr_vs_golden() {
         .map(|(a, b)| (a - b).abs() as f64)
         .fold(0.0f64, f64::max);
     println!("// Measured: max_abs_error = {max_abs:.4e} | same run");
+    // Measured: SNR = 135.90 dB (V1), 135.97 dB (V2); threshold calibrated with ~15.9 dB margin
+    assert!(snr_db >= 120.0, "A2 Max: SNR {snr_db:.6} dB < 120.0 dB");
+    // Measured: ESR = 2.57e-14 (V1), 2.53e-14 (V2); threshold calibrated with ~389x margin
+    assert!(
+        esr_raw < 1.0e-11,
+        "A2 Max: ESR (raw) {esr_raw:.9e} >= 1.0e-11"
+    );
 }
 
-/// Triple decomposition harness (H0).
+/// Triple decomposition harness (H0) — Case A closed (T2.1.1, 2026-10-08).
 ///
 /// Processes the same deterministic golden input (n=2048) three ways:
 ///   1. prod f32 (unlock) — with diagnostic dumps of condition_dsp, head_accum, output
-///   2. f64 oracle — full model output
+///   2. f64 oracle — full model output, prewarm-paired (2048 zeros first)
 ///   3. C++ golden output — from `golden_wavenet_a2_max.bin`
 ///
 /// Emits SNR/ESR table for prod×C++, prod×f64, f64×C++ and classifies
@@ -3392,13 +3408,14 @@ fn test_measure_a2_max_snr_vs_golden() {
 ///
 /// ## How to run
 /// ```sh
-/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_h0_triple_decomposition -- --ignored --exact --nocapture
+/// cargo test --test models test_h0_triple_decomposition -- --ignored --exact --nocapture
 /// ```
 ///
 /// ## Invariants
 /// - One `#[ignore]`'d command reproduces the full table.
 /// - Numbers annotated with `// Measured:` for machine-readable consumption.
 /// - No production code change; only measurement + documentation.
+/// - Case A gate: all three legs ≥ 90 dB (T2.1.1 acceptance).
 // on-demand: KB-A2-MAX H0 triple-decomposition harness (TR2b.1); not a nightly gate
 #[test]
 #[ignore = "TR2b.1 (H0): diagnostic harness — not a CI gate; run manually"]
@@ -3427,9 +3444,6 @@ fn test_h0_triple_decomposition() {
     let json_data = fs::read_to_string(&nam_path).expect("Failed to read A2 Max model");
     let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
 
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
     let model = build_model(&model_data).expect("Failed to build A2 Max under unlock");
     let mut wad = match *model {
         neural_amp_modeler_rs::models::StaticModel::WavenetA2Dyn(w) => w,
@@ -3486,16 +3500,24 @@ fn test_h0_triple_decomposition() {
         dump.head_per_layer_snapshots.len()
     );
 
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
-
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // (2) f64 oracle — full model output
+    // (2) f64 oracle — full model output, prewarm-paired with production.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Production prewarms with zeros (receptive-field silence); the oracle
+    // replays the same zero feed so both start from the identical steady
+    // state — otherwise the cold-start transient dominates the ESR (T2.1.1d).
     let input_f64: Vec<f64> = input.iter().map(|&x| x as f64).collect();
     let oracle_cfg = PrecisionConfig::default();
-    let oracle_output = oracle_forward(&model_data, &input_f64, &oracle_cfg);
+    let prewarm_len = 2048usize;
+    let mut oracle_fed = vec![0.0f64; prewarm_len + n];
+    oracle_fed[prewarm_len..].copy_from_slice(&input_f64);
+    let oracle_full = oracle_forward(&model_data, &oracle_fed, &oracle_cfg);
+    assert_eq!(
+        oracle_full.len(),
+        prewarm_len + n,
+        "oracle output length mismatch"
+    );
+    let oracle_output = oracle_full[prewarm_len..].to_vec();
     assert_eq!(oracle_output.len(), n, "oracle output length mismatch");
     assert!(
         oracle_output.iter().all(|&x| x.is_finite()),
@@ -3538,7 +3560,7 @@ fn test_h0_triple_decomposition() {
         (true, true, false) => "prod≈f64≈C++ pair (prod≈f64 ∧ prod≈C++ but f64≉C++)",
         (true, false, true) => "prod≈f64≈C++ pair (prod≈f64 ∧ f64≈C++ but prod≉C++)",
         (false, true, true) => "prod≈C++≈f64 pair (prod≈C++ ∧ f64≈C++ but prod≉f64)",
-        (true, true, true) => "All identical (ESR < 1e-3 across all pairs) — gap closed!",
+        (true, true, true) => "Case A (T2.1.1): all three legs agree — triple parity closed",
     };
 
     // ── Print table ─────────────────────────────────────────────────────────
@@ -3547,8 +3569,9 @@ fn test_h0_triple_decomposition() {
     println!("Model:  wavenet_a2_max.nam (CH=4, cond=8, FiLM, head1x1)");
     println!("Input:  n=2048, block=64, prewarm=2048, 48 kHz (golden_wavenet_a2_max.bin)");
     println!(
-        "Oracle: PrecisionConfig::default() (F64Exact weights, Exact activations, Neumaier acc)"
+        "Oracle: PrecisionConfig::default() (F64Exact weights, Exact activations, Neumaier acc),"
     );
+    println!("        prewarm-paired: 2048 zeros fed before the 2048-frame window (T2.1.1d)");
     println!();
     println!(
         "{:<20} {:<18} {:<18} {:<18}",
@@ -3598,11 +3621,21 @@ fn test_h0_triple_decomposition() {
     println!("eps = {eps:.0e} (matches < -30 dB ESR for practical identity)");
     println!();
 
-    // Assert the classification is not vacuous (at least one pair should diverge)
+    // Acceptance (Case A): all three legs ≥ 90 dB.
     assert!(
-        esr_prod_cpp > eps || esr_prod_f64 > eps || esr_f64_cpp > eps,
-        "H0: all three pairs are identical (ESR<{eps:.0e}) — this would mean the gap is closed. \
-         Update classification and remove #[ignore]."
+        snr(esr_prod_cpp) >= 90.0,
+        "H0 Case A: prod×C++ SNR {:.2} dB < 90 dB",
+        snr(esr_prod_cpp)
+    );
+    assert!(
+        snr(esr_prod_f64) >= 90.0,
+        "H0 Case A: prod×f64 SNR {:.2} dB < 90 dB",
+        snr(esr_prod_f64)
+    );
+    assert!(
+        snr(esr_f64_cpp) >= 90.0,
+        "H0 Case A: f64×C++ SNR {:.2} dB < 90 dB",
+        snr(esr_f64_cpp)
     );
 }
 
@@ -3616,7 +3649,7 @@ fn test_h0_triple_decomposition() {
 ///
 /// ## How to run
 /// ```sh
-/// NAM_A2_MAX_UNLOCK=1 cargo test --test models test_tr2b2_condition_dsp_contract -- --ignored --exact --nocapture
+/// cargo test --test models test_tr2b2_condition_dsp_contract -- --ignored --exact --nocapture
 /// ```
 // on-demand: KB-A2-MAX condition_dsp contract harness (TR2b.2/H5+H7); not a nightly gate
 #[test]
@@ -3634,9 +3667,6 @@ fn test_tr2b2_condition_dsp_contract() {
     let model_data = parse_nam_json(&json_data).expect("Failed to parse A2 Max JSON");
     let model_data_for_oracle = model_data.clone();
 
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
     let model = build_model(&model_data).expect("A2 Max must build under unlock");
     let wad = match *model {
         StaticModel::WavenetA2Dyn(w) => w,
@@ -3714,10 +3744,6 @@ fn test_tr2b2_condition_dsp_contract() {
     }
     println!();
 
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
-
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // (c) Dump condition_dsp 8ch vs f64 oracle
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3730,9 +3756,6 @@ fn test_tr2b2_condition_dsp_contract() {
     let (golden_input, _) =
         read_golden_bin(&golden_path).expect("Failed to read golden_wavenet_a2_max.bin");
 
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
     let model2 = build_model(&model_data_for_oracle).expect("A2 Max must build");
     let mut wad2 = match *model2 {
         StaticModel::WavenetA2Dyn(w) => w,
@@ -3764,10 +3787,6 @@ fn test_tr2b2_condition_dsp_contract() {
     let dump = wad2
         .take_diagnostics()
         .expect("Diagnostic dump must be present");
-
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
 
     // ── f64 oracle for condition_dsp sub-model ──
     let cond_json = model_data_for_oracle

@@ -42,14 +42,16 @@ impl FiLMOracleSlot {
     }
 
     pub(crate) fn apply(&mut self, input: &mut [f64], condition: &[f64]) {
+        // Global-row GEMV (production `film.rs::cond_to_scale_shift`):
+        // the Conv1x1-with-groups maps all 2*channels rows first, scale/shift
+        // split only after projection — never scale/shift-per-group.
         let constructed_ch = self.buf.len() / 2;
         let g = self.groups as usize;
-        let ch_per_group = constructed_ch / g;
         let cond_per_group = condition.len().checked_div(g).unwrap_or(0);
         let out_per_group = if self.shift {
-            ch_per_group * 2
+            constructed_ch * 2 / g
         } else {
-            ch_per_group
+            constructed_ch / g
         };
 
         self.buf.fill(0.0);
@@ -57,14 +59,9 @@ impl FiLMOracleSlot {
 
         for grp in 0..g {
             let cond_off = grp * cond_per_group;
-            let row_off = grp * out_per_group;
-            let w_off = row_off * cond_per_group;
+            let w_off = grp * out_per_group * cond_per_group;
             for row in 0..out_per_group {
-                let global_out = if row < ch_per_group {
-                    grp * ch_per_group + row
-                } else {
-                    constructed_ch + grp * ch_per_group + (row - ch_per_group)
-                };
+                let global_out = grp * out_per_group + row;
                 let mut sum = self.bias[global_out];
                 for k in 0..cond_per_group {
                     sum += self.weights[w_off + row * cond_per_group + k] * condition[cond_off + k];
@@ -116,6 +113,10 @@ pub(crate) fn a2_read_activation(
     li: usize,
     _num_layers: usize,
 ) -> ActivationConfig {
+    // Single-string activation (A2 generic): replicate across all layers.
+    if let Some(s) = raw.get("activation").and_then(|v| v.as_str()) {
+        return ActivationConfig::from_json(&serde_json::Value::String(s.to_string()));
+    }
     let arr = raw.get("activation").and_then(|v| v.as_array());
     if let Some(arr) = arr
         && li < arr.len()
@@ -131,6 +132,20 @@ pub(crate) fn a2_read_activation(
 }
 
 pub(crate) fn a2_read_secondary_activation(raw: &serde_json::Value, li: usize) -> ActivationConfig {
+    // Single-value secondary activation (object or string): same value for all layers.
+    // Mirrors production `parse_secondary_activations_from_json` (string → {"type": name}).
+    // Empty string / "none" means absent → Sigmoid default (unused when gating is None).
+    if let Some(v) = raw.get("secondary_activation") {
+        if let Some(s) = v.as_str() {
+            if s.is_empty() || s.eq_ignore_ascii_case("none") {
+                return ActivationConfig::Sigmoid;
+            }
+            return ActivationConfig::from_json(v);
+        }
+        if v.is_object() {
+            return ActivationConfig::from_json(v);
+        }
+    }
     let arr = raw.get("secondary_activation").and_then(|v| v.as_array());
     if let Some(arr) = arr
         && li < arr.len()
@@ -147,6 +162,15 @@ pub(crate) fn a2_read_secondary_activation(raw: &serde_json::Value, li: usize) -
 }
 
 pub(crate) fn a2_read_gating_mode(raw: &serde_json::Value, li: usize) -> GatingModeOracle {
+    // Single-string gating mode (A2 generic / condition_dsp): replicate across layers.
+    // Mirrors production `parse_gating_modes_from_json`.
+    if let Some(s) = raw.get("gating_mode").and_then(|v| v.as_str()) {
+        return match s {
+            "gated" => GatingModeOracle::Gated,
+            "blended" => GatingModeOracle::Blended,
+            _ => GatingModeOracle::None,
+        };
+    }
     let arr = raw.get("gating_mode").and_then(|v| v.as_array());
     if let Some(arr) = arr
         && li < arr.len()
@@ -181,10 +205,21 @@ pub(crate) enum ActivationConfig {
     HardTanh,
     FastTanh,
     ReLU,
-    LeakyReLU { negative_slope: f64 },
+    LeakyReLU {
+        negative_slope: f64,
+    },
+    PReLU {
+        negative_slopes: Vec<f64>,
+    },
     Sigmoid,
     SiLU,
     HardSwish,
+    LeakyHardTanh {
+        min_val: f64,
+        max_val: f64,
+        min_slope: f64,
+        max_slope: f64,
+    },
     Softsign,
 }
 
@@ -195,14 +230,17 @@ impl ActivationConfig {
             return Self::from_json_obj(obj);
         }
         if let Some(s) = v.as_str() {
+            // Production `activation_parser.rs` wraps bare names as {"type": name}
+            // and `ActivationType` carries `#[serde(alias)]` for NAM spellings.
             return match s {
                 "HardTanh" => Self::HardTanh,
                 "FastTanh" => Self::FastTanh,
                 "ReLU" => Self::ReLU,
                 "Sigmoid" => Self::Sigmoid,
                 "SiLU" => Self::SiLU,
-                "HardSwish" => Self::HardSwish,
+                "HardSwish" | "Hardswish" => Self::HardSwish,
                 "Softsign" => Self::Softsign,
+                "Tanh" => Self::Tanh,
                 _ => Self::Tanh,
             };
         }
@@ -224,10 +262,40 @@ impl ActivationConfig {
                     negative_slope: slope,
                 }
             }
+            // Production `PReLU { negative_slopes }` — per-channel slopes.
+            // Mirrors `prelu_slice` cycling semantics (`slopes[idx % len]`).
+            "PReLU" => {
+                let slopes = obj
+                    .get("negative_slopes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if slopes.is_empty() {
+                    Self::Tanh
+                } else {
+                    Self::PReLU {
+                        negative_slopes: slopes,
+                    }
+                }
+            }
             "Sigmoid" => Self::Sigmoid,
             "SiLU" => Self::SiLU,
-            "HardSwish" => Self::HardSwish,
+            "HardSwish" | "Hardswish" => Self::HardSwish,
+            // Production alias `#[serde(alias = "LeakyHardtanh")]` (lowercase t).
+            "LeakyHardTanh" | "LeakyHardtanh" => {
+                let min_val = obj.get("min_val").and_then(|v| v.as_f64()).unwrap_or(-1.0);
+                let max_val = obj.get("max_val").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                let min_slope = obj.get("min_slope").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let max_slope = obj.get("max_slope").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                Self::LeakyHardTanh {
+                    min_val,
+                    max_val,
+                    min_slope,
+                    max_slope,
+                }
+            }
             "Softsign" => Self::Softsign,
+            "Tanh" => Self::Tanh,
             _ => Self::Tanh,
         }
     }
@@ -257,6 +325,17 @@ impl ActivationConfig {
                     }
                 }
             }
+            Self::PReLU { negative_slopes } => {
+                if negative_slopes.is_empty() {
+                    return;
+                }
+                // Mirrors `prelu_slice` cycling: slope[idx % len].
+                for (i, v) in z.iter_mut().enumerate() {
+                    if *v < 0.0 {
+                        *v *= negative_slopes[i % negative_slopes.len()];
+                    }
+                }
+            }
             Self::Sigmoid => {
                 for v in z.iter_mut() {
                     *v = oracle_sigmoid(*v, activation_mode);
@@ -272,6 +351,22 @@ impl ActivationConfig {
                 for v in z.iter_mut() {
                     let relu6 = (*v + 3.0).clamp(0.0, 6.0);
                     *v = *v * relu6 / 6.0;
+                }
+            }
+            Self::LeakyHardTanh {
+                min_val,
+                max_val,
+                min_slope,
+                max_slope,
+            } => {
+                // Mirrors `leaky_hard_tanh` scalar: (x-min)*slope+min below,
+                // (x-max)*slope+max above, identity inside.
+                for v in z.iter_mut() {
+                    if *v < *min_val {
+                        *v = (*v - *min_val) * *min_slope + *min_val;
+                    } else if *v > *max_val {
+                        *v = (*v - *max_val) * *max_slope + *max_val;
+                    }
                 }
             }
             Self::Softsign => {
@@ -301,6 +396,7 @@ pub(crate) struct A2OracleLayerWeights {
     pub head1x1_b: Vec<f64>,
     pub mixin_groups: u32,
     pub l1x1_groups: u32,
+    pub groups_input: u32,
 }
 
 pub(crate) struct ArrayState {
@@ -412,6 +508,13 @@ pub(crate) fn build_a2_arrays(
         };
 
         let mut lws: Vec<A2OracleLayerWeights> = Vec::new();
+        // Grouped dilated conv (C++ `groups_input`): block-diagonal, no
+        // cross-group links. Read once per array — uniform across layers.
+        let groups_input = layer_raw
+            .as_ref()
+            .and_then(|raw| raw.get("groups_input"))
+            .and_then(|g| g.as_u64())
+            .unwrap_or(1) as u32;
         for li in 0..num_layers {
             let ks = kernel_sizes[li];
             let dil = dilations[li];
@@ -423,7 +526,9 @@ pub(crate) fn build_a2_arrays(
                 bottleneck
             };
 
-            let conv_w = cursor.read_f64(ch * conv_out * ks);
+            // Mirrors production `build.rs`: (ch * conv_out / groups) * ks.
+            let gi = groups_input.max(1) as usize;
+            let conv_w = cursor.read_f64(ch * conv_out / gi * ks);
             let conv_b = cursor.read_f64(conv_out);
 
             // Group config (per-array, applied to mixin and l1x1).
@@ -504,7 +609,12 @@ pub(crate) fn build_a2_arrays(
                     .and_then(|s| s.as_bool())
                     .unwrap_or(true);
 
+                // Per-slot channel dims mirror production `set_weights.rs`:
+                // slot1/3/4 = conv_out (this layer), slot5 = bottleneck,
+                // slot2 = cond_size, slot7 = head_accum_size, slots 0/6 = ch.
                 let film_ch = match slot_idx {
+                    1 | 3 | 4 => conv_out,
+                    5 => bottleneck,
                     2 => cond_size,
                     7 => head_accum_size_for_film,
                     _ => ch,
@@ -544,6 +654,7 @@ pub(crate) fn build_a2_arrays(
                 head1x1_b: h1_b,
                 mixin_groups,
                 l1x1_groups,
+                groups_input,
             });
         }
 

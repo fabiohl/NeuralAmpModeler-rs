@@ -301,17 +301,27 @@ Measured against NAMcore at 48 kHz:
 | WaveNet A2 Dynamic Gated (CH8)   | 5.03e-11        | 1.00e-10          | 103.0    | 6.63e-05 | ✅ Parity verified |
 | WaveNet A2 Dynamic Blended (CH3) | 5.35e-14        | 2.65e-14          | 132.7    | 9.97e-06 | ✅ Bit-exact floor |
 
-### 4.3 🔴 Known Bug KB-A2-MAX: `wavenet_a2_max.nam`
+### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified (Fase 3, 2026-10-08)
 
-**Status:** Permanent known bug. Under active fail-closed dispatch guard (`reject_wavenet_a2_max_class`).
+**Status:** Resolved. Former fail-closed guard (`reject_wavenet_a2_max_class`) retired.
 
-The official flagship model `wavenet_a2_max.nam` triggers severe acoustic divergence against the C++ reference:
+Production f32 × C++ golden (Fase 2, reconfirmed Fase 3) + f64 oracle (T2.1.1, 2026-10-08):
 
-| Evaluation Pair             | Metric                            | Status                                           |
-|:--------------------------- |:--------------------------------- |:------------------------------------------------ |
-| **Rust f32 × C++ Golden**   | **SNR = 1.69 dB** (ESR ≈ 6.78e-1) | 🔴 Unacceptable parity (threshold $\ge 90$ dB)   |
-| **Rust f32 × f64 Oracle**   | SNR = −3.30 dB (ESR ≈ 2.14)       | 🔴 Structural divergence from oracle             |
-| **f64 Oracle × C++ Golden** | SNR = 0.53 dB (ESR ≈ 8.85e-1)     | 🔴 **Case D:** f64 oracle also diverges from C++ |
+| Evaluation Pair             | Metric                                         | Status                                    |
+|:--------------------------- |:---------------------------------------------- |:----------------------------------------- |
+| **Rust f32 × C++ Golden V1**| **SNR = 135.90 dB** (ESR ≈ 2.57e-14, n=2048)  | ✅ Parity verified (Gate 1, ≥ 90 dB)      |
+| **Rust f32 × C++ Golden V2**| **SNR = 135.97 dB** (ESR ≈ 2.53e-14, 48 kHz)  | ✅ Parity verified (Gate 1, ≥ 90 dB)      |
+| **Rust f32 × f64 Oracle**   | **SNR = 136.65 dB** (ESR ≈ 2.16e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
+| **f64 Oracle × C++ Golden** | **SNR = 137.01 dB** (ESR ≈ 1.99e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
+
+Root causes fixed in Fase 2 (see §4.3.2 historical record below):
+secondary-activation parser, grouped-FiLM scale/shift rows, last-layer
+residual in cascade, head-seed ring position. T2.1.1 (Épico 2, 2026-10-08)
+ported these 4 semantics — plus grouped dilated conv (`groups_input`),
+per-slot FiLM channel dims, `PReLU`/`LeakyHardTanh` activations, single-value
+activation/gating parsers, and zero-feed prewarm pairing — into the f64 oracle
+(`src/testing/` only, zero production change), closing the H0 triple to Case A.
+Evidence: `test_h0_triple_decomposition --ignored` (all three legs ≥ 90 dB).
 
 #### 4.3.1 Architectural Facts & Verified Invariants
 
@@ -329,19 +339,38 @@ The official flagship model `wavenet_a2_max.nam` triggers severe acoustic diverg
 3. **Grouped Layouts:** Row-major group-to-output mapping verified in `build.rs`.
 4. **Cascade Buffer Stride:** Multi-channel buffer indexing and slicing verified (`max_diff = 0.0` across 64-sample and 256-sample chunks).
 
-#### 4.3.2 Root Divergence Analysis & Freeze Policy
+#### 4.3.2 Root Divergence Analysis (Historical — Case D Closed)
 
-Because `f64 Oracle × C++ Golden` diverges ($ESR \approx 0.89$, Case D), the mathematical reference oracle itself diverges from C++ NAMcore for multi-array cascades. Comparing Rust against f64 only measures internal consistency, not market parity.
+> Historical record. During the investigation, `f64 Oracle × C++ Golden`
+> diverged ($ESR \approx 0.89$, Case D): the mathematical reference oracle
+> itself diverged from C++ NAMcore for multi-array cascades, so comparing Rust
+> against f64 measured only internal consistency, not market parity.
+>
+> The primary divergence area was isolated to **nested multi-array cascade
+> conditioning and multi-head propagation graph interactions** within C++ Eigen.
+> Speculative modifications to Rust production code without ground-truth
+> intermediate tensor dumps were halted at the time.
+>
+> **Outcome:** the four Fase 2 production fixes (secondary-activation parser,
+> grouped-FiLM scale/shift rows, last-layer residual in cascade, head-seed ring
+> position) closed Case D — production f32 × C++ golden now verifies at
+> **SNR 135.90 dB (V1)** / **135.97 dB (V2)** (table in §4.3 above). Case D is
+> closed and will not be reopened on this evidence.
 
-The primary divergence area is isolated to **nested multi-array cascade conditioning and multi-head propagation graph interactions** within C++ Eigen. Speculative modifications to Rust production code without ground-truth intermediate tensor dumps have been halted.
+#### 4.3.3 Reopening Criteria (Historical — Guard Retired)
 
-#### 4.3.3 Reopening Criteria
-
-The fail-closed guard `reject_wavenet_a2_max_class` remains permanent until:
-
-1. Intermediate per-frame tensor dumps (Array 0 output, residual projection, Array 1 output, layer FiLM outputs) are extracted from instrumented C++ NAMcore.
-2. A single hypothesis demonstrates isolated $\Delta\text{SNR} \gg 10\text{ dB}$.
-3. Rust production × C++ golden reaches $\text{SNR} \ge 90.0\text{ dB}$ across standard test inputs with zero regression in neighboring models.
+> Historical record. The former fail-closed guard
+> `reject_wavenet_a2_max_class` required, before its retirement:
+>
+> 1. Intermediate per-frame tensor dumps (Array 0 output, residual projection, Array 1 output, layer FiLM outputs) extracted from instrumented C++ NAMcore.
+> 2. A single hypothesis demonstrating isolated $\Delta\text{SNR} \gg 10\text{ dB}$.
+> 3. Rust production × C++ golden reaching $\text{SNR} \ge 90.0\text{ dB}$ across standard test inputs with zero regression in neighboring models.
+>
+> **Current state:** all three conditions are superseded — the guard is retired
+> (now unconditional `Ok`), and the active CI gates are listed in §7.1
+> (`test_wavenet_a2_max_dispatch_accepted` asserting `Ok`,
+> `test_measure_a2_max_snr_vs_golden`, `test_measure_a2_max_v2_snr_vs_golden`,
+> `test_golden_vectors_wavenet_a2_max`).
 
 ---
 
@@ -498,15 +527,14 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 
 ## 7. Known-Broken & Policy Ledger
 
-### 7.1 🔴 Known Bug KB-A2-MAX
+### 7.1 ✅ Retired KB-A2-MAX (Fase 3, 2026-10-08)
 
-| Item / Model         | Symptom                                                             | Status                                                                      |
+| Item / Model         | Symptom (historical)                                                | Status                                                                      |
 |:-------------------- |:------------------------------------------------------------------- |:--------------------------------------------------------------------------- |
-| `wavenet_a2_max.nam` | Rust × C++ $\text{SNR} = 1.69\text{ dB}$; Case D triple divergence. | **KB-A2-MAX Frozen.** Fail-closed guard active. Reopen strictly via §4.3.3. |
+| `wavenet_a2_max.nam` | Rust × C++ $\text{SNR} = 1.69\text{ dB}$; Case D triple divergence. | **Retired.** Parity verified: V1 135.90 dB / V2 135.97 dB. Guard removed.   |
 
-- Guard: `reject_wavenet_a2_max_class` returns explicit error on model load.
-- Unlock (test/diagnostic only): `NAM_A2_MAX_UNLOCK=1 cargo test ...`.
-- CI Gate: `test_wavenet_a2_max_dispatch_rejected` must remain green.
+- Former guard `reject_wavenet_a2_max_class` retired (now unconditional `Ok`).
+- CI Gates: `test_wavenet_a2_max_dispatch_accepted` (asserts `Ok`), `test_measure_a2_max_snr_vs_golden`, `test_measure_a2_max_v2_snr_vs_golden`, `test_golden_vectors_wavenet_a2_max` active.
 
 ### 7.2 🟡 Deliberate Engineering Tradeoffs
 

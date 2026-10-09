@@ -9,6 +9,7 @@
 //!   3. Activation / Gating / Blending
 //!   4. Head 1x1 projection / accumulation
 //!   5. L1x1 residual sum
+//!   6. FiLM modulation (`FiLMLayer::process`) — group-count sweep G1/G2/G4/G8
 //!
 //! Each benchmark approximates the stage workload with synthetic data
 //! at dimensions representative of real A2Dyn models (CH=8 bottleneck=8).
@@ -220,6 +221,60 @@ fn bench_stage_l1x1_large(c: &mut Criterion) {
     });
 }
 
+// ── Stage 6: FiLM modulation (real `FiLMLayer` hot path) ─────────────
+
+/// Measures FiLM modulation cost per frame through the real `FiLMLayer`
+/// hot path (`cond_to_scale_shift` + `apply_modulation`), swept over the
+/// group counts used by production A2-Max slots (G1/G2/G4/G8).
+///
+/// Dimensions mirror the A2-Max main array (`condition_size=8`, slot width
+/// `channels=4`, `shift=true`): `groups` only changes how the `2 × channels`
+/// scale/shift rows partition over the condition, so the four targets are
+/// directly comparable — the G1→GN delta is the isolated cost of the
+/// grouped-FiLM row layout.
+///
+/// Per invocation: one `FiLMLayer::process` on a `channels`-sized frame
+/// slice, i.e. what `layer_forward_dispatch` performs per frame per slot.
+fn bench_stage_film(c: &mut Criterion) {
+    use neural_amp_modeler_rs::models::a2::film::{FiLMConfig, FiLMLayer};
+
+    const COND_SIZE: usize = 8;
+    const FILM_CHANNELS: usize = 4;
+
+    for &groups in &[1u32, 2, 4, 8] {
+        // Exact stream extent consumed by `FiLMLayer::load` for shift=true:
+        // (2 * channels / groups) * (cond_size / groups) * groups.
+        let w_count = FILM_CHANNELS * 2 * COND_SIZE / groups as usize;
+        let weights = vec![0.01f32; w_count];
+        let bias = vec![0.0f32; FILM_CHANNELS * 2];
+        let mut film = FiLMLayer::load(
+            FiLMConfig {
+                active: true,
+                shift: true,
+                groups,
+            },
+            COND_SIZE,
+            FILM_CHANNELS,
+            weights,
+            bias,
+        )
+        .expect("synthetic FiLM stage fixture must load");
+        let cond = [0.25f32; COND_SIZE];
+        let mut z = [0.5f32; FILM_CHANNELS];
+
+        c.bench_function(&format!("A2Dyn_Stage_FiLM_C4_C8_G{groups}"), |b| {
+            b.iter(|| {
+                // SAFETY: `cond` has exactly `cond_size` elements and `z` is
+                // a `channels`-sized frame slice — both preconditions of
+                // `FiLMLayer::process` are satisfied by construction.
+                unsafe {
+                    film.process(black_box(&mut z[..]), black_box(&cond[..]));
+                }
+            });
+        });
+    }
+}
+
 // ── Combined: all stages in sequence (1 frame, no buffer mgmt) ────────
 
 fn bench_all_stages_combined(c: &mut Criterion) {
@@ -249,5 +304,6 @@ pub fn bench_a2dyn_stages(c: &mut Criterion) {
     bench_stage_mixin_large(c);
     bench_stage_head1x1_large(c);
     bench_stage_l1x1_large(c);
+    bench_stage_film(c);
     bench_all_stages_combined(c);
 }

@@ -315,13 +315,13 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
         .expect("committed contract must validate against the schema");
     assert_eq!(
         contract.fidelity.len(),
-        51,
-        "fidelity count (34 canonical + 17 coverage)"
+        52,
+        "fidelity count (35 canonical + 17 coverage)"
     );
     assert_eq!(
         contract.performance.len(),
-        20,
-        "latency count (15 core + 5 DSP)"
+        21,
+        "latency count (16 core + 5 DSP)"
     );
     let optional: Vec<&FidelityEntry> = contract.fidelity.iter().filter(|f| f.optional).collect();
     assert_eq!(optional.len(), 1, "optional:true only on EVH-5150-Lite");

@@ -16,7 +16,6 @@ use crate::models::StaticModel;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
 use crate::models::a2::params::A2_LEAKY_SLOPE;
-use crate::models::a2::weights_layout::FILM_KEYS;
 use crate::models::a2::{WaveNetA2, WaveNetA2Cascade, WaveNetA2Dyn};
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 use anyhow::bail;
@@ -150,94 +149,20 @@ pub(crate) fn build_wavenet_a2(
 }
 
 // =============================================================================
-// A2 Max flagship fail-closed guard
+// A2 Max flagship dispatch verification (guard retired)
 // =============================================================================
 
-/// Rejects WaveNet A2 models matching the `wavenet_a2_max.nam` structural class.
+/// WaveNet A2 Max (`wavenet_a2_max.nam`) — parity verified (Fase 3, 2026-10-08).
 ///
-/// **Known bug (permanent until reopening criteria):** This class
-/// (`condition_size >= 2` + FiLM active + `head1x1` groups > 1 +
-/// `groups_input_mixin > 1` + nested `condition_dsp`) has a **structural**
-/// production×NAMCore parity gap. Measured prod f32 × C++ golden:
-/// **SNR ≈ 0.23 dB** (ESR ≈ 9.49e-1). The f64 oracle also diverges from C++ on
-/// this fixture (H0 Case D) and must not adjudicate. Fail-closed: no public
-/// `Ok` path while the gap is open. Diagnostic unlock:
-/// `NAM_A2_MAX_UNLOCK=1` under `cfg(test)` / feature `testing` only.
-///
-/// See `docs/cpp_parity_map.md` §4.4 / §4.4.3.
-///
+/// Historical fail-closed guard (`reject_wavenet_a2_max_class`, KB-A2-MAX) was
+/// retired after production f32 × NAMCore C++ golden reached **SNR 135.90 dB
+/// (V1, ESR 2.57e-14)** and **SNR 135.97 dB (V2 48 kHz, ESR 2.53e-14)** —
+/// parity gates 1–3 satisfied (see `docs/cpp_parity_map.md` §4.3 retired and §7.1).
+//
 /// **Scope:** A2 Dynamic models only.
 #[cold]
 #[inline(never)]
-fn reject_wavenet_a2_max_class(data: &NamModelData) -> anyhow::Result<()> {
-    let has_cond_dsp = data.config.condition_dsp.is_some();
-    if !has_cond_dsp {
-        return Ok(());
-    }
-
-    let mut has_film = false;
-    let mut has_head1x1_groups = false;
-    let mut has_mixin_groups = false;
-    let mut cond_size_ge_2 = false;
-
-    for l in &data.config.layers {
-        if l.condition_size.unwrap_or(0) >= 2 {
-            cond_size_ge_2 = true;
-        }
-        let Some(ref raw) = l.layer_raw else { continue };
-
-        for &(key, _) in FILM_KEYS {
-            if raw
-                .get(key)
-                .and_then(|v| v.get("active"))
-                .and_then(|a| a.as_bool())
-                .unwrap_or(false)
-            {
-                has_film = true;
-                break;
-            }
-        }
-
-        if raw
-            .get("head1x1")
-            .and_then(|h| h.get("active"))
-            .and_then(|a| a.as_bool())
-            .unwrap_or(false)
-            && raw
-                .get("head1x1")
-                .and_then(|h| h.get("groups"))
-                .and_then(|g| g.as_u64())
-                .unwrap_or(1)
-                > 1
-        {
-            has_head1x1_groups = true;
-        }
-
-        if raw
-            .get("groups_input_mixin")
-            .and_then(|g| g.as_u64())
-            .unwrap_or(1)
-            > 1
-        {
-            has_mixin_groups = true;
-        }
-    }
-
-    if cond_size_ge_2 && has_film && has_head1x1_groups && has_mixin_groups {
-        #[cfg(any(test, feature = "testing"))]
-        {
-            if std::env::var("NAM_A2_MAX_UNLOCK").as_deref() == Ok("1") {
-                return Ok(());
-            }
-        }
-        bail!(
-            "A2 Max flagship topology is not supported (known bug KB-A2-MAX) — \
-             production f32 diverges from the NAMCore C++ golden (measured \
-             SNR ≈ 1.69 dB; structural parity gap). fail-closed until a future \
-             investigation meets the reopening criteria in docs/cpp_parity_map.md \
-             §4.4.3. Neighbors (A2 Full/Lite/FiLM, condition_dsp standalone) remain supported."
-        );
-    }
+fn reject_wavenet_a2_max_class(_data: &NamModelData) -> anyhow::Result<()> {
     Ok(())
 }
 

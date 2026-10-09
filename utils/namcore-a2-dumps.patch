@@ -1,0 +1,608 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index eed7055..72c0b87 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -60,6 +60,15 @@ if(NAM_ENABLE_A2_FAST)
+ 	add_compile_definitions(NAM_ENABLE_A2_FAST)
+ endif()
+ 
++# Opt-in debug instrumentation for the KB-A2-MAX parity investigation: intermediate
++# tensor dumps of wavenet_a2_max.nam (see NAM/debug_dump_a2.h). Compiled out by
++# default; even when compiled in, capture is off unless the env var
++# NAM_A2_DUMP_DIR points to an output directory.
++option(NAM_A2_DUMPS "Compile-in KB-A2-MAX debug tensor dumps (opt-in; runtime env NAM_A2_DUMP_DIR)" OFF)
++if(NAM_A2_DUMPS)
++	add_compile_definitions(NAM_A2_DUMP_ENABLE)
++endif()
++
+ add_subdirectory(tools)
+ 
+ #file(MAKE_DIRECTORY build/tools)
+diff --git a/NAM/debug_dump_a2.cpp b/NAM/debug_dump_a2.cpp
+new file mode 100644
+index 0000000..944182d
+--- /dev/null
++++ b/NAM/debug_dump_a2.cpp
+@@ -0,0 +1,263 @@
++#include "debug_dump_a2.h"
++
++#ifdef NAM_A2_DUMP_ENABLE
++
++#include <cstdlib>
++#include <bit>
++#include <cstring>
++#include <stdexcept>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++#include <filesystem>
++#include <fstream>
++
++namespace nam
++{
++namespace debug
++{
++namespace a2dump
++{
++namespace
++{
++
++// Capture targets of the KB-A2-MAX investigation (wavenet_a2_max.nam):
++//   dump_array0        — condition_dsp LayerArray 0 residual output (GetLayerOutputs),
++//                        3 channels × 2048 frames
++//   dump_rechannel     — condition_dsp LayerArray 0 _head_rechannel output, delivered
++//                        as head_inputs to LayerArray 1, 4 channels × 2048 frames
++//   dump_condition_dsp — top-level WaveNet _condition_output blocks feeding the main
++//                        FiLM stages, 8 channels × 2048 frames
++//   dump_film          — all 16 FiLM slots of the main WaveNet layer array
++//                        (single layer array, 2 layers × 8 families, in order):
++//                        family 0 = conv_pre_film           (4 channels)
++//                        family 1 = conv_post_film          (4 channels)
++//                        family 2 = input_mixin_pre_film    (8 channels = condition_size)
++//                        family 3 = input_mixin_post_film   (4 channels)
++//                        family 4 = activation_pre_film     (4 channels)
++//                        family 5 = activation_post_film    (4 channels)
++//                        family 6 = layer1x1_post_film      (4 channels)
++//                        family 7 = head1x1_post_film       (4 channels)
++//                        Frame-major interleave: frame outermost, then slot 0..15, then
++//                        channel. Per-frame floats = 14*4 + 2*8 = 72.
++//
++// All files are appended frame-major as f32 little-endian, one render block per call.
++// Prewarm frames are excluded via SetPrewarmContext and never counted.
++
++constexpr int kNumFilmSlots = 16;
++constexpr int kNumFilmFamilies = 8;
++constexpr int kFilmMainInputMixinPre = 2; // family index whose input dim == condition_size
++
++struct Writer
++{
++  std::ofstream stream;
++  long frames = 0;
++  long channels = -1;
++};
++
++static_assert(std::endian::native == std::endian::little, "A2 dumps require little-endian f32");
++bool gEnabled = false;
++std::filesystem::path gDir;
++std::unordered_map<std::string, Writer> gWriters;
++
++thread_local bool gInPrewarm = true;
++thread_local int gDepth = 0;
++
++struct FilmBlock
++{
++  bool active = false;
++  int num_frames = -1;
++  std::vector<std::vector<float>> slots;
++};
++thread_local FilmBlock gFilmBlock;
++
++int film_expected_channels(const int slot)
++{
++  if (slot < 0 || slot >= kNumFilmSlots)
++    throw std::runtime_error("A2 dump: invalid FiLM slot " + std::to_string(slot));
++  const long family = slot % kNumFilmFamilies;
++  // Slot input dims of the a2_max main layers: input_mixin_pre operates on the
++  // condition tensor itself (condition_size=8); every other family modulates a
++  // bottleneck/channels-sized block (4 channels).
++  return family == kFilmMainInputMixinPre ? 8 : 4;
++}
++
++void init()
++{
++  if (gEnabled)
++    return;
++  const char* dir_str = std::getenv("NAM_A2_DUMP_DIR");
++  if (dir_str == nullptr || dir_str[0] == '\0')
++    return;
++  const std::filesystem::path dir(dir_str);
++  if (!std::filesystem::is_directory(dir))
++    throw std::runtime_error("NAM_A2_DUMP_DIR is set but not a directory: " + dir.string());
++  gDir = dir;
++  gEnabled = true;
++  std::atexit(
++    []()
++    {
++      std::ofstream meta(gDir / "capture_meta.txt", std::ios::out | std::ios::trunc);
++      for (const auto& entry : gWriters)
++        meta << entry.first << " frames=" << entry.second.frames << " channels=" << entry.second.channels << "\n";
++    });
++}
++
++void writer_append(const char* tensor, const long channels, const float* values, const int num_frames)
++{
++  init();
++  if (!gEnabled)
++    return;
++  Writer& writer = gWriters[tensor];
++  if (!writer.stream.is_open())
++  {
++    writer.stream.open((gDir / tensor).string(), std::ios::out | std::ios::binary | std::ios::trunc);
++    if (!writer.stream.is_open())
++      throw std::runtime_error(std::string("A2 dump: cannot open dump file for ") + tensor);
++  }
++  if (writer.channels == -1)
++    writer.channels = channels;
++  else if (writer.channels != channels)
++    throw std::runtime_error(std::string("A2 dump: channel-count mismatch for ") + tensor);
++  writer.frames += num_frames;
++  writer.stream.write(reinterpret_cast<const char*>(values),
++                      static_cast<std::streamsize>(num_frames) * channels * sizeof(float));
++  writer.stream.flush();
++  if (!writer.stream.good())
++    throw std::runtime_error(std::string("A2 dump: I/O error while writing ") + tensor);
++}
++
++// Captures an (rows x num_frames) Eigen frame block into a frame-major f32 buffer.
++void capture_block(const Eigen::Ref<const Eigen::MatrixXf>& data, const int num_frames, std::vector<float>& out)
++{
++  const long rows = data.rows();
++  out.resize(static_cast<size_t>(rows) * static_cast<size_t>(num_frames));
++  for (long f = 0; f < num_frames; f++)
++    for (long c = 0; c < rows; c++)
++      out[static_cast<size_t>(f) * rows + c] = data(c, f);
++}
++
++bool film_window_active()
++{
++  init();
++  return gEnabled && gDepth == 1 && !gInPrewarm;
++}
++
++} // namespace
++
++void SetPrewarmContext(const bool in_prewarm)
++{
++  if (gDepth != 0)
++    throw std::runtime_error("A2 dump: SetPrewarmContext called inside a capture scope");
++  gInPrewarm = in_prewarm;
++}
++
++ProcessDepthScope::ProcessDepthScope() { gDepth += 1; }
++ProcessDepthScope::~ProcessDepthScope() { gDepth -= 1; }
++
++void DumpTensor(const char* tensor, const Eigen::Ref<const Eigen::MatrixXf>& data, const int num_frames,
++                const long expected_channels)
++{
++  init();
++  if (!gEnabled || gInPrewarm)
++    return;
++  if (expected_channels <= 0 || data.rows() != expected_channels)
++    throw std::runtime_error(std::string("A2 dump: ") + tensor
++                             + ": unexpected channel count " + std::to_string(data.rows()) + " (expected "
++                             + std::to_string(expected_channels) + ")");
++  if (num_frames <= 0 || data.cols() < num_frames)
++    throw std::runtime_error(std::string("A2 dump: ") + tensor + ": num_frames outside buffer bounds");
++  std::vector<float> buffer;
++  capture_block(data, num_frames, buffer);
++  writer_append(tensor, expected_channels, buffer.data(), num_frames);
++}
++
++void DumpConditionLayerArrayTensor(const char* tensor, const Eigen::Ref<const Eigen::MatrixXf>& data,
++                                   const int num_frames, const long expected_channels)
++{
++  init();
++  // Only the first LayerArray of a nested condition WaveNet may emit these anchors.
++  if (!(gEnabled && gDepth == 2 && !gInPrewarm))
++    return;
++  if (expected_channels <= 0 || data.rows() != expected_channels)
++    throw std::runtime_error(std::string("A2 dump: ") + tensor
++                             + ": unexpected channel count " + std::to_string(data.rows()) + " (expected "
++                             + std::to_string(expected_channels) + ")");
++  if (num_frames <= 0 || data.cols() < num_frames)
++    throw std::runtime_error(std::string("A2 dump: ") + tensor + ": num_frames outside buffer bounds");
++  std::vector<float> buffer;
++  capture_block(data, num_frames, buffer);
++  writer_append(tensor, expected_channels, buffer.data(), num_frames);
++}
++
++void BeginFilmBlock(const int num_frames)
++{
++  if (!film_window_active())
++    return;
++  if (gFilmBlock.active)
++    throw std::runtime_error("A2 dump: nested FiLM capture block");
++  if (num_frames <= 0)
++    throw std::runtime_error("A2 dump: BeginFilmBlock with invalid num_frames");
++  gFilmBlock.active = true;
++  gFilmBlock.num_frames = num_frames;
++  gFilmBlock.slots.assign(static_cast<size_t>(kNumFilmSlots), {});
++}
++
++void DumpFilmSlot(const int slot, const Eigen::Ref<const Eigen::MatrixXf>& out, const int num_frames)
++{
++  if (!film_window_active())
++    return;
++  if (!gFilmBlock.active)
++    throw std::runtime_error("A2 dump: DumpFilmSlot called outside a FiLM capture block");
++  if (num_frames != gFilmBlock.num_frames)
++    throw std::runtime_error("A2 dump: FiLM slot frame count does not match the capture block");
++  if (slot < 0 || slot >= kNumFilmSlots)
++    throw std::runtime_error("A2 dump: invalid FiLM slot " + std::to_string(slot));
++  const int expected = film_expected_channels(slot);
++  if (out.rows() != expected || out.cols() < num_frames)
++    throw std::runtime_error("A2 dump: FiLM slot " + std::to_string(slot) + ": unexpected shape "
++                             + std::to_string(out.rows()) + "x" + std::to_string(num_frames));
++  capture_block(out, num_frames, gFilmBlock.slots[static_cast<size_t>(slot)]);
++}
++
++void EndFilmBlock()
++{
++  if (!film_window_active())
++    return;
++  if (!gFilmBlock.active)
++    throw std::runtime_error("A2 dump: EndFilmBlock without BeginFilmBlock");
++  long per_frame = 0;
++  for (int slot = 0; slot < kNumFilmSlots; slot++)
++  {
++    const auto& captured = gFilmBlock.slots[static_cast<size_t>(slot)];
++    if (captured.empty())
++      throw std::runtime_error("A2 dump: FiLM slot " + std::to_string(slot) + " was never captured in the block");
++    if (static_cast<long>(captured.size()) != static_cast<long>(gFilmBlock.num_frames) * film_expected_channels(slot))
++      throw std::runtime_error("A2 dump: FiLM slot " + std::to_string(slot) + " storage size mismatch");
++    per_frame += film_expected_channels(slot);
++  }
++  std::vector<float> interleaved;
++  interleaved.resize(static_cast<size_t>(gFilmBlock.num_frames) * static_cast<size_t>(per_frame));
++  {
++    size_t pos = 0;
++    for (int f = 0; f < gFilmBlock.num_frames; f++)
++      for (int slot = 0; slot < kNumFilmSlots; slot++)
++      {
++        const int ch = film_expected_channels(slot);
++        const std::vector<float>& captured = gFilmBlock.slots[static_cast<size_t>(slot)];
++        std::memcpy(interleaved.data() + pos, captured.data() + static_cast<size_t>(f) * ch,
++                    static_cast<size_t>(ch) * sizeof(float));
++        pos += static_cast<size_t>(ch);
++      }
++  }
++  writer_append("dump_film.bin", per_frame, interleaved.data(), gFilmBlock.num_frames);
++  gFilmBlock.active = false;
++  gFilmBlock.slots.clear();
++}
++
++} // namespace a2dump
++} // namespace debug
++} // namespace nam
++
++#endif // NAM_A2_DUMP_ENABLE
+diff --git a/NAM/debug_dump_a2.h b/NAM/debug_dump_a2.h
+new file mode 100644
+index 0000000..f370c73
+--- /dev/null
++++ b/NAM/debug_dump_a2.h
+@@ -0,0 +1,68 @@
++#pragma once
++
++#include <Eigen/Dense>
++
++// debug_dump_a2.h — Opt-in intermediate-tensor capture for the KB-A2-MAX
++// (wavenet_a2_max.nam) C++ parity investigation.
++//
++// Capture rules:
++// - The 4 anchor dumps are dump_array0, dump_rechannel, dump_condition_dsp,
++//   dump_film, appended frame-major as f32 little-endian Per frame, all file
++//   bytes go one frame at a time (slot-major inside dump_film).
++// - Compile gate: only compiles in when NAM_A2_DUMP_ENABLE is defined
++//   (CMake option NAM_A2_DUMPS, OFF by default). Without it every entry point
++//   is an empty inline no-op, so release behavior and numerics are identical.
++// - Runtime gate: even when compiled in, files are only written when the
++//   environment variable NAM_A2_DUMP_DIR points to an existing directory;
++//   the default is capture disabled.
++// - Prewarm frames (DSP::prewarm processing a silent input buffer) are always
++//   excluded; only rendered frames are captured.
++
++namespace nam
++{
++namespace debug
++{
++#ifdef NAM_A2_DUMP_ENABLE
++namespace a2dump
++{
++void SetPrewarmContext(const bool in_prewarm);
++class ProcessDepthScope
++{
++public:
++  ProcessDepthScope();
++  ~ProcessDepthScope();
++  ProcessDepthScope(const ProcessDepthScope&) = delete;
++  ProcessDepthScope& operator=(const ProcessDepthScope&) = delete;
++};
++void DumpTensor(const char* tensor, const Eigen::Ref<const Eigen::MatrixXf>& data, const int num_frames,
++                const long expected_channels);
++// Anchors inside the condition DSP's own layer-array loop (capture gate requires
++// WaveNet process nesting depth == 2, i.e., the first LayerArray of a nested
++// condition WaveNet).
++void DumpConditionLayerArrayTensor(const char* tensor, const Eigen::Ref<const Eigen::MatrixXf>& data,
++                                   const int num_frames, const long expected_channels);
++void DumpFilmSlot(const int slot, const Eigen::Ref<const Eigen::MatrixXf>& out, const int num_frames);
++void BeginFilmBlock(const int num_frames);
++void EndFilmBlock();
++} // namespace a2dump
++#else
++namespace a2dump
++{
++inline void SetPrewarmContext(bool) {}
++class ProcessDepthScope
++{
++public:
++  ProcessDepthScope() {}
++  ~ProcessDepthScope() {}
++  ProcessDepthScope(const ProcessDepthScope&) = delete;
++  ProcessDepthScope& operator=(const ProcessDepthScope&) = delete;
++};
++inline void DumpTensor(const char*, const Eigen::Ref<const Eigen::MatrixXf>&, int, long) {}
++inline void DumpConditionLayerArrayTensor(const char*, const Eigen::Ref<const Eigen::MatrixXf>&, int, long) {}
++inline void DumpFilmSlot(int, const Eigen::Ref<const Eigen::MatrixXf>&, int) {}
++inline void BeginFilmBlock(int) {}
++inline void EndFilmBlock() {}
++} // namespace a2dump
++#endif
++} // namespace debug
++} // namespace nam
+diff --git a/NAM/dsp.cpp b/NAM/dsp.cpp
+index dc6449e..8dc5b9a 100644
+--- a/NAM/dsp.cpp
++++ b/NAM/dsp.cpp
+@@ -9,6 +9,7 @@
+ #include <unordered_set>
+ 
+ #include "dsp.h"
++#include "debug_dump_a2.h"
+ #define tanh_impl_ std::tanh
+ // #define tanh_impl_ fast_tanh_
+ 
+@@ -93,11 +94,15 @@ void nam::DSP::prewarm()
+   }
+ 
+   int samplesProcessed = 0;
++  // Debug captures (KB-A2-MAX dumps): mark the whole prewarm window so that
++  // anchors can exclude these silent frames. No-op when NAM_A2_DUMP_ENABLE is off.
++  debug::a2dump::SetPrewarmContext(true);
+   while (samplesProcessed < prewarmSamples)
+   {
+     this->process(inputPtrs.data(), outputPtrs.data(), bufferSize);
+     samplesProcessed += bufferSize;
+   }
++  debug::a2dump::SetPrewarmContext(false);
+ }
+ 
+ void nam::DSP::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames)
+diff --git a/NAM/wavenet/detail.h b/NAM/wavenet/detail.h
+index c7b06e1..0013072 100644
+--- a/NAM/wavenet/detail.h
++++ b/NAM/wavenet/detail.h
+@@ -228,6 +228,13 @@ public:
+   void PrewarmFromCache() { _conv.PrewarmFromCache(); }
+   void CacheStateAsPrewarmed() { _conv.CacheStateAsPrewarmed(); }
+ 
++#ifdef NAM_A2_DUMP_ENABLE
++  // Debug capture only (see ../debug_dump_a2.h): ordinal of this layer within its
++  // LayerArray, set by LayerArray under the dump compile gate; FiLM slot index is
++  // _debug_layer_ordinal*8 + family.
++  int _debug_layer_ordinal = -1;
++#endif
++
+ private:
+   // The dilated convolution at the front of the block
+   Conv1D _conv;
+diff --git a/NAM/wavenet/model.cpp b/NAM/wavenet/model.cpp
+index 2d56cc6..6d864c6 100644
+--- a/NAM/wavenet/model.cpp
++++ b/NAM/wavenet/model.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "../get_dsp.h"
+ #include "../registry.h"
++#include "../debug_dump_a2.h"
+ #include "slimmable.h"
+ #include "model.h"
+ 
+@@ -191,6 +192,9 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     // Use Process() instead of Process_() since input is const
+     this->_conv_pre_film->Process(input, condition, num_frames);
+     this->_conv.Process(this->_conv_pre_film->GetOutput(), num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 0, this->_conv_pre_film->GetOutput(), num_frames);
++#endif
+   }
+   else
+   {
+@@ -200,6 +204,9 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+   {
+     Eigen::MatrixXf& conv_output = this->_conv.GetOutput();
+     this->_conv_post_film->Process_(conv_output, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 1, this->_conv_post_film->GetOutput(), num_frames);
++#endif
+   }
+ 
+   if (this->_input_mixin_pre_film)
+@@ -207,6 +214,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     // Use Process() instead of Process_() since condition is const
+     this->_input_mixin_pre_film->Process(condition, condition, num_frames);
+     this->_input_mixin.process_(this->_input_mixin_pre_film->GetOutput(), num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 2, this->_input_mixin_pre_film->GetOutput(),
++                                num_frames);
++#endif
+   }
+   else
+   {
+@@ -216,13 +227,20 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+   {
+     Eigen::MatrixXf& input_mixin_output = this->_input_mixin.GetOutput();
+     this->_input_mixin_post_film->Process_(input_mixin_output, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 3, this->_input_mixin_post_film->GetOutput(),
++                                num_frames);
++#endif
+   }
+   this->_z.leftCols(num_frames).noalias() =
+     _conv.GetOutput().leftCols(num_frames) + _input_mixin.GetOutput().leftCols(num_frames);
+-
+   if (this->_activation_pre_film)
+   {
+     this->_activation_pre_film->Process_(this->_z, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 4, this->_activation_pre_film->GetOutput(),
++                                num_frames);
++#endif
+   }
+ 
+   // Step 2 & 3: activation and 1x1
+@@ -237,6 +255,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     if (this->_activation_post_film)
+     {
+       this->_activation_post_film->Process_(this->_z, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++      debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 5, this->_activation_post_film->GetOutput(),
++                                  num_frames);
++#endif
+     }
+     if (this->_layer1x1)
+     {
+@@ -254,6 +276,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     {
+       // Use Process() for blocks and copy result back
+       this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
++      #ifdef NAM_A2_DUMP_ENABLE
++      debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 5, this->_activation_post_film->GetOutput(),
++                                  num_frames);
++      #endif
+       this->_z.topRows(bottleneck).leftCols(num_frames).noalias() =
+         this->_activation_post_film->GetOutput().leftCols(num_frames);
+     }
+@@ -273,6 +299,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     {
+       // Use Process() for blocks and copy result back
+       this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
++      #ifdef NAM_A2_DUMP_ENABLE
++      debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 5, this->_activation_post_film->GetOutput(),
++                                  num_frames);
++      #endif
+       this->_z.topRows(bottleneck).leftCols(num_frames).noalias() =
+         this->_activation_post_film->GetOutput().leftCols(num_frames);
+     }
+@@ -288,6 +318,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+   {
+     Eigen::MatrixXf& layer1x1_output = this->_layer1x1->GetOutput();
+     this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++    debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 6, this->_layer1x1_post_film->GetOutput(),
++                                num_frames);
++#endif
+   }
+ 
+   if (this->_head1x1)
+@@ -304,6 +338,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
+     {
+       Eigen::MatrixXf& head1x1_output = this->_head1x1->GetOutput();
+       this->_head1x1_post_film->Process_(head1x1_output, condition, num_frames);
++#ifdef NAM_A2_DUMP_ENABLE
++      debug::a2dump::DumpFilmSlot(this->_debug_layer_ordinal * 8 + 7, this->_head1x1_post_film->GetOutput(),
++                                  num_frames);
++#endif
+     }
+ #ifdef NAM_USE_INLINE_GEMM
+     {
+@@ -416,6 +454,10 @@ nam::wavenet::detail::LayerArray::LayerArray(const LayerArrayParams& params)
+       params._layer1x1_post_film_params, params.head1x1_post_film_params);
+     this->_layers.push_back(Layer(layer_params));
+   }
++#ifdef NAM_A2_DUMP_ENABLE
++  for (size_t i = 0; i < this->_layers.size(); i++)
++    this->_layers[i]._debug_layer_ordinal = static_cast<int>(i);
++#endif
+ }
+ 
+ void nam::wavenet::detail::LayerArray::SetMaxBufferSize(const int maxBufferSize)
+@@ -799,14 +841,17 @@ void nam::wavenet::WaveNet::_process_condition(const int num_frames)
+     this->_condition_dsp->process(
+       this->_condition_dsp_input_ptrs.data(), this->_condition_dsp_output_ptrs.data(), num_frames);
+ 
+-    // Copy output data back to Eigen matrix
+-    const int condition_output_channels = this->_condition_dsp->NumOutputChannels();
+-    for (int ch = 0; ch < condition_output_channels; ch++)
+-    {
+-      for (int j = 0; j < num_frames; j++)
+-        this->_condition_output(ch, j) = (float)this->_condition_dsp_output_buffers[ch][j];
+-    }
++  // Copy output data back to Eigen matrix
++  const int condition_output_channels = this->_condition_dsp->NumOutputChannels();
++  for (int ch = 0; ch < condition_output_channels; ch++)
++  {
++    for (int j = 0; j < num_frames; j++)
++      this->_condition_output(ch, j) = (float)this->_condition_dsp_output_buffers[ch][j];
+   }
++  // Debug capture (KB-A2-MAX): the conditioning tensor fed to the main FiLM stages.
++  debug::a2dump::DumpTensor(
++    "dump_condition_dsp.bin", this->_condition_output, num_frames, condition_output_channels);
++}
+ }
+ 
+ void nam::wavenet::WaveNet::_set_condition_array(NAM_SAMPLE** input, const int num_frames)
+@@ -827,9 +872,16 @@ void nam::wavenet::WaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, con
+   assert(num_frames <= mMaxBufferSize);
+   const int out_channels = NumOutputChannels();
+ 
++  // Debug capture (KB-A2-MAX): outer WaveNet sits at depth 1; a nested condition
++  // DSP runs inside this scope at depth 2. Both RAII hits are no-ops with the
++  // capture compiled out.
++  debug::a2dump::ProcessDepthScope a2_dump_scope;
+   this->_set_condition_array(input, num_frames);
+   this->_process_condition(num_frames);
+ 
++  // Debug capture: open one FiLM block per realtime block (main WaveNet only).
++  debug::a2dump::BeginFilmBlock(num_frames);
++
+   // Main layer arrays:
+   // Layer-to-layer
+   for (size_t i = 0; i < this->_layer_arrays.size(); i++)
+@@ -850,8 +902,25 @@ void nam::wavenet::WaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, con
+       Eigen::MatrixXf& prev_head_outputs = this->_layer_arrays[i - 1].GetHeadOutputs();
+       this->_layer_arrays[i].Process(prev_layer_outputs, this->_condition_output, prev_head_outputs, num_frames);
+     }
++
++#ifdef NAM_A2_DUMP_ENABLE
++    // Debug capture (KB-A2-MAX): the two condition_dsp tensors crossing the
++    // Array0 -> Array1 boundary. Gate lives inside the hook (capture depth 2).
++    if (i == 0)
++    {
++      nam::debug::a2dump::DumpConditionLayerArrayTensor(
++        "dump_array0.bin", this->_layer_arrays[0].GetLayerOutputs(), num_frames,
++        this->_layer_arrays[0].GetLayerOutputs().rows());
++      nam::debug::a2dump::DumpConditionLayerArrayTensor(
++        "dump_rechannel.bin", this->_layer_arrays[0].GetHeadOutputs(), num_frames,
++        this->_layer_arrays[0].GetHeadOutputs().rows());
++    }
++#endif
+   }
+ 
++  // Debug capture: close the FiLM block for this realtime block (main WaveNet only).
++  debug::a2dump::EndFilmBlock();
++
+   auto& final_head_outputs = this->_layer_arrays.back().GetHeadOutputs();
+ 
+   if (this->_post_stack_head != nullptr)

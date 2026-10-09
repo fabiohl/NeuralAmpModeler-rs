@@ -102,6 +102,7 @@ Below is the committed reference baseline measured on release builds under an is
 | `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                      | 8.81 µs         | 0.66%                  |
 | `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)               | 188.35 µs       | 14.13%                 |
 | `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)             | 147.50 µs       | 11.06%                 |
+| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)           | 190.60 µs       | 14.30%                 |
 | `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k   | 1.22 µs / block | 0.09%                  |
 | `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k     | 0.62 µs / block | 0.05%                  |
 | `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.22 µs / block | 0.09%                  |

@@ -225,7 +225,9 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
 }
 ```
 
-- **Receipt Statuses:** `PASSED`, `FAILED`, `SKIPPED`, `INCONCLUSIVE`, `SKIP_CAPABILITY`, `NOT_RUN`. The suite line uses `PASSED`, `FAILED`, or `COMPLETED_WITH_GAPS`.
+- **Receipt Statuses:** `PASSED`, `FAILED`, `SKIPPED`, `INCONCLUSIVE`, `SKIP_CAPABILITY`, `NOT_RUN`, `SIMULATED`. The suite line uses `PASSED`, `FAILED`, `COMPLETED_WITH_GAPS`, or `SIMULATED`.
+
+- **Simulated Receipts:** `utils/tests-long.sh --simulate` (alias `--dry-run`) pre-registers the six preflights and seven phases as `SIMULATED` with `tests_executed: 0` without executing any test. The derived suite line is `SIMULATED` and every verdict line reads `NOT_RUN` (`FIDELITY`, `RT_DEADLINE`, `RT_JITTER`, `PERF_REGRESSION`) — a simulated receipt never prints `OK`/`PASS`, and `--strict-pre-release` always rejects it.
 
 - **Typed Markers:** Discrepancies or skips must emit recognized markers parsed into typed gaps:
 
@@ -234,7 +236,7 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
   - `[STATUS] KNOWN_GAP id="<id>" reason="<detail>"`: Upstream gap under active tracking.
   - `[STATUS] INCONCLUSIVE reason="<detail>"`: Measurement bypass in non-calibrated environments.
 
-- **Fail-Closed Invariant:** `overall: PASSED` is emitted only when all phases complete with `gaps: []` and no timed phase executed zero tests. Any declared gap downgrades the verdict to `COMPLETED_WITH_GAPS`. Verification is enforced via:
+- **Fail-Closed Invariant:** `overall: PASSED` is emitted only when all phases complete with `gaps: []` and no timed phase executed zero tests. Any declared gap downgrades the verdict to `COMPLETED_WITH_GAPS`; an all-`SIMULATED` receipt derives `SIMULATED` instead (never a green verdict). Verification is enforced via:
 
   ```bash
   cargo run --locked --features testing --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl

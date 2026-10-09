@@ -4,7 +4,7 @@
 //! Integration test suite for the machine-readable capability receipt and skip classification.
 //!
 //! Validates:
-//! - Exact count invariants: 51 canonical entries, 61 catalog paths, 45 supported, 6 unsupported.
+//! - Exact count invariants: 51 canonical entries, 61 catalog paths, 47 supported, 4 unsupported.
 //! - Zero unexpected FAILED stages (`receipt.has_unexpected_failures() == false`).
 //! - JSON serialization roundtrip and schema validity.
 //! - ASCII/Markdown audit table rendering.
@@ -61,8 +61,8 @@ fn test_capability_receipt_generation_and_invariants() {
     // 1. Count Invariants
     assert_eq!(receipt.total_canonical_models, 51);
     assert_eq!(receipt.total_catalog_paths, 61);
-    assert_eq!(receipt.supported_count, 46);
-    assert_eq!(receipt.unsupported_count, 5);
+    assert_eq!(receipt.supported_count, 47);
+    assert_eq!(receipt.unsupported_count, 4);
     assert_eq!(receipt.entries.len(), 51);
 
     // 2. Zero unexpected FAILED stages
@@ -309,6 +309,61 @@ fn test_long_receipt_cli_end_to_end() {
         "1",
     ]);
     assert_eq!(bad_run.status.code(), Some(2), "bad status must exit 2");
+}
+
+// F-07: a `--simulate` / `--dry-run` receipt pre-registers every phase as
+// SIMULATED with zero tests executed. `summary` must derive OVERALL: SIMULATED
+// and print NOT_RUN on every verdict line — never a vacuous OK/PASS.
+#[test]
+fn test_long_receipt_simulate_never_prints_green_verdicts() {
+    let out = temp_path("simulate.jsonl");
+    let bin = env!("CARGO_BIN_EXE_nam_long_receipt");
+    let run = |args: &[&str]| {
+        Command::new(bin)
+            .args(args)
+            .output()
+            .expect("nam_long_receipt must run")
+    };
+
+    for id in ["preflight-catalog", "phase1", "phase5", "phase6"] {
+        let r = run(&[
+            "append",
+            "--phase-id",
+            id,
+            "--name",
+            id,
+            "--status",
+            "SIMULATED",
+            "--duration-ms",
+            "0",
+            "--tests-executed",
+            "0",
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(r.status.success(), "append {id} failed: {r:?}");
+    }
+
+    let sum = run(&["summary", "--out", out.to_str().unwrap()]);
+    assert!(sum.status.success(), "summary failed: {sum:?}");
+    let human = String::from_utf8_lossy(&sum.stdout);
+    assert!(human.contains("OVERALL: SIMULATED"), "{human}");
+    assert!(human.contains("FIDELITY: NOT_RUN"), "{human}");
+    assert!(human.contains("RT_DEADLINE: NOT_RUN"), "{human}");
+    assert!(human.contains("RT_JITTER: NOT_RUN"), "{human}");
+    assert!(human.contains("PERF_REGRESSION: NOT_RUN"), "{human}");
+    assert!(!human.contains("FIDELITY: OK"), "{human}");
+    assert!(!human.contains("RT_DEADLINE: PASS"), "{human}");
+    assert!(!human.contains("RT_JITTER: PASS"), "{human}");
+
+    // The stored overall line is SIMULATED and strict-pre-release rejects it.
+    let content = fs::read_to_string(&out).unwrap();
+    let audit = LongAuditReceipt::parse_jsonl(&content).unwrap();
+    assert_eq!(
+        audit.phases.last().unwrap().status,
+        LongPhaseStatus::Simulated
+    );
+    assert!(audit.strict_verdict().is_err());
 }
 
 // `count-log` is the counter behind `_lib.sh::assert_ran_tests`.

@@ -22,47 +22,16 @@ const A2_DYNAMIC_BLENDED_FIXTURE: &str = concat!(
 );
 
 #[test]
-fn test_a2_max_flag_controlled() {
+fn test_a2_max_accepted_after_guard_retirement() {
     let json = fs::read_to_string(A2_MAX_FIXTURE).expect("Fixture wavenet_a2_max.nam not found");
     let data = parse_nam_json(&json).expect("Failed to parse fixture");
 
-    // SAFETY: this test runs single-threaded and no other thread reads
-    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
-    let result = build_model(&data);
-    match result {
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("KB-A2-MAX") || msg.contains("parity gap"),
-                "Error must cite KB-A2-MAX / parity gap, got: {msg}"
-            );
-            assert!(
-                msg.contains("fail-closed"),
-                "Error must cite fail-closed, got: {msg}"
-            );
-        }
-        Ok(_) => panic!("A2 Max must be rejected by default (no unlock flag set)"),
-    }
-
-    // SAFETY: this test runs single-threaded and no other thread reads
-    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
-    unsafe {
-        std::env::set_var("NAM_A2_MAX_UNLOCK", "1");
-    }
-    let model = build_model(&data).expect("A2 Max must build under NAM_A2_MAX_UNLOCK=1");
+    // KB-A2-MAX retired (Fase 3, 2026-10-08): parity verified, no unlock needed.
+    let model = build_model(&data).expect("A2 Max must build after KB-A2-MAX retirement");
     assert!(
         matches!(*model, StaticModel::WavenetA2Dyn(_)),
-        "Expected WavenetA2Dyn variant under unlock"
+        "Expected WavenetA2Dyn variant"
     );
-
-    // SAFETY: this test runs single-threaded and no other thread reads
-    // `NAM_A2_MAX_UNLOCK`, so mutating the process environment cannot race.
-    unsafe {
-        std::env::remove_var("NAM_A2_MAX_UNLOCK");
-    }
 }
 
 /// A nested `condition_dsp` sub-model is deserialized via raw

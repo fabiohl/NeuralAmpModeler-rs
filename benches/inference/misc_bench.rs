@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Miscellaneous inference benchmarks: LinearModel dot product, ContainerModel
-//! crossfade, dynamic fallbacks, non-distributable models, and ConvNet.
+//! crossfade, dynamic fallbacks, non-distributable models, ConvNet, and the
+//! A2-Dynamic FiLM family (dense, grouped, and the A2-Max flagship cascade).
 
 use criterion::Criterion;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
@@ -14,7 +15,8 @@ use neural_amp_modeler_rs::models::slimmable::SlimmableModel;
 
 use super::common::{
     generate_sine_440hz, load_and_prewarm, load_model_data, make_lstm_data,
-    make_wavenet_a2_dyn_data,
+    make_wavenet_a2_dyn_cond_dsp_data, make_wavenet_a2_dyn_data,
+    make_wavenet_a2_dyn_film_grouped_data,
 };
 
 /// Benchmarks the LinearModel dot product kernel (AVX2/AVX-512 SIMD vs scalar).
@@ -95,6 +97,114 @@ pub fn bench_wavenet_a2_dyn_gated_process(c: &mut Criterion) {
     let mut output = vec![0.0f32; 64];
 
     c.bench_function("A2Dyn_Gated_64samp_48kHz", |b| {
+        b.iter(|| {
+            model.process(&input, &mut output);
+        });
+    });
+}
+
+/// Measures the processing time of a WaveNet A2 Dynamic control model
+/// (CH=4, `condition_size=4`, Linear `condition_dsp`) without FiLM.
+///
+/// Control counterpart of [`bench_wavenet_a2_dyn_film_grouped_process`]:
+/// identical topology and conditioning path minus the FiLM slots, so the
+/// latency delta between `A2Dyn_CondDsp_CH4_64samp_48kHz` and
+/// `A2Dyn_FiLM_Grouped_CH4_64samp_48kHz` isolates the grouped-FiLM hot-path
+/// cost from the `condition_dsp` cost.
+pub fn bench_wavenet_a2_dyn_cond_dsp_process(c: &mut Criterion) {
+    let data = make_wavenet_a2_dyn_cond_dsp_data();
+    let mut model =
+        build_model(&data).expect("Dispatcher failed for A2 Dynamic condition_dsp benchmark");
+    model.prewarm(2048);
+
+    let input = generate_sine_440hz(64);
+    let mut output = vec![0.0f32; 64];
+
+    c.bench_function("A2Dyn_CondDsp_CH4_64samp_48kHz", |b| {
+        b.iter(|| {
+            model.process(&input, &mut output);
+        });
+    });
+}
+
+/// Measures the processing time of a WaveNet A2 Dynamic model (CH=4) with
+/// grouped FiLM (all 8 insertion slots active, `groups=2`, `shift=true`)
+/// and a Linear `condition_dsp`.
+///
+/// Exercises the grouped `cond_to_scale_shift` + global-row modulation path
+/// on every layer — the FiLM layout production consumes for grouped A2
+/// topologies. Compare against [`bench_wavenet_a2_dyn_cond_dsp_process`]
+/// for the isolated FiLM cost and against the stage sweep in
+/// `a2_dyn_stage_bench` for the per-slot group-count effect.
+pub fn bench_wavenet_a2_dyn_film_grouped_process(c: &mut Criterion) {
+    let data = make_wavenet_a2_dyn_film_grouped_data();
+    let mut model =
+        build_model(&data).expect("Dispatcher failed for A2 Dynamic grouped-FiLM benchmark");
+    model.prewarm(2048);
+
+    let input = generate_sine_440hz(64);
+    let mut output = vec![0.0f32; 64];
+
+    c.bench_function("A2Dyn_FiLM_Grouped_CH4_64samp_48kHz", |b| {
+        b.iter(|| {
+            model.process(&input, &mut output);
+        });
+    });
+}
+
+/// Measures the processing time of dense-FiLM A2 Dynamic models on the
+/// Full (CH=8) and Lite (CH=3) topologies (`groups=1`, `shift=true`,
+/// 4 FiLM slots each).
+///
+/// These fixtures route to `WaveNetA2Dyn` because FiLM is active (the
+/// const-generic A2 fast path rejects FiLM), so they quantify the FiLM
+/// modulation cost on the exact full/lite dimensions used by the
+/// non-FiLM `RT_A2_Full_CH8` / `RT_A2_Lite_CH3` regression-gate targets.
+pub fn bench_wavenet_a2_dyn_film_dense_process(c: &mut Criterion) {
+    let input = generate_sine_440hz(64);
+    let mut output = vec![0.0f32; 64];
+
+    for (fixture, id) in [
+        (
+            "wavenet_a2_film_full.nam",
+            "A2Dyn_FiLM_Dense_CH8_64samp_48kHz",
+        ),
+        (
+            "wavenet_a2_film_lite.nam",
+            "A2Dyn_FiLM_Dense_CH3_64samp_48kHz",
+        ),
+    ] {
+        let mut model = match load_and_prewarm(fixture) {
+            Some(m) => m,
+            None => continue,
+        };
+        c.bench_function(id, |b| {
+            b.iter(|| {
+                model.process(&input, &mut output);
+            });
+        });
+    }
+}
+
+/// Measures the processing time of the flagship A2-Max topology
+/// (`wavenet_a2_max.nam`): a main A2-Dynamic array with grouped FiLM
+/// (`groups` 1/2/4/8 across the 8 slots, `condition_size=8`) driven by a
+/// two-array condition_dsp cascade.
+///
+/// This is the only in-tree model combining grouped FiLM with a multi-array
+/// cascade, so it is the bench that covers the last-layer residual of
+/// non-final arrays (`skip_last_residual=false` in the cascade path) next to
+/// the grouped-FiLM hot path at production dimensions.
+pub fn bench_wavenet_a2_max_film_grouped_process(c: &mut Criterion) {
+    let mut model = match load_and_prewarm("wavenet_a2_max.nam") {
+        Some(m) => m,
+        None => return,
+    };
+
+    let input = generate_sine_440hz(64);
+    let mut output = vec![0.0f32; 64];
+
+    c.bench_function("A2Dyn_FiLM_Grouped_A2Max_64samp_48kHz", |b| {
         b.iter(|| {
             model.process(&input, &mut output);
         });

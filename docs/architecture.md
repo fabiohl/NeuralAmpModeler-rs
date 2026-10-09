@@ -309,6 +309,8 @@ Neural networks are trained at a fixed 48 kHz sample rate. When the host runs at
 
 The noise gate ([`src/dsp/gate.rs`](../src/dsp/gate.rs)) employs a Schmitt trigger with independent opening and closing thresholds to prevent chattering at noise floor boundaries. Transitions apply vectorized linear ramping for smooth, artifact-free gain changes.
 
+**Zero-input model offset:** some trained models carry a large constant offset in their zero-input response (the reference C++ renderer reproduces it sample-constantly from sample 0, so it is model content, not a parity deviation). The gate is born Open (unity gain, steady), so the first blocks deliver that offset unattenuated and `RT_STATUS_HAS_CLIPPED` fires truthfully at unity gain; once sustained silent input closes the gate, the output mutes to zero without flagging. Clipping-flag observation point: with a steady gate the detection runs on the post-gate (fused) signal, i.e. the delivered sample; while the gate is fading it runs on the pre-gate signal before the fade ramp is applied. See [`apply_output_stage`](../src/dsp/pipeline/stages/output.rs), [`RT_STATUS_HAS_CLIPPED`](../src/common/spsc/status.rs), and the locked behavioral proof [`tests/models/dc_offset_clipping_proof.rs`](../tests/models/dc_offset_clipping_proof.rs).
+
 ### 4.3 Oversampling Engine (Anti-Aliasing)
 
 Optional 2× or 4× oversampling ([`src/dsp/oversample.rs`](../src/dsp/oversample.rs)) suppresses aliasing from nonlinear neural activations:
@@ -355,7 +357,7 @@ For models containing advanced features, execution routes to flexible runtime en
 - **`WaveNetA2Cascade`:** Chains multiple dynamic A2 arrays in series.
 - **Slimmable Containers:** Pre-allocates both A2-Full and A2-Lite submodels in memory, enabling instantaneous zero-allocation swaps via the Adaptive Compute FSM with 32 ms crossfading.
 
-*(Note: The flagship model `wavenet_a2_max.nam` triggers a permanent known bug in upstream C++ parity and is rejected at load time via fail-closed guard `reject_wavenet_a2_max_class`. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4.3).*
+*(Note: The flagship model `wavenet_a2_max.nam` reached production×C++ parity in Fase 3 (V1 SNR 135.90 dB, V2 SNR 135.97 dB); the former fail-closed guard `reject_wavenet_a2_max_class` was retired. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4.3).*
 
 ---
 

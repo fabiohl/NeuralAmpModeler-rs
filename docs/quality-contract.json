@@ -214,6 +214,15 @@
       "optional": false
     },
     {
+      "id": "wavenet-a2-max@48000:live",
+      "label": "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference @48000 Live",
+      "esr_namcore": 2.57e-14,
+      "esr_f64": 1.66e-14,
+      "snr_db": 135.9,
+      "mrstft": 5.9e-6,
+      "optional": false
+    },
+    {
       "id": "wavenet-condition-dsp@48000:live",
       "label": "WaveNet Condition DSP (CH=3, cond=3, dynamic path) C++ cross-reference @48000 Live",
       "esr_namcore": 1.11e-14,
@@ -559,6 +568,11 @@
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
       "median_latency_us": 147.5
+    },
+    {
+      "id": "RT_A2_Max_CH4",
+      "label": "A2 Max CH4",
+      "median_latency_us": 190.6
     },
     {
       "id": "RT_DSP_Resampler_44k1_to_48k",

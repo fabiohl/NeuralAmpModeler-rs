@@ -742,10 +742,28 @@ impl LongAuditReceipt {
         self.phase_entries().map(|p| p.duration_ms).sum()
     }
 
+    /// `true` when the receipt was produced by `--simulate` / `--dry-run`:
+    /// it carries at least one phase entry and every entry is `SIMULATED`
+    /// (no test was executed). Used to suppress every green (`OK`/`PASS`)
+    /// verdict line — a simulated receipt must never *look* like a passing
+    /// audit (F-07).
+    pub fn is_simulated_only(&self) -> bool {
+        let mut any = false;
+        for p in self.phase_entries() {
+            any = true;
+            if p.status != LongPhaseStatus::Simulated {
+                return false;
+            }
+        }
+        any
+    }
+
     /// Derived suite-level `overall` receipt line.
     ///
     /// Verdict semantics mirror the runner's final summary:
     /// - any `FAILED` phase or preflight ⇒ `FAILED`;
+    /// - otherwise an all-`SIMULATED` receipt ⇒ `SIMULATED` (the
+    ///   `--simulate` / `--dry-run` pre-registration where no test ran);
     /// - otherwise any **declared gap** ⇒ `COMPLETED_WITH_GAPS`. A declared
     ///   gap is a gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
     ///   NOT_RUN), a `PASSED` phase whose `gaps` list is non-empty, or a
@@ -773,6 +791,8 @@ impl LongAuditReceipt {
             .any(|p| p.status == LongPhaseStatus::Failed)
         {
             LongPhaseStatus::Failed
+        } else if self.is_simulated_only() {
+            LongPhaseStatus::Simulated
         } else if self.phase_entries().any(has_declared_gap) {
             LongPhaseStatus::CompletedWithGaps
         } else {
@@ -828,12 +848,17 @@ impl LongAuditReceipt {
     /// Fail-closed strict-pre-release verdict: `Ok(())` only when the derived
     /// `overall` status is `PASSED` (no failures and no declared gaps).
     pub fn strict_verdict(&self) -> Result<(), String> {
-        match self.summary_receipt().status {
+        let summary = self.summary_receipt();
+        match summary.status {
             LongPhaseStatus::Passed => Ok(()),
             LongPhaseStatus::Failed => Err("audit FAILED: one or more phases failed".to_string()),
+            LongPhaseStatus::Simulated => Err(
+                "audit SIMULATED: no test was executed — strict-pre-release rejects simulated receipts"
+                    .to_string(),
+            ),
             _ => Err(format!(
                 "audit COMPLETED_WITH_GAPS: {} declared gap(s) — strict-pre-release rejects gaps",
-                self.summary_receipt().gaps.len()
+                summary.gaps.len()
             )),
         }
     }
@@ -849,7 +874,23 @@ impl LongAuditReceipt {
     /// (preflights included). Declared gaps never downgrade FIDELITY to
     /// `FAIL` — that is what the `OVERALL: COMPLETED_WITH_GAPS` verdict is
     /// for (the pre-S5 `ANY_FIDELITY_FAILED` semantics).
+    ///
+    /// A fidelity-class phase that was never executed (`SIMULATED`, from
+    /// `--simulate` / `--dry-run`) reports `NOT_RUN` instead of the vacuous
+    /// `OK`: a green verdict requires tests that actually ran (F-07). An
+    /// all-`SIMULATED` receipt reports `NOT_RUN` unconditionally, even when
+    /// it carries no fidelity-class entry.
     pub fn fidelity_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
+        let simulated_fidelity = self.phase_entries().any(|p| {
+            p.status == LongPhaseStatus::Simulated
+                && !PERFORMANCE_PHASE_IDS.contains(&p.phase_id.as_str())
+        });
+        if simulated_fidelity {
+            return "NOT_RUN";
+        }
         let failed_fidelity = self.phase_entries().any(|p| {
             p.status == LongPhaseStatus::Failed
                 && !PERFORMANCE_PHASE_IDS.contains(&p.phase_id.as_str())
@@ -862,14 +903,20 @@ impl LongAuditReceipt {
     /// Mirrors the pre-S5 bash mapping (FAILED → FAIL, SKIPPED → PASS,
     /// anything else → PASS) plus the typed gap carrier: a `PASSED` phase
     /// whose log carried the `inconclusive_environment` marker is reported
-    /// `INCONCLUSIVE`. The bash override that used to patch `PHASE_STATUS`
-    /// is gone (S5) — the marker is authoritative, and "exit-0 with
-    /// internal measurement bypass" must not be promoted to PASS.
+    /// `INCONCLUSIVE`. A `SIMULATED` phase (never executed) reports
+    /// `NOT_RUN`, never a vacuous `PASS`. The bash override that used to
+    /// patch `PHASE_STATUS` is gone (S5) — the marker is authoritative, and
+    /// "exit-0 with internal measurement bypass" must not be promoted to
+    /// PASS.
     pub fn rt_deadline_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
         match self.phase_by_id("phase5") {
             Some(p) => match p.status {
                 LongPhaseStatus::Failed => "FAIL",
                 LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
+                LongPhaseStatus::Simulated => "NOT_RUN",
                 LongPhaseStatus::Passed
                     if p.gaps
                         .iter()
@@ -888,14 +935,20 @@ impl LongAuditReceipt {
     /// Mirrors the pre-S5 bash mapping (PASSED → PASS, INCONCLUSIVE →
     /// INCONCLUSIVE, SKIP_CAPABILITY → SKIP_CAPABILITY, FAILED → FAIL,
     /// SKIPPED → INCONCLUSIVE), with the typed log markers as the carrier
-    /// for bypasses now that the bash `PHASE_STATUS` overrides are gone.
+    /// for bypasses now that the bash `PHASE_STATUS` overrides are gone. A
+    /// `SIMULATED` phase (never executed) reports `NOT_RUN`, never a vacuous
+    /// `PASS`.
     pub fn rt_jitter_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
         match self.phase_by_id("phase6") {
             None => "PASS",
             Some(p) => match p.status {
                 LongPhaseStatus::Failed => "FAIL",
                 LongPhaseStatus::Inconclusive | LongPhaseStatus::Skipped => "INCONCLUSIVE",
                 LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
+                LongPhaseStatus::Simulated => "NOT_RUN",
                 LongPhaseStatus::Passed
                     if p.gaps.iter().any(|g| gap_has_id(g, "skip_capability")) =>
                 {
@@ -916,6 +969,10 @@ impl LongAuditReceipt {
     /// (WARNING/ERROR) plus the verdict lines. The runner echoes these lines
     /// verbatim and maps `OVERALL:` to its exit code — it never reclassifies
     /// logs.
+    ///
+    /// A simulated receipt (all phases `SIMULATED`) yields
+    /// `OVERALL: SIMULATED` and `NOT_RUN` on every verdict line — no `OK` /
+    /// `PASS` is ever printed for a run that executed nothing (F-07).
     pub fn human_summary_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for p in self.phase_entries() {

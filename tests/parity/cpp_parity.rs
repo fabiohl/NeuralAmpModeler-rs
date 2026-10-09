@@ -1604,18 +1604,17 @@ fn live_cross_validation_wavenet_a2_film_chaos_stress() {
     );
 }
 
-// wavenet_a2_max — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
-// (prod f32×C++ SNR≈1.69 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
-// #[test]
-// #[ignore]
-// fn live_cross_validation_wavenet_a2_max() {
-//     run_v1(
-//         "wavenet_a2_max.nam",
-//         "wavenet_a2_max",
-//         "Live WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1)",
-//         true,
-//     );
-// }
+// wavenet_a2_max — parity verified (Fase 3, 2026-10-08): prod×C++ SNR 135.90 dB (V1).
+#[test]
+#[ignore]
+fn live_cross_validation_wavenet_a2_max() {
+    run_v1(
+        "wavenet_a2_max.nam",
+        "wavenet_a2_max",
+        "Live WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1)",
+        true,
+    );
+}
 
 // --- v2 A2 Dynamic Models ---
 
@@ -1685,18 +1684,17 @@ fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
     );
 }
 
-// wavenet_a2_max v2 — DISABLED: KB-A2-MAX known bug; fail-closed TR1.1; see cpp_parity_map §4.4.3
-// (prod f32×C++ SNR≈1.69 dB). Re-enable only after KB-A2-MAX §4.4.3 reopening criteria.
-// #[test]
-// #[ignore]
-// fn live_cross_validation_v2_wavenet_a2_max() {
-//     run_v2_multi_sr(
-//         "wavenet_a2_max.nam",
-//         "wavenet_a2_max",
-//         "Live WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) (v2)",
-//         true,
-//     );
-// }
+// wavenet_a2_max v2 — parity verified (Fase 3, 2026-10-08): prod×C++ SNR 135.97 dB (V2)
+#[test]
+#[ignore]
+fn live_cross_validation_v2_wavenet_a2_max() {
+    run_v2_multi_sr(
+        "wavenet_a2_max.nam",
+        "wavenet_a2_max",
+        "Live WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) (v2)",
+        true,
+    );
+}
 
 // --- Linear ---
 

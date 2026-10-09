@@ -55,9 +55,11 @@ pub enum ActivationType {
     SiLU,
     /// Efficient version of the Swish function.
     /// Reserves general A2 full engine support (future).
+    #[serde(alias = "Hardswish")]
     HardSwish,
     /// HardTanh with configurable slopes for saturation regions.
     /// Reserves general A2 full engine support (future).
+    #[serde(alias = "LeakyHardtanh")]
     LeakyHardTanh {
         /// Minimum value for linear saturation.
         min_val: f32,

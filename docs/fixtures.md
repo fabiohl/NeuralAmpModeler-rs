@@ -126,9 +126,8 @@ The single source of truth for model identities and architectural categorization
 
 ### Tracked Known Gaps & Specific Guardrails
 
-1. **`wavenet_a2_max.nam` (KB-A2-MAX Bug):**
-   - Official example model affected by an upstream architectural bug that produces severe divergence between production inference and C++ reference (SNR ≈ 1.69 dB).
-   - Enforced **fail-closed** by guard TR1.1 in [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs). Unlocked exclusively for diagnostics via `NAM_A2_MAX_UNLOCK=1`. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.4.3.
+1. **`wavenet_a2_max.nam` (KB-A2-MAX retired — Fase 3, 2026-10-08):**
+    - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB). Former fail-closed guard TR1.1 retired; active CI gate. The standalone f64 oracle still diverges (H0 Case C, oracle-only) and is non-gating. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
 2. **`wavenet_condition_lstm.nam` (Upstream C++ Channel Mismatch):**
    - WaveNet outer model with embedded LSTM `condition_dsp`.
    - The upstream C++ `render` tool encounters an input channel mismatch (`input_size=1` vs `hidden_size=3`), blocking golden generation. Flagged with `skip_reason` in [`src/testing/catalog.rs`](../src/testing/catalog.rs); tests skip gracefully when the golden is absent.
@@ -187,6 +186,52 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
    - Generated from `dsp::ImpulseResponse` in `AudioDSPTools` using [`tests/fixtures/render_ir.cpp`](../tests/fixtures/render_ir.cpp).
    - Committed vectors: `golden_cabsim_cpp_short.bin` (64), `golden_cabsim_cpp_medium.bin` (512), `golden_cabsim_cpp_long.bin` (8192).
    - *Engine Constraint:* C++ `dsp::ImpulseResponse` hard-caps IR length at 8192 samples (`mMaxLength`). Tests exceeding 8192 samples are evaluated exclusively against the inline direct convolution oracle.
+
+### A2-Max Intermediate C++ Anchors (Retired — Reproducible Forensic Record, Épico 1 Sprint 1.3)
+
+> The four raw little-endian f32 tensors (`dump_array0.bin`, `dump_rechannel.bin`,
+> `dump_condition_dsp.bin`, `dump_film.bin`, 712 KB total) were removed from git
+> after KB-A2-MAX retirement: their value is forensic/historical, not gating —
+> production f32 × C++ golden verifies at SNR 135.90 dB (V1) / 135.97 dB (V2)
+> (see `docs/cpp_parity_map.md` §4.3), and the Axis-B structural guard
+> (`test_structural_tests_contain_no_bin_references`) forbids `.bin` references
+> in Phase 1 modules. Removal also resolves that guard violation by deletion.
+>
+> Reproduce at any time with `bash utils/render-a2-dumps.sh` (tracked
+> [`utils/namcore-a2-dumps.patch`](../utils/namcore-a2-dumps.patch) instruments
+> the pinned C++ v0.6.0 `NAM/dsp.cpp` and split WaveNet implementation
+> `NAM/wavenet/model.cpp`; CMake `NAM_A2_DUMPS` gate defaults OFF; runtime capture
+> needs `NAM_A2_DUMP_DIR`; offline-only). The script regenerates
+> `tests/fixtures/dumps_a2_max/` (gitignored `*.bin`, tracked `manifest.json` +
+> `capture_meta.txt`) and verifies the render reproduces the V1 golden output
+> byte-identically.
+>
+> Last captured identities (SHA-256, 2026-10-07) for forensic verification of
+> regenerated dumps:
+>
+> | File | SHA-256 |
+> |:-----|:--------|
+> | `dump_array0.bin` | `8764236e76c9f2f5ff68daff1a720aea35f7f1e840eece929cb72d62860acf4a` |
+> | `dump_rechannel.bin` | `0552afcaebbc1fd45526b6dbcfb8c072d0193a2a91355227338806f107b41ec0` |
+> | `dump_condition_dsp.bin` | `1227723e1466f390b60601f285bd744c204dfe21bf09cf75ffedd2e7eef1dceb` |
+> | `dump_film.bin` | `b30a14a1aa1cd6d91d6331f54013f9cdc0fd0b4b518abfbf107329546a4d1587` |
+>
+> Shapes: `[2048, 3]` (24576 B), `[2048, 4]` (32768 B), `[2048, 8]` (65536 B),
+> `[2048, 72]` (589824 B); frame-major f32 little-endian; stimulus is the
+> 2048-frame, 48 kHz V1 input; frame zero is the first real input sample after
+> the normal C++ reset/prewarm. FiLM slots ordered by layer, then `conv_pre`,
+> `conv_post`, `input_mixin_pre`, `input_mixin_post`, `activation_pre`,
+> `activation_post`, `layer1x1_post`, `head1x1_post` (slots 2 and 10 have
+> 8 channels; other 14 have 4; exact per-frame offsets in regenerated
+> `manifest.json`).
+>
+> Phase-1 input identities (SHA-256, 2026-10-07):
+>
+> | Asset | SHA-256 |
+> |:------|:--------|
+> | `models/wavenet_a2_max.nam` | `12384c6640e1126907b366584024c4abb129ac5920b3dc2d31b29e39315e820d` |
+> | `stress_signal.wav` | `3d7d24609f8c004023b9560f7842994800bec96e4d7d35e63ed09080d8b57434` |
+> | `golden_wavenet_a2_max.bin` | `7248380f90391c14b75269310b7f5b0fc6146f69a4264ffea4a5e13d483c182b` |
 
 ### f64 Reference Anchors (`tests/fixtures/f64_anchors/`)
 

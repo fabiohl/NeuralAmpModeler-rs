@@ -7,7 +7,7 @@
 //! - Exactly 51 unique SHA-256 model identities
 //! - Exactly 61 catalog file paths mapped
 //! - Exactly 10 redundant file aliases identified
-//! - Exactly 45 supported models and 6 unsupported models (3 intentional negative, 3 known gaps)
+//! - Exactly 47 supported models and 4 unsupported models (2 intentional negative, 2 known gaps)
 //! - Disk-level SHA-256 verification when fixture files exist on disk
 
 use std::collections::HashSet;
@@ -42,13 +42,13 @@ fn test_catalog_counts_and_invariants() {
     );
     assert_eq!(
         supported_count(),
-        46,
-        "Catalog must classify exactly 46 supported models"
+        47,
+        "Catalog must classify exactly 47 supported models"
     );
     assert_eq!(
         unsupported_count(),
-        5,
-        "Catalog must classify exactly 5 unsupported models"
+        4,
+        "Catalog must classify exactly 4 unsupported models"
     );
     assert_eq!(
         intentional_negative_count(),
@@ -57,8 +57,8 @@ fn test_catalog_counts_and_invariants() {
     );
     assert_eq!(
         known_gap_count(),
-        3,
-        "Catalog must classify exactly 3 known architectural gaps"
+        2,
+        "Catalog must classify exactly 2 known architectural gaps"
     );
 }
 

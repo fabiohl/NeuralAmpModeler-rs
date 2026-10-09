@@ -205,6 +205,11 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
         fixture: Some("a2_dynamic_blended_ch3.nam"),
     },
     RtBenchEntry {
+        bench_label: "RT_A2_Max_CH4",
+        contract_id: "RT_A2_Max_CH4",
+        fixture: Some("wavenet_a2_max.nam"),
+    },
+    RtBenchEntry {
         bench_label: "RT_DSP_Resampler_44k1_to_48k",
         contract_id: "RT_DSP_Resampler_44k1_to_48k",
         fixture: None,
@@ -340,6 +345,10 @@ pub static F64_ORACLE_FIXTURE_TABLE: &[(&str, &str)] = &[
     (
         "WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference",
         "wavenet_a2_film_input_mixin_pre.nam",
+    ),
+    (
+        "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference",
+        "wavenet_a2_max.nam",
     ),
     ("ConvNet Test", "convnet_test.nam"),
     ("Quick LSTM 1×16", "BossLSTM-1x16.nam"),

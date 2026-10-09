@@ -396,7 +396,7 @@ pub const MRSTFT_SOFT_THRESHOLD: f64 = 0.50;
 ///   ESR     = 1.23e-05       (−49.1 dB)   (threshold < 1.0e-1)  ✓   [baseline A1-Std: 6.23e-03, A2-Full: 3.34e-03]
 ///   MR-STFT = 0.0042         (log-mag abs)                   ✓   [hard gate ≤ 0.05 @ 44.1/48 kHz]
 ///   LUFS    = −23.4 LUFS    (reference)   [plausible: −50.0..+10.0]  ✓
-///   LUFS    = −65.0 LUFS    (reference)   [plausible: −50.0..+10.0]  ⓘ informational (gate opt-out — expected)
+///   LUFS    = −65.0 LUFS    (reference)   [plausible: −50.0..+10.0]  ⓘ informational (declared gate opt-out)
 ///   Fidelity Margin = 48.2 dB (target > 8.0 dB) ✓
 ///   Samples = 2048 @ 48 kHz (stress signal)
 /// ```
@@ -431,11 +431,16 @@ pub fn report_dsp_fidelity(
 /// Like [`report_dsp_fidelity`] but skips the LUFS plausibility gate.
 ///
 /// Use when the reference signal has LUFS outside the plausible range for
-/// legitimate reasons, not indicating a defect:
-/// - IR convolution goldens (synthetic signal + IR can legitimately produce
-///   LUFS above +10 or below −50)
-/// - Dynamic/free-shape models with low head_scale (e.g., WaveNetDyn
-///   Free-Shape at ~−65 LUFS, LSTM-Dyn at ~−55 LUFS)
+/// legitimate reasons, not indicating a defect. The skip message reports the
+/// measured reference LUFS, the side of the window it falls on, and its margin,
+/// so the cause is never misattributed:
+/// - Above the `+10` ceiling — high-gain IR convolution goldens (synthetic
+///   signal + IR can legitimately produce loud output)
+/// - Below the `−50` floor — inherently low-loudness model output, e.g. dynamic
+///   free-shape models with low `head_scale` (WaveNetDyn Free-Shape ≈ −65,
+///   LSTM-Dyn ≈ −55), large-hidden-size LSTM (2×24 ≈ −51…−54), or ReLU without
+///   BatchNorm (ConvNet ReLU ≈ −65). These are typically not IR-convolution
+///   goldens.
 ///
 /// With BS.1770-4 full LUFS, the measurement is accurate — these
 /// are genuine opt-outs for models whose output loudness is inherently
@@ -668,7 +673,7 @@ fn report_dsp_fidelity_impl(
                 } else if check_lufs_gate {
                     "✗ — GOLDEN DEFECT (LUFS plausibility check)"
                 } else {
-                    "ⓘ informational (gate opt-out — expected)"
+                    "ⓘ informational (declared gate opt-out)"
                 }
             )
             .unwrap();
@@ -750,7 +755,8 @@ fn report_dsp_fidelity_impl(
         );
     }
     // LUFS plausibility sanity gate — catch near-silence / implausible golden output.
-    // Only enforced when check_lufs_gate is true (opt-out for IR convolution goldens).
+    // Only enforced when check_lufs_gate is true (opt-out declared for high-gain
+    // IR-convolution goldens and inherently low-loudness model fixtures).
     if check_lufs_gate {
         assert!(
             lufs_plausible,
@@ -759,11 +765,34 @@ fn report_dsp_fidelity_impl(
              The golden output may be defective (near-silence, clipping, or wrong scaling)."
         );
     } else if !lufs_plausible {
+        // The plausibility gate was opted out for this fixture (declared by the
+        // caller through `report_dsp_fidelity_no_lufs`). Report the *measured*
+        // reason rather than asserting a blanket cause, and classify by which
+        // side of the window the reference falls on: high-gain IR-convolution
+        // output sits above the ceiling, whereas inherently low-loudness model
+        // output (energy-damping architecture or low `head_scale`) sits below
+        // the floor. Reporting the measured side keeps low-loudness LSTM/ConvNet
+        // fixtures from being blanket-attributed to IR convolution.
+        let (side, bound, cause) = if lufs_ref > LUFS_PLAUSIBLE_MAX {
+            (
+                "above",
+                LUFS_PLAUSIBLE_MAX,
+                "expected for high-gain IR-convolution goldens",
+            )
+        } else {
+            (
+                "below",
+                LUFS_PLAUSIBLE_MIN,
+                "typical of inherently low-loudness model output (energy-damping \
+                 architecture or low head_scale)",
+            )
+        };
+        let margin = (lufs_ref - bound).abs();
         eprintln!(
-            "  ⓘ  LUFS gate skipped for [{label}]: reference LUFS={lufs_ref:.1} \
-             outside [{LUFS_PLAUSIBLE_MIN:.0}, {LUFS_PLAUSIBLE_MAX:.0}] — \
-             expected for IR convolution / dynamic free-shape goldens \
-             (gate opt-out)"
+            "  ⓘ  LUFS gate opt-out for [{label}]: reference LUFS={lufs_ref:.1} is \
+             {margin:.1} LU {side} the plausibility bound ({bound:.1}) — {cause}. \
+             Declared opt-out, not a golden defect; SNR remains asserted and \
+             configured ESR/MR-STFT gates still apply."
         );
     }
 }
@@ -1032,13 +1061,25 @@ pub fn get_calibrated_threshold(
                 Some(1.0e-4),
             ))
         }
-        // --- WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) — KB-A2-MAX ---
-        // Fail-closed TR1.1. Thresholds are placeholders for a future un-ignore
-        // only after §4.4.3 reopening (SNR≥90 dB). HEAD measured ~0.23 dB.
-        // Do not use these gates to claim parity while the guard is active.
+        // --- WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) ---
+        // Generic WaveNet with Conv1x1 grouped FiLM and 4 cascaded arrays.
+        // C++ uses Eigen-based generic WaveNet, Rust uses WaveNetA2Dyn per-frame.
+        // Golden vector has pronounced DC offset (mean ≈ 8.19, std ≈ 2.45, signal power ≈ 73).
+        // ESR and SNR are scale-calibrated; MSE gate is N/A (ESR primary, consistent with wavenet_a2_full/lite).
+        // Measured: SNR=135.9 dB (V1) / 136.0 dB (V2), ESR=2.57e-14 (V1) / 2.53e-14 (V2),
+        // MR-STFT=5.90e-6 (float32 precision limit)
+        // Margin: SNR - 15.9 dB, ESR factor ~389x, MR-STFT factor ~17x
         "wavenet_a2_max" => {
-            let snr_db = 90.0;
-            Some((Some(snr_to_mse(snr_db)), snr_db, Some(1.0e-9), Some(0.05)))
+            // Measured: SNR = 135.90 dB (V1), 135.97 dB (V2)
+            let snr_db = 120.0;
+            Some((
+                None,
+                snr_db,
+                // Measured: ESR = 2.57e-14 (V1), 2.53e-14 (V2)
+                Some(1.0e-11),
+                // Measured: MR-STFT = 5.90e-6 (V1)
+                Some(1.0e-4),
+            ))
         }
         // --- WaveNet A2 Dynamic Gated CH=8 ---
         // Gating doubles conv output (channels × 2*bottleneck) and applies

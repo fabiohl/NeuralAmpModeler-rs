@@ -1,0 +1,4 @@
+dump_film.bin frames=2048 channels=72
+dump_condition_dsp.bin frames=2048 channels=8
+dump_rechannel.bin frames=2048 channels=4
+dump_array0.bin frames=2048 channels=3
