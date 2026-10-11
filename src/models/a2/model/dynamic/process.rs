@@ -36,7 +36,7 @@ use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
 use super::process_frame::process_frame_dyn;
 
-use core::arch::x86_64::{_mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps};
+use crate::arch::simd::{_mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps};
 
 #[cfg(any(test, feature = "testing"))]
 use crate::math::common::AlignedVec;

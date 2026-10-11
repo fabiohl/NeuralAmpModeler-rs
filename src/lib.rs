@@ -133,27 +133,39 @@
 //! * [Benchmarks and regression envelopes](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md)
 //! * [Testing and verification policies](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/testing.md)
 
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("NeuralAmpModeler-rs requires x86_64 architecture");
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("NeuralAmpModeler-rs requires the x86_64 or aarch64 architecture");
 
-#[cfg(not(any(
-    doc,
-    all(
-        target_feature = "avx",
-        target_feature = "avx2",
-        target_feature = "bmi1",
-        target_feature = "bmi2",
-        target_feature = "f16c",
-        target_feature = "fma",
-        target_feature = "lzcnt",
-        target_feature = "movbe"
-    )
-)))]
+#[cfg(all(target_arch = "aarch64", not(any(doc, target_feature = "neon"))))]
+compile_error!("NeuralAmpModeler-rs requires NEON on aarch64");
+
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(
+        doc,
+        all(
+            target_feature = "avx",
+            target_feature = "avx2",
+            target_feature = "bmi1",
+            target_feature = "bmi2",
+            target_feature = "f16c",
+            target_feature = "fma",
+            target_feature = "lzcnt",
+            target_feature = "movbe"
+        )
+    ))
+))]
 compile_error!(
     "NeuralAmpModeler-rs requires full x86-64-v3 target support \
      (avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe). \
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
+
+#[cfg(all(feature = "avx512", not(target_arch = "x86_64")))]
+compile_error!("the `avx512` feature is only available on x86_64");
+
+/// Architecture-neutral SIMD intrinsic surface (x86_64 native, aarch64 NEON).
+mod arch;
 
 /// Host-agnostic infrastructure: diagnostics, SPSC protocol, alloc audit, panic hooks.
 pub mod common;

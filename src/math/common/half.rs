@@ -136,11 +136,11 @@ pub fn f32_to_f16_bits(f: f32) -> u16 {
 /// The caller must ensure the CPU supports the `f16c` target feature.
 /// This is guaranteed when compiling with `x86-64-v3` or higher.
 #[inline]
-#[target_feature(enable = "f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
 pub unsafe fn f16_bits_to_f32_f16c(bits: u16) -> f32 {
-    use std::arch::x86_64::_mm_cvtph_ps;
-    use std::arch::x86_64::_mm_cvtsi32_si128;
-    use std::arch::x86_64::_mm_cvtss_f32;
+    use crate::arch::simd::_mm_cvtph_ps;
+    use crate::arch::simd::_mm_cvtsi32_si128;
+    use crate::arch::simd::_mm_cvtss_f32;
     _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(bits as i32)))
 }
 
@@ -152,12 +152,12 @@ pub unsafe fn f16_bits_to_f32_f16c(bits: u16) -> f32 {
 /// The caller must ensure the CPU supports the `f16c` target feature.
 /// This is guaranteed when compiling with `x86-64-v3` or higher.
 #[inline]
-#[target_feature(enable = "f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
 pub unsafe fn f32_to_f16_bits_f16c(f: f32) -> u16 {
-    use std::arch::x86_64::_MM_FROUND_TO_NEAREST_INT;
-    use std::arch::x86_64::_mm_cvtps_ph;
-    use std::arch::x86_64::_mm_cvtsi128_si32;
-    use std::arch::x86_64::_mm_set_ss;
+    use crate::arch::simd::_MM_FROUND_TO_NEAREST_INT;
+    use crate::arch::simd::_mm_cvtps_ph;
+    use crate::arch::simd::_mm_cvtsi128_si32;
+    use crate::arch::simd::_mm_set_ss;
     (_mm_cvtsi128_si32(_mm_cvtps_ph(_mm_set_ss(f), _MM_FROUND_TO_NEAREST_INT)) as u32 & 0xFFFF)
         as u16
 }

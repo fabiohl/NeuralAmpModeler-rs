@@ -3,10 +3,10 @@
 
 use super::A2Conv1dCh8;
 use super::MAX_KERNEL_FRAMES;
+use crate::arch::simd::*;
 use crate::math::common::SimdMath;
 use crate::models::a2::film::FilmBlock;
 use crate::models::a2::params::A2_LEAKY_SLOPE;
-use core::arch::x86_64::*;
 
 /// T=8 frame-tiled tap-major dilated conv for CH=8, AVX2+FMA.
 ///
@@ -24,7 +24,7 @@ use core::arch::x86_64::*;
 /// - `weights` must have at least `kernel * 64` valid f32 elements.
 /// - `layer_buffer` must be large enough for all frame lookbacks.
 /// - `z_out` must have at least `num_frames * 8` elements.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn conv1d_ch8_t8_avx2(
     weights: &[f32],
     bias: &[f32],
@@ -140,7 +140,7 @@ pub unsafe fn conv1d_ch8_t8_avx2(
     clippy::too_many_arguments,
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn layer_forward_ch8_block(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -373,7 +373,7 @@ pub unsafe fn layer_forward_ch8_block(
     clippy::too_many_arguments,
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn layer_forward_ch8_block_no_film(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -477,7 +477,7 @@ pub unsafe fn layer_forward_ch8_block_no_film(
 /// # Safety
 /// `z_conv` must hold `num_frames * 8` conv outputs; remaining buffers follow
 /// the `no_film` tail contract (same capacities as the caller-verified inputs).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn layer_forward_ch8_postconv_no_film(
     z_conv: &[f32],
     mixin_w: &[f32],

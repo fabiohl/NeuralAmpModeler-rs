@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Computes the energy (Mean Square) of a block via AVX2, returning (energy, has_non_finite).
 /// $E = \frac{1}{N} \sum x_i^2$
@@ -16,7 +16,7 @@ use core::arch::x86_64::*;
 /// `avx2`/`fma` target features (via its own `#[target_feature]` attribute or
 /// inlining) is an unsafe operation and requires an `unsafe` block.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub fn compute_energy_avx2(data: &[f32]) -> (f32, bool) {
     let len = data.len();
     if len == 0 {
@@ -119,7 +119,7 @@ pub fn compute_energy_avx2(data: &[f32]) -> (f32, bool) {
 /// Calling this function from code whose own codegen does not enable the
 /// `avx2`/`fma` target features (via its own `#[target_feature]` attribute or
 /// inlining) is an unsafe operation and requires an `unsafe` block.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(l.len(), r.len());
     if len == 0 {
@@ -270,7 +270,7 @@ pub fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// must guarantee the CPU supports AVX-512F.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
 pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(l.len(), r.len());
     if len == 0 {
@@ -354,7 +354,7 @@ pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// must guarantee the CPU supports AVX-512F.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
 pub fn compute_energy_avx512(data: &[f32]) -> (f32, bool) {
     let len = data.len();
     if len == 0 {

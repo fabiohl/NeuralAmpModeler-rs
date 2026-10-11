@@ -11,10 +11,10 @@
 //!
 //! Process multiple audio frames simultaneously for efficient weight reuse.
 
+use crate::arch::simd::*;
 use crate::gemm_batch_frame_loop_avx2;
 use crate::gemm_batch_inner_dual_avx2;
 use crate::gemm_batch_outc_loop_avx2;
-use core::arch::x86_64::*;
 
 /// Fused residual GEMM kernel via AVX2.
 ///
@@ -29,7 +29,7 @@ use core::arch::x86_64::*;
 /// - If `do_bias` is true, `bias.len()` must be >= `out_len`.
 ///
 /// All slices must be valid and accessible for reading/writing.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_gemm_residual_batch_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -213,7 +213,7 @@ pub unsafe fn fused_gemm_residual_batch_avx2(
 ///
 /// # Safety
 /// Preconditions are identical to [`fused_gemm_residual_batch_avx2`].
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_gemm_residual_batch_f32_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -400,7 +400,7 @@ pub unsafe fn fused_gemm_residual_batch_f32_avx2(
 ///
 /// # Safety
 /// Preconditions are identical to [`fused_gemm_residual_batch_f32_avx2`].
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_gemm_residual_batch_f32_const<const IN: usize, const OUT: usize>(
     in_frames: &[f32],
     weights: &[f32],
@@ -571,7 +571,7 @@ pub unsafe fn fused_gemm_residual_batch_f32_const<const IN: usize, const OUT: us
 ///
 /// # Safety
 /// Preconditions are identical to [`fused_gemm_residual_batch_avx2`].
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_gemm_residual_batch_f32_12x12(
     in_frames: &[f32],
     weights: &[f32],
@@ -592,7 +592,7 @@ pub unsafe fn fused_gemm_residual_batch_f32_12x12(
         debug_assert!(bias.len() >= 12);
     }
 
-    use core::arch::x86_64::{
+    use crate::arch::simd::{
         _mm_add_ps, _mm_fmadd_ps, _mm_loadu_ps, _mm_set1_ps, _mm_setzero_ps, _mm_storeu_ps,
         _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
         _mm256_storeu_ps,

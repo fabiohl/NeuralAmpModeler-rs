@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //! Fused kernels for LSTM gates (AVX2 and AVX-512).
 
+use crate::arch::simd::*;
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
 use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
@@ -16,7 +17,6 @@ use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx512;
 use crate::math::activations::tanh::simd_tanh_avx2;
 #[cfg(feature = "avx512")]
 use crate::math::activations::tanh::simd_tanh_avx512;
-use core::arch::x86_64::*;
 
 /// Fused kernel for LSTM gates (AVX2) — Standard (exact-grade) accuracy path.
 /// Uses polynomial exp-based tanh/sigmoid approximations with Kahan
@@ -25,7 +25,7 @@ use core::arch::x86_64::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_lstm_gates_avx2_hf(
     gf: __m256,
     gi: __m256,
@@ -71,7 +71,7 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_lstm_gates_avx2_std(
     gf: __m256,
     gi: __m256,
@@ -113,7 +113,7 @@ pub unsafe fn fused_lstm_gates_avx2_std(
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_lstm_gates_avx2(
     gf: __m256,
     gi: __m256,
@@ -143,7 +143,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn fused_lstm_gates_avx512_hf(
     gf: __m512,
     gi: __m512,
@@ -193,7 +193,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn fused_lstm_gates_avx512_std(
     gf: __m512,
     gi: __m512,
@@ -241,7 +241,7 @@ pub unsafe fn fused_lstm_gates_avx512_std(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn fused_lstm_gates_avx512(
     gf: __m512,
     gi: __m512,
@@ -270,7 +270,7 @@ pub unsafe fn fused_lstm_gates_avx512(
 /// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
 /// Output buffers must not alias `gates`.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_lstm_gates_dyn_avx2(
     gates: &mut [f32],
     cell_state: &mut [f32],
@@ -332,7 +332,7 @@ pub unsafe fn fused_lstm_gates_dyn_avx2(
 ///
 /// Replacement for the previous scalar tail — the `Standard` and `Fast` paths
 /// share the same buffer-and-dispatch structure.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn fused_lstm_gates_dyn_tail(
     gates: &mut [f32],
     cell_state: &mut [f32],
@@ -447,7 +447,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn fused_lstm_gates_dyn_avx512(
     gates: &mut [f32],
     cell_state: &mut [f32],

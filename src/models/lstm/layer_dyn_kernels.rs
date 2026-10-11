@@ -7,13 +7,13 @@
 //! from `crate::math::gemm` and `crate::math::lstm`, which infer dimensions
 //! directly from slice lengths at runtime.
 
+use crate::arch::simd::*;
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
 use crate::math::activations::scalar_minimax_sigmoid;
 use crate::math::activations::sigmoid::high_fidelity::scalar_sigmoid_poly;
 use crate::math::activations::tanh::high_fidelity::scalar_tanh_poly;
 use crate::math::activations::tanh::scalar_pade_tanh;
-use core::arch::x86_64::*;
 
 use super::layer_dyn::LstmLayerDyn;
 
@@ -105,7 +105,7 @@ impl LstmLayerDyn {
     ///
     /// # Safety
     /// The caller must have verified AVX2+FMA+F16C CPU support.
-    #[target_feature(enable = "avx2,fma,f16c")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
     pub unsafe fn process_sample_avx2(&mut self, input: &[f32]) {
         let i = self.input_size;
         let h = self.hidden_size;

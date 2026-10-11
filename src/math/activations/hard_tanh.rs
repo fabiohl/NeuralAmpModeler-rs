@@ -6,13 +6,13 @@
 use crate::activation_simd_avx2;
 #[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Applies HardTanh (`clamp(x, -1.0, 1.0)`) to a slice using AVX2.
 ///
 /// # Safety
 /// Requires AVX2 support.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn hard_tanh_slice_avx2(data: &mut [f32]) {
     let neg_one = _mm256_set1_ps(-1.0_f32);
     let pos_one = _mm256_set1_ps(1.0_f32);
@@ -57,7 +57,7 @@ pub unsafe fn hard_tanh_slice_avx2(data: &mut [f32]) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn hard_tanh_slice_avx512(data: &mut [f32]) {
     let neg_one = _mm512_set1_ps(-1.0_f32);
     let pos_one = _mm512_set1_ps(1.0_f32);

@@ -6,13 +6,13 @@
 use crate::activation_simd_avx2;
 #[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Vector approximation of `PReLU(x) = x > 0 ? x : alpha * x` using AVX2.
 ///
 /// # Safety
 /// Requires AVX2 support.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn simd_prelu_avx2(x: __m256, alpha: __m256) -> __m256 {
     // Mask of positive values (x > 0)
     let mask = _mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_GT_OQ);
@@ -28,7 +28,7 @@ pub unsafe fn simd_prelu_avx2(x: __m256, alpha: __m256) -> __m256 {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn simd_prelu_avx512(x: __m512, alpha: __m512) -> __m512 {
     let zero = _mm512_setzero_ps();
     // Mask of positive values (x > 0)
@@ -43,7 +43,7 @@ pub unsafe fn simd_prelu_avx512(x: __m512, alpha: __m512) -> __m512 {
 ///
 /// # Safety
 /// Requires AVX2 support.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn prelu_slice_avx2(slice: &mut [f32], slopes: &[f32]) {
     let mut i = 0;
     let len = slice.len();
@@ -119,7 +119,7 @@ pub unsafe fn prelu_slice_avx2(slice: &mut [f32], slopes: &[f32]) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn prelu_slice_avx512(slice: &mut [f32], slopes: &[f32]) {
     let mut i = 0;
     let len = slice.len();

@@ -3,7 +3,7 @@
 
 //! LSTM layer kernel dispatch — SIMD processing paths and scalar fallback.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 use super::layer::LstmLayer;
 use crate::math::activations::ActivationPrecision;
@@ -217,7 +217,10 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         process_sample_avx2,
         process_sample_avx2_hf,
         process_sample_avx2_std,
-        target_feature(enable = "avx2,fma,f16c"),
+        cfg_attr(
+            target_arch = "x86_64",
+            target_feature(enable = "avx2,fma,f16c")
+        ),
         crate::math::gemm::gemv_4gate_avx2,
         8,
         _mm256_loadu_ps,
@@ -234,7 +237,10 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         process_sample_avx512,
         process_sample_avx512_hf,
         process_sample_avx512_std,
-        target_feature(enable = "avx512f,avx512vl"),
+        cfg_attr(
+            target_arch = "x86_64",
+            target_feature(enable = "avx512f,avx512vl")
+        ),
         crate::math::gemm::gemv_4gate_avx512vl,
         16,
         _mm512_loadu_ps,

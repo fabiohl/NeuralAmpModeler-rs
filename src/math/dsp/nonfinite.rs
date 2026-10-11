@@ -13,7 +13,7 @@
 //! logging. Implemented with AVX2 intrinsics (`_mm256_*`) — no scalar
 //! fallback: the `x86-64-v3` baseline guarantees AVX2 unconditionally.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Returns `true` when every sample is finite (no NaN and no ±inf).
 ///
@@ -25,7 +25,7 @@ use core::arch::x86_64::*;
 /// `samples` must be a valid slice. AVX2 must be available (guaranteed by the
 /// crate's `x86-64-v3` build baseline).
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn all_finite_f32_avx2(samples: &[f32]) -> bool {
     let len = samples.len();
     let mut i = 0;
@@ -69,7 +69,7 @@ pub unsafe fn all_finite_f32_avx2(samples: &[f32]) -> bool {
 /// `samples` must be a valid mutable slice. AVX2 must be available
 /// (guaranteed by the crate's `x86-64-v3` build baseline).
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn sanitize_nonfinite_f32_avx2(samples: &mut [f32]) {
     let len = samples.len();
     let mut i = 0;
@@ -140,7 +140,7 @@ pub fn sanitize_nonfinite_f32(samples: &mut [f32]) {
 /// `src` and `dst` must be valid slices. AVX2 must be available (guaranteed by
 /// the crate's `x86-64-v3` build baseline).
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn sanitize_copy_peak_avx2(src: &[f32], dst: &mut [f32]) -> f32 {
     let len = core::cmp::min(src.len(), dst.len());
     if len == 0 {

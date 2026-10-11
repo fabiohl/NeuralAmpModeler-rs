@@ -91,14 +91,20 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
     }
     define_lstm2_process_pipelined!(
         process_avx2,
-        target_feature(enable = "avx2,fma,f16c"),
+        cfg_attr(
+            target_arch = "x86_64",
+            target_feature(enable = "avx2,fma,f16c")
+        ),
         process_sample_avx2,
     );
 
     #[cfg(feature = "avx512")]
     define_lstm2_process_pipelined!(
         process_avx512,
-        target_feature(enable = "avx512f,avx512vl"),
+        cfg_attr(
+            target_arch = "x86_64",
+            target_feature(enable = "avx512f,avx512vl")
+        ),
         process_sample_avx512,
     );
     /// Processes an audio block through the model (SIMD dispatch).

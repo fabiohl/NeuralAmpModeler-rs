@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use core::arch::x86_64::{_mm_loadu_ps, _mm_storeu_ps, _mm256_loadu_ps, _mm256_storeu_ps};
+use crate::arch::simd::{_mm_loadu_ps, _mm_storeu_ps, _mm256_loadu_ps, _mm256_storeu_ps};
 
 /// Stores 4 accumulator values back to the output buffer with
 /// bounds‑check elision for the hot path. Extracted verbatim from single‑frame

@@ -152,7 +152,7 @@ fn test_tanh_piecewise_odd_symmetry() {
 /// `< 5e-3` per `docs/fastmath-approximations.md`.
 #[test]
 fn test_tanh_pade_nr2_sweep() {
-    use std::arch::x86_64::*;
+    use crate::arch::simd::*;
 
     let sweep: Vec<f32> = (0..2001).map(|i| -10.0_f32 + i as f32 * 0.01_f32).collect();
     let mut max_error: f32 = 0.0_f32;
@@ -224,7 +224,7 @@ proptest! {
     })]
     #[test]
     fn test_tanh_pade_nr2_proptest_100k(x in -10.0f32..10.0f32) {
-        use std::arch::x86_64::*;
+        use crate::arch::simd::*;
 
         let expected = (x as f64).tanh() as f32;
         // SAFETY: `_mm256_set1_ps` broadcasts a scalar and `_mm256_storeu_ps` writes to the 8-element `result` array, so no out-of-bounds access occurs.
@@ -249,7 +249,7 @@ proptest! {
 #[cfg(feature = "avx512")]
 #[test]
 fn test_tanh_pade_nr2_sweep_avx512() {
-    use std::arch::x86_64::*;
+    use crate::arch::simd::*;
 
     if !is_x86_feature_detected!("avx512f")
         || !is_x86_feature_detected!("avx512vl")
@@ -329,7 +329,7 @@ proptest! {
     #[cfg(feature = "avx512")]
     #[test]
     fn test_tanh_pade_nr2_proptest_100k_avx512(x in -10.0f32..10.0f32) {
-        use std::arch::x86_64::*;
+        use crate::arch::simd::*;
 
         if !is_x86_feature_detected!("avx512f")
             || !is_x86_feature_detected!("avx512vl")

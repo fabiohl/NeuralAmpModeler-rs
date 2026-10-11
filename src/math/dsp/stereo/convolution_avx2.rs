@@ -10,11 +10,11 @@
 // Architecture-specific AVX2 convolution helpers and parameter lists.
 #![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
+use crate::arch::simd::*;
 use crate::impl_convolve_mono;
 use crate::impl_convolve_mono_dual;
 use crate::impl_convolve_stereo;
 use crate::impl_convolve_stereo_dual;
-use core::arch::x86_64::*;
 
 const AVX2_STEP_DBL: usize = 16;
 const AVX2_HALF_STEP: usize = 8;
@@ -48,7 +48,7 @@ macro_rules! avx2_add {
 /// carries `#[target_feature(enable = "avx2,fma")]`) — callers must dispatch
 /// through the runtime CPUID before calling. There is no memory access; any
 /// register value is valid input.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn avx2_hsum(r: __m256) -> f32 {
     let hi128 = _mm256_extractf128_ps(r, 1);
     let lo128 = _mm256_castps256_ps128(r);
@@ -64,7 +64,7 @@ pub unsafe fn avx2_hsum(r: __m256) -> f32 {
 
 impl_convolve_stereo!(
     #[doc = "Stereo Interleaved Convolution AVX2.\n\nLoads coefficients once and applies them to both channels.\n\n# Safety\n`coeffs`, `input_l` and `input_r` must each be valid for reads of `taps` initialized f32 elements; `coeffs` must be 32-byte aligned (debug-asserted); the CPU must support AVX2+FMA (runtime dispatch by the caller). See `impl_convolve_stereo!` for the full contract."]
-    #[target_feature(enable = "avx2,fma")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
     convolve_stereo_avx2,
     AVX2_STEP_DBL,
     AVX2_HALF_STEP,
@@ -78,7 +78,7 @@ impl_convolve_stereo!(
 
 impl_convolve_stereo_dual!(
     #[doc = "Stereo Dual Convolution AVX2.\n\nPerforms two stereo convolutions (for two coefficient sets coeffs0 and coeffs1)\nover the same input buffers input_l and input_r.\nLoads input samples once and applies them to both coefficient sets.\n\n# Safety\n`coeffs0`, `coeffs1`, `input_l` and `input_r` must each be valid for reads of `taps` initialized f32 elements; `coeffs0` and `coeffs1` must be 32-byte aligned (debug-asserted); the CPU must support AVX2+FMA (runtime dispatch by the caller). See `impl_convolve_stereo_dual!` for the full contract."]
-    #[target_feature(enable = "avx2,fma")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
     convolve_stereo_dual_avx2,
     AVX2_STEP_DBL,
     AVX2_HALF_STEP,
@@ -92,7 +92,7 @@ impl_convolve_stereo_dual!(
 
 impl_convolve_mono_dual!(
     #[doc = "Mono Dual Convolution AVX2.\n\nPerforms two mono convolutions on the same input buffer, reusing the loaded input samples.\n\n# Safety\n`coeffs0`, `coeffs1` and `input` must each be valid for reads of `taps` initialized f32 elements; `coeffs0` and `coeffs1` must be 32-byte aligned (debug-asserted); the CPU must support AVX2+FMA (runtime dispatch by the caller). See `impl_convolve_mono_dual!` for the full contract."]
-    #[target_feature(enable = "avx2,fma")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
     convolve_mono_dual_avx2,
     AVX2_STEP_DBL,
     AVX2_HALF_STEP,
@@ -106,7 +106,7 @@ impl_convolve_mono_dual!(
 
 impl_convolve_mono!(
     #[doc = "Mono Convolution AVX2.\n\nLoads coefficients and applies them to a single channel.\n\n# Safety\n`coeffs` and `input` must each be valid for reads of `taps` initialized f32 elements; `coeffs` must be 32-byte aligned (debug-asserted); the CPU must support AVX2+FMA (runtime dispatch by the caller). See `impl_convolve_mono!` for the full contract."]
-    #[target_feature(enable = "avx2,fma")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
     convolve_mono_avx2,
     AVX2_STEP_DBL,
     AVX2_HALF_STEP,

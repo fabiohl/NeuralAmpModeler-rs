@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Computes the maximum absolute difference between two blocks via AVX2,
 /// returning (max_diff, has_non_finite).
@@ -10,7 +10,7 @@ use core::arch::x86_64::*;
 /// # Safety
 /// The slices `a` and `b` must have the same length.
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());
     if len == 0 {
@@ -96,7 +96,7 @@ pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
 /// The slices `a` and `b` must have the same length.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
 pub unsafe fn compute_max_diff_avx512(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());
     if len == 0 {

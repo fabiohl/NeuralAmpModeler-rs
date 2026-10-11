@@ -9,11 +9,11 @@
 
 //! Dot Product 4x kernels — AVX2 (basic + interleaved).
 
+use crate::arch::simd::*;
 use crate::dot4x_simd8_avx2;
 use crate::dot4x_simd8_avx2_tail2;
 use crate::dot4x_simd16_avx2;
 use crate::math::common::half::f16_bits_to_f32_f16c;
-use core::arch::x86_64::*;
 
 /// Computes 4 Dot Products simultaneously with maximum parallelism (ILP) via AVX2.
 ///
@@ -25,7 +25,7 @@ use core::arch::x86_64::*;
 /// # Safety
 /// Each of `w0`, `w1`, `w2`, and `w3` must have a length greater than or equal to `state.len()`.
 /// All slices must be valid and accessible for reading.
-#[target_feature(enable = "f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
 pub unsafe fn dot_product_4x_avx2(
     w0: &[u16],
     w1: &[u16],
@@ -140,7 +140,7 @@ pub unsafe fn dot_product_4x_avx2(
 /// # Safety
 /// `weights` must have a length greater than or equal to `state.len()`.
 /// Both slices must be valid and accessible for reading.
-#[target_feature(enable = "f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
 pub unsafe fn dot_product_4x_interleaved_avx2(weights: &[[u16; 4]], state: &[f32]) -> [f32; 4] {
     let len = state.len().min(weights.len());
     debug_assert!(weights.len() >= len);

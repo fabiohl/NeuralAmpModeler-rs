@@ -7,9 +7,9 @@
     clippy::too_many_arguments
 )]
 
+use crate::arch::simd::*;
 use crate::gemv_4gate_inner_dual_avx2;
 use crate::gemv_4gate_simd_outer_avx2;
-use core::arch::x86_64::*;
 
 /// Performs the linear projection for the 4 "gates" of an LSTM cell simultaneously via AVX2.
 ///
@@ -22,7 +22,7 @@ use core::arch::x86_64::*;
 /// (2 per gate: `acc_lo`/`acc_hi`), breaking the serial FMA dependency chain and
 /// doubling port utilization on x86-64-v3 (Haswell+) where FMA has ~4–5 cycle
 /// latency and 2 execution ports.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "Performance-critical AVX2 LSTM 4-gate kernel requiring many matrix strides/dimensions for maximum SIMD throughput"

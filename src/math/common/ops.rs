@@ -3,7 +3,7 @@
 
 //! Basic mathematical operations and low-level SIMD utilities.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Converts a vector of f32 numbers (normal) to bf16 (compact) via AVX-512.
 /// The bf16 format takes up half the space but maintains the range of f32 numbers,
@@ -14,7 +14,7 @@ use core::arch::x86_64::*;
 /// AVX-512F+VL target feature must be available (enforced by CPU dispatch).
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 // SAFETY: Caller must ensure AVX-512F+VL is available and src/dest are valid
 // non-overlapping slices. This `pub unsafe fn` is the trust boundary.
 pub unsafe fn f32_to_bf16_avx512(src: &[f32], dest: &mut [u16]) {

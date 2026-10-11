@@ -14,13 +14,13 @@ use super::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_dual_avx2};
 use crate::activation_simd_avx2;
 #[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Applies Sigmoid followed by ReLU (fused).
 ///
 /// # Safety
 /// Requires AVX2 and FMA support.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
     // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
     // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_avx2`.
@@ -34,7 +34,7 @@ pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
 ///
 /// # Safety
 /// Requires AVX2 and FMA support.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
@@ -50,7 +50,7 @@ pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m2
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
     // SAFETY: `simd_sigmoid_avx512` requires AVX-512F/VL, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
@@ -65,7 +65,7 @@ pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
 ///
 /// # Safety
 /// Requires AVX2 and FMA support.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
@@ -107,7 +107,7 @@ pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn fused_sigmoid_relu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

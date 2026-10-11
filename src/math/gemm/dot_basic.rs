@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //! Dot Product kernels — AVX2 and AVX-512.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Computes the Dot Product in a blazing-fast manner using hardware acceleration (AVX2).
 ///
@@ -15,7 +15,7 @@ use core::arch::x86_64::*;
 /// The caller must ensure that the CPU supports AVX2 and FMA target features.
 // KEEP IN SYNC WITH: `src/models/a2/film.rs::dot_product_avx2`
 // (Note: `film.rs` maintains a specialized 2-accumulator 16-unrolled inlined version for small condition vectors)
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;
@@ -102,7 +102,7 @@ pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// The caller must ensure that the CPU supports AVX-512F and AVX-512VL.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;
@@ -140,7 +140,7 @@ pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
 /// The caller must ensure that the CPU supports AVX-512BF16 and AVX-512VL.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512bf16,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512bf16,avx512vl"))]
 pub unsafe fn dot_product_bf16_avx512(a: &[u16], b: &[u16]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;

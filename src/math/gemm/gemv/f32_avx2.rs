@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+use crate::arch::simd::*;
 use crate::gemv_f32_inner_loop_avx2;
-use core::arch::x86_64::*;
 
 const SMALL_IN_LEN_THRESHOLD_AVX2: usize = 4;
 
@@ -68,7 +68,7 @@ macro_rules! transpose_8x8_f32_avx2 {
 /// - `bias.len()` must be >= `out_len`.
 ///
 /// All slices must be valid and accessible for reading/writing.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn gemv_with_bias_f32_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -363,7 +363,7 @@ pub unsafe fn gemv_with_bias_f32_avx2(
 ///   and `out_len = out_frames.len() / num_frames`.
 ///
 /// All slices must be valid and accessible for reading/writing.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn gemv_no_bias_f32_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -618,7 +618,7 @@ pub unsafe fn gemv_no_bias_f32_avx2(
 /// `weights.len() >= OUT`
 /// AVX2+FMA ISA must be available (x86-64-v3).
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
     in_frames: &[f32],
     weights: &[f32],
@@ -662,7 +662,7 @@ pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
 /// `weights.len() >= OUT`, `bias.len() >= OUT`
 /// AVX2+FMA ISA must be available (x86-64-v3).
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn broadcast_scale_with_bias_f32_avx2<const OUT: usize>(
     in_frames: &[f32],
     weights: &[f32],

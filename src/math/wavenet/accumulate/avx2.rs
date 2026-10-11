@@ -3,15 +3,15 @@
 
 //! AVX2 accumulation and activation kernels for WaveNet.
 
+use crate::arch::simd::*;
 use crate::wavenet_simd_avx2;
-use core::arch::x86_64::*;
 
 /// Builds an AVX2 tail mask with the low `rem` lanes enabled (`-1`) and the rest zero.
 ///
 /// Lets remainder paths (`rem < 8`) run the full 256-bit vector kernels without
 /// scalar fallback, heap allocation, or libm calls. Stack-resident only; the
 /// mask lives in a register after load.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
     let mut vals = [0i32; 8];
     for item in vals.iter_mut().take(rem) {
@@ -26,7 +26,7 @@ unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
 /// Matches the vector loop (`_mm256_add_ps`, f32) lane-for-lane. Fractional
 /// blocks run the same vector add under an AVX2 mask, so they accumulate
 /// identically to full vectors.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 unsafe fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
     let rem = dest.len();
     if rem == 0 {
@@ -52,7 +52,7 @@ unsafe fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
 /// - `src.len() >= dest.len()`: the vector loop performs unaligned 256-bit
 ///   raw-pointer loads from `src` up to `dest.len()`; a shorter `src` is read
 ///   out of bounds (UB).
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
     let mut i = 0;
@@ -77,7 +77,7 @@ pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
 /// Runs the same `simd_tanh_poly_avx2` kernel and `_mm256_add_ps` f32 sum as
 /// the vector loop under an AVX2 mask, so the remainder lanes activate and
 /// accumulate identically to full vectors.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -105,7 +105,7 @@ unsafe fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mu
 /// - `head_input.len() >= block.len()`: the vector loop performs unaligned
 ///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
 ///   shorter `head_input` is accessed out of bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -147,7 +147,7 @@ pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
 /// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel and f32 add as
 /// the vector loop under an AVX2 mask, so the remainder lanes activate and
 /// accumulate identically to full vectors.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn gated_activation_and_accumulate_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -193,7 +193,7 @@ unsafe fn gated_activation_and_accumulate_block_avx2_tail(
 ///   vector loop performs unaligned 256-bit raw-pointer loads/stores at
 ///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
 ///   bounds (UB). `ch == 0` also divides by zero.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn gated_activation_and_accumulate_block_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -236,7 +236,7 @@ pub unsafe fn gated_activation_and_accumulate_block_avx2(
 ///
 /// Runs the same `simd_tanh_poly_avx2` kernel as the vector loop under an AVX2
 /// mask, so the remainder lanes activate identically to full vectors.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -263,7 +263,7 @@ unsafe fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut
 /// - `head_input.len() >= block.len()`: the vector loop performs unaligned
 ///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
 ///   `head_input` is written out of bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -300,7 +300,7 @@ pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
 /// Runs the same `simd_tanh_poly_avx2` kernel and f32 add as the vector loop
 /// under an AVX2 mask, so the remainder lanes compute `seed + tanh(block)`
 /// identically to full vectors.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn tanh_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -336,7 +336,7 @@ unsafe fn tanh_and_accumulate_with_seed_avx2_tail(
 ///   vector loop performs unaligned 256-bit raw-pointer loads/stores up to
 ///   `block.len()` on all three slices; shorter slices are accessed out of
 ///   bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn tanh_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -385,7 +385,7 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx2(
 ///
 /// Runs the same `_mm256_max_ps` and f32 add as the vector loop under an AVX2
 /// mask, so the remainder lanes activate and accumulate identically to full vectors.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 unsafe fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -413,7 +413,7 @@ unsafe fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mu
 /// - `head_input.len() >= block.len()`: the vector loop performs unaligned
 ///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
 ///   shorter `head_input` is accessed out of bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -455,7 +455,7 @@ pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
 ///
 /// Runs the same `_mm256_max_ps` as the vector loop under an AVX2 mask, so the
 /// remainder lanes activate identically to full vectors.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 unsafe fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -482,7 +482,7 @@ unsafe fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut
 /// - `head_input.len() >= block.len()`: the vector loop performs unaligned
 ///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
 ///   `head_input` is written out of bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -520,7 +520,7 @@ pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
 /// Runs the same `_mm256_max_ps` and f32 add as the vector loop under an AVX2
 /// mask, so the remainder lanes compute `seed + max(0, block)` identically to
 /// full vectors.
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 unsafe fn relu_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -555,7 +555,7 @@ unsafe fn relu_and_accumulate_with_seed_avx2_tail(
 ///   vector loop performs unaligned 256-bit raw-pointer loads/stores up to
 ///   `block.len()` on all three slices; shorter slices are accessed out of
 ///   bounds (UB).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn relu_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -606,7 +606,7 @@ pub unsafe fn relu_and_accumulate_with_seed_avx2(
 /// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel as the vector
 /// loop under an AVX2 mask, so the remainder lanes activate identically to
 /// full vectors.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 unsafe fn gated_activation_and_overwrite_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -651,7 +651,7 @@ unsafe fn gated_activation_and_overwrite_block_avx2_tail(
 ///   vector loop performs unaligned 256-bit raw-pointer loads/stores at
 ///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
 ///   bounds (UB). `ch == 0` also divides by zero.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn gated_activation_and_overwrite_block_avx2(
     head_input: &mut [f32],
     block: &mut [f32],

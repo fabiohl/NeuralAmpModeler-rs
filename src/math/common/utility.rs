@@ -10,7 +10,7 @@
 //! SIMD utilities for reductions and horizontal operations.
 
 use super::kahan::kahan_add;
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Horizontal sum of an AVX2 (256-bit) register to scalar f32.
 ///
@@ -23,7 +23,7 @@ use core::arch::x86_64::*;
 /// dereferenced: the reduction and final store operate on the register argument
 /// and a stack-local `f32`.
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn hsum_avx2(v: __m256) -> f32 {
     let hi = _mm256_extractf128_ps(v, 1);
     let lo = _mm256_castps256_ps128(v);
@@ -47,7 +47,7 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
 pub unsafe fn hsum_avx512(v: __m512) -> f32 {
     _mm512_reduce_add_ps(v)
 }
@@ -58,7 +58,7 @@ pub unsafe fn hsum_avx512(v: __m512) -> f32 {
 /// `ptr` must be non-null, aligned to `align_of::<f32>()`, and valid for `len`
 /// consecutive reads of initialized `f32` values. The caller must guarantee
 /// AVX2 is available (`#[target_feature]`).
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
     let mut i = 0;
     let mut sum_v = _mm256_setzero_ps();
@@ -88,7 +88,7 @@ pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
 /// AVX-512F is available (`#[target_feature]`).
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
 pub unsafe fn horizontal_sum_avx512(ptr: *const f32, len: usize) -> f32 {
     let mut i = 0;
     let mut sum_v = _mm512_setzero_ps();

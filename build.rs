@@ -34,8 +34,28 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
     let is_linux_elf = target_os == "linux" && target_env == "gnu";
 
+    if target_arch == "x86_64" {
+        check_x86_64_v3();
+    }
+
+    if is_linux_elf {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        println!("cargo:rustc-link-arg=-Wl,--undefined-version");
+        println!(
+            "cargo:rustc-link-arg=-Wl,--version-script={manifest_dir}/.cargo/hide-libm-shadow.map"
+        );
+    }
+
+    export_bench_constants_env();
+}
+
+/// Fails the build when an x86_64 target is compiled without the full
+/// x86-64-v3 feature set (the AVX2/FMA kernels are selected at compile time).
+fn check_x86_64_v3() {
     let target_feature = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
     let features: Vec<&str> = target_feature.split(',').collect();
 
@@ -71,16 +91,6 @@ fn main() {
         }
         std::process::exit(1);
     }
-
-    if is_linux_elf {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        println!("cargo:rustc-link-arg=-Wl,--undefined-version");
-        println!(
-            "cargo:rustc-link-arg=-Wl,--version-script={manifest_dir}/.cargo/hide-libm-shadow.map"
-        );
-    }
-
-    export_bench_constants_env();
 }
 
 /// Extracts `DSP_MICRO_BATCH` from the canonical `benches/constants.rs` and

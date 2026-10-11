@@ -13,7 +13,7 @@
 //! with 8 independent accumulators to break the FMA dependency chain.
 
 #[cfg(feature = "avx512")]
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// GEMV BF16 AVX-512: Y = Bias + W * X, where X and W are in BF16 format.
 ///
@@ -21,7 +21,10 @@ use core::arch::x86_64::*;
 /// ZMM accumulators and step 16 in the inner loop (16 BF16 pairs = 32 elements).
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl,avx512bf16")]
+#[cfg_attr(
+    target_arch = "x86_64",
+    target_feature(enable = "avx512f,avx512vl,avx512bf16")
+)]
 pub unsafe fn gemv_overwrite_bf16_avx512(
     in_frame: &[u16],
     weights: &[u16],

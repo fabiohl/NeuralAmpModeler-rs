@@ -13,15 +13,15 @@
 use crate::activation_simd_avx2;
 #[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
+use crate::arch::simd::*;
 use crate::math::constants::*;
-use core::arch::x86_64::*;
 
 /// Direct minimax polynomial approximation of `sigmoid(x)` (AVX2).
 ///
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn simd_sigmoid_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-SIGMOID_MINIMAX_CLAMP);
     let clamp_hi = _mm256_set1_ps(SIGMOID_MINIMAX_CLAMP);
@@ -62,7 +62,7 @@ pub unsafe fn simd_sigmoid_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn simd_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let clamp_lo = _mm256_set1_ps(-SIGMOID_MINIMAX_CLAMP);
     let clamp_hi = _mm256_set1_ps(SIGMOID_MINIMAX_CLAMP);
@@ -119,7 +119,7 @@ pub unsafe fn simd_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256)
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn simd_sigmoid_avx512(x: __m512) -> __m512 {
     let clamp_lo = _mm512_set1_ps(-SIGMOID_MINIMAX_CLAMP);
     let clamp_hi = _mm512_set1_ps(SIGMOID_MINIMAX_CLAMP);
@@ -157,7 +157,7 @@ pub unsafe fn simd_sigmoid_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 pub unsafe fn sigmoid_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
@@ -199,7 +199,7 @@ pub unsafe fn sigmoid_slice_avx2(slice: &mut [f32]) {
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
 pub unsafe fn sigmoid_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

@@ -5,9 +5,9 @@ use super::common::{WaveNetLayerState, WavenetProcessContext};
 use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;
 use super::layer_dyn::WaveNetLayerDyn;
+use crate::arch::simd::{_MM_HINT_T0, _mm_prefetch};
 use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;
-use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
 
 /// Final tensor closure generating Head projection (Dense or 1D Conv).
 #[derive(Clone)]

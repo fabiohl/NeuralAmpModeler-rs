@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, arm64-port]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Every job is gated on the same condition: only run in the rread fork, and
+# only for events triggered by rread (pushes, PRs opened by rread, manual
+# dispatch). Activity by anyone else, or this file landing in another repo,
+# skips all jobs.
+
+jobs:
+  # x86_64 is the reference platform: full lints + the quick QA suite.
+  x86_64-linux:
+    if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets --features testing
+      - name: Quick QA suite
+        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
+        run: ./utils/tests-quick.sh --allow-gaps
+
+  # aarch64 targets. Allowed to fail until the NEON backend (Phase 2) lands.
+  aarch64:
+    if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: Check library
+        run: cargo check --lib --features testing

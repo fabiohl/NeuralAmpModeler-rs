@@ -15,9 +15,9 @@
 //! Methods delegate to kernel functions in `math::gemm`, `math::wavenet`,
 //! `math::lstm`, `math::dsp`, and `math::common::utility`.
 
+use crate::arch::simd::*;
 use crate::math::common::InstructionSet;
 use crate::math::common::traits::SimdMath;
-use core::arch::x86_64::*;
 
 /// Concrete implementation of the SimdMath trait for processors with AVX2 and FMA support.
 ///

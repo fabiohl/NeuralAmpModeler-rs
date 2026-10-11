@@ -97,7 +97,7 @@ impl<const CH: usize> WaveNetA2<CH> {
     #[inline(always)]
     fn rechannel_prescale(&mut self, input: &[f32], pos: usize, nf: usize) {
         if CH == 8 {
-            use core::arch::x86_64::{
+            use crate::arch::simd::{
                 _mm256_load_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_store_ps,
             };
             // SAFETY: `rechannel_w_f32` has exactly `CH == 8` elements and `layer_in`
