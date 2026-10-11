@@ -23,7 +23,7 @@ jobs:
   # x86_64 is the reference platform: full lints + the quick QA suite.
   x86_64-linux:
     if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
@@ -38,7 +38,7 @@ jobs:
         # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
         run: ./utils/tests-quick.sh --allow-gaps
 
-  # aarch64 targets. Allowed to fail until the NEON backend (Phase 2) lands.
+  # aarch64 targets (NEON backend): lints + the quick QA suite.
   aarch64:
     if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
     strategy:
@@ -48,15 +48,25 @@ jobs:
           - name: macos-arm64
             os: macos-latest
           - name: linux-arm64
-            os: ubuntu-24.04-arm
+            os: ubuntu-26.04-arm
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
-      - name: Check library
-        run: cargo check --lib --features testing
+      - name: Clippy
+        run: cargo clippy --all-targets --features testing
+      # macOS ships bash 3.2; the QA scripts need bash >= 4. NAM_NO_LOW_PRIORITY
+      # skips the `nice` re-exec, which would go back through /bin/bash.
+      - name: Install bash (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
+          echo "NAM_NO_LOW_PRIORITY=1" >> "$GITHUB_ENV"
+      - name: Quick QA suite
+        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
+        run: ${QA_BASH:-bash} ./utils/tests-quick.sh --allow-gaps
