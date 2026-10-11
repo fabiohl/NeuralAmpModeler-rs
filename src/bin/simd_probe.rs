@@ -19,9 +19,9 @@
 //! cargo run --features avx512 --bin simd_probe
 //! ```
 
-use neural_amp_modeler_rs::math::common::{
-    InstructionSet, SIMD_MATH, avx512_capability_complete, effective_instruction_set,
-};
+#[cfg(target_arch = "x86_64")]
+use neural_amp_modeler_rs::math::common::avx512_capability_complete;
+use neural_amp_modeler_rs::math::common::{InstructionSet, SIMD_MATH, effective_instruction_set};
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::lstm::Lstm2x8;
 
@@ -44,6 +44,7 @@ fn main() {
     println!("=======================================================");
 }
 
+#[cfg(target_arch = "x86_64")]
 /// Prints the runtime-detected CPU hardware flags and OS context-save status.
 ///
 /// Compliance is judged strictly against the project's mandatory
@@ -82,6 +83,29 @@ fn print_hardware_flags() {
     );
 }
 
+/// Prints the runtime-detected aarch64 CPU features. NEON is the mandatory
+/// baseline (always present on aarch64); the rest are informative.
+#[cfg(target_arch = "aarch64")]
+fn print_hardware_flags() {
+    println!("[CPU Hardware Flags]");
+    for (name, present) in [
+        ("neon", std::arch::is_aarch64_feature_detected!("neon")),
+        ("fp16", std::arch::is_aarch64_feature_detected!("fp16")),
+        (
+            "dotprod",
+            std::arch::is_aarch64_feature_detected!("dotprod"),
+        ),
+        ("i8mm", std::arch::is_aarch64_feature_detected!("i8mm")),
+        ("bf16", std::arch::is_aarch64_feature_detected!("bf16")),
+        ("sve", std::arch::is_aarch64_feature_detected!("sve")),
+        ("sve2", std::arch::is_aarch64_feature_detected!("sve2")),
+    ] {
+        println!("  - {name:<12} {}", bool_label(present, ""));
+    }
+    println!("  -> Baseline Hardware (aarch64 NEON): [COMPLIANT]");
+}
+
+#[cfg(target_arch = "x86_64")]
 /// Verdict label for the mandatory `x86-64-v3` baseline (AVX2 + FMA).
 ///
 /// AVX2 and FMA are the project's non-negotiable floor: the default build
@@ -96,6 +120,7 @@ fn baseline_status_label(avx2: bool, fma: bool) -> &'static str {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 /// Verdict label for the optional AVX-512 extension set (F+VL+BW+DQ).
 fn avx512_extension_label(complete: bool) -> &'static str {
     if complete {
@@ -127,7 +152,13 @@ fn print_dispatch_resolution() {
     println!("[Engine Dispatch Resolution]");
     println!(
         "  - Active SIMD Backend: {}",
-        if backend_is_avx512 { "AVX-512" } else { "AVX2" }
+        if cfg!(target_arch = "aarch64") {
+            "NEON"
+        } else if backend_is_avx512 {
+            "AVX-512"
+        } else {
+            "AVX2"
+        }
     );
     println!("  - Engine Backend (SIMD_MATH.name): {}", SIMD_MATH.name);
 
@@ -170,6 +201,7 @@ fn run_inference_smoke_test() -> Result<f32, String> {
     Ok(output.iter().sum())
 }
 
+#[cfg(target_arch = "x86_64")]
 /// Returns whether the OS saves the full AVX-512 (ZMM/opmask) register context.
 ///
 /// When `OSXSAVE` is advertised, XCR0 bits 5 (opmask), 6 (ZMM_Hi256) and 7
@@ -186,6 +218,7 @@ fn os_saves_zmm_context() -> bool {
     (xcr0 & 0xE0) == 0xE0
 }
 
+#[cfg(target_arch = "x86_64")]
 /// Returns whether the OS advertises the XSAVE/OSXSAVE context management.
 ///
 /// CPUID leaf 1, ECX bit 27 (`OSXSAVE`) is not exposed as a Rust target
@@ -204,7 +237,7 @@ fn bool_label(value: bool, suffix: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::{avx512_extension_label, baseline_status_label};
 

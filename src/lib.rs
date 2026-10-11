@@ -4,6 +4,12 @@
 #![warn(missing_docs)]
 // Every `unsafe` block must carry a `// SAFETY:` justification (enforced by clippy::undocumented_unsafe_blocks).
 #![warn(clippy::undocumented_unsafe_blocks)]
+// On aarch64 the `crate::arch::simd` NEON functions are plain safe fns, while the
+// x86 intrinsics they mirror are `#[target_feature]` fns that need `unsafe`
+// when called outside an AVX2 context. Shared kernel code keeps the `unsafe`
+// blocks x86 requires; on aarch64 some of them are therefore redundant.
+// Unsafe hygiene stays enforced by the x86_64 build.
+#![cfg_attr(target_arch = "aarch64", allow(unused_unsafe))]
 // Rustdoc resolves intra-doc links in a module's inner docs against the parent
 // module scope on the stable toolchain, but against the module's own scope on
 // nightly (docs.rs). A short label that references an imported item therefore
@@ -165,6 +171,12 @@ compile_error!(
 compile_error!("the `avx512` feature is only available on x86_64");
 
 /// Architecture-neutral SIMD intrinsic surface (x86_64 native, aarch64 NEON).
+/// Public (hidden) under `testing` so integration tests and benches can build
+/// `__m256` values for the crate's SIMD functions on either architecture.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod arch;
+#[cfg(not(feature = "testing"))]
 mod arch;
 
 /// Host-agnostic infrastructure: diagnostics, SPSC protocol, alloc audit, panic hooks.
@@ -301,7 +313,8 @@ pub mod testing;
 // Redirects math symbols to the stable GLIBC_2.2.5 version.
 // Since external dependencies use these symbols, we declare global wrappers
 // that intercept calls and jump (jmp) via PLT to the compatible versions.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+// x86_64 only: the trampolines are x86 `jmp`s to the x86_64 base symbol version.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 core::arch::global_asm!(
     ".global log10f",
     ".hidden log10f",

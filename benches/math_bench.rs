@@ -34,7 +34,7 @@ fn bench_tanh_slice_256(c: &mut Criterion) {
 /// Padé [5,4] tanh with single Newton-Raphson on reciprocal (AVX2).
 /// Evaluates rcp_ps + 1×NR throughput vs div_ps and NR2.
 fn bench_tanh_pade_nr1_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PadeNR1_AVX2_256elem", |b| {
         b.iter(|| {
@@ -53,7 +53,7 @@ fn bench_tanh_pade_nr1_256(c: &mut Criterion) {
 /// Padé [5,4] tanh with single Newton-Raphson — dual path (AVX2).
 /// Measures throughput when processing two independent registers.
 fn bench_tanh_pade_nr1_dual_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PadeNR1_Dual_AVX2_256elem", |b| {
         b.iter(|| {
@@ -77,7 +77,7 @@ fn bench_tanh_pade_nr1_dual_256(c: &mut Criterion) {
 /// Padé [5,4] tanh with double Newton-Raphson on reciprocal (AVX2).
 /// Evaluates rcp_ps + 2×NR iteration throughput vs piecewise minimax.
 fn bench_tanh_pade_nr2_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PadeNR2_AVX2_256elem", |b| {
         b.iter(|| {
@@ -96,7 +96,7 @@ fn bench_tanh_pade_nr2_256(c: &mut Criterion) {
 /// Padé [5,4] tanh with hardware division oracle (AVX2).
 /// IEEE 754 full-precision reference — maximum fidelity, minimum throughput.
 fn bench_tanh_pade_div_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PadeDiv_AVX2_256elem", |b| {
         b.iter(|| {
@@ -130,7 +130,7 @@ fn bench_sigmoid_slice_256(c: &mut Criterion) {
 /// Polynomial tanh with hardware division (AVX2).
 /// IEEE 754 full-precision division — baseline for NR evaluation.
 fn bench_tanh_poly_div_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PolyDiv_AVX2_256elem", |b| {
         b.iter(|| {
@@ -149,7 +149,7 @@ fn bench_tanh_poly_div_256(c: &mut Criterion) {
 /// Polynomial tanh with single Newton-Raphson on reciprocal (AVX2).
 /// Evaluates rcp_ps + 1×NR throughput vs hardware division.
 fn bench_tanh_poly_nr1_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PolyNR1_AVX2_256elem", |b| {
         b.iter(|| {
@@ -168,7 +168,7 @@ fn bench_tanh_poly_nr1_256(c: &mut Criterion) {
 /// Polynomial tanh with double Newton-Raphson on reciprocal (AVX2).
 /// Evaluates rcp_ps + 2×NR throughput vs NR1 and hardware division (oracle).
 fn bench_tanh_poly_nr2_256(c: &mut Criterion) {
-    use std::arch::x86_64::*;
+    use neural_amp_modeler_rs::arch::simd::*;
     let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
     c.bench_function("FastMath_tanh_PolyNR2_AVX2_256elem", |b| {
         b.iter(|| {
@@ -293,7 +293,7 @@ macro_rules! bench_avx512 {
         fn $func_name(c: &mut Criterion) {
             if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl")
             {
-                use std::arch::x86_64::*;
+                use neural_amp_modeler_rs::arch::simd::*;
                 let base: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05) - 6.4).collect();
                 c.bench_function($bench_name, |b| {
                     b.iter(|| {

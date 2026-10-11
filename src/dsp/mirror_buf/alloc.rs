@@ -11,9 +11,26 @@ use super::{
 };
 use crate::math::common::huge_alloc::{HUGE_PAGE_2M, create_backing_fd, try_mmap_huge};
 use libc::{
-    MADV_HUGEPAGE, MAP_FAILED, MAP_FIXED, MAP_SHARED, PROT_READ, PROT_WRITE, c_void, mmap, munmap,
-    sysconf,
+    MAP_FAILED, MAP_FIXED, MAP_SHARED, PROT_READ, PROT_WRITE, c_void, mmap, munmap, sysconf,
 };
+
+/// Sets the calling thread's `errno` (fault-injection paths only).
+///
+/// # Safety
+/// Writes through the libc thread-local errno pointer, which is always valid.
+unsafe fn set_errno(code: libc::c_int) {
+    // SAFETY: the libc errno accessor returns a valid pointer to this thread's errno.
+    unsafe {
+        #[cfg(target_os = "linux")]
+        {
+            *libc::__errno_location() = code;
+        }
+        #[cfg(target_vendor = "apple")]
+        {
+            *libc::__error() = code;
+        }
+    }
+}
 use std::marker::PhantomData;
 use std::ptr;
 
@@ -180,13 +197,13 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         let size_elements = size_bytes / element_size;
 
         // 1. Create backing store (memfd on Linux, stub fallback on other platforms)
-        // SAFETY: __errno_location() returns a valid thread-local errno pointer; create_backing_fd creates
+        // SAFETY: set_errno writes the thread-local errno; create_backing_fd creates
         // an anonymous, sealed memory file descriptor sized to size_bytes.
         let fd = unsafe {
             #[cfg(target_os = "linux")]
             {
                 if SIMULATE_FAIL.with(|f| f.get()) {
-                    *libc::__errno_location() = libc::ENOMEM;
+                    set_errno(libc::ENOMEM);
                     return Err(std::io::Error::last_os_error());
                 }
             }
@@ -205,7 +222,7 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         // of total_size (2 * size_bytes) from the kernel; return value is checked against MAP_FAILED.
         let base_ptr = unsafe {
             if SIMULATE_FAIL.with(|f| f.get()) {
-                *libc::__errno_location() = libc::ENOMEM;
+                set_errno(libc::ENOMEM);
                 MAP_FAILED
             } else {
                 try_mmap_huge(ptr::null_mut(), total_size, -1, 0, false)
@@ -268,10 +285,14 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         // Hint THP promotion for the data regions, then force synchronous collapse.
         // Only report THP active if the kernel confirms success (return 0).
         // SAFETY: base_ptr points to the valid page-aligned mapped region of size_bytes; madvise provides VM advice.
+        #[cfg(target_os = "linux")]
         let collapse_rc = unsafe {
-            libc::madvise(base_ptr, size_bytes, MADV_HUGEPAGE);
+            libc::madvise(base_ptr, size_bytes, libc::MADV_HUGEPAGE);
             libc::madvise(base_ptr, size_bytes, libc::MADV_COLLAPSE)
         };
+        // No transparent huge pages outside Linux.
+        #[cfg(not(target_os = "linux"))]
+        let collapse_rc = -1;
         if collapse_rc == 0 {
             MIRROR_BUF_HUGEPAGE_STATE
                 .fetch_max(HUGEPAGE_STATE_THP, std::sync::atomic::Ordering::Relaxed);
@@ -318,11 +339,11 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         let size_elements = size_bytes / element_size;
 
         // 1. Create HugeTLB-backed memfd (falls back to regular memfd)
-        // SAFETY: __errno_location() returns a valid thread-local errno pointer; create_backing_fd creates
+        // SAFETY: set_errno writes the thread-local errno; create_backing_fd creates
         // an anonymous HugeTLB-backed memfd sized to size_bytes.
         let fd = unsafe {
             if SIMULATE_FAIL.with(|f| f.get()) {
-                *libc::__errno_location() = libc::ENOMEM;
+                set_errno(libc::ENOMEM);
                 return Err(std::io::Error::last_os_error());
             }
             create_backing_fd(size_bytes, true)?

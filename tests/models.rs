@@ -143,6 +143,8 @@ mod slimmable_2array_parity_test;
 mod spectral_fidelity;
 #[path = "models/split_prewarm_equiv.rs"]
 mod split_prewarm_equiv;
+// Transparent huge pages and /proc/self/smaps_rollup are Linux-only.
+#[cfg(target_os = "linux")]
 #[path = "models/thp_coherence.rs"]
 mod thp_coherence;
 #[path = "models/threshold_calibration.rs"]

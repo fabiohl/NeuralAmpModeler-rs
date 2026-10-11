@@ -99,6 +99,7 @@ fn read_kernel_version() -> String {
 }
 
 /// Detects advanced CPU features (above x86-64-v3 baseline).
+#[cfg(target_arch = "x86_64")]
 fn detect_advanced_features() -> Vec<String> {
     let mut features = Vec::new();
     // Features de x86-64-v4 (AVX-512)
@@ -119,6 +120,28 @@ fn detect_advanced_features() -> Vec<String> {
     }
     if std::is_x86_feature_detected!("avx512bf16") {
         features.push("avx512bf16".to_string());
+    }
+    features
+}
+
+/// Detects optional CPU features above the aarch64 NEON baseline.
+#[cfg(target_arch = "aarch64")]
+fn detect_advanced_features() -> Vec<String> {
+    let mut features = Vec::new();
+    for (name, present) in [
+        ("fp16", std::arch::is_aarch64_feature_detected!("fp16")),
+        (
+            "dotprod",
+            std::arch::is_aarch64_feature_detected!("dotprod"),
+        ),
+        ("i8mm", std::arch::is_aarch64_feature_detected!("i8mm")),
+        ("bf16", std::arch::is_aarch64_feature_detected!("bf16")),
+        ("sve", std::arch::is_aarch64_feature_detected!("sve")),
+        ("sve2", std::arch::is_aarch64_feature_detected!("sve2")),
+    ] {
+        if present {
+            features.push(name.to_string());
+        }
     }
     features
 }

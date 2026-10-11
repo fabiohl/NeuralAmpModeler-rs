@@ -126,15 +126,18 @@ fn test_wavenet_a2_set_max_buffer_size_grows() {
     assert_eq!(model.layer_buffers.len(), A2_NUM_LAYERS);
     assert_eq!(model.layer_lookbacks.len(), A2_NUM_LAYERS);
     assert_eq!(model.layer_buffer_starts.len(), A2_NUM_LAYERS);
-    // At least one ring should have grown.
-    let any_grew = orig_sizes
+    // Every ring must hold its lookback plus the new block (+1). Ring sizes are
+    // rounded up to whole pages (4 KiB on x86_64 Linux, 16 KiB on Apple
+    // Silicon), so a ring may already have had room and not grow; none may shrink.
+    for (i, (&orig, &ring)) in orig_sizes
         .iter()
         .zip(model.layer_ring_sizes.iter())
-        .any(|(a, b)| b > a);
-    assert!(
-        any_grew,
-        "at least one ring should grow with larger max_buffer_size"
-    );
+        .enumerate()
+    {
+        let needed = model.layer_lookbacks[i] + (256 + 1) * 8;
+        assert!(ring >= needed, "layer {i}: ring {ring} < required {needed}");
+        assert!(ring >= orig, "layer {i}: ring shrank from {orig} to {ring}");
+    }
 }
 
 #[test]

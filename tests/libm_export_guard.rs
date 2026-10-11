@@ -11,6 +11,10 @@
 //! Canonical gate: wired into `tests-quick.sh` Phase 1 and `tests-long.sh`
 //! Defense phase. The former standalone wrapper
 //! `utils/debug/verify_no_libm_exports.sh` was consolidated into this test.
+//!
+//! Linux GNU only: ELF symbol interposition (and the version script that
+//! prevents it) does not apply to Mach-O or other targets.
+#![cfg(all(target_os = "linux", target_env = "gnu"))]
 
 use std::env;
 use std::path::PathBuf;

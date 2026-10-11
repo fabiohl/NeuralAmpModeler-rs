@@ -12,8 +12,17 @@
 //! AVX-512 kernels (behind the `avx512` feature) remain x86_64-only and keep
 //! importing `core::arch::x86_64` directly.
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+
 /// SIMD intrinsics for the current target architecture.
 #[cfg(target_arch = "x86_64")]
-pub(crate) mod simd {
-    pub(crate) use core::arch::x86_64::*;
+pub mod simd {
+    pub use core::arch::x86_64::*;
+}
+
+/// SIMD intrinsics for the current target architecture.
+#[cfg(target_arch = "aarch64")]
+pub mod simd {
+    pub use super::aarch64::*;
 }

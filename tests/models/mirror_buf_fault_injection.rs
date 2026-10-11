@@ -4,7 +4,7 @@
 use neural_amp_modeler_rs::dsp::mirror_buf::{MirroredBuffer, set_simulate_fail};
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn test_mirror_buf_mmap_failure_injection() {
     // Activating failure simulation
     set_simulate_fail(true);
@@ -26,7 +26,7 @@ fn test_mirror_buf_mmap_failure_injection() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn test_mirror_buf_try_clone_under_fault() {
     let buf = MirroredBuffer::<f32>::new(1024).expect("initial allocation should succeed");
 
