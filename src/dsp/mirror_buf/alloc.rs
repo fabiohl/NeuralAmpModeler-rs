@@ -9,28 +9,10 @@ use super::{
     HUGEPAGE_STATE_HUGETLB, HUGEPAGE_STATE_THP, MIRROR_BUF_HUGEPAGE_STATE, MirrorSafe,
     MirroredBuffer, SIMULATE_FAIL,
 };
-use crate::math::common::huge_alloc::{HUGE_PAGE_2M, create_backing_fd, try_mmap_huge};
+use crate::math::common::huge_alloc::{HUGE_PAGE_2M, create_backing_fd, set_errno, try_mmap_huge};
 use libc::{
     MAP_FAILED, MAP_FIXED, MAP_SHARED, PROT_READ, PROT_WRITE, c_void, mmap, munmap, sysconf,
 };
-
-/// Sets the calling thread's `errno` (fault-injection paths only).
-///
-/// # Safety
-/// Writes through the libc thread-local errno pointer, which is always valid.
-unsafe fn set_errno(code: libc::c_int) {
-    // SAFETY: the libc errno accessor returns a valid pointer to this thread's errno.
-    unsafe {
-        #[cfg(target_os = "linux")]
-        {
-            *libc::__errno_location() = code;
-        }
-        #[cfg(target_vendor = "apple")]
-        {
-            *libc::__error() = code;
-        }
-    }
-}
 use std::marker::PhantomData;
 use std::ptr;
 
@@ -167,7 +149,9 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
             }
         };
 
-        if total_chunk >= HUGE_PAGE_2M {
+        // Explicit huge pages are Linux-only (MAP_HUGETLB / MFD_HUGETLB); elsewhere
+        // the attempt would create and size a backing object only to fail.
+        if cfg!(target_os = "linux") && total_chunk >= HUGE_PAGE_2M {
             let huge_res = Self::try_new_huge_aligned(requested_bytes, HUGE_PAGE_2M, elem_stride);
             if let Ok(buf) = huge_res {
                 MIRROR_BUF_HUGEPAGE_STATE
@@ -196,16 +180,13 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         };
         let size_elements = size_bytes / element_size;
 
-        // 1. Create backing store (memfd on Linux, stub fallback on other platforms)
+        // 1. Create backing store (memfd on Linux, unlinked POSIX shm on macOS)
         // SAFETY: set_errno writes the thread-local errno; create_backing_fd creates
-        // an anonymous, sealed memory file descriptor sized to size_bytes.
+        // an anonymous memory file descriptor sized to size_bytes.
         let fd = unsafe {
-            #[cfg(target_os = "linux")]
-            {
-                if SIMULATE_FAIL.with(|f| f.get()) {
-                    set_errno(libc::ENOMEM);
-                    return Err(std::io::Error::last_os_error());
-                }
+            if SIMULATE_FAIL.with(|f| f.get()) {
+                set_errno(libc::ENOMEM);
+                return Err(std::io::Error::last_os_error());
             }
             create_backing_fd(size_bytes, false)?
         };

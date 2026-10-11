@@ -103,8 +103,9 @@ pub fn mlockall_current() -> io::Result<()> {
 /// thread. Cheap enough to call during RT-thread setup, before the hot loop.
 #[inline]
 pub fn set_ftz_daz() {
-    // SAFETY: `set_daz_ftz` only manipulates the calling thread's MXCSR
-    // (SSE2 is guaranteed by the x86-64-v3 baseline).
+    // SAFETY: `set_daz_ftz` only manipulates the calling thread's floating-point
+    // control register: MXCSR on x86_64 (SSE2 is guaranteed by the x86-64-v3
+    // baseline), FPCR.FZ on aarch64 (unprivileged, always present).
     unsafe {
         crate::math::common::set_daz_ftz();
     }

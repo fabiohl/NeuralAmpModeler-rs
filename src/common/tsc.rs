@@ -21,9 +21,7 @@
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(target_arch = "x86_64")]
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Fixed shift for the `cyc2ns`-style conversion.
 ///
@@ -192,11 +190,50 @@ fn generic_timer_frequency() -> u64 {
     freq
 }
 
+/// Maximum relative disagreement between the reported (`CNTFRQ_EL0`) and the
+/// measured generic-timer rate before the reported value is distrusted.
+#[cfg(target_arch = "aarch64")]
+const GENERIC_TIMER_MAX_DEVIATION: f64 = 0.02;
+
+/// Chooses the calibration multiplier for the aarch64 generic timer.
+///
+/// Uses the exact `reported_hz` (`CNTFRQ_EL0`) when it agrees with the rate
+/// measured over a wall-clock window to within
+/// [`GENERIC_TIMER_MAX_DEVIATION`]; otherwise (firmware that programs
+/// CNTFRQ_EL0 wrongly, or reports 0) falls back to the measured rate, as the
+/// x86_64 path does. Returns `(mult, reported_trusted)`, or `None` when
+/// neither source is usable. Pure helper so tests can pin the inputs.
+#[cfg(target_arch = "aarch64")]
+fn choose_generic_timer_mult(
+    reported_hz: u64,
+    measured_cycles: u64,
+    measured_nanos: u64,
+) -> Option<(u64, bool)> {
+    let measured = mult_for_rate(measured_cycles, measured_nanos);
+    let Some(reported) = mult_for_rate(reported_hz, 1_000_000_000) else {
+        return measured.map(|m| (m, false));
+    };
+    match measured {
+        Some(m) => {
+            let deviation = (reported as f64 - m as f64).abs() / m as f64;
+            if deviation <= GENERIC_TIMER_MAX_DEVIATION {
+                Some((reported, true))
+            } else {
+                Some((m, false))
+            }
+        }
+        // No usable measurement window: nothing to contradict the register.
+        None => Some((reported, true)),
+    }
+}
+
 /// Calibrates the cycle counter.
 ///
-/// aarch64: exact, from the architected generic-timer frequency
-/// (`CNTFRQ_EL0`); the generic timer is constant-rate by definition, so no
-/// measurement window is needed.
+/// aarch64: from the architected generic-timer frequency (`CNTFRQ_EL0`),
+/// exact when correct. Because some firmware programs CNTFRQ_EL0 wrongly, the
+/// value is checked against a 20 ms window measured with `Instant`; on a
+/// disagreement above [`GENERIC_TIMER_MAX_DEVIATION`] the measured rate is used
+/// and a warning is logged.
 ///
 /// Runs only once at program startup (cold-path).
 #[cfg(target_arch = "aarch64")]
@@ -205,18 +242,38 @@ pub fn calibrate_tsc() {
     if is_tsc_calibrated() {
         return;
     }
-    let freq = generic_timer_frequency();
-    match mult_for_rate(freq, 1_000_000_000) {
-        Some(mult) => {
+    let reported_hz = generic_timer_frequency();
+
+    let start_inst = Instant::now();
+    let start = read_counter();
+    std::thread::sleep(Duration::from_millis(20));
+    let end = read_counter();
+    let elapsed_nanos = start_inst.elapsed().as_nanos() as u64;
+    let elapsed_cycles = end.wrapping_sub(start);
+
+    match choose_generic_timer_mult(reported_hz, elapsed_cycles, elapsed_nanos) {
+        Some((mult, true)) => {
             publish_calibration(mult);
             log::info!(
-                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
-                freq as f64 / 1.0e6
+                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0 \
+                 (confirmed by a {} ms measurement)",
+                reported_hz as f64 / 1.0e6,
+                elapsed_nanos / 1_000_000
             );
         }
-        None => {
-            log::warn!("CNTFRQ_EL0 reports 0 Hz — cycle clock left uncalibrated (Instant fallback)")
+        Some((mult, false)) => {
+            publish_calibration(mult);
+            log::warn!(
+                "CNTFRQ_EL0 reports {:.3} MHz but the generic timer measured {:.3} MHz; \
+                 using the measured rate",
+                reported_hz as f64 / 1.0e6,
+                elapsed_cycles as f64 * 1.0e3 / elapsed_nanos.max(1) as f64
+            );
         }
+        None => log::warn!(
+            "Generic timer could not be calibrated (CNTFRQ_EL0 = 0 and no measurable \
+             window) — cycle clock left uncalibrated (Instant fallback)"
+        ),
     }
 }
 
@@ -396,6 +453,43 @@ mod tests {
         // Counter must tick on real hardware (not frozen at zero mapping).
         assert!(last >= first);
         set_mult_for_test(0);
+    }
+
+    /// aarch64: the reported CNTFRQ_EL0 rate is used when the measurement
+    /// agrees, and replaced by the measured rate when firmware misreports it.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn generic_timer_rate_falls_back_to_measurement_on_mismatch() {
+        let window_ns = 20_000_000;
+        let reported = mult_for_rate(24_000_000, 1_000_000_000).expect("24 MHz");
+        // 24 MHz measured over 20 ms = 480_000 cycles: agrees, register trusted.
+        assert_eq!(
+            choose_generic_timer_mult(24_000_000, 480_000, window_ns),
+            Some((reported, true))
+        );
+        // 1% off is within tolerance.
+        assert_eq!(
+            choose_generic_timer_mult(24_000_000, 484_800, window_ns),
+            Some((reported, true))
+        );
+        // Firmware claims 24 MHz but the timer runs at 25 MHz (500_000 cycles).
+        let measured = mult_for_rate(500_000, window_ns).expect("valid window");
+        assert_eq!(
+            choose_generic_timer_mult(24_000_000, 500_000, window_ns),
+            Some((measured, false))
+        );
+        // Register reports 0 Hz: measured rate.
+        assert_eq!(
+            choose_generic_timer_mult(0, 500_000, window_ns),
+            Some((measured, false))
+        );
+        // No usable measurement: nothing contradicts the register.
+        assert_eq!(
+            choose_generic_timer_mult(24_000_000, 0, 0),
+            Some((reported, true))
+        );
+        // Neither source usable.
+        assert_eq!(choose_generic_timer_mult(0, 0, 0), None);
     }
 
     /// aarch64: the CNTFRQ_EL0-derived conversion tracks `Instant` over a
