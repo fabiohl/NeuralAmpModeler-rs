@@ -21,6 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (all features)
         run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
@@ -46,6 +49,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
       - name: Check library
         run: cargo check --lib --features testing
