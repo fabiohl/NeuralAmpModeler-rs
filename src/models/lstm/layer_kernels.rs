@@ -237,10 +237,7 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         process_sample_avx512,
         process_sample_avx512_hf,
         process_sample_avx512_std,
-        cfg_attr(
-            target_arch = "x86_64",
-            target_feature(enable = "avx512f,avx512vl")
-        ),
+        target_feature(enable = "avx512f,avx512vl"),
         crate::math::gemm::gemv_4gate_avx512vl,
         16,
         _mm512_loadu_ps,

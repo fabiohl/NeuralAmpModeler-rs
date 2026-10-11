@@ -47,7 +47,7 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
+#[target_feature(enable = "avx512f")]
 pub unsafe fn hsum_avx512(v: __m512) -> f32 {
     _mm512_reduce_add_ps(v)
 }
@@ -88,7 +88,7 @@ pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
 /// AVX-512F is available (`#[target_feature]`).
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
+#[target_feature(enable = "avx512f")]
 pub unsafe fn horizontal_sum_avx512(ptr: *const f32, len: usize) -> f32 {
     let mut i = 0;
     let mut sum_v = _mm512_setzero_ps();

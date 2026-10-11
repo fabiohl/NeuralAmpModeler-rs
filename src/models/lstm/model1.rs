@@ -77,10 +77,7 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
     #[cfg(feature = "avx512")]
     define_lstm1_process!(
         process_avx512,
-        cfg_attr(
-            target_arch = "x86_64",
-            target_feature(enable = "avx512f,avx512vl")
-        ),
+        target_feature(enable = "avx512f,avx512vl"),
         process_sample_avx512,
     );
     /// Processes an audio block through the model (SIMD dispatch).

@@ -50,7 +50,7 @@ pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m2
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
     // SAFETY: `simd_sigmoid_avx512` requires AVX-512F/VL, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx512f,avx512vl")]` and caller
@@ -107,7 +107,7 @@ pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_sigmoid_relu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

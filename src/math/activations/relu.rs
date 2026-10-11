@@ -33,7 +33,7 @@ pub unsafe fn simd_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_relu_avx512(x: __m512) -> __m512 {
     _mm512_max_ps(_mm512_setzero_ps(), x)
 }
@@ -81,7 +81,7 @@ pub unsafe fn relu_slice_avx2(slice: &mut [f32]) {
 /// Requires AVX-512F and AVX-512VL support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn relu_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

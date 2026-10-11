@@ -14,7 +14,7 @@ use crate::arch::simd::*;
 /// AVX-512F+VL target feature must be available (enforced by CPU dispatch).
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 // SAFETY: Caller must ensure AVX-512F+VL is available and src/dest are valid
 // non-overlapping slices. This `pub unsafe fn` is the trust boundary.
 pub unsafe fn f32_to_bf16_avx512(src: &[f32], dest: &mut [u16]) {

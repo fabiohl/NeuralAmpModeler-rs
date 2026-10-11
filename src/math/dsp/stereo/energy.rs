@@ -270,7 +270,7 @@ pub fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// must guarantee the CPU supports AVX-512F.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
+#[target_feature(enable = "avx512f")]
 pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(l.len(), r.len());
     if len == 0 {
@@ -354,7 +354,7 @@ pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// must guarantee the CPU supports AVX-512F.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
+#[target_feature(enable = "avx512f")]
 pub fn compute_energy_avx512(data: &[f32]) -> (f32, bool) {
     let len = data.len();
     if len == 0 {

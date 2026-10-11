@@ -199,7 +199,7 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Requires a supported processor (AVX-512).
     #[cfg(feature = "avx512")]
     #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+    #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]
     pub unsafe fn prewarm_avx512(&mut self) {
         // SAFETY: this body runs under `#[target_feature(enable = "avx512f,avx512vl")]` and the fn

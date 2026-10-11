@@ -143,7 +143,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_hf(
     gf: __m512,
     gi: __m512,
@@ -193,7 +193,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512_std(
     gf: __m512,
     gi: __m512,
@@ -241,7 +241,7 @@ pub unsafe fn fused_lstm_gates_avx512_std(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_avx512(
     gf: __m512,
     gi: __m512,
@@ -447,7 +447,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f,avx512vl"))]
+#[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_lstm_gates_dyn_avx512(
     gates: &mut [f32],
     cell_state: &mut [f32],

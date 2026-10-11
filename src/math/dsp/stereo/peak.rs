@@ -98,7 +98,7 @@ pub fn compute_peak_abs_stereo_avx2(left: &[f32], right: &[f32]) -> (f32, f32) {
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx512f"))]
+#[target_feature(enable = "avx512f")]
 pub fn compute_peak_abs_stereo_avx512(left: &[f32], right: &[f32]) -> (f32, f32) {
     let len = core::cmp::min(left.len(), right.len());
     if len == 0 {

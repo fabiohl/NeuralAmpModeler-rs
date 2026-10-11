@@ -9,8 +9,11 @@
 //! implementation of the same `__m256`/`__m128` surface, so the AVX2-shaped
 //! kernels compile unchanged and keep identical per-lane operation order.
 //!
-//! AVX-512 kernels (behind the `avx512` feature) remain x86_64-only and keep
-//! importing `core::arch::x86_64` directly.
+//! AVX-512 kernels (behind the `avx512` feature) are x86_64-only: the feature
+//! is rejected on other targets, and their `#[target_feature]` attributes stay
+//! unconditional. Files that hold only AVX-512 code import `core::arch::x86_64`
+//! directly; files that mix AVX2 and AVX-512 code import through [`simd`],
+//! which on x86_64 is the same re-export.
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
