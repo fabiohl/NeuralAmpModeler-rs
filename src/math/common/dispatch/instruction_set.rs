@@ -4,8 +4,8 @@
 /// Enumerates the supported instruction sets in the public API.
 ///
 /// Note: There is no scalar `Fallback` variant in this enum. The crate strictly
-/// enforces `x86-64-v3` (AVX2 + FMA + BMI1/2) as its mandatory compile-time
-/// baseline (`compile_error!` in `src/lib.rs` and `.cargo/config.toml`).
+/// enforces a SIMD compile-time baseline (`compile_error!` in `src/lib.rs`):
+/// `x86-64-v3` (AVX2 + FMA + BMI1/2) on x86_64, NEON on aarch64.
 ///
 /// In standard production builds (without the opt-in `avx512` feature enabled),
 /// [`InstructionSet::Avx2`] is the sole backend compiled, detected, and dispatched.
@@ -16,6 +16,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum InstructionSet {
     /// AVX2 + FMA (x86-64-v3 baseline, standard production backend).
+    ///
+    /// On aarch64 this selects the same 256-bit kernel family, executed through
+    /// the NEON implementation of the AVX2 intrinsic surface (`crate::arch`).
     Avx2,
     /// AVX-512 Foundation + Vector Length Extensions (Skylake-X+, Zen 4+).
     ///

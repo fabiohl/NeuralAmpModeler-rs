@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NeuralAmpModeler-rs
 
-![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/fabiohl/badge.svg)](https://hub.xerj.org/contributors/fabiohl)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64%20%7C%20aarch64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3%20%7C%20NEON-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/fabiohl/badge.svg)](https://hub.xerj.org/contributors/fabiohl)
 
 **NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
@@ -25,7 +25,7 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 * **Const-Generic Optimization & Dynamic Topologies:** Provides 24 distinct model variants (16 static const-generic profiles + zero-allocation dynamic fallbacks). Channel counts ($CH=16, 12, 8, 4, 3$), kernel sizes, and receptive fields are known at compile time for canonical configurations, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies automatically route to dynamic zero-alloc fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`).
 * **Complete Native DSP Stack (Zero External Audio Crates):** Includes a native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, $>105\text{ dB}$ stopband attenuation, zero pre-ringing, $0.7\text{–}1.3\text{ µs}$ execution), Uniform-Partitioned Overlap-Save (UPOLS) FFT cabinet IR convolution ($1.3\text{ µs}$ for 512-sample IRs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, $>100\text{ dB}$ stopband).
 * **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load-monitoring state machine with hysteresis that degrades model complexity under load (Full → Reduced → Minimal) using 32 ms click-free linear crossfades to prevent buffer dropouts. The binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model load time from $\sim 50\text{ ms}$ to $< 1\text{ ms}$ with mandatory IEEE 802.3 CRC32 integrity checks.
-* **Denormal & Subnormal Armor:** Injects symmetric $-220\text{ dBFS}$ deterministic dither ($1.0 \times 10^{-11}$) combined with hardware MXCSR FTZ/DAZ reassertion on every processing block, preventing 10–100× CPU microcode penalties during digital silence with zero net DC drift.
+* **Denormal & Subnormal Armor:** Injects symmetric $-220\text{ dBFS}$ deterministic dither ($1.0 \times 10^{-11}$) combined with hardware FTZ/DAZ reassertion (MXCSR on x86_64, FPCR.FZ on aarch64) on every processing block, preventing 10–100× CPU microcode penalties during digital silence with zero net DC drift.
 
 ---
 
@@ -44,7 +44,7 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 | **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)      | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                                                                   |
 | **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                 | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                                       |
 | **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32     | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                                |
-| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware MXCSR FTZ/DAZ                        | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)                            |
+| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware FTZ/DAZ (MXCSR / FPCR.FZ)            | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)                            |
 | **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks  | Enterprise-grade software stability and strict regression protection                                                                                       |
 
 ---
@@ -67,7 +67,7 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 | Dependency           | Minimum Requirement                           | Purpose                               |
 |:-------------------- |:--------------------------------------------- |:------------------------------------- |
-| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline) | SIMD vectorized DSP kernels           |
+| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels |
 | **Rust Toolchain**   | $\ge 1.99.0$ (Edition 2024)                   | Public MSRV promise                   |
 | **Build Tools**      | `build-essential`, `pkg-config`, `cmake`      | Host build tools & C++ parity oracles |
 
@@ -87,16 +87,24 @@ NeuralAmpModeler-rs supports **`x86_64` with the `x86-64-v3` instruction set** o
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
 ```
 
-### Mandatory Vector Target: `x86-64-v3`
+### SIMD Baseline per Architecture
 
-NeuralAmpModeler-rs requires an `x86_64` processor supporting the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`). Build-time assertions enforce this target to guarantee SIMD performance across all DSP modules.
+| Architecture | Baseline | Platforms validated |
+|:------------ |:-------- |:------------------- |
+| `x86_64`  | `x86-64-v3` (AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) | Linux |
+| `aarch64` | NEON (part of every aarch64 target) | macOS (Apple Silicon), Linux |
 
-Because Cargo does not automatically propagate compiler target flags to downstream dependencies, applications depending on `NeuralAmpModeler-rs` must instruct `rustc` to target `x86-64-v3`:
+Build-time assertions enforce the baseline for the target architecture. The optional `avx512` feature is x86_64-only.
+
+#### x86_64: `x86-64-v3`
+
+Because Cargo does not automatically propagate compiler target flags to downstream dependencies, applications depending on `NeuralAmpModeler-rs` must instruct `rustc` to target `x86-64-v3` when building for x86_64:
 
 **Option A — In `.cargo/config.toml` (Recommended for downstream crates):**
 
 ```toml
-[build]
+# Scoped to x86_64 so aarch64 builds of the same project are unaffected.
+[target.'cfg(target_arch = "x86_64")']
 rustflags = ["-Ctarget-cpu=x86-64-v3"]
 ```
 
@@ -105,6 +113,15 @@ rustflags = ["-Ctarget-cpu=x86-64-v3"]
 ```bash
 RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
 ```
+
+#### aarch64: NEON
+
+No flags are needed: NEON is part of every aarch64 target (`aarch64-apple-darwin` already defaults to `-Ctarget-cpu=apple-m1`). The AVX2-shaped kernels run unchanged through a NEON implementation of the AVX2/FMA/F16C intrinsic surface (`src/arch/aarch64/`): each 256-bit operation is two 128-bit NEON operations with the same per-lane order and single-rounding FMA, so results match the x86_64 path (identical SNR against the C++ reference across the golden catalog). Platform notes:
+
+- **Denormals:** FPCR.FZ replaces MXCSR DAZ/FTZ.
+- **Cycle clock:** `common::tsc` reads the generic timer (`CNTVCT_EL0`), calibrated exactly from `CNTFRQ_EL0`.
+- **Page size:** delay rings are rounded to the kernel page size (16 KiB on macOS; 4/16/64 KiB on aarch64 Linux depending on the kernel).
+- **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages and `rt-hardening` are Linux-only. The QA scripts need bash ≥ 4 (`brew install bash`) and `NAM_NO_LOW_PRIORITY=1`, e.g. `NAM_NO_LOW_PRIORITY=1 /opt/homebrew/bin/bash utils/tests-quick.sh`.
 
 #### Pre-Flight Hardware Verification (`simd_probe`)
 

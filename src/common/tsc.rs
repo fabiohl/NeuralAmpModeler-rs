@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Time Stamp Counter (TSC) calibration and reading via RDTSC.
+//! Cycle-counter clock: Time Stamp Counter (RDTSC) on x86_64, the
+//! architectural generic timer (`CNTVCT_EL0`) on aarch64.
 //!
-//! Provides time measurement with ~1ns precision and ~1 cycle cost,
+//! Provides low-cost time measurement (~1 ns resolution on x86_64; the
+//! generic-timer tick, e.g. ~42 ns at 24 MHz on Apple Silicon, on aarch64),
 //! avoiding the vDSO clock_gettime syscall in the audio hot-path.
 //!
 //! Conversion uses fixed-point `mult/shift` scaling in the style of the
@@ -11,16 +13,17 @@
 //! at startup. The hot-path performs no division and no `cycles * 1000`,
 //! so large counter values cannot overflow in debug builds.
 //!
-//! Portability contract: this module is x86-64-only, requiring the
-//! x86-64-v3 baseline (AVX2, FMA, BMI2). The crate root rejects other
-//! architectures at compile time and `common/mod.rs` exposes this module
-//! only under `cfg(target_arch = "x86_64")`. There is intentionally no
-//! cross-ISA fallback in this module; the `Instant` fallback below covers
-//! only the uncalibrated-TSC case on x86-64 hosts.
+//! Portability contract: x86_64 reads RDTSC (serialized with LFENCE) and
+//! calibrates against the system clock; aarch64 reads `CNTVCT_EL0`
+//! (serialized with ISB) and calibrates exactly from `CNTFRQ_EL0`. The public
+//! names (`rdtsc_nanos`, `calibrate_tsc`) are kept on both architectures so
+//! host code is portable. The `Instant` fallback covers the uncalibrated case.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+#[cfg(target_arch = "x86_64")]
+use std::time::Duration;
+use std::time::Instant;
 
 /// Fixed shift for the `cyc2ns`-style conversion.
 ///
@@ -44,7 +47,7 @@ static TSC_ANCHOR_NS: AtomicU64 = AtomicU64::new(0);
 static BOOT_TIME: OnceLock<Instant> = OnceLock::new();
 
 /// Helper to read `CLOCK_MONOTONIC_RAW` on Linux for startup calibration validation.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 fn monotonic_raw_nanos() -> Option<u64> {
     let mut ts = libc::timespec {
         tv_sec: 0,
@@ -60,7 +63,7 @@ fn monotonic_raw_nanos() -> Option<u64> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "linux")))]
 fn monotonic_raw_nanos() -> Option<u64> {
     None
 }
@@ -87,11 +90,57 @@ fn mult_for_rate(elapsed_cycles: u64, elapsed_nanos: u64) -> Option<u64> {
     if mult == 0 { None } else { Some(mult) }
 }
 
-/// Returns the current time in nanoseconds using the serialized RDTSC instruction.
+/// Publishes the conversion rate `mult` together with its continuity anchor
+/// (the counter and the `BOOT_TIME`-relative nanoseconds now), so that
+/// `rdtsc_nanos()` continues from the fallback clock without a jump. The
+/// anchor is stored before `mult` (Release) for `rdtsc_nanos`' Acquire load.
+fn publish_calibration(mult: u64) {
+    let anchor_ns = BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64;
+    let anchor_tsc = read_counter();
+    TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
+    TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
+    TSC_MULT.store(mult, Ordering::Release);
+}
+
+/// Reads the raw cycle counter, serialized against earlier instructions.
 ///
-/// Serialized with `_mm_lfence` to prevent out-of-order execution reordering.
-/// Provides sub-nanosecond precision with ~15ns cost, avoiding vDSO syscalls.
-/// If the TSC is not calibrated, falls back to Instant::now().
+/// x86_64: `LFENCE; RDTSC`. aarch64: `ISB; MRS CNTVCT_EL0`.
+#[inline(always)]
+fn read_counter() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: `_mm_lfence` + `_rdtsc` is available on all x86-64 CPUs; it performs no
+        // memory access and has no side effects, so reading it here is sound.
+        unsafe {
+            core::arch::x86_64::_mm_lfence();
+            core::arch::x86_64::_rdtsc()
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let cycles: u64;
+        // SAFETY: `isb` and `mrs cntvct_el0` only read a system register; no memory is
+        // accessed (`nomem`, `nostack`). EL0 access to CNTVCT_EL0 is granted by the kernel
+        // via CNTKCTL_EL1.EL0VCTEN, which Linux and macOS always set; if a kernel
+        // cleared it, the read would trap (SIGILL), which aborts the process but is not
+        // undefined behavior.
+        unsafe {
+            core::arch::asm!(
+                "isb",
+                "mrs {0}, cntvct_el0",
+                out(reg) cycles,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        cycles
+    }
+}
+
+/// Returns the current time in nanoseconds from the serialized cycle counter
+/// (RDTSC on x86_64, `CNTVCT_EL0` on aarch64).
+///
+/// Avoids vDSO syscalls. If the counter is not calibrated, falls back to
+/// `Instant::now()`.
 ///
 /// Continuity guarantee: when calibration completes, `rdtsc_nanos()` transitions
 /// continuously and monotonically (|Δ| < 1 ms, no system uptime discontinuity)
@@ -105,13 +154,7 @@ pub fn rdtsc_nanos() -> u64 {
     if mult != 0 {
         let anchor_tsc = TSC_ANCHOR_TSC.load(Ordering::Relaxed);
         let anchor_ns = TSC_ANCHOR_NS.load(Ordering::Relaxed);
-        // SAFETY: `_mm_lfence` + `_rdtsc` is available on all x86-64 CPUs; it performs no
-        // memory access and has no side effects, so reading it here is sound.
-        let cycles = unsafe {
-            core::arch::x86_64::_mm_lfence();
-            core::arch::x86_64::_rdtsc()
-        };
-        anchor_ns.wrapping_add(cycles_to_nanos(cycles.wrapping_sub(anchor_tsc), mult))
+        anchor_ns.wrapping_add(cycles_to_nanos(read_counter().wrapping_sub(anchor_tsc), mult))
     } else {
         BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64
     }
@@ -122,6 +165,7 @@ pub fn rdtsc_nanos() -> u64 {
 /// Invariant TSC means the counter ticks at a constant rate regardless of
 /// P-state, C-state, or other CPU frequency scaling. This is critical for
 /// reliable timing in the audio hot-path.
+#[cfg(target_arch = "x86_64")]
 fn probe_invariant_tsc() {
     let res = core::arch::x86_64::__cpuid(0x8000_0007);
     if res.edx & (1 << 8) != 0 {
@@ -137,10 +181,50 @@ pub fn is_tsc_calibrated() -> bool {
     TSC_MULT.load(Ordering::Relaxed) != 0
 }
 
+/// Reads the generic-timer frequency in Hz (`CNTFRQ_EL0`).
+#[cfg(target_arch = "aarch64")]
+fn generic_timer_frequency() -> u64 {
+    let freq: u64;
+    // SAFETY: CNTFRQ_EL0 is readable from EL0; no memory is accessed.
+    unsafe {
+        core::arch::asm!("mrs {0}, cntfrq_el0", out(reg) freq, options(nomem, nostack, preserves_flags));
+    }
+    freq
+}
+
+/// Calibrates the cycle counter.
+///
+/// aarch64: exact, from the architected generic-timer frequency
+/// (`CNTFRQ_EL0`); the generic timer is constant-rate by definition, so no
+/// measurement window is needed.
+///
+/// Runs only once at program startup (cold-path).
+#[cfg(target_arch = "aarch64")]
+#[cold]
+pub fn calibrate_tsc() {
+    if is_tsc_calibrated() {
+        return;
+    }
+    let freq = generic_timer_frequency();
+    match mult_for_rate(freq, 1_000_000_000) {
+        Some(mult) => {
+            publish_calibration(mult);
+            log::info!(
+                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
+                freq as f64 / 1.0e6
+            );
+        }
+        None => {
+            log::warn!("CNTFRQ_EL0 reports 0 Hz — cycle clock left uncalibrated (Instant fallback)")
+        }
+    }
+}
+
 /// Calibrates the TSC (Time Stamp Counter) frequency against the system clock
 /// and validates it against `CLOCK_MONOTONIC_RAW`.
 ///
 /// This function runs only once at program startup (cold-path).
+#[cfg(target_arch = "x86_64")]
 #[cold]
 pub fn calibrate_tsc() {
     if is_tsc_calibrated() {
@@ -152,26 +236,14 @@ pub fn calibrate_tsc() {
     probe_invariant_tsc();
 
     // 1. WARM-UP:
-    // Call the serialized instruction once and wait a bit.
-    // SAFETY: `_mm_lfence` and `_rdtsc` are available on all x86-64 CPUs (including
-    // x86-64-v3 baseline). They perform no memory writes and have no side-effects
-    // beyond reading the time-stamp counter; the result is intentionally discarded.
-    let _ = unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    };
+    // Call the serialized instruction once and wait a bit; the result is discarded.
+    let _ = read_counter();
     thread::sleep(Duration::from_millis(10));
 
     // 2. ZERO POINT (Start of Measurement):
     let start_raw = monotonic_raw_nanos();
     let start_inst = Instant::now();
-    // SAFETY: `_mm_lfence` serializes the instruction stream before `_rdtsc`, ensuring
-    // that no prior loads are reordered past the timestamp read. Both intrinsics are
-    // available unconditionally on the x86-64-v3 baseline enforced by `.cargo/config.toml`.
-    let start_tsc = unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    };
+    let start_tsc = read_counter();
 
     // 3. CONTROLLED WAIT:
     thread::sleep(Duration::from_millis(50));
@@ -179,12 +251,7 @@ pub fn calibrate_tsc() {
     // 4. END POINT:
     let end_raw = monotonic_raw_nanos();
     let end_inst = Instant::now();
-    // SAFETY: Same contract as `start_tsc` above — `_mm_lfence` + `_rdtsc` on the
-    // unconditional x86-64-v3 baseline; no memory writes, no side-effects.
-    let end_tsc = unsafe {
-        core::arch::x86_64::_mm_lfence();
-        core::arch::x86_64::_rdtsc()
-    };
+    let end_tsc = read_counter();
 
     let elapsed_nanos = end_inst.duration_since(start_inst).as_nanos() as u64;
     let elapsed_cycles = end_tsc.wrapping_sub(start_tsc);
@@ -194,17 +261,7 @@ pub fn calibrate_tsc() {
     // widening multiply plus shift. Rejects degenerate windows to avoid
     // freezing the clock at zero.
     if let Some(mult) = mult_for_rate(elapsed_cycles, elapsed_nanos) {
-        // Publish continuity anchor before publishing TSC_MULT:
-        let anchor_ns = BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64;
-        // SAFETY: `_mm_lfence` + `_rdtsc` on unconditional x86-64-v3 baseline;
-        // no memory writes, no side-effects.
-        let anchor_tsc = unsafe {
-            core::arch::x86_64::_mm_lfence();
-            core::arch::x86_64::_rdtsc()
-        };
-        TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
-        TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
-        TSC_MULT.store(mult, Ordering::Release);
+        publish_calibration(mult);
         let freq_ghz = elapsed_cycles as f64 / elapsed_nanos as f64;
 
         if let (Some(s_raw), Some(e_raw)) = (start_raw, end_raw) {
@@ -233,19 +290,12 @@ pub fn calibrate_tsc() {
 #[cfg(test)]
 fn set_mult_for_test(mult: u64) {
     if mult != 0 {
-        let anchor_ns = BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64;
-        // SAFETY: `_mm_lfence` + `_rdtsc` on x86-64 test environment.
-        let anchor_tsc = unsafe {
-            core::arch::x86_64::_mm_lfence();
-            core::arch::x86_64::_rdtsc()
-        };
-        TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
-        TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
+        publish_calibration(mult);
     } else {
         TSC_ANCHOR_TSC.store(0, Ordering::Relaxed);
         TSC_ANCHOR_NS.store(0, Ordering::Relaxed);
+        TSC_MULT.store(0, Ordering::Release);
     }
-    TSC_MULT.store(mult, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -346,6 +396,26 @@ mod tests {
         // Counter must tick on real hardware (not frozen at zero mapping).
         assert!(last >= first);
         set_mult_for_test(0);
+    }
+
+    /// aarch64: the CNTFRQ_EL0-derived conversion tracks `Instant` over a
+    /// short sleep. Uses a local multiplier (not the global `TSC_MULT`, which
+    /// other tests in this module set and reset concurrently).
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn generic_timer_calibration_tracks_instant() {
+        let freq = generic_timer_frequency();
+        let mult = mult_for_rate(freq, 1_000_000_000).expect("CNTFRQ_EL0 must be non-zero");
+        let c0 = read_counter();
+        let i0 = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let counter_ns = cycles_to_nanos(read_counter() - c0, mult);
+        let instant_ns = i0.elapsed().as_nanos() as u64;
+        // Both clocks cover the same window; allow scheduling jitter.
+        assert!(
+            counter_ns.abs_diff(instant_ns) < 2_000_000,
+            "freq={freq} Hz counter={counter_ns} ns instant={instant_ns} ns"
+        );
     }
 
     #[test]

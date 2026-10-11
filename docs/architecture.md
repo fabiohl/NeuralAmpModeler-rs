@@ -54,15 +54,16 @@ Dynamic models allocate contiguous memory blocks ([`AlignedVec`](../src/math/com
 
 NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarchitecture:
 
-1. **Mandatory Baseline (`x86-64-v3`):**
+1. **Mandatory Baseline (per architecture):**
 
-   - The engine decrees `x86-64-v3` (AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE) as its mandatory compile-time baseline (enforced via `.cargo/config.toml` and compile-time assertions in `src/lib.rs`).
+   - On `x86_64` the engine decrees `x86-64-v3` (AVX2, FMA, BMI1, BMI2, F16C, LZCNT, MOVBE) as its mandatory compile-time baseline (enforced via `.cargo/config.toml` and compile-time assertions in `src/lib.rs`).
+   - On `aarch64` the baseline is NEON, part of every aarch64 target (also asserted in `src/lib.rs`). See **aarch64 (NEON) Backend** below.
    - Performance-critical DSP loops use explicit, hand-written SIMD intrinsics and const-generic layout monomorphization rather than relying on compiler auto-vectorization heuristics.
 
 2. **SIMD Dispatch & AVX-512 Policy:**
 
    - Vector operations are abstracted behind the [`SimdMath`](../src/math/common/traits/mod.rs) trait and instantiated via the static `dispatch_simd!` macro.
-   - **Production Backend:** `Avx2Math` is the sole production math backend. In standard release builds, CPUs lacking `x86-64-v3` support are rejected off-RT during model construction with `E5001 UNSUPPORTED_CPU_ARCHITECTURE`. No scalar fallback branches exist on the audio hot path.
+   - **Production Backend:** `Avx2Math` is the sole production math backend (on aarch64 it runs through the NEON layer, reported as `NEON (AVX2-compatible layer)`). In standard x86_64 release builds, CPUs lacking `x86-64-v3` support are rejected off-RT during model construction with `E5001 UNSUPPORTED_CPU_ARCHITECTURE`. No scalar fallback branches exist on the audio hot path.
    - **AVX-512 Gating & L1i Cache Defense:** AVX-512 kernels are isolated behind the opt-in `avx512` Cargo feature (`#[cfg(feature = "avx512")]`). Default builds completely omit AVX-512 code, keeping EVEX/ZMM instructions out of `.text` and defending the critical 32 KB core L1 instruction cache (L1i) budget.
    - **Architectural Rationale:** Real-time audio inference operates on small sample blocks (e.g., $N=64$). At these block sizes, AVX-512 yields negative or negligible throughput improvements over AVX2 due to CPU frequency transitions and vector setup overheads, while significantly expanding code footprint. AVX-512 sources are retained strictly for offline research, comparative benchmarking, and experimental verification. When enabled, dispatch mandates the complete `F+VL+BW+DQ` host capability matrix to prevent `SIGILL` on hypervisors.
 
@@ -79,6 +80,13 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 
    - Non-DSP off-RT routines (JSON parsing, `.namb` CRC32 validation, IR file decoding) are bounded by file I/O and memory bandwidth. They remain in standard, idiomatic safe Rust.
 
+3. **aarch64 (NEON) Backend:**
+
+   - Kernels import intrinsics from `crate::arch::simd` ([`src/arch/`](../src/arch/mod.rs)): a re-export of `core::arch::x86_64` on x86_64, and on aarch64 a NEON implementation of the same AVX2/FMA/F16C surface ([`src/arch/aarch64/`](../src/arch/aarch64/mod.rs)). The AVX2-shaped kernels therefore compile unchanged on both architectures.
+   - `__m256` is a pair of `float32x4_t`; every 256-bit operation becomes two 128-bit NEON operations with the same per-lane order. FMA maps to `vfma`/`vfms` (single rounding), and `max`/`min` reproduce the x86 operand-selection rule for NaN and signed zero, so arithmetic results match the AVX2 path: golden-catalog SNR against the C++ reference is identical on x86_64 and aarch64.
+   - Documented differences: `rcp_ps` is more precise on NEON (~2⁻¹⁶ vs ~2⁻¹² relative error) and `cvtps_epi32` saturates out-of-range/NaN inputs instead of returning `i32::MIN`.
+   - The `avx512` feature is x86_64-only (`compile_error!` otherwise). SVE/SVE2 are not used.
+
 #### Core Fused & Tiled SIMD Kernels
 
 - **WaveNet Conv1D + Mixin + Gated Activation:** Fuses tap fetching, residual mixin, activation (`tanh`/`sigmoid`), and skip-head accumulation into continuous register operations.
@@ -94,6 +102,7 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 
 - **Single-Precision Consistency:** All weights, intermediate activations, and delay rings operate in `f32` to guarantee parity with NAMCore.
 - **Kahan Summation:** Employed in scalar reference dot products (`src/math/common/scalar_ref/dot.rs`) to bound accumulation drift to $\mathcal{O}(\epsilon)$ instead of $\mathcal{O}(N \cdot \epsilon)$.
+- **Hardware Flush-to-Zero:** Each pipeline callback reasserts FTZ+DAZ on the audio thread via [`set_daz_ftz`](../src/math/common/ops.rs): MXCSR bits 15/6 on x86_64, FPCR.FZ (bit 24, which flushes both denormal inputs and outputs) on aarch64.
 - **Deterministic Anti-Denormal Dither:** To prevent catastrophic CPU stalling from subnormal floats during silence, a calibrated `−220 dBFS` DC offset is injected at the input stage ([`apply_input_stage`](../src/dsp/pipeline/stages/input.rs)) and subtracted identically at the output stage ([`apply_output_stage`](../src/dsp/pipeline/stages/output.rs)). See [docs/audio_fidelity_map.md](audio_fidelity_map.md) §6.
 
 ---
@@ -156,14 +165,15 @@ For multi-array WaveNet architectures, the head accumulator of the second layer 
 
 To eliminate circular index wrapping and modulo branching in dilated convolution delay lines, the engine implements virtual memory mirroring ([`src/dsp/mirror_buf/alloc.rs`](../src/dsp/mirror_buf/alloc.rs)):
 
-- **Mechanism:** Allocates a physical memory region via `memfd_create` and maps it twice consecutively into contiguous virtual memory using `mmap(MAP_SHARED)`. This allows read lookbacks across the buffer boundary to be executed via simple pointer arithmetic without branch penalties.
+- **Mechanism:** Allocates a physical memory region via `memfd_create` (Linux) or an unlinked POSIX shared-memory object (`shm_open` + `shm_unlink`, macOS) and maps it twice consecutively into contiguous virtual memory using `mmap(MAP_SHARED)`. This allows read lookbacks across the buffer boundary to be executed via simple pointer arithmetic without branch penalties.
 - **Linux Allocation Hierarchy:**
   1. 2 MB HugeTLB pages (`MAP_HUGETLB` / `MFD_HUGETLB`) to minimize TLB misses.
   2. Transparent Huge Pages (THP via `MADV_HUGEPAGE` / `MADV_COLLAPSE`).
-  3. Standard 4 KB pages.
+  3. Standard pages (the kernel page size from `sysconf(_SC_PAGESIZE)`).
+- **Page Size:** Ring sizes are rounded up to whole pages, and the ring length equals the mapping size (the mirror wraps at the mapping boundary), so the whole rounded ring is touched as the write position cycles. Rings are therefore larger on 16 KiB (Apple Silicon) and 64 KiB (some aarch64 Linux kernels) page systems; on 64 KiB kernels a 23-layer A2 model's rings can exceed a core's L2 cache.
 - **Descriptor Lifecycle:** `libc::close(fd)` is called immediately after mappings succeed. On Linux, `MAP_SHARED` maintains page residency independently of the file descriptor; mappings are freed cleanly during `Drop` via `munmap`.
 - **Soundness & `MirrorSafe`:** Storage is zero-filled by the kernel and elements physically alias across virtual halves. To ensure absolute soundness, [`MirroredBuffer<T>`](../src/dsp/mirror_buf.rs) requires `T: MirrorSafe` via a sealed trait implemented only for types where all-bits-zero is sound, `Copy` is implemented (preventing drop leaks or double-drops), and addresses do not dictate identity (e.g. `f32`, `f64`, integer primitives). Non-zero-valid types (like `NonZeroU32`) are statically rejected at compile time.
-- **Portability:** Non-Linux platforms compile a fallback stub returning `Unsupported`.
+- **Portability:** Linux and macOS are supported; other platforms compile a fallback stub returning `Unsupported`. Huge pages are Linux-only.
 
 ---
 
@@ -205,7 +215,7 @@ The audio thread operates under strict real-time guarantees:
 - **Zero Allocations & Zero Deallocations:** No heap allocation (`Vec`, `Box`, `String`) or object drops inside `process()`.
 - **Zero Blocking I/O & Locks:** Mutexes, condition variables, file access, and logging (`log::*`) are prohibited on the hot path. State anomalies are communicated via atomic bitmasks ([`RtStatusFlags`](../src/common/spsc/status.rs)).
 - **Panic-Free Operation:** Bounds checks are statically structured or asserted off-RT.
-- **Low-Overhead Telemetry:** Direct read of the CPU Time Stamp Counter (RDTSC) replaces `Instant::now()` (vDSO syscall) for sub-nanosecond, single-cycle profiling without kernel jitter.
+- **Low-Overhead Telemetry:** Direct read of the CPU cycle counter ([`common::tsc`](../src/common/tsc.rs): RDTSC on x86_64, the generic timer `CNTVCT_EL0` calibrated from `CNTFRQ_EL0` on aarch64) replaces `Instant::now()` (vDSO syscall) for low-cost profiling without kernel jitter.
 - **Cache-Line Isolation:** SPSC communication structures are aligned to 128 bytes (`#[repr(align(128))]`) to prevent multi-core false sharing between audio and control threads.
 
 ### Host Hardening (Linux RT)
@@ -366,6 +376,7 @@ NeuralAmpModeler-rs separates the host-agnostic DSP core into distinct architect
 | Layer            | Path                | Responsibility                                                                                     |
 |:---------------- |:------------------- |:-------------------------------------------------------------------------------------------------- |
 | **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.            |
+| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.       |
 | **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.   |
 | **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.              |
 | **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute. |

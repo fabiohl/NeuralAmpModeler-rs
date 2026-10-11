@@ -243,6 +243,9 @@ fn detect_best_simd() -> SimdMathConfig {
     if has_full_avx512() {
         return config_table!(InstructionSet::Avx512, "AVX-512", true);
     }
+    #[cfg(target_arch = "aarch64")]
+    return config_table!(InstructionSet::Avx2, "NEON (AVX2-compatible layer)", false);
+    #[cfg(not(target_arch = "aarch64"))]
     config_table!(InstructionSet::Avx2, "AVX2", false)
 }
 

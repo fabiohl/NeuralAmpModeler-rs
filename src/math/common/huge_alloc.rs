@@ -53,10 +53,17 @@ pub enum HugePageStatus {
 /// Below this threshold, standard `alloc` is used directly (no syscall overhead).
 pub const HUGE_PAGE_THRESHOLD: usize = 1 << 20; // 1 MiB
 
-/// Page size for transparent huge pages (4 KB standard pages, kernel promotes to 2 MB).
-const PAGE_4K: usize = 4096;
+/// Base page size of the running kernel: 4 KiB on x86_64, 16 KiB on Apple
+/// Silicon, 4/16/64 KiB on aarch64 Linux depending on the kernel build.
+fn system_page_size() -> usize {
+    // SAFETY: `sysconf` is a side-effect-free POSIX configuration query.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page > 0 { page as usize } else { 4096 }
+}
 
-/// Huge page size (2 MB on x86-64). Must divide evenly into the allocation size.
+/// Explicit huge page size requested (2 MiB: the PMD size with 4 KiB pages, a
+/// contiguous-PTE hugetlb size on 64 KiB-page arm64). Must divide evenly into
+/// the allocation size.
 pub const HUGE_PAGE_2M: usize = 2 * 1024 * 1024;
 
 /// Rounds `size` up to the next multiple of `alignment`.
@@ -125,7 +132,7 @@ pub(crate) fn allocate_huge_pages(
     }
 
     // Strategy 2: anonymous mmap + madvise(MADV_HUGEPAGE) + MADV_COLLAPSE for synchronous THP.
-    let thp_size = align_up(size_bytes, PAGE_4K).ok_or(NamErrorCode::OutOfMemory)?;
+    let thp_size = align_up(size_bytes, system_page_size()).ok_or(NamErrorCode::OutOfMemory)?;
     // SAFETY: try_mmap_huge with validated size.
     let ptr = unsafe { try_mmap_huge(ptr::null_mut(), thp_size, -1, 0, false) };
 
