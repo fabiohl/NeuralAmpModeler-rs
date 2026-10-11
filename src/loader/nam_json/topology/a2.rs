@@ -158,6 +158,21 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
     // --- If we reached here, the model is unequivocally a WaveNet A2 fast-path candidate. ---
     // From here on, we validate whether it fits the const-generic fast-path.
 
+    // No conditioning DSP for fast-path (a2_fast.cpp:844-853).
+    // When given a non-null condition_dsp, the fast-path has no conditioning
+    // stage and feeds the raw input as the condition. The condition DSP carries
+    // its own weights, so the parent weight stream is identical with or without
+    // it. The detector must reject the fast path here; routing to Dynamic ensures
+    // the nested condition DSP is built, sample-rate validated, and evaluated.
+    if data
+        .config
+        .condition_dsp
+        .as_ref()
+        .is_some_and(|c| !c.is_null())
+    {
+        return Some(A2TopologyResult::Dynamic);
+    }
+
     // 5. in_channels defaults to 1, must be 1 (a2_fast.cpp:892-894)
     if data.config.in_channels.unwrap_or(1) != 1 {
         return Some(A2TopologyResult::Dynamic);

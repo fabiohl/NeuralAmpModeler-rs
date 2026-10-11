@@ -215,7 +215,7 @@ fn test_post_stack_head_integration() {
         channels: Some(1),
         bias: Some(false),
         out_channels: Some(1),
-        activation: Some("Tanh".to_string()),
+        activation: Some(serde_json::json!("Tanh")),
         kernel_size: Some(1),
     };
     let head = PostStackHead::from_config(&head_config, 1).expect("head");

@@ -701,7 +701,7 @@ mod tests {
         }
         assert_eq!(adaptive.state(), AdaptiveState::Reduced);
         assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(12));
-        assert_eq!(adaptive.take_slimmable_rebuild(), Some(12));
+        assert_eq!(adaptive.take_slimmable_rebuild(), Some(vec![12]));
 
         // Subsequent call returns None since channel 12 is already active
         assert_eq!(adaptive.take_slimmable_rebuild(), None);
@@ -712,6 +712,30 @@ mod tests {
         }
         assert_eq!(adaptive.state(), AdaptiveState::Minimal);
         assert_eq!(adaptive.wavenet_slimmable_ch_target(), Some(8));
-        assert_eq!(adaptive.take_slimmable_rebuild(), Some(8));
+        assert_eq!(adaptive.take_slimmable_rebuild(), Some(vec![8]));
+    }
+
+    #[test]
+    fn slimmable_with_per_array_allowed_channels_and_fixed_array() {
+        let flags = rt_flags();
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let budget = 1000;
+
+        // Array 0 slimmable [2, 4, 8], Array 1 fixed [8] (allowed = [])
+        adaptive.set_wavenet_slimmable_info(vec![8, 8], Some(vec![vec![2, 4, 8], vec![]]), true);
+
+        // Initial state Full: target is [8, 8], already active, so rebuild is None
+        assert_eq!(adaptive.take_slimmable_rebuild(), None);
+
+        // Force CPU degradation to Minimal (ratio 0.50 -> index 1 -> 4 for array 0, 8 for array 1)
+        for _ in 0..6 {
+            adaptive.update(above_threshold(budget, 0.90), budget, 48000, &flags);
+        }
+        assert_eq!(adaptive.state(), AdaptiveState::Minimal);
+        assert_eq!(adaptive.wavenet_slimmable_targets(), Some(vec![4, 8]));
+        assert_eq!(adaptive.take_slimmable_rebuild(), Some(vec![4, 8]));
+
+        // Idempotent
+        assert_eq!(adaptive.take_slimmable_rebuild(), None);
     }
 }

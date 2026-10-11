@@ -4,7 +4,8 @@
 //  Integration tests for optional prewarm control via `LoadOptions`.
 //
 //  Validates that:
-//  1. `prewarm: Some(false)` skips the initial prewarm during loading.
+//  1. `prewarm: Some(false)` skips the *initial* prewarm during loading while
+//     restoring the persistent `prewarm_on_reset` flag (F-10).
 //  2. `reset()` with `prewarm_on_reset == false` does not execute prewarm.
 //  3. `set_prewarm_on_reset(false)` propagates through ContainerModel submodels.
 //  4. LSTM `prewarm_samples()` returns values proportional to `expected_sample_rate`.
@@ -13,7 +14,9 @@
 use neural_amp_modeler_rs::common::diagnostics::SystemSnapshot;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
-use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
+use neural_amp_modeler_rs::loader::{
+    LoadOptions, load_and_build_model, load_and_build_model_from_bytes,
+};
 use neural_amp_modeler_rs::models::{NamModel, StaticModel};
 
 use super::common;
@@ -46,10 +49,13 @@ fn load_with_opts(
 // Test 1: prewarm: Some(false) skips initial prewarm
 // =============================================================================
 
-/// Load a model with `prewarm: Some(false)` and verify prewarm was skipped.
+/// Load a model with `prewarm: Some(false)` and verify the initial prewarm was
+/// skipped while the persistent `prewarm_on_reset` flag was restored.
 ///
-/// Verifies that `prewarm_on_reset()` returns `false` after loading with
-/// `prewarm: Some(false)`, and returns `true` with the default `LoadOptions`.
+/// `LoadOptions.prewarm` mirrors the C++ `ScopedPrewarmOnResetDefault`
+/// (`get_dsp.cpp:286-296`): the load-time default only governs the *initial*
+/// pass, and the model's own flag is restored afterwards so later host resets
+/// still stabilize. Hence `prewarm_on_reset()` is `true` in both cases.
 #[test]
 fn test_load_with_prewarm_skip() {
     let path = model_path("linear_test.nam");
@@ -57,8 +63,9 @@ fn test_load_with_prewarm_skip() {
     let pair_skip = load_with_opts(&path, Some(false));
     let model_skip = pair_skip.model_l.as_ref().unwrap();
     assert!(
-        !model_skip.prewarm_on_reset(),
-        "prewarm_on_reset should be false when loaded with prewarm: Some(false)"
+        model_skip.prewarm_on_reset(),
+        "prewarm_on_reset must be restored to true after a load that skipped the \
+         initial prewarm (F-10)"
     );
 
     let pair_default = load_with_opts(&path, None);
@@ -257,7 +264,8 @@ fn test_container_prewarm_propagation() {
 }
 
 /// Verify that loading a slimmable_container.nam with `prewarm: Some(false)`
-/// propagates the flag through both ContainerModel and its submodels.
+/// skips the initial prewarm but restores the container's persistent
+/// `prewarm_on_reset` flag (F-10), for the container and its submodels.
 #[test]
 fn test_container_load_skip_propagation() {
     let path = model_path("slimmable_container.nam");
@@ -281,25 +289,81 @@ fn test_container_load_skip_propagation() {
     };
 
     assert!(
-        !model.prewarm_on_reset(),
-        "Container loaded with prewarm: Some(false) should have prewarm_on_reset=false"
+        model.prewarm_on_reset(),
+        "Container loaded with prewarm: Some(false) must have prewarm_on_reset restored to true"
     );
 
     if let StaticModel::Container(container) = model.as_ref() {
         for (idx, (_threshold, submodel)) in container.submodels().iter().enumerate() {
             assert!(
-                !submodel.prewarm_on_reset(),
-                "Container submodel[{}] should have prewarm_on_reset=false",
+                submodel.prewarm_on_reset(),
+                "Container submodel[{}] prewarm_on_reset must be restored to true",
                 idx
             );
         }
     }
 }
 
+/// T5.4-5: loading a container with `prewarm: Some(false)` must skip the
+/// construction-time stabilization pass. The container's sole (hence active)
+/// submodel is an LSTM whose recurrent state is charged by that pass, so its
+/// output diverges from a freshly built (cleared) LSTM on an excited probe.
+/// Before the fix, `assemble()` prewarmed unconditionally and the
+/// `Some(false)` load was indistinguishable from a prewarmed one.
+#[test]
+fn container_load_skip_initial_prewarm() {
+    let path = model_path("lstm.nam");
+    if !path.exists() {
+        eprintln!("SKIP: lstm.nam not found.");
+        return;
+    }
+    let lstm_json = std::fs::read_to_string(&path).expect("read lstm.nam");
+    let lstm_val: serde_json::Value =
+        serde_json::from_str(&lstm_json).expect("parse lstm.nam as JSON");
+    let container_json = serde_json::json!({
+        "version": "0.7.0",
+        "architecture": "SlimmableContainer",
+        "config": {
+            "layers": [],
+            "head": null,
+            "submodels": [{ "max_value": 1.0, "model": lstm_val }]
+        },
+        "weights": [0.0]
+    });
+    let bytes = serde_json::to_vec(&container_json).expect("serialize container");
+
+    let probe: Vec<f32> = (0..2048).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+
+    // Reference: a freshly built LSTM, probed directly on its cleared state.
+    let data_ref = parse_nam_json(&lstm_json).expect("parse lstm.nam");
+    let mut fresh = build_model(&data_ref).expect("build bare lstm.nam");
+    let mut ref_out = vec![0.0f32; probe.len()];
+    fresh.process(&probe, &mut ref_out);
+
+    // Container loaded with the initial prewarm skipped.
+    let pair = load_and_build_model_from_bytes(
+        &bytes,
+        &sys(),
+        false,
+        LoadOptions::new().with_prewarm(Some(false)),
+    )
+    .expect("container load must succeed");
+    let mut model = pair.model_l.expect("container model_l");
+    let mut got = vec![0.0f32; probe.len()];
+    model.process(&probe, &mut got);
+
+    for (i, (a, b)) in ref_out.iter().zip(&got).enumerate() {
+        assert!(
+            a.to_bits() == b.to_bits(),
+            "container construction prewarmed the active LSTM despite \
+             prewarm: Some(false): mismatch at {i} (fresh={a} vs container={b})"
+        );
+    }
+}
+
 // =============================================================================
 // Test 4: LSTM prewarm_samples() changes with expected_sample_rate
 // =============================================================================
-
 /// Verify that `prewarm_samples()` returns a value proportional to the
 /// `expected_sample_rate` stored in the LSTM model. For LSTM models,
 /// `prewarm_samples() == (0.5 * expected_sample_rate)`.

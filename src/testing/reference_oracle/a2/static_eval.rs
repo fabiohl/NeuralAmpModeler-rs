@@ -241,14 +241,17 @@ impl ActivationConfig {
                 "HardSwish" | "Hardswish" => Self::HardSwish,
                 "Softsign" => Self::Softsign,
                 "Tanh" => Self::Tanh,
-                _ => Self::Tanh,
+                other => panic!("reference oracle: unknown activation string {other:?}"),
             };
         }
-        Self::Tanh
+        panic!("reference oracle: activation value is neither string nor object: {v:?}");
     }
 
     pub(crate) fn from_json_obj(obj: &serde_json::Map<String, serde_json::Value>) -> Self {
-        let t = obj.get("type").and_then(|v| v.as_str()).unwrap_or("Tanh");
+        let t = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .expect("reference oracle: missing or non-string 'type' in activation object");
         match t {
             "HardTanh" => Self::HardTanh,
             "FastTanh" => Self::FastTanh,
@@ -271,7 +274,7 @@ impl ActivationConfig {
                     .map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>())
                     .unwrap_or_default();
                 if slopes.is_empty() {
-                    Self::Tanh
+                    panic!("reference oracle: PReLU with empty negative_slopes");
                 } else {
                     Self::PReLU {
                         negative_slopes: slopes,
@@ -296,7 +299,7 @@ impl ActivationConfig {
             }
             "Softsign" => Self::Softsign,
             "Tanh" => Self::Tanh,
-            _ => Self::Tanh,
+            other => panic!("reference oracle: unknown activation object type {other:?}"),
         }
     }
 

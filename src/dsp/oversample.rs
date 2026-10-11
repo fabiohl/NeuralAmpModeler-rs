@@ -42,7 +42,9 @@ use crate::math::common::AlignedVec;
 /// Half-band FIR filter length (≡ 1 mod 4 so D=HB_TAPS/2 is even).
 /// 25 taps, D=12. Kaiser β=12 → >100 dB stop-band rejection.
 pub(crate) const HB_TAPS: usize = 25;
-/// Filter delay (group delay = HB_TAPS/2 = 12 samples at native rate).
+/// Filter delay (group delay = HB_TAPS/2 = 12 samples at the rate of the
+/// stage where the filter runs: native rate for a single stage, 2× rate for
+/// the second stage of 4× oversampling).
 pub(crate) const HB_DELAY: usize = HB_TAPS / 2;
 
 /// Oversampling factor.
@@ -219,28 +221,33 @@ impl OversampleEngine {
     /// Returns the group delay in samples at the native (model) rate.
     ///
     /// ## Mathematical Derivation
-    /// Each 2× half-band stage uses a linear-phase Type I FIR of length `N = 25` taps.
-    /// The phase response is linear with constant group delay `tau_g = (N - 1) / 2 = 12` samples
-    /// at the stage's processing rate.
+    /// Each 2× half-band stage uses a linear-phase Type I FIR of length `N = 25`
+    /// taps. The phase response is linear with constant group delay
+    /// `tau_g = (N - 1) / 2 = 12` samples **at the stage's processing rate**.
     ///
-    /// For a full upsample -> neural processing -> downsample round trip:
-    /// - Stage 1 upsampler introduces `D/2 = 6` native samples delay (12 oversampled samples).
-    /// - Stage 1 downsampler introduces `D/2 = 6` native samples delay (12 oversampled samples).
-    /// - Net round-trip group delay per 2× stage: exactly `D = 12` samples at native model rate.
+    /// For a full upsample -> neural processing -> downsample round trip, the
+    /// delay must be converted to the native rate per stage:
+    /// - Stage 1 (`X2`, running at 2×) up + down: `12 / 2 + 12 / 2 = 6 + 6 = 12`
+    ///   native samples.
+    /// - Stage 2 (`X4`, running at 4×) up + down: `12 / 4 + 12 / 4 = 3 + 3 = 6`
+    ///   native samples.
+    /// - Cascaded 4× total: `12 + 6 = 18` native samples (the previous
+    ///   `2 * 12 = 24` figure double-counted stage 2 at the native rate instead
+    ///   of its own 4× rate).
     ///
-    /// For cascaded 4× oversampling (two stages):
-    /// - Total latency = `2 * 12 = 24` samples at native rate.
-    ///
-    /// ### Latency Table
+    /// ### Latency Table (measured against an impulse; see
+    /// `dsp::oversample::tests::latency_matches_impulse_peak`)
     /// - `Off` -> 0 samples (zero added delay).
-    /// - `X2`  -> 12 samples (e.g., 0.25 ms @ 48 kHz).
-    /// - `X4`  -> 24 samples (e.g., 0.50 ms @ 48 kHz).
+    /// - `X2`  -> 12 samples (0.25 ms @ 48 kHz).
+    /// - `X4`  -> 18 samples (0.375 ms @ 48 kHz).
     #[inline]
     pub fn latency_samples(&self) -> usize {
+        // Measured: impulse-peak round-trip delay is X2 = 12, X4 = 18 native
+        // samples (see `dsp::oversample::tests::latency_matches_impulse_peak`).
         match self.factor {
             OversampleFactor::Off => 0,
             OversampleFactor::X2 => HB_DELAY,
-            OversampleFactor::X4 => 2 * HB_DELAY,
+            OversampleFactor::X4 => HB_DELAY + HB_DELAY / 2,
         }
     }
 
@@ -343,6 +350,11 @@ impl OversampleEngine {
     /// Input blocks larger than `max_samples × multiplier` are truncated
     /// defensively: when `rt_status` is provided the truncation
     /// raises `RT_STATUS_HOST_CONTRACT_VIOLATION` — no more silent truncation.
+    ///
+    /// Input blocks whose length is not a multiple of the oversampling factor
+    /// (the decimation stages' even-length contract) are aligned down and also
+    /// raise `RT_STATUS_HOST_CONTRACT_VIOLATION`, so a malformed host block can
+    /// never trip a decimation-stage `debug_assert!`.
     pub fn downsample(
         &mut self,
         input: &[f32],
@@ -355,12 +367,29 @@ impl OversampleEngine {
         // F-05: `output` must hold `n_in / multiplier` samples; clamp the
         // processed input so the decimation stages never write past `output`.
         n_in = n_in.min(output.len().saturating_mul(multiplier));
-        if n_in != input.len()
+        // T5.4-7 boundary: the decimation stages require an input length that is
+        // a multiple of the oversampling factor (`X2Stage::downsample` needs an
+        // even length; the X4 path additionally needs its half-rate intermediate
+        // to stay even, i.e. the input to be a multiple of 4). Real hosts always
+        // feed `multiplier * native`, so this only fires on a contract violation;
+        // align down and flag it rather than letting a stage trip its
+        // `debug_assert!`.
+        let aligned = n_in - (n_in % multiplier);
+        if aligned != n_in {
+            if let Some(rt) = rt_status {
+                rt.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+            }
+            n_in = aligned;
+        } else if n_in != input.len()
             && let Some(rt) = rt_status
         {
             rt.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
         }
         let input = &input[..n_in];
+        debug_assert!(
+            input.len().is_multiple_of(multiplier),
+            "oversample: input length must be a multiple of the oversampling factor"
+        );
         debug_assert!(
             output.len() >= input.len() / self.factor.multiplier(),
             "oversample: output buffer too small for downsampling factor"

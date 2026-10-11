@@ -98,7 +98,8 @@ pub(crate) fn model_process_stereo_with_os(
         } else {
             passthru(&os_buf_l[..n_os], &mut os_model_l[..n_os]);
         }
-        os_l.downsample(&os_model_l[..n_os], native_out_l, rt_status);
+        let written = os_l.downsample(&os_model_l[..n_os], native_out_l, rt_status);
+        finish_downsample(written, model_in_l.len(), native_out_l, rt_status);
     }
 
     // R channel (or mono copy)
@@ -117,7 +118,37 @@ pub(crate) fn model_process_stereo_with_os(
         } else {
             passthru(&os_buf_r[..n_os], &mut os_model_r[..n_os]);
         }
-        os_r.downsample(&os_model_r[..n_os], native_out_r, rt_status);
+        let written = os_r.downsample(&os_model_r[..n_os], native_out_r, rt_status);
+        finish_downsample(written, model_in_r.len(), native_out_r, rt_status);
+    }
+}
+
+/// Enforces the downsample cardinality contract at the native boundary.
+///
+/// With the half-band warm-up gate removed (T3.4), an X2/X4 stage emits exactly
+/// `input.len() / factor` samples, so a well-formed host block yields
+/// `written == n_native`. If a stage ever under-produces, the tail is
+/// zero-filled (never stale samples from a previous block) and
+/// `RT_STATUS_HOST_CONTRACT_VIOLATION` is latched — fail-closed and RT-safe.
+#[inline(always)]
+fn finish_downsample(
+    written: usize,
+    n_native: usize,
+    native_out: &mut [f32],
+    rt_status: Option<&RtStatusFlags>,
+) {
+    debug_assert_eq!(
+        written, n_native,
+        "downsample cardinality contract violated: wrote {written}, expected {n_native}"
+    );
+    if written < n_native {
+        let end = n_native.min(native_out.len());
+        if written < end {
+            native_out[written..end].fill(0.0);
+        }
+        if let Some(s) = rt_status {
+            s.set_flag(crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION);
+        }
     }
 }
 

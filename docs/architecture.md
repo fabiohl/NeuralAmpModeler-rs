@@ -165,6 +165,35 @@ To eliminate circular index wrapping and modulo branching in dilated convolution
 
 ---
 
+### 1.7 LSTM Reset Semantics and State Clearing (DEC-03)
+
+The C++ NAMcore `LSTMCell` constructor loads the initial hidden state `_xh` and
+cell state `_c` directly from the model weights (`NAM/lstm.cpp:24-28`), and
+`LSTM` does not override `DSP::Reset`; `DSP::Reset` (`NAM/dsp.cpp:133-140`)
+calls `SetMaxBufferSize` (a no-op for the fixed-size LSTM) and, only when the
+prewarm policy is enabled, `prewarm`. A C++ `Reset` **without prewarm** therefore
+preserves the file-loaded `_xh`/`_c` and the input delay slots.
+
+Rust intentionally diverges: `LstmLayer::reset_states`
+([`src/models/lstm/layer.rs`](../src/models/lstm/layer.rs)) always zeroes the
+hidden state, cell state, cell error, and gate scratch, so a Rust
+`NamModel::reset` returns the LSTM to a fully cleared condition even when
+`prewarm_on_reset == false` (via the family's `reset_states` zeroing, invoked
+by the default `reset` clearing phase in [`src/models/mod.rs`](../src/models/mod.rs);
+LSTM keeps its state through `reset_states` rather than a dedicated
+`clear_state` override).
+
+**Decision (DEC-03):** keep the Rust clean-reset behaviour — a reset must clear
+all temporal state — and do not replicate the C++ no-prewarm `_xh`/`_c`
+retention absent a Product Owner decision for strict parity. While DEC-03
+stands, LSTM is excluded from the T3.1 reset-freshness matrix, because a Rust
+reset-without-prewarm on an LSTM is deliberately **not** bit-equivalent to a
+C++ reset-without-prewarm. If strict parity is later required, gate
+`reset_states` behind the active prewarm flag and re-enable the 1×1×1 F-11
+oracle test.
+
+---
+
 ## 2. Real-Time Safety & Concurrency Architecture
 
 ### Real-Time Invariants (Audio Thread Hot Path)
@@ -336,11 +365,79 @@ The cabsim stage convolves model output with speaker cabinet impulse responses (
 - **Frequency Delay Line (FDL):** Pre-allocated circular buffer of input spectra, convolving all partitions in the frequency domain before an inverse FFT.
 - **Release-Safe Block Contract:** `ConvEngine::process()` verifies in both debug and release builds that input and output slices meet or exceed `partition_size`. If a sub-partition block is received, the engine safely clears the output buffer and signals `RT_STATUS_CABSIM_CONTRACT_VIOLATION` without panicking. Variable-block hosts buffer samples through `CabSimAdapter`.
 
+### 4.6 Multichannel Processing Contract
+
+Every model declares the channel geometry it accepts and produces. This mirrors
+the C++ NAMcore `DSP::NumInputChannels()` / `DSP::NumOutputChannels()` contract
+and is the single source of truth for all boundary code.
+
+- **Declared geometry.** [`NamModel::num_input_channels`](../src/models/mod.rs)
+  and [`NamModel::num_output_channels`](../src/models/mod.rs) return the counts
+  fixed at load time. Defaults are `1` (mono); Linear, Sequential, Container,
+  WaveNet A2 with `head_size > 1` and multi-array cascades override them. The
+  declared geometry always equals the geometry the loader/C++ build for the same
+  JSON.
+- **`process()` interleaving.** The concrete `process(input, output)` entry
+  point is mono-in and writes **frame-major interleaved** output
+  (`output[f * C + c]`) when a model has `C > 1` output channels, matching the
+  C++ reference. The frame count is `min(input.len(), output.len() / C)`.
+- **Planar helpers.** `NamModel::process_multichannel(&[&[f32]], &mut [&mut [f32]])`
+  and `process_multichannel_in_place(&mut [&mut [f32]])` take one plane per
+  channel and return `Result<usize, NamErrorCode>` (the number of frames
+  processed). They **fail closed**: fewer planes than the declared geometry
+  returns `E2304` (`HostFormatContractViolation`) *before any pointer is
+  dereferenced*. Surplus planes are ignored and the frame count is the minimum
+  length across the **required** planes only. The in-place form requires at
+  least `max(in, out)` planes.
+- **Aliasing rules.** Exact in-place aliasing (`input == output`, or
+  `input == planes[0]`) is supported: the boundary stages the input through a
+  stack buffer (`src/models/plane_adapter.rs`) before writing, so no
+  `&[f32]`/`&mut [f32]` pair is ever created over the same memory. **Partial
+  overlap** (an input plane shifted into a destination plane) is a contract
+  violation — it cannot be staged away — and is detected by a `debug_assert!`.
+- **RT and allocation.** The planar helpers allocate nothing while the required
+  channel counts are `<= 16`; larger geometries use a temporary heap pointer
+  table (there is no artificial model channel cap). A2 heads emit their
+  `head_size` interleaved channels from both `process()` and the planar helpers.
+- **`head_scale`.** The model-level head scale multiplies the final output. The
+  cascade applies it once to its final block; a single-array A2-Dynamic with
+  `head_size > 1` carries it as the trailing weight and folds it into the
+  per-channel head scale, so both paths scale identically.
+
+#### Breaking changes (0.6.x)
+
+- **Multichannel Contract:** `NamModel::process_multichannel` / `process_multichannel_in_place` now return
+  `Result<usize, NamErrorCode>` instead of `()`; under-sized plane sets return
+  `E2304` instead of dereferencing null pointers.
+- **Linear Model Trait Helpers:** The duplicate inherent `process_multichannel` /
+  `process_multichannel_in_place` helpers on `LinearModel` were removed; callers
+  use the `NamModel` trait methods (bring `NamModel` into scope).
+- **A2 Dynamic Multi-Channel Head:** A single-array WaveNet A2-Dynamic with `head_size > 1` now emits
+  `head_size` interleaved channels (previously silence) and reports
+  `num_output_channels() == head_size` (previously `1`).
+- **Raw Buffer In-Place Aliasing:** `NamModel::process_raw` and the Linear mono raw path now support exact
+  in-place aliasing without undefined behaviour; partial overlap remains a
+  documented contract violation.
+- **Heterogeneous Slimmable Per-Array Slicing:** `allowed_channels` and `pending_slim_channel` are structured
+  per-array (`Vec<Vec<usize>>` and `Option<Vec<usize>>`). Slicing functions operate per-array (`slice_wavenet_array` accepts
+  `new_in_ch`, `new_ch`, `new_head`, and `slice_wavenet_model_per_array` accepts `targets: &[usize]`). Slicing strictly reduces
+  channels; re-expanding above loaded full capacity requires cloning from retained full-model storage.
+- **Union of Slimmable Breakpoints:** `SlimmableModel::slimmable_breakpoints` returns the sorted deduplicated union of
+  fractional breakpoints ($i / n$) across all layer arrays.
+- **Typed Loader Error Inspection:** `LoadError::code(&self) -> NamErrorCode` provides direct programmatic inspection of
+  typed diagnostics without string pattern matching.
+- **LSTM Multi-I/O Dynamic Support:** Added `input_size`, `in_channels`, and `out_channels` to `NamConfig` and `LstmTopology`;
+  dynamic path routes multi-channel I/O with interleaved layout, strictly enforcing `input_size == in_channels` (failing with `E1316`).
+- **ConvNet Multi-I/O & Grouped Convolutions:** Added `in_channels`, `out_channels`, and `groups` to ConvNet topology.
+  Validates `in_channels % groups == 0` and `channels % groups == 0` (failing with `E1316`).
+- **Typed Error Code E1316:** Introduced `NamErrorCode::InvalidFeatureTopology` (`E1316`) for structural feature violations
+  (slimmable constraints, LSTM dimension mismatches, ConvNet groups mismatch).
+
 ---
 
 ## 5. WaveNet A2 Architecture
 
-The WaveNet A2 format represents the next-generation architecture of Neural Amp Modeler (NeuralAmpModelerCore v0.5.2+):
+The WaveNet A2 format represents the next-generation architecture of Neural Amp Modeler (NeuralAmpModelerCore v0.5.2+). Its architectural provenance and design principles derive from the author's public presentation: <https://youtu.be/24FCS8tFHcE> (see cross-reference in [docs/cpp_parity_map.md](cpp_parity_map.md#40-proveniência)).
 
 ### Fast-Path Engines
 
@@ -356,6 +453,14 @@ For models containing advanced features, execution routes to flexible runtime en
 - **`WaveNetA2Dyn`:** Runtime-dimensioned convolution supporting arbitrary channel dimensions, bottleneck layers, FiLM modulation, grouped convolutions, and gating/blending activations.
 - **`WaveNetA2Cascade`:** Chains multiple dynamic A2 arrays in series.
 - **Slimmable Containers:** Pre-allocates both A2-Full and A2-Lite submodels in memory, enabling instantaneous zero-allocation swaps via the Adaptive Compute FSM with 32 ms crossfading.
+
+### Slimmable Model Validation & Topology Invariants
+
+Slimmable WaveNet models allow dynamic channel degradation. The loader enforces strict behavioral and topological parity with C++ NAMCore (`slimmable.cpp`):
+- **Method Invariant:** The `slimmable.method` field is mandatory for any layer with slimmable metadata; currently only `"slice_channels_uniform"` is supported. Missing or invalid methods fail-closed with `NamErrorCode::InvalidFeatureTopology` (`E1316`).
+- **Allowed Channels & Fixed Arrays:** If `kwargs` or `allowed_channels` is absent, channel breakpoints default to `[1..=channels]`. An explicit `allowed_channels: []` designates a fixed (non-slimmable) array. At least one layer array must have non-empty `allowed_channels`; models where all layers are fixed fail-closed with `E1316`.
+- **Groups & Head Kernel Size:** All layer arrays in a slimmable model must satisfy `head_kernel_size == 1` and all convolution group parameters (`groups`, `groups_input`, `groups_input_mixin`, `layer1x1.groups`, `head1x1.groups`) must equal 1 (`slimmable.cpp:136-146`), failing with `E1316` otherwise.
+- **Typed Loader Errors:** Topology and feature rejections carry structured `NamErrorCode` values via `LoadError::InvalidTopology { code, reason }`, exposed programmatically through `LoadError::code(&self) -> NamErrorCode` rather than string parsing.
 
 *(Note: The flagship model `wavenet_a2_max.nam` reached production×C++ parity in Fase 3 (V1 SNR 135.90 dB, V2 SNR 135.97 dB); the former fail-closed guard `reject_wavenet_a2_max_class` was retired. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4.3).*
 
@@ -375,7 +480,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 
 ### Complete Error Code Reference
 
-- **E1xxx (Model Loading):** `E1100` FILE_NOT_FOUND, `E1101` FILE_READ_ERROR, `E1102` UNKNOWN_EXTENSION, `E1200` NAM_JSON_PARSE_ERROR, `E1201` NAMB_CRC32_MISMATCH, `E1202` NAMB_INVALID_MAGIC, `E1203` NAMB_UNSUPPORTED_VERSION, `E1204` NAMB_TRUNCATED, `E1205` NAMB_CRC32_MISSING, `E1206` NAM_JSON_WEIGHTS_EXCEED_LIMIT, `E1207` NAM_JSON_TRAINING_TOO_LARGE, `E1208` NAM_JSON_TRAINING_TOO_DEEP, `E1209` NAM_JSON_SUBMODELS_EXCEED_LIMIT, `E1210` NAM_JSON_SUBMODELS_TOO_DEEP, `E1211` NAM_JSON_WEIGHT_NOT_FINITE, `E1212` NAMB_NON_FINITE_WEIGHT, `E1213` NAMB_INVALID_HEADER_FIELD, `E1214` NAM_JSON_INVALID_SAMPLE_RATE, `E1215` NAM_JSON_UNSUPPORTED_TOPOLOGY, `E1216` NAM_JSON_INVALID_VERSION_FORMAT, `E1217` NAM_JSON_UNSUPPORTED_VERSION, `E1218` NAM_JSON_UNSUPPORTED_MULTI_CHANNEL, `E1219` INVALID_METADATA, `E1220` NAM_JSON_INVALID_ENVELOPE, `E1300` UNSUPPORTED_ARCHITECTURE, `E1301` TOPOLOGY_DETECTION_FAILED, `E1302` WEIGHT_COUNT_MISMATCH, `E1303` MODEL_BUILD_FAILED, `E1304` MODEL_TOO_LARGE, `E1305` INVALID_MODEL_TOPOLOGY, `E1306` SEQUENTIAL_EMPTY_MODELS, `E1307` SEQUENTIAL_INCOMPLETE_CHILD, `E1308` SEQUENTIAL_CHANNEL_MISMATCH, `E1309` SEQUENTIAL_SAMPLE_RATE_MISMATCH, `E1310` SEQUENTIAL_TOP_LEVEL_WEIGHTS_NOT_EMPTY, `E1311` SEQUENTIAL_RECURSION_DEPTH_EXCEEDED, `E1312` LINEAR_INVALID_CHANNELS, `E1313` LINEAR_WEIGHT_COUNT_MISMATCH, `E1314` SEQUENTIAL_CHILDREN_EXCEED_LIMIT, `E1400` WAV_INVALID_FORMAT, `E1401` WAV_INVALID_FILE.
+- **E1xxx (Model Loading):** `E1100` FILE_NOT_FOUND, `E1101` FILE_READ_ERROR, `E1102` UNKNOWN_EXTENSION, `E1200` NAM_JSON_PARSE_ERROR, `E1201` NAMB_CRC32_MISMATCH, `E1202` NAMB_INVALID_MAGIC, `E1203` NAMB_UNSUPPORTED_VERSION, `E1204` NAMB_TRUNCATED, `E1205` NAMB_CRC32_MISSING, `E1206` NAM_JSON_WEIGHTS_EXCEED_LIMIT, `E1207` NAM_JSON_TRAINING_TOO_LARGE, `E1208` NAM_JSON_TRAINING_TOO_DEEP, `E1209` NAM_JSON_SUBMODELS_EXCEED_LIMIT, `E1210` NAM_JSON_SUBMODELS_TOO_DEEP, `E1211` NAM_JSON_WEIGHT_NOT_FINITE, `E1212` NAMB_NON_FINITE_WEIGHT, `E1213` NAMB_INVALID_HEADER_FIELD, `E1214` NAM_JSON_INVALID_SAMPLE_RATE, `E1215` NAM_JSON_UNSUPPORTED_TOPOLOGY, `E1216` NAM_JSON_INVALID_VERSION_FORMAT, `E1217` NAM_JSON_UNSUPPORTED_VERSION, `E1218` NAM_JSON_UNSUPPORTED_MULTI_CHANNEL, `E1219` INVALID_METADATA, `E1220` NAM_JSON_INVALID_ENVELOPE, `E1221` NAM_JSON_UNKNOWN_ACTIVATION, `E1300` UNSUPPORTED_ARCHITECTURE, `E1301` TOPOLOGY_DETECTION_FAILED, `E1302` WEIGHT_COUNT_MISMATCH, `E1303` MODEL_BUILD_FAILED, `E1304` MODEL_TOO_LARGE, `E1305` INVALID_MODEL_TOPOLOGY, `E1306` SEQUENTIAL_EMPTY_MODELS, `E1307` SEQUENTIAL_INCOMPLETE_CHILD, `E1308` SEQUENTIAL_CHANNEL_MISMATCH, `E1309` SEQUENTIAL_SAMPLE_RATE_MISMATCH, `E1310` SEQUENTIAL_TOP_LEVEL_WEIGHTS_NOT_EMPTY, `E1311` SEQUENTIAL_RECURSION_DEPTH_EXCEEDED, `E1312` LINEAR_INVALID_CHANNELS, `E1313` LINEAR_WEIGHT_COUNT_MISMATCH, `E1314` SEQUENTIAL_CHILDREN_EXCEED_LIMIT, `E1315` NAM_JSON_SAMPLE_RATE_MISMATCH, `E1316` INVALID_FEATURE_TOPOLOGY, `E1400` WAV_INVALID_FORMAT, `E1401` WAV_INVALID_FILE.
 - **E2xxx (Audio / DSP):** `E2001` PROCESSING_OVERLOAD, `E2100` AUDIO_INIT_FAILED, `E2101` STREAM_ERROR, `E2200` RESAMPLER_BUILD_FAILED, `E2201` RESAMPLER_CHANNEL_FULL, `E2202` INVALID_CABSIM_PARTITION_SIZE, `E2300` RT_PRIORITY_DENIED, `E2301` CPU_AFFINITY_FAILED, `E2302` BACKEND_FAILURE, `E2304` HOST_FORMAT_CONTRACT_VIOLATION.
 - **E3xxx (SPSC):** `E3100` PARAM_CHANNEL_FULL, `E3101` GC_OVERFLOW, `E3102` GC_CORRUPTED.
 - **E4xxx (Runtime):** `E4100` INVALID_GAIN_VALUE, `E4101` UNKNOWN_COMMAND, `E4102` CTRL_C_HANDLER_FAILED, `E4103` IR_LOAD_FAILED.

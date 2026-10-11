@@ -3,6 +3,7 @@
 
 use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
+use crate::common::diagnostics::NamErrorCode;
 use std::sync::Arc;
 
 impl StaticModel {
@@ -146,6 +147,28 @@ impl StaticModel {
             Self::WavenetDyn(m) => SlimmableModel::slimmable_breakpoints(m.as_ref()),
             _ => Box::new([]),
         }
+    }
+
+    /// Returns per-array target channel counts for a given slimmable ratio,
+    /// if this model is a slimmable WaveNet.
+    ///
+    /// `ratio` is `f64` to preserve C++ `ratio_to_channels` parity at tier
+    /// boundaries (see `slimmable_tier_index`).
+    pub fn slimmable_targets(&self, ratio: f64) -> Option<Vec<usize>> {
+        match self {
+            Self::WavenetDyn(m) => m.slimmable_targets(ratio),
+            _ => None,
+        }
+    }
+
+    /// `f32` convenience wrapper for [`slimmable_targets`](Self::slimmable_targets),
+    /// preserving the historical signature for callers whose ratio originates as
+    /// `f32`. Note the `f32` rounding is applied before the `f64` tier mapping,
+    /// so a caller that needs exact C++ `ratio_to_channels` parity at wide tier
+    /// boundaries should call the `f64` method directly.
+    #[inline]
+    pub fn slimmable_targets_f32(&self, ratio: f32) -> Option<Vec<usize>> {
+        self.slimmable_targets(ratio as f64)
     }
 
     /// Returns the total number of layers for the model (0 for non-WaveNet).
@@ -313,7 +336,10 @@ impl StaticModel {
 
     /// Returns the number of input channels consumed by the model's `process()`.
     ///
-    /// - WaveNet variants and LSTM: always 1 (single sample per frame).
+    /// - WaveNet A1/static LSTM: always 1 (single sample per frame).
+    /// - WaveNet A2 single array: `input_channels` (1 for standalone mono
+    ///   models; wider only for cascade sub-arrays).
+    /// - WaveNet A2 cascade: 1 (mono entry).
     /// - ConvNet: `in_channels` from configuration (defaults to 1).
     /// - Linear: `in_channels` from configuration.
     /// - Container: delegates to active sub-model.
@@ -325,7 +351,10 @@ impl StaticModel {
             | Self::WavenetNano(_) => 1,
             Self::WavenetA2Full(_) => 1,
             Self::WavenetA2Lite(_) => 1,
-            Self::WavenetA2Dyn(_) => 1,
+            // Standalone single-array input width (1 for mono models; wider
+            // only for cascade sub-arrays, which never surface as a bare
+            // `WavenetA2Dyn` variant). Delegates so the helper stays truthful.
+            Self::WavenetA2Dyn(m) => m.input_channels.max(1),
             Self::WavenetA2Cascade(_) => 1,
             Self::WavenetDyn(_) => 1,
             Self::Container(c) => c.active().in_channels(),
@@ -338,8 +367,8 @@ impl StaticModel {
             | Self::Lstm2x12(_)
             | Self::Lstm2x16(_)
             | Self::Lstm1x40(_)
-            | Self::Lstm2x24(_)
-            | Self::LstmDyn(_) => 1,
+            | Self::Lstm2x24(_) => 1,
+            Self::LstmDyn(m) => m.in_channels,
             Self::Linear(m) => m.in_channels,
             Self::ConvNet(m) => m.in_channels(),
             // Chain input channels = first stage input channels.
@@ -360,8 +389,10 @@ impl StaticModel {
     /// Returns the number of output channels produced by the model's `process()`.
     ///
     /// Mirrors C++ `DSP::NumOutputChannels()`:
-    /// - WaveNet A1 without post-stack head: last array's `head_size` (`wave_net_output_channels`)
-    /// - LSTM: `hidden_size`
+    /// - WaveNet A1 static: mono (1); WaveNet A1 dynamic: post-stack head
+    ///   width when present, else last array's `head`
+    /// - WaveNet A2 single array: `head_size`; A2 cascade: last array's `head_size`
+    /// - LSTM static: mono (1); LSTM dynamic: `out_channels`
     /// - Linear: `out_channels`
     /// - Container: delegates to active sub-model
     pub fn num_output_channels(&self) -> usize {
@@ -372,7 +403,6 @@ impl StaticModel {
             | Self::WavenetNano(_)
             | Self::WavenetA2Full(_)
             | Self::WavenetA2Lite(_)
-            | Self::WavenetA2Dyn(_)
             | Self::Lstm1x3(_)
             | Self::Lstm1x8(_)
             | Self::Lstm2x8(_)
@@ -382,11 +412,21 @@ impl StaticModel {
             | Self::Lstm2x16(_)
             | Self::Lstm1x24(_)
             | Self::Lstm2x24(_)
-            | Self::Lstm1x40(_)
-            | Self::LstmDyn(_) => 1,
+            | Self::Lstm1x40(_) => 1,
+            Self::LstmDyn(m) => m.out_channels,
+            // A2-Dynamic single array: the head conv emits `head_size`
+            // interleaved channels. A1 and LSTM remain mono.
+            Self::WavenetA2Dyn(m) => m.head_size.max(1),
             Self::Linear(m) => m.out_channels,
-            Self::WavenetA2Cascade(m) => m.arrays.last().map(|a| a.head_size).unwrap_or(1),
-            Self::WavenetDyn(m) => m.arrays.last().map(|a| a.head).unwrap_or(0),
+            Self::WavenetA2Cascade(m) => m.arrays.last().map(|a| a.head_size).unwrap_or(1).max(1),
+            // WaveNet A1 dynamic: post-stack head width when present (same
+            // `out_per_frame` clamp as `process_internal`), else last array's
+            // head projection (0 for an empty model → mono fallback 1 via
+            // `unwrap_or(0)` + `.max(1)` below is folded inline).
+            Self::WavenetDyn(m) => match m.post_stack_head {
+                Some(ref h) => h.out_channels().max(1),
+                None => m.arrays.last().map(|a| a.head).unwrap_or(0).max(1),
+            },
             Self::Container(c) => c.active().num_output_channels(),
             Self::ConvNet(m) => m.out_channels(),
             // Chain output channels = last stage output channels.
@@ -410,14 +450,29 @@ impl StaticModel {
     }
 
     /// Safe multichannel processing helper taking slices of channel slices.
+    ///
+    /// Returns the number of frames processed, or
+    /// [`NamErrorCode::HostFormatContractViolation`] (`E2304`) when the plane
+    /// counts do not satisfy the model's declared channel geometry.
     #[inline(always)]
-    pub fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
+    pub fn process_multichannel(
+        &mut self,
+        input: &[&[f32]],
+        output: &mut [&mut [f32]],
+    ) -> Result<usize, NamErrorCode> {
         <Self as NamModel>::process_multichannel(self, input, output)
     }
 
     /// Safe multichannel in-place processing helper.
+    ///
+    /// Returns the number of frames processed, or
+    /// [`NamErrorCode::HostFormatContractViolation`] (`E2304`) when fewer than
+    /// `max(in, out)` planes are supplied.
     #[inline(always)]
-    pub fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
+    pub fn process_multichannel_in_place(
+        &mut self,
+        buffers: &mut [&mut [f32]],
+    ) -> Result<usize, NamErrorCode> {
         <Self as NamModel>::process_multichannel_in_place(self, buffers)
     }
 

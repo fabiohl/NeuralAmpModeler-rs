@@ -1034,7 +1034,9 @@ fn test_multichannel_many_to_one_summation_order() {
 
     let in_slices = [&input0[..], &input1[..], &input2[..]];
     let mut out_slices = [&mut output[..]];
-    model.process_multichannel(&in_slices, &mut out_slices);
+    model
+        .process_multichannel(&in_slices, &mut out_slices)
+        .expect("geometry matches");
 
     let mut expected_sample = bias;
     expected_sample += 1e7;
@@ -1077,7 +1079,9 @@ fn test_multichannel_reset_clears_all_channels() {
             let in_slices: Vec<&[f32]> = (0..in_ch).map(|_| &sig[..]).collect();
             let mut out_buf: Vec<Vec<f32>> = vec![vec![0.0f32; 256]; out_ch];
             let mut out_slices: Vec<&mut [f32]> = out_buf.iter_mut().map(|b| &mut b[..]).collect();
-            model.process_multichannel(&in_slices, &mut out_slices);
+            model
+                .process_multichannel(&in_slices, &mut out_slices)
+                .expect("geometry matches");
 
             // Reset
             model.reset(48000, 128);
@@ -1088,7 +1092,9 @@ fn test_multichannel_reset_clears_all_channels() {
             let mut post_buf: Vec<Vec<f32>> = vec![vec![0.0f32; 128]; out_ch];
             let mut post_slices: Vec<&mut [f32]> =
                 post_buf.iter_mut().map(|b| &mut b[..]).collect();
-            model.process_multichannel(&silence_in, &mut post_slices);
+            model
+                .process_multichannel(&silence_in, &mut post_slices)
+                .expect("geometry matches");
 
             // Output must be purely the bias on each channel
             for ch in 0..out_ch {
@@ -1129,7 +1135,9 @@ fn test_static_model_multichannel_dispatch() {
     let mut out0 = [0.0f32; 32];
     let mut out1 = [0.0f32; 32];
 
-    static_model.process_multichannel(&[&ch0[..], &ch1[..]], &mut [&mut out0[..], &mut out1[..]]);
+    static_model
+        .process_multichannel(&[&ch0[..], &ch1[..]], &mut [&mut out0[..], &mut out1[..]])
+        .expect("geometry matches");
     assert_eq!(out0[0], 0.5);
     assert_eq!(out1[0], 1.0);
 
@@ -1139,7 +1147,9 @@ fn test_static_model_multichannel_dispatch() {
     // Test in-place
     let mut in_out0 = [1.0f32; 32];
     let mut in_out1 = [2.0f32; 32];
-    static_model.process_multichannel_in_place(&mut [&mut in_out0[..], &mut in_out1[..]]);
+    static_model
+        .process_multichannel_in_place(&mut [&mut in_out0[..], &mut in_out1[..]])
+        .expect("geometry matches");
     assert_eq!(in_out0[0], 0.5);
     assert_eq!(in_out1[0], 1.0);
 }

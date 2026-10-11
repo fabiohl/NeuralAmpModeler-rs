@@ -48,7 +48,7 @@ fn fill_model_dyn(model: &mut LstmModelDyn) {
     for i in 0..hidden_size {
         model.head_weights_f32[i] = 0.1 * (i + num_layers) as f32;
     }
-    model.head_bias = 0.25;
+    model.head_bias[0] = 0.25;
 }
 
 /// Inner: runs the model on the provided input and asserts SIMD vs scalar parity.
@@ -74,7 +74,7 @@ fn assert_model_dyn_parity_inner(num_layers: usize, hidden_size: usize, zero_inp
     model_scalar
         .head_weights_f32
         .copy_from_slice(&model_simd.head_weights_f32);
-    model_scalar.head_bias = model_simd.head_bias;
+    model_scalar.head_bias = model_simd.head_bias.clone();
 
     let n_samples = 64;
     let input: Vec<f32> = if zero_input {
@@ -200,7 +200,7 @@ fn test_model_dyn_determinism() {
     model_b
         .head_weights_f32
         .copy_from_slice(&model_a.head_weights_f32);
-    model_b.head_bias = model_a.head_bias;
+    model_b.head_bias = model_a.head_bias.clone();
 
     let input: Vec<f32> = (0..64).map(|i| (i as f32 * 0.13).sin()).collect();
     let mut out_a = vec![0.0f32; 64];

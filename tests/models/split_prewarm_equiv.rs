@@ -225,6 +225,59 @@ fn split_equiv_a2_dynamic_odd_chunks() {
     }
 }
 
+/// T5.4-4 [R]: a split reset after a **dirty** run must converge to the same
+/// state as the integral `reset`, including the cascade-level scratch and the
+/// nested `condition_dsp` temporal state. Those are *not* zeroed by the
+/// per-subarray `set_max_buffer_size` (a no-op when the size is unchanged), so
+/// `prewarm_reset` must clear them explicitly. Uses the A2-Max fixture
+/// (`condition_dsp` present), whose condition path carries FIR/recurrent
+/// memory that a fresh-build split test cannot expose.
+#[test]
+fn split_equiv_a2_max_after_dirty_state() {
+    let name = "wavenet_a2_max.nam";
+    if !fixture_exists(name) {
+        eprintln!("[STATUS] SKIP_CAPABILITY: model_not_found:{name}");
+        return;
+    }
+    let dirt = probe_input(4096, 0x9E37_79B9_7F4A_7C15);
+    let probe = probe_input(4096, 0x243F_6A88_85A3_08D3);
+    let chunks = [1usize, 7, 64, 1024];
+
+    // Integral: load (prewarmed), dirty the state, then `reset()`.
+    let mut integral = load(name);
+    run(&mut integral, &dirt);
+    integral.reset(48000, 64).expect("reset");
+    assert!(integral.prewarm_complete());
+    let expected = run(&mut integral, &probe);
+
+    // Split: dirty identically, then `prewarm_reset` + drain until converged.
+    let mut split = load(name);
+    run(&mut split, &dirt);
+    split.prewarm_reset();
+    assert!(
+        !split.prewarm_complete(),
+        "{name}: split must arm pending work"
+    );
+    for &c in &chunks {
+        split.prewarm_step(c);
+    }
+    let mut guard = 0usize;
+    while !split.prewarm_complete() {
+        split.prewarm_step(usize::MAX);
+        guard += 1;
+        assert!(guard < 1_000_000, "{name}: split feed did not converge");
+    }
+    let got = run(&mut split, &probe);
+
+    assert_eq!(expected.len(), got.len(), "{name}: length");
+    for (i, (a, b)) in expected.iter().zip(got.iter()).enumerate() {
+        assert!(
+            a.to_bits() == b.to_bits(),
+            "{name}: dirty-state split mismatch at {i}: {a} vs {b}"
+        );
+    }
+}
+
 // ── ConvNet / Linear ─────────────────────────────────────────────────────────
 
 #[test]

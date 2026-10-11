@@ -7,10 +7,10 @@ use super::WeightCursor;
 use crate::loader::nam_json::{ConvNetFormat, NamModelData, get_convnet_topology};
 use crate::math::common::AlignedVec;
 use crate::models::StaticModel;
+use crate::models::a2::ActivationType;
 use crate::models::convnet::{ConvNetBlock, ConvNetModel, LinearHead};
 use crate::models::wavenet::PostStackHead;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
-use crate::models::wavenet::post_stack_head::parse_activation;
 use anyhow::Context;
 use log::{info, warn};
 
@@ -25,7 +25,7 @@ use crate::loader::dispatcher::wavenet::layout;
 /// - **FlatCpp**: C++ NAMCore flat config (`channels` scalar, `dilations` array,
 ///   `batchnorm` bool), raw BatchNorm params, separate linear head.
 pub(crate) fn build_convnet(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
-    let topo = get_convnet_topology(data).context("ConvNet topology not detectable")?;
+    let topo = get_convnet_topology(data)?.context("ConvNet topology not detectable")?;
 
     match topo.format {
         ConvNetFormat::FlatCpp => build_convnet_flat_cpp(data, &topo),
@@ -38,16 +38,25 @@ fn build_convnet_flat_cpp(
     data: &NamModelData,
     topo: &crate::loader::nam_json::ConvNetTopology,
 ) -> anyhow::Result<Box<StaticModel>> {
+    let in_channels = topo.in_channels;
+    let out_channels = topo.out_channels;
+    let groups = topo.groups;
     let batchnorm = topo.batchnorm.unwrap_or(false);
-    let activation_str = topo.activation.as_deref().unwrap_or("Tanh");
-    let activation = parse_activation(activation_str);
+    let default_activation = serde_json::Value::String("Tanh".to_string());
+    let activation = crate::loader::nam_json::try_parse_activation(
+        topo.activation.as_ref().unwrap_or(&default_activation),
+    )?;
 
     let mut cursor = WeightCursor::new(&data.weights, data.weights_layout);
     let mut blocks = Vec::with_capacity(topo.num_blocks);
     let mut total_rf = 0usize;
 
     for (alloc_num, i) in (0..topo.num_blocks).enumerate() {
-        let in_ch = if i == 0 { 1 } else { topo.channels[i - 1] };
+        let in_ch = if i == 0 {
+            in_channels
+        } else {
+            topo.channels[i - 1]
+        };
         let out_ch = topo.channels[i];
         let kernel = topo.kernel_sizes[i];
         let dilation = *topo.dilations[i]
@@ -67,15 +76,38 @@ fn build_convnet_flat_cpp(
         )
         .map_err(|e| anyhow::anyhow!("ConvNet block {i}: failed to create: {e}"))?;
 
-        let total_conv = checked_arith::checked_mul3(out_ch, in_ch, kernel)?;
-        let raw_conv = cursor.read_slice(total_conv)?;
+        let in_per_group = in_ch / groups;
+        let out_per_group = out_ch / groups;
+
+        // Performance Tradeoffs:
+        // Grouped convolution weights are expanded off-RT into a dense block-diagonal tensor
+        // of shape [out_ch, in_ch, kernel] (memory: O(out_ch * in_ch * kernel), multiplications
+        // factor: groups).
+        // Expanding into a dense buffer off-RT allows the hot real-time path to reuse the
+        // highly-optimized SIMD-interleaved Conv1dDyn kernels without branch divergence,
+        // complex register-packing logic, or any dynamic memory allocation on the audio callback.
+        let dense_len = checked_arith::checked_mul3(out_ch, in_ch, kernel)?;
+        let mut dense_conv = vec![0.0f32; dense_len];
+
+        for g in 0..groups {
+            for oi in 0..out_per_group {
+                let out_idx = g * out_per_group + oi;
+                for ii in 0..in_per_group {
+                    let in_idx = g * in_per_group + ii;
+                    for k in 0..kernel {
+                        let dense_idx = (out_idx * in_ch + in_idx) * kernel + k;
+                        dense_conv[dense_idx] = cursor.read_f32_finite()?;
+                    }
+                }
+            }
+        }
 
         let padded_total =
             checked_arith::checked_conv_padded_total(out_ch.div_ceil(4), 4, in_ch, kernel)?;
         let mut interleaved = AlignedVec::new(padded_total, 0.0f32)
             .map_err(|e| anyhow::anyhow!("ConvNet block {i}: {e}"))?;
 
-        transpose_cpp_conv_to_interleaved(raw_conv, &mut interleaved, out_ch, in_ch, kernel);
+        transpose_cpp_conv_to_interleaved(&dense_conv, &mut interleaved, out_ch, in_ch, kernel);
         block.set_conv_weights(&interleaved);
 
         if batchnorm {
@@ -105,7 +137,7 @@ fn build_convnet_flat_cpp(
     }
 
     let last_out_ch = *topo.channels.last().context("ConvNet: no blocks")?;
-    let out_ch = 1usize;
+    let out_ch = out_channels;
 
     let head_weight_raw = cursor.read_slice(out_ch * last_out_ch)?;
     let head_bias_raw = cursor.read_slice(out_ch)?;
@@ -116,7 +148,7 @@ fn build_convnet_flat_cpp(
         AlignedVec::new(out_ch, 0.0f32).map_err(|e| anyhow::anyhow!("head_bias alloc: {e}"))?;
     head_bias.copy_from_slice(head_bias_raw);
 
-    transpose_cpp_head_to_row_major(head_weight_raw, &mut head_weight, last_out_ch, out_ch);
+    transpose_cpp_head_to_gemv(head_weight_raw, &mut head_weight, last_out_ch, out_ch);
 
     let linear_head = Some(LinearHead {
         weight: head_weight,
@@ -162,8 +194,11 @@ fn build_convnet_flat_cpp(
 
     let bn_label = if batchnorm { "with BN" } else { "no BN" };
     info!(
-        "[Dispatcher] ConvNet FlatCpp built — num_blocks={}, {bn_label}, weights={}",
+        "[Dispatcher] ConvNet FlatCpp built — num_blocks={}, {bn_label}, in_ch={}, out_ch={}, groups={}, weights={}",
         topo.num_blocks,
+        in_channels,
+        out_channels,
+        groups,
         data.weights.len()
     );
 
@@ -212,27 +247,44 @@ fn transpose_cpp_conv_to_interleaved(
     }
 }
 
-/// Transposes C++ head weights to Rust row-major layout.
+/// Transposes C++ row-major head weights to Rust GEMV column-major layout.
 ///
 /// C++ `_Head` writes serialized weights in row-major order:
-///   for i in 0..out_ch:
-///     for j in 0..in_ch:
-///       weight(i, j) = *(weights++)
+///   for out_c in 0..out_ch:
+///     for in_c in 0..in_ch:
+///       weight(out_c, in_c) = *(weights++)
 ///
-/// Stored to Eigen column-major [out_ch × in_ch] but the serialized
-/// order is row-major: src[i * in_ch + j] = weight(i, j).
+/// Rust `M::gemv_with_bias_f32` expects weights column-major:
+///   weights[in_c * out_ch + out_c].
 ///
-/// Rust LinearHead also uses row-major: dst[i * in_ch + j] = weight(i, j).
-/// This is an identity copy.
-fn transpose_cpp_head_to_row_major(src: &[f32], dst: &mut [f32], _in_ch: usize, _out_ch: usize) {
-    dst[..src.len()].copy_from_slice(src);
+/// Transpose mapping: dst[in_c * out_ch + out_c] = src[out_c * in_ch + in_c].
+/// When `out_ch == 1`, this is an identity copy.
+fn transpose_cpp_head_to_gemv(src: &[f32], dst: &mut [f32], in_ch: usize, out_ch: usize) {
+    for out_c in 0..out_ch {
+        for in_c in 0..in_ch {
+            dst[in_c * out_ch + out_c] = src[out_c * in_ch + in_c];
+        }
+    }
 }
 
 /// Builds ConvNet from the NeuralAmpModeler-rs `layers` format (existing behavior).
+///
+/// Scope: the `layers` format is mono-in / ungrouped (`in_channels == 1`,
+/// `groups == 1`). Multi-I/O (`in_channels`/`groups`) is a **FlatCpp-only**
+/// contract honored by [`build_convnet_flat_cpp`]; a `layers` model declaring
+/// either is rejected fail-closed here (E1305) so the builder never silently
+/// ignores declared geometry.
 fn build_convnet_layers(
     data: &NamModelData,
     topo: &crate::loader::nam_json::ConvNetTopology,
 ) -> anyhow::Result<Box<StaticModel>> {
+    if topo.in_channels != 1 || topo.groups != 1 {
+        anyhow::bail!(
+            "ConvNet layers format: in_channels={} groups={} not supported (multi-I/O is FlatCpp-only; E1305)",
+            topo.in_channels,
+            topo.groups,
+        );
+    }
     let mut cursor = WeightCursor::new(&data.weights, data.weights_layout);
     let mut blocks = Vec::with_capacity(topo.num_blocks);
 
@@ -250,13 +302,19 @@ fn build_convnet_layers(
 
         let do_bias = true;
 
-        let activation_str = data
-            .config
-            .layers
-            .get(i)
-            .and_then(|l| l.activation.as_deref())
-            .unwrap_or("Tanh");
-        let activation = parse_activation(activation_str);
+        let layer_opt = data.config.layers.get(i);
+        let activation = match layer_opt
+            .and_then(|l| l.layer_raw.as_ref())
+            .and_then(|raw| raw.get("activation"))
+        {
+            Some(val) => crate::loader::nam_json::try_parse_activation(val)?,
+            None => match layer_opt.and_then(|l| l.activation.as_deref()) {
+                Some(name) => crate::loader::nam_json::try_parse_activation(
+                    &serde_json::Value::String(name.to_string()),
+                )?,
+                None => ActivationType::Tanh,
+            },
+        };
 
         let mut block = ConvNetBlock::new(
             in_ch, out_ch, kernel, dilation, do_bias, activation, alloc_num,
@@ -306,8 +364,7 @@ fn build_convnet_layers(
             .last()
             .context("ConvNet: no blocks, cannot build head")?;
 
-        let mut head = PostStackHead::from_config(head_config, in_ch)
-            .map_err(|e| anyhow::anyhow!("Failed to build post-stack head: {}", e))?;
+        let mut head = PostStackHead::from_config(head_config, in_ch)?;
 
         let ch = head.in_channels();
         let out_ch = head.out_channels();

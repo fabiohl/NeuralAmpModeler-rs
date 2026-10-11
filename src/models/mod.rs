@@ -29,6 +29,8 @@ pub mod wavenet;
 
 /// NamModel trait implementation for StaticModel (dispatch methods).
 mod nam_model;
+/// Planar <-> interleaved boundary adapter (zero-allocation staging).
+pub(crate) mod plane_adapter;
 mod static_model;
 
 // =============================================================================
@@ -42,6 +44,20 @@ mod sealed {
 // =============================================================================
 // Trait NamModel — Public Contract
 // =============================================================================
+
+/// Number of channel pointers held on the stack per call by the safe
+/// multichannel helpers.
+///
+/// This is **not** a model channel cap: it is only the threshold below which
+/// the pointer tables are materialized on the stack (zero heap allocation).
+/// Larger geometries fall back to a temporary heap table (`Vec`), so no valid
+/// model geometry is rejected by this bound. The heap fallback runs off the
+/// hot allocation budget: `process_multichannel`/`process_multichannel_in_place`
+/// with `> 16` channels allocates two small pointer tables per call and must
+/// not be used on the RT thread — prefer [`process_raw`](NamModel::process_raw)
+/// there (T5.6 deviation record: the fallback is a documented host-side
+/// convenience, not an RT path).
+const STACK_CHANNEL_PTRS: usize = 16;
 
 /// Interface for all neural network model architectures in `NeuralAmpModeler-rs`.
 ///
@@ -127,6 +143,27 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// ```
     fn process(&mut self, input: &[f32], output: &mut [f32]);
 
+    /// Number of input channels required by [`process_multichannel`](Self::process_multichannel)
+    /// and [`process_multichannel_in_place`](Self::process_multichannel_in_place).
+    ///
+    /// Mirrors the C++ NAMcore `DSP::NumInputChannels()` contract: the base class
+    /// is constructed with an explicit input-channel count and every DSP exposes it.
+    /// Default: `1` (mono models). Multichannel families override it with the
+    /// geometry fixed at construction time.
+    fn num_input_channels(&self) -> usize {
+        1
+    }
+
+    /// Number of output channels produced by [`process_multichannel`](Self::process_multichannel)
+    /// and [`process_multichannel_in_place`](Self::process_multichannel_in_place).
+    ///
+    /// Mirrors the C++ NAMcore `DSP::NumOutputChannels()` contract. Default:
+    /// `1` (mono models). WaveNet A1/A2 with `head_size > 1`, Linear multi-output
+    /// and Sequential chains override it with the geometry fixed at construction.
+    fn num_output_channels(&self) -> usize {
+        1
+    }
+
     /// Processes a block of multichannel audio samples via raw channel pointers.
     ///
     /// # Safety
@@ -143,87 +180,174 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
         output: *const *mut f32,
         num_frames: usize,
     ) {
-        // SAFETY: Caller guarantees input pointer array has at least one valid buffer of num_frames.
-        let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
-        // SAFETY: Caller guarantees output pointer array has at least one valid mutable buffer of num_frames.
-        let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
-        self.process(in_slice, out_slice);
+        // SAFETY: Caller guarantees input/output pointer arrays hold the
+        // declared geometry and each pointed-to plane covers `num_frames`.
+        let (in0, out0) = unsafe { (*input, *output) };
+        let in_ch = self.num_input_channels();
+        let out_ch = self.num_output_channels();
+
+        // Fast path: mono 1->1 model into distinct buffers — no alias, no staging.
+        if in_ch == 1 && out_ch == 1 && !std::ptr::eq(in0, out0 as *const f32) {
+            // SAFETY: `in0`/`out0` each cover `num_frames` and do not alias.
+            let (in_slice, out_slice) = unsafe {
+                (
+                    core::slice::from_raw_parts(in0, num_frames),
+                    core::slice::from_raw_parts_mut(out0, num_frames),
+                )
+            };
+            self.process(in_slice, out_slice);
+            return;
+        }
+
+        // SAFETY: Caller guarantees input pointer array holds in_ch valid pointers.
+        let inputs = unsafe { core::slice::from_raw_parts(input, in_ch) };
+        // SAFETY: Caller guarantees output pointer array holds out_ch valid pointers.
+        let outputs = unsafe { core::slice::from_raw_parts(output, out_ch) };
+        // SAFETY: `inputs[c]` and `outputs[c]` cover `num_frames` each.
+        unsafe {
+            plane_adapter::run_staged_io(
+                inputs,
+                outputs,
+                num_frames,
+                in_ch,
+                out_ch,
+                |inp, outp| self.process(inp, outp),
+            );
+        }
     }
 
     /// Safe multichannel processing helper taking slices of channel slices.
     ///
+    /// The caller supplies one input plane per required input channel and one
+    /// output plane per required output channel (as declared by
+    /// [`num_input_channels`](Self::num_input_channels) /
+    /// [`num_output_channels`](Self::num_output_channels)). Surplus planes are
+    /// ignored, exactly like the C++ host contract; the frame count is the
+    /// minimum length across the **required** planes only.
+    ///
+    /// # Errors
+    /// Returns [`crate::common::diagnostics::NamErrorCode::HostFormatContractViolation`]
+    /// (`E2304`) — without
+    /// touching any pointer — when fewer input or output planes are supplied
+    /// than the model's declared geometry. This is the fail-closed guard that
+    /// removes the previous null-pointer dereference on under-sized plane sets.
+    ///
     /// # Real-Time Safety Note
-    /// Zero heap allocation when channel count <= 16. For higher channel counts,
-    /// prefer [`process_raw`](Self::process_raw).
-    fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
-        let in_ch = input.len();
-        let out_ch = output.len();
-        if in_ch == 0 || out_ch == 0 {
-            return;
+    /// Zero heap allocation when the required channel counts are `<= 16`. For
+    /// higher channel counts a temporary pointer table is allocated (the
+    /// engine applies no artificial channel cap); prefer
+    /// [`process_raw`](Self::process_raw) there.
+    fn process_multichannel(
+        &mut self,
+        inputs: &[&[f32]],
+        outputs: &mut [&mut [f32]],
+    ) -> Result<usize, crate::common::diagnostics::NamErrorCode> {
+        let ni = self.num_input_channels();
+        let no = self.num_output_channels();
+        if inputs.len() < ni || outputs.len() < no {
+            return Err(crate::common::diagnostics::NamErrorCode::HostFormatContractViolation);
         }
-        let num_frames = input.iter().map(|s| s.len()).min().unwrap_or(0);
-        if num_frames == 0 {
-            return;
+        let frames = inputs[..ni]
+            .iter()
+            .map(|p| p.len())
+            .chain(outputs[..no].iter().map(|p| p.len()))
+            .min()
+            .unwrap_or(0);
+        if frames == 0 {
+            return Ok(0);
         }
-        for out in output.iter() {
-            assert!(out.len() >= num_frames);
-        }
-        if in_ch <= 16 && out_ch <= 16 {
-            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
-            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
-            for i in 0..in_ch {
-                in_ptrs[i] = input[i].as_ptr();
+        if ni <= STACK_CHANNEL_PTRS && no <= STACK_CHANNEL_PTRS {
+            let mut in_ptrs = [core::ptr::null::<f32>(); STACK_CHANNEL_PTRS];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); STACK_CHANNEL_PTRS];
+            for i in 0..ni {
+                in_ptrs[i] = inputs[i].as_ptr();
             }
-            for i in 0..out_ch {
-                out_ptrs[i] = output[i].as_mut_ptr();
+            for i in 0..no {
+                out_ptrs[i] = outputs[i].as_mut_ptr();
             }
-            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            // SAFETY: all `ni` input and `no` output slots are non-null (each
+            // came from a valid slice) and each covers at least `frames`
+            // samples by the `min` above; `process_raw` reads exactly the
+            // declared geometry.
             unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), frames);
             }
         } else {
-            let in_ptrs: Vec<*const f32> = input.iter().map(|s| s.as_ptr()).collect();
-            let out_ptrs: Vec<*mut f32> = output.iter_mut().map(|s| s.as_mut_ptr()).collect();
-            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
+            let in_ptrs: Vec<*const f32> = inputs[..ni].iter().map(|s| s.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> =
+                outputs[..no].iter_mut().map(|s| s.as_mut_ptr()).collect();
+            // SAFETY: same as the stack path — full non-null tables of the
+            // declared geometry, each plane covering `frames` samples.
             unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), frames);
             }
         }
+        Ok(frames)
     }
 
     /// Safe multichannel in-place processing helper.
     ///
+    /// The caller supplies a single plane set that is both read and written:
+    /// the first [`num_input_channels`](Self::num_input_channels) planes are the
+    /// inputs and the first [`num_output_channels`](Self::num_output_channels)
+    /// planes are the outputs. At least `max(in, out)` planes must be present.
+    ///
+    /// # Errors
+    /// Returns [`crate::common::diagnostics::NamErrorCode::HostFormatContractViolation`]
+    /// (`E2304`) without
+    /// touching any pointer when fewer than `max(in, out)` planes are supplied.
+    ///
     /// # Real-Time Safety Note
-    /// Zero heap allocation when channel count <= 16. For higher channel counts,
-    /// prefer [`process_raw`](Self::process_raw).
-    fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
-        let ch = buffers.len();
-        if ch == 0 {
-            return;
+    /// Zero heap allocation when `max(in, out) <= 16`; larger geometries
+    /// allocate a temporary pointer table.
+    fn process_multichannel_in_place(
+        &mut self,
+        planes: &mut [&mut [f32]],
+    ) -> Result<usize, crate::common::diagnostics::NamErrorCode> {
+        let ni = self.num_input_channels();
+        let no = self.num_output_channels();
+        let required = ni.max(no);
+        if planes.len() < required {
+            return Err(crate::common::diagnostics::NamErrorCode::HostFormatContractViolation);
         }
-        let num_frames = buffers.iter().map(|s| s.len()).min().unwrap_or(0);
-        if num_frames == 0 {
-            return;
+        let frames = planes[..required]
+            .iter()
+            .map(|p| p.len())
+            .min()
+            .unwrap_or(0);
+        if frames == 0 {
+            return Ok(0);
         }
-        if ch <= 16 {
-            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
-            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
-            for i in 0..ch {
-                in_ptrs[i] = buffers[i].as_ptr();
-                out_ptrs[i] = buffers[i].as_mut_ptr();
+        if required <= STACK_CHANNEL_PTRS {
+            let mut in_ptrs = [core::ptr::null::<f32>(); STACK_CHANNEL_PTRS];
+            let mut out_ptrs = [core::ptr::null_mut::<f32>(); STACK_CHANNEL_PTRS];
+            for i in 0..ni {
+                in_ptrs[i] = planes[i].as_ptr();
             }
-            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            for i in 0..no {
+                out_ptrs[i] = planes[i].as_mut_ptr();
+            }
+            // SAFETY: every required slot is non-null and covers at least
+            // `frames` samples; the in-place kernels read their inputs before
+            // writing their outputs.
             unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), frames);
             }
         } else {
-            let in_ptrs: Vec<*const f32> = buffers.iter().map(|s| s.as_ptr()).collect();
-            let out_ptrs: Vec<*mut f32> = buffers.iter_mut().map(|s| s.as_mut_ptr()).collect();
-            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
+            let mut in_ptrs: Vec<*const f32> = Vec::with_capacity(ni);
+            for plane in planes[..ni].iter() {
+                in_ptrs.push(plane.as_ptr());
+            }
+            let mut out_ptrs: Vec<*mut f32> = Vec::with_capacity(no);
+            for plane in planes[..no].iter_mut() {
+                out_ptrs.push(plane.as_mut_ptr());
+            }
+            // SAFETY: see stack path.
             unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), frames);
             }
         }
+        Ok(frames)
     }
 
     /// Primes internal state buffers by processing zeroed input off-RT.
@@ -330,9 +454,33 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Default: no-op (fixed-size models ignore this flag).
     fn set_prewarm_on_reset(&mut self, _val: bool) {}
 
+    /// Clears every temporal state buffer to the freshly-built (all-zero)
+    /// condition, in place and without allocating.
+    ///
+    /// This is the state-clearing phase shared by [`reset`](Self::reset) and
+    /// [`prewarm_reset`](Self::prewarm_reset): it restores delay-line/ring
+    /// memory and cursors so a subsequent [`process`](Self::process) behaves
+    /// exactly like a freshly constructed model, independently of any history.
+    /// The C++ NAMcore `DSP::Reset` (`dsp.cpp:133-140`) always clears state via
+    /// `SetMaxBufferSize` before the optional prewarm; this method is the Rust
+    /// engine's equivalent for families whose state clearing is a distinct,
+    /// allocation-free operation (the stabilization pass is separate).
+    ///
+    /// The default is a no-op for families that already clear their state
+    /// through `reset` (LSTM recurrent state, Linear FIR history, A2 ring
+    /// masks, composed Container/Sequential children).
+    ///
+    /// # Real-Time Safety
+    /// Zero-allocation, lock-free, no I/O, bounded by the model's ring sizes.
+    fn clear_state(&mut self) {}
+
     /// Resets internal model states with a new sample rate and maximum block size.
     ///
-    /// Default implementation calls `prewarm(max_buffer_size)` if `prewarm_on_reset()` is `true`.
+    /// Default implementation clears every temporal state buffer
+    /// ([`clear_state`](Self::clear_state)) and then calls
+    /// `prewarm(max_buffer_size)` if `prewarm_on_reset()` is `true`. This mirrors
+    /// the C++ NAMcore `DSP::Reset` order: state is always cleared, and the
+    /// stabilization pass is gated by the prewarm policy.
     ///
     /// # Errors
     ///
@@ -340,6 +488,7 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// (re)allocated for `max_buffer_size` (out of memory). The default
     /// implementation never fails.
     fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
+        self.clear_state();
         if self.prewarm_on_reset() {
             self.prewarm(max_buffer_size);
         }

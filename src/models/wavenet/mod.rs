@@ -86,7 +86,11 @@ impl<const CH: usize, const K: usize, const HEAD: usize> NamModel
     /// stabilization is a single one-shot backfill pass (no separate zero
     /// phase), so it is armed as one pending unit and executed on the first
     /// [`NamModel::prewarm_step`] call.
+    ///
+    /// The zero phase clears both layer arrays' delay-line state so the
+    /// pending backfill starts from the freshly-built condition.
     fn prewarm_reset(&mut self) {
+        self.clear_state();
         self.prewarm_pending = true;
     }
 
@@ -116,6 +120,14 @@ impl<const CH: usize, const K: usize, const HEAD: usize> NamModel
     fn set_prewarm_on_reset(&mut self, val: bool) {
         self.prewarm_on_reset = val;
     }
+
+    /// Clears both layer arrays' delay-line state (see
+    /// [`WaveNetModel::clear_state`](model::WaveNetModel::clear_state)) so the
+    /// model returns to its freshly-built condition before the optional
+    /// stabilization pass.
+    fn clear_state(&mut self) {
+        self.clear_state();
+    }
 }
 
 // =============================================================================
@@ -127,6 +139,22 @@ impl NamModel for model_dyn::WaveNetModelDyn {
         self.process(input, output);
     }
 
+    /// Mono input; the engine always consumes one sample per frame.
+    fn num_input_channels(&self) -> usize {
+        1
+    }
+
+    /// Output width written per frame by [`process`](Self::process):
+    /// the post-stack head width when present, otherwise the last
+    /// array's head projection (mirrors the `out_per_frame` clamp in
+    /// `process_internal`).
+    fn num_output_channels(&self) -> usize {
+        match self.post_stack_head {
+            Some(ref h) => h.out_channels().max(1),
+            None => self.arrays.last().map_or(1, |a| a.head.max(1)),
+        }
+    }
+
     fn prewarm(&mut self, _num_samples: usize) {
         self.prewarm();
     }
@@ -135,7 +163,11 @@ impl NamModel for model_dyn::WaveNetModelDyn {
     /// stabilization is a single one-shot backfill pass (no separate zero
     /// phase), so it is armed as one pending unit and executed on the first
     /// [`NamModel::prewarm_step`] call.
+    ///
+    /// The zero phase clears all layer arrays' delay-line state so the
+    /// pending backfill starts from the freshly-built condition.
     fn prewarm_reset(&mut self) {
+        self.clear_state();
         self.prewarm_pending = true;
     }
 
@@ -170,6 +202,13 @@ impl NamModel for model_dyn::WaveNetModelDyn {
             cond_dsp.set_max_buffer_size(max_buf)?;
         }
         Ok(())
+    }
+
+    /// Clears every layer array's delay-line state (and the optional head and
+    /// condition-DSP state) so the model returns to its freshly-built
+    /// condition before the optional stabilization pass.
+    fn clear_state(&mut self) {
+        self.clear_state();
     }
 
     fn prewarm_on_reset(&self) -> bool {

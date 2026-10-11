@@ -6,6 +6,8 @@
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 
+use crate::loader::nam_json::validation::{MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_IO_CHANNELS};
+
 /// An individual LSTM model layer with runtime-sized buffers.
 ///
 /// This is the dynamic counterpart to [`super::layer::LstmLayer`],
@@ -36,9 +38,24 @@ pub struct LstmLayerDyn {
 impl LstmLayerDyn {
     /// Creates a new zero-initialized dynamic LSTM layer.
     pub fn new(input_size: usize, hidden_size: usize) -> Result<Self, NamErrorCode> {
-        let ih = input_size + hidden_size;
-        let h4 = 4 * hidden_size;
-        let weights_len = 4 * ih * hidden_size;
+        let max_input_size = MAX_LSTM_IO_CHANNELS.max(MAX_LSTM_HIDDEN_SIZE);
+        if input_size == 0
+            || input_size > max_input_size
+            || hidden_size == 0
+            || hidden_size > MAX_LSTM_HIDDEN_SIZE
+        {
+            return Err(NamErrorCode::InvalidFeatureTopology);
+        }
+
+        let ih = input_size
+            .checked_add(hidden_size)
+            .ok_or(NamErrorCode::InvalidFeatureTopology)?;
+        let h4 = hidden_size
+            .checked_mul(4)
+            .ok_or(NamErrorCode::InvalidFeatureTopology)?;
+        let weights_len = ih
+            .checked_mul(h4)
+            .ok_or(NamErrorCode::InvalidFeatureTopology)?;
 
         Ok(Self {
             input_size,

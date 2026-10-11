@@ -326,13 +326,34 @@ impl X2Stage {
     /// Splits arrivals into even/odd sample queues, then processes each
     /// complete even/odd pair using a 12-tap half-band convolution.
     ///
-    /// # Returns
+    /// # Contract
     ///
-    /// Number of output samples written (`input.len() / 2`, truncated).
+    /// `input.len()` **must be even**. The cardinality is then exactly
+    /// `input.len() / 2` (floor): one output per completed even/odd phase pair,
+    /// which is the `n_out == n_in / 2` contract every downstream stage and the
+    /// native routing (`finish_downsample`) rely on. An odd input length would
+    /// otherwise emit an extra `ceil(n/2)` leftover sample (the streaming
+    /// reference's tail behavior), so it is rejected with a `debug_assert!` and
+    /// — in release, where the assert is compiled out — clamped to `floor(n/2)`
+    /// so `finish_downsample` observes the under-production and latches
+    /// `RT_STATUS_HOST_CONTRACT_VIOLATION` instead of silently over-writing the
+    /// native block.
+    ///
+    /// The delay lines start zeroed (the half-band filter at rest), so emission
+    /// begins with the first phase pair: the observable output already includes
+    /// the filter's `HB_TAPS`-sample group delay, and the causal filter counts
+    /// fit.
     #[inline(always)]
     pub fn downsample(&mut self, input: &[f32], output: &mut [f32]) -> usize {
+        debug_assert!(
+            input.len().is_multiple_of(2),
+            "X2Stage::downsample requires an even input length (got {}); \
+             odd-length calls emit an unsupported ceil(n/2) leftover sample",
+            input.len()
+        );
         let coeffs = self.down_filter.coeffs;
         let center = self.down_center;
+        let max_out = input.len() / 2;
         let mut out_idx = 0;
 
         // Phase batching: consume input in even/odd phase pairs so
@@ -349,7 +370,7 @@ impl X2Stage {
         }
         while i + 1 < input.len() {
             self.write_even_sample(input[i]);
-            if self.down_total >= HB_TAPS as u64 && (self.down_total & 1) == 1 {
+            if (self.down_total & 1) == 1 && out_idx < max_out {
                 self.emit_downsample_output(&coeffs, center, output, &mut out_idx);
             }
             self.write_odd_sample(input[i + 1]);
@@ -357,7 +378,7 @@ impl X2Stage {
         }
         if i < input.len() {
             self.write_even_sample(input[i]);
-            if self.down_total >= HB_TAPS as u64 && (self.down_total & 1) == 1 {
+            if (self.down_total & 1) == 1 && out_idx < max_out {
                 self.emit_downsample_output(&coeffs, center, output, &mut out_idx);
             }
         }

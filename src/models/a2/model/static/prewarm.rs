@@ -56,6 +56,25 @@ impl<const CH: usize> WaveNetA2<CH> {
         };
     }
 
+    /// Clears every layer ring and the head accumulator to the freshly-built
+    /// condition, in place and without allocating.
+    ///
+    /// This is the state-clearing half of [`WaveNetA2::prewarm_reset`]; it is
+    /// invoked by `reset` so that a reset without prewarm still removes all
+    /// FIR/recurrent memory (C++ `DSP::Reset → SetMaxBufferSize`).
+    pub fn clear_state(&mut self) {
+        a2_prewarm_common(
+            A2_NUM_LAYERS,
+            self.receptive_field_size,
+            &mut self.layer_buffers,
+            &self.layer_ring_sizes,
+            &mut self.layer_buffer_starts,
+            &mut self.layer_in,
+            &mut self.head_accum,
+            &mut self.head_write_pos,
+        );
+    }
+
     /// Advances the armed stabilization by at most `samples` zeroed samples
     /// and returns the work still pending (0 = converged). Zero-allocation
     /// and lock-free, sharing the same per-frame kernels as [`Self::process`].

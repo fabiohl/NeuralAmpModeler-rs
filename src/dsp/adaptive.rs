@@ -149,9 +149,13 @@ pub struct AdaptiveCompute {
     /// Original (full-quality) channel count of the loaded WaveNet model.
     /// `None` until a WaveNet model is detected via `set_wavenet_full_ch`.
     wavenet_full_ch: Option<usize>,
-    /// Current slimmable channel count of the active WaveNet model.
+    /// Array channel widths of the full-quality WaveNet model.
+    wavenet_array_channels: Vec<usize>,
+    /// Per-array allowed channels metadata (`allowed_channels`).
+    wavenet_allowed_channels: Option<Vec<Vec<usize>>>,
+    /// Current target channel counts of the active WaveNet model.
     /// Tracks the last value applied via `take_slimmable_rebuild`.
-    wavenet_slim_ch_current: Option<usize>,
+    wavenet_targets_current: Option<Vec<usize>>,
     /// Whether the loaded WaveNet model explicitly declares slimmability support.
     /// Conventional WaveNets (default) set this to `false` and maintain full channel size.
     wavenet_slimmable_capable: bool,
@@ -180,7 +184,9 @@ impl AdaptiveCompute {
             crossfade_elapsed: 0,
             slim_override: SlimOverride::Auto,
             wavenet_full_ch: None,
-            wavenet_slim_ch_current: None,
+            wavenet_array_channels: Vec::new(),
+            wavenet_allowed_channels: None,
+            wavenet_targets_current: None,
             wavenet_slimmable_capable: false,
         }
     }
@@ -482,21 +488,14 @@ impl AdaptiveCompute {
         }
     }
 
-    /// Target channel count for WaveNet slimming, based on FSM state + override.
+    /// Returns the slimmable ratio corresponding to current FSM state and override.
     ///
-    /// Maps the adaptive degradation level to a fraction of the original channels:
-    /// - `Full` → 100% (no reduction).
-    /// - `Reduced` → 75% (3/4 of original channels).
-    /// - `Minimal` → 50% (1/2 of original channels).
-    /// - `ForceFull` → 100%, `ForceLite` → 75%.
-    ///
-    /// Clamped to `[4, original_ch]` (4 is the minimum viable channel count).
-    pub fn wavenet_slimmable_ch_target(&self) -> Option<usize> {
-        let original = self.wavenet_full_ch?;
-        if !self.wavenet_slimmable_capable {
-            return Some(original);
-        }
-        let fraction = match self.slim_override {
+    /// - Full: 1.0 (100% capacity)
+    /// - Reduced: 0.75 (3/4 capacity)
+    /// - Minimal: 0.50 (1/2 capacity)
+    /// - ForceFull: 1.0, ForceLite: 0.75
+    pub fn wavenet_slimmable_ratio(&self) -> f32 {
+        match self.slim_override {
             SlimOverride::ForceFull => 1.0,
             SlimOverride::ForceLite => 0.75,
             SlimOverride::Auto => match self.state {
@@ -504,9 +503,61 @@ impl AdaptiveCompute {
                 AdaptiveState::Reduced => 0.75,
                 AdaptiveState::Minimal => 0.50,
             },
-        };
-        let target = (original as f32 * fraction).round() as usize;
-        Some(target.max(4).min(original))
+        }
+    }
+
+    /// Target channel counts per array for WaveNet slimming, based on FSM state + override.
+    ///
+    /// Uses `allowed_channels` when present: for each array, calculates the tier index
+    /// via `slimmable_tier_index(ratio, allowed.len())`. Fixed arrays (`allowed.is_empty()`)
+    /// retain their full channel count.
+    ///
+    /// When `allowed_channels` is absent, scales channels by `ratio` and clamps to `[1, orig_ch]`.
+    pub fn wavenet_slimmable_targets(&self) -> Option<Vec<usize>> {
+        if !self.wavenet_slimmable_capable {
+            return if self.wavenet_array_channels.is_empty() {
+                self.wavenet_full_ch.map(|ch| vec![ch])
+            } else {
+                Some(self.wavenet_array_channels.clone())
+            };
+        }
+        let ratio = self.wavenet_slimmable_ratio();
+        if let Some(ref per_array) = self.wavenet_allowed_channels {
+            let mut targets = Vec::with_capacity(per_array.len());
+            for (i, allowed) in per_array.iter().enumerate() {
+                if allowed.is_empty() {
+                    let ch = self
+                        .wavenet_array_channels
+                        .get(i)
+                        .copied()
+                        .unwrap_or_else(|| self.wavenet_full_ch.unwrap_or(1));
+                    targets.push(ch);
+                } else {
+                    let idx =
+                        crate::models::slimmable::slimmable_tier_index(ratio as f64, allowed.len());
+                    targets.push(allowed[idx]);
+                }
+            }
+            Some(targets)
+        } else {
+            let mut targets = Vec::with_capacity(self.wavenet_array_channels.len());
+            for &orig in &self.wavenet_array_channels {
+                let t = ((orig as f32) * ratio).round() as usize;
+                targets.push(t.clamp(1, orig));
+            }
+            if targets.is_empty() {
+                let orig = self.wavenet_full_ch?;
+                let t = ((orig as f32) * ratio).round() as usize;
+                targets.push(t.clamp(1, orig));
+            }
+            Some(targets)
+        }
+    }
+
+    /// Primary scalar channel target query (returns first array's target channels).
+    pub fn wavenet_slimmable_ch_target(&self) -> Option<usize> {
+        self.wavenet_slimmable_targets()
+            .and_then(|t| t.first().copied())
     }
 
     /// Records the full-quality channel count of the currently loaded WaveNet model
@@ -516,29 +567,79 @@ impl AdaptiveCompute {
     /// preventing `take_slimmable_rebuild` from altering their array widths.
     pub fn set_wavenet_full_ch(&mut self, ch: usize, capable: bool) {
         self.wavenet_full_ch = Some(ch);
-        self.wavenet_slim_ch_current = Some(ch);
+        self.wavenet_array_channels = vec![ch];
+        self.wavenet_allowed_channels = None;
+        self.wavenet_targets_current = if capable { Some(vec![ch]) } else { None };
         self.wavenet_slimmable_capable = capable;
     }
 
-    /// Returns `Some(target_ch)` if a WaveNet slimmable rebuild is needed,
-    /// i.e., the FSM/override demands a different channel count than what's
-    /// currently loaded. Clears the pending flag and updates tracking.
+    /// Registers full WaveNet topology and allowed_channels metadata.
+    pub fn set_wavenet_slimmable_info(
+        &mut self,
+        array_channels: Vec<usize>,
+        allowed_channels: Option<Vec<Vec<usize>>>,
+        capable: bool,
+    ) {
+        self.wavenet_full_ch = array_channels.first().copied();
+        self.wavenet_array_channels = array_channels.clone();
+        self.wavenet_allowed_channels = allowed_channels;
+        self.wavenet_targets_current = if capable { Some(array_channels) } else { None };
+        self.wavenet_slimmable_capable = capable;
+    }
+
+    /// Registers WaveNet topology directly from a loaded [`crate::models::wavenet::WaveNetModelDyn`].
+    pub fn set_wavenet_from_model(&mut self, model: &crate::models::wavenet::WaveNetModelDyn) {
+        let array_channels = model.arrays.iter().map(|a| a.ch).collect();
+        self.set_wavenet_slimmable_info(
+            array_channels,
+            model.allowed_channels.clone(),
+            model.slimmable_capable,
+        );
+    }
+
+    /// Peeks the WaveNet slimmable rebuild targets without consuming the
+    /// request: returns `Some(targets)` when the FSM/override demands
+    /// different channel counts than what's currently applied.
     ///
-    /// Returns `None` if the model is not slimmable-capable.
-    /// Must be called **before** DSP (in `process_events` / `receive_commands`)
-    /// to perform the allocation-intensive `slice_channels` off the hot-path.
-    pub fn take_slimmable_rebuild(&mut self) -> Option<usize> {
+    /// Transactional contract: pair with
+    /// [`confirm_slimmable_rebuild`](Self::confirm_slimmable_rebuild) after a
+    /// successful rebuild. If the rebuild fails, skip the confirm and the
+    /// same targets are offered again on the next peek — the request is only
+    /// consumed on success. Must be called off-RT.
+    pub fn peek_slimmable_rebuild(&self) -> Option<Vec<usize>> {
         if !self.wavenet_slimmable_capable {
             return None;
         }
-        let target = self.wavenet_slimmable_ch_target()?;
-        let current = self.wavenet_slim_ch_current?;
-        if current != target && target >= 4 {
-            self.wavenet_slim_ch_current = Some(target);
-            Some(target)
+        let targets = self.wavenet_slimmable_targets()?;
+        if self.wavenet_targets_current.as_ref() != Some(&targets) {
+            Some(targets)
         } else {
             None
         }
+    }
+
+    /// Commits a successfully applied rebuild: records `applied` as the
+    /// current channel counts so subsequent peeks report no pending work.
+    /// Call only after the rebuild actually succeeded.
+    pub fn confirm_slimmable_rebuild(&mut self, applied: &[usize]) {
+        self.wavenet_targets_current = Some(applied.to_vec());
+    }
+
+    /// Returns `Some(targets)` if a WaveNet slimmable rebuild is needed,
+    /// i.e., the FSM/override demands different channel counts than what's
+    /// currently loaded. Consumes the request immediately (marks the targets
+    /// as current even if the caller later fails to rebuild).
+    ///
+    /// Legacy convenience for tests and non-transactional callers. Production
+    /// consumers that can fail the rebuild must use
+    /// [`peek_slimmable_rebuild`](Self::peek_slimmable_rebuild) +
+    /// [`confirm_slimmable_rebuild`](Self::confirm_slimmable_rebuild) so a
+    /// failed rebuild retries instead of being silently dropped.
+    /// Must be called off-RT (e.g., in command drain before DSP).
+    pub fn take_slimmable_rebuild(&mut self) -> Option<Vec<usize>> {
+        let targets = self.peek_slimmable_rebuild()?;
+        self.confirm_slimmable_rebuild(&targets);
+        Some(targets)
     }
 
     /// Returns the previous degradation state.

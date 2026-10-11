@@ -80,8 +80,9 @@ fn test_parse_heterogeneous_activations() {
         ]
     });
 
-    let activations =
-        parse_activations_from_json(&raw, 23).expect("should parse heterogeneous activations");
+    let activations = parse_activations_from_json(&raw, 23)
+        .expect("should parse heterogeneous activations")
+        .expect("should return Some vector");
     assert_eq!(activations.len(), 23);
     assert_eq!(
         activations[0],
@@ -209,13 +210,66 @@ fn test_parse_activations_wrong_length_rejected() {
             {"type": "LeakyReLU", "negative_slope": 0.01}
         ]
     });
-    assert!(parse_activations_from_json(&raw, 23).is_none());
+    assert_eq!(
+        parse_activations_from_json(&raw, 23),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
 }
 
 #[test]
-fn test_parse_activations_missing_rejected() {
+fn test_parse_activations_missing_is_ok_none() {
     let raw = serde_json::json!({});
-    assert!(parse_activations_from_json(&raw, 23).is_none());
+    assert_eq!(parse_activations_from_json(&raw, 23), Ok(None));
+}
+
+#[test]
+fn test_parse_activations_null_rejected() {
+    let raw = serde_json::json!({ "activation": null });
+    assert_eq!(
+        parse_activations_from_json(&raw, 23),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+}
+
+#[test]
+fn test_parse_layer_activations_missing_defaults_to_leaky_relu() {
+    let raw = serde_json::json!({});
+    let config = parse_layer_activations(&raw, 23).expect("should default");
+    assert_eq!(config.activations.len(), 23);
+    for act in &config.activations {
+        assert_eq!(
+            act,
+            &ActivationType::LeakyReLU {
+                negative_slope: 0.01,
+            }
+        );
+    }
+}
+
+#[test]
+fn test_parse_layer_activations_unknown_rejected() {
+    let raw = serde_json::json!({ "activation": "Gelu" });
+    assert_eq!(
+        parse_layer_activations(&raw, 23),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+}
+
+#[test]
+fn test_parse_layer_activations_unknown_object_rejected() {
+    let raw = serde_json::json!({ "activation": { "unknown": true } });
+    assert_eq!(
+        parse_layer_activations(&raw, 23),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+}
+
+#[test]
+fn test_try_parse_activation_null_param_rejected() {
+    assert_eq!(
+        try_parse_activation(&serde_json::json!({ "type": "LeakyReLU", "negative_slope": null })),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
 }
 
 #[test]
@@ -225,4 +279,143 @@ fn test_parse_layer_activations_integrated() {
     assert_eq!(config.activations.len(), A2_NUM_LAYERS);
     assert_eq!(config.gating_modes.len(), A2_NUM_LAYERS);
     assert_eq!(config.secondary_activations.len(), A2_NUM_LAYERS);
+}
+
+// =============================================================================
+// `try_parse_activation` — NAMcore `ActivationConfig::from_json` parity
+// =============================================================================
+
+/// The full C++ name map (`activations.cpp:64-76`) resolves to a typed variant.
+#[test]
+fn test_try_parse_activation_all_canonical_names() {
+    use super::try_parse_activation;
+    let cases: &[(&str, ActivationType)] = &[
+        ("Tanh", ActivationType::Tanh),
+        ("Hardtanh", ActivationType::HardTanh),
+        ("Fasttanh", ActivationType::FastTanh),
+        ("ReLU", ActivationType::ReLU),
+        (
+            "LeakyReLU",
+            ActivationType::LeakyReLU {
+                negative_slope: 0.01,
+            },
+        ),
+        (
+            "PReLU",
+            ActivationType::PReLU {
+                negative_slopes: vec![0.01],
+            },
+        ),
+        ("Sigmoid", ActivationType::Sigmoid),
+        ("SiLU", ActivationType::SiLU),
+        ("Hardswish", ActivationType::HardSwish),
+        (
+            "LeakyHardtanh",
+            ActivationType::LeakyHardTanh {
+                min_val: -1.0,
+                max_val: 1.0,
+                min_slope: 0.01,
+                max_slope: 0.01,
+            },
+        ),
+        (
+            "LeakyHardTanh",
+            ActivationType::LeakyHardTanh {
+                min_val: -1.0,
+                max_val: 1.0,
+                min_slope: 0.01,
+                max_slope: 0.01,
+            },
+        ),
+        ("Softsign", ActivationType::Softsign),
+    ];
+    for (name, expected) in cases {
+        let got = try_parse_activation(&serde_json::Value::String((*name).to_string()));
+        assert_eq!(got.as_ref(), Ok(expected), "name {name}");
+    }
+}
+
+#[test]
+fn test_try_parse_activation_unknown_name_is_e1221() {
+    use super::try_parse_activation;
+    use crate::common::diagnostics::NamErrorCode;
+    assert_eq!(
+        try_parse_activation(&serde_json::json!("Gelu")),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+}
+
+#[test]
+fn test_try_parse_activation_leaky_relu_default_slope() {
+    use super::try_parse_activation;
+    let got = try_parse_activation(&serde_json::json!({"type": "LeakyReLU"})).expect("parse");
+    assert_eq!(
+        got,
+        ActivationType::LeakyReLU {
+            negative_slope: 0.01
+        }
+    );
+}
+
+#[test]
+fn test_try_parse_activation_prelu_vector_and_scalar() {
+    use super::try_parse_activation;
+    assert_eq!(
+        try_parse_activation(&serde_json::json!({"type": "PReLU", "negative_slopes": [0.1, 0.2]}))
+            .expect("parse"),
+        ActivationType::PReLU {
+            negative_slopes: vec![0.1, 0.2]
+        }
+    );
+    // Scalar form maps to a single-element slope vector (C++ `ActivationsPReLU(float)`).
+    assert_eq!(
+        try_parse_activation(&serde_json::json!({"type": "PReLU", "negative_slope": 0.25}))
+            .expect("parse"),
+        ActivationType::PReLU {
+            negative_slopes: vec![0.25]
+        }
+    );
+    // Absent slopes default to 0.01.
+    assert_eq!(
+        try_parse_activation(&serde_json::json!({"type": "PReLU"})).expect("parse"),
+        ActivationType::PReLU {
+            negative_slopes: vec![0.01]
+        }
+    );
+}
+
+#[test]
+fn test_try_parse_activation_non_string_non_object_is_e1221() {
+    use super::try_parse_activation;
+    use crate::common::diagnostics::NamErrorCode;
+    assert_eq!(
+        try_parse_activation(&serde_json::json!(42)),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+    assert_eq!(
+        try_parse_activation(&serde_json::json!({"no_type": true})),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+}
+
+#[test]
+fn test_try_parse_activation_leaky_hard_tanh_custom_params() {
+    use super::try_parse_activation;
+    let got = try_parse_activation(&serde_json::json!({
+        "type": "LeakyHardtanh",
+        "min_val": -2.0,
+        "max_val": 3.0,
+        "min_slope": 0.1,
+        "max_slope": 0.2,
+    }))
+    .expect("parse");
+    assert_eq!(
+        got,
+        ActivationType::LeakyHardTanh {
+            min_val: -2.0,
+            max_val: 3.0,
+            min_slope: 0.1,
+            max_slope: 0.2,
+        }
+    );
 }

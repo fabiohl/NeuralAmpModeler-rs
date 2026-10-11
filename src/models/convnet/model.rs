@@ -53,9 +53,10 @@ pub struct ConvNetModel {
 ///
 /// The weight matrix is consumed by the batched GEMV kernel
 /// `M::gemv_with_bias_f32`, which expects column-major layout
-/// `weights[in_c * out_ch + out_c]`. For `out_ch == 1` (the only current
-/// construction path — C++ flat ConvNet always serializes a mono head) this
-/// coincides with row-major `weight[o * in_ch + i]`.
+/// `weights[in_c * out_ch + out_c]`. For `out_ch == 1` (e.g. the C++ flat
+/// ConvNet mono head) this coincides with row-major `weight[o * in_ch + i]`.
+/// Multi-output heads (`out_ch > 1`) use the same column-major layout with
+/// one column per output channel.
 #[derive(Clone)]
 #[repr(align(64))]
 pub struct LinearHead {
@@ -102,12 +103,14 @@ impl ConvNetModel {
     /// scaled by `head_scale`.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        // Each frame writes `out_ch` interleaved output samples; clamp the frame
-        // count so the output is never indexed beyond its actual length.
+        // Each frame writes `out_ch` interleaved output samples and reads
+        // `in_ch` interleaved input samples; clamp the frame count so neither
+        // buffer is indexed out of bounds.
+        let in_ch = self.in_channels().max(1);
         let out_ch = self.out_channels().max(1);
-        let total_frames = input.len().min(output.len() / out_ch);
+        let total_frames = (input.len() / in_ch).min(output.len() / out_ch);
         if total_frames == 0 || self.blocks.is_empty() {
-            output[..total_frames].fill(0.0);
+            output[..total_frames * out_ch].fill(0.0);
             return;
         }
 
@@ -115,7 +118,8 @@ impl ConvNetModel {
 
         while pos < total_frames {
             let num_frames = (total_frames - pos).min(WAVENET_MAX_NUM_FRAMES);
-            let in_slice = &input[pos..pos + num_frames];
+            let in_start = pos * in_ch;
+            let in_slice = &input[in_start..in_start + num_frames * in_ch];
 
             let num_blocks = self.blocks.len();
             // SAFETY: &mut self borrows blocks exclusively; Vec won't reallocate
@@ -251,11 +255,28 @@ impl ConvNetModel {
     #[cold]
     pub fn prewarm(&mut self) {
         let n = self.receptive_field_size + 1;
-        let zeros = vec![0.0f32; n];
+        let in_ch = self.in_channels().max(1);
+        let zeros = vec![0.0f32; n * in_ch];
         let mut sink = vec![0.0f32; n * self.out_channels()];
         self.process(&zeros, &mut sink);
         // The integral one-shot pass completes any armed deferred unit.
         self.prewarm_pending = false;
+    }
+
+    /// Clears every block's causal delay-line state (and the optional
+    /// post-stack head state) to the freshly-built condition, in place.
+    ///
+    /// Each block owns a [`WaveNetLayerState`](crate::models::wavenet::WaveNetLayerState)
+    /// ring buffer; zeroing it and restoring the ring cursor is the ConvNet
+    /// equivalent of the C++ `DSP::Reset → SetMaxBufferSize → Conv1D::Reset`
+    /// chain (`convnet.cpp:286-294`, `conv1d.cpp:128-143`). Zero-allocation.
+    pub fn clear_state(&mut self) {
+        for block in &mut self.blocks {
+            block.state.clear();
+        }
+        if let Some(ref mut head) = self.post_stack_head {
+            head.clear_state();
+        }
     }
 }
 

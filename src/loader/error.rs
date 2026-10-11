@@ -99,6 +99,15 @@ pub enum LoadError {
     #[error("Invalid model metadata: {0}")]
     InvalidMetadata(#[from] MetadataError),
 
+    /// Model topology validation failed or requested unsupported feature topology.
+    #[error("Invalid model topology ({code:?}): {reason}")]
+    InvalidTopology {
+        /// Diagnostic error code.
+        code: crate::common::diagnostics::NamErrorCode,
+        /// Detailed reason.
+        reason: String,
+    },
+
     /// Failed to instantiate or initialize the neural network model graph.
     #[error("Failed to build model instance: {0}")]
     ModelBuildFailed(String),
@@ -106,4 +115,73 @@ pub enum LoadError {
     /// An unclassified internal loader error occurred.
     #[error("Internal loader error: {0}")]
     Internal(String),
+}
+
+impl LoadError {
+    /// Returns the typed diagnostic [`NamErrorCode`](crate::common::diagnostics::NamErrorCode) associated with this load failure.
+    pub fn code(&self) -> crate::common::diagnostics::NamErrorCode {
+        use crate::common::diagnostics::NamErrorCode;
+
+        match self {
+            Self::Io(_) => NamErrorCode::FileReadError,
+            Self::InvalidUtf8(_) => NamErrorCode::NamJsonParseError,
+            Self::Namb(e) => match e {
+                NambError::Truncated { .. } => NamErrorCode::NambTruncated,
+                NambError::InvalidMagic(_) => NamErrorCode::NambInvalidMagic,
+                NambError::InvalidVersion(_) => NamErrorCode::NambUnsupportedVersion,
+                NambError::WeightsOffsetOutOfBounds { .. }
+                | NambError::InvalidWeightsOffset { .. }
+                | NambError::InvalidHeaderField { .. } => NamErrorCode::NambInvalidHeaderField,
+                NambError::CrcMismatch { .. } => NamErrorCode::NambCrc32Mismatch,
+                NambError::CrcMissing { .. } | NambError::CrcMissingV1 => {
+                    NamErrorCode::NambCrc32Missing
+                }
+                NambError::WeightsTooLarge { .. } => NamErrorCode::ModelTooLarge,
+                NambError::NonFiniteWeight { .. } => NamErrorCode::NambNonFiniteWeight,
+                NambError::MetadataNotUtf8 { .. } | NambError::MetadataJson(_) => {
+                    NamErrorCode::NamJsonParseError
+                }
+            },
+            Self::Json(e) => match e {
+                JsonError::WeightsExceedLimit { .. } => NamErrorCode::NamJsonWeightsExceedLimit,
+                JsonError::TrainingTooDeep { .. } => NamErrorCode::NamJsonTrainingTooDeep,
+                JsonError::TrainingTooLarge { .. } => NamErrorCode::NamJsonTrainingTooLarge,
+                JsonError::SubmodelsExceedLimit { .. } => NamErrorCode::NamJsonSubmodelsExceedLimit,
+                JsonError::SubmodelsTooDeep { .. } => NamErrorCode::NamJsonSubmodelsTooDeep,
+                JsonError::WeightNotFinite { .. } => NamErrorCode::NamJsonWeightNotFinite,
+                JsonError::InvalidSampleRate { .. } => NamErrorCode::NamJsonInvalidSampleRate,
+                JsonError::UnsupportedTopology { .. } => NamErrorCode::NamJsonUnsupportedTopology,
+                JsonError::InvalidVersionFormat { .. } => NamErrorCode::NamJsonInvalidVersionFormat,
+                JsonError::UnsupportedVersion { .. } => NamErrorCode::NamJsonUnsupportedVersion,
+                JsonError::UnsupportedMultiChannel { .. } => {
+                    NamErrorCode::NamJsonUnsupportedMultiChannel
+                }
+                JsonError::InvalidEnvelope { .. } => NamErrorCode::NamJsonInvalidEnvelope,
+                JsonError::SequentialChildrenExceedLimit { .. } => {
+                    NamErrorCode::SequentialChildrenExceedLimit
+                }
+                JsonError::Serde(_) => NamErrorCode::NamJsonParseError,
+            },
+            Self::Wav(e) => e.error_code(),
+            #[expect(deprecated)]
+            Self::JsonParse(_) => NamErrorCode::NamJsonParseError,
+            #[expect(deprecated)]
+            Self::NambInvalidMagic(_) => NamErrorCode::NambInvalidMagic,
+            #[expect(deprecated)]
+            Self::NambTruncated(_) => NamErrorCode::NambTruncated,
+            #[expect(deprecated)]
+            Self::NambCrc32Mismatch => NamErrorCode::NambCrc32Mismatch,
+            #[expect(deprecated)]
+            Self::NambCrc32Missing => NamErrorCode::NambCrc32Missing,
+            Self::UnsupportedExtension(_) => NamErrorCode::UnknownExtension,
+            Self::UnsupportedArchitecture(_) => NamErrorCode::UnsupportedArchitecture,
+            Self::DimensionMismatch(_) => NamErrorCode::WeightCountMismatch,
+            Self::NonFiniteWeights => NamErrorCode::NamJsonWeightNotFinite,
+            Self::ModelTooLarge => NamErrorCode::ModelTooLarge,
+            Self::InvalidMetadata(_) => NamErrorCode::InvalidMetadata,
+            Self::InvalidTopology { code, .. } => *code,
+            Self::ModelBuildFailed(_) => NamErrorCode::ModelBuildFailed,
+            Self::Internal(_) => NamErrorCode::ModelBuildFailed,
+        }
+    }
 }

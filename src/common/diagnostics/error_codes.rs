@@ -83,6 +83,10 @@ pub enum NamErrorCode {
     NamJsonUnsupportedVersion,
     /// LSTM model has multi-channel I/O (NeuralAmpModeler-rs supports mono only).
     NamJsonUnsupportedMultiChannel,
+    /// JSON activation name is not recognized by the NAMcore activation map.
+    NamJsonUnknownActivation,
+    /// JSON `condition_dsp` sample rate disagrees with its parent WaveNet.
+    NamJsonSampleRateMismatch,
     /// Model metadata float is non-finite or outside the plausible range
     /// (`input_level_dbu`, `output_level_dbu`, `loudness`, `head_scale`).
     InvalidMetadata,
@@ -134,6 +138,10 @@ pub enum NamErrorCode {
     /// DoS-hardening caps (C++ NAMcore applies no limit; declared robustness
     /// divergence).
     SequentialChildrenExceedLimit,
+    /// Model feature topology is invalid or inconsistent (slimmable per-array
+    /// channel mismatch, LSTM `input_size != in_channels`, non-divisor
+    /// ConvNet `groups`, etc.).
+    InvalidFeatureTopology,
     /// WAV audio file format is invalid or unsupported.
     WavInvalidFormat,
     /// WAV audio file is truncated, corrupt, or contains invalid chunks.
@@ -232,6 +240,8 @@ impl NamErrorCode {
             Self::NamJsonInvalidVersionFormat => "E1216",
             Self::NamJsonUnsupportedVersion => "E1217",
             Self::NamJsonUnsupportedMultiChannel => "E1218",
+            Self::NamJsonUnknownActivation => "E1221",
+            Self::NamJsonSampleRateMismatch => "E1315",
             Self::InvalidMetadata => "E1219",
             Self::NamJsonInvalidEnvelope => "E1220",
             Self::NambNonFiniteWeight => "E1212",
@@ -256,6 +266,7 @@ impl NamErrorCode {
             Self::LinearInvalidChannels => "E1312",
             Self::LinearWeightCountMismatch => "E1313",
             Self::SequentialChildrenExceedLimit => "E1314",
+            Self::InvalidFeatureTopology => "E1316",
             Self::WavInvalidFormat => "E1400",
             Self::WavInvalidFile => "E1401",
             Self::AudioInitFailed => "E2100",
@@ -309,6 +320,12 @@ impl NamErrorCode {
             Self::NamJsonUnsupportedMultiChannel => {
                 "LSTM model has multi-channel I/O (only mono supported)"
             }
+            Self::NamJsonUnknownActivation => {
+                "JSON activation type is not recognized (unknown ActivationType name)"
+            }
+            Self::NamJsonSampleRateMismatch => {
+                "condition_dsp sample rate disagrees with the parent WaveNet model"
+            }
             Self::InvalidMetadata => {
                 "Model metadata float is non-finite or outside the plausible range"
             }
@@ -351,6 +368,9 @@ impl NamErrorCode {
             }
             Self::SequentialChildrenExceedLimit => {
                 "Sequential child budget exceeded (models array / tree count / aggregate weights)"
+            }
+            Self::InvalidFeatureTopology => {
+                "Model feature topology is invalid or inconsistent (slimmable per-array mismatch, LSTM input_size mismatch, non-divisor ConvNet groups)"
             }
             Self::WavInvalidFormat => "WAV file format is invalid or unsupported",
             Self::WavInvalidFile => "WAV file is truncated, corrupt, or contains invalid chunks",
@@ -401,6 +421,8 @@ impl NamErrorCode {
             Self::NamJsonInvalidVersionFormat => "NAM_JSON_INVALID_VERSION_FORMAT",
             Self::NamJsonUnsupportedVersion => "NAM_JSON_UNSUPPORTED_VERSION",
             Self::NamJsonUnsupportedMultiChannel => "NAM_JSON_UNSUPPORTED_MULTI_CHANNEL",
+            Self::NamJsonUnknownActivation => "NAM_JSON_UNKNOWN_ACTIVATION",
+            Self::NamJsonSampleRateMismatch => "NAM_JSON_SAMPLE_RATE_MISMATCH",
             Self::InvalidMetadata => "INVALID_METADATA",
             Self::NambNonFiniteWeight => "NAMB_NON_FINITE_WEIGHT",
             Self::NambInvalidHeaderField => "NAMB_INVALID_HEADER_FIELD",
@@ -424,6 +446,7 @@ impl NamErrorCode {
             Self::LinearInvalidChannels => "LINEAR_INVALID_CHANNELS",
             Self::LinearWeightCountMismatch => "LINEAR_WEIGHT_COUNT_MISMATCH",
             Self::SequentialChildrenExceedLimit => "SEQUENTIAL_CHILDREN_EXCEED_LIMIT",
+            Self::InvalidFeatureTopology => "INVALID_FEATURE_TOPOLOGY",
             Self::WavInvalidFormat => "WAV_INVALID_FORMAT",
             Self::WavInvalidFile => "WAV_INVALID_FILE",
             Self::AudioInitFailed => "AUDIO_INIT_FAILED",

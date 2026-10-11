@@ -1830,21 +1830,31 @@ fn test_slimmable_wavenet_inference_and_breakpoints() {
         w.set_slimmable_size(0.0, None);
         assert_eq!(
             w.pending_slim_channel,
-            Some(1),
+            Some(vec![1]),
             "quality 0.0 should select lowest tier CH=1"
+        );
+
+        // Tier boundary (T3.3): `floor(ratio * num_tiers)` keeps 0.30 in the
+        // lowest tier; the old `round(ratio * (num_tiers - 1))` rule would have
+        // selected CH=2 here.
+        w.set_slimmable_size(0.30, None);
+        assert_eq!(
+            w.pending_slim_channel,
+            Some(vec![1]),
+            "quality 0.30 should select lowest tier CH=1"
         );
 
         w.set_slimmable_size(0.5, None);
         assert_eq!(
             w.pending_slim_channel,
-            Some(2),
+            Some(vec![2]),
             "quality 0.5 should select middle tier CH=2"
         );
 
         w.set_slimmable_size(1.0, None);
         assert_eq!(
             w.pending_slim_channel,
-            Some(3),
+            Some(vec![3]),
             "quality 1.0 should select highest tier CH=3"
         );
     } else {

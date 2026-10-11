@@ -56,11 +56,15 @@ fn check_dsp_response(model: &mut StaticModel, channels: usize) {
     let mut output_ch1 = [0.0f32; 2];
 
     if channels == 1 {
-        model.process_multichannel(&[&input_1], &mut [&mut output_ch0]);
+        model
+            .process_multichannel(&[&input_1], &mut [&mut output_ch0])
+            .expect("geometry matches");
         assert!((output_ch0[0] - 0.5).abs() < 1e-6);
         assert!((output_ch0[1] - (-0.25)).abs() < 1e-6);
     } else {
-        model.process_multichannel(&[&input_1], &mut [&mut output_ch0, &mut output_ch1]);
+        model
+            .process_multichannel(&[&input_1], &mut [&mut output_ch0, &mut output_ch1])
+            .expect("geometry matches");
         assert!((output_ch0[0] - 0.5).abs() < 1e-6);
         assert!((output_ch0[1] - (-0.25)).abs() < 1e-6);
         assert!((output_ch1[0] - (-0.5)).abs() < 1e-6);
@@ -69,11 +73,15 @@ fn check_dsp_response(model: &mut StaticModel, channels: usize) {
 
     let input_2 = [0.0f32, 0.0f32];
     if channels == 1 {
-        model.process_multichannel(&[&input_2], &mut [&mut output_ch0]);
+        model
+            .process_multichannel(&[&input_2], &mut [&mut output_ch0])
+            .expect("geometry matches");
         assert!((output_ch0[0] - 0.125).abs() < 1e-6);
         assert!(output_ch0[1].abs() < 1e-6);
     } else {
-        model.process_multichannel(&[&input_2], &mut [&mut output_ch0, &mut output_ch1]);
+        model
+            .process_multichannel(&[&input_2], &mut [&mut output_ch0, &mut output_ch1])
+            .expect("geometry matches");
         assert!((output_ch0[0] - 0.125).abs() < 1e-6);
         assert!(output_ch0[1].abs() < 1e-6);
         assert!((output_ch1[0] - (-0.125)).abs() < 1e-6);

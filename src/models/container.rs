@@ -135,7 +135,7 @@ impl ContainerModel {
         sample_rate: u32,
     ) -> Result<Self, NamErrorCode> {
         Self::validate_submodels(&mut submodels).map_err(|e| e.code())?;
-        Self::assemble(submodels, sample_rate)
+        Self::assemble(submodels, sample_rate, true)
     }
 
     /// Creates a new `ContainerModel`.
@@ -166,7 +166,20 @@ impl ContainerModel {
         sample_rate: u32,
     ) -> anyhow::Result<Self> {
         Self::validate_submodels(&mut submodels)?;
-        Self::assemble(submodels, sample_rate).map_err(Into::into)
+        Self::assemble(submodels, sample_rate, true).map_err(Into::into)
+    }
+
+    /// Typed-error constructor that honours the loader's `LoadOptions.prewarm`
+    /// decision: when `prewarm` is `false` the construction-time stabilization
+    /// pass is skipped, so a subsequent host reset (or the loader's
+    /// `Some(false)` path) observes the raw cleared state (T5.4-5).
+    pub(crate) fn new_with_prewarm(
+        mut submodels: Vec<(f32, Box<StaticModel>)>,
+        sample_rate: u32,
+        prewarm: bool,
+    ) -> Result<Self, NamErrorCode> {
+        Self::validate_submodels(&mut submodels).map_err(|e| e.code())?;
+        Self::assemble(submodels, sample_rate, prewarm)
     }
 
     /// Validates the submodel ordering/value invariants shared by [`new`] and
@@ -211,6 +224,7 @@ impl ContainerModel {
     fn assemble(
         submodels: Vec<(f32, Box<StaticModel>)>,
         sample_rate: u32,
+        prewarm: bool,
     ) -> Result<Self, NamErrorCode> {
         let active_index = submodels.len() - 1;
         let crossfade_duration =
@@ -236,8 +250,15 @@ impl ContainerModel {
                 .set_max_buffer_size(default_buf)
                 .map_err(|_| NamErrorCode::OutOfMemory)?;
         }
-
-        container.prewarm(4096);
+        // T5.4-5: the construction-time stabilization pass is governed by the
+        // loader's `LoadOptions.prewarm` (threaded through
+        // `ContainerModel::new_with_prewarm`, `build.rs`). `new`/`new_typed`
+        // keep the historical prewarm for direct builders and C++ golden
+        // references; `prewarm == false` (from `LoadOptions::Some(false)`)
+        // skips it so the raw cleared state is observable.
+        if prewarm {
+            container.prewarm(4096);
+        }
 
         Ok(container)
     }
@@ -280,7 +301,11 @@ impl ContainerModel {
         self.sample_rate
     }
 
-    pub(crate) fn active(&self) -> &StaticModel {
+    /// Returns the currently active submodel (the one producing the output).
+    ///
+    /// Exposed so hosts and reset-contract tests can inspect the active
+    /// member's family without reaching into the private submodel list.
+    pub fn active(&self) -> &StaticModel {
         &self.submodels[self.active_index].1
     }
 }
@@ -325,6 +350,19 @@ impl NamModel for ContainerModel {
         }
     }
 
+    /// Channel geometry delegated to the active submodel; the container does
+    /// not alter the geometry of its members.
+    #[inline(always)]
+    fn num_input_channels(&self) -> usize {
+        self.active().num_input_channels()
+    }
+
+    /// Channel geometry delegated to the active submodel.
+    #[inline(always)]
+    fn num_output_channels(&self) -> usize {
+        self.active().num_output_channels()
+    }
+
     fn prewarm(&mut self, num_samples: usize) {
         for (_, model) in &mut self.submodels {
             model.prewarm(num_samples);
@@ -353,6 +391,15 @@ impl NamModel for ContainerModel {
     /// Deferred pass pending? (`true` when no submodel has work left.)
     fn prewarm_complete(&self) -> bool {
         self.submodels.iter().all(|(_, m)| m.prewarm_complete())
+    }
+
+    /// Clears every submodel's temporal state (all members, not only the
+    /// active one) by delegating to each child's [`NamModel::clear_state`].
+    /// Real-time safe.
+    fn clear_state(&mut self) {
+        for (_, model) in &mut self.submodels {
+            model.clear_state();
+        }
     }
 
     fn reset(&mut self, sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {

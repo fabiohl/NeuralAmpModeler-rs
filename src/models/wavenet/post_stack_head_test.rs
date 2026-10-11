@@ -6,20 +6,34 @@ use crate::loader::nam_json::model::HeadConfig;
 
 #[test]
 fn test_parse_activation_known_names() {
-    assert_eq!(parse_activation("Tanh"), ActivationType::Tanh);
-    assert_eq!(parse_activation("HardTanh"), ActivationType::HardTanh);
-    assert_eq!(parse_activation("FastTanh"), ActivationType::FastTanh);
-    assert_eq!(parse_activation("ReLU"), ActivationType::ReLU);
-    assert_eq!(parse_activation("Sigmoid"), ActivationType::Sigmoid);
-    assert_eq!(parse_activation("SiLU"), ActivationType::SiLU);
-    assert_eq!(parse_activation("HardSwish"), ActivationType::HardSwish);
-    assert_eq!(parse_activation("Softsign"), ActivationType::Softsign);
+    use crate::loader::nam_json::try_parse_activation;
+    let parse = |s: &str| try_parse_activation(&serde_json::Value::String(s.to_string()));
+    assert_eq!(parse("Tanh"), Ok(ActivationType::Tanh));
+    assert_eq!(parse("HardTanh"), Ok(ActivationType::HardTanh));
+    assert_eq!(parse("Hardtanh"), Ok(ActivationType::HardTanh));
+    assert_eq!(parse("FastTanh"), Ok(ActivationType::FastTanh));
+    assert_eq!(parse("Fasttanh"), Ok(ActivationType::FastTanh));
+    assert_eq!(parse("ReLU"), Ok(ActivationType::ReLU));
+    assert_eq!(parse("Sigmoid"), Ok(ActivationType::Sigmoid));
+    assert_eq!(parse("SiLU"), Ok(ActivationType::SiLU));
+    assert_eq!(parse("HardSwish"), Ok(ActivationType::HardSwish));
+    assert_eq!(parse("Softsign"), Ok(ActivationType::Softsign));
 }
 
 #[test]
-fn test_parse_activation_unknown_falls_back_to_tanh() {
-    assert_eq!(parse_activation("UnknownAct"), ActivationType::Tanh);
-    assert_eq!(parse_activation(""), ActivationType::Tanh);
+fn test_parse_activation_unknown_is_rejected() {
+    use crate::common::diagnostics::NamErrorCode;
+    use crate::loader::nam_json::try_parse_activation;
+    let parse = |s: &str| try_parse_activation(&serde_json::Value::String(s.to_string()));
+    assert_eq!(
+        parse("UnknownAct"),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+    assert_eq!(parse(""), Err(NamErrorCode::NamJsonUnknownActivation));
+    assert_eq!(
+        try_parse_activation(&serde_json::json!(42)),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
 }
 
 #[test]
@@ -46,7 +60,7 @@ fn test_construction_explicit() {
         channels: Some(16),
         bias: Some(true),
         out_channels: Some(2),
-        activation: Some("ReLU".to_string()),
+        activation: Some(serde_json::json!("ReLU")),
         kernel_size: Some(5),
     };
 

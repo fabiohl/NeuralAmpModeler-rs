@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;
 use crate::models::a2::activations::ActivationType;
@@ -34,62 +35,47 @@ impl PostStackHead {
     /// - `out_channels` → 1 (mono output)
     /// - `kernel_size` → 3
     /// - `bias` → false
-    /// - `activation` → "Tanh"
+    /// - `activation` → `"Tanh"` (a present but unrecognized activation is
+    ///   rejected with [`NamErrorCode::NamJsonUnknownActivation`], never
+    ///   silently defaulted)
     ///
     /// Weight and bias arrays are zero-initialized and must be populated
     /// by the dispatcher via `set_weights` and `set_bias`.
     ///
     /// # Errors
-    /// Rejects non-positive or oversized dimensions before any allocation:
+    /// Rejects non-positive or oversized dimensions and unresolved activation
+    /// specifications with a typed [`NamErrorCode`] before any allocation:
     /// zero channels/out-channels/kernel, `channels` above
     /// `MAX_WAVENET_FREE_CHANNELS`, `out_channels` above `MAX_A2_HEAD_CHANNELS`
     /// and `kernel` above `MAX_KERNEL` (the `Conv1dDyn` fixed tap array).
     /// These are the canonical loader ceilings, re-checked here as
     /// defense-in-depth (F-RES2-02) because `HeadConfig` is also constructible
     /// directly (unit tests, oracle) bypassing the topology validators.
-    pub fn from_config(config: &HeadConfig, in_channels: usize) -> std::io::Result<Self> {
+    pub fn from_config(config: &HeadConfig, in_channels: usize) -> Result<Self, NamErrorCode> {
         use crate::loader::nam_json::validation::{
             MAX_A2_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_WAVENET_FREE_CHANNELS,
         };
-        use crate::models::wavenet::common::MAX_KERNEL;
 
         let channels = config.channels.unwrap_or(in_channels);
         let out_channels = config.out_channels.unwrap_or(1);
         let kernel = config.kernel_size.unwrap_or(3);
         let do_bias = config.bias.unwrap_or(false);
-        let activation = parse_activation(config.activation.as_deref().unwrap_or("Tanh"));
+        let default_activation = serde_json::Value::String("Tanh".to_string());
+        let activation = crate::loader::nam_json::try_parse_activation(
+            config.activation.as_ref().unwrap_or(&default_activation),
+        )?;
 
         if channels == 0 || out_channels == 0 || kernel == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "PostStackHead dimensions must be >= 1, got channels={channels}, out_channels={out_channels}, kernel={kernel}"
-                ),
-            ));
+            return Err(NamErrorCode::InvalidModelTopology);
         }
         if channels > MAX_WAVENET_FREE_CHANNELS {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "PostStackHead channels ({channels}) exceeds maximum {MAX_WAVENET_FREE_CHANNELS} — OOM/DoS protection (F-RES2-02)"
-                ),
-            ));
+            return Err(NamErrorCode::InvalidModelTopology);
         }
         if out_channels > MAX_A2_HEAD_CHANNELS {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "PostStackHead out_channels ({out_channels}) exceeds maximum {MAX_A2_HEAD_CHANNELS} — OOM/DoS protection (F-RES2-02)"
-                ),
-            ));
+            return Err(NamErrorCode::InvalidModelTopology);
         }
         if kernel > MAX_HEAD_KERNEL_SIZE {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "PostStackHead kernel ({kernel}) exceeds maximum {MAX_HEAD_KERNEL_SIZE} (MAX_KERNEL={MAX_KERNEL}) — hostile dimension rejected (F-RES2-02)"
-                ),
-            ));
+            return Err(NamErrorCode::InvalidModelTopology);
         }
 
         let num_blocks = out_channels.div_ceil(4);
@@ -101,34 +87,21 @@ impl PostStackHead {
             .checked_mul(4)
             .and_then(|v| v.checked_mul(channels))
             .and_then(|v| v.checked_mul(kernel))
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "PostStackHead weights size overflows usize: num_blocks={num_blocks}, channels={channels}, kernel={kernel}"
-                    ),
-                )
-            })?;
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
         let bias_len = out_channels;
 
-        let weights = AlignedVec::new(weights_len, 0.0f32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
-        let bias = AlignedVec::new(bias_len, 0.0f32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::OutOfMemory, format!("{e}")))?;
+        let weights = AlignedVec::new(weights_len, 0.0f32)?;
+        let bias = AlignedVec::new(bias_len, 0.0f32)?;
 
         let receptive_field = kernel;
-        let state = WaveNetLayerState::new(channels, receptive_field, 0)?;
+        let state = WaveNetLayerState::new(channels, receptive_field, 0)
+            .map_err(|_| NamErrorCode::InvalidModelTopology)?;
 
         // Release-stable padding/bounds proof (R-2): weights_len is exactly the
         // interleaved-4 padded total, validated again by the constructor.
         let conv =
             Conv1dDyn::try_from_parts(weights, bias, do_bias, 1, channels, out_channels, kernel, 4)
-                .map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("PostStackHead conv layout validation failed: {e}"),
-                    )
-                })?;
+                .map_err(|_| NamErrorCode::InvalidModelTopology)?;
 
         Ok(Self {
             conv,
@@ -151,6 +124,12 @@ impl PostStackHead {
     /// Number of input channels expected by this head.
     pub fn in_channels(&self) -> usize {
         self.conv.in_ch
+    }
+
+    /// Clears the head's causal delay-line state to the freshly-built
+    /// condition, in place and without allocating.
+    pub fn clear_state(&mut self) {
+        self.state.clear();
     }
 
     /// Loads convolution weights from a flat f32 slice.
@@ -302,27 +281,6 @@ impl PostStackHead {
         }
 
         self.state.advance_frames(1, in_ch);
-    }
-}
-
-/// Maps an activation function name string to an `ActivationType`.
-///
-/// Supported values match the variant names of `ActivationType`:
-/// `"Tanh"`, `"HardTanh"`, `"FastTanh"`, `"ReLU"`, `"Sigmoid"`,
-/// `"SiLU"`, `"HardSwish"`, `"Softsign"`.
-///
-/// Unrecognized strings fall back to `ActivationType::Tanh`.
-pub fn parse_activation(name: &str) -> ActivationType {
-    match name {
-        "Tanh" => ActivationType::Tanh,
-        "HardTanh" => ActivationType::HardTanh,
-        "FastTanh" => ActivationType::FastTanh,
-        "ReLU" => ActivationType::ReLU,
-        "Sigmoid" => ActivationType::Sigmoid,
-        "SiLU" => ActivationType::SiLU,
-        "HardSwish" => ActivationType::HardSwish,
-        "Softsign" => ActivationType::Softsign,
-        _ => ActivationType::Tanh,
     }
 }
 

@@ -465,17 +465,13 @@ fn test_prelu_slice_dispatch_smoke() {
     let slopes = vec![0.1, 0.2, 0.3];
     let mut data: Vec<f32> = vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0, 9.0];
     prelu_slice(&mut data, &slopes);
-    for chunk in data.chunks(slopes.len()) {
-        for &val in chunk.iter() {
-            if val > 0.0 {
-                assert!(val > 0.0);
-            } else {
-                assert!(val <= 0.0);
-            }
-        }
+    let expected = [1.0, -0.4, 3.0, -0.4, 5.0, -1.8, 7.0, -1.6, 9.0];
+    for (idx, (&actual, &exp)) in data.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - exp).abs() < 1e-6,
+            "channel {idx}: expected {exp}, got {actual}"
+        );
     }
-    assert_eq!(data[0], 1.0);
-    assert!(data[1] < 0.0 && data[1] > -2.0);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

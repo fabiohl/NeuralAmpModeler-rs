@@ -141,3 +141,31 @@ pub(crate) fn read_lstm_head<'a>(
     let head_bias = cursor.read_f32_finite()?;
     Ok((head_weights, head_bias))
 }
+
+/// Reads the head linear projection weights and biases for a multi-channel LSTM model.
+///
+/// Layout:
+/// - weights: `[out_channels × hidden_size]`
+/// - biases:  `[out_channels]`
+///
+/// Returns `(head_weights, head_biases)`.
+pub(crate) fn read_lstm_head_multi<'a>(
+    cursor: &mut WeightCursor<'a>,
+    hidden_size: usize,
+    out_channels: usize,
+) -> anyhow::Result<(&'a [f32], &'a [f32])> {
+    let weights_len = checked_arith::checked_mul(out_channels, hidden_size)?;
+    let head_weights = cursor.read_slice(weights_len)?;
+    for &w in head_weights {
+        if !w.is_finite() {
+            anyhow::bail!("Non-finite weight in LSTM head: {}", w);
+        }
+    }
+    let head_biases = cursor.read_slice(out_channels)?;
+    for &b in head_biases {
+        if !b.is_finite() {
+            anyhow::bail!("Non-finite bias in LSTM head: {}", b);
+        }
+    }
+    Ok((head_weights, head_biases))
+}

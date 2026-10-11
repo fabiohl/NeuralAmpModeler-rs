@@ -15,6 +15,13 @@ pub const MAX_LSTM_LAYERS: usize = 16;
 /// Maximum LSTM hidden size accepted from model config.
 pub const MAX_LSTM_HIDDEN_SIZE: usize = 1024;
 
+/// Maximum number of channels for LSTM multi-I/O configurations (`in_channels` / `out_channels`).
+///
+/// Provenance: aligned with [`MAX_LINEAR_CHANNELS`] (512), matching the ceiling
+/// adopted across multi-channel Linear and free-geometry architectures to bound
+/// head projection allocations and prevent DoS via hostile channel dimensions.
+pub const MAX_LSTM_IO_CHANNELS: usize = MAX_LINEAR_CHANNELS;
+
 /// Maximum channels per layer-array for WaveNet A1 free-geometry (non-catalog SKU).
 pub const MAX_WAVENET_FREE_CHANNELS: usize = 512;
 

@@ -59,7 +59,9 @@ pub(crate) fn build_sequential(data: &NamModelData) -> anyhow::Result<Box<Static
             );
             return Err(anyhow::Error::from(e));
         }
-        declared_rates.push(child_data.sample_rate);
+        declared_rates.push(crate::loader::sample_rate::effective_known_rate(
+            &child_data,
+        )?);
         match super::build_model(&child_data) {
             // Unbox into stage storage: the chain keeps plain `StaticModel`
             // stages so stage calls never chase a second indirection.

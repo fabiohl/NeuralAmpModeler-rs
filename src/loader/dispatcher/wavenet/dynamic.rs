@@ -28,7 +28,6 @@ use crate::loader::nam_json::{
 };
 use crate::math::common::AlignedVec;
 use crate::models::a2::activations::ActivationType;
-use crate::models::wavenet::post_stack_head::parse_activation;
 use crate::models::wavenet::{
     DenseLayerDyn, HeadRechannelDyn, PostStackHead, WAVENET_MAX_NUM_FRAMES, WaveNetLayerArrayDyn,
     WaveNetLayerDyn, WaveNetLayerState, WaveNetModelDyn,
@@ -168,7 +167,7 @@ fn build_sub_model(
                 max_depth: MAX_UNIFIED_DEPTH,
             });
         }
-        return super::super::container::build_container_inner(data, combined);
+        return super::super::container::build_container_inner(data, combined, true);
     }
     if data.architecture == "WaveNet"
         && let WavenetTopologyResult::Free(ref geom) = get_wavenet_topology(data)
@@ -247,14 +246,8 @@ fn build_wavenet_dynamic_inner(
             geom.kernel_size
         };
 
-        let act_str = if let Some(lcfg) = data.config.layers.get(i)
-            && let Some(ref act) = lcfg.activation
-        {
-            act.as_str()
-        } else {
-            "Tanh"
-        };
-        let activation = parse_activation(act_str);
+        let activation =
+            super::static_factory::parse_a1_layer_activation(data.config.layers.get(i))?;
 
         let array = build_wavenet_array_dyn(
             &mut cursor,
@@ -277,8 +270,7 @@ fn build_wavenet_dynamic_inner(
 
     let post_stack_head = if let Some(ref head_config) = geom.post_stack_head {
         let in_ch = *geom.head_sizes.last().unwrap_or(&1);
-        let mut head = PostStackHead::from_config(head_config, in_ch)
-            .map_err(|e| anyhow::anyhow!("Failed to build post-stack head: {}", e))?;
+        let mut head = PostStackHead::from_config(head_config, in_ch)?;
 
         let ch = head.in_channels();
         let out_ch = head.out_channels();
@@ -333,14 +325,13 @@ fn build_wavenet_dynamic_inner(
 
         reject_condition_dsp_lstm(&cond_dsp_data)?;
 
-        if let (Some(main_sr), Some(cond_sr)) = (data.sample_rate, cond_dsp_data.sample_rate)
-            && (main_sr - cond_sr).abs() > 1.0
-        {
-            anyhow::bail!(
-                "condition_dsp sample rate mismatch: main={} Hz, condition_dsp={} Hz",
-                main_sr,
-                cond_sr
-            );
+        // C++ strict equality on the *declared effective* rates
+        // (`model.cpp:923-932`): a condition_dsp with an unknown rate never
+        // matches a known WaveNet rate, and two differing known rates are
+        // rejected. No tolerance band.
+        let cond_rate = crate::loader::sample_rate::effective_known_rate(&cond_dsp_data)?;
+        if cond_rate != data.sample_rate {
+            return Err(crate::common::diagnostics::NamErrorCode::NamJsonSampleRateMismatch.into());
         }
 
         let cond_model = build_sub_model(&cond_dsp_data, depth + 1, container_depth)?;

@@ -128,6 +128,44 @@ fn test_zero_alloc_process_wavenet_dynamic() {
     );
 }
 
+/// Zero-Allocation Verification Test for `NamModel::clear_state()`.
+///
+/// T3.1's state-clearing phase must be allocation-free: it only zero-fills the
+/// pre-allocated ring/delay-line storage and restores cursors, so it can run on
+/// the hard-deadline reset path. Checked across the families that override it
+/// (static WaveNet, dynamic WaveNet via A2, LSTM recurrent zeroing).
+#[test]
+fn test_zero_alloc_clear_state() {
+    for name in [
+        "BossWN-standard.nam",
+        "BossWN-feather.nam",
+        "BossLSTM-1x16.nam",
+        "wavenet_a2_full.nam",
+        "wavenet_a2_dynamic.nam",
+    ] {
+        let path = model_path(name);
+        if !path.exists() {
+            eprintln!("[STATUS] SKIP_OPTIONAL: model_not_found:{name}");
+            continue;
+        }
+        let json_data = fs::read_to_string(&path).expect("Failed to read JSON");
+        let model_data = parse_nam_json(&json_data).expect("Failed in parser");
+        let mut model = build_model(&model_data).expect("Failed to build model");
+        model.prewarm(2048);
+
+        let count = {
+            let _guard = TrackingGuard::new();
+            model.clear_state();
+            get_alloc_count()
+        };
+        assert_eq!(
+            count, 0,
+            "clear_state() allocated for {name}: count={count} — the T3.1 reset \
+             clearing phase must be zero-allocation"
+        );
+    }
+}
+
 /// Zero-Allocation Verification Test for the Full DSP Pipeline
 #[test]
 fn test_zero_alloc_capture_pipeline() {

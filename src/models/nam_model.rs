@@ -19,7 +19,7 @@
 //!    [`crate::loader::dispatcher`] and [`crate::loader::nam_json::topology`].
 
 use super::slimmable::SlimmableModel;
-use super::{NamModel, StaticModel};
+use super::{NamModel, StaticModel, plane_adapter};
 
 impl NamModel for StaticModel {
     /// Routes sample-by-sample neural inference to the active model variant.
@@ -80,6 +80,21 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Channel geometry declared by the concrete variant, delegating to the
+    /// inherent [`StaticModel::in_channels`] helper so every family keeps a
+    /// single source of truth for its input width.
+    #[inline(always)]
+    fn num_input_channels(&self) -> usize {
+        StaticModel::in_channels(self)
+    }
+
+    /// Channel geometry declared by the concrete variant, delegating to the
+    /// inherent [`StaticModel::num_output_channels`] helper.
+    #[inline(always)]
+    fn num_output_channels(&self) -> usize {
+        StaticModel::num_output_channels(self)
+    }
+
     #[inline(always)]
     unsafe fn process_raw(
         &mut self,
@@ -98,11 +113,41 @@ impl NamModel for StaticModel {
                 unsafe { m.process_raw(input, output, num_frames) }
             }
             _ => {
-                // SAFETY: Caller guarantees input pointer array has at least one valid buffer of num_frames.
-                let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
-                // SAFETY: Caller guarantees output pointer array has at least one valid mutable buffer of num_frames.
-                let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
-                self.process(in_slice, out_slice);
+                let in_ch = StaticModel::in_channels(self);
+                let out_ch = StaticModel::num_output_channels(self);
+                // SAFETY: Caller guarantees input/output pointer arrays hold
+                // the declared geometry and valid pointers to channel planes.
+                let (in0, out0) = unsafe { (*input, *output) };
+
+                // Fast path: mono-in, mono-out model into a distinct buffer.
+                if in_ch == 1 && out_ch == 1 && !std::ptr::eq(in0, out0 as *const f32) {
+                    // SAFETY: `in0`/`out0` each cover `num_frames` and do not
+                    // alias in this branch.
+                    let (in_slice, out_slice) = unsafe {
+                        (
+                            core::slice::from_raw_parts(in0, num_frames),
+                            core::slice::from_raw_parts_mut(out0, num_frames),
+                        )
+                    };
+                    self.process(in_slice, out_slice);
+                } else {
+                    // SAFETY: Caller guarantees the input pointer array holds `in_ch` valid pointers.
+                    let inputs = unsafe { core::slice::from_raw_parts(input, in_ch) };
+                    // SAFETY: Caller guarantees the output pointer array holds `out_ch` valid pointers.
+                    let outputs = unsafe { core::slice::from_raw_parts(output, out_ch) };
+                    // SAFETY: all input and output planes cover `num_frames`;
+                    // exact alias is permitted.
+                    unsafe {
+                        plane_adapter::run_staged_io(
+                            inputs,
+                            outputs,
+                            num_frames,
+                            in_ch,
+                            out_ch,
+                            |inp, outp| self.process(inp, outp),
+                        );
+                    }
+                }
             }
         }
     }
@@ -314,6 +359,37 @@ impl NamModel for StaticModel {
         }
     }
 
+    /// Clears every temporal state buffer of the active variant, delegating to
+    /// the concrete family's [`NamModel::clear_state`].
+    fn clear_state(&mut self) {
+        match self {
+            Self::WavenetStandard(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetLite(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetFeather(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetNano(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetA2Full(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetA2Lite(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetA2Dyn(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetA2Cascade(m) => NamModel::clear_state(m.as_mut()),
+            Self::WavenetDyn(m) => NamModel::clear_state(m.as_mut()),
+            Self::Container(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x3(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x8(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x12(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x16(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x24(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm2x8(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm2x12(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm2x16(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm1x40(m) => NamModel::clear_state(m.as_mut()),
+            Self::Lstm2x24(m) => NamModel::clear_state(m.as_mut()),
+            Self::LstmDyn(m) => NamModel::clear_state(m.as_mut()),
+            Self::Linear(m) => NamModel::clear_state(m.as_mut()),
+            Self::ConvNet(m) => NamModel::clear_state(m.as_mut()),
+            Self::Sequential(m) => NamModel::clear_state(m.as_mut()),
+        }
+    }
+
     fn reset(&mut self, sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         match self {
             Self::WavenetStandard(m) => m.reset(sample_rate, max_buffer_size),
@@ -406,6 +482,36 @@ impl NamModel for StaticModel {
             Self::Container(c) => SlimmableModel::slimmable_breakpoints(c.as_ref()),
             Self::WavenetDyn(m) => SlimmableModel::slimmable_breakpoints(m.as_ref()),
             _ => Box::new([]),
+        }
+    }
+}
+
+impl StaticModel {
+    /// Returns whether this model's temporal state is governed by the LSTM
+    /// family — directly, or through a container whose currently active
+    /// submodel is an LSTM.
+    ///
+    /// LSTM `reset` zeroes its recurrent state (hidden/cell/error/gates via
+    /// `reset_states`) while preserving the input delay slots, so a
+    /// reset-without-prewarm is not bit-equivalent to a freshly built model
+    /// (tracked by DEC-03 / T3.2). Reset-contract tests use
+    /// this predicate to exempt LSTM from the within-scope matrix.
+    pub fn is_lstm_family(&self) -> bool {
+        match self {
+            Self::Lstm1x3(_)
+            | Self::Lstm1x8(_)
+            | Self::Lstm1x12(_)
+            | Self::Lstm1x16(_)
+            | Self::Lstm1x24(_)
+            | Self::Lstm2x8(_)
+            | Self::Lstm2x12(_)
+            | Self::Lstm2x16(_)
+            | Self::Lstm1x40(_)
+            | Self::Lstm2x24(_)
+            | Self::LstmDyn(_) => true,
+            Self::Container(c) => c.active().is_lstm_family(),
+            Self::Sequential(s) => s.contains_lstm_family(),
+            _ => false,
         }
     }
 }

@@ -37,16 +37,22 @@ fn audit_harness_counts_allocations() {
 }
 
 // ── Model Loading & Parsing Submodules ────────────────────────────────────────
+#[path = "models/a2_head2_parity_test.rs"]
+mod a2_head2_parity_test;
 #[path = "models/a2_loader.rs"]
 mod a2_loader;
 #[path = "models/block_invariance_test.rs"]
 mod block_invariance_test;
 #[path = "models/catalog_test.rs"]
 mod catalog_test;
+#[path = "models/channel_geometry_test.rs"]
+mod channel_geometry_test;
 #[path = "models/condition_broadcast_test.rs"]
 mod condition_broadcast_test;
 #[path = "models/container_slimmable.rs"]
 mod container_slimmable;
+#[path = "models/convnet_multichannel_test.rs"]
+mod convnet_multichannel_test;
 #[path = "models/dc_offset_clipping_proof.rs"]
 mod dc_offset_clipping_proof;
 #[path = "models/deterministic_energy_test.rs"]
@@ -63,10 +69,14 @@ mod hostile_models_test;
 mod loader_stderr_hygiene;
 #[path = "models/receipt_test.rs"]
 mod receipt_test;
+#[path = "models/reset_matrix_test.rs"]
+mod reset_matrix_test;
 #[path = "models/wavenet_clone_exact_test.rs"]
 mod wavenet_clone_exact_test;
 
 // ── Activation Precision & FSM Submodules ────────────────────────────────────
+#[path = "models/activation_contract_test.rs"]
+mod activation_contract_test;
 #[path = "models/activation_precision.rs"]
 mod activation_precision;
 #[path = "models/adaptive_fsm_proptest.rs"]
@@ -89,12 +99,16 @@ mod linear_golden;
 mod lstm_activation_precision;
 #[path = "models/lstm_model_dyn_validation.rs"]
 mod lstm_model_dyn_validation;
+#[path = "models/lstm_multichannel_test.rs"]
+mod lstm_multichannel_test;
 #[path = "models/meta_coherence.rs"]
 mod meta_coherence;
 #[path = "models/metrics_jsonl_test.rs"]
 mod metrics_jsonl_test;
 #[path = "models/mirror_buf_fault_injection.rs"]
 mod mirror_buf_fault_injection;
+#[path = "models/multichannel_contract_test.rs"]
+mod multichannel_contract_test;
 #[path = "models/nam_infer_test.rs"]
 mod nam_infer_test;
 #[path = "models/namb_v2_roundtrip.rs"]
@@ -107,6 +121,8 @@ mod nondist_validation;
 mod oversampling_characterization;
 #[path = "models/perf_gate_cli_test.rs"]
 mod perf_gate_cli_test;
+#[path = "models/plane_adapter_test.rs"]
+mod plane_adapter_test;
 #[path = "models/prewarm_test.rs"]
 mod prewarm_test;
 #[path = "models/process_contract_test.rs"]
@@ -117,8 +133,12 @@ mod proptest_math;
 mod proptest_parsers;
 #[path = "models/quality_cli_test.rs"]
 mod quality_cli_test;
+#[path = "models/sample_rate_provenance_test.rs"]
+mod sample_rate_provenance_test;
 #[path = "models/self_consistency.rs"]
 mod self_consistency;
+#[path = "models/slimmable_2array_parity_test.rs"]
+mod slimmable_2array_parity_test;
 #[path = "models/spectral_fidelity.rs"]
 mod spectral_fidelity;
 #[path = "models/split_prewarm_equiv.rs"]
@@ -131,6 +151,8 @@ mod threshold_calibration;
 mod wavenet_dual_frame_guard;
 #[path = "models/wavenet_head_config_parity.rs"]
 mod wavenet_head_config_parity;
+#[path = "models/wavenet_layer1x1_parity_test.rs"]
+mod wavenet_layer1x1_parity_test;
 #[path = "models/wavenet_lite_block_invariance.rs"]
 mod wavenet_lite_block_invariance;
 #[path = "models/wavenet_prewarm_edge.rs"]

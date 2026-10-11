@@ -472,3 +472,89 @@ pub fn process_in_blocks(
         pos = end;
     }
 }
+
+/// Locates the compiled NAMcore `render` executable if the toolchain is present.
+///
+/// The tool is built on demand by `utils/ensure_namcore_render.sh`; when it is
+/// absent the caller may skip an offline C++ parity check, but the absence of
+/// that evidence must be visible (never a silent green).
+pub fn namcore_render_bin() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join("build/namcore_render/tools/render"),
+        manifest_dir.join("build/namcore_render/Release/render"),
+        manifest_dir.join("build/namcore_render/Debug/render"),
+        manifest_dir.join("build/namcore_render/render"),
+    ];
+    candidates.into_iter().find(|p| p.exists() && p.is_file())
+}
+
+/// Returns the NAMcore `render` binary, or skips a C++ parity test with a typed
+/// status — **promoting the skip to a hard failure under `NAM_QUICK_STRICT=1`**
+/// (`a evidência falta = falha`).
+///
+/// Usage:
+/// ```ignore
+/// let Some(bin) = require_render_or_skip("a2 head3 parity") else { return; };
+/// ```
+pub fn require_render_or_skip(context: &str) -> Option<PathBuf> {
+    match namcore_render_bin() {
+        Some(bin) => Some(bin),
+        None => {
+            if std::env::var("NAM_QUICK_STRICT").as_deref() == Ok("1") {
+                panic!(
+                    "[STRICT] {context}: namcore_render binary unavailable — missing C++ \
+                     parity evidence is a failure under NAM_QUICK_STRICT=1"
+                );
+            }
+            eprintln!(
+                "[STATUS] NOT_VERIFIED: {context}: namcore_render binary not found, \
+                 skipping C++ parity (set NAM_QUICK_STRICT=1 to make this fatal)"
+            );
+            None
+        }
+    }
+}
+
+/// Renders `input` through a NAMcore `render` binary using the supplied model
+/// JSON (written to a temp `.nam`) and returns the mono channel-0 output.
+///
+/// The NAMcore `render` tool is mono-only; use this for single-channel parity.
+/// Panics on any tool failure so a broken oracle can never be mistaken for a
+/// passing test.
+pub fn cpp_render_mono(
+    bin: &Path,
+    nam_json: &str,
+    input: &[f32],
+    sample_rate: u32,
+    tag: &str,
+) -> Vec<f32> {
+    use neural_amp_modeler_rs::testing::wav::{read_wav_f32, write_wav_f32};
+    use std::process::Command;
+
+    let tmp = std::env::temp_dir();
+    let in_wav = tmp.join(format!("nam_rs_{tag}_in.wav"));
+    let out_wav = tmp.join(format!("nam_rs_{tag}_out.wav"));
+    let nam_path = tmp.join(format!("nam_rs_{tag}.nam"));
+    write_wav_f32(&in_wav, input, sample_rate).expect("write render input wav");
+    fs::write(&nam_path, nam_json).expect("write render input nam");
+
+    let out = Command::new(bin)
+        .arg(&nam_path)
+        .arg(&in_wav)
+        .arg(&out_wav)
+        .output()
+        .expect("spawn namcore render");
+    assert!(
+        out.status.success(),
+        "namcore render failed for {tag}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let (samples, sr) = read_wav_f32(&out_wav).expect("read render output wav");
+    assert_eq!(sr, sample_rate, "render changed the sample rate");
+    let _ = fs::remove_file(&in_wav);
+    let _ = fs::remove_file(&out_wav);
+    let _ = fs::remove_file(&nam_path);
+    samples
+}

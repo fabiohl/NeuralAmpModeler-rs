@@ -183,6 +183,26 @@ impl WaveNetLayerState {
         })
     }
 
+    /// Clears the delay-line storage and restores the ring cursor, reproducing
+    /// the freshly-constructed state.
+    ///
+    /// The full `2N` virtual view of [`MirroredBuffer`] is zeroed: both halves
+    /// alias the same physical pages, so a single `fill` clears the storage
+    /// exactly once while keeping both mirrored halves zero. The cursor is set
+    /// to `receptive_field_size` (not a literal zero) because the causal read
+    /// reaches `buffer_start - (K - 1) * dilation` and this struct's
+    /// construction invariant requires `buffer_start >= receptive_field_size`.
+    /// With an all-zero delay line every tap reads zero, so the exact cursor
+    /// value is irrelevant to the output: the cleared state is bit-equivalent
+    /// to a cold model.
+    ///
+    /// Zero-allocation: in-place fill only.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.layer_buffer.fill(0.0);
+        self.buffer_start = self.receptive_field_size;
+    }
+
     /// Executes one Ring Buffer pointer step. If it reaches the margin, it wraps back to the start.
     pub fn advance_frames(&mut self, num_frames: usize, channels: usize) {
         self.buffer_start += num_frames;

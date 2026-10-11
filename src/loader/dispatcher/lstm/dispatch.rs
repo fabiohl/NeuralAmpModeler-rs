@@ -39,52 +39,61 @@ use anyhow::Context;
 /// | _      | _      | `LstmDyn`         | dynamic | dynamic | dynamic | dynamic |
 pub(crate) fn build_lstm(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     let result = get_lstm_topology(data).map_err(|e| anyhow::anyhow!(e))?;
-    let (num_layers, hidden_size) =
-        result.context("LSTM geometry not detectable (check num_layers and hidden_size)")?;
+    let topo = result.context("LSTM geometry not detectable (check num_layers and hidden_size)")?;
 
-    match (num_layers, hidden_size) {
+    // Multi-channel LSTM (in != 1 or out != 1) routes to the dynamic engine,
+    // which handles arbitrary input vector strides and multi-output head projection.
+    if topo.in_channels != 1 || topo.out_channels != 1 {
+        let model = build_lstm_dynamic(data, topo)?;
+        return Ok(Box::new(StaticModel::LstmDyn(Box::new(model))));
+    }
+
+    match (topo.num_layers, topo.hidden_size) {
         (1, 3) => {
-            let model = build_lstm_1layer::<3, 4, 12>(data, hidden_size)?;
+            let model = build_lstm_1layer::<3, 4, 12>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x3(Box::new(model))))
         }
         (1, 8) => {
-            let model = build_lstm_1layer::<8, 9, 32>(data, hidden_size)?;
+            let model = build_lstm_1layer::<8, 9, 32>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x8(Box::new(model))))
         }
         (1, 12) => {
-            let model = build_lstm_1layer::<12, 13, 48>(data, hidden_size)?;
+            let model = build_lstm_1layer::<12, 13, 48>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x12(Box::new(model))))
         }
         (1, 16) => {
-            let model = build_lstm_1layer::<16, 17, 64>(data, hidden_size)?;
+            let model = build_lstm_1layer::<16, 17, 64>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x16(Box::new(model))))
         }
         (1, 24) => {
-            let model = build_lstm_1layer::<24, 25, 96>(data, hidden_size)?;
+            let model = build_lstm_1layer::<24, 25, 96>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x24(Box::new(model))))
         }
         (2, 8) => {
-            let model = build_lstm_2layer::<8, 9, 16, 32>(data, num_layers, hidden_size)?;
+            let model = build_lstm_2layer::<8, 9, 16, 32>(data, topo.num_layers, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm2x8(Box::new(model))))
         }
         (2, 12) => {
-            let model = build_lstm_2layer::<12, 13, 24, 48>(data, num_layers, hidden_size)?;
+            let model =
+                build_lstm_2layer::<12, 13, 24, 48>(data, topo.num_layers, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm2x12(Box::new(model))))
         }
         (2, 16) => {
-            let model = build_lstm_2layer::<16, 17, 32, 64>(data, num_layers, hidden_size)?;
+            let model =
+                build_lstm_2layer::<16, 17, 32, 64>(data, topo.num_layers, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm2x16(Box::new(model))))
         }
         (1, 40) => {
-            let model = build_lstm_1layer::<40, 41, 160>(data, hidden_size)?;
+            let model = build_lstm_1layer::<40, 41, 160>(data, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm1x40(Box::new(model))))
         }
         (2, 24) => {
-            let model = build_lstm_2layer::<24, 25, 48, 96>(data, num_layers, hidden_size)?;
+            let model =
+                build_lstm_2layer::<24, 25, 48, 96>(data, topo.num_layers, topo.hidden_size)?;
             Ok(Box::new(StaticModel::Lstm2x24(Box::new(model))))
         }
         _ => {
-            let model = build_lstm_dynamic(data, num_layers, hidden_size)?;
+            let model = build_lstm_dynamic(data, topo)?;
             Ok(Box::new(StaticModel::LstmDyn(Box::new(model))))
         }
     }

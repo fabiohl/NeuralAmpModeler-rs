@@ -8,14 +8,13 @@
 //! topology match.
 
 use crate::loader::nam_json::{
-    A2TopologyResult, NamModelData, WavenetTopologyResult, get_wavenet_topology,
-    validate_model_data,
+    A2TopologyResult, NamLayerConfig, NamModelData, TopologyError, WavenetTopologyResult,
+    get_wavenet_topology, validate_model_data,
 };
 use crate::math::common::AlignedVec;
 use crate::models::StaticModel;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
-use crate::models::a2::params::A2_LEAKY_SLOPE;
 use crate::models::a2::{WaveNetA2, WaveNetA2Cascade, WaveNetA2Dyn};
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 use anyhow::bail;
@@ -36,6 +35,48 @@ pub use crate::loader::nam_json::validation::MAX_CONDITION_SIZE;
 // Validation
 // =============================================================================
 
+/// Parses and validates the activation declared by a WaveNet A1 layer.
+/// Resolves the single activation for a WaveNet A1 layer.
+///
+/// Accepts an optional reference to the layer configuration. Inspects
+/// `layer_raw.get("activation")` first (preserving objects, strings, arrays, null)
+/// and falls back to `layer.activation`. When omitted entirely, defaults to `Tanh`.
+///
+/// Delegates name/object resolution to the shared NAMcore-faithful parser
+/// ([`crate::loader::nam_json::try_parse_activation`]): an unknown name or invalid
+/// structure is rejected with [`NamErrorCode::NamJsonUnknownActivation`] (`E1221`).
+///
+/// The A1 fused accumulate-and-activate kernels implement only `Tanh` and
+/// `ReLU`; any other *valid* NAMcore activation is rejected with
+/// [`NamErrorCode::NamJsonUnsupportedTopology`] (`E1215`) — never silently
+/// approximated to `Tanh`.
+pub(crate) fn parse_a1_layer_activation(
+    layer: Option<&NamLayerConfig>,
+) -> anyhow::Result<ActivationType> {
+    let act = match layer
+        .and_then(|l| l.layer_raw.as_ref())
+        .and_then(|raw| raw.get("activation"))
+    {
+        Some(val) => crate::loader::nam_json::try_parse_activation(val)?,
+        None => match layer.and_then(|l| l.activation.as_deref()) {
+            Some(name) => crate::loader::nam_json::try_parse_activation(
+                &serde_json::Value::String(name.to_string()),
+            )?,
+            None => ActivationType::Tanh,
+        },
+    };
+    match act {
+        ActivationType::Tanh | ActivationType::ReLU => Ok(act),
+        other => {
+            log::error!(
+                "[Dispatcher] WaveNet A1 engine does not implement activation {other:?} \
+                 — rejected (E1215 NamJsonUnsupportedTopology)"
+            );
+            Err(crate::common::diagnostics::NamErrorCode::NamJsonUnsupportedTopology.into())
+        }
+    }
+}
+
 /// Validates the `activation` field in all layers of a WaveNet A1 model.
 ///
 /// **Scope: A1 topologies only** (Standard, Lite, Feather, Nano). A2 models use
@@ -43,16 +84,12 @@ pub use crate::loader::nam_json::validation::MAX_CONDITION_SIZE;
 /// is ever reached — so this function is never called for A2.
 ///
 /// Called from `build_wavenet_typed` (which backs all A1 builders).
-/// Returns an error if any layer declares an unsupported activation function.
+/// Returns an error if any layer declares an unknown or unsupported activation.
 pub(crate) fn validate_layer_activations(data: &NamModelData) -> anyhow::Result<()> {
     for (idx, layer) in data.config.layers.iter().enumerate() {
-        let act = layer.activation.as_deref().unwrap_or("Tanh");
-        if act != "Tanh" && act != "ReLU" {
-            bail!(
-                "Activation '{}' in layer {} is not supported. Only 'Tanh' and 'ReLU' are implemented.",
-                act,
-                idx
-            );
+        if let Err(e) = parse_a1_layer_activation(Some(layer)) {
+            log::warn!("[Dispatcher] A1 layer {idx} activation rejected: {e}");
+            return Err(e);
         }
     }
     Ok(())
@@ -94,6 +131,14 @@ fn build_wavenet_a2_static<const CH: usize>(
     layer_raw: Option<serde_json::Value>,
     name: &'static str,
 ) -> anyhow::Result<WaveNetA2<CH>> {
+    if data
+        .config
+        .condition_dsp
+        .as_ref()
+        .is_some_and(|c| !c.is_null())
+    {
+        bail!("{name} does not support condition_dsp — model must be routed to dynamic engine");
+    }
     let mut model = WaveNetA2::<CH>::new()?;
     model.set_layer_raw(layer_raw);
     model
@@ -339,22 +384,12 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         let dilations = topo.dilations.clone();
         let num_layers = topo.num_layers;
 
-        let act_cfg = layer_cfg
-            .parse_activation_config(num_layers)
-            .map(|cfg| (cfg.activations, cfg.gating_modes, cfg.secondary_activations));
-        let (activations, gating_modes, secondary_activations) = match act_cfg {
-            Some((a, g, s)) => (a, g, s),
-            None => (
-                vec![
-                    ActivationType::LeakyReLU {
-                        negative_slope: A2_LEAKY_SLOPE,
-                    };
-                    num_layers
-                ],
-                vec![GatingMode::None; num_layers],
-                vec![None; num_layers],
-            ),
-        };
+        let act_cfg = layer_cfg.parse_activation_config(num_layers)?;
+        let (activations, gating_modes, secondary_activations) = (
+            act_cfg.activations,
+            act_cfg.gating_modes,
+            act_cfg.secondary_activations,
+        );
 
         let head1x1_active = layer_cfg
             .layer_raw
@@ -526,13 +561,20 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     let condition_size = l0.condition_size.unwrap_or(1);
 
     // Build condition_dsp sub-model if present.
-    let condition_dsp = if let Some(ref cond_dsp_json) = data.config.condition_dsp {
+    let condition_dsp = if let Some(ref cond_dsp_json) = data.config.condition_dsp
+        && !cond_dsp_json.is_null()
+    {
         let cond_dsp_data: NamModelData = serde_json::from_value(cond_dsp_json.clone())?;
         // The nested sub-model never went through `parse_nam_json`, so the
         // root version-range/topology validation must be re-applied here
         // before the sub-model is built.
         validate_model_data(&cond_dsp_data)?;
         reject_condition_dsp_lstm(&cond_dsp_data)?;
+        // C++ strict equality on declared effective rates (`model.cpp:923-932`).
+        let cond_rate = crate::loader::sample_rate::effective_known_rate(&cond_dsp_data)?;
+        if cond_rate != data.sample_rate {
+            return Err(crate::common::diagnostics::NamErrorCode::NamJsonSampleRateMismatch.into());
+        }
         let cond_model = crate::loader::dispatcher::build_model(&cond_dsp_data)?;
         let cond_out = cond_model.num_output_channels();
         if cond_out > condition_size {
@@ -554,6 +596,14 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     if num_arrays == 1 {
         let mut model = arrays.remove(0);
         model.set_condition_dsp(condition_dsp, WAVENET_MAX_NUM_FRAMES)?;
+        // Single-array A2-Dynamic with a multi-channel head carries its
+        // model-level `head_scale` as the trailing scalar (the head block for
+        // `head_size > 1` does not consume a per-array scale). Fold it into the
+        // per-channel head scale so the final output is scaled exactly like the
+        // cascade path (`WaveNetA2Cascade::head_scale`).
+        if model.head_size > 1 && cascade_head_scale != 1.0 {
+            model.head_rechannel_scale.fill(cascade_head_scale);
+        }
         info!(
             "[Dispatcher] WaveNet A2-Dynamic built — CH={}, BN={}, layers={}, weights={}",
             model.channels,
@@ -614,7 +664,7 @@ pub(crate) fn build_wavenet_a1(data: &NamModelData) -> anyhow::Result<Box<Static
             let model = super::dynamic::build_wavenet_dynamic(data, geom)?;
             Ok(Box::new(StaticModel::WavenetDyn(Box::new(model))))
         }
-        WavenetTopologyResult::Rejected(reason) => {
+        WavenetTopologyResult::Rejected { code, reason } => {
             let layer_info: Vec<(usize, usize)> = data
                 .config
                 .layers
@@ -625,11 +675,12 @@ pub(crate) fn build_wavenet_a1(data: &NamModelData) -> anyhow::Result<Box<Static
                     (ch, k)
                 })
                 .collect();
-            bail!(
+            let msg = format!(
                 "WaveNet model rejected: {reason}. \
                  Detected: {} layer(s) with geometry {layer_info:?}",
                 data.config.layers.len(),
             );
+            Err(anyhow::Error::new(TopologyError { code, reason: msg }))
         }
     }
 }

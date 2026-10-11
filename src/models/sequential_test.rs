@@ -423,17 +423,21 @@ fn test_sequential_multichain_process_matches_manual_series() {
     while offset < input.len() {
         let requested = chunk_sizes[chunk_index % chunk_sizes.len()];
         let take = requested.min(input.len() - offset);
-        first.process_multichannel(
-            &[&input[offset..offset + take]],
-            &mut [
-                &mut ch0[offset..offset + take],
-                &mut ch1[offset..offset + take],
-            ],
-        );
-        second.process_multichannel(
-            &[&ch0[offset..offset + take], &ch1[offset..offset + take]],
-            &mut [&mut expected[offset..offset + take]],
-        );
+        first
+            .process_multichannel(
+                &[&input[offset..offset + take]],
+                &mut [
+                    &mut ch0[offset..offset + take],
+                    &mut ch1[offset..offset + take],
+                ],
+            )
+            .expect("geometry matches");
+        second
+            .process_multichannel(
+                &[&ch0[offset..offset + take], &ch1[offset..offset + take]],
+                &mut [&mut expected[offset..offset + take]],
+            )
+            .expect("geometry matches");
         offset += take;
         chunk_index += 1;
     }

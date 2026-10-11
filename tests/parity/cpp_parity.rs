@@ -2129,7 +2129,9 @@ fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
             .iter_mut()
             .map(|ch| &mut ch[offset..offset + count])
             .collect();
-        rust_model.process_multichannel(&in_slices, &mut out_slices);
+        rust_model
+            .process_multichannel(&in_slices, &mut out_slices)
+            .expect("geometry matches");
         offset += count;
     }
 
@@ -2149,7 +2151,9 @@ fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
             .iter_mut()
             .map(|ch| &mut ch[offset_ir..offset_ir + count])
             .collect();
-        rust_model.process_multichannel(&in_slices, &mut out_slices);
+        rust_model
+            .process_multichannel(&in_slices, &mut out_slices)
+            .expect("geometry matches");
         offset_ir += count;
     }
     for ch in 0..out_channels {
@@ -2206,7 +2210,9 @@ fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
                 .iter_mut()
                 .map(|ch| &mut ch[offset_ip..offset_ip + count])
                 .collect();
-            rust_model.process_multichannel_in_place(&mut io_slices);
+            rust_model
+                .process_multichannel_in_place(&mut io_slices)
+                .expect("geometry matches");
             offset_ip += count;
         }
         for ch in 0..out_channels {
@@ -2618,7 +2624,9 @@ fn run_wav_ir_stereo_parity(ch0_taps: &[f32], ch1_taps: &[f32], sample_rate: u32
         let in_slice = &input[offset..offset + count];
         let mut out0_slice = &mut rust_ch0[offset..offset + count];
         let mut out1_slice = &mut rust_ch1[offset..offset + count];
-        rust_model.process_multichannel(&[in_slice], &mut [&mut out0_slice, &mut out1_slice]);
+        rust_model
+            .process_multichannel(&[in_slice], &mut [&mut out0_slice, &mut out1_slice])
+            .expect("geometry matches");
         offset += count;
     }
 

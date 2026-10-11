@@ -29,16 +29,19 @@ pub enum ActivationType {
     Tanh,
     /// Hyperbolic Tangent with hard saturation within [-1, 1].
     /// Reserves general A2 full engine support (future).
+    #[serde(alias = "Hardtanh")]
     HardTanh,
     /// Fast rational approximation for Tanh.
     /// Reserves general A2 full engine support (future).
+    #[serde(alias = "Fasttanh")]
     FastTanh,
     /// Rectified Linear Unit: max(0, x).
     /// Reserves general A2 full engine support (future).
     ReLU,
     /// Leaky ReLU with fixed negative slope (fast-path A2-Full/Lite: slope = 0.01).
     LeakyReLU {
-        /// Slope applied when x < 0.
+        /// Slope applied when x < 0. Defaults to `0.01` (C++ `activations.cpp:116`).
+        #[serde(default = "default_leaky_relu_slope")]
         negative_slope: f32,
     },
     /// Parametric ReLU with per-channel or global negative slope.
@@ -62,12 +65,16 @@ pub enum ActivationType {
     #[serde(alias = "LeakyHardtanh")]
     LeakyHardTanh {
         /// Minimum value for linear saturation.
+        #[serde(default = "default_leaky_hard_tanh_min_val")]
         min_val: f32,
         /// Maximum value for linear saturation.
+        #[serde(default = "default_leaky_hard_tanh_max_val")]
         max_val: f32,
         /// Slope applied below `min_val`.
+        #[serde(default = "default_leaky_hard_tanh_slope")]
         min_slope: f32,
         /// Slope applied above `max_val`.
+        #[serde(default = "default_leaky_hard_tanh_slope")]
         max_slope: f32,
     },
     /// Softsign: x / (1 + |x|).
@@ -76,6 +83,23 @@ pub enum ActivationType {
 }
 
 use crate::math::common::SimdMath;
+
+/// C++ default `negative_slope` for `LeakyReLU` (`activations.cpp:116`).
+fn default_leaky_relu_slope() -> f32 {
+    0.01
+}
+/// C++ default `min_val` for `LeakyHardtanh` (`activations.cpp:120`).
+fn default_leaky_hard_tanh_min_val() -> f32 {
+    -1.0
+}
+/// C++ default `max_val` for `LeakyHardtanh` (`activations.cpp:121`).
+fn default_leaky_hard_tanh_max_val() -> f32 {
+    1.0
+}
+/// C++ default `min_slope`/`max_slope` for `LeakyHardtanh` (`activations.cpp:122-123`).
+fn default_leaky_hard_tanh_slope() -> f32 {
+    0.01
+}
 
 /// Trait for applying activation functions on audio buffers.
 pub trait ActivationFn {

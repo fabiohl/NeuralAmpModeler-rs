@@ -27,7 +27,6 @@ use super::layout;
 use crate::loader::nam_json::{NamModelData, NamWavenetTopology};
 use crate::math::common::AlignedVec;
 use crate::models::a2::activations::ActivationType;
-use crate::models::wavenet::post_stack_head::parse_activation;
 use crate::models::wavenet::{DenseLayer, WaveNetLayer, WaveNetLayerArray, WaveNetModel};
 use crate::models::wavenet::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState};
 use anyhow::Context;
@@ -57,8 +56,8 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
     debug_assert!(data.config.layers.len() >= 2);
     let l0 = &data.config.layers[0];
     let l1 = &data.config.layers[1];
-    let act0 = parse_activation(l0.activation.as_deref().unwrap_or("Tanh"));
-    let act1 = parse_activation(l1.activation.as_deref().unwrap_or("Tanh"));
+    let act0 = super::static_factory::parse_a1_layer_activation(Some(l0))?;
+    let act1 = super::static_factory::parse_a1_layer_activation(Some(l1))?;
     let dils_0 = l0
         .dilations
         .as_deref()

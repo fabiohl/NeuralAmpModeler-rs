@@ -22,6 +22,19 @@ use anyhow::bail;
 /// Branches by architecture (`"WaveNet"` / `"LSTM"` / `"SlimmableContainer"`) and delegates to the
 /// specialized builders with const generics.
 pub fn build_model(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
+    build_model_with_prewarm(data, true)
+}
+
+/// Builds a `Box<StaticModel>` while threading the loader's
+/// `LoadOptions.prewarm` decision to the architecture builders that apply a
+/// construction-time stabilization pass (`SlimmableContainer`). All other
+/// builders ignore the flag (their construction does not prewarm). Used by the
+/// loader so `LoadOptions::Some(false)` skips the container's initial prewarm
+/// (T5.4-5); the public [`build_model`] keeps the historical prewarm-on-build.
+pub(crate) fn build_model_with_prewarm(
+    data: &NamModelData,
+    prewarm: bool,
+) -> anyhow::Result<Box<StaticModel>> {
     #[cfg(target_arch = "x86_64")]
     {
         if !std::is_x86_feature_detected!("avx2") || !std::is_x86_feature_detected!("fma") {
@@ -36,7 +49,7 @@ pub fn build_model(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     match data.architecture.as_str() {
         "WaveNet" => wavenet::build_wavenet(data),
         "LSTM" => lstm::build_lstm(data),
-        "SlimmableContainer" => container::build_container(data),
+        "SlimmableContainer" => container::build_container(data, prewarm),
         "Linear" => linear::build_linear(data),
         "ConvNet" => convnet::build_convnet(data),
         "Sequential" => sequential::build_sequential(data),

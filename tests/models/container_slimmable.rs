@@ -208,6 +208,188 @@ fn test_breakpoints_a2_fixture() {
     assert_eq!(bps, expected, "A2 breakpoints must be [0.5]");
 }
 
+/// Tier-selection boundaries for the channel-sliced SlimmableWaveNet.
+///
+/// `slimmable_wavenet.nam` exposes `allowed_channels = [1, 2, 3]`. The tier
+/// mapping is `idx = min(floor(ratio * num_tiers), num_tiers - 1)` (T3.3), so
+/// `0.30` selects the lowest tier `CH=1`; the previous
+/// `round(ratio * (num_tiers - 1))` rule wrongly selected `CH=2` there.
+#[test]
+fn test_slimmable_wavenet_tier_boundaries() {
+    let path = model_path("slimmable_wavenet.nam");
+    if !path.exists() {
+        eprintln!("SKIP: slimmable_wavenet.nam not found.");
+        return;
+    }
+    let json = fs::read_to_string(&path).expect("Failed to read slimmable_wavenet.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse slimmable_wavenet.nam");
+    let mut model = build_model(&data).expect("Slimmable WaveNet model must build");
+
+    fn pending(m: &StaticModel) -> Option<Vec<usize>> {
+        match m {
+            StaticModel::WavenetDyn(w) => w.pending_slim_channel.clone(),
+            _ => panic!("expected StaticModel::WavenetDyn"),
+        }
+    }
+
+    model.set_slimmable_size(0.0, None);
+    assert_eq!(pending(&model), Some(vec![1]), "ratio 0.0 -> CH=1");
+    model.set_slimmable_size(0.30, None);
+    assert_eq!(pending(&model), Some(vec![1]), "ratio 0.30 -> CH=1");
+    model.set_slimmable_size(0.34, None);
+    assert_eq!(pending(&model), Some(vec![2]), "ratio 0.34 -> CH=2");
+    model.set_slimmable_size(2.0 / 3.0, None);
+    assert_eq!(pending(&model), Some(vec![3]), "ratio 2/3 -> CH=3");
+    model.set_slimmable_size(0.99, None);
+    assert_eq!(pending(&model), Some(vec![3]), "ratio 0.99 -> CH=3");
+    model.set_slimmable_size(1.0, None);
+    assert_eq!(pending(&model), Some(vec![3]), "ratio 1.0 -> CH=3");
+}
+
+/// Integration test for T4.1d:
+/// "set_slimmable_size -> rebuild off-RT -> process" with finite output and correct dimensions.
+///
+/// T5.6 transactional contract: a failed rebuild returns `false` and keeps
+/// `pending_slim_channel` intact so the next call retries (no silent drop).
+#[test]
+fn test_slimmable_rebuild_failure_is_transactional_pending_preserved() {
+    use neural_amp_modeler_rs::models::slimmable::{
+        try_slimmable_rebuild_from_pending, try_slimmable_rebuild_single,
+    };
+
+    let path = model_path("slimmable_wavenet.nam");
+    if !path.exists() {
+        eprintln!("SKIP: slimmable_wavenet.nam not found.");
+        return;
+    }
+    let json = fs::read_to_string(&path).expect("Failed to read slimmable_wavenet.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse slimmable_wavenet.nam");
+    let mut model = build_model(&data).expect("Slimmable WaveNet model must build");
+
+    // Stage a valid pending request, then attempt a rebuild with an
+    // impossible target (channel count above the loaded width): slicing
+    // rejects it, so `_single` must return `false` and invoke the error
+    // callback without touching the slot.
+    model.set_slimmable_size(0.34, None);
+    let full_ch = match &*model {
+        StaticModel::WavenetDyn(w) => w.arrays[0].ch,
+        _ => panic!("expected StaticModel::WavenetDyn"),
+    };
+    let impossible = vec![full_ch + 8; 1];
+    let mut slot = Some(model);
+    let mut gc_called = false;
+    let mut err_called = false;
+    let ok = try_slimmable_rebuild_single(
+        &mut slot,
+        &impossible,
+        Some(128),
+        &mut |_| gc_called = true,
+        &mut || err_called = true,
+    );
+    assert!(!ok, "impossible target must fail the rebuild");
+    assert!(err_called, "slice error callback must fire on failure");
+    assert!(!gc_called, "failed rebuild must not retire the model to GC");
+    // The staged pending request survives: a retry with the valid target
+    // succeeds through `from_pending`.
+    let ok_retry =
+        try_slimmable_rebuild_from_pending(&mut slot, Some(128), &mut |_| {}, &mut || {
+            panic!("valid retry must not fail")
+        });
+    assert!(ok_retry, "valid retry after failure must succeed");
+    if let StaticModel::WavenetDyn(w) = &*slot.expect("model remains populated") {
+        assert_eq!(w.arrays[0].ch, 2, "retry rebuilds to the staged target");
+        assert_eq!(
+            w.pending_slim_channel, None,
+            "pending cleared only after successful rebuild"
+        );
+    } else {
+        panic!("expected StaticModel::WavenetDyn");
+    }
+}
+
+/// Integration test for T4.1d:
+/// "set_slimmable_size -> rebuild off-RT -> process" with finite output and correct dimensions.
+#[test]
+fn test_slimmable_wavenet_set_slimmable_size_rebuild_from_pending_and_process() {
+    use neural_amp_modeler_rs::models::slimmable::try_slimmable_rebuild_from_pending;
+
+    let path = model_path("slimmable_wavenet.nam");
+    if !path.exists() {
+        eprintln!("SKIP: slimmable_wavenet.nam not found.");
+        return;
+    }
+    let json = fs::read_to_string(&path).expect("Failed to read slimmable_wavenet.nam");
+    let data = parse_nam_json(&json).expect("Failed to parse slimmable_wavenet.nam");
+    let mut model = build_model(&data).expect("Slimmable WaveNet model must build");
+
+    // Pure query: ratio 0.34 corresponds to tier 1 (channels = 2)
+    assert_eq!(model.slimmable_targets(0.34), Some(vec![2]));
+    // T5.4-8: the f32 convenience wrapper preserves the historical signature.
+    assert_eq!(model.slimmable_targets_f32(0.34), Some(vec![2]));
+
+    // Stage pending channel rebuild target via set_slimmable_size
+    model.set_slimmable_size(0.34, None);
+
+    let mut gc_called = false;
+    let mut err_called = false;
+    let mut slot = Some(model);
+    let ok = try_slimmable_rebuild_from_pending(
+        &mut slot,
+        Some(128),
+        &mut |_gc_item| {
+            gc_called = true;
+        },
+        &mut || {
+            err_called = true;
+        },
+    );
+    let mut model = slot.expect("model remains populated");
+
+    assert!(ok, "rebuild from pending must succeed");
+    assert!(gc_called, "retired model must be sent to GC callback");
+    assert!(!err_called, "slice error callback must not be invoked");
+
+    // Verify sliced model structure
+    if let StaticModel::WavenetDyn(w) = &*model {
+        assert_eq!(w.arrays[0].ch, 2, "array channels sliced to 2");
+        assert_eq!(
+            w.pending_slim_channel, None,
+            "pending channel must be cleared after rebuild"
+        );
+    } else {
+        panic!("expected StaticModel::WavenetDyn");
+    }
+
+    // Process audio block and verify finite output
+    let input = vec![0.25f32; 128];
+    let mut output = vec![0.0f32; 128];
+    model.process(&input, &mut output);
+
+    for &s in &output {
+        assert!(s.is_finite(), "Output sample must be finite after rebuild");
+    }
+
+    // Rebuild again to ratio 0.0 (channels = 1)
+    model.set_slimmable_size(0.0, None);
+    let mut slot2 = Some(model);
+    let ok2 = try_slimmable_rebuild_from_pending(&mut slot2, Some(128), &mut |_| {}, &mut || {
+        panic!("fail")
+    });
+    assert!(ok2);
+    let mut model = slot2.expect("model remains populated");
+    if let StaticModel::WavenetDyn(w) = &*model {
+        assert_eq!(w.arrays[0].ch, 1, "array channels sliced to 1");
+    }
+
+    model.process(&input, &mut output);
+    for &s in &output {
+        assert!(
+            s.is_finite(),
+            "Output sample must be finite after second rebuild"
+        );
+    }
+}
+
 // =============================================================================
 // Container Switch RT-Safety
 // =============================================================================

@@ -9,17 +9,19 @@
 //! - Degenerate Topologies: Rejection of invalid topologies (`hidden_size == 0`, `dilation == 0`).
 //! - Fail-Closed Constructors: Safe `A2Conv1d::try_new` constructor and caller integration.
 
+use neural_amp_modeler_rs::common::diagnostics::NamErrorCode;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{
     MAX_A2_HEAD_CHANNELS, MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS,
-    WavenetTopologyResult, get_convnet_topology, get_lstm_topology, get_wavenet_topology,
-    parse_nam_json,
+    MAX_LSTM_IO_CHANNELS, WavenetTopologyResult, get_convnet_topology, get_lstm_topology,
+    get_wavenet_topology, parse_nam_json,
 };
 use neural_amp_modeler_rs::loader::namb_encoder::ensure_capacity;
 use neural_amp_modeler_rs::loader::transpose::wavenet::transpose_wavenet_interleaved4;
 use neural_amp_modeler_rs::math::common::AlignedVec;
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::a2::conv1d::A2Conv1d;
+use neural_amp_modeler_rs::models::lstm::{LstmLayerDyn, LstmModelDyn};
 
 // ── Arithmetic Hardening & Integer Overflow Protection ────────────────────────
 
@@ -427,8 +429,8 @@ fn test_degenerate_convnet_zero_dilation_rejected() {
 
     let parsed_flat = parse_nam_json(flat_json).expect("JSON syntax is valid");
     assert!(
-        get_convnet_topology(&parsed_flat).is_none(),
-        "ConvNet flat format with dilation == 0 must return None"
+        get_convnet_topology(&parsed_flat).ok().flatten().is_none(),
+        "ConvNet flat format with dilation == 0 must return None or Err"
     );
     assert!(
         build_model(&parsed_flat).is_err(),
@@ -453,8 +455,11 @@ fn test_degenerate_convnet_zero_dilation_rejected() {
 
     let parsed_layers = parse_nam_json(layers_json).expect("JSON syntax is valid");
     assert!(
-        get_convnet_topology(&parsed_layers).is_none(),
-        "ConvNet layers format with dilation == 0 must return None"
+        get_convnet_topology(&parsed_layers)
+            .ok()
+            .flatten()
+            .is_none(),
+        "ConvNet layers format with dilation == 0 must return None or Err"
     );
     assert!(
         build_model(&parsed_layers).is_err(),
@@ -484,7 +489,7 @@ fn test_degenerate_wavenet_zero_dilation_rejected() {
 
     let parsed = parse_nam_json(hostile_json).expect("JSON syntax is valid");
     match get_wavenet_topology(&parsed) {
-        WavenetTopologyResult::Rejected(reason) => {
+        WavenetTopologyResult::Rejected { reason, .. } => {
             assert!(
                 reason.contains("dilation") && reason.contains("0"),
                 "expected rejection reason to identify zero dilation: {reason}"
@@ -598,7 +603,7 @@ fn test_hostile_head_channels_extreme_rejected_wavenet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         match get_wavenet_topology(&parsed) {
-            WavenetTopologyResult::Rejected(reason) => assert!(
+            WavenetTopologyResult::Rejected { reason, .. } => assert!(
                 reason.contains("head"),
                 "rejection should identify the head ceiling, got: {reason}"
             ),
@@ -619,7 +624,7 @@ fn test_hostile_head_out_channels_extreme_rejected_wavenet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         match get_wavenet_topology(&parsed) {
-            WavenetTopologyResult::Rejected(reason) => assert!(
+            WavenetTopologyResult::Rejected { reason, .. } => assert!(
                 reason.contains("head"),
                 "rejection should identify the head ceiling, got: {reason}"
             ),
@@ -640,7 +645,7 @@ fn test_hostile_head_kernel_extreme_rejected_wavenet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         match get_wavenet_topology(&parsed) {
-            WavenetTopologyResult::Rejected(reason) => assert!(
+            WavenetTopologyResult::Rejected { reason, .. } => assert!(
                 reason.contains("head"),
                 "rejection should identify the head ceiling, got: {reason}"
             ),
@@ -661,7 +666,7 @@ fn test_hostile_head_channels_extreme_rejected_convnet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         assert!(
-            get_convnet_topology(&parsed).is_none(),
+            get_convnet_topology(&parsed).ok().flatten().is_none(),
             "ConvNet head.channels={extreme} must be rejected by get_convnet_topology"
         );
         assert!(
@@ -679,7 +684,7 @@ fn test_hostile_head_out_channels_extreme_rejected_convnet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         assert!(
-            get_convnet_topology(&parsed).is_none(),
+            get_convnet_topology(&parsed).ok().flatten().is_none(),
             "ConvNet head.out_channels={extreme} must be rejected by get_convnet_topology"
         );
         assert!(
@@ -697,7 +702,7 @@ fn test_hostile_head_kernel_extreme_rejected_convnet() {
         ));
         let parsed = parse_nam_json(&json).expect("JSON syntax is valid");
         assert!(
-            get_convnet_topology(&parsed).is_none(),
+            get_convnet_topology(&parsed).ok().flatten().is_none(),
             "ConvNet head.kernel_size={extreme} must be rejected by get_convnet_topology"
         );
         assert!(
@@ -728,7 +733,169 @@ fn test_valid_head_at_ceiling_builds() {
     );
     let parsed_conv = parse_nam_json(&convnet).expect("JSON syntax is valid");
     assert!(
-        get_convnet_topology(&parsed_conv).is_some(),
+        get_convnet_topology(&parsed_conv).ok().flatten().is_some(),
         "small valid ConvNet head must stay accepted"
+    );
+}
+
+// ── DoS Hardening & Allocation Caps (LSTM Multi-I/O) ──────────────────────────
+
+#[test]
+fn test_hostile_lstm_extreme_io_channels_rejected() {
+    for extreme in [MAX_LSTM_IO_CHANNELS + 1, 1000usize, 1048576, 1099511627776] {
+        // Extreme in_channels
+        let in_json = format!(
+            r#"{{
+                "version": "0.5.0",
+                "architecture": "LSTM",
+                "config": {{
+                    "num_layers": 1,
+                    "hidden_size": 16,
+                    "in_channels": {extreme},
+                    "out_channels": 1
+                }},
+                "weights": [0.0],
+                "sample_rate": 48000.0
+            }}"#
+        );
+        let parsed = parse_nam_json(&in_json).expect("valid JSON syntax");
+        assert!(
+            get_lstm_topology(&parsed).is_err(),
+            "in_channels={extreme} must be rejected by get_lstm_topology"
+        );
+        assert!(
+            build_model(&parsed).is_err(),
+            "in_channels={extreme} must fail build_model"
+        );
+
+        // Extreme out_channels
+        let out_json = format!(
+            r#"{{
+                "version": "0.5.0",
+                "architecture": "LSTM",
+                "config": {{
+                    "num_layers": 1,
+                    "hidden_size": 16,
+                    "in_channels": 1,
+                    "out_channels": {extreme}
+                }},
+                "weights": [0.0],
+                "sample_rate": 48000.0
+            }}"#
+        );
+        let parsed_out = parse_nam_json(&out_json).expect("valid JSON syntax");
+        assert!(
+            get_lstm_topology(&parsed_out).is_err(),
+            "out_channels={extreme} must be rejected by get_lstm_topology"
+        );
+        assert!(
+            build_model(&parsed_out).is_err(),
+            "out_channels={extreme} must fail build_model"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_lstm_zero_channels_rejected() {
+    let cases = [
+        ("in_channels", 0, 1),
+        ("out_channels", 1, 0),
+        ("both_zero", 0, 0),
+    ];
+
+    for (name, in_ch, out_ch) in cases {
+        let json = format!(
+            r#"{{
+                "version": "0.5.0",
+                "architecture": "LSTM",
+                "config": {{
+                    "num_layers": 1,
+                    "hidden_size": 16,
+                    "in_channels": {in_ch},
+                    "out_channels": {out_ch}
+                }},
+                "weights": [0.0],
+                "sample_rate": 48000.0
+            }}"#
+        );
+        let parsed = parse_nam_json(&json).expect("valid JSON syntax");
+        let res = get_lstm_topology(&parsed);
+        assert!(
+            res.is_err(),
+            "Case {name} with zero channels must be rejected"
+        );
+        assert_eq!(
+            res.unwrap_err().code,
+            NamErrorCode::InvalidFeatureTopology,
+            "Case {name} must return InvalidFeatureTopology (E1316)"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_lstm_overflow_hidden_input_rejected() {
+    let json = r#"{
+        "version": "0.5.0",
+        "architecture": "LSTM",
+        "config": {
+            "num_layers": 1,
+            "hidden_size": 512,
+            "in_channels": 1048576,
+            "out_channels": 1
+        },
+        "weights": [0.0],
+        "sample_rate": 48000.0
+    }"#;
+    let parsed = parse_nam_json(json).expect("valid JSON syntax");
+    assert!(
+        get_lstm_topology(&parsed).is_err(),
+        "hidden=512 with in_channels=2^20 must be rejected"
+    );
+}
+
+#[test]
+fn test_hostile_lstm_direct_constructors_bounded() {
+    // LstmModelDyn::new_io must reject zero or out-of-bounds parameters before allocation
+    assert_eq!(
+        LstmModelDyn::new_io(1, 1024, 1 << 20, 1).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmModelDyn::new_io(1, 1024, 1, 1 << 40).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmModelDyn::new_io(1, 1024, 0, 1).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmModelDyn::new_io(1, 1024, 1, 0).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmModelDyn::new_io(0, 1024, 1, 1).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmModelDyn::new_io(100, 1024, 1, 1).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+
+    // LstmLayerDyn::new must reject zero or out-of-bounds parameters before allocation
+    assert_eq!(
+        LstmLayerDyn::new(1 << 20, 1024).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmLayerDyn::new(0, 16).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmLayerDyn::new(16, 0).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
+    );
+    assert_eq!(
+        LstmLayerDyn::new(16, 1 << 20).err(),
+        Some(NamErrorCode::InvalidFeatureTopology)
     );
 }

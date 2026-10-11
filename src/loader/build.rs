@@ -5,7 +5,7 @@
 //! and dispatches to the appropriate architecture builder.
 
 use crate::common::diagnostics::{NamErrorCode, SystemSnapshot};
-use crate::loader::nam_json::NamModelData;
+use crate::loader::nam_json::{NamModelData, TopologyError};
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
 use log::{debug, error, info};
@@ -555,7 +555,19 @@ fn build_model_pair_from_data(
 ) -> Result<LoadedModelPair, LoadError> {
     let model_version = model_data.version.as_deref().unwrap_or("(unknown)");
     let weights_count = model_data.weights.len();
-    let model_sample_rate = model_data.sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
+    // DEC-01b: publish the *resolved* expected sample rate of the root node.
+    // A Sequential/Container with no own rate inherits its first known child
+    // rate instead of the 48 kHz default (F-13/F-16).
+    let resolved_sample_rate = crate::loader::sample_rate::effective_known_rate(&model_data)
+        .map_err(|e| {
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 sample-rate provenance resolution failed (detail: {}).",
+                source_label, file_size, e, e
+            );
+            LoadError::ModelBuildFailed(e.to_string())
+        })?;
+    let model_sample_rate = resolved_sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
     info!(
         "[Loader] Parsed model: arch=\"{}\", version={}, {} weights, sample_rate={:.0} Hz",
         model_data.architecture, model_version, weights_count, model_sample_rate
@@ -583,7 +595,7 @@ fn build_model_pair_from_data(
 
     let input_db_adj = DEFAULT_INPUT_LEVEL_DBU - in_level;
     let output_db_adj = DEFAULT_LOUDNESS_DB - loudness;
-    let nam_rate = model_data.sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE) as u32;
+    let nam_rate = model_sample_rate as u32;
 
     let lut = crate::math::dsp::gain_lut::get_gain_lut();
     let input_mult_adj = lut.db_to_linear(input_db_adj);
@@ -601,25 +613,35 @@ fn build_model_pair_from_data(
         "[Loader] Dispatching model build: arch=\"{}\", layout={:?}",
         model_data.architecture, model_data.weights_layout
     );
-    let mut model_l = dispatcher::build_model(&model_data).map_err(|e| {
-        let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
-            code
-        } else if e.to_string().contains("slimmable") {
-            NamErrorCode::InvalidModelTopology
-        } else {
-            NamErrorCode::ModelBuildFailed
-        };
-        error!(
-            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+    let mut model_l =
+        dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false)).map_err(
+            |e| {
+                let (code, is_topo) = if let Some(topo_err) = e.downcast_ref::<TopologyError>() {
+                    (topo_err.code, true)
+                } else if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
+                    let is_topo = code == NamErrorCode::InvalidModelTopology
+                        || code == NamErrorCode::InvalidFeatureTopology;
+                    (code, is_topo)
+                } else {
+                    (NamErrorCode::ModelBuildFailed, false)
+                };
+                error!(
+                    "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
              failed to build model (L) (detail: {}).",
-            source_label, file_size, code, e
-        );
-        if e.to_string().contains("slimmable") {
-            LoadError::UnsupportedArchitecture(e.to_string())
-        } else {
-            LoadError::ModelBuildFailed(e.to_string())
-        }
-    })?;
+                    source_label, file_size, code, e
+                );
+                if is_topo {
+                    LoadError::InvalidTopology {
+                        code,
+                        reason: e.to_string(),
+                    }
+                } else if code == NamErrorCode::WeightCountMismatch {
+                    LoadError::DimensionMismatch(e.to_string())
+                } else {
+                    LoadError::ModelBuildFailed(e.to_string())
+                }
+            },
+        )?;
 
     // Pre-allocate scratch containers, crossfade buffers, and delay lines for
     // the engine's documented maximum block size (`MAX_RESAMP_BUF` = 8192 samples).
@@ -633,11 +655,18 @@ fn build_model_pair_from_data(
     // steady-state before audio processing starts.
     // INVARIANT: Eliminates cold-start transients, pops, and DC step responses on
     // the first processed audio block.
+    //
+    // `LoadOptions.prewarm` mirrors the C++ `ScopedPrewarmOnResetDefault`
+    // (`get_dsp.cpp:286-296`): it only controls the *initial* pass performed
+    // here; the model's persistent `prewarm_on_reset` is restored to its
+    // previous value so later host resets still stabilize normally (F-10).
+    let prev_prewarm_l = model_l.prewarm_on_reset();
     if options.prewarm == Some(false) {
         model_l.set_prewarm_on_reset(false);
     } else {
         model_l.prewarm(model_l.prewarm_samples().max(2048));
     }
+    model_l.set_prewarm_on_reset(prev_prewarm_l);
 
     #[cfg(feature = "dual-mono")]
     let build_dual_mono = dual_mono;
@@ -656,33 +685,46 @@ fn build_model_pair_from_data(
     // right channel. Both channels run strictly disjoint internal states (ring buffers,
     // delay lines, recurrent memory) to guarantee zero stereo crosstalk.
     let model_r = if build_dual_mono {
-        let mut model = dispatcher::build_model(&model_data).map_err(|e| {
-            let code = if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
-                code
-            } else if e.to_string().contains("slimmable") {
-                NamErrorCode::InvalidModelTopology
-            } else {
-                NamErrorCode::ModelBuildFailed
-            };
-            error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+        let mut model =
+            dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false))
+                .map_err(|e| {
+                    let (code, is_topo) = if let Some(topo_err) = e.downcast_ref::<TopologyError>()
+                    {
+                        (topo_err.code, true)
+                    } else if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
+                        let is_topo = code == NamErrorCode::InvalidModelTopology
+                            || code == NamErrorCode::InvalidFeatureTopology;
+                        (code, is_topo)
+                    } else {
+                        (NamErrorCode::ModelBuildFailed, false)
+                    };
+                    error!(
+                        "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  failed to build model (R) (detail: {}).",
-                source_label, file_size, code, e
-            );
-            if e.to_string().contains("slimmable") {
-                LoadError::UnsupportedArchitecture(e.to_string())
-            } else {
-                LoadError::ModelBuildFailed(e.to_string())
-            }
-        })?;
+                        source_label, file_size, code, e
+                    );
+                    if is_topo {
+                        LoadError::InvalidTopology {
+                            code,
+                            reason: e.to_string(),
+                        }
+                    } else if code == NamErrorCode::WeightCountMismatch {
+                        LoadError::DimensionMismatch(e.to_string())
+                    } else {
+                        LoadError::ModelBuildFailed(e.to_string())
+                    }
+                })?;
         model
             .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
             .map_err(|e| LoadError::Internal(e.to_string()))?;
+        let prev_prewarm_r = model.prewarm_on_reset();
         if options.prewarm == Some(false) {
             model.set_prewarm_on_reset(false);
         } else {
             model.prewarm(model.prewarm_samples().max(2048));
         }
+        // F-10: restore the persistent flag (see model L note above).
+        model.set_prewarm_on_reset(prev_prewarm_r);
         Some(model)
     } else {
         None
@@ -721,7 +763,7 @@ fn build_model_pair_from_data(
         }
     } else if architecture == "LSTM" {
         match nam_json::get_lstm_topology(&model_data) {
-            Ok(Some((layers, hidden))) => format!("{}x{}", layers, hidden),
+            Ok(Some(topo)) => format!("{}x{}", topo.num_layers, topo.hidden_size),
             _ => "Custom".to_string(),
         }
     } else if architecture == "Linear" {
@@ -737,8 +779,8 @@ fn build_model_pair_from_data(
         }
     } else if architecture == "ConvNet" {
         match nam_json::get_convnet_topology(&model_data) {
-            Some(topo) => format!("B{}", topo.num_blocks),
-            None => "Custom".to_string(),
+            Ok(Some(topo)) => format!("B{}", topo.num_blocks),
+            _ => "Custom".to_string(),
         }
     } else {
         "Unknown".to_string()

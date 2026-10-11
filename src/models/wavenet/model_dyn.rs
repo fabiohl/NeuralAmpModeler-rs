@@ -133,17 +133,18 @@ pub struct WaveNetModelDyn {
     pub prewarm_pending: bool,
     /// Whether this dynamic WaveNet model explicitly supports dynamic channel slimming.
     pub slimmable_capable: bool,
-    /// Allowed channel breakpoints for slimmable channel slicing.
+    /// Allowed channel breakpoints for slimmable channel slicing, one list per
+    /// layer-array (C++ `SlimmableWavenet::_per_array_allowed_channels`).
     ///
-    /// When `Some`, contains the valid channel counts for this model in
-    /// ascending order (e.g. `[1, 2, 3]` for a CH=3 model with 3 tiers).
+    /// When `Some`, the outer `Vec` has one entry per layer-array; an empty
+    /// inner list means that array is non-slimmable (keeps full channels).
     /// `None` means no slimmable breakpoints are defined.
-    pub allowed_channels: Option<Vec<usize>>,
-    /// Pending slimmable channel target set by `set_slimmable_size`.
+    pub allowed_channels: Option<Vec<Vec<usize>>>,
+    /// Pending slimmable channel targets set by `set_slimmable_size`, one per
+    /// layer-array (C++ `_get_channels_for_slimmable_size`).
     ///
-    /// Consumed by `try_slimmable_rebuild_single` before DSP processing.
-    /// `None` means no pending change.
-    pub pending_slim_channel: Option<usize>,
+    /// Consumed before DSP processing. `None` means no pending change.
+    pub pending_slim_channel: Option<Vec<usize>>,
 }
 
 impl Clone for WaveNetModelDyn {
@@ -164,7 +165,7 @@ impl Clone for WaveNetModelDyn {
             prewarm_pending: false,
             slimmable_capable: self.slimmable_capable,
             allowed_channels: self.allowed_channels.clone(),
-            pending_slim_channel: self.pending_slim_channel,
+            pending_slim_channel: self.pending_slim_channel.clone(),
         }
     }
 }
@@ -216,10 +217,19 @@ impl WaveNetModelDyn {
     /// This is the entry point for the SPSC GC swap pipeline: the async thread
     /// calls this to produce a lightweight copy that can be atomically swapped
     /// in via `gc_cascade`.
+    /// Returns a new `WaveNetModelDyn` with per-array target channel counts.
     ///
-    /// # Errors
-    /// Returns [`crate::models::slimmable::SlicingError`] if `new_ch` is zero,
-    /// exceeds the original channel count, or exceeds array minimum channels.
+    /// Delegates to [`crate::models::slimmable::slice_wavenet_model_per_array`].
+    pub fn slice_channels_per_array(
+        &self,
+        targets: &[usize],
+    ) -> Result<Self, crate::models::slimmable::SlicingError> {
+        crate::models::slimmable::slice_wavenet_model_per_array(self, targets)
+    }
+
+    /// Creates a new `WaveNetModelDyn` with uniform channel reduction on all slimmable arrays.
+    ///
+    /// Delegates to [`crate::models::slimmable::slice_wavenet_model`].
     pub fn slice_channels(
         &self,
         new_ch: usize,
@@ -396,6 +406,32 @@ impl WaveNetModelDyn {
         self.prewarm_pending = false;
     }
 
+    /// Clears every layer array's delay-line state (including the optional
+    /// head-rechannel convolution state), the optional post-stack head state
+    /// and the nested condition-DSP state, returning the model to its
+    /// freshly-built condition.
+    ///
+    /// In-place and zero-allocation, so it is safe to call off the critical
+    /// stabilization path.
+    pub fn clear_state(&mut self) {
+        for array in &mut self.arrays {
+            for state in &mut array.states {
+                state.clear();
+            }
+            if let super::layer_array_dyn::HeadRechannelDyn::Conv1d { state, .. } =
+                &mut array.head_rechannel
+            {
+                state.clear();
+            }
+        }
+        if let Some(ref mut head) = self.post_stack_head {
+            head.clear_state();
+        }
+        if let Some(ref mut cond_dsp) = self.condition_dsp {
+            cond_dsp.clear_state();
+        }
+    }
+
     /// Prewarm strictly optimized for AVX2 architecture.
     ///
     /// # Safety
@@ -463,6 +499,38 @@ impl WaveNetModelDyn {
             head_proc.prewarm();
         }
     }
+
+    /// Returns per-array target channel counts for a given slimmable ratio.
+    ///
+    /// `ratio` is `f64` to preserve C++ `ratio_to_channels` parity at tier
+    /// boundaries (see [`slimmable_tier_index`](crate::models::slimmable::slimmable_tier_index)).
+    ///
+    /// Pure function without side effects. Returns `None` if the model does not
+    /// declare `allowed_channels` or if it is empty.
+    pub fn slimmable_targets(&self, ratio: f64) -> Option<Vec<usize>> {
+        let per_array = self.allowed_channels.as_ref()?;
+        if per_array.is_empty() {
+            return None;
+        }
+        let mut targets = Vec::with_capacity(per_array.len());
+        for (i, allowed) in per_array.iter().enumerate() {
+            if allowed.is_empty() {
+                targets.push(self.arrays.get(i).map(|a| a.ch).unwrap_or(self.ch));
+            } else {
+                let idx = crate::models::slimmable::slimmable_tier_index(ratio, allowed.len());
+                targets.push(allowed[idx]);
+            }
+        }
+        Some(targets)
+    }
+
+    /// `f32` convenience wrapper for [`slimmable_targets`](Self::slimmable_targets),
+    /// preserving the historical signature for callers whose ratio originates as
+    /// `f32` (see the `f64` method for the C++ parity caveat).
+    #[inline]
+    pub fn slimmable_targets_f32(&self, ratio: f32) -> Option<Vec<usize>> {
+        self.slimmable_targets(ratio as f64)
+    }
 }
 
 use crate::models::slimmable::SlimmableModel;
@@ -471,34 +539,39 @@ impl SlimmableModel for WaveNetModelDyn {
     fn set_slimmable_size(
         &mut self,
         val: f32,
-        _rt_status: Option<&crate::common::spsc::RtStatusFlags>,
+        rt_status: Option<&crate::common::spsc::RtStatusFlags>,
     ) {
-        let Some(ref allowed) = self.allowed_channels else {
+        let Some(ref per_array) = self.allowed_channels else {
             return;
         };
-        if allowed.is_empty() {
+        if per_array.is_empty() {
             return;
         }
-        let val = val.clamp(0.0, 1.0);
-        let num_tiers = allowed.len();
-        let tier = ((val * (num_tiers as f32 - 1.0)).round() as usize).min(num_tiers - 1);
-        self.pending_slim_channel = Some(allowed[tier]);
+        if let Some(ref mut targets) = self.pending_slim_channel
+            && targets.len() == per_array.len()
+        {
+            for (i, allowed) in per_array.iter().enumerate() {
+                let expected = if allowed.is_empty() {
+                    self.arrays.get(i).map(|a| a.ch).unwrap_or(self.ch)
+                } else {
+                    let idx =
+                        crate::models::slimmable::slimmable_tier_index(val as f64, allowed.len());
+                    allowed[idx]
+                };
+                targets[i] = expected;
+            }
+            return;
+        }
+        if rt_status.is_some() {
+            return;
+        }
+        self.pending_slim_channel = self.slimmable_targets(val as f64);
     }
 
     fn slimmable_breakpoints(&self) -> Box<[f64]> {
-        let Some(ref allowed) = self.allowed_channels else {
+        let Some(ref per_array) = self.allowed_channels else {
             return Box::new([]);
         };
-        if allowed.len() < 2 {
-            return Box::new([]);
-        }
-        let max_ch = *allowed.last().unwrap_or(&1) as f64;
-        if max_ch <= 0.0 {
-            return Box::new([]);
-        }
-        allowed[..allowed.len() - 1]
-            .iter()
-            .map(|&ch| (ch as f64) / max_ch)
-            .collect()
+        crate::models::slimmable::slimmable_per_array_breakpoints(per_array)
     }
 }

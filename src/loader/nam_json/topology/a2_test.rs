@@ -123,3 +123,21 @@ fn test_a2_channels_truncation_does_not_route_to_fast_path() {
         }
     }
 }
+
+/// Upstream C++ parity (a2_fast.cpp:851-853): an A2 candidate that would otherwise
+/// qualify for KnownFastPath must route to Dynamic if condition_dsp is present.
+#[test]
+fn test_a2_candidate_with_condition_dsp_routes_to_dynamic() {
+    let base_json = a2_fastpath_candidate_json(3, 3);
+    let mut val: serde_json::Value = serde_json::from_str(&base_json).expect("parse candidate");
+    val["config"]["condition_dsp"] = serde_json::json!({
+        "type": "Linear",
+        "params": {}
+    });
+    let data: NamModelData = serde_json::from_value(val).expect("deserialize data");
+    assert_eq!(
+        is_a2_shape(&data),
+        Some(A2TopologyResult::Dynamic),
+        "A2 model with non-null condition_dsp must route to Dynamic, not KnownFastPath"
+    );
+}

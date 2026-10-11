@@ -300,20 +300,30 @@ impl WaveNetA2Cascade {
         for arr in &mut self.arrays {
             arr.reset(sample_rate, max_buffer_size)?;
         }
+        self.clear_state();
         if self.prewarm_on_reset {
             self.prewarm();
         }
         Ok(())
     }
 
-    /// Zero phase of the deferred split stabilization: clears the cascade
-    /// scratch buffers in place (via the shrink-equivariant
-    /// `set_max_buffer_size`, which zeroes the subarray states in place), arms
-    /// the per-subarray split passes (without integral prewarm), and records
-    /// the cascade-level zero-feed units. Allocation- and lock-free: a
+    /// Zero phase of the deferred split stabilization: clears every subarray
+    /// state **and** the cascade-level scratch buffers and the nested
+    /// condition-DSP state (via [`Self::clear_state`], which is the
+    /// allocation-free counterpart of the integral `reset`'s state clearing),
+    /// arms the per-subarray split passes (without integral prewarm), and
+    /// records the cascade-level zero-feed units. Allocation- and lock-free: a
     /// real-time consumer may call it on its audio thread and amortize
     /// [`WaveNetA2Cascade::prewarm_step`] within per-callback budgets.
+    ///
+    /// The cascade-level scratch (`condition_dsp_output`, `cascade_residual`,
+    /// `intermediate_head_output`) and the nested `condition_dsp` temporal
+    /// state are **not** zeroed by the per-subarray `set_max_buffer_size`
+    /// below — that call early-returns as a no-op when the size is unchanged —
+    /// so a split reset after a dirty run must clear them explicitly here to
+    /// match the integral `reset` path bit-for-bit.
     pub fn prewarm_reset(&mut self) {
+        self.clear_state();
         // Order matters (A2-Max class): the subarray zero-feeds must run
         // BEFORE the cascade-level scratch is touched, because the subarray
         // `prewarm_reset()` calls `set_max_buffer_size(max)` on models whose
@@ -348,6 +358,25 @@ impl WaveNetA2Cascade {
         }
 
         self.prewarm_pending = self.receptive_field_size.max(2048);
+    }
+
+    /// Clears every subarray's state (including nested condition-DSP state)
+    /// and the cascade scratch buffers to the freshly-built condition, in
+    /// place and without allocating.
+    ///
+    /// Counterpart of the C++ `DSP::Reset → SetMaxBufferSize` chain for the
+    /// cascade: it removes all FIR/recurrent memory even when the optional
+    /// stabilization pass is disabled.
+    pub fn clear_state(&mut self) {
+        for arr in &mut self.arrays {
+            arr.clear_state();
+        }
+        self.condition_dsp_output.fill(0.0);
+        self.cascade_residual.fill(0.0);
+        self.intermediate_head_output.fill(0.0);
+        if let Some(ref mut cond_dsp) = self.condition_dsp {
+            cond_dsp.clear_state();
+        }
     }
 
     /// Advances the armed stabilization by at most `samples` zeroed samples

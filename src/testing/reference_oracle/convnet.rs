@@ -148,7 +148,12 @@ pub(crate) fn oracle_convnet_forward(
             let h_out_ch = hc.out_channels.unwrap_or(1);
             let h_kernel = hc.kernel_size.unwrap_or(1);
             let h_has_bias = hc.bias.unwrap_or(true);
-            let h_activation = hc.activation.unwrap_or_else(|| "Tanh".to_string());
+            let h_activation = hc
+                .activation
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .unwrap_or("Tanh")
+                .to_string();
 
             let h_w = cursor.read_f64(h_in_ch * h_out_ch * h_kernel);
             let h_b = if h_has_bias {

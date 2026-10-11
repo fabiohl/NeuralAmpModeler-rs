@@ -127,7 +127,7 @@ fn build_minimal_model_with_head() -> WaveNetModelDyn {
         channels: Some(1),
         bias: Some(false),
         out_channels: Some(1),
-        activation: Some("ReLU".to_string()),
+        activation: Some(serde_json::json!("ReLU")),
         kernel_size: Some(1),
     };
     let mut post_stack_head =
@@ -293,7 +293,7 @@ fn test_post_stack_head_prewarm_samples_includes_kernel() {
         channels: Some(1),
         bias: Some(false),
         out_channels: Some(1),
-        activation: Some("Tanh".to_string()),
+        activation: Some(serde_json::json!("Tanh")),
         kernel_size: Some(3),
     };
     let mut head_k3 = PostStackHead::from_config(&head_config_k3, 1).expect("create kernel=3 head");
@@ -420,7 +420,7 @@ fn test_post_stack_head_multi_array_determinism() {
             channels: Some(1),
             bias: Some(false),
             out_channels: Some(1),
-            activation: Some("Tanh".to_string()),
+            activation: Some(serde_json::json!("Tanh")),
             kernel_size: Some(1),
         };
         let mut post = PostStackHead::from_config(&head_config, 1).expect("create post-stack head");

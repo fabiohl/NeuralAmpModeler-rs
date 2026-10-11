@@ -11,6 +11,52 @@ use crate::math::common::SimdMath;
 
 use super::WaveNetA2Dyn;
 
+/// Projects the head accumulator ring into `head_size` interleaved channels
+/// per frame (`output[f * head_size + oc]`), applying the `head_rechannel`
+/// Conv1D over `channels`, the per-channel bias and the per-channel scale.
+///
+/// Shared by the single-array [`WaveNetA2Dyn::head_finalize`](super::process::WaveNetA2Dyn)
+/// path and the cascade [`WaveNetA2Dyn::cascade_head_finalize`] path so both
+/// geometries scale identically (single source of truth for the multi-output
+/// head projection).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Head projection needs the full ring geometry (accum, weights, bias, scale, ring, dims); callers pass model fields directly"
+)]
+#[inline(always)]
+pub(crate) fn project_heads(
+    head_accum: &[f32],
+    head_rechannel_w: &[f32],
+    head_rechannel_b: &[f32],
+    head_rechannel_scale: &[f32],
+    write_pos: usize,
+    ring_mask: usize,
+    head_size: usize,
+    channels: usize,
+    kernel: usize,
+    nf: usize,
+    output: &mut [f32],
+) {
+    let base = write_pos.wrapping_sub(nf);
+    for f in 0..nf {
+        let col_base = base.wrapping_add(f);
+        let out_off = f * head_size;
+        for oc in 0..head_size {
+            let w_base = oc * kernel * channels;
+            let mut y = head_rechannel_b[oc];
+            for t in 0..kernel {
+                let col = col_base.wrapping_sub(kernel - 1 - t) & ring_mask;
+                let ha_off = col * channels;
+                let w_off = w_base + t * channels;
+                for ic in 0..channels {
+                    y += head_rechannel_w[w_off + ic] * head_accum[ha_off + ic];
+                }
+            }
+            output[out_off + oc] = y * head_rechannel_scale[oc];
+        }
+    }
+}
+
 impl WaveNetA2Dyn {
     /// Runs the per-layer loop for the cascade pipeline.
     /// Caller must pre-fill `self.layer_in` and initialize `self.head_accum`
@@ -65,32 +111,19 @@ impl WaveNetA2Dyn {
                 );
             }
         } else {
-            let channels = self.head_accum_size;
-            let k = self.head_kernel_size;
-            let hw = &self.head_rechannel_w;
-            let hb = &self.head_rechannel_b;
-            let hs = &self.head_rechannel_scale;
-            let ha = &self.head_accum;
-            let wp = self.head_write_pos;
-            let mask = self.head_ring_mask;
-            let base = wp.wrapping_sub(nf);
-            for f in 0..nf {
-                let col_base = base.wrapping_add(f);
-                let out_off = f * head_size;
-                for oc in 0..head_size {
-                    let w_base = oc * k * channels;
-                    let mut y = hb[oc];
-                    for t in 0..k {
-                        let col = col_base.wrapping_sub(k - 1 - t) & mask;
-                        let ha_off = col * channels;
-                        let w_off = w_base + t * channels;
-                        for ic in 0..channels {
-                            y += hw[w_off + ic] * ha[ha_off + ic];
-                        }
-                    }
-                    output[out_off + oc] = y * hs[oc];
-                }
-            }
+            project_heads(
+                &self.head_accum,
+                &self.head_rechannel_w,
+                &self.head_rechannel_b,
+                &self.head_rechannel_scale,
+                self.head_write_pos,
+                self.head_ring_mask,
+                head_size,
+                self.head_accum_size,
+                self.head_kernel_size,
+                nf,
+                output,
+            );
         }
     }
 

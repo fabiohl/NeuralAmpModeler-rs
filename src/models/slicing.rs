@@ -49,6 +49,45 @@ pub enum SlicingError {
         /// Minimum channel count across all layer arrays.
         min_array_ch: usize,
     },
+    /// Target channels slice length does not match model layer array count.
+    ArrayCountMismatch {
+        /// Requested number of target channels.
+        requested: usize,
+        /// Number of layer arrays available in model.
+        available: usize,
+    },
+    /// Target channel count for an array exceeds loaded array channel count.
+    TargetExceedsArrayChannels {
+        /// Layer array index (0-based).
+        array_idx: usize,
+        /// Requested channel count.
+        requested: usize,
+        /// Loaded channel count of this array.
+        available: usize,
+    },
+    /// Target channel count is not in the array's allowed_channels tier list.
+    TargetNotInAllowedList {
+        /// Layer array index (0-based).
+        array_idx: usize,
+        /// Requested channel count.
+        requested: usize,
+        /// Allowed channels configured for this array.
+        allowed: Vec<usize>,
+    },
+    /// Target channel count on a fixed array must equal loaded channels.
+    FixedArrayTargetMismatch {
+        /// Layer array index (0-based).
+        array_idx: usize,
+        /// Requested channel count.
+        requested: usize,
+        /// Loaded channel count of this fixed array.
+        fixed: usize,
+    },
+    /// Head rechannel convolution kernel size must be 1.
+    UnsupportedHeadKernelSize {
+        /// Head rechannel kernel size encountered.
+        kernel: usize,
+    },
     /// Allocation error during slicing.
     Allocation(NamErrorCode),
 }
@@ -93,6 +132,51 @@ impl std::fmt::Display for SlicingError {
                 write!(
                     f,
                     "Slicing target channel count ({requested}) exceeds minimum array channel count ({min_array_ch})"
+                )
+            }
+            Self::ArrayCountMismatch {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Slicing array count mismatch: requested {requested} targets for {available} arrays"
+                )
+            }
+            Self::TargetExceedsArrayChannels {
+                array_idx,
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Slicing target channel count ({requested}) for array {array_idx} exceeds loaded channels ({available})"
+                )
+            }
+            Self::TargetNotInAllowedList {
+                array_idx,
+                requested,
+                allowed,
+            } => {
+                write!(
+                    f,
+                    "Slicing target channel count ({requested}) for array {array_idx} is not in allowed list {allowed:?}"
+                )
+            }
+            Self::FixedArrayTargetMismatch {
+                array_idx,
+                requested,
+                fixed,
+            } => {
+                write!(
+                    f,
+                    "Slicing fixed array {array_idx} requires target {fixed}, got {requested}"
+                )
+            }
+            Self::UnsupportedHeadKernelSize { kernel } => {
+                write!(
+                    f,
+                    "Slicing head rechannel kernel size must be 1, found {kernel}"
                 )
             }
             Self::Allocation(code) => {
@@ -260,13 +344,17 @@ pub fn slice_wavenet_layer(
 /// `WaveNetLayerState::new` — prewarm will stabilize them later.
 ///
 /// `new_in_ch`: input channels for this array (1 for the first array,
-///              `new_ch` for subsequent arrays).
+///              target channels of the previous array for subsequent arrays).
+/// `new_ch`: internal layer channels for this array.
+/// `new_head`: head rechannel output channels (target channels of the next array,
+///             or final model head channels for the last array).
 /// `alloc_num`: allocation counter for state jitter (pass a `&mut usize`
 ///              that increments across all arrays in the model).
 pub fn slice_wavenet_array(
     array: &WaveNetLayerArrayDyn,
     new_in_ch: usize,
     new_ch: usize,
+    new_head: usize,
     alloc_num: &mut usize,
 ) -> Result<WaveNetLayerArrayDyn, SlicingError> {
     let rechannel = slice_dense(&array.rechannel, new_in_ch, new_ch)?;
@@ -286,11 +374,16 @@ pub fn slice_wavenet_array(
 
     let (head_rechannel, head_rf) = match &array.head_rechannel {
         HeadRechannelDyn::Dense(dense) => (
-            HeadRechannelDyn::Dense(slice_dense(dense, new_ch, array.head)?),
+            HeadRechannelDyn::Dense(slice_dense(dense, new_ch, new_head)?),
             0,
         ),
         HeadRechannelDyn::Conv1d { conv, state } => {
-            let sliced_conv = slice_conv1d(conv, new_ch, array.head)?;
+            if conv.kernel != 1 {
+                return Err(SlicingError::UnsupportedHeadKernelSize {
+                    kernel: conv.kernel,
+                });
+            }
+            let sliced_conv = slice_conv1d(conv, new_ch, new_head)?;
             let rf = state.receptive_field_size;
             let new_state = WaveNetLayerState::new(new_ch, rf, *alloc_num)
                 .map_err(|_| SlicingError::Allocation(NamErrorCode::OutOfMemory))?;
@@ -320,14 +413,14 @@ pub fn slice_wavenet_array(
         cond: array.cond,
         ch: new_ch,
         k: array.k,
-        head: array.head,
+        head: new_head,
         layers,
         states,
         rechannel,
         head_rechannel,
         array_outputs: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?,
         head_accum: AlignedVec::new(new_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?,
-        head_outputs: AlignedVec::new(array.head * WAVENET_MAX_NUM_FRAMES, 0.0)?,
+        head_outputs: AlignedVec::new(new_head * WAVENET_MAX_NUM_FRAMES, 0.0)?,
         receptive_field_size,
         block_size,
         block_buffer: AlignedVec::new(block_size * WAVENET_MAX_NUM_FRAMES, 0.0)?,
@@ -335,51 +428,84 @@ pub fn slice_wavenet_array(
     })
 }
 
-/// Creates a new `WaveNetModelDyn` with all internal channels reduced to
-/// `new_ch`. This is the primary entry point for the SPSC GC swap pipeline.
+/// Creates a new `WaveNetModelDyn` with per-array target channel counts.
 ///
-/// Each layer array's internal `ch` is reduced to `new_ch`. The head
-/// projection and condition dimensions remain unchanged.
+/// This is the primary heterogeneous slicing entry point.
 ///
-/// ## Limitations
+/// # Slicing Rules & Topology Chain
 ///
-/// - **`condition_dsp`**: Cloned from the original model. Only `WavenetDyn`
-///   sub-models are supported for deep cloning; other variants fall back to
-///   `None`. The `post_stack_head` and
-///   `condition_dsp_output` buffers are allocated fresh.
-/// - **`post_stack_head`**: Cloned as-is (not affected by channel slicing).
+/// For array `i` in `0..n`:
+/// - `slim_ch = targets[i]`
+/// - `slim_input_size = if i == 0 { array.in_ch } else { targets[i - 1] }`
+/// - `slim_head_size = if i < n - 1 { targets[i + 1] } else { array.head }`
 ///
-/// # Errors
-/// Returns [`SlicingError`] if `new_ch == 0`, `new_ch > model.ch`, or `new_ch` exceeds
-/// the minimum channel count across arrays.
-pub fn slice_wavenet_model(
+/// # Validation & Invariants
+///
+/// - `targets.len() == model.arrays.len()`
+/// - Each target `t ∈ [1, array.ch]` (slicing can only reduce channels; expanding
+///   beyond loaded width is an error — store the full-width model via
+///   [`clone_wavenet_for_slimmable_storage`] for future re-slicing).
+/// - If `allowed_channels` exists for array `i`:
+///   - If `allowed.is_empty()` (fixed array), `targets[i] == array.ch` is required.
+///   - If `!allowed.is_empty()`, `targets[i]` must be in `allowed`.
+///
+/// # Allocation & RT Safety
+///
+/// Allocation is strictly off-RT (main thread / background worker).
+pub fn slice_wavenet_model_per_array(
     model: &WaveNetModelDyn,
-    new_ch: usize,
+    targets: &[usize],
 ) -> Result<WaveNetModelDyn, SlicingError> {
-    if new_ch == 0 {
-        return Err(SlicingError::ZeroChannelCount);
-    }
-    if new_ch > model.ch {
-        return Err(SlicingError::RequestedChannelExceedsModel {
-            requested: new_ch,
-            available: model.ch,
+    if targets.len() != model.arrays.len() {
+        return Err(SlicingError::ArrayCountMismatch {
+            requested: targets.len(),
+            available: model.arrays.len(),
         });
     }
 
-    let min_array_ch = model.arrays.iter().map(|a| a.ch).min().unwrap_or(model.ch);
-    if new_ch > min_array_ch {
-        return Err(SlicingError::RequestedChannelExceedsMinArray {
-            requested: new_ch,
-            min_array_ch,
-        });
+    for (i, (&t, array)) in targets.iter().zip(model.arrays.iter()).enumerate() {
+        if t == 0 {
+            return Err(SlicingError::ZeroChannelCount);
+        }
+        if t > array.ch {
+            return Err(SlicingError::TargetExceedsArrayChannels {
+                array_idx: i,
+                requested: t,
+                available: array.ch,
+            });
+        }
+        if let Some(allowed) = model.allowed_channels.as_ref().and_then(|p| p.get(i)) {
+            if allowed.is_empty() {
+                if t != array.ch {
+                    return Err(SlicingError::FixedArrayTargetMismatch {
+                        array_idx: i,
+                        requested: t,
+                        fixed: array.ch,
+                    });
+                }
+            } else if !allowed.contains(&t) {
+                return Err(SlicingError::TargetNotInAllowedList {
+                    array_idx: i,
+                    requested: t,
+                    allowed: allowed.clone(),
+                });
+            }
+        }
     }
 
+    let num_arrays = model.arrays.len();
     let mut alloc_num = 0usize;
-    let mut arrays = Vec::with_capacity(model.arrays.len());
+    let mut arrays = Vec::with_capacity(num_arrays);
 
     for (i, array) in model.arrays.iter().enumerate() {
-        let in_ch = if i == 0 { 1 } else { new_ch };
-        arrays.push(slice_wavenet_array(array, in_ch, new_ch, &mut alloc_num)?);
+        let in_ch = if i == 0 { array.in_ch } else { targets[i - 1] };
+        let ch = targets[i];
+        let head = if i < num_arrays - 1 {
+            targets[i + 1]
+        } else {
+            array.head
+        };
+        arrays.push(slice_wavenet_array(array, in_ch, ch, head, &mut alloc_num)?);
     }
 
     let cond = model.arrays[0].cond;
@@ -401,10 +527,12 @@ pub fn slice_wavenet_model(
         rf += head_proc.receptive_field() - 1;
     }
 
+    let final_head = arrays.last().map(|a| a.head).unwrap_or(model.head);
+
     Ok(WaveNetModelDyn {
-        ch: new_ch,
+        ch: arrays[0].ch,
         k: model.k,
-        head: model.head,
+        head: final_head,
         arrays,
         head_scale: model.head_scale,
         receptive_field_size: rf,
@@ -420,6 +548,37 @@ pub fn slice_wavenet_model(
     })
 }
 
+/// Creates a new `WaveNetModelDyn` with uniform channel reduction on all slimmable arrays.
+///
+/// Arrays marked fixed (empty `allowed_channels`) retain their loaded channel count.
+/// Slicing delegates to [`slice_wavenet_model_per_array`].
+///
+/// # Errors
+/// Returns [`SlicingError`] if `new_ch == 0` or target exceeds array channel counts.
+pub fn slice_wavenet_model(
+    model: &WaveNetModelDyn,
+    new_ch: usize,
+) -> Result<WaveNetModelDyn, SlicingError> {
+    if new_ch == 0 {
+        return Err(SlicingError::ZeroChannelCount);
+    }
+    let mut targets = Vec::with_capacity(model.arrays.len());
+    for (i, array) in model.arrays.iter().enumerate() {
+        let is_fixed = model
+            .allowed_channels
+            .as_ref()
+            .and_then(|ac| ac.get(i))
+            .map(|a| a.is_empty())
+            .unwrap_or(false);
+        if is_fixed {
+            targets.push(array.ch);
+        } else {
+            targets.push(new_ch);
+        }
+    }
+    slice_wavenet_model_per_array(model, &targets)
+}
+
 /// Usage:
 /// Creates a full exact clone of a WaveNet model for storage, enabling main-thread
 /// slimmable rebuilds. Uses `clone_exact()` so that immutable weights and topology
@@ -433,46 +592,95 @@ pub fn clone_wavenet_for_slimmable_storage(
 }
 
 /// Centralized helper for slimmable WaveNet channel rebuild.
-///
 /// Checks if a model slot needs a WaveNet channel count change
-/// and performs the allocation-intensive `slice_channels` + GC swap.
+/// and performs the allocation-intensive `slice_channels_per_array` + GC swap.
 ///
-/// Must be called **before** DSP to keep the hot-path zero-alloc.
-/// Callers should obtain `target_ch` via `AdaptiveCompute::take_slimmable_rebuild()`
-/// before invoking this function.
+/// Must be called **off-RT** (before DSP or in background thread) to keep the hot-path zero-alloc.
+/// Callers can obtain `targets` via [`crate::dsp::adaptive::AdaptiveCompute::take_slimmable_rebuild`]
+/// (or the transactional `peek_slimmable_rebuild` +
+/// `confirm_slimmable_rebuild` pair) before invoking this function.
+///
+/// Returns `true` only when the model was actually rebuilt and swapped.
+/// A `false` return means no rebuild happened (already at targets, wrong
+/// variant, or rebuild failed) — the caller's pending request must be kept
+/// so it retries instead of being silently dropped.
 ///
 /// `max_buffer_size`: if `Some(n)`, calls `set_max_buffer_size(n)` after prewarm
 /// (needed by host plugins). Pass `None` for standalone mode.
 /// `on_gc`: callback to dispose the old model (e.g., `gc_cascade` or `push_to_gc`).
-/// `on_slice_error`: callback invoked when `slice_channels` fails.
-#[inline(always)]
+/// `on_slice_error`: callback invoked when slicing fails.
 pub fn try_slimmable_rebuild_single(
     model: &mut Option<Box<StaticModel>>,
-    target_ch: usize,
+    targets: &[usize],
     max_buffer_size: Option<usize>,
     on_gc: &mut impl FnMut(GcItem),
     on_slice_error: &mut impl FnMut(),
-) {
+) -> bool {
     if let Some(model_inner) = model.as_ref()
         && let StaticModel::WavenetDyn(w) = model_inner.as_ref()
-        && w.ch != target_ch
     {
-        match w.slice_channels(target_ch) {
-            Ok(mut new_model) => {
-                new_model.prewarm();
-                if let Some(max) = max_buffer_size
-                    && new_model.set_max_buffer_size(max).is_err()
-                {
-                    return;
+        let needs_rebuild = w.arrays.len() != targets.len()
+            || w.arrays.iter().zip(targets.iter()).any(|(a, &t)| a.ch != t);
+        if needs_rebuild {
+            match w.slice_channels_per_array(targets) {
+                Ok(mut new_model) => {
+                    new_model.pending_slim_channel = None;
+                    new_model.prewarm();
+                    if let Some(max) = max_buffer_size
+                        && new_model.set_max_buffer_size(max).is_err()
+                    {
+                        on_slice_error();
+                        return false;
+                    }
+                    let old = model.replace(Box::new(StaticModel::WavenetDyn(Box::new(new_model))));
+                    if let Some(old) = old {
+                        on_gc(GcItem::Model(old));
+                    }
+                    return true;
                 }
-                let old = model.replace(Box::new(StaticModel::WavenetDyn(Box::new(new_model))));
-                if let Some(old) = old {
-                    on_gc(GcItem::Model(old));
+                Err(_) => {
+                    on_slice_error();
+                    return false;
                 }
-            }
-            Err(_) => {
-                on_slice_error();
             }
         }
+    }
+    false
+}
+
+/// Checks if a model slot has a pending slimmable channel request staged via
+/// `set_slimmable_size`, and if so, performs the off-RT rebuild and GC swap.
+///
+/// Transactional: the pending request is only consumed (cleared) when the
+/// rebuild actually succeeds. A failed rebuild keeps `pending_slim_channel`
+/// intact so the next call retries.
+///
+/// Returns `true` if a rebuild occurred.
+pub fn try_slimmable_rebuild_from_pending(
+    model: &mut Option<Box<StaticModel>>,
+    max_buffer_size: Option<usize>,
+    on_gc: &mut impl FnMut(GcItem),
+    on_slice_error: &mut impl FnMut(),
+) -> bool {
+    let targets = if let Some(model_inner) = model.as_ref()
+        && let StaticModel::WavenetDyn(w) = model_inner.as_ref()
+    {
+        w.pending_slim_channel.clone()
+    } else {
+        None
+    };
+
+    if let Some(targets) = targets {
+        if try_slimmable_rebuild_single(model, &targets, max_buffer_size, on_gc, on_slice_error) {
+            // Success: the replacement model already carries
+            // `pending_slim_channel = None` (cleared in `_single`); nothing
+            // left to consume.
+            true
+        } else {
+            // Failure (or no-op): keep the pending request for retry.
+            false
+        }
+    } else {
+        false
     }
 }

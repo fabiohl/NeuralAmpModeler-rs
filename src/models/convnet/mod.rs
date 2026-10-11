@@ -20,6 +20,14 @@ use super::sealed;
 impl sealed::Sealed for ConvNetModel {}
 
 impl NamModel for ConvNetModel {
+    fn num_input_channels(&self) -> usize {
+        self.in_channels()
+    }
+
+    fn num_output_channels(&self) -> usize {
+        self.out_channels()
+    }
+
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
         self.process(input, output);
     }
@@ -32,7 +40,11 @@ impl NamModel for ConvNetModel {
     /// stabilization is a single one-shot feed (no separate zero phase), so
     /// it is armed as one pending unit and executed on the first
     /// [`NamModel::prewarm_step`] call.
+    ///
+    /// The zero phase clears every block's delay-line state so the pending
+    /// stabilization starts from the freshly-built condition.
     fn prewarm_reset(&mut self) {
+        self.clear_state();
         self.prewarm_pending = true;
     }
 
@@ -57,6 +69,13 @@ impl NamModel for ConvNetModel {
 
     fn set_max_buffer_size(&mut self, _max_buf: usize) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    /// Clears every block's causal delay-line state (see
+    /// [`ConvNetModel::clear_state`]); called by the default [`reset`](NamModel::reset)
+    /// before the optional stabilization pass.
+    fn clear_state(&mut self) {
+        self.clear_state();
     }
 
     fn prewarm_on_reset(&self) -> bool {

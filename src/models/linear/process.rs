@@ -9,6 +9,7 @@
 
 use super::LinearMode;
 use crate::math::common::SimdMath;
+use crate::models::plane_adapter;
 
 impl super::LinearModel {
     /// Processes a single audio sample using the Linear model.
@@ -228,83 +229,30 @@ impl super::LinearModel {
             // SAFETY: Caller guarantees input and output pointers point to valid channel buffers of length num_frames.
             unsafe { mc.process_raw(input, output, num_frames) };
         } else {
-            // SAFETY: Caller guarantees input pointer array has at least one valid channel of length num_frames.
-            let in_slice = unsafe { core::slice::from_raw_parts(*input, num_frames) };
-            // SAFETY: Caller guarantees output pointer array has at least one valid mutable channel of length num_frames.
-            let out_slice = unsafe { core::slice::from_raw_parts_mut(*output, num_frames) };
-            // SAFETY: in_slice and out_slice are valid slices of length num_frames.
-            unsafe { self.process(in_slice, out_slice) };
-        }
-    }
-
-    /// Safe multichannel processing helper taking slices of channel slices.
-    ///
-    /// Uses a stack buffer of up to 16 channels for zero heap allocations.
-    pub fn process_multichannel(&mut self, input: &[&[f32]], output: &mut [&mut [f32]]) {
-        let in_ch = input.len();
-        let out_ch = output.len();
-        if in_ch == 0 || out_ch == 0 {
-            return;
-        }
-        let num_frames = input.iter().map(|s| s.len()).min().unwrap_or(0);
-        if num_frames == 0 {
-            return;
-        }
-        for out in output.iter() {
-            assert!(out.len() >= num_frames);
-        }
-        if in_ch <= 16 && out_ch <= 16 {
-            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
-            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
-            for i in 0..in_ch {
-                in_ptrs[i] = input[i].as_ptr();
-            }
-            for i in 0..out_ch {
-                out_ptrs[i] = output[i].as_mut_ptr();
-            }
-            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
-            unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
-            }
-        } else {
-            let in_ptrs: Vec<*const f32> = input.iter().map(|s| s.as_ptr()).collect();
-            let out_ptrs: Vec<*mut f32> = output.iter_mut().map(|s| s.as_mut_ptr()).collect();
-            // SAFETY: in_ptrs and out_ptrs point to valid channel slices with num_frames elements.
-            unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
-            }
-        }
-    }
-
-    /// Safe multichannel in-place processing helper.
-    ///
-    /// Uses a stack buffer of up to 16 channels for zero heap allocations.
-    pub fn process_multichannel_in_place(&mut self, buffers: &mut [&mut [f32]]) {
-        let ch = buffers.len();
-        if ch == 0 {
-            return;
-        }
-        let num_frames = buffers.iter().map(|s| s.len()).min().unwrap_or(0);
-        if num_frames == 0 {
-            return;
-        }
-        if ch <= 16 {
-            let mut in_ptrs = [core::ptr::null::<f32>(); 16];
-            let mut out_ptrs = [core::ptr::null_mut::<f32>(); 16];
-            for i in 0..ch {
-                in_ptrs[i] = buffers[i].as_ptr();
-                out_ptrs[i] = buffers[i].as_mut_ptr();
-            }
-            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
-            unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
-            }
-        } else {
-            let in_ptrs: Vec<*const f32> = buffers.iter().map(|s| s.as_ptr()).collect();
-            let out_ptrs: Vec<*mut f32> = buffers.iter_mut().map(|s| s.as_mut_ptr()).collect();
-            // SAFETY: in_ptrs and out_ptrs point to valid channel buffers with num_frames elements.
-            unsafe {
-                self.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), num_frames);
+            // SAFETY: Caller guarantees the input/output pointer arrays hold
+            // the mono geometry and each plane covers `num_frames`.
+            let (in0, out0) = unsafe { (*input, *output) };
+            if !std::ptr::eq(in0, out0 as *const f32) {
+                // SAFETY: `in0`/`out0` each cover `num_frames` and, in this
+                // branch, do not alias, so shared/mutable views are disjoint.
+                let (in_slice, out_slice) = unsafe {
+                    (
+                        core::slice::from_raw_parts(in0, num_frames),
+                        core::slice::from_raw_parts_mut(out0, num_frames),
+                    )
+                };
+                // SAFETY: in_slice/out_slice are valid, distinct, length num_frames.
+                unsafe { self.process(in_slice, out_slice) };
+            } else {
+                // Exact in-place alias: stage the input before writing.
+                let outputs = [out0];
+                // SAFETY: `in0` and the single output plane cover `num_frames`;
+                // exact alias is the permitted case.
+                unsafe {
+                    plane_adapter::run_staged(in0, &outputs, num_frames, 1, |inp, outp| {
+                        self.process(inp, outp)
+                    });
+                }
             }
         }
     }

@@ -71,12 +71,16 @@ impl WaveNetA2Dyn {
     /// Monomorphized inner loop — see [`process`](Self::process) for contract.
     #[inline(always)]
     unsafe fn process_internal<M: SimdMath>(&mut self, input: &[f32], output: &mut [f32]) {
-        let total = input.len().min(output.len());
+        // `head_size` interleaved channels are written per frame; the frame
+        // count is bounded by both the input length and the output capacity in
+        // frames.
+        let out_ch = self.head_size.max(1);
+        let total = input.len().min(output.len() / out_ch);
         if total == 0 {
             return;
         }
 
-        output[..total].fill(0.0);
+        output[..total * out_ch].fill(0.0);
 
         if self.layers.is_empty() {
             self.head_write_pos = (self.head_write_pos + total) & self.head_ring_mask;
@@ -201,7 +205,7 @@ impl WaveNetA2Dyn {
                 }
             }
 
-            self.head_finalize(head_wp, nf, &mut output[pos..pos + nf]);
+            self.head_finalize(head_wp, nf, &mut output[pos * out_ch..(pos + nf) * out_ch]);
             pos += nf;
         }
 
@@ -438,11 +442,32 @@ impl WaveNetA2Dyn {
     fn head_finalize(&mut self, head_wp: usize, nf: usize, output: &mut [f32]) {
         self.head_write_pos = (head_wp + nf) & self.head_ring_mask;
 
-        if let Some(ref head) = self.head_conv {
-            head.process(
+        let head_size = self.head_size;
+        if head_size == 1 {
+            if let Some(ref head) = self.head_conv {
+                head.process(
+                    &self.head_accum,
+                    self.head_write_pos,
+                    self.head_ring_mask,
+                    nf,
+                    output,
+                );
+            }
+        } else {
+            // Multi-output head: same projection as `cascade_head_finalize`
+            // via the shared `project_heads` helper (`head_size` interleaved
+            // channels per frame, `head_rechannel_w` Conv1D over
+            // `head_accum_size`, bias, then per-channel scale).
+            super::process_cascade::project_heads(
                 &self.head_accum,
+                &self.head_rechannel_w,
+                &self.head_rechannel_b,
+                &self.head_rechannel_scale,
                 self.head_write_pos,
                 self.head_ring_mask,
+                head_size,
+                self.head_accum_size,
+                self.head_kernel_size,
                 nf,
                 output,
             );

@@ -72,13 +72,16 @@ pub struct FreeWavenetGeometry {
     /// the signal after all layer arrays, before `head_scale` and output.
     /// `None` means no post-stack head is present (standard behavior).
     pub post_stack_head: Option<HeadConfig>,
-    /// Allowed channel breakpoints for slimmable WaveNet models.
+    /// Allowed channel breakpoints for slimmable WaveNet models, one list per
+    /// layer-array (C++ `SlimmableWavenet::_per_array_allowed_channels`).
     ///
-    /// When `Some`, the model supports `SlimmableWavenet` channel slicing.
-    /// The first element must match the model's full channel count.
-    /// Each subsequent element defines a lower-quality tier (fewer channels).
+    /// When `Some`, the outer `Vec` has one entry per layer-array; an empty
+    /// inner list means that array is non-slimmable (keeps full channels).
+    /// A non-empty inner list must be sorted ascending with `back() == channels`
+    /// for that array. Missing `kwargs.allowed_channels` defaults to
+    /// `[1..=channels]` (C++ `SlimmableWavenetConfig::create`).
     /// `None` means the model is not slimmable-capable.
-    pub allowed_channels: Option<Vec<usize>>,
+    pub allowed_channels: Option<Vec<Vec<usize>>>,
 }
 
 impl FreeWavenetGeometry {
@@ -115,6 +118,33 @@ impl FreeWavenetGeometry {
 
 /// Result of WaveNet topology detection.
 ///
+use crate::common::diagnostics::NamErrorCode;
+
+/// Topology construction or validation error carrying a typed diagnostic error code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopologyError {
+    /// Diagnostic error code.
+    pub code: NamErrorCode,
+    /// Detailed reason string.
+    pub reason: String,
+}
+
+impl std::fmt::Display for TopologyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{} {}] {}",
+            self.code.code(),
+            self.code.mnemonic(),
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for TopologyError {}
+
+/// The outcome of WaveNet topology detection (`get_wavenet_topology`).
+///
 /// Distinguishes three states:
 /// - `Known`: fast-path const-generic SKU (Standard/Lite/Feather/Nano).
 /// - `Free`: valid geometry outside the catalog — destined for the dynamic engine.
@@ -126,7 +156,30 @@ pub enum WavenetTopologyResult {
     /// Valid geometry not in the catalog — use dynamic engine.
     Free(Box<FreeWavenetGeometry>),
     /// Rejected due to unsupported feature or invalid shape.
-    Rejected(String),
+    Rejected {
+        /// Typed diagnostics error code.
+        code: NamErrorCode,
+        /// Rejection reason description.
+        reason: String,
+    },
+}
+
+impl WavenetTopologyResult {
+    /// Helper to construct a `Rejected` variant with [`NamErrorCode::InvalidModelTopology`] (`E1305`).
+    pub fn rejected_topology(reason: impl Into<String>) -> Self {
+        Self::Rejected {
+            code: NamErrorCode::InvalidModelTopology,
+            reason: reason.into(),
+        }
+    }
+
+    /// Helper to construct a `Rejected` variant with [`NamErrorCode::InvalidFeatureTopology`] (`E1316`).
+    pub fn rejected_feature(reason: impl Into<String>) -> Self {
+        Self::Rejected {
+            code: NamErrorCode::InvalidFeatureTopology,
+            reason: reason.into(),
+        }
+    }
 }
 
 static STD_DILATIONS: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
@@ -215,16 +268,19 @@ impl NamModelData {
 pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     // ── Architecture gate ──
     if data.architecture != "WaveNet" {
-        return WavenetTopologyResult::Rejected("Not a WaveNet model.".to_string());
+        return WavenetTopologyResult::Rejected {
+            code: NamErrorCode::UnsupportedArchitecture,
+            reason: "Not a WaveNet model.".to_string(),
+        };
     }
 
     let layers = &data.config.layers;
     if layers.is_empty() {
-        return WavenetTopologyResult::Rejected("WaveNet model has no layer arrays.".to_string());
+        return WavenetTopologyResult::rejected_topology("WaveNet model has no layer arrays.");
     }
 
     if layers.len() > MAX_WAVENET_ARRAYS {
-        return WavenetTopologyResult::Rejected(format!(
+        return WavenetTopologyResult::rejected_topology(format!(
             "WaveNet model has {} layer arrays, exceeding maximum {} — \
              DoS/OOM protection.",
             layers.len(),
@@ -237,7 +293,7 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     // reject oversized values before the dynamic engine allocates
     // conditioning buffers proportional to it.
     if condition_size > MAX_CONDITION_SIZE {
-        return WavenetTopologyResult::Rejected(format!(
+        return WavenetTopologyResult::rejected_topology(format!(
             "WaveNet A1 condition_size ({condition_size}) exceeds maximum \
              {MAX_CONDITION_SIZE} — DoS/OOM protection (H-03)."
         ));
@@ -245,7 +301,7 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
 
     let extract = match extract_layer_metadata(layers) {
         Ok(m) => m,
-        Err(reason) => return WavenetTopologyResult::Rejected(reason),
+        Err(reason) => return WavenetTopologyResult::rejected_topology(reason),
     };
 
     // ── Aggregate state budget check ──
@@ -256,19 +312,21 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         &extract.head_kernel_sizes,
         &extract.head_dilations,
     ) {
-        return WavenetTopologyResult::Rejected(reason);
+        return WavenetTopologyResult::rejected_topology(reason);
     }
 
-    // ── Guardrail: Reject A1 models with A2-specific features ──
-    if let Err(reason) = validate_a1_guardrail(layers) {
-        return WavenetTopologyResult::Rejected(reason);
-    }
-
-    // ── Slimmable metadata validation ──
+    // ── Slimmable metadata validation (E1316) ──
+    // Run before general A1 guardrails so slimmable invariants (method, channels,
+    // head_kernel_size, groups) produce E1316 instead of generic E1305.
     let allowed_channels = match validate_slimmable_metadata(layers, &extract.channels) {
-        Err(reason) => return WavenetTopologyResult::Rejected(reason),
+        Err(reason) => return WavenetTopologyResult::rejected_feature(reason),
         Ok(ac) => ac,
     };
+
+    // ── Guardrail: Reject A1 models with A2-specific features (E1305) ──
+    if let Err(reason) = validate_a1_guardrail(layers) {
+        return WavenetTopologyResult::rejected_topology(reason);
+    }
 
     // ── Try matching a known catalog SKU (fast-path) ──
     if layers.len() == 2 {
@@ -291,17 +349,15 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
 
     // ── Free geometry (valid A1, but not in catalog) ──
     let Some(kernel_size) = extract.first_kernel_size else {
-        return WavenetTopologyResult::Rejected(
+        return WavenetTopologyResult::rejected_topology(
             "Layer 0 is missing or has invalid 'kernel_size' — required for \
-             free geometry WaveNet A1."
-                .to_string(),
+             free geometry WaveNet A1.",
         );
     };
     if extract.first_head_size.is_none_or(|h| h == 0) {
-        return WavenetTopologyResult::Rejected(
+        return WavenetTopologyResult::rejected_topology(
             "Layer 0 is missing or has invalid 'head_size' — required for \
-             WaveNet A1 geometries (determines the head projection dimension)."
-                .to_string(),
+             WaveNet A1 geometries (determines the head projection dimension).",
         );
     }
 
@@ -318,12 +374,16 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         .and_then(|l| l.head_size)
         .unwrap_or(1);
     let Ok(post_stack_head) = data.config.validate_head(in_channels) else {
-        return WavenetTopologyResult::Rejected(
+        return WavenetTopologyResult::rejected_topology(
             "WaveNet free-geometry head exceeds canonical ceilings \
-             (channels/out_channels/kernel_size) — OOM/DoS protection (F-RES2-02)."
-                .to_string(),
+             (channels/out_channels/kernel_size) — OOM/DoS protection (F-RES2-02).",
         );
     };
+    if allowed_channels.is_some() && post_stack_head.is_some() {
+        return WavenetTopologyResult::rejected_feature(
+            "SlimmableWavenet: post-stack head is not supported.",
+        );
+    }
 
     WavenetTopologyResult::Free(Box::new(FreeWavenetGeometry {
         channels: extract.channels,
@@ -712,15 +772,42 @@ fn validate_a1_guardrail(
                 "Layer {i} has active head1x1 — A2 feature not supported in WaveNet A1."
             ));
         }
-        if raw
-            .get("layer1x1")
-            .and_then(|l| l.get("active"))
-            .and_then(|a| a.as_bool())
-            .unwrap_or(false)
-        {
-            return Err(format!(
-                "Layer {i} has active layer1x1 — A2 feature not supported in WaveNet A1."
-            ));
+        if let Some(l1x1) = raw.get("layer1x1") {
+            // C++ A1 (`wavenet/model.cpp:948-954`) reads `layer1x1["active"]`
+            // and `layer1x1["groups"]` unconditionally whenever the key is
+            // present, so a malformed block (non-object, or missing/ill-typed
+            // keys) is rejected rather than silently defaulted. Absence of the
+            // `layer1x1` key keeps the C++ default `active=true, groups=1`.
+            // The Rust A1 engine always consumes the 1×1 block, so
+            // `active=false` and `groups != 1` remain unsupported (PO backlog).
+            let Some(obj) = l1x1.as_object() else {
+                return Err(format!(
+                    "Layer {i} has a non-object layer1x1 — malformed (C++ expects an \
+                     object with 'active' and 'groups')."
+                ));
+            };
+            let Some(active) = obj.get("active").and_then(serde_json::Value::as_bool) else {
+                return Err(format!(
+                    "Layer {i} has layer1x1 with a missing or non-boolean 'active' — malformed."
+                ));
+            };
+            let Some(groups) = obj.get("groups").and_then(serde_json::Value::as_u64) else {
+                return Err(format!(
+                    "Layer {i} has layer1x1 with a missing or non-integer 'groups' — malformed."
+                ));
+            };
+            if !active {
+                return Err(format!(
+                    "Layer {i} has layer1x1.active=false — not supported in the Rust A1 \
+                     engine (PO backlog)."
+                ));
+            }
+            if groups != 1 {
+                return Err(format!(
+                    "Layer {i} has layer1x1.groups={groups} — not supported in the Rust A1 \
+                     engine (PO backlog)."
+                ));
+            }
         }
         for &(key, _) in FILM_KEYS {
             if raw
@@ -763,94 +850,178 @@ fn validate_a1_guardrail(
 fn validate_slimmable_metadata(
     layers: &[crate::loader::nam_json::model::NamLayerConfig],
     channels: &[usize],
-) -> Result<Option<Vec<usize>>, String> {
-    let mut allowed_channels: Option<Vec<usize>> = None;
+) -> Result<Option<Vec<Vec<usize>>>, String> {
+    let any_slimmable = layers.iter().any(|l| l.slimmable.is_some());
+    if !any_slimmable {
+        return Ok(None);
+    }
+
+    // In a slimmable model, C++ slimmable.cpp:136-146 validates that ALL layer arrays
+    // have head_kernel_size == 1 and all convolution groups == 1.
+    for (j, layer) in layers.iter().enumerate() {
+        let hk = layer
+            .head_kernel_size
+            .or_else(|| {
+                layer
+                    .layer_raw
+                    .as_ref()
+                    .and_then(|raw| raw.get("head"))
+                    .and_then(|h| h.get("kernel_size"))
+                    .and_then(|k| k.as_u64())
+                    .map(|k| k as usize)
+            })
+            .unwrap_or(1);
+        if hk != 1 {
+            return Err(format!(
+                "Layer {j} slimmable requires head_kernel_size==1, got {hk}."
+            ));
+        }
+
+        // C++ `compute_slim_bottleneck` (`slimmable.cpp:80-85`) reduces to
+        // `slim_bn = slim_ch` only when `bottleneck == channels`; otherwise it
+        // back-computes `max(1, bottleneck * slim_ch / channels)`. The Rust
+        // slicer has no representation for a distinct bottleneck, so reject
+        // fail-closed instead of silently producing a wrong channel width.
+        let full_ch = channels.get(j).copied().unwrap_or(0);
+        let bottleneck = layer.bottleneck.unwrap_or(full_ch);
+        if bottleneck != full_ch {
+            return Err(format!(
+                "Layer {j} slimmable requires bottleneck==channels ({full_ch}), got {bottleneck}."
+            ));
+        }
+
+        if let Some(raw) = layer.layer_raw.as_ref().and_then(|r| r.as_object()) {
+            // C++ `validate_groups` (`slimmable.cpp:88-98`) reads these keys as
+            // concrete integers; a present-but-unparseable value (negative or
+            // non-numeric) is malformed and must not fall back to the default.
+            for key in ["groups", "groups_input", "groups_input_mixin"] {
+                if let Some(value) = raw.get(key) {
+                    let Some(v) = value.as_u64() else {
+                        return Err(format!(
+                            "Layer {j} slimmable requires {key} to be a non-negative integer."
+                        ));
+                    };
+                    if v != 1 {
+                        return Err(format!("Layer {j} slimmable requires {key}==1, got {v}."));
+                    }
+                }
+            }
+            for (key, default_active) in [("layer1x1", true), ("head1x1", false)] {
+                let Some(block) = raw.get(key) else {
+                    continue;
+                };
+                let Some(obj) = block.as_object() else {
+                    return Err(format!(
+                        "Layer {j} slimmable requires '{key}' to be an object when present."
+                    ));
+                };
+                let active = match obj.get("active") {
+                    Some(a) => a.as_bool().ok_or_else(|| {
+                        format!("Layer {j} slimmable requires '{key}.active' to be a boolean.")
+                    })?,
+                    None => default_active,
+                };
+                match obj.get("groups") {
+                    Some(groups_val) => {
+                        let Some(groups) = groups_val.as_u64() else {
+                            return Err(format!(
+                                "Layer {j} slimmable requires '{key}.groups' to be a \
+                                 non-negative integer."
+                            ));
+                        };
+                        if active && groups != 1 {
+                            return Err(format!(
+                                "Layer {j} slimmable requires {key}.groups==1, got {groups}."
+                            ));
+                        }
+                    }
+                    None if active => {
+                        return Err(format!(
+                            "Layer {j} slimmable requires '{key}.groups' when active."
+                        ));
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    let mut per_array: Vec<Vec<usize>> = Vec::with_capacity(layers.len());
 
     for (i, layer) in layers.iter().enumerate() {
         let Some(ref cfg) = layer.slimmable else {
+            per_array.push(Vec::new());
             continue;
         };
-        if cfg
-            .method
-            .as_deref()
-            .is_some_and(|m| m != "slice_channels_uniform")
-        {
+
+        let method = cfg.method.as_deref().unwrap_or("");
+        if method != "slice_channels_uniform" {
             return Err(format!(
-                "Layer {i} has unsupported slimmable method '{}'. \
-                 Only 'slice_channels_uniform' is supported.",
-                cfg.method.as_deref().unwrap_or("(none)")
+                "Layer {i} has unsupported slimmable method '{method}'. \
+                 Only 'slice_channels_uniform' is supported."
             ));
         }
-        let Some(ac) = cfg
+
+        let full_ch = channels.get(i).copied().unwrap_or(0);
+        // C++ slimmable.cpp:560-572:
+        // If kwargs.allowed_channels is absent, defaults to [1..=full_ch].
+        // If explicitly present (e.g. `[]`), leaves allowed list as provided (empty = fixed array).
+        let ac: Vec<usize> = match cfg
             .kwargs
             .as_ref()
             .and_then(|k| k.allowed_channels.as_deref())
-        else {
-            return Err(format!(
-                "Layer {i} has slimmable config but missing kwargs.allowed_channels."
-            ));
+        {
+            None => (1..=full_ch).collect(),
+            Some(list) => list.to_vec(),
         };
-        if ac.is_empty() {
-            return Err(format!(
-                "Layer {i} has an empty 'slimmable' allowed_channels list."
-            ));
-        }
-        if ac.len() > MAX_WAVENET_ARRAYS {
-            return Err(format!(
-                "Layer {i} has {} slimmable breakpoints, exceeding maximum {} — DoS/OOM protection.",
-                ac.len(),
-                MAX_WAVENET_ARRAYS
-            ));
-        }
-        for w in ac.windows(2) {
-            if w[0] >= w[1] {
+
+        if !ac.is_empty() {
+            if ac.len() > MAX_WAVENET_FREE_CHANNELS {
                 return Err(format!(
-                    "Layer {i} slimmable channels must be strictly ascending: {:?}.",
+                    "Layer {i} has {} slimmable breakpoints, exceeding maximum {} — DoS/OOM protection.",
+                    ac.len(),
+                    MAX_WAVENET_FREE_CHANNELS
+                ));
+            }
+            for w in ac.windows(2) {
+                if w[0] >= w[1] {
+                    return Err(format!(
+                        "Layer {i} slimmable channels must be strictly ascending: {:?}.",
+                        ac
+                    ));
+                }
+            }
+            if ac.contains(&0) {
+                return Err(format!(
+                    "Layer {i} slimmable channels contain a zero value: {:?}.",
+                    ac
+                ));
+            }
+            if ac.iter().any(|&c| c > MAX_WAVENET_FREE_CHANNELS) {
+                return Err(format!(
+                    "Layer {i} slimmable channels contain a value exceeding maximum {}: {:?}.",
+                    MAX_WAVENET_FREE_CHANNELS, ac
+                ));
+            }
+            if ac.last().copied().unwrap_or(0) != full_ch {
+                return Err(format!(
+                    "Layer {i} slimmable allowed_channels last entry must equal full channels ({full_ch}): {:?}.",
                     ac
                 ));
             }
         }
-        if ac.contains(&0) {
-            return Err(format!(
-                "Layer {i} slimmable channels contain a zero value: {:?}.",
-                ac
-            ));
-        }
-        if ac.iter().any(|&c| c > MAX_WAVENET_FREE_CHANNELS) {
-            return Err(format!(
-                "Layer {i} slimmable channels contain a value exceeding maximum {}: {:?}.",
-                MAX_WAVENET_FREE_CHANNELS, ac
-            ));
-        }
-        match &allowed_channels {
-            None => {
-                allowed_channels = Some(ac.to_vec());
-            }
-            Some(existing) if existing != ac => {
-                return Err(format!(
-                    "Slimmable allowed_channels mismatch: layer 0 has {:?}, \
-                     layer {i} has {:?}. All layers must declare the same list \
-                     for slice_channels_uniform.",
-                    existing, ac
-                ));
-            }
-            _ => {}
-        }
+
+        per_array.push(ac);
     }
 
-    if let Some(ref allowed) = allowed_channels {
-        for (i, &ch) in channels.iter().enumerate() {
-            if !allowed.contains(&ch) {
-                return Err(format!(
-                    "Layer {i} channels ({}) is not in the declared \
-                     slimmable allowed_channels: {:?}.",
-                    ch, allowed
-                ));
-            }
-        }
+    // C++ slimmable.cpp:371-393: At least one layer array must have non-empty allowed_channels.
+    if !per_array.iter().any(|a| !a.is_empty()) {
+        return Err(
+            "SlimmableWavenet: at least one layer array must have allowed_channels.".to_string(),
+        );
     }
 
-    Ok(allowed_channels)
+    Ok(Some(per_array))
 }
 
 // ── Catalog SKU matching ───────────────────────────────────────────────────

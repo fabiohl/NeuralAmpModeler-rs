@@ -43,21 +43,100 @@ pub use model_dyn::LstmModelDyn;
 pub use model1::LstmModel1;
 pub use model2::LstmModel2;
 
-/// Total serialized weight count for LSTM (num_layers, hidden_size).
+/// Calculates total serialized weight count for LSTM with arbitrary input and output channel counts,
+/// using checked arithmetic to prevent integer overflow.
+/// Returns `None` if any intermediate computation overflows `usize`.
+pub const fn checked_lstm_weight_count_io(
+    num_layers: usize,
+    hidden_size: usize,
+    input_size: usize,
+    out_channels: usize,
+) -> Option<usize> {
+    let h = hidden_size;
+
+    // layer0 = 4 * h * (input_size + h) + 6 * h
+    let ih = match input_size.checked_add(h) {
+        Some(val) => val,
+        None => return None,
+    };
+    let w_ih = match (4usize).checked_mul(h) {
+        Some(val) => match val.checked_mul(ih) {
+            Some(w) => w,
+            None => return None,
+        },
+        None => return None,
+    };
+    let bias_state0 = match (6usize).checked_mul(h) {
+        Some(val) => val,
+        None => return None,
+    };
+    let layer0 = match w_ih.checked_add(bias_state0) {
+        Some(val) => val,
+        None => return None,
+    };
+
+    // subsequent = (num_layers - 1) * (8 * h * h + 6 * h)
+    let subsequent = if num_layers > 1 {
+        let n_sub = num_layers - 1;
+        let h_sq = match h.checked_mul(h) {
+            Some(val) => val,
+            None => return None,
+        };
+        let w_sub = match (8usize).checked_mul(h_sq) {
+            Some(val) => val,
+            None => return None,
+        };
+        let per_sub = match w_sub.checked_add(bias_state0) {
+            Some(val) => val,
+            None => return None,
+        };
+        match n_sub.checked_mul(per_sub) {
+            Some(val) => val,
+            None => return None,
+        }
+    } else {
+        0
+    };
+
+    // head = out_channels * h + out_channels
+    let head_w = match out_channels.checked_mul(h) {
+        Some(val) => val,
+        None => return None,
+    };
+    let head = match head_w.checked_add(out_channels) {
+        Some(val) => val,
+        None => return None,
+    };
+
+    match layer0.checked_add(subsequent) {
+        Some(sum) => sum.checked_add(head),
+        None => None,
+    }
+}
+
+/// Total serialized weight count for LSTM with arbitrary input and output channel counts.
+pub const fn lstm_weight_count_io(
+    num_layers: usize,
+    hidden_size: usize,
+    input_size: usize,
+    out_channels: usize,
+) -> usize {
+    match checked_lstm_weight_count_io(num_layers, hidden_size, input_size, out_channels) {
+        Some(count) => count,
+        None => panic!("LSTM weight count calculation overflowed"),
+    }
+}
+
+/// Total serialized weight count for LSTM (num_layers, hidden_size) with mono 1→1 I/O.
 ///
-/// This is the single canonical source for LSTM weight arithmetic.
+/// This is the single canonical source for mono LSTM weight arithmetic.
 /// Derived from the per-layer layout: 4 gates × (input+hidden)×hidden weights,
 /// 4×hidden biases, hidden-state preload, cell-state preload.
 ///
 /// 1-layer: 4h² + 11h + 1
 /// 2-layer: 12h² + 17h + 1
 pub const fn lstm_weight_count(num_layers: usize, hidden_size: usize) -> usize {
-    let h = hidden_size;
-    if num_layers == 1 {
-        4 * h * (1 + h) + 7 * h + 1
-    } else {
-        12 * h * h + 17 * h + 1
-    }
+    lstm_weight_count_io(num_layers, hidden_size, 1, 1)
 }
 
 // =============================================================================
@@ -123,8 +202,12 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> NamModel
         lstm_prewarm_common(self, num_samples);
     }
 
-    /// LSTM reset: zeros internal states and executes prewarm to stabilize
-    /// recurrent state, matching C++ `Reset()` → `prewarm(GetPrewarmSamples())`.
+    /// LSTM reset: zeros internal states and, when `prewarm_on_reset` is set,
+    /// executes prewarm to stabilize recurrent state.
+    ///
+    /// The C++ `DSP::Reset` without prewarm preserves the file-loaded `_xh`/`_c`
+    /// (`NAM/lstm.cpp:24-28`); the Rust reset always zeroes them — an intended
+    /// divergence recorded as DEC-03 in `docs/architecture.md` §1.7.
     fn reset(&mut self, _sample_rate: u32, _max_buffer_size: usize) -> anyhow::Result<()> {
         self.reset_states();
         if self.prewarm_on_reset() {
@@ -183,8 +266,12 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize> 
         lstm_prewarm_common(self, num_samples);
     }
 
-    /// LSTM reset: zeros internal states and executes prewarm to stabilize
-    /// recurrent state, matching C++ `Reset()` → `prewarm(GetPrewarmSamples())`.
+    /// LSTM reset: zeros internal states and, when `prewarm_on_reset` is set,
+    /// executes prewarm to stabilize recurrent state.
+    ///
+    /// The C++ `DSP::Reset` without prewarm preserves the file-loaded `_xh`/`_c`
+    /// (`NAM/lstm.cpp:24-28`); the Rust reset always zeroes them — an intended
+    /// divergence recorded as DEC-03 in `docs/architecture.md` §1.7.
     fn reset(&mut self, _sample_rate: u32, _max_buffer_size: usize) -> anyhow::Result<()> {
         self.reset_states();
         if self.prewarm_on_reset() {
@@ -230,6 +317,14 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize> 
 // =============================================================================
 
 impl NamModel for LstmModelDyn {
+    fn num_input_channels(&self) -> usize {
+        self.in_channels
+    }
+
+    fn num_output_channels(&self) -> usize {
+        self.out_channels
+    }
+
     /// Executes LSTM audio processing through the dynamic layer chain.
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
         self.process(input, output);
@@ -241,8 +336,11 @@ impl NamModel for LstmModelDyn {
         lstm_prewarm_common(self, num_samples);
     }
 
-    /// LSTM reset: zeros all layers' internal states and executes prewarm
-    /// to stabilize recurrent state, matching C++ behavior.
+    /// LSTM reset: zeros all layers' internal states and, when
+    /// `prewarm_on_reset` is set, executes prewarm to stabilize recurrent state.
+    ///
+    /// Divergence from C++ (which preserves the file-loaded `_xh`/`_c` when
+    /// prewarm is disabled) is recorded as DEC-03 in `docs/architecture.md` §1.7.
     fn reset(&mut self, _sample_rate: u32, _max_buffer_size: usize) -> anyhow::Result<()> {
         self.reset_states();
         if self.prewarm_on_reset() {

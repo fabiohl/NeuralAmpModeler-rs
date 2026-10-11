@@ -95,7 +95,7 @@ Standard exact activations and neural stage oversampling operate synergistically
 
 - **Exact-Grade Gate Activations:** Exp-based polynomial kernels ($\le 2.4 \times 10^{-7}$ error) across SIMD dispatch paths prevent error propagation in hidden state $h_t$.
 - **Kahan-Compensated Head Projection:** Head projection accumulation ($H \to 1$) uses Kahan compensated summation, yielding $\sim 2\text{ dB}$ higher SNR in deep projection heads.
-- **Oversampling Interaction:** In feedforward architectures (WaveNet, ConvNet), oversampling is acoustically transparent. In recurrent architectures (LSTM), discrete updates step at $\Delta t = 1/f_s$. Running at $2\times$ or $4\times$ causes the recurrence to step at $\Delta t / 2$ or $\Delta t / 4$, compressing physical decay time and modifying frequency response (typical $\text{ESR} \approx -15 \text{ to } -25\text{ dB}$ vs native rate). For clone fidelity matching analog hardware captures, LSTMs must be run at native sample rate (`Oversample::Off`).
+- **Oversampling Interaction & Temporal Memory:** Oversampling is an advanced pipeline extension for anti-aliasing non-linear harmonics, not a bit-exact NAMCore representation. Convolutional kernels (WaveNet, ConvNet) possess temporal memory defined in discrete sample delays (receptive field in samples); driving them at $2\times$ or $4\times$ rates compresses effective physical filter lengths and time constants relative to real time. In recurrent architectures (LSTM), discrete updates step at $\Delta t = 1/f_s$; running at $2\times$ or $4\times$ causes recurrence updates at $\Delta t / 2$ or $\Delta t / 4$, substantially modifying decay curves and frequency response (typical $\text{ESR} \approx -15 \text{ to } -25\text{ dB}$ vs native rate). For canonical bit-exact clone fidelity matching NAMCore and analog captures, models should be evaluated at their native sample rate (`Oversample::Off`). HQ oversampling is explicitly an anti-aliasing extension.
 
 ### 3.3 Dynamic Path & Container Regression Fixtures
 
@@ -160,8 +160,8 @@ Every layer in the DSP pipeline is covered by structural invariance tests valida
 | Mode              | Stages | Added Latency                                | Relative CPU Cost           | Architectural Behavior                                              |
 |:----------------- |:------:|:--------------------------------------------:|:---------------------------:|:------------------------------------------------------------------- |
 | **Off** (Default) | 0      | 0 samples                                    | $1.0\times$                 | Native reference (all topologies)                                   |
-| **2×**            | 1      | 12 samples @ native rate (~0.25 ms @ 48 kHz) | $\sim 2.0\times$ model cost | Transparent anti-aliasing (WaveNet/ConvNet/A2); Timbre shift (LSTM) |
-| **4×**            | 2      | 24 samples @ native rate (~0.50 ms @ 48 kHz) | $\sim 4.0\times$ model cost | Transparent anti-aliasing (WaveNet/ConvNet/A2); Timbre shift (LSTM) |
+| **2×**            | 1      | 12 samples @ native rate (~0.25 ms @ 48 kHz) | $\sim 2.0\times$ model cost | Anti-aliasing extension; sample-domain memory scaling; Timbre shift in recurrent LSTM |
+| **4×**            | 2      | 24 samples @ native rate (~0.50 ms @ 48 kHz) | $\sim 4.0\times$ model cost | Anti-aliasing extension; sample-domain memory scaling; Timbre shift in recurrent LSTM |
 
 Latency is reported dynamically to the host via `OversampleEngine::latency_samples()`.
 
@@ -177,7 +177,7 @@ ADAA requires analytical antiderivatives per activation function, conflicting wi
 
 **Architecture:** Two complementary defenses prevent subnormal (denormal) floating-point numbers from entering neural network state buffers, avoiding 10–100× microcode execution stalls on x86 processors:
 
-1. **Deterministic Symmetrical Dither:** A constant offset `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is injected into input samples before inference and subtracted after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)). Symmetrical addition and subtraction provide bit-exact cancellation with zero noise floor elevation.
+1. **Deterministic Symmetrical Dither:** A constant offset `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is injected into input samples before inference and subtracted after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)). Because the neural network represents a non-linear transfer function $f$, $f(x + d) - d \neq f(x)$; subtraction does not yield mathematical bit-exact cancellation. However, the $-220\text{ dBFS}$ offset sits more than 70 dB below the $f32$ floating-point machine epsilon ($\sim -144\text{ dBFS}$), maintaining effective noise-floor neutrality while keeping subnormal values flushed from arithmetic pipelines.
 2. **Hardware FTZ/DAZ (MXCSR Register):** Configures SSE2 MXCSR control register flags:
    - **FTZ (Flush-To-Zero):** Output subnormals flush to positive zero.
    - **DAZ (Denormals-Are-Zero):** Input subnormals are treated as zero.
@@ -227,11 +227,11 @@ Empirical measurements on x86-64-v3 (AVX2/FMA) for standard guitar cabinet IRs (
 
 Partition construction and FFT pre-computation occur strictly off-RT during loader initialization (~19.6 µs for 2048 taps).
 
-### 9.3 Audio Fidelity & Bit-Exact Invariance
+### 9.3 Audio Fidelity & Near Bit-Exact Invariance
 
 Partition sizing in UPOLS has **zero impact on audio fidelity**:
 
-- **Bit-Exact Frequency Response:** Output is mathematically identical across all partition sizes ($\text{ESR} < 10^{-11}$ vs direct convolution, bounded only by floating-point MAC summation order).
+- **Near Bit-Exact Frequency Response:** Output is mathematically identical across all partition sizes ($\text{ESR} < 10^{-11}$ vs direct convolution, bounded only by floating-point MAC summation order).
 - **Linear-Phase FIR Reconstruction:** Zero spectral coloration, zero truncation, zero frequency warping.
 - **Tail Ring-Out Continuity:** When audio input drops to zero, the impulse response tail renders to completion via the block-agnostic tail drain.
 

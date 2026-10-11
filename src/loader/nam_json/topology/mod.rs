@@ -14,10 +14,10 @@ mod wavenet;
 pub use a2::{A2TopologyResult, is_a2_shape};
 pub use convnet::{ConvNetFormat, ConvNetTopology, get_convnet_topology};
 pub use linear::{LinearTopology, get_linear_topology};
-pub use lstm::get_lstm_topology;
+pub use lstm::{LstmTopology, get_lstm_topology};
 pub use sequential::{SequentialChildTopology, SequentialTopology, get_sequential_topology};
 pub(crate) use wavenet::parse_semver;
 pub use wavenet::{
-    A2TopologyVectors, FreeWavenetGeometry, NamWavenetTopology, WavenetTopologyResult,
-    get_wavenet_topology, validate_a2_layer_topology,
+    A2TopologyVectors, FreeWavenetGeometry, NamWavenetTopology, TopologyError,
+    WavenetTopologyResult, get_wavenet_topology, validate_a2_layer_topology,
 };

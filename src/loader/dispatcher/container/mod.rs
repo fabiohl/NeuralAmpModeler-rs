@@ -12,6 +12,7 @@ use crate::loader::nam_json::NamModelData;
 use crate::models::StaticModel;
 use crate::models::container::ContainerModel;
 use anyhow::Context;
+use log::warn;
 
 /// Maximum nesting depth for SlimmableContainer recursion.
 ///
@@ -26,13 +27,17 @@ const MAX_CONTAINER_DEPTH: usize = 4;
 /// Parses `config.submodels[]`, recursively builds each submodel via the main
 /// dispatcher, validates ordering / sample rate uniformity, and wraps them in
 /// a `ContainerModel`.
-pub(crate) fn build_container(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
-    build_container_inner(data, 0)
+pub(crate) fn build_container(
+    data: &NamModelData,
+    prewarm: bool,
+) -> anyhow::Result<Box<StaticModel>> {
+    build_container_inner(data, 0, prewarm)
 }
 
 pub(crate) fn build_container_inner(
     data: &NamModelData,
     depth: usize,
+    prewarm: bool,
 ) -> anyhow::Result<Box<StaticModel>> {
     if depth > MAX_CONTAINER_DEPTH {
         anyhow::bail!(JsonError::SubmodelsTooDeep {
@@ -51,9 +56,10 @@ pub(crate) fn build_container_inner(
         anyhow::bail!("SlimmableContainer: 'submodels' must be a non-empty array");
     }
 
-    let container_sr = data.sample_rate.map(|s| s as u32).unwrap_or(48000);
+    let container_declared = data.sample_rate;
 
     let mut submodels: Vec<(f32, Box<StaticModel>)> = Vec::with_capacity(submodels_json.len());
+    let mut sub_rates: Vec<Option<f32>> = Vec::with_capacity(submodels_json.len());
 
     for (i, entry) in submodels_json.iter().enumerate() {
         let max_value: f32 = entry
@@ -79,23 +85,14 @@ pub(crate) fn build_container_inner(
                 )
             })?;
 
-        let sub_sr = inner_data
-            .sample_rate
-            .map(|s| s as u32)
-            .unwrap_or(container_sr);
-
-        if sub_sr != container_sr {
-            anyhow::bail!(
-                "SlimmableContainer: submodel[{}] sample rate mismatch \
-                 (container={}, submodel={})",
-                i,
-                container_sr,
-                sub_sr
-            );
-        }
+        // Recursive declared rate: a nested Sequential/Container child
+        // propagates its own children's rate instead of materializing 48 kHz.
+        sub_rates.push(crate::loader::sample_rate::effective_known_rate(
+            &inner_data,
+        )?);
 
         if inner_data.architecture == "SlimmableContainer" {
-            let model = build_container_inner(&inner_data, depth + 1)
+            let model = build_container_inner(&inner_data, depth + 1, prewarm)
                 .with_context(|| format!("Container -> submodel[{}] (nested container)", i))?;
             submodels.push((max_value, model));
         } else {
@@ -105,7 +102,19 @@ pub(crate) fn build_container_inner(
         }
     }
 
-    let container = ContainerModel::new(submodels, container_sr)
+    // C++ container rule: the container's own declared rate governs; when
+    // absent, the first known submodel rate is used; a conflict between the
+    // declared container rate and a known submodel rate is fail-closed. Only
+    // when nothing declares a rate do we fall back to the 48 kHz default.
+    let resolved =
+        crate::models::sequential::resolve_known_sample_rate(&sub_rates, container_declared)
+            .map_err(|e| {
+                warn!("[Dispatcher] Container sample-rate resolution rejected: {e}");
+                anyhow::Error::from(e)
+            })?;
+    let container_sr = resolved.unwrap_or(48000.0) as u32;
+
+    let container = ContainerModel::new_with_prewarm(submodels, container_sr, prewarm)
         .context("Container: failed to create ContainerModel")?;
 
     Ok(Box::new(StaticModel::Container(Box::new(container))))

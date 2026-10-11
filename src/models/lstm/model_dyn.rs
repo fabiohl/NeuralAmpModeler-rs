@@ -21,15 +21,19 @@ use crate::math::common::AlignedVec;
 /// `process()` calls `process_avx2` only. There is no AVX-512 or BF16
 /// arm on the dynamic LSTM path.
 pub struct LstmModelDyn {
+    /// Number of input channels (audio frames are interleaved with this stride).
+    pub in_channels: usize,
+    /// Number of output channels (audio frames are emitted with this stride).
+    pub out_channels: usize,
     /// Dynamically-sized LSTM layers.
     ///
-    /// Layer 0 has `input_size=1` (mono audio), subsequent layers have
+    /// Layer 0 has `input_size=in_channels`, subsequent layers have
     /// `input_size=hidden_size` (stacked recurrent input).
     pub layers: Vec<LstmLayerDyn>,
-    /// Output head (linear projection) weights.
+    /// Output head (linear projection) weights, shaped `[out_channels × hidden_size]`.
     pub head_weights_f32: AlignedVec<f32>,
-    /// Output head bias.
-    pub head_bias: f32,
+    /// Output head biases, shaped `[out_channels]`.
+    pub head_bias: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
     pub prewarm_on_reset: bool,
     /// Expected sample rate (Hz) for prewarm calculation. Default: `48000.0`.
@@ -42,27 +46,60 @@ pub struct LstmModelDyn {
     pub prewarm_pending: usize,
 }
 
+use crate::loader::nam_json::validation::{
+    MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_IO_CHANNELS, MAX_LSTM_LAYERS,
+};
+
 impl LstmModelDyn {
-    /// Creates a new zero-initialized dynamic LSTM model.
+    /// Creates a new zero-initialized dynamic LSTM model with custom channel geometry.
     ///
     /// Allocates `num_layers` × `LstmLayerDyn` with the appropriate
-    /// input_size (1 for layer 0, `hidden_size` for the rest) and
-    /// pre-allocates `head_weights_f32`.
-    pub fn new(num_layers: usize, hidden_size: usize) -> Result<Self, NamErrorCode> {
+    /// input_size (`in_channels` for layer 0, `hidden_size` for subsequent layers) and
+    /// pre-allocates `head_weights_f32` and `head_bias`.
+    pub fn new_io(
+        num_layers: usize,
+        hidden_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+    ) -> Result<Self, NamErrorCode> {
+        if num_layers == 0 || num_layers > MAX_LSTM_LAYERS {
+            return Err(NamErrorCode::InvalidFeatureTopology);
+        }
+        if hidden_size == 0 || hidden_size > MAX_LSTM_HIDDEN_SIZE {
+            return Err(NamErrorCode::InvalidFeatureTopology);
+        }
+        if in_channels == 0 || in_channels > MAX_LSTM_IO_CHANNELS {
+            return Err(NamErrorCode::InvalidFeatureTopology);
+        }
+        if out_channels == 0 || out_channels > MAX_LSTM_IO_CHANNELS {
+            return Err(NamErrorCode::InvalidFeatureTopology);
+        }
+
+        let head_len = out_channels
+            .checked_mul(hidden_size)
+            .ok_or(NamErrorCode::InvalidFeatureTopology)?;
+
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
-            let input_size = if i == 0 { 1 } else { hidden_size };
+            let input_size = if i == 0 { in_channels } else { hidden_size };
             layers.push(LstmLayerDyn::new(input_size, hidden_size)?);
         }
 
         Ok(Self {
+            in_channels,
+            out_channels,
             layers,
-            head_weights_f32: AlignedVec::new(hidden_size, 0.0f32)?,
-            head_bias: 0.0,
+            head_weights_f32: AlignedVec::new(head_len, 0.0f32)?,
+            head_bias: AlignedVec::new(out_channels, 0.0f32)?,
             prewarm_on_reset: true,
             expected_sample_rate: 48000.0,
             prewarm_pending: 0,
         })
+    }
+
+    /// Creates a new zero-initialized dynamic LSTM model with mono 1→1 I/O.
+    pub fn new(num_layers: usize, hidden_size: usize) -> Result<Self, NamErrorCode> {
+        Self::new_io(num_layers, hidden_size, 1, 1)
     }
 
     // =====================================================================
@@ -71,23 +108,26 @@ impl LstmModelDyn {
 
     #[target_feature(enable = "avx2,fma,f16c")]
     unsafe fn process_avx2(&mut self, input: &[f32], output: &mut [f32]) {
-        if self.layers.is_empty() {
+        if self.layers.is_empty() || self.in_channels == 0 || self.out_channels == 0 {
             return;
         }
+        let in_ch = self.in_channels;
+        let out_ch = self.out_channels;
+        let n_layers = self.layers.len();
+        let n_frames = (input.len() / in_ch).min(output.len() / out_ch);
+
         // SAFETY: `layers` is non-empty (early return above), so `layers_ptr`
         // points to a live Vec of `n_layers` elements; the indices 0, `i-1`, `i`
         // and `n_layers-1` for `i in 1..n_layers` are all in bounds, and each
-        // deref aliases a distinct layer slot. The caller guarantees
-        // `output.len() >= input.len()`, so every `output[s]` write (s <
-        // `input.len()`) is in bounds; `input[s]` is read in bounds by iteration.
+        // deref aliases a distinct layer slot. `n_frames` ensures all input and
+        // output slice accesses remain strictly in bounds.
         // AVX2+FMA+F16C are guaranteed by `#[target_feature]`.
         unsafe {
-            let n_layers = self.layers.len();
-            debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
             let layers_ptr = self.layers.as_mut_ptr();
 
-            for (s, &val) in input.iter().enumerate() {
-                (*layers_ptr).process_sample_avx2(&[val]);
+            for s in 0..n_frames {
+                let frame_in = &input[s * in_ch..(s + 1) * in_ch];
+                (*layers_ptr).process_sample_avx2(frame_in);
 
                 for i in 1..n_layers {
                     let prev = &*layers_ptr.add(i - 1);
@@ -97,11 +137,12 @@ impl LstmModelDyn {
 
                 let last = &*layers_ptr.add(n_layers - 1);
                 let h = last.get_hidden_state();
-                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
-                    h,
-                    &self.head_weights_f32,
-                );
-                output[s] = dot + self.head_bias;
+                let h_len = h.len();
+                for c in 0..out_ch {
+                    let w = &self.head_weights_f32[c * h_len..(c + 1) * h_len];
+                    let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(h, w);
+                    output[s * out_ch + c] = dot + self.head_bias[c];
+                }
             }
         }
     }
@@ -115,14 +156,17 @@ impl LstmModelDyn {
     /// Routes to the baseline x86-64-v3 AVX2 kernel (dynamic LSTM is a fallback
     /// topology where AVX-512 duplication has low ROI).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        // Length contract: clamp to the shorter buffer; never index past
-        // `output.len()` even with asymmetric caller buffers.
-        let n = input.len().min(output.len());
-        let input = &input[..n];
-        let output = &mut output[..n];
-        // SAFETY: the slices were re-sliced to the common length `n`, so
-        // `input.len() == output.len()`, satisfying `process_avx2`'s length
-        // contract; the AVX2 kernel is reachable only on x86-64-v3 targets.
+        if self.in_channels == 0 || self.out_channels == 0 {
+            return;
+        }
+        let n_frames = (input.len() / self.in_channels).min(output.len() / self.out_channels);
+        let in_len = n_frames * self.in_channels;
+        let out_len = n_frames * self.out_channels;
+        let input = &input[..in_len];
+        let output = &mut output[..out_len];
+        // SAFETY: the slices were re-sliced to `n_frames * channels`, satisfying
+        // `process_avx2`'s length contract; the AVX2 kernel is reachable only
+        // on x86-64-v3 targets.
         unsafe {
             self.process_avx2(input, output);
         }
@@ -130,15 +174,16 @@ impl LstmModelDyn {
 
     /// Scalar processing (fallback).
     ///
-    /// Exclusively for parity tests. Extremely slow.
+    /// Exclusively for parity tests.
     pub fn process_scalar(&mut self, input: &[f32], output: &mut [f32]) {
-        if self.layers.is_empty() {
+        if self.layers.is_empty() || self.in_channels == 0 || self.out_channels == 0 {
             return;
         }
+        let in_ch = self.in_channels;
+        let out_ch = self.out_channels;
         let n_layers = self.layers.len();
-        let n = input.len().min(output.len());
+        let n_frames = (input.len() / in_ch).min(output.len() / out_ch);
 
-        debug_assert!(n_layers > 0, "LstmModelDyn requires at least one layer");
         let layers_ptr = self.layers.as_mut_ptr();
 
         let hidden_size = if n_layers > 1 {
@@ -148,15 +193,13 @@ impl LstmModelDyn {
         };
         let mut hidden_scratch = vec![0.0f32; hidden_size];
 
-        for s in 0..n {
+        for s in 0..n_frames {
             // SAFETY: `layers` is non-empty (early return above), so `layers_ptr`
             // points to a live Vec of `n_layers` elements; indices 0, `i-1`, `i`
-            // and `n_layers-1` for `i in 1..n_layers` are in bounds. `s < n <=
-            // input.len() = output.len()` (clamped above), so the reads/writes on
-            // the slice bounds are in bounds. `hidden_scratch` is sized to layer 0
-            // hidden_size, which equals every subsequent layer's input_size.
+            // and `n_layers-1` for `i in 1..n_layers` are in bounds.
             unsafe {
-                (*layers_ptr).process_sample_scalar(&[input[s]]);
+                let frame_in = &input[s * in_ch..(s + 1) * in_ch];
+                (*layers_ptr).process_sample_scalar(frame_in);
 
                 for i in 1..n_layers {
                     let prev = &*layers_ptr.add(i - 1);
@@ -167,11 +210,15 @@ impl LstmModelDyn {
 
                 let last = &*layers_ptr.add(n_layers - 1);
                 let hidden_last = last.get_hidden_state();
-                let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
-                    hidden_last,
-                    &self.head_weights_f32,
-                );
-                output[s] = dot + self.head_bias;
+                let h_len = hidden_last.len();
+                for c in 0..out_ch {
+                    let w = &self.head_weights_f32[c * h_len..(c + 1) * h_len];
+                    let dot = crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
+                        hidden_last,
+                        w,
+                    );
+                    output[s * out_ch + c] = dot + self.head_bias[c];
+                }
             }
         }
     }

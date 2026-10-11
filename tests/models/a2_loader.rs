@@ -7,6 +7,7 @@
 //  `is_wavenet_a2` dispatch), fixture loading, real inference sanity, forward‑compatibility
 //  error handling, and A1 model regression.
 
+use neural_amp_modeler_rs::common::diagnostics::NamErrorCode;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{
     A2TopologyResult, NamConfig, NamLayerConfig, NamModelData, WavenetTopologyResult,
@@ -17,8 +18,11 @@ use neural_amp_modeler_rs::models::a2::{
     A2_DILATIONS, A2_HEAD_KERNEL_SIZE, A2_KERNEL_SIZES, A2_LEAKY_SLOPE, A2_NUM_LAYERS,
     A2_VALID_CHANNELS, a2_weight_count,
 };
+use neural_amp_modeler_rs::testing::perceptual::{compute_esr, compute_snr_db};
+use neural_amp_modeler_rs::testing::wav::{read_wav_f32, write_wav_f32};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1265,4 +1269,173 @@ fn test_a2_dynamic_synthetic_model_with_head_kernel_size_16_builds() {
     let mut output = vec![0.0f32; 64];
     model.process(&input, &mut output);
     assert!(output[0].is_finite());
+}
+
+// =============================================================================
+// 7. condition_dsp in A2 fast-path candidate (T5.2)
+// =============================================================================
+
+fn find_namcore_render_bin() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest_dir.join("build/namcore_render/tools/render"),
+        manifest_dir.join("build/namcore_render/Release/render"),
+        manifest_dir.join("build/namcore_render/Debug/render"),
+        manifest_dir.join("build/namcore_render/render"),
+    ];
+    for path in &candidates {
+        if path.exists() && path.is_file() {
+            return Some(path.clone());
+        }
+    }
+    None
+}
+
+/// A2 fast-shape candidate with condition_dsp at 44.1 kHz vs WaveNet at 48 kHz
+/// must be rejected with `NamErrorCode::NamJsonSampleRateMismatch` (E1315).
+#[test]
+fn test_a2_fast_shape_condition_dsp_sample_rate_mismatch_rejected() {
+    let json_str = fs::read_to_string(model_path("wavenet_a2_lite.nam"))
+        .expect("read wavenet_a2_lite.nam fixture");
+    let mut val: serde_json::Value = serde_json::from_str(&json_str).expect("parse JSON");
+    val["config"]["condition_dsp"] = serde_json::json!({
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {"receptive_field": 1, "bias": false},
+        "weights": [0.5],
+        "sample_rate": 44100.0
+    });
+    let data = parse_nam_json(&val.to_string()).expect("parse mutated nam json");
+    assert_eq!(
+        is_a2_shape(&data),
+        Some(A2TopologyResult::Dynamic),
+        "A2 model with non-null condition_dsp must route to Dynamic"
+    );
+    let err = match build_model(&data) {
+        Ok(_) => panic!("expected NamJsonSampleRateMismatch error"),
+        Err(e) => e,
+    };
+    assert_eq!(
+        err.downcast_ref::<NamErrorCode>(),
+        Some(&NamErrorCode::NamJsonSampleRateMismatch),
+        "condition_dsp with mismatched sample rate must fail with E1315"
+    );
+}
+
+/// A2 fast-shape candidate with condition_dsp at 48 kHz routes to Dynamic
+/// and successfully builds `WaveNetA2Dyn` executing `condition_dsp`.
+#[test]
+fn test_a2_fast_shape_condition_dsp_routes_to_dynamic_and_builds() {
+    let json_str = fs::read_to_string(model_path("wavenet_a2_lite.nam"))
+        .expect("read wavenet_a2_lite.nam fixture");
+    let mut val: serde_json::Value = serde_json::from_str(&json_str).expect("parse JSON");
+    val["config"]["condition_dsp"] = serde_json::json!({
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {"receptive_field": 1, "bias": false},
+        "weights": [0.5],
+        "sample_rate": 48000.0
+    });
+    let data = parse_nam_json(&val.to_string()).expect("parse mutated nam json");
+    assert_eq!(
+        is_a2_shape(&data),
+        Some(A2TopologyResult::Dynamic),
+        "A2 model with condition_dsp must route to Dynamic"
+    );
+    let mut model = build_model(&data).expect("build model must succeed");
+    let input = vec![0.1f32; 64];
+    let mut output = vec![0.0f32; 64];
+    model.process(&input, &mut output);
+    assert!(output[0].is_finite());
+}
+
+/// A2 fast-shape candidate with condition_dsp produces sample-accurate audio parity
+/// against the upstream C++ `NeuralAmpModelerCore` render binary.
+#[test]
+fn test_a2_fast_shape_condition_dsp_cpp_render_parity() {
+    let render_bin = match find_namcore_render_bin() {
+        Some(bin) => bin,
+        None => {
+            eprintln!(
+                "[STATUS] SKIP_OPTIONAL_FIXTURE: namcore_render binary not found, skipping C++ parity"
+            );
+            return;
+        }
+    };
+
+    let json_str = fs::read_to_string(model_path("wavenet_a2_lite.nam"))
+        .expect("read wavenet_a2_lite.nam fixture");
+    let mut val: serde_json::Value = serde_json::from_str(&json_str).expect("parse JSON");
+    val["config"]["condition_dsp"] = serde_json::json!({
+        "version": "0.5.4",
+        "architecture": "Linear",
+        "config": {"receptive_field": 1, "bias": false},
+        "weights": [0.5],
+        "sample_rate": 48000.0
+    });
+    let mutated_json = val.to_string();
+
+    let num_samples = 2048;
+    let sample_rate = 48000;
+    let mut input_signal = vec![0.0f32; num_samples];
+    for (i, sample) in input_signal.iter_mut().enumerate() {
+        *sample =
+            0.5 * (2.0 * std::f32::consts::PI * 440.0 * (i as f32) / (sample_rate as f32)).sin();
+    }
+
+    let tmp_dir = std::env::temp_dir();
+    let in_wav_path = tmp_dir.join("nam_test_a2_cond_dsp_in.wav");
+    let out_wav_path = tmp_dir.join("nam_test_a2_cond_dsp_out.wav");
+    let nam_path = tmp_dir.join("nam_test_a2_cond_dsp.nam");
+
+    write_wav_f32(&in_wav_path, &input_signal, sample_rate).expect("write input wav");
+    fs::write(&nam_path, &mutated_json).expect("write mutated nam");
+
+    let cmd_status = Command::new(&render_bin)
+        .arg(&nam_path)
+        .arg(&in_wav_path)
+        .arg(&out_wav_path)
+        .output();
+
+    let output = match cmd_status {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            panic!("C++ render failed for A2 condition_dsp: {stderr}");
+        }
+        Err(e) => {
+            panic!("Failed to execute C++ render: {e}");
+        }
+    };
+    let _ = output;
+
+    let (cpp_output, cpp_sr) = read_wav_f32(&out_wav_path).expect("read cpp output wav");
+    assert_eq!(cpp_sr, sample_rate);
+    assert_eq!(cpp_output.len(), num_samples);
+
+    let data = parse_nam_json(&mutated_json).expect("parse in rust");
+    let mut rust_model = build_model(&data).expect("build model in rust");
+    rust_model.reset(sample_rate, 64).expect("reset");
+    let mut rust_output = vec![0.0f32; num_samples];
+    for (in_chunk, out_chunk) in input_signal.chunks(64).zip(rust_output.chunks_mut(64)) {
+        rust_model.process(in_chunk, out_chunk);
+    }
+
+    let esr = compute_esr(&cpp_output, &rust_output);
+    let snr_db = compute_snr_db(&cpp_output, &rust_output);
+
+    // Measured: ESR = 4.8722e-14, SNR = 133.12 dB (oracle parity against NeuralAmpModelerCore render tool)
+    assert!(
+        esr < 1e-4,
+        "ESR too high: {esr} (must match C++ render output)"
+    );
+    assert!(
+        snr_db > 80.0,
+        "SNR too low: {snr_db} dB (must match C++ render output)"
+    );
+
+    // Cleanup temp files
+    let _ = fs::remove_file(&in_wav_path);
+    let _ = fs::remove_file(&out_wav_path);
+    let _ = fs::remove_file(&nam_path);
 }

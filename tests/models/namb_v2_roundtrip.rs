@@ -102,6 +102,69 @@ fn make_synthetic_lstm(num_layers: usize, hidden_size: usize) -> NamModelData {
     }
 }
 
+fn make_synthetic_lstm_io(
+    num_layers: usize,
+    hidden_size: usize,
+    in_channels: usize,
+    out_channels: usize,
+) -> NamModelData {
+    let mut weights = Vec::new();
+    let mut current_input_size = in_channels;
+    let mut val = 0.05f32;
+
+    for _ in 0..num_layers {
+        let ih = current_input_size + hidden_size;
+        let w_size = 4 * hidden_size * ih;
+        for _ in 0..w_size {
+            weights.push(val);
+            val = (val + 0.007) % 0.3;
+        }
+        let b_size = 4 * hidden_size;
+        for _ in 0..b_size {
+            weights.push(val);
+            val = (val + 0.007) % 0.3;
+        }
+        for _ in 0..hidden_size {
+            weights.push(val);
+            val = (val + 0.007) % 0.3;
+        }
+        for _ in 0..hidden_size {
+            weights.push(val);
+            val = (val + 0.007) % 0.3;
+        }
+        current_input_size = hidden_size;
+    }
+
+    for _ in 0..(out_channels * hidden_size) {
+        weights.push(val);
+        val = (val + 0.007) % 0.3;
+    }
+    weights.resize(weights.len() + out_channels, 0.01);
+
+    NamModelData {
+        version: Some("0.5.0".to_string()),
+        architecture: "LSTM".to_string(),
+        config: NamConfig {
+            layers: vec![],
+            head: None,
+            head_scale: Some(1.0),
+            num_layers: Some(num_layers),
+            hidden_size: Some(hidden_size),
+            input_size: Some(in_channels),
+            in_channels: Some(in_channels),
+            out_channels: Some(out_channels),
+            receptive_field: None,
+            bias: None,
+            submodels: None,
+            ..Default::default()
+        },
+        weights,
+        sample_rate: Some(48000.0),
+        metadata: None,
+        weights_layout: WeightsLayout::Original,
+    }
+}
+
 // =============================================================================
 // LSTM — Expected GateMajor weight computation (independent verification)
 // =============================================================================
@@ -110,10 +173,12 @@ fn make_synthetic_lstm(num_layers: usize, hidden_size: usize) -> NamModelData {
 fn expected_gate_major_weights(data: &NamModelData) -> Vec<f32> {
     let hidden_size = data.config.hidden_size.unwrap();
     let num_layers = data.config.num_layers.unwrap_or(1);
+    let in_channels = data.config.in_channels.unwrap_or(1);
+    let initial_input_size = data.config.input_size.unwrap_or(in_channels);
 
     let mut cursor = 0;
     let mut out = Vec::with_capacity(data.weights.len());
-    let mut current_input_size = 1;
+    let mut current_input_size = initial_input_size;
 
     for _l in 0..num_layers {
         let ih = current_input_size + hidden_size;
@@ -616,6 +681,47 @@ fn test_real_lstm_2x8_roundtrip() {
     assert!(
         mse < 1e-12,
         "Real model BossLSTM-2x8 divergence! MSE={:e}",
+        mse
+    );
+}
+
+#[test]
+fn test_lstm_multichannel_2to2_gate_major_roundtrip() {
+    let orig_data = make_synthetic_lstm_io(2, 8, 2, 2);
+
+    // 1. Verification against expected weights
+    let expected = expected_gate_major_weights(&orig_data);
+    let encoded = encode_namb(&orig_data, 2, WeightsLayout::GateMajorLstm)
+        .expect("encode GateMajorLstm multi-I/O");
+    let decoded = parse_namb(&encoded).expect("parse NAMB GateMajorLstm multi-I/O");
+    assert_eq!(decoded.weights_layout, WeightsLayout::GateMajorLstm);
+    assert_eq!(
+        decoded.weights, expected,
+        "Decoded weights must match expected GateMajor layout"
+    );
+
+    // 2. Inference parity check (interleaved 2-channel buffer)
+    let mut model_orig = build_model(&orig_data).unwrap();
+    model_orig.prewarm(1024);
+    let mut model_v2 = build_model(&decoded).unwrap();
+    model_v2.prewarm(1024);
+
+    let mono_sine = generate_sine(256);
+    let mut input = vec![0.0f32; 512]; // 256 frames * 2 channels
+    for (i, &s) in mono_sine.iter().enumerate() {
+        input[i * 2] = s;
+        input[i * 2 + 1] = -s;
+    }
+
+    let mut out_orig = vec![0.0f32; 512];
+    let mut out_v2 = vec![0.0f32; 512];
+    model_orig.process(&input, &mut out_orig);
+    model_v2.process(&input, &mut out_v2);
+
+    let mse = compute_mse(&out_orig, &out_v2);
+    assert!(
+        mse < 1e-10,
+        "LSTM 2->2 multi-I/O GateMajor divergence! MSE = {:e}",
         mse
     );
 }

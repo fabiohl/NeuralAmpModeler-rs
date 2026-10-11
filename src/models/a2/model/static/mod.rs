@@ -240,6 +240,7 @@ impl<const CH: usize> WaveNetA2<CH> {
     /// Resets internal state for a new sample rate and max buffer size.
     pub fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         self.set_max_buffer_size(max_buffer_size)?;
+        self.clear_state();
         if self.prewarm_on_reset {
             self.prewarm();
         }

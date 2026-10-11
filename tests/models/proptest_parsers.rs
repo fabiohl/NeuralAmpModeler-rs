@@ -1445,7 +1445,7 @@ fn adversarial_lstm_json_strategy() -> impl Strategy<Value = String> {
         //   2 — num_layers = 0 (empty stack)
         //   3 — hidden_size exceeds MAX_HIDDEN_SIZE (WaveNet-bound constant)
         //   4 — explicit `layers` array exceeds MAX_LAYERS
-        //   5 — in/out channels > 1 (weight/channel mismatch)
+        //   5 — input_size != in_channels mismatch
         //   6 — config field removed (num_layers or hidden_size missing)
         //   _ — both num_layers and hidden_size exceed bounds simultaneously
         match pattern % 8 {
@@ -1540,7 +1540,8 @@ fn adversarial_lstm_json_strategy() -> impl Strategy<Value = String> {
                         "num_layers": 2,
                         "hidden_size": 4,
                         "in_channels": ch,
-                        "out_channels": ch
+                        "out_channels": ch,
+                        "input_size": ch + 1
                     },
                     "weights": vec![0.0f32; 16],
                     "sample_rate": 48000
@@ -1639,7 +1640,7 @@ proptest! {
                         "Free geometry exceeded state budget: {total_state} > {MAX_TOTAL_STATE_FRAMES}"
                     );
                 }
-                neural_amp_modeler_rs::loader::nam_json::WavenetTopologyResult::Rejected(_) => {
+                neural_amp_modeler_rs::loader::nam_json::WavenetTopologyResult::Rejected { .. } => {
                     // Expected for adversarial dims — nothing to check
                 }
             }
@@ -1652,9 +1653,11 @@ proptest! {
     fn prop_fuzz_adversarial_convnet_dims(json_str in adversarial_convnet_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let topo = neural_amp_modeler_rs::loader::nam_json::get_convnet_topology(&parsed);
-            // Adversarial dimensions should be rejected (None)
-            assert!(topo.is_none(),
-                "ConvNet with adversarial dimensions should be rejected, got: {topo:?}");
+            // Adversarial dimensions should be rejected (Err or None)
+            assert!(
+                !matches!(topo, Ok(Some(_))),
+                "ConvNet with adversarial dimensions should be rejected, got: {topo:?}"
+            );
         }
     }
 
@@ -1679,10 +1682,11 @@ proptest! {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let result = get_lstm_topology(&parsed);
             match result {
-                Ok(Some((nl, hs))) => {
+                Ok(Some(topo)) => {
                     panic!(
                         "adversarial LSTM should not resolve valid topology \
-                         (num_layers={nl}, hidden_size={hs})"
+                         (num_layers={}, hidden_size={})",
+                        topo.num_layers, topo.hidden_size
                     );
                 }
                 Ok(None) => {
@@ -1773,7 +1777,7 @@ proptest! {
                         "Free geometry exceeded state budget: {total_state} > {MAX_TOTAL_STATE_FRAMES}"
                     );
                 }
-                neural_amp_modeler_rs::loader::nam_json::WavenetTopologyResult::Rejected(_) => {
+                neural_amp_modeler_rs::loader::nam_json::WavenetTopologyResult::Rejected { .. } => {
                     // Rejection is acceptable — some combos exceed budget
                 }
             }

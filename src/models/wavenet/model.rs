@@ -180,6 +180,19 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
         self.prewarm_pending = false;
     }
 
+    /// Clears both layer arrays' delay-line state to the freshly-built
+    /// condition, in place and without allocating.
+    pub fn clear_state(&mut self) {
+        for state in self
+            .array1
+            .states
+            .iter_mut()
+            .chain(self.array2.states.iter_mut())
+        {
+            state.clear();
+        }
+    }
+
     /// Prewarm strictly optimized for AVX-512 architecture.
     ///
     /// # Safety

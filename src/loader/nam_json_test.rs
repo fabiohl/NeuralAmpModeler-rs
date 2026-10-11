@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::common::diagnostics::NamErrorCode;
 use crate::models::NamModel as _;
 
 #[test]
@@ -91,7 +92,16 @@ fn test_parse_lstm() {
 
     // Checks whether the LSTM structure (layers and size) was interpreted correctly
     let topo = get_lstm_topology(&parsed);
-    assert_eq!(topo, Ok(Some((2, 16))));
+    assert_eq!(
+        topo,
+        Ok(Some(LstmTopology {
+            num_layers: 2,
+            hidden_size: 16,
+            input_size: 1,
+            in_channels: 1,
+            out_channels: 1,
+        }))
+    );
 }
 
 /// Helper: generates minimal WaveNet JSON with provided channels, dilations, and head_size.
@@ -297,7 +307,7 @@ fn test_topology_feather_with_condition_dsp_routes_to_free() {
         WavenetTopologyResult::Free(geom) => {
             assert_eq!(geom.channels, vec![8, 8]);
         }
-        WavenetTopologyResult::Rejected(reason) => {
+        WavenetTopologyResult::Rejected { reason, .. } => {
             panic!(
                 "Feather with condition_dsp was Rejected: {} — should be Free (dynamic engine)",
                 reason
@@ -368,7 +378,7 @@ fn test_topology_rejected_missing_head_size() {
     let parsed = parse_nam_json(json).unwrap();
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("head_size")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("head_size")),
         "missing head_size should be Rejected, got: {:?}",
         result
     );
@@ -423,7 +433,7 @@ fn test_topology_rejected_non_wavenet() {
     let parsed = parse_nam_json(json).unwrap();
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(_)),
+        matches!(result, WavenetTopologyResult::Rejected { .. }),
         "non-WaveNet should be Rejected, got: {:?}",
         result
     );
@@ -444,11 +454,20 @@ fn test_lstm_accepts_mono_channels() {
         "weights": [0.1, 0.2]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    assert_eq!(get_lstm_topology(&parsed), Ok(Some((2, 16))));
+    assert_eq!(
+        get_lstm_topology(&parsed),
+        Ok(Some(LstmTopology {
+            num_layers: 2,
+            hidden_size: 16,
+            input_size: 1,
+            in_channels: 1,
+            out_channels: 1,
+        }))
+    );
 }
 
 #[test]
-fn test_lstm_rejects_multi_in_channels() {
+fn test_lstm_accepts_multi_channel() {
     let json = r#"{
         "version": "0.5.4",
         "architecture": "LSTM",
@@ -456,39 +475,42 @@ fn test_lstm_rejects_multi_in_channels() {
             "num_layers": 2,
             "hidden_size": 16,
             "in_channels": 2,
+            "out_channels": 2,
+            "input_size": 2,
             "layers": []
         },
         "weights": [0.1, 0.2]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    let err = get_lstm_topology(&parsed).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("in_channels=2"),
-        "Expected multi-channel error for in_channels=2, got: {msg}"
+    assert_eq!(
+        get_lstm_topology(&parsed),
+        Ok(Some(LstmTopology {
+            num_layers: 2,
+            hidden_size: 16,
+            input_size: 2,
+            in_channels: 2,
+            out_channels: 2,
+        }))
     );
 }
 
 #[test]
-fn test_lstm_rejects_multi_out_channels() {
+fn test_lstm_rejects_input_size_in_channels_mismatch() {
     let json = r#"{
         "version": "0.5.4",
         "architecture": "LSTM",
         "config": {
             "num_layers": 2,
             "hidden_size": 16,
-            "out_channels": 2,
+            "in_channels": 2,
+            "input_size": 1,
             "layers": []
         },
         "weights": [0.1, 0.2]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
     let err = get_lstm_topology(&parsed).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("out_channels=2"),
-        "Expected multi-channel error for out_channels=2, got: {msg}"
-    );
+    assert_eq!(err.code, NamErrorCode::InvalidFeatureTopology);
 }
 
 #[test]
@@ -504,7 +526,16 @@ fn test_lstm_accepts_absent_channels() {
         "weights": [0.0]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    assert_eq!(get_lstm_topology(&parsed), Ok(Some((1, 8))));
+    assert_eq!(
+        get_lstm_topology(&parsed),
+        Ok(Some(LstmTopology {
+            num_layers: 1,
+            hidden_size: 8,
+            input_size: 1,
+            in_channels: 1,
+            out_channels: 1,
+        }))
+    );
 }
 
 // =========================================================================
@@ -1268,7 +1299,13 @@ fn test_lstm_accepts_max_bounds() {
     let parsed = parse_nam_json(&json).expect("parse");
     assert_eq!(
         get_lstm_topology(&parsed),
-        Ok(Some((MAX_LSTM_LAYERS, MAX_HIDDEN_SIZE)))
+        Ok(Some(LstmTopology {
+            num_layers: MAX_LSTM_LAYERS,
+            hidden_size: MAX_HIDDEN_SIZE,
+            input_size: 1,
+            in_channels: 1,
+            out_channels: 1,
+        }))
     );
 }
 
@@ -1285,15 +1322,8 @@ fn test_lstm_zero_layers_err() {
         "weights": [0.0]
     }"#;
     let parsed = parse_nam_json(json).expect("parse");
-    match get_lstm_topology(&parsed) {
-        Err(JsonError::UnsupportedTopology { issue, .. }) => {
-            assert!(issue.contains("num_layers=0"));
-        }
-        other => panic!(
-            "expected UnsupportedTopology for num_layers=0, got {:?}",
-            other
-        ),
-    }
+    let err = get_lstm_topology(&parsed).unwrap_err();
+    assert!(err.reason.contains("num_layers=0"));
 }
 
 // ── WaveNet free-shape channels bounds ──
@@ -1345,7 +1375,7 @@ fn test_wavenet_free_rejects_channels_too_high() {
     let parsed = parse_nam_json(&json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("OOM/DoS")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("OOM/DoS")),
         "Expected Rejected(OOM/DoS), got: {result:?}"
     );
 }
@@ -1412,7 +1442,7 @@ fn test_wavenet_a1_rejects_gated_true() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("gated=true")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("gated=true")),
         "Expected Rejected(gated=true), got: {result:?}"
     );
 }
@@ -1457,7 +1487,7 @@ fn test_wavenet_a1_rejects_gating_mode_non_none() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("gating_mode")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("gating_mode")),
         "Expected Rejected(gating_mode), got: {result:?}"
     );
 }
@@ -1488,13 +1518,16 @@ fn test_wavenet_a1_rejects_head1x1_active() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("head1x1")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("head1x1")),
         "Expected Rejected(head1x1), got: {result:?}"
     );
 }
 
 #[test]
-fn test_wavenet_a1_rejects_layer1x1_active() {
+fn test_wavenet_a1_accepts_layer1x1_active_groups1() {
+    // C++ A1 defaults `layer1x1_active = true`; the Rust A1 engine always
+    // consumes the 1×1 block, so `{active:true, groups:1}` is the default
+    // behaviour and must be accepted (not rejected as an A2-only feature).
     let json = r#"{
         "version": "0.5.4",
         "architecture": "WaveNet",
@@ -1519,8 +1552,70 @@ fn test_wavenet_a1_rejects_layer1x1_active() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("layer1x1")),
-        "Expected Rejected(layer1x1), got: {result:?}"
+        !matches!(result, WavenetTopologyResult::Rejected { .. }),
+        "layer1x1 {{active:true, groups:1}} must be accepted, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_wavenet_a1_rejects_layer1x1_inactive() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [
+                {
+                    "channels": 16, "kernel_size": 3, "head_size": 8,
+                    "dilations": [1,2,4,8,16,32,64,128,256,512],
+                    "gated": false, "head_bias": false,
+                    "layer1x1": {"active": false, "groups": 1}
+                },
+                {
+                    "channels": 16, "kernel_size": 3, "head_size": 8,
+                    "dilations": [1,2,4,8,16,32,64,128,256,512],
+                    "gated": false, "head_bias": true
+                }
+            ],
+            "head": null, "head_scale": 0.02
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).expect("parse");
+    let result = get_wavenet_topology(&parsed);
+    assert!(
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("layer1x1.active=false")),
+        "Expected Rejected(layer1x1.active=false), got: {result:?}"
+    );
+}
+
+#[test]
+fn test_wavenet_a1_rejects_layer1x1_groups() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [
+                {
+                    "channels": 16, "kernel_size": 3, "head_size": 8,
+                    "dilations": [1,2,4,8,16,32,64,128,256,512],
+                    "gated": false, "head_bias": false,
+                    "layer1x1": {"active": true, "groups": 2}
+                },
+                {
+                    "channels": 16, "kernel_size": 3, "head_size": 8,
+                    "dilations": [1,2,4,8,16,32,64,128,256,512],
+                    "gated": false, "head_bias": true
+                }
+            ],
+            "head": null, "head_scale": 0.02
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).expect("parse");
+    let result = get_wavenet_topology(&parsed);
+    assert!(
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("layer1x1.groups=2")),
+        "Expected Rejected(layer1x1.groups=2), got: {result:?}"
     );
 }
 
@@ -1550,7 +1645,7 @@ fn test_wavenet_a1_rejects_film_active() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg) if msg.contains("conv_pre_film") && msg.contains("A2 feature")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. } if reason.contains("conv_pre_film") && reason.contains("A2 feature")),
         "Expected Rejected(FiLM), got: {result:?}"
     );
 }
@@ -1581,8 +1676,8 @@ fn test_wavenet_a1_rejects_secondary_activation() {
     let parsed = parse_nam_json(json).expect("parse");
     let result = get_wavenet_topology(&parsed);
     assert!(
-        matches!(result, WavenetTopologyResult::Rejected(ref msg)
-            if msg.contains("secondary_activation") && msg.contains("A2 feature")),
+        matches!(result, WavenetTopologyResult::Rejected { ref reason, .. }
+            if reason.contains("secondary_activation") && reason.contains("A2 feature")),
         "Expected Rejected(secondary_activation), got: {result:?}"
     );
 }
@@ -2453,8 +2548,8 @@ fn test_layer_head_config_rejection_of_invalid_fields() {
     }"#;
     let parsed = parse_nam_json(json_huge_dil).expect("parse huge dilation");
     match get_wavenet_topology(&parsed) {
-        WavenetTopologyResult::Rejected(msg) => {
-            assert!(msg.contains("exceeds maximum"));
+        WavenetTopologyResult::Rejected { reason, .. } => {
+            assert!(reason.contains("exceeds maximum"));
         }
         other => panic!("Expected Rejected topology for huge dilation, got {other:?}"),
     }
@@ -2501,8 +2596,8 @@ fn test_a1_rejects_film_in_layer() {
     let parsed = parse_nam_json(json).expect("parse A1 with FiLM");
     let topo = get_wavenet_topology(&parsed);
     match topo {
-        WavenetTopologyResult::Rejected(msg) => {
-            assert!(msg.contains("layer1x1_post_film") || msg.contains("A2 feature"));
+        WavenetTopologyResult::Rejected { reason, .. } => {
+            assert!(reason.contains("layer1x1_post_film") || reason.contains("A2 feature"));
         }
         other => panic!("Expected Rejected topology for A1 with FiLM, got {other:?}"),
     }
@@ -3069,5 +3164,374 @@ fn test_sequential_fixture_dec01_parametrized() {
             }
             (Ok(_), false) => panic!("[{fixture}] conflicting chain must fail closed"),
         }
+    }
+}
+
+// ── Slimmable WaveNet validation & E1316 typed error ──
+
+fn make_slimmable_wavenet_json(
+    layer1_slimmable: Option<&str>,
+    layer2_slimmable: Option<&str>,
+    layer_overrides: Option<&str>,
+) -> String {
+    let layers_str = if let Some(custom) = layer_overrides {
+        custom.to_string()
+    } else {
+        let slim1 = match layer1_slimmable {
+            Some(s) => format!(r#", "slimmable": {s}"#),
+            None => String::new(),
+        };
+        let slim2 = match layer2_slimmable {
+            Some(s) => format!(r#", "slimmable": {s}"#),
+            None => String::new(),
+        };
+        format!(
+            r#"[
+                {{
+                    "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "dilations": [1,2,4,8],
+                    "gated": false, "head_bias": false
+                    {slim1}
+                }},
+                {{
+                    "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "dilations": [1,2,4,8],
+                    "gated": false, "head_bias": true
+                    {slim2}
+                }}
+            ]"#
+        )
+    };
+    format!(
+        r#"{{
+            "version": "0.5.4",
+            "architecture": "WaveNet",
+            "config": {{
+                "layers": {layers_str},
+                "head": null, "head_scale": 0.02
+            }},
+            "weights": [0.0]
+        }}"#
+    )
+}
+
+#[test]
+fn test_slimmable_rejects_missing_or_invalid_method() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // Divergence 1: Missing method or unsupported method fails-closed with E1316
+    let json_missing_method =
+        make_slimmable_wavenet_json(Some(r#"{"kwargs": {"allowed_channels": [8]}}"#), None, None);
+    let parsed = parse_nam_json(&json_missing_method).expect("parse");
+    let res = get_wavenet_topology(&parsed);
+    match res {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("method") || reason.contains("slice_channels_uniform"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+
+    let json_wrong_method = make_slimmable_wavenet_json(
+        Some(r#"{"method": "unsupported_slice_method"}"#),
+        None,
+        None,
+    );
+    let parsed = parse_nam_json(&json_wrong_method).expect("parse");
+    let res = get_wavenet_topology(&parsed);
+    match res {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("method") || reason.contains("unsupported_slice_method"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slimmable_empty_allowed_channels_fixed_and_all_fixed_rejected() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // Divergence 2: Explicit [] keeps array fixed. If all layer arrays are fixed, fails with E1316.
+    let json = make_slimmable_wavenet_json(
+        Some(r#"{"method": "slice_channels_uniform", "kwargs": {"allowed_channels": []}}"#),
+        Some(r#"{"method": "slice_channels_uniform", "kwargs": {"allowed_channels": []}}"#),
+        None,
+    );
+    let parsed = parse_nam_json(&json).expect("parse");
+    let res = get_wavenet_topology(&parsed);
+    match res {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("at least one layer array must have allowed_channels"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slimmable_happy_path_fixed_plus_slimmable_and_default_kwargs() {
+    // 1 fixed layer (allowed_channels: []) + 1 slimmable layer (allowed_channels: [4, 8])
+    let json_mixed = make_slimmable_wavenet_json(
+        Some(r#"{"method": "slice_channels_uniform", "kwargs": {"allowed_channels": []}}"#),
+        Some(r#"{"method": "slice_channels_uniform", "kwargs": {"allowed_channels": [4, 8]}}"#),
+        None,
+    );
+    let parsed = parse_nam_json(&json_mixed).expect("parse");
+    let res = get_wavenet_topology(&parsed);
+    match res {
+        WavenetTopologyResult::Free(ref geom) => {
+            assert_eq!(geom.allowed_channels, Some(vec![vec![], vec![4, 8]]));
+        }
+        other => panic!("expected Free with mixed allowed_channels, got {other:?}"),
+    }
+
+    // Default absent allowed_channels: expands to 1..=channels
+    let json_default = make_slimmable_wavenet_json(
+        Some(r#"{"method": "slice_channels_uniform"}"#),
+        Some(r#"{"method": "slice_channels_uniform"}"#),
+        None,
+    );
+    let parsed = parse_nam_json(&json_default).expect("parse");
+    let res = get_wavenet_topology(&parsed);
+    match res {
+        WavenetTopologyResult::Free(ref geom) => {
+            let expected_full: Vec<usize> = (1..=8).collect();
+            assert_eq!(
+                geom.allowed_channels,
+                Some(vec![expected_full.clone(), expected_full])
+            );
+        }
+        other => panic!("expected Free with default 1..=8, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slimmable_rejects_head_kernel_size_or_groups_non_one() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // Divergence 3: head_kernel_size == 1 and all groups == 1 required faithful to C++
+    // 1. head_kernel_size != 1
+    let layers_bad_head_kernel = r#"[
+        {
+            "channels": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "head_kernel_size": 3,
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json1 = make_slimmable_wavenet_json(None, None, Some(layers_bad_head_kernel));
+    let parsed1 = parse_nam_json(&json1).expect("parse");
+    match get_wavenet_topology(&parsed1) {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("head_kernel_size"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+
+    // 2. groups != 1
+    let layers_bad_groups = r#"[
+        {
+            "channels": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "groups": 2,
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json2 = make_slimmable_wavenet_json(None, None, Some(layers_bad_groups));
+    let parsed2 = parse_nam_json(&json2).expect("parse");
+    match get_wavenet_topology(&parsed2) {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("groups"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+
+    // 3. layer1x1.groups != 1
+    let layers_bad_layer1x1_groups = r#"[
+        {
+            "channels": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "layer1x1": { "active": true, "groups": 2 },
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json3 = make_slimmable_wavenet_json(None, None, Some(layers_bad_layer1x1_groups));
+    let parsed3 = parse_nam_json(&json3).expect("parse");
+    match get_wavenet_topology(&parsed3) {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("layer1x1.groups"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+
+    // 4. head1x1.groups != 1
+    let layers_bad_head1x1_groups = r#"[
+        {
+            "channels": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "head1x1": { "active": true, "groups": 2 },
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json4 = make_slimmable_wavenet_json(None, None, Some(layers_bad_head1x1_groups));
+    let parsed4 = parse_nam_json(&json4).expect("parse");
+    match get_wavenet_topology(&parsed4) {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("head1x1.groups"));
+        }
+        other => panic!("expected Rejected with E1316, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slimmable_rejects_invalid_groups_and_bottleneck() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // T5.4-2: a present-but-unparseable `groups` (negative or non-numeric) must
+    // be rejected with E1316, never silently defaulted to 1.
+    for bad_groups in [r#"-1"#, r#""1""#, r#"1.5"#, r#"null"#] {
+        let layer = format!(
+            r#"[{{ "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "dilations": [1,2,4,8], "gated": false, "head_bias": false,
+                    "groups": {bad_groups},
+                    "slimmable": {{"method": "slice_channels_uniform"}} }}]"#
+        );
+        let json = make_slimmable_wavenet_json(None, None, Some(&layer));
+        let parsed = parse_nam_json(&json).expect("parse");
+        match get_wavenet_topology(&parsed) {
+            WavenetTopologyResult::Rejected { code, reason } => {
+                assert_eq!(
+                    code,
+                    NamErrorCode::InvalidFeatureTopology,
+                    "groups={bad_groups}"
+                );
+                assert!(
+                    reason.contains("groups"),
+                    "groups={bad_groups}, reason={reason}"
+                );
+            }
+            other => panic!("expected Rejected E1316 for groups={bad_groups}, got {other:?}"),
+        }
+    }
+
+    // T5.4-3: slimmable with bottleneck != channels is not representable in the
+    // Rust slicer and must be rejected fail-closed (E1316).
+    let layer_bad_bottleneck = r#"[
+        {
+            "channels": 8, "bottleneck": 4, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json = make_slimmable_wavenet_json(None, None, Some(layer_bad_bottleneck));
+    let parsed = parse_nam_json(&json).expect("parse");
+    match get_wavenet_topology(&parsed) {
+        WavenetTopologyResult::Rejected { code, reason } => {
+            assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+            assert!(reason.contains("bottleneck"), "reason={reason}");
+        }
+        other => panic!("expected Rejected E1316 for bottleneck!=channels, got {other:?}"),
+    }
+
+    // Explicit bottleneck == channels stays accepted (default equivalence).
+    let layer_ok_bottleneck = r#"[
+        {
+            "channels": 8, "bottleneck": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8],
+            "gated": false, "head_bias": false,
+            "slimmable": {"method": "slice_channels_uniform"}
+        }
+    ]"#;
+    let json = make_slimmable_wavenet_json(None, None, Some(layer_ok_bottleneck));
+    let parsed = parse_nam_json(&json).expect("parse");
+    match get_wavenet_topology(&parsed) {
+        WavenetTopologyResult::Free(_) => {}
+        other => panic!("expected Free for bottleneck==channels, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_a1_rejects_malformed_layer1x1() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // T5.4-1: a present `layer1x1` block must be a well-formed object with a
+    // boolean `active` and an integer `groups` (C++ model.cpp:948-954 reads
+    // both keys unconditionally). A malformed block is rejected with E1305.
+    for bad in [
+        r#""not_an_object""#,
+        r#"{"active": true}"#,
+        r#"{"groups": 1}"#,
+        r#"{"active": 1, "groups": 1}"#,
+        r#"{"active": true, "groups": -1}"#,
+    ] {
+        let layer = format!(
+            r#"[{{ "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "dilations": [1,2,4,8], "gated": false, "head_bias": false,
+                    "activation": "Tanh",
+                    "layer1x1": {bad} }}]"#
+        );
+        let json = make_slimmable_wavenet_json(None, None, Some(&layer));
+        let parsed = parse_nam_json(&json).expect("parse");
+        match get_wavenet_topology(&parsed) {
+            WavenetTopologyResult::Rejected { code, .. } => {
+                assert_eq!(code, NamErrorCode::InvalidModelTopology, "layer1x1={bad}");
+            }
+            other => panic!("expected Rejected E1305 for layer1x1={bad}, got {other:?}"),
+        }
+    }
+
+    // Absence of the key keeps the C++ default (active=true, groups=1).
+    let layer_no_key = r#"[
+        {
+            "channels": 8, "kernel_size": 3, "head_size": 4,
+            "dilations": [1,2,4,8], "gated": false, "head_bias": false,
+            "activation": "Tanh"
+        }
+    ]"#;
+    let json = make_slimmable_wavenet_json(None, None, Some(layer_no_key));
+    let parsed = parse_nam_json(&json).expect("parse");
+    match get_wavenet_topology(&parsed) {
+        WavenetTopologyResult::Free(_) => {}
+        other => panic!("expected Free when layer1x1 is absent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slimmable_load_model_error_code_mapping() {
+    use crate::common::diagnostics::NamErrorCode;
+
+    // Divergence 4: End-to-end build_model failure yields LoadError::InvalidTopology
+    // and err.code() == NamErrorCode::InvalidFeatureTopology (E1316)
+    let json_invalid =
+        make_slimmable_wavenet_json(Some(r#"{"method": "invalid_method"}"#), None, None);
+    let sys = crate::common::diagnostics::SystemSnapshot::capture();
+    let res = crate::loader::load_and_build_model_from_bytes(
+        json_invalid.as_bytes(),
+        &sys,
+        false,
+        crate::loader::LoadOptions::default(),
+    );
+    match res {
+        Err(err) => {
+            assert_eq!(err.code(), NamErrorCode::InvalidFeatureTopology);
+            match err {
+                crate::loader::LoadError::InvalidTopology { code, reason } => {
+                    assert_eq!(code, NamErrorCode::InvalidFeatureTopology);
+                    assert!(reason.contains("method") || reason.contains("invalid_method"));
+                }
+                other => panic!("expected LoadError::InvalidTopology, got {other:?}"),
+            }
+        }
+        Ok(_) => panic!("expected build to fail for invalid slimmable topology"),
     }
 }

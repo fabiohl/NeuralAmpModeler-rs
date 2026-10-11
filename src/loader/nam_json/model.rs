@@ -153,8 +153,25 @@ impl NamLayerConfig {
     pub fn parse_activation_config(
         &self,
         num_layers: usize,
-    ) -> Option<super::activation_parser::LayerActivationConfig> {
-        let raw = self.layer_raw.as_ref()?;
+    ) -> Result<
+        super::activation_parser::LayerActivationConfig,
+        crate::common::diagnostics::NamErrorCode,
+    > {
+        let raw = match self.layer_raw.as_ref() {
+            Some(r) => r,
+            None => {
+                return Ok(super::activation_parser::LayerActivationConfig {
+                    activations: vec![
+                        crate::models::a2::activations::ActivationType::LeakyReLU {
+                            negative_slope: crate::models::a2::A2_LEAKY_SLOPE,
+                        };
+                        num_layers
+                    ],
+                    gating_modes: vec![crate::models::a2::gating::GatingMode::None; num_layers],
+                    secondary_activations: vec![None; num_layers],
+                });
+            }
+        };
         super::activation_parser::parse_layer_activations(raw, num_layers)
     }
 }
@@ -310,10 +327,13 @@ pub struct HeadConfig {
     pub channels: Option<usize>,
     /// Whether the head Conv1D has a bias term.
     pub bias: Option<bool>,
-    /// Number of output channels (typically 1 for mono).
+    /// Number of output channels. Defaults to 1 when absent. Multi-output
+    /// heads (`out_channels > 1`, post-stack A1) are supported and reported
+    /// via `num_output_channels()`.
     pub out_channels: Option<usize>,
-    /// Activation function name (e.g. "Tanh", "ReLU").
-    pub activation: Option<String>,
+    /// Activation specification (bare name string or tagged object, mirroring the
+    /// C++ `ActivationConfig::from_json` contract).
+    pub activation: Option<serde_json::Value>,
     /// Kernel size for the head Conv1D.
     pub kernel_size: Option<usize>,
 }
@@ -327,9 +347,17 @@ pub struct NamConfig {
     /// Number of input channels (WaveNet A2). Defaults to 1 when absent.
     #[serde(default)]
     pub in_channels: Option<usize>,
-    /// Number of output channels. Defaults to 1 when absent (NeuralAmpModeler-rs only supports mono).
+    /// Number of output channels. Defaults to 1 when absent. Multi-output
+    /// geometries (`head_size > 1`, ConvNet `out_channels > 1`, LSTM
+    /// multi-I/O) are supported and reported via `num_output_channels()`.
     #[serde(default)]
     pub out_channels: Option<usize>,
+    /// Convolution groups (ConvNet). Defaults to 1 when absent.
+    #[serde(default)]
+    pub groups: Option<usize>,
+    /// Input feature size (LSTM multi-I/O). Defaults to None when absent.
+    #[serde(default)]
+    pub input_size: Option<usize>,
     /// Post-stack head sub-object (WaveNet with head / ConvNet).
     /// `null` in JSON becomes `Some(Value::Null)` (head present but empty).
     /// Absent in JSON becomes `None`.
@@ -387,9 +415,10 @@ pub struct NamConfig {
     /// ConvNet C++ flat format: global batchnorm flag.
     #[serde(default, rename = "batchnorm")]
     pub conv_batchnorm: Option<bool>,
-    /// ConvNet C++ flat format: per-block activation function string (config root level).
+    /// ConvNet C++ flat format: per-block activation specification at the
+    /// config root level (bare name string or tagged object).
     #[serde(default, rename = "activation")]
-    pub conv_activation: Option<String>,
+    pub conv_activation: Option<serde_json::Value>,
 }
 
 impl NamConfig {
@@ -419,10 +448,7 @@ impl NamConfig {
             .get("out_channels")
             .and_then(|v| v.as_u64())
             .and_then(|v| usize::try_from(v).ok());
-        let activation = val
-            .get("activation")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let activation = val.get("activation").filter(|v| !v.is_null()).cloned();
         let kernel_size = val
             .get("kernel_size")
             .and_then(|v| v.as_u64())

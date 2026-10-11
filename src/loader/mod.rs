@@ -21,6 +21,8 @@ pub mod nam_json;
 pub mod namb;
 /// `.namb` encoder: serializes `NamModelData` into the binary compact profile format.
 pub mod namb_encoder;
+/// Sample-rate provenance resolution across nested model graphs.
+pub(crate) mod sample_rate;
 /// Weight matrix transposition utilities for interleaved memory layouts.
 pub mod transpose;
 /// WAV impulse response parser and Linear model converter.
@@ -53,7 +55,10 @@ mod loader_log_test;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LoadOptions {
     /// `None`  → use default (prewarm runs normally).
-    /// `Some(false)` → skip the initial prewarm pass (fast preview / preset browsing).
+    /// `Some(false)` → skip the *initial* prewarm pass (fast preview / preset
+    /// browsing). The model's persistent `prewarm_on_reset` flag is restored
+    /// afterwards, so later `reset()` calls still stabilize normally
+    /// (mirrors the C++ `ScopedPrewarmOnResetDefault`, `get_dsp.cpp:286-296`).
     /// `Some(true)`  → force prewarm on (explicit override).
     pub prewarm: Option<bool>,
 }

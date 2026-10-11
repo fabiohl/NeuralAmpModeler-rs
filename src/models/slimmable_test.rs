@@ -350,7 +350,7 @@ fn test_slice_wavenet_array_dims() {
     let dilations = [1, 2, 4];
     let array = make_wavenet_array(1, CH_FULL, 4, &dilations);
     let mut alloc_num = 0;
-    let sliced = slice_wavenet_array(&array, 1, CH_SLIM, &mut alloc_num).unwrap();
+    let sliced = slice_wavenet_array(&array, 1, CH_SLIM, 4, &mut alloc_num).unwrap();
 
     assert_eq!(sliced.in_ch, 1);
     assert_eq!(sliced.ch, CH_SLIM);
@@ -369,6 +369,7 @@ fn test_slice_wavenet_array_dims() {
     }
     assert_eq!(sliced.array_outputs.len(), CH_SLIM * WAVENET_MAX_NUM_FRAMES);
     assert_eq!(sliced.head_accum.len(), CH_SLIM * WAVENET_MAX_NUM_FRAMES);
+    assert_eq!(sliced.head_outputs.len(), 4 * WAVENET_MAX_NUM_FRAMES);
     assert_eq!(sliced.block_size, CH_SLIM);
     assert_eq!(sliced.effective_layers, 3);
 }
@@ -378,7 +379,7 @@ fn test_slice_wavenet_array_preserves_weights() {
     let dilations = [1, 2, 4];
     let array = make_wavenet_array(1, CH_FULL, 4, &dilations);
     let mut alloc_num = 0;
-    let sliced = slice_wavenet_array(&array, 1, CH_SLIM, &mut alloc_num).unwrap();
+    let sliced = slice_wavenet_array(&array, 1, CH_SLIM, 4, &mut alloc_num).unwrap();
 
     let rec_expected = slice_dense(&array.rechannel, 1, CH_SLIM).unwrap();
     assert_eq!(&*sliced.rechannel.weights, &*rec_expected.weights);
@@ -412,15 +413,17 @@ fn test_slice_wavenet_model_dims() {
     let sliced = slice_wavenet_model(&model, CH_SLIM).unwrap();
 
     assert_eq!(sliced.ch, CH_SLIM);
-    assert_eq!(sliced.head, CH_SLIM);
+    assert_eq!(sliced.head, 1);
     assert_eq!(sliced.k, TEST_KERNEL);
     assert_eq!(sliced.head_scale, 0.02);
     assert_eq!(sliced.arrays.len(), 2);
 
     assert_eq!(sliced.arrays[0].ch, CH_SLIM);
     assert_eq!(sliced.arrays[0].in_ch, 1);
+    assert_eq!(sliced.arrays[0].head, CH_SLIM);
     assert_eq!(sliced.arrays[1].ch, CH_SLIM);
     assert_eq!(sliced.arrays[1].in_ch, CH_SLIM);
+    assert_eq!(sliced.arrays[1].head, 1);
     assert_eq!(sliced.arrays[0].effective_layers, 3);
     assert_eq!(sliced.arrays[1].effective_layers, 3);
 }
@@ -472,9 +475,10 @@ fn test_slice_wavenet_model_too_large_ch_returns_err() {
     };
     assert_eq!(
         err,
-        SlicingError::RequestedChannelExceedsModel {
+        SlicingError::TargetExceedsArrayChannels {
+            array_idx: 0,
             requested: CH_FULL + 1,
-            available: CH_FULL
+            available: CH_FULL,
         }
     );
 }
@@ -498,10 +502,239 @@ fn test_slice_wavenet_model_exceeds_min_array_ch_returns_err() {
     };
     assert_eq!(
         err,
-        SlicingError::RequestedChannelExceedsMinArray {
+        SlicingError::TargetExceedsArrayChannels {
+            array_idx: 1,
             requested: 5,
-            min_array_ch: 4
+            available: 4,
         }
+    );
+}
+
+// =====================================================================
+// T4.1c: F-20 reproduction & heterogeneous per-array slicing tests
+// =====================================================================
+
+/// (a) F-20 reproduction & verification:
+/// Standard NAM WaveNet has array0 `ch=16, head=8` and array1 `ch=8, head=1`.
+/// Slicing with per-array targets `[4, 4]` produces:
+/// - array0: `in_ch=1, ch=4, head=4` (intermediate head matches next array channels!)
+/// - array1: `in_ch=4, ch=4, head=1`
+///
+/// Verifies the chaining invariant: `prev.head == curr.ch == 4`, preventing
+/// slice buffer length divergence during `tanh_and_accumulate_with_seed`.
+#[test]
+fn test_f20_chain_head_and_seed_alignment() {
+    let dilations = [1, 2, 4];
+    let array0 = make_wavenet_array(1, 16, 8, &dilations);
+    let array1 = make_wavenet_array(16, 8, 1, &dilations);
+    let rf = array0.receptive_field_size.max(array1.receptive_field_size);
+    let model = WaveNetModelDyn {
+        ch: 16,
+        k: TEST_KERNEL,
+        head: 1,
+        arrays: vec![array0, array1],
+        head_scale: 0.02,
+        receptive_field_size: rf,
+        condition_dsp: None,
+        condition_dsp_output: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        post_stack_head: None,
+        head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        prewarm_on_reset: true,
+        prewarm_pending: false,
+        slimmable_capable: true,
+        allowed_channels: None,
+        pending_slim_channel: None,
+    };
+
+    let mut sliced = slice_wavenet_model_per_array(&model, &[4, 4]).unwrap();
+    assert_eq!(sliced.ch, 4);
+    assert_eq!(sliced.arrays[0].ch, 4);
+    assert_eq!(
+        sliced.arrays[0].head, 4,
+        "Array 0 head must be chained to Array 1 ch"
+    );
+    assert_eq!(sliced.arrays[1].in_ch, 4);
+    assert_eq!(sliced.arrays[1].ch, 4);
+    assert_eq!(sliced.arrays[1].head, 1);
+
+    // Buffer length invariants
+    assert_eq!(
+        sliced.arrays[0].head_outputs.len(),
+        4 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(
+        sliced.arrays[1].head_accum.len(),
+        4 * WAVENET_MAX_NUM_FRAMES
+    );
+
+    // Inference executes without panic, bounds violation, or NaN/Inf
+    sliced.prewarm();
+    let input = vec![0.3f32; 128];
+    let mut output = vec![0.0f32; 128];
+    sliced.process(&input, &mut output);
+
+    for &s in &output {
+        assert!(s.is_finite(), "Output sample must be finite");
+    }
+}
+
+/// (b) 2 arrays heterogêneos: buffer dimensions, chaining, and validation error cases.
+#[test]
+fn test_heterogeneous_per_array_slicing_and_validations() {
+    let dilations = [1, 2, 4];
+    let array0 = make_wavenet_array(1, 16, 8, &dilations);
+    let array1 = make_wavenet_array(16, 8, 1, &dilations);
+    let rf = array0.receptive_field_size.max(array1.receptive_field_size);
+    let model = WaveNetModelDyn {
+        ch: 16,
+        k: TEST_KERNEL,
+        head: 1,
+        arrays: vec![array0, array1],
+        head_scale: 0.02,
+        receptive_field_size: rf,
+        condition_dsp: None,
+        condition_dsp_output: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        post_stack_head: None,
+        head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        prewarm_on_reset: true,
+        prewarm_pending: false,
+        slimmable_capable: true,
+        allowed_channels: Some(vec![vec![4, 8, 16], vec![2, 4, 8]]),
+        pending_slim_channel: None,
+    };
+
+    // Valid heterogeneous target: [8, 4]
+    let sliced = slice_wavenet_model_per_array(&model, &[8, 4]).unwrap();
+    assert_eq!(sliced.arrays[0].ch, 8);
+    assert_eq!(sliced.arrays[0].in_ch, 1);
+    assert_eq!(
+        sliced.arrays[0].head, 4,
+        "Intermediate head chains to target[1]"
+    );
+    assert_eq!(
+        sliced.arrays[1].in_ch, 8,
+        "Array 1 input chains to target[0]"
+    );
+    assert_eq!(sliced.arrays[1].ch, 4);
+    assert_eq!(sliced.arrays[1].head, 1);
+
+    // Buffer dimension verification
+    assert_eq!(
+        sliced.arrays[0].array_outputs.len(),
+        8 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(
+        sliced.arrays[0].head_accum.len(),
+        8 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(
+        sliced.arrays[0].head_outputs.len(),
+        4 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(
+        sliced.arrays[1].array_outputs.len(),
+        4 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(
+        sliced.arrays[1].head_accum.len(),
+        4 * WAVENET_MAX_NUM_FRAMES
+    );
+    assert_eq!(sliced.arrays[1].head_outputs.len(), WAVENET_MAX_NUM_FRAMES);
+
+    // Error case 1: Length mismatch
+    let Err(err_len) = slice_wavenet_model_per_array(&model, &[8]) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err_len,
+        SlicingError::ArrayCountMismatch {
+            requested: 1,
+            available: 2
+        }
+    );
+
+    // Error case 2: Target exceeds loaded array channel count
+    let Err(err_exceed) = slice_wavenet_model_per_array(&model, &[32, 4]) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err_exceed,
+        SlicingError::TargetExceedsArrayChannels {
+            array_idx: 0,
+            requested: 32,
+            available: 16
+        }
+    );
+
+    // Error case 3: Target not in allowed list
+    let Err(err_not_allowed) = slice_wavenet_model_per_array(&model, &[6, 4]) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err_not_allowed,
+        SlicingError::TargetNotInAllowedList {
+            array_idx: 0,
+            requested: 6,
+            allowed: vec![4, 8, 16]
+        }
+    );
+
+    // Error case 4: Fixed array target mismatch
+    let mut model_with_fixed = model.clone();
+    model_with_fixed.allowed_channels = Some(vec![vec![4, 8, 16], vec![]]); // Array 1 fixed
+    let Err(err_fixed) = slice_wavenet_model_per_array(&model_with_fixed, &[8, 4]) else {
+        panic!("expected Err");
+    };
+    assert_eq!(
+        err_fixed,
+        SlicingError::FixedArrayTargetMismatch {
+            array_idx: 1,
+            requested: 4,
+            fixed: 8
+        }
+    );
+
+    // Valid fixed array target: array 1 retains 8
+    let ok_fixed = slice_wavenet_model_per_array(&model_with_fixed, &[8, 8]).unwrap();
+    assert_eq!(ok_fixed.arrays[0].ch, 8);
+    assert_eq!(ok_fixed.arrays[0].head, 8);
+    assert_eq!(ok_fixed.arrays[1].ch, 8);
+}
+
+/// (c) clone_exact and slice preserve allowed_channels and reset pending_slim_channel.
+#[test]
+fn test_clone_and_slice_preserve_allowed_channels() {
+    let dilations = [1, 2, 4];
+    let array0 = make_wavenet_array(1, 16, 8, &dilations);
+    let array1 = make_wavenet_array(16, 8, 1, &dilations);
+    let rf = array0.receptive_field_size.max(array1.receptive_field_size);
+    let model = WaveNetModelDyn {
+        ch: 16,
+        k: TEST_KERNEL,
+        head: 1,
+        arrays: vec![array0, array1],
+        head_scale: 0.02,
+        receptive_field_size: rf,
+        condition_dsp: None,
+        condition_dsp_output: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        post_stack_head: None,
+        head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+        prewarm_on_reset: true,
+        prewarm_pending: false,
+        slimmable_capable: true,
+        allowed_channels: Some(vec![vec![4, 8, 16], vec![2, 4, 8]]),
+        pending_slim_channel: Some(vec![8, 4]),
+    };
+
+    let cloned = model.clone_exact();
+    assert_eq!(cloned.allowed_channels, model.allowed_channels);
+    assert_eq!(cloned.pending_slim_channel, Some(vec![8, 4]));
+
+    let sliced = slice_wavenet_model_per_array(&model, &[8, 4]).unwrap();
+    assert_eq!(sliced.allowed_channels, model.allowed_channels);
+    assert_eq!(
+        sliced.pending_slim_channel, None,
+        "Pending slim channel must be reset to None on sliced model"
     );
 }
 
@@ -529,5 +762,77 @@ fn test_clone_wavenet_for_slimmable_storage_heterogeneous() {
         assert_eq!(m.arrays[1].ch, 4);
     } else {
         panic!("expected StaticModel::WavenetDyn");
+    }
+}
+
+// =====================================================================
+// slimmable tier mapping / breakpoints
+// =====================================================================
+
+/// Tier mapping for `allowed_channels = [4, 8, 16]` (three tiers): the
+/// `floor(ratio * num_tiers)` rule places each tier on an equal third of the
+/// quality axis, so `0.30 -> 4` (the old `round(ratio * (n - 1))` rule wrongly
+/// yielded `8`).
+#[test]
+fn test_slimmable_tier_index_four_eight_sixteen() {
+    let allowed = [4usize, 8, 16];
+    let pick = |r: f64| allowed[slimmable_tier_index(r, allowed.len())];
+
+    assert_eq!(pick(0.0), 4);
+    assert_eq!(pick(0.30), 4);
+    assert_eq!(pick(0.34), 8);
+    assert_eq!(pick(2.0 / 3.0), 16);
+    assert_eq!(pick(0.99), 16);
+    assert_eq!(pick(1.0), 16);
+    assert_eq!(pick(2.0), 16, "out-of-range ratio clamps to the top tier");
+    assert_eq!(pick(-1.0), 4, "negative ratio clamps to the bottom tier");
+}
+
+#[test]
+fn test_slimmable_tier_index_monotonic_and_bounded() {
+    for n in 1..=16usize {
+        let mut prev = 0usize;
+        for k in 0..=1000 {
+            let r = k as f64 / 1000.0;
+            let idx = slimmable_tier_index(r, n);
+            assert!(idx < n, "index {idx} out of range for n={n}");
+            assert!(idx >= prev, "non-monotonic at n={n}, r={r}");
+            prev = idx;
+        }
+        assert_eq!(slimmable_tier_index(1.0, n), n - 1);
+        assert_eq!(slimmable_tier_index(0.0, n), 0);
+    }
+}
+
+/// T5.4-8: `f64` ratio preserves C++ `ratio_to_channels` parity at tier
+/// boundaries that `f32` rounding corrupts. With `num_tiers = 10`, the exact
+/// `0.7f64 * 10 = 7.0` selects tier 7, whereas the `f32`-rounded `0.7` widens
+/// to `6.999…` and would select tier 6 (one below C++).
+#[test]
+fn test_slimmable_tier_index_f64_boundary_parity() {
+    assert_eq!(slimmable_tier_index(0.7f64, 10), 7);
+    assert_eq!(slimmable_tier_index(0.9f64, 10), 9);
+    assert_eq!(slimmable_tier_index(0.35f64, 20), 7);
+    assert_eq!(slimmable_tier_index(0.95f64, 20), 19);
+    // The f32-rounded value is what previously drifted a tier lower.
+    assert_eq!(slimmable_tier_index(0.7f32 as f64, 10), 6);
+}
+
+#[test]
+fn test_slimmable_channel_breakpoints() {
+    assert!(slimmable_channel_breakpoints(0).is_empty());
+    assert!(slimmable_channel_breakpoints(1).is_empty());
+
+    let bp3 = slimmable_channel_breakpoints(3);
+    assert_eq!(&*bp3, &[1.0 / 3.0, 2.0 / 3.0]);
+
+    let bp4 = slimmable_channel_breakpoints(4);
+    assert_eq!(&*bp4, &[0.25, 0.5, 0.75]);
+
+    for window in bp4.windows(2) {
+        assert!(
+            window[0] < window[1],
+            "breakpoints must be strictly increasing"
+        );
     }
 }

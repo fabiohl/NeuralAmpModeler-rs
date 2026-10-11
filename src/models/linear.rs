@@ -293,6 +293,20 @@ impl NamModel for LinearModel {
         unsafe { self.process(input, output) };
     }
 
+    /// Input-channel count declared at load time (mirrors the C++ NAMcore
+    /// `DSP::NumInputChannels`).
+    #[inline(always)]
+    fn num_input_channels(&self) -> usize {
+        self.in_channels
+    }
+
+    /// Output-channel count declared at load time (mirrors the C++ NAMcore
+    /// `DSP::NumOutputChannels`).
+    #[inline(always)]
+    fn num_output_channels(&self) -> usize {
+        self.out_channels
+    }
+
     #[inline(always)]
     unsafe fn process_raw(
         &mut self,

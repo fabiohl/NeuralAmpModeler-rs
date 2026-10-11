@@ -191,8 +191,143 @@ fn test_latency_samples() {
     assert!(!x2.is_bypass());
 
     let x4 = OversampleEngine::new(OversampleFactor::X4, 256).unwrap();
-    assert_eq!(x4.latency_samples(), 24);
+    assert_eq!(x4.latency_samples(), 18);
     assert!(!x4.is_bypass());
+}
+
+/// Measures the round-trip group delay from the impulse response peak and
+/// checks it against [`OversampleEngine::latency_samples`].
+///
+/// Drives an impulse through `upsample -> passthrough -> downsample` with
+/// several block sizes (to exercise phase batching) and locates the peak of the
+/// resulting native-rate impulse response. The symmetric half-band filters make
+/// the round trip a linear-phase FIR whose peak sits on the group delay.
+#[test]
+fn latency_matches_impulse_peak() {
+    fn measure(factor: OversampleFactor, block: usize) -> usize {
+        let mut engine = OversampleEngine::new(factor, 2048).unwrap();
+        let n_in = 4096usize;
+        let mut input = vec![0.0f32; n_in];
+        input[0] = 1.0;
+        let mut os_buf = vec![0.0f32; n_in * factor.multiplier()];
+        let mut os_model = vec![0.0f32; n_in * factor.multiplier()];
+        let mut out = vec![0.0f32; n_in];
+        let mut produced = 0usize;
+
+        let mut pos = 0usize;
+        while pos < n_in {
+            let n = (n_in - pos).min(block);
+            let n_os = engine.upsample(&input[pos..pos + n], &mut os_buf, None);
+            os_model[..n_os].copy_from_slice(&os_buf[..n_os]);
+            let n_out = engine.downsample(&os_model[..n_os], &mut out[produced..], None);
+            produced += n_out;
+            pos += n;
+        }
+
+        let (peak_idx, _) = out[..produced]
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .unwrap();
+        peak_idx
+    }
+
+    for block in [1usize, 7, 64, 513] {
+        assert_eq!(
+            measure(OversampleFactor::X2, block),
+            12,
+            "X2 impulse peak != declared latency (block={block})"
+        );
+        assert_eq!(
+            measure(OversampleFactor::X4, block),
+            18,
+            "X4 impulse peak != declared latency (block={block})"
+        );
+    }
+}
+
+/// With the warm-up gate removed, `downsample` must emit exactly
+/// `os_input.len() / factor` samples from the very first block, with no stale
+/// tail retained in the caller's buffer (T3.4 cardinality contract).
+#[test]
+fn downsample_cardinality_every_block_size() {
+    let cases = [1usize, 7, 8, 64, 513];
+    for &k in &cases {
+        let mut x2 = OversampleEngine::new(OversampleFactor::X2, 4096).unwrap();
+        let mut input = vec![0.0f32; 2 * k];
+        for (i, s) in input.iter_mut().enumerate() {
+            *s = (i as f32 * 0.01).sin();
+        }
+        // Sentinel-fill the destination so an unwritten tail is observable.
+        let mut out = vec![f32::NAN; k];
+        let n = x2.downsample(&input, &mut out, None);
+        assert_eq!(n, k, "X2 downsample must emit exactly n/2 (k={k})");
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "X2 downsample left an unwritten (stale/NaN) tail for k={k}"
+        );
+
+        for short in [k.saturating_sub(1), k / 2, 1] {
+            if short == 0 {
+                continue;
+            }
+            let mut x2 = OversampleEngine::new(OversampleFactor::X2, 4096).unwrap();
+            let mut out = vec![f32::NAN; short];
+            let n = x2.downsample(&input, &mut out, None);
+            assert_eq!(n, short, "X2 downsample clamps to output capacity");
+            assert!(out.iter().all(|s| s.is_finite()));
+        }
+    }
+
+    // X4: os input length 4k -> k native samples.
+    for &k in &cases {
+        let mut x4 = OversampleEngine::new(OversampleFactor::X4, 8192).unwrap();
+        let mut input = vec![0.0f32; 4 * k];
+        for (i, s) in input.iter_mut().enumerate() {
+            *s = (i as f32 * 0.01).cos();
+        }
+        let mut out = vec![f32::NAN; k];
+        let n = x4.downsample(&input, &mut out, None);
+        assert_eq!(n, k, "X4 downsample must emit exactly n/4 (k={k})");
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+}
+
+/// T5.4-7: `X2Stage::downsample` requires an even per-call input length; an
+/// odd call would otherwise emit an unsupported `ceil(n/2)` leftover sample.
+#[test]
+#[should_panic(expected = "requires an even input length")]
+fn downsample_rejects_odd_input_length() {
+    let mut s = X2Stage::new().unwrap();
+    let input = vec![0.1f32; 5];
+    let mut out = vec![0.0f32; 3];
+    let _ = s.downsample(&input, &mut out);
+}
+
+/// T5.4-7 boundary: an X4 block whose length is not a multiple of the factor
+/// (so its half-rate intermediate would be odd) is aligned down and flagged,
+/// never panicking the decimation stages.
+#[test]
+fn x4_downsample_aligns_non_multiple_of_four_and_flags() {
+    let mut engine = OversampleEngine::new(OversampleFactor::X4, 256).unwrap();
+    let rt = RtStatusFlags::new();
+    let input = vec![0.25f32; 6];
+    let mut out = vec![0.0f32; 2];
+    let n = engine.downsample(&input, &mut out, Some(&rt));
+    assert_eq!(n, 1, "6 aligned down to 4 → 1 native sample");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+}
+
+/// T5.4-7 boundary: an X2 block of odd length is aligned down and flagged.
+#[test]
+fn x2_downsample_aligns_odd_input_and_flags() {
+    let mut engine = OversampleEngine::new(OversampleFactor::X2, 256).unwrap();
+    let rt = RtStatusFlags::new();
+    let input = vec![0.25f32; 5];
+    let mut out = vec![0.0f32; 3];
+    let n = engine.downsample(&input, &mut out, Some(&rt));
+    assert_eq!(n, 2, "5 aligned down to 4 → 2 native samples");
+    assert!(rt.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
 }
 
 #[test]
@@ -518,7 +653,7 @@ fn test_x2_stage_phase_batched_reference_parity() {
                 *pos_o = (*pos_o + 1) % HB_ODD_LEN;
             }
             *total += 1;
-            if *total >= HB_TAPS as u64 && (*total & 1) == 1 {
+            if (*total & 1) == 1 {
                 let mut sum = ring_e[*pos_e + 6] * down_center;
                 for k in 0..down_coeffs.len() {
                     sum += down_coeffs[k] * ring_o[*pos_o + k];
@@ -565,8 +700,11 @@ fn test_x2_stage_phase_batched_reference_parity() {
         }
     }
 
-    // ── Downsample parity across block sizes 1..=37 ──
-    for block in 1..=37usize {
+    // ── Downsample parity across even block sizes 2..=36 ──
+    // `downsample` requires an even per-call length (T5.4-7); the production
+    // pipeline always feeds it `upsample` output (`2 * native`), so the odd
+    // leftover-tail sweep is intentionally restricted to even blocks.
+    for block in (2..=36usize).step_by(2) {
         let mut s = X2Stage::new().unwrap();
         let mut down_out = Vec::new();
         let mut r_e = vec![0.0f32; HB_EVEN_LEN * 2];

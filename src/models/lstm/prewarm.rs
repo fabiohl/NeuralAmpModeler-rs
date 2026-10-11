@@ -74,14 +74,17 @@ pub(super) fn lstm_prewarm_common(model: &mut impl LstmLike, num_samples: usize)
     model.reset_input_slots();
 
     // 2. Process zero-value samples.
-    const CHUNK: usize = 512;
-    let zero_in = [0.0f32; CHUNK];
-    let mut zero_out = [0.0f32; CHUNK];
+    let in_ch = model.num_input_channels().max(1);
+    let out_ch = model.num_output_channels().max(1);
+    const BUF_CAP: usize = 1024;
+    let zero_in = [0.0f32; BUF_CAP];
+    let mut zero_out = [0.0f32; BUF_CAP];
+    let chunk_frames = (BUF_CAP / in_ch.max(out_ch)).max(1);
     let mut rem = num_samples;
 
     while rem > 0 {
-        let n = rem.min(CHUNK);
-        model.process(&zero_in[..n], &mut zero_out[..n]);
+        let n = rem.min(chunk_frames);
+        model.process(&zero_in[..n * in_ch], &mut zero_out[..n * out_ch]);
         rem -= n;
     }
 }
@@ -111,14 +114,17 @@ pub(super) fn lstm_prewarm_split_step(model: &mut impl LstmLike, samples: usize)
     let pending = *model.prewarm_pending_slot();
     let n = samples.min(pending);
     if n > 0 {
-        const CHUNK: usize = 512;
-        let zero_in = [0.0f32; CHUNK];
-        let mut zero_out = [0.0f32; CHUNK];
+        let in_ch = model.num_input_channels().max(1);
+        let out_ch = model.num_output_channels().max(1);
+        const BUF_CAP: usize = 1024;
+        let zero_in = [0.0f32; BUF_CAP];
+        let mut zero_out = [0.0f32; BUF_CAP];
+        let chunk_frames = (BUF_CAP / in_ch.max(out_ch)).max(1);
         let mut rem = n;
 
         while rem > 0 {
-            let take = rem.min(CHUNK);
-            model.process(&zero_in[..take], &mut zero_out[..take]);
+            let take = rem.min(chunk_frames);
+            model.process(&zero_in[..take * in_ch], &mut zero_out[..take * out_ch]);
             rem -= take;
         }
         *model.prewarm_pending_slot() = pending - n;

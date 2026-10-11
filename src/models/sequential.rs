@@ -83,6 +83,23 @@ pub fn resolve_expected_sample_rate(
     child_rates: &[Option<f32>],
     top_level_rate: Option<f32>,
 ) -> Result<f32, NamErrorCode> {
+    Ok(resolve_known_sample_rate(child_rates, top_level_rate)?.unwrap_or(DEFAULT_SAMPLE_RATE))
+}
+
+/// Resolves the *known* (non-materialized) expected sample rate of a chain,
+/// returning `None` when nothing is declared (C++
+/// `resolve_expected_sample_rate`, `sequential.cpp:36-62`, DEC-01).
+///
+/// Identical resolution/conflict rules as
+/// [`resolve_expected_sample_rate`], but the all-unknown case stays `None`
+/// instead of materializing the 48 kHz global default. This is the primitive
+/// used by the loader's `effective_known_rate` so nested
+/// Sequential/Container nodes propagate their *declared* rate without
+/// creating false conflicts against the engine default.
+pub fn resolve_known_sample_rate(
+    child_rates: &[Option<f32>],
+    top_level_rate: Option<f32>,
+) -> Result<Option<f32>, NamErrorCode> {
     let mut resolved = top_level_rate;
     for (i, child_rate) in child_rates.iter().enumerate() {
         let child_rate = match child_rate {
@@ -103,7 +120,7 @@ pub fn resolve_expected_sample_rate(
             }
         }
     }
-    Ok(resolved.unwrap_or(DEFAULT_SAMPLE_RATE))
+    Ok(resolved)
 }
 
 /// Saturating sum of per-child stabilization counts (C++
@@ -252,6 +269,15 @@ impl SequentialModel {
         self.models.len()
     }
 
+    /// Whether any stage resolves to an LSTM-family model.
+    ///
+    /// Used by [`crate::models::StaticModel::is_lstm_family`] so that LSTM
+    /// governed reset semantics are honoured even when the LSTM is nested
+    /// inside a Sequential chain (mirroring the Container recursion).
+    pub fn contains_lstm_family(&self) -> bool {
+        self.models.iter().any(|m| m.is_lstm_family())
+    }
+
     /// Stage references (in processing order) for diagnostics and tests.
     #[cfg(test)]
     pub(crate) fn stages(&mut self) -> &mut [StaticModel] {
@@ -380,6 +406,20 @@ impl NamModel for SequentialModel {
         // SAFETY: `in_arr`/`out_arr` hold one valid borrow of `num_frames`
         // elements each (see `NamModel::process_raw` safety contract).
         unsafe { self.process_chain(in_arr.as_ptr(), out_arr.as_ptr(), n) };
+    }
+
+    /// Chain input channels = first stage input channels (C++
+    /// `SequentialModel::NumInputChannels`).
+    #[inline(always)]
+    fn num_input_channels(&self) -> usize {
+        self.in_channels
+    }
+
+    /// Chain output channels = last stage output channels (C++
+    /// `SequentialModel::NumOutputChannels`).
+    #[inline(always)]
+    fn num_output_channels(&self) -> usize {
+        self.out_channels
     }
 
     /// Processes a multichannel block through the whole chain (C++
@@ -522,6 +562,15 @@ impl NamModel for SequentialModel {
         self.prewarm_on_reset = val;
         for model in &mut self.models {
             model.set_prewarm_on_reset(val);
+        }
+    }
+
+    /// Clears every stage's temporal state by delegating to each child's
+    /// [`NamModel::clear_state`] (the chain itself owns only scratch planes,
+    /// which the next `process` overwrites wholesale). Real-time safe.
+    fn clear_state(&mut self) {
+        for model in &mut self.models {
+            model.clear_state();
         }
     }
 

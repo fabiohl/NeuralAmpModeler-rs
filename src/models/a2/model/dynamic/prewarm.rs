@@ -18,6 +18,7 @@ use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
 use super::super::a2_prewarm_common;
 use super::WaveNetA2Dyn;
+use crate::models::NamModel;
 
 impl WaveNetA2Dyn {
     /// Zero phase of the deferred split stabilization: clears every buffer in
@@ -48,6 +49,29 @@ impl WaveNetA2Dyn {
         } else {
             0
         };
+    }
+
+    /// Clears every layer ring, the head accumulator and the nested
+    /// condition-DSP state to the freshly-built condition, in place and
+    /// without allocating.
+    ///
+    /// This is the state-clearing half of [`WaveNetA2Dyn::prewarm_reset`]; it is
+    /// invoked by `reset` so that a reset without prewarm still removes all
+    /// FIR/recurrent memory (C++ `DSP::Reset → SetMaxBufferSize`).
+    pub fn clear_state(&mut self) {
+        a2_prewarm_common(
+            self.num_layers,
+            self.receptive_field_size,
+            &mut self.layer_buffers,
+            &self.layer_ring_sizes,
+            &mut self.layer_buffer_starts,
+            &mut self.layer_in,
+            &mut self.head_accum,
+            &mut self.head_write_pos,
+        );
+        if let Some(ref mut cond_dsp) = self.condition_dsp {
+            cond_dsp.clear_state();
+        }
     }
 
     /// Advances the armed stabilization by at most `samples` zeroed samples

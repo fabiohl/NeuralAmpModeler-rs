@@ -30,18 +30,19 @@ The audit tracks the canonical C++ reference at tag **`v0.6.0`** (commit `0b3d3c
    - `NAM/gating_activations.h` (`class GatingActivation`, `BlendingActivation`, `IdentityActivation`): Gating and blend activations are audited via WaveNet A1/A2 activation tests and dynamic dispatch ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1), [§4.2](#42-measured-interop-metrics-fast--dynamic-paths)).
    - `NAM/ring_buffer.h` (`class RingBuffer`): Circular history buffer employed inside `Conv1D`. FIFO delay line semantics are verified directly in ConvNet ([§6](#6-other-architectures)) and WaveNet ([§3](#3-wavenet-a1-architecture)) convolution kernels.
 
-2. **Plumbing and Host Infrastructure Out of Scope (Non-DSP):**
+2. **In-Scope Model Loading, Envelope Validation & Pipeline Infrastructure:**
 
-   - `NAM/get_dsp.h` / `get_dsp.cpp`: Model file loading and C++ polymorphic instantiation.
-   - `NAM/model_config.h`: JSON parsing structs.
-   - `NAM/registry.h`: C++ dynamic dispatch registry.
+   - `NAM/get_dsp.h` / `get_dsp.cpp`: Model envelope parsing, `ScopedPrewarmOnResetDefault`, and recursive polymorphic instantiation are audited against `src/loader/` and `src/models/` dispatchers.
+   - `NAM/model_config.h`: JSON parsing semantics, activation mappings, default parameters, and multi-I/O geometry invariants are audited against `src/loader/nam_json/`.
+   - `NAM/wav.h` / `wav.cpp`: Audio WAV parsing for IR and stimulus loading are verified against `src/dsp/cabsim/` and validation harnesses.
+   - `NAM/sequential.h` / `sequential.cpp`: Serial model pipeline composition, child channel routing, saturating prewarm summation, and rate reconciliation are fully audited and verified ([§6.6](#66-sequential-namcore-v060)).
+
+3. **Plumbing and Host Infrastructure Out of Scope (Non-DSP):**
+
+   - `NAM/registry.h`: C++ dynamic dispatch registry (Rust uses static enum and compile-time monomorphization).
    - `NAM/util.h` / `util.cpp`: Host utility and string formatting routines.
    - `NAM/compiler.h`: C++ compiler macros (`NAM_FORCE_INLINE`).
    - `NAM/version.h`: C++ version declaration header (intentionally bypassed in favor of [`variables.env`](../variables.env) commit pinning).
-     *Rationale:* The Rust engine implements its own strongly typed deserializer and static enum dispatcher (`src/loader/`, `src/models/mod.rs`), verified via independent test suites.
-
-3. **External DSP Modules Out of Scope:**
-
    - `Dependencies/AudioDSPTools/dsp/*` and `ResamplingContainer/*`: Auxiliary tools in upstream repositories not included by `NAM/` core headers and not part of neural inference.
 
 ### 0.2 Numerical Scope & ISA Independence
@@ -52,12 +53,12 @@ This audit targets **numerical and architectural semantics**. NeuralAmpModeler-r
 
 | Architecture         | Status                                                                                                                    | Reference Section                |
 |:-------------------- |:------------------------------------------------------------------------------------------------------------------------- |:-------------------------------- |
-| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore                                   | [§2](#2-lstm-architecture)       |
+| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore; multi-I/O dynamic path           | [§2](#2-lstm-architecture)       |
 | **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards                   | [§3](#3-wavenet-a1-architecture) |
-| **WaveNet A2**       | 🟡 Verified Dynamic/Fast paths — 🔴 Legacy fixture `wavenet_a2_max.nam` (reclassified upstream as feature test in v0.6.0) | [§4](#4-wavenet-a2-architecture) |
-| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore)                                | [§6](#6-other-architectures)     |
+| **WaveNet A2**       | ✅ Fully Verified — Dynamic/Fast paths and feature fixture `wavenet_a2_max.nam` (KB-A2-Max) parity closed vs NAMcore/f64  | [§4](#4-wavenet-a2-architecture) |
+| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore; multi-channel/groups verified) | [§6](#6-other-architectures)     |
 | **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated (v0.6.0 multi-channel tracked)   | [§6](#6-other-architectures)     |
-| **SlimmableWavenet** | 🟡 Verified — Channel-sliceable dynamic inference operational; no multi-size NAMcore parity claimed                       | [§6](#6-other-architectures)     |
+| **SlimmableWavenet** | ✅ Verified — Dynamic channel slicing per-array, union breakpoints, and `render --slim` live C++ parity verified          | [§6](#6-other-architectures)     |
 | **Sequential**       | ✅ Fully Verified — Whole-chain live cross-validation vs C++ render (mono-interior/exterior composites, 44.1–192 kHz sweeps), f64 composition oracle, single-prewarm transient identity + detection-power control (NC-3.4) | [§6](#66-sequential-namcore-v060) |
 
 ---
@@ -120,7 +121,7 @@ Audited against `NAM/lstm.h`, `NAM/lstm.cpp`, and corresponding Rust modules:
 | LSTM Official (1×3)           | 48 kHz              | 48000                      | 48000                      |
 | LSTM Synthetic (1/2/3 layers) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
 
-*Note: 192 kHz is excluded across all LSTM evaluations due to an upstream C++ overflow limitation ([§2.7](#27-192-khz-upstream-limitation)).*
+*Note: 192 kHz is excluded across all LSTM evaluations across long continuous sequences (causa não adjudicada, [§2.7](#27-192-khz-evaluation-exclusion)).*
 
 ### 2.1 Reference Algorithm (`NAM/lstm.cpp`)
 
@@ -178,14 +179,19 @@ In Standard mode (universal default), activation functions execute exact polynom
 | BossLSTM-2×8  | 1.00e-11        | 5.68e-13          | 110.0    | 1.57e-05 | ✅ Bit-exact / noise floor |
 | LSTM Official | 7.86e-13        | 2.71e-12          | 121.0    | 3.08e-05 | ✅ Near-bit-exact          |
 
-### 2.6 Scope Divergence: Mono Only
+### 2.6 Multi-Channel I/O Topology Scope
 
-While C++ declares general multi-channel parameters, NeuralAmpModeler-rs models guitar and bass gear strictly as mono. Topologies declaring `in_channels` or `out_channels` $\notin \{1, \text{None}\}$ return `Err(JsonError::UnsupportedMultiChannel)`.
+Canonical const-generic static profiles (`LstmModel1`, `LstmModel2`) are monomorphic mono paths optimized for single-channel guitar/bass workflows. Multi-channel LSTM topologies (`in_channels > 1` or `out_channels > 1`) route to `LstmModelDyn` in the dynamic loader path.
 
-### 2.7 192 kHz Upstream Limitation
+**Provenance & Fail-Closed Bounds (DEC-LSTM-01, T5.3):**
+- **Channel Bounds:** `in_channels` and `out_channels` are strictly bounded by `MAX_LSTM_IO_CHANNELS` (512, aligned with `MAX_LINEAR_CHANNELS` to prevent DoS/OOM on hostile dimensions). Zero channels (`in_channels == 0` or `out_channels == 0`) or channels exceeding 512 are rejected immediately with `NamErrorCode::InvalidFeatureTopology` (`E1316`).
+- **`input_size` Handling:** If `input_size` is omitted in the model config, Rust resiliently infers `input_size = in_channels.unwrap_or(1)` for backwards compatibility with synthetic and community models (DEC-LSTM-01). When explicitly provided, `input_size` must strictly match `in_channels` and be $\le 512$; any discrepancy or zero value fails closed with `E1316`.
+- **Pre-allocation Arithmetic:** Both `checked_lstm_weight_count_io` and dynamic builders enforce checked multiplication on head projection (`out_channels * hidden_size`) and layer weight counts before any heap allocation, guaranteeing robust fail-closed defense against integer overflows.
 
-**Status:** Fundamental upstream C++ limitation.
-The C++ NAMcore `render` tool produces `NaN` or crashes when processing LSTM models over continuous sequences at 192 kHz (e.g., 960,000 samples). The uncompensated recurrent state in Eigen accumulates exponential growth in `f32`.
+### 2.7 192 kHz Evaluation Exclusion
+
+**Status:** Causa não adjudicada.
+Continuous long sequences (e.g., 960,000 samples) at 192 kHz exhibit cumulative drift across recurrent states. To maintain rigorous determinism without unadjudicated baseline divergences:
 
 - 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog.rs`).
 - All catalog LSTM captures are verified at `[44100, 48000, 88200, 96000]`.
@@ -239,11 +245,13 @@ The A1 path rejects configurations declaring A2 features at topology parsing tim
 
 - `gated: true` or `gating_mode` $\in \{\text{"gated"}, \text{"blended"}\}$
 - `head1x1` active
-- `layer1x1` active
+- `layer1x1.active == false` or `layer1x1.groups > 1`
 - Any FiLM parameter definition
 - Non-trivial `secondary_activation`
 
 Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
+
+**`layer1x1` provenance (F-09, T2.3).** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine (PO backlog)"`.
 
 ### 3.5 Measured Interop Metrics
 
@@ -275,6 +283,10 @@ Audited against `NAM/wavenet/a2_fast.h/.cpp` (fast path), `NAM/wavenet/model.cpp
 - Models: [`src/models/a2/`](../src/models/a2/)
 - Dynamic Cascade: [`src/models/a2/model/cascade/`](../src/models/a2/model/cascade/)
 - Topology: [`src/loader/nam_json/topology/a2.rs`](../src/loader/nam_json/topology/a2.rs)
+
+### 4.0 Proveniência
+
+A especificação e a fundamentação conceitual da arquitetura WaveNet A2 têm como proveniência a apresentação pública do autor: <https://youtu.be/24FCS8tFHcE>. Consulte a remissão cruzada em [docs/architecture.md](architecture.md#5-wavenet-a2-architecture).
 
 ### 4.1 Topology Classification & Fast Path
 
@@ -401,6 +413,64 @@ When composing child models inside `Sequential`, interaction between missing rat
 | ∅ | ∅ | 48000 Hz | **48000 Hz** | Top-level dictates 48 kHz; unknown children conform |
 | 44100 Hz | ∅ | 48000 Hz | **REJECTED** | Conflict between Child 1 (44.1 kHz) and Top-Level (48 kHz) |
 
+#### DEC-01b Decision Record — Nested Rate Provenance (Container / pair / condition_dsp)
+
+Extends DEC-01 to nested graphs (F-05/F-13/F-16):
+
+- **Effective declared rate.** `effective_known_rate(node)` returns the node's
+  own declared rate when present; otherwise, for `Sequential` it resolves
+  recursively from `config.models` children and for `SlimmableContainer` from
+  `config.submodels[].model`. The 48 kHz default is **never** materialized
+  inside the recursion (`None` propagates), so an unknown node never
+  masquerades as a declared rate and creates a false conflict against a real
+  sibling rate.
+- **Sequential builder.** Each child's rate vector entry is its
+  `effective_known_rate` (not the raw declared field), so a nested chain
+  contributes its grandchildren's resolved rate.
+- **Container (mirrors C++ `container.cpp:35-46`).** The published rate is the
+  container's own declared rate; when absent, the first known submodel rate;
+  when all are unknown, 48000 Hz. A known container rate conflicting with a
+  known submodel rate is rejected (`E1309`). The previous
+  `unwrap_or(48000)` (which rejected an unknown-rate container holding a
+  44.1 kHz submodel) is retired.
+- **`LoadedModelPair.sample_rate`.** Publishes the resolved expected rate of
+  the root (`resolve_expected_sample_rate`), not `root.unwrap_or(48000)`.
+- **condition_dsp (mirrors C++ `wavenet/model.cpp:923-932`).** Strict `Option`
+  equality between the condition_dsp effective rate and the WaveNet declared
+  rate, in both A1 and A2; an unknown rate never matches a known rate
+  (`E1315 NAM_JSON_SAMPLE_RATE_MISMATCH`).
+
+#### DEC-01c Decision Record — Container Child-vs-Child Rate Conflict (Stricter Rust Rule)
+
+`effective_known_rate` for a `SlimmableContainer` with **no own declared rate**
+resolves recursively from its `config.submodels[].model` children via
+`resolve_known_sample_rate(&rates, None)` (`src/loader/sample_rate.rs:46-58`).
+The C++ container only reconciles each submodel against the *container's own*
+declared rate (`container.cpp:35-46`); it never compares submodels against each
+other, so two submodels declaring different known rates with an absent
+container rate are **not** rejected upstream (the first known rate governs).
+
+- **Decision (Option A — adopted):** the Rust loader **keeps the stricter
+  rule** and rejects a child-vs-child known-rate conflict inside a
+  rate-less container with `E1309 NAM_JSON_SAMPLE_RATE_MISMATCH`, rather than
+  silently letting the first submodel govern the whole container.
+- **Rationale:** a container selects one submodel at a time; if those submodels
+  were trained at genuinely different rates, letting the first rate govern the
+  others produces wrong-timebase inference on the non-matching submodels. Fail
+  closed instead of shipping a silently incorrect rate.
+- **Consequence:** container fixtures whose submodels declare mismatched rates
+  are rejected by the Rust loader while the C++ `render` tool may accept them.
+  No shipped fixture exercises this (all container submodels share a rate or
+  omit it), so the divergence is fail-closed-only.
+
+| Container rate | Submodel A rate | Submodel B rate | Rust behavior | C++ behavior |
+|:---:|:---:|:---:|:---|:---|
+| ∅ | 44100 Hz | 48000 Hz | **REJECTED** (`E1309`) | 44100 Hz governs (no cross-check) |
+| ∅ | 44100 Hz | ∅ | **44100 Hz** | 44100 Hz |
+| ∅ | ∅ | ∅ | **48000 Hz** (global default) | 48000 Hz |
+| 48000 Hz | 44100 Hz | ∅ | **REJECTED** (`E1309`) | **REJECTED** (submodel vs container) |
+| 48000 Hz | ∅ | ∅ | **48000 Hz** | 48000 Hz |
+
 ### 5.2 FastLUTActivation (Not Ported)
 
 C++ provides an optional `FastLUTActivation` class (`NAM/activations.h:374-428`) for hardware lacking fast `expf`.
@@ -445,6 +515,7 @@ Upstream NAMcore v0.6.0 (`linear.cpp` L120–147) generalized `Linear` to multic
   $$N_{\text{weights}} = \text{receptive\_field} \times \text{kernels} + (\text{bias} \ ? \ \text{biases} : 0)$$
 - **Weight Layout:** Kernel $k \in [0, \text{kernels})$ occupies slice `weights[k * L .. (k + 1) * L)`. If `bias` is enabled, biases are placed at the end of the weight stream.
 - **Execution & Partitioning:** Short receptive fields execute via time-domain direct convolution (`LinearImplementation::Direct`); long receptive fields select partitioned FFT convolution (`LinearImplementation::FFT`) via `select_implementation()` (`linear.h` L125).
+- **Partitioning Threshold Divergence (Intentional Cost Tradeoff):** Upstream C++ selects direct convolution for receptive fields $\le 1024$ and partitioned FFT for $> 1024$ (`linear.cpp:27-35`). NeuralAmpModeler-rs sets `FFT_AUTO_THRESHOLD = 256`, switching to partitioned FFT at lower receptive fields to optimize cache efficiency and worst-case per-sample CPU cycle budget on x86-64-v3. Both implementations yield identical mathematical outputs (bit-exact / sub-ULP); the divergence is strictly a deliberate cost optimization.
 
 #### 6.2.2 Decision DEC-02 — Sample Rate Adaptation of Linear Models
 
@@ -464,6 +535,9 @@ Upstream NAMcore v0.6.0 introduced arbitrary sample-rate adaptation inside `Line
 Multi-model crossfade orchestrator ([`src/models/container.rs`](../src/models/container.rs)):
 
 - Bundles multiple sub-models for dynamic compute scaling.
+- **Crossfading:** Executes smooth 32 ms linear crossfades during dynamic compute tier transitions, ensuring click-free handoffs.
+- **Nested Rate Provenance (DEC-01b):** Resolves sample rates across nested submodels without false 48 kHz conflicts ([§5.1.1](#dec-01b-decision-record--nested-rate-provenance-container--pair--condition_dsp)).
+- **Prewarm PO Backlog Candidate:** `ContainerModel::assemble` prewarms all submodels unconditionally upon construction; aligning this behavior with `LoadOptions.prewarm` is tracked in the PO backlog.
 - Tested on official bundled capture `a2_example.nam` (CH 3→6): $\text{ESR} = 7.28 \times 10^{-14}$ vs. NAMcore ($\text{SNR} = 131.4\text{ dB}$).
 
 ### 6.4 Impulse Response CabSim
@@ -474,9 +548,10 @@ Uniform-partitioned overlap-save FIR convolution, cross-validated against `Neura
 
 Dynamic single-network channel slicing ([`src/models/slimmable.rs`](../src/models/slimmable.rs)):
 
-- Supports adaptive quality scaling via channel slicing (`allowed_channels`).
-- Fully functional in loading and inference (`test_slimmable_wavenet_inference_and_breakpoints`).
-- **Parity Scope:** Inference-only. Upstream NAMcore provides no channel-slicing API; multi-size C++ parity claims are architecturally out of scope.
+- Supports adaptive quality scaling via heterogeneous channel slicing per layer array (`allowed_channels: Vec<Vec<usize>>`).
+- **Union of Breakpoints:** `slimmable_breakpoints` computes the sorted union of fractional breakpoints ($i / n$) across all layer arrays.
+- **Monotonic Reduction Invariant:** Channel slicing strictly **reduces** channel width from the full loaded model ("só reduz, nunca amplia"). Scaling back up requires re-slicing from the preserved full-capacity model storage (`clone_wavenet_for_slimmable_storage`).
+- **Parity Scope:** Fully verified. Validated against upstream C++ `render --slim <ratio>` and a single-precision sliced-vs-prefix-masked equivalence oracle (`tests/models/slimmable_2array_parity_test.rs`).
 
 ### 6.6 Sequential (NAMcore v0.6.0)
 
@@ -523,6 +598,33 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 
 **Note:** the small WaveNet child of `sequential_linear_wavenet.nam` (Linear → WaveNet) is canonical two-array A1 (correct f64-oracle routing requires `.layers.len() >= 2` for single-layer WaveNets, which the A1 oracle bail-outs to silence).
 
+### 6.7 Loading-Time Parity Notes
+
+Rust-only loading semantics tightened to remove silent fallbacks while preserving
+upstream rejection outcomes:
+
+- **Activation parsing is fallible.** `try_parse_activation`
+  (`src/loader/nam_json/activation_parser.rs`) mirrors C++
+  `ActivationConfig::from_json` (`activations.cpp:59-130`): the full 12-name map
+  (including the `Hardtanh`/`Fasttanh` aliases), the documented parameter
+  defaults (`LeakyReLU` slope `0.01`; `LeakyHardtanh` `(-1,1,0.01,0.01)`;
+  `PReLU` scalar/vector/default `0.01`). An unknown name or non-string/object
+  JSON is rejected with `E1221 NAM_JSON_UNKNOWN_ACTIVATION`. The former
+  `_ => Tanh` fallback is retired, so a declared activation is either executed
+  exactly or the model is rejected.
+- **Per-family activation support.** The A1 static/dynamic engines implement only
+  `Tanh`/`ReLU`; other *valid* variants are rejected with
+  `E1215 NAM_JSON_UNSUPPORTED_TOPOLOGY` (never approximated). ConvNet and the
+  post-stack head apply the full `ActivationType` set via `apply_simd`.
+- **A1 `layer1x1` default-on accepted (A1-only scope).** See [§3.4](#34-fail-closed-rejection-of-a2-features-in-a1): the accepted `{"active": true, "groups": 1}` configuration applies to the A1 engine path only; A2 `layer1x1` variants (grouped, gated, FiLM-coupled) follow the A2 topology rules, not this acceptance.
+- **Nested sample-rate provenance.** See [DEC-01b](#dec-01b-decision-record--nested-rate-provenance-container--pair--condition_dsp):
+  `E1309` for `Sequential`/`Container` conflicts and `E1315
+  NAM_JSON_SAMPLE_RATE_MISMATCH` for the strict `condition_dsp` comparison.
+- **`LoadOptions.prewarm` is load-scoped.** Mirrors the C++
+  `ScopedPrewarmOnResetDefault` (`get_dsp.cpp:286-296`): `Some(false)` skips the
+  initial prewarm and restores the model's persistent `prewarm_on_reset`
+  afterwards, so later host resets still stabilize.
+
 ---
 
 ## 7. Known-Broken & Policy Ledger
@@ -545,6 +647,9 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 | **Analytical WaveNet Prewarm** | $\mathcal{O}(\text{layers})$ fixed-point fill instead of $\mathcal{O}(\text{receptive\_field})$ iterative rollout. | Exact mathematical convergence with zero startup overhead.                            |
 | **Linear Sample Rate (DEC-02)**| Preserves native IR taps and resamples audio via polyphase sinc FIR (`NamResampler`).                              | $>105\text{ dB}$ SNR vs $\sim 31\text{--}33\text{ dB}$ for C++ cubic tap interpolation ([§6.2.2](#622-decision-dec-02--sample-rate-adaptation-of-linear-models)). |
 | **Sequential Rate (DEC-01)**   | Option A: ignores unknown rates inside Sequential resolution; defaults to 48 kHz if all absent.                   | Full upstream interop for multi-rate child chains ([§5.1](#dec-01-decision-record--missing-sample-rate-in-sequential-models)). |
+| **Linear FFT Threshold**       | `FFT_AUTO_THRESHOLD = 256` in Rust vs `Direct <= 1024` in C++ (`linear.cpp:27-35`).                               | Intentional cost divergence: partitioned FFT reduces peak CPU load; identical numerical output. |
+| **Container Crossfade**        | 32 ms linear crossfade on quality transitions.                                                                    | Click-free dynamic compute downgrades/upgrades.                                       |
+| **Nested Prewarm (DEC-01b)**   | Saturating sum of child prewarm counts across Sequential/Container.                                               | Identical transient settling at engine boundaries. Prewarm alignment to `LoadOptions` is candidate for PO backlog. |
 
 ### 7.3 🟠 Test Infrastructure Boundaries
 
@@ -557,11 +662,11 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 | ID  | Target / Feature                        | Classification        | Contract / Enforcement Mechanism                                                                                                                        |
 |:--- |:--------------------------------------- |:--------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | P1  | `wavenet_condition_lstm.nam`            | **Policy Reject**     | Loader returns `Err("LSTM condition_dsp is not supported")`. Upstream toolchain cannot train or validate this geometry.                                 |
-| P2  | WaveNet A1 models declaring A2 features | **Fail-Closed**       | Rejects `gated`, FiLM, `head1x1`, `layer1x1`, and secondary activations at topology detection ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1)). |
-| P3  | LSTM degenerate topologies              | **Fail-Closed**       | Multi-channel → `Err(UnsupportedMultiChannel)`. Zero layers or overflow → `Err(UnsupportedTopology)`.                                                   |
+| P2  | WaveNet A1 models declaring A2 features | **Fail-Closed**       | Rejects `gated`, FiLM, `head1x1`, `layer1x1` (`active == false` / `groups > 1`), and secondary activations at topology detection with `E1305` (`InvalidModelTopology`; slimmable-metadata divergences use `E1316`) ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1)). |
+| P3  | LSTM degenerate topologies              | **Fail-Closed**       | Multi-channel routes to dynamic path; mismatches (`input_size != in_channels` or zero channels) reject with `E1316` ([§2.6](#26-multi-channel-io-topology-scope)). |
 | P4  | Multi-array receptive field summation   | **Canonical Sum**     | `prewarm_samples()` sums all array RFs + condition_dsp + post-stack head ([§3.2](#32-structural-implementation-mapping)).                               |
 | P5  | `dsp_ch < condition_size` Broadcast     | **Rust Fallback**     | Broadcasts channel 0 across inputs if sub-model channels are fewer than parent condition size.                                                          |
-| P6  | `SlimmableWavenet` Multi-Size Parity    | **Inference Only**    | Validated for loader and runtime inference; no upstream multi-size parity claimed ([§6.5](#65-slimmablewavenet)).                                       |
+| P6  | `SlimmableWavenet` Multi-Size Parity    | **Verified Parity**   | Heterogeneous channel slicing per array, union breakpoints, and live `render --slim` cross-validation verified; monotonic reduction invariant ([§6.5](#65-slimmablewavenet)). |
 | P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat** | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                              |
 | P8  | Linear $M \to N$ Channel Mismatch       | **Fail-Closed**       | Rejects topologies where both $in > 1$ and $out > 1$ with $in \neq out$ (e.g. $2 \to 3$) ([§6.2.1](#621-namcore-v060-multichannel-topology--weight-specification)). |
 | P9  | Sequential Child & Top-Level Invariants | **Fail-Closed**       | Rejects non-empty top-level weights, non-matching inter-stage channels, and conflicting known sample rates ([§6.6](#66-sequential-namcore-v060)).       |
