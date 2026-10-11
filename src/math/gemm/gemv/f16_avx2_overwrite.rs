@@ -15,6 +15,7 @@ use crate::arch::simd::*;
 
 /// Specialized overwrite GEMV for: 1 input × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_1x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -40,6 +41,7 @@ pub unsafe fn gemv_overwrite_avx2_1x4(
 
 /// Specialized overwrite GEMV for: 4 inputs × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_4x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -79,6 +81,7 @@ pub unsafe fn gemv_overwrite_avx2_4x4(
 
 /// Specialized overwrite GEMV for: 4 inputs × 6 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_4x6(
     in_frame: &[f32],
     weights: &[f32],
@@ -135,6 +138,7 @@ pub unsafe fn gemv_overwrite_avx2_4x6(
 
 /// Specialized overwrite GEMV for: 8 inputs × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_8x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -190,6 +194,7 @@ pub unsafe fn gemv_overwrite_avx2_8x4(
 
 /// Specialized overwrite GEMV for: 8 inputs × 6 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_8x6(
     in_frame: &[f32],
     weights: &[f32],
@@ -235,6 +240,7 @@ pub unsafe fn gemv_overwrite_avx2_8x6(
 
 /// Specialized overwrite GEMV for: 8 inputs × 8 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2_8x8(
     in_frame: &[f32],
     weights: &[f32],

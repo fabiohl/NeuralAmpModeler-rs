@@ -19,6 +19,7 @@ use crate::gain_simd_avx2;
 ///   accepted (8-wide blocks are loop-guarded, the remainder is scalar) and
 ///   no alignment requirement exists (`loadu`/`storeu`).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_avx2(data: &mut [f32], gain: f32) {
     let len = data.len();
     let vg = _mm256_set1_ps(gain);
@@ -44,6 +45,7 @@ pub unsafe fn apply_gain_avx2(data: &mut [f32], gain: f32) {
 /// `data` valid over its full length for the call duration. Elementwise
 /// in-place; any length, no alignment requirement.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_and_detect_clipping_mono_avx2(data: &mut [f32], gain: f32) -> bool {
     let len = data.len();
     let vg = _mm256_set1_ps(gain);
@@ -84,6 +86,7 @@ pub unsafe fn apply_gain_and_detect_clipping_mono_avx2(data: &mut [f32], gain: f
 /// channels are processed over `min(left.len(), right.len())` elements;
 /// `&mut` exclusivity already guarantees the buffers do not alias.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_and_detect_clipping_stereo_avx2(
     left: &mut [f32],
     right: &mut [f32],
@@ -141,6 +144,7 @@ pub unsafe fn apply_gain_and_detect_clipping_stereo_avx2(
 /// any lengths, no alignment requirement). Processes
 /// `min(left.len(), right.len())` elements.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_stereo_avx2(left: &mut [f32], right: &mut [f32], gain: f32) {
     let n = core::cmp::min(left.len(), right.len());
     let ymm_gain = _mm256_set1_ps(gain);
@@ -170,6 +174,7 @@ pub unsafe fn apply_gain_stereo_avx2(left: &mut [f32], right: &mut [f32], gain: 
 /// `min(left.len(), right.len())` elements; the ramp gain at element `i` is
 /// `start + i * step` in both channels.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_ramp_stereo_avx2(left: &mut [f32], right: &mut [f32], start: f32, step: f32) {
     let n = core::cmp::min(left.len(), right.len());
     let mut i = 0;
@@ -208,6 +213,7 @@ pub unsafe fn apply_ramp_stereo_avx2(left: &mut [f32], right: &mut [f32], start:
 /// the caller; `data` valid over its full length; elementwise in-place, any
 /// length, no alignment requirement.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_then_dither_avx2(data: &mut [f32], gain: f32, offset: f32) {
     let len = data.len();
     let vg = _mm256_set1_ps(gain);
@@ -233,6 +239,7 @@ pub unsafe fn apply_gain_then_dither_avx2(data: &mut [f32], gain: f32, offset: f
 /// caller; `data` valid over its full length; elementwise in-place, any
 /// length, no alignment requirement.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_dither_add_avx2(data: &mut [f32], offset: f32) {
     let len = data.len();
     let voffset = _mm256_set1_ps(offset);
@@ -259,6 +266,7 @@ pub unsafe fn apply_dither_add_avx2(data: &mut [f32], offset: f32) {
 /// and `&mut`/`&` exclusivity already guarantees the two do not alias. Only
 /// the first `min(out.len(), pending.len())` elements are blended.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn crossfade_blend_mono_avx2(out: &mut [f32], pending: &[f32], t: f32) {
     let n = core::cmp::min(out.len(), pending.len());
     let mut i = 0;
@@ -285,6 +293,7 @@ pub unsafe fn crossfade_blend_mono_avx2(out: &mut [f32], pending: &[f32], t: f32
 /// length, no alignment requirement. The gain at element `i` is
 /// `start + i * step`.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_ramp_avx2(buffer: &mut [f32], start: f32, step: f32) {
     let len = buffer.len();
     let mut i = 0;
@@ -319,6 +328,7 @@ pub unsafe fn apply_ramp_avx2(buffer: &mut [f32], start: f32, step: f32) {
 /// caller; `data` valid over its full length; elementwise in-place, any
 /// length, no alignment requirement.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_with_dither_and_detect_clipping_mono_avx2(
     data: &mut [f32],
     gain: f32,
@@ -364,6 +374,7 @@ pub unsafe fn apply_gain_with_dither_and_detect_clipping_mono_avx2(
 /// any lengths, no alignment requirement). Processes
 /// `min(left.len(), right.len())` elements.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn apply_gain_with_dither_and_detect_clipping_stereo_avx2(
     left: &mut [f32],
     right: &mut [f32],
@@ -427,6 +438,7 @@ pub unsafe fn apply_gain_with_dither_and_detect_clipping_stereo_avx2(
 /// `min(src.len(), dst.len())` elements are written to `dst`; `&`/`&mut`
 /// exclusivity already guarantees `src` and `dst` do not alias.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn copy_with_scale_avx2(src: &[f32], dst: &mut [f32], scale: f32) {
     let len = src.len().min(dst.len());
     let vs = _mm256_set1_ps(scale);

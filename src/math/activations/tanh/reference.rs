@@ -43,6 +43,7 @@ use crate::math::constants::*;
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -83,6 +84,7 @@ pub unsafe fn simd_tanh_pade_nr1_avx2(x: __m256) -> __m256 {
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -142,6 +144,7 @@ pub unsafe fn simd_tanh_pade_nr1_dual_avx2(x1: __m256, x2: __m256) -> (__m256, _
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512dq")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_avx512(x: __m512) -> __m512 {
     let clamp_lo = _mm512_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm512_set1_ps(PADE_TANH_CLAMP);
@@ -182,6 +185,7 @@ pub unsafe fn simd_tanh_pade_nr1_avx512(x: __m512) -> __m512 {
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr2_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -232,6 +236,7 @@ pub unsafe fn simd_tanh_pade_nr2_avx2(x: __m256) -> __m256 {
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512dq")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr2_avx512(x: __m512) -> __m512 {
     let clamp_lo = _mm512_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm512_set1_ps(PADE_TANH_CLAMP);

@@ -69,6 +69,7 @@ macro_rules! transpose_8x8_f32_avx2 {
 ///
 /// All slices must be valid and accessible for reading/writing.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_with_bias_f32_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -364,6 +365,7 @@ pub unsafe fn gemv_with_bias_f32_avx2(
 ///
 /// All slices must be valid and accessible for reading/writing.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_no_bias_f32_avx2(
     in_frames: &[f32],
     weights: &[f32],
@@ -619,6 +621,7 @@ pub unsafe fn gemv_no_bias_f32_avx2(
 /// AVX2+FMA ISA must be available (x86-64-v3).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
     in_frames: &[f32],
     weights: &[f32],
@@ -663,6 +666,7 @@ pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
 /// AVX2+FMA ISA must be available (x86-64-v3).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn broadcast_scale_with_bias_f32_avx2<const OUT: usize>(
     in_frames: &[f32],
     weights: &[f32],

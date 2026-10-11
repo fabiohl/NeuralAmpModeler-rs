@@ -23,6 +23,7 @@ use crate::gemv_4gate_simd_outer_avx2;
 /// doubling port utilization on x86-64-v3 (Haswell+) where FMA has ~4–5 cycle
 /// latency and 2 execution ports.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "Performance-critical AVX2 LSTM 4-gate kernel requiring many matrix strides/dimensions for maximum SIMD throughput"

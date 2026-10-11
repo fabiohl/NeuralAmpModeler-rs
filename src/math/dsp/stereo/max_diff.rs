@@ -11,6 +11,7 @@ use crate::arch::simd::*;
 /// The slices `a` and `b` must have the same length.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());
     if len == 0 {

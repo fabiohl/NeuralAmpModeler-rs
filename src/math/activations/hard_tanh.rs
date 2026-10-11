@@ -13,6 +13,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn hard_tanh_slice_avx2(data: &mut [f32]) {
     let neg_one = _mm256_set1_ps(-1.0_f32);
     let pos_one = _mm256_set1_ps(1.0_f32);

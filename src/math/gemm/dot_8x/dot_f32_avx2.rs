@@ -36,6 +36,7 @@ use crate::dot4x_simd4;
 /// Caller must ensure `weights.len() >= state.len()` and that the memory regions
 /// are valid for unaligned load.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_8x_f32_avx2(weights: &[[f32; 8]], state: &[f32]) -> [f32; 8] {
     let len = state.len();
     let mut acc0 = _mm256_setzero_ps();
@@ -101,6 +102,7 @@ pub unsafe fn dot_product_8x_f32_avx2(weights: &[[f32; 8]], state: &[f32]) -> [f
 /// Caller must ensure `weights.len() >= state_f0.len()` and
 /// `weights.len() >= state_f1.len()`.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_8x_f32_dual_avx2(
     weights: &[[f32; 8]],
     state_f0: &[f32],
@@ -191,6 +193,7 @@ pub unsafe fn dot_product_8x_f32_dual_avx2(
 /// Caller must ensure `weights.len() >= state.len()` and that the memory
 /// regions are valid for unaligned load.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_8x_f32_accumulate_avx2(
     weights: &[[f32; 8]],
     state: &[f32],
@@ -260,6 +263,7 @@ pub unsafe fn dot_product_8x_f32_accumulate_avx2(
 /// Caller must ensure `weights.len() >= state_f0.len()` and
 /// `weights.len() >= state_f1.len()`.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_8x_f32_dual_accumulate_avx2(
     weights: &[[f32; 8]],
     state_f0: &[f32],

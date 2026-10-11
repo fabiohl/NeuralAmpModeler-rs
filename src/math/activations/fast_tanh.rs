@@ -13,6 +13,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 #[expect(
     clippy::excessive_precision,
     reason = "High-precision constants required for bit-exact numerical validation against reference"
@@ -93,6 +94,7 @@ pub unsafe fn fast_tanh_slice_avx2(data: &mut [f32]) {
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512dq,fma")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 #[expect(
     clippy::excessive_precision,
     reason = "High-precision constants required for bit-exact numerical validation against reference"

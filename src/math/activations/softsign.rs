@@ -15,6 +15,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_softsign_avx2(x: __m256) -> __m256 {
     let one = _mm256_set1_ps(1.0);
     let two = _mm256_set1_ps(2.0);
@@ -35,6 +36,7 @@ pub unsafe fn simd_softsign_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_softsign_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let one = _mm256_set1_ps(1.0);
     let two = _mm256_set1_ps(2.0);
@@ -68,6 +70,7 @@ pub unsafe fn simd_softsign_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512dq")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_softsign_avx512(x: __m512) -> __m512 {
     let one = _mm512_set1_ps(1.0);
     let two = _mm512_set1_ps(2.0);
@@ -89,6 +92,7 @@ pub unsafe fn simd_softsign_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn softsign_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
@@ -130,6 +134,7 @@ pub unsafe fn softsign_slice_avx2(slice: &mut [f32]) {
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512dq")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn softsign_slice_avx512(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

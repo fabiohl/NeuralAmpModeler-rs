@@ -26,6 +26,7 @@ use crate::arch::simd::*;
 /// crate's `x86-64-v3` build baseline).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn all_finite_f32_avx2(samples: &[f32]) -> bool {
     let len = samples.len();
     let mut i = 0;
@@ -70,6 +71,7 @@ pub unsafe fn all_finite_f32_avx2(samples: &[f32]) -> bool {
 /// (guaranteed by the crate's `x86-64-v3` build baseline).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn sanitize_nonfinite_f32_avx2(samples: &mut [f32]) {
     let len = samples.len();
     let mut i = 0;
@@ -141,6 +143,7 @@ pub fn sanitize_nonfinite_f32(samples: &mut [f32]) {
 /// the crate's `x86-64-v3` build baseline).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn sanitize_copy_peak_avx2(src: &[f32], dst: &mut [f32]) -> f32 {
     let len = core::cmp::min(src.len(), dst.len());
     if len == 0 {

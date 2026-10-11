@@ -17,6 +17,7 @@ use crate::arch::simd::*;
 /// inlining) is an unsafe operation and requires an `unsafe` block.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub fn compute_peak_abs_stereo_avx2(left: &[f32], right: &[f32]) -> (f32, f32) {
     let len = core::cmp::min(left.len(), right.len());
     if len == 0 {

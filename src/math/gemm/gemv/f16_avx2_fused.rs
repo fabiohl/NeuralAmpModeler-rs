@@ -15,6 +15,7 @@ use crate::arch::simd::*;
 
 /// Specialized fused GEMV for: 1 input × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_1x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -42,6 +43,7 @@ pub unsafe fn fused_add_gemv_avx2_1x4(
 
 /// Specialized fused GEMV for: 4 inputs × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_4x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -86,6 +88,7 @@ pub unsafe fn fused_add_gemv_avx2_4x4(
 /// Lanes 0..3 are processed via SIMD; lanes 4..5 via scalar to avoid
 /// over-reading weight rows with only 6 f32 entries.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_4x6(
     in_frame: &[f32],
     weights: &[f32],
@@ -148,6 +151,7 @@ pub unsafe fn fused_add_gemv_avx2_4x6(
 
 /// Specialized fused GEMV for: 8 inputs × 4 outputs.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_8x4(
     in_frame: &[f32],
     weights: &[f32],
@@ -207,6 +211,7 @@ pub unsafe fn fused_add_gemv_avx2_8x4(
 ///
 /// Lanes 0..3 processed via SIMD; lanes 4..5 via 8-unrolled scalar for each input.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_8x6(
     in_frame: &[f32],
     weights: &[f32],
@@ -256,6 +261,7 @@ pub unsafe fn fused_add_gemv_avx2_8x6(
 ///
 /// Full 8 accumulators, fully unrolled — no loop branching.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2_8x8(
     in_frame: &[f32],
     weights: &[f32],

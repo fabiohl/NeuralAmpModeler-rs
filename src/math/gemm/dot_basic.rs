@@ -16,6 +16,7 @@ use crate::arch::simd::*;
 // KEEP IN SYNC WITH: `src/models/a2/film.rs::dot_product_avx2`
 // (Note: `film.rs` maintains a specialized 2-accumulator 16-unrolled inlined version for small condition vectors)
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;

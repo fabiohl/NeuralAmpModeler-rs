@@ -33,6 +33,7 @@ use crate::math::constants::*;
 /// [-20, 20] to prevent overflow (`k ∈ [-29, 29]`, poses no int32 overflow).
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn simd_exp_poly_avx2(x: __m256) -> __m256 {
     let log2e = _mm256_set1_ps(POLY_LOG2_E);
     let ln2 = _mm256_set1_ps(POLY_LN2);
@@ -76,6 +77,7 @@ unsafe fn simd_exp_poly_avx2(x: __m256) -> __m256 {
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-POLY_ACTIVATION_CLAMP);
     let clamp_hi = _mm256_set1_ps(POLY_ACTIVATION_CLAMP);
@@ -102,6 +104,7 @@ pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
 /// Requires AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn sigmoid_poly_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

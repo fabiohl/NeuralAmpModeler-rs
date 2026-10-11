@@ -18,6 +18,7 @@ use crate::gemv_kernel;
 /// Uses 8 independent accumulators to break the FMA pipeline dependency chain,
 /// allowing the processor to execute up to 8 FMAs in parallel.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2(
     in_frame: &[f32],
     weights: &[f32],
@@ -95,6 +96,7 @@ pub unsafe fn fused_add_gemv_avx2(
 ///
 /// Uses 8 independent accumulators to break the FMA pipeline dependency chain.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2(
     in_frame: &[f32],
     weights: &[f32],

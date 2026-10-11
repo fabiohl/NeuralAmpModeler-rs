@@ -137,6 +137,7 @@ pub fn f32_to_f16_bits(f: f32) -> u16 {
 /// This is guaranteed when compiling with `x86-64-v3` or higher.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn f16_bits_to_f32_f16c(bits: u16) -> f32 {
     use crate::arch::simd::_mm_cvtph_ps;
     use crate::arch::simd::_mm_cvtsi32_si128;
@@ -153,6 +154,7 @@ pub unsafe fn f16_bits_to_f32_f16c(bits: u16) -> f32 {
 /// This is guaranteed when compiling with `x86-64-v3` or higher.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn f32_to_f16_bits_f16c(f: f32) -> u16 {
     use crate::arch::simd::_MM_FROUND_TO_NEAREST_INT;
     use crate::arch::simd::_mm_cvtps_ph;

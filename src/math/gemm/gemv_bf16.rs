@@ -25,6 +25,7 @@ use crate::arch::simd::*;
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,avx512bf16")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_bf16_avx512(
     in_frame: &[u16],
     weights: &[u16],

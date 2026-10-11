@@ -13,6 +13,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn leaky_hard_tanh_slice_avx2(
     data: &mut [f32],
     min_val: f32,
@@ -81,6 +82,7 @@ pub unsafe fn leaky_hard_tanh_slice_avx2(
     target_arch = "x86_64",
     target_feature(enable = "avx512f,avx512vl,fma")
 )]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn leaky_hard_tanh_slice_avx512(
     data: &mut [f32],
     min_val: f32,

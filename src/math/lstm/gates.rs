@@ -26,6 +26,7 @@ use crate::math::activations::tanh::simd_tanh_avx512;
 /// Requires AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2_hf(
     gf: __m256,
     gi: __m256,
@@ -72,6 +73,7 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
 /// Requires AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2_std(
     gf: __m256,
     gi: __m256,
@@ -114,6 +116,7 @@ pub unsafe fn fused_lstm_gates_avx2_std(
 /// Requires AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2(
     gf: __m256,
     gi: __m256,
@@ -271,6 +274,7 @@ pub unsafe fn fused_lstm_gates_avx512(
 /// Output buffers must not alias `gates`.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_dyn_avx2(
     gates: &mut [f32],
     cell_state: &mut [f32],
@@ -333,6 +337,7 @@ pub unsafe fn fused_lstm_gates_dyn_avx2(
 /// Replacement for the previous scalar tail — the `Standard` and `Fast` paths
 /// share the same buffer-and-dispatch structure.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn fused_lstm_gates_dyn_tail(
     gates: &mut [f32],
     cell_state: &mut [f32],

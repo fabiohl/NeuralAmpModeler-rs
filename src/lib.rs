@@ -4,12 +4,6 @@
 #![warn(missing_docs)]
 // Every `unsafe` block must carry a `// SAFETY:` justification (enforced by clippy::undocumented_unsafe_blocks).
 #![warn(clippy::undocumented_unsafe_blocks)]
-// On aarch64 the `crate::arch::simd` NEON functions are plain safe fns, while the
-// x86 intrinsics they mirror are `#[target_feature]` fns that need `unsafe`
-// when called outside an AVX2 context. Shared kernel code keeps the `unsafe`
-// blocks x86 requires; on aarch64 some of them are therefore redundant.
-// Unsafe hygiene stays enforced by the x86_64 build.
-#![cfg_attr(target_arch = "aarch64", allow(unused_unsafe))]
 // Rustdoc resolves intra-doc links in a module's inner docs against the parent
 // module scope on the stable toolchain, but against the module's own scope on
 // nightly (docs.rs). A short label that references an imported item therefore

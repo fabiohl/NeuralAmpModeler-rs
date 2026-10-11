@@ -25,6 +25,7 @@ use crate::models::a2::params::A2_LEAKY_SLOPE;
 /// - `layer_buffer` must be large enough for all frame lookbacks.
 /// - `z_out` must have at least `num_frames * 8` elements.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn conv1d_ch8_t8_avx2(
     weights: &[f32],
     bias: &[f32],
@@ -141,6 +142,7 @@ pub unsafe fn conv1d_ch8_t8_avx2(
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch8_block(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -374,6 +376,7 @@ pub unsafe fn layer_forward_ch8_block(
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch8_block_no_film(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -478,6 +481,7 @@ pub unsafe fn layer_forward_ch8_block_no_film(
 /// `z_conv` must hold `num_frames * 8` conv outputs; remaining buffers follow
 /// the `no_film` tail contract (same capacities as the caller-verified inputs).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn layer_forward_ch8_postconv_no_film(
     z_conv: &[f32],
     mixin_w: &[f32],

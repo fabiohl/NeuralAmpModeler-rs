@@ -21,6 +21,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
     // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
     // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_avx2`.
@@ -35,6 +36,7 @@ pub unsafe fn simd_fused_sigmoid_relu_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
@@ -66,6 +68,7 @@ pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

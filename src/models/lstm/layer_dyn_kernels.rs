@@ -106,6 +106,7 @@ impl LstmLayerDyn {
     /// # Safety
     /// The caller must have verified AVX2+FMA+F16C CPU support.
     #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     pub unsafe fn process_sample_avx2(&mut self, input: &[f32]) {
         let i = self.input_size;
         let h = self.hidden_size;

@@ -26,6 +26,7 @@ use crate::math::common::half::f16_bits_to_f32_f16c;
 /// Each of `w0`, `w1`, `w2`, and `w3` must have a length greater than or equal to `state.len()`.
 /// All slices must be valid and accessible for reading.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_avx2(
     w0: &[u16],
     w1: &[u16],
@@ -141,6 +142,7 @@ pub unsafe fn dot_product_4x_avx2(
 /// `weights` must have a length greater than or equal to `state.len()`.
 /// Both slices must be valid and accessible for reading.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_interleaved_avx2(weights: &[[u16; 4]], state: &[f32]) -> [f32; 4] {
     let len = state.len().min(weights.len());
     debug_assert!(weights.len() >= len);

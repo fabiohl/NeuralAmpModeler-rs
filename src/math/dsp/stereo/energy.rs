@@ -17,6 +17,7 @@ use crate::arch::simd::*;
 /// inlining) is an unsafe operation and requires an `unsafe` block.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub fn compute_energy_avx2(data: &[f32]) -> (f32, bool) {
     let len = data.len();
     if len == 0 {
@@ -120,6 +121,7 @@ pub fn compute_energy_avx2(data: &[f32]) -> (f32, bool) {
 /// `avx2`/`fma` target features (via its own `#[target_feature]` attribute or
 /// inlining) is an unsafe operation and requires an `unsafe` block.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(l.len(), r.len());
     if len == 0 {

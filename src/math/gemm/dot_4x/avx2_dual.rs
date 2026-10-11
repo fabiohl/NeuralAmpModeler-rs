@@ -26,6 +26,7 @@ use crate::math::common::half::f16_bits_to_f32_f16c;
 /// `weights` must have a length greater than or equal to both `state_f0.len()` and `state_f1.len()`.
 /// All slices must be valid and accessible for reading.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_interleaved_dual_frame_avx2(
     weights: &[[u16; 4]],
     state_f0: &[f32],
@@ -168,6 +169,7 @@ pub unsafe fn dot_product_4x_interleaved_dual_frame_avx2(
 /// `weights` must have a length greater than or equal to `h0.len()`, `h1.len()`, `h2.len()`, and `h3.len()`.
 /// All slices must be valid and accessible for reading.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_batch_4x_avx2(
     h0: &[f32],
     h1: &[f32],

@@ -107,6 +107,7 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
     #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn process_single_ch3_k6(
         &self,
         layer_buffer: &[f32],
@@ -183,6 +184,7 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
     #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn process_single_ch3_k15(
         &self,
         layer_buffer: &[f32],

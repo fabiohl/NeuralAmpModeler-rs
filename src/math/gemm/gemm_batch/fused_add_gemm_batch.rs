@@ -38,6 +38,7 @@ use crate::gemm_batch_outc_loop_avx2;
 ///
 /// All slices must be valid and accessible for reading/writing.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemm_batch_avx2(
     in_frames: &[f32],
     weights: &[f32],

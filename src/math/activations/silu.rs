@@ -21,6 +21,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
     // SAFETY: `simd_sigmoid_avx2` requires AVX2+FMA, guaranteed by this `unsafe
     // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
@@ -35,6 +36,7 @@ pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
@@ -66,6 +68,7 @@ pub unsafe fn simd_silu_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn silu_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();
@@ -147,6 +150,7 @@ pub fn silu_hf(x: f32) -> f32 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_poly_avx2(x: __m256) -> __m256 {
     // SAFETY: `simd_sigmoid_poly_avx2` requires AVX2+FMA, guaranteed by this
     // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
@@ -178,6 +182,7 @@ pub unsafe fn simd_silu_poly_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn silu_poly_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

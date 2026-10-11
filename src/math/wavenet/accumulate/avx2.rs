@@ -12,6 +12,7 @@ use crate::wavenet_simd_avx2;
 /// scalar fallback, heap allocation, or libm calls. Stack-resident only; the
 /// mask lives in a register after load.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
     let mut vals = [0i32; 8];
     for item in vals.iter_mut().take(rem) {
@@ -27,6 +28,7 @@ unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
 /// blocks run the same vector add under an AVX2 mask, so they accumulate
 /// identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
     let rem = dest.len();
     if rem == 0 {
@@ -53,6 +55,7 @@ unsafe fn accumulate_head_avx2_tail(dest: &mut [f32], src: &[f32]) {
 ///   raw-pointer loads from `src` up to `dest.len()`; a shorter `src` is read
 ///   out of bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
     let len = dest.len();
     let mut i = 0;
@@ -78,6 +81,7 @@ pub unsafe fn accumulate_head_avx2(dest: &mut [f32], src: &[f32]) {
 /// the vector loop under an AVX2 mask, so the remainder lanes activate and
 /// accumulate identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -106,6 +110,7 @@ unsafe fn tanh_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mu
 ///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
 ///   shorter `head_input` is accessed out of bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -148,6 +153,7 @@ pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
 /// the vector loop under an AVX2 mask, so the remainder lanes activate and
 /// accumulate identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn gated_activation_and_accumulate_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -194,6 +200,7 @@ unsafe fn gated_activation_and_accumulate_block_avx2_tail(
 ///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
 ///   bounds (UB). `ch == 0` also divides by zero.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gated_activation_and_accumulate_block_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -237,6 +244,7 @@ pub unsafe fn gated_activation_and_accumulate_block_avx2(
 /// Runs the same `simd_tanh_poly_avx2` kernel as the vector loop under an AVX2
 /// mask, so the remainder lanes activate identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -264,6 +272,7 @@ unsafe fn tanh_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut
 ///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
 ///   `head_input` is written out of bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -301,6 +310,7 @@ pub unsafe fn tanh_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
 /// under an AVX2 mask, so the remainder lanes compute `seed + tanh(block)`
 /// identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn tanh_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -337,6 +347,7 @@ unsafe fn tanh_and_accumulate_with_seed_avx2_tail(
 ///   `block.len()` on all three slices; shorter slices are accessed out of
 ///   bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn tanh_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -386,6 +397,7 @@ pub unsafe fn tanh_and_accumulate_with_seed_avx2(
 /// Runs the same `_mm256_max_ps` and f32 add as the vector loop under an AVX2
 /// mask, so the remainder lanes activate and accumulate identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -414,6 +426,7 @@ unsafe fn relu_and_accumulate_block_avx2_tail(head_input: &mut [f32], block: &mu
 ///   256-bit raw-pointer loads/stores up to `block.len()` on both slices; a
 ///   shorter `head_input` is accessed out of bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -456,6 +469,7 @@ pub unsafe fn relu_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
 /// Runs the same `_mm256_max_ps` as the vector loop under an AVX2 mask, so the
 /// remainder lanes activate identically to full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut [f32]) {
     let rem = block.len();
     if rem == 0 {
@@ -483,6 +497,7 @@ unsafe fn relu_and_overwrite_block_avx2_tail(head_input: &mut [f32], block: &mut
 ///   256-bit raw-pointer stores up to `block.len()` on both slices; a shorter
 ///   `head_input` is written out of bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut [f32]) {
     let len = block.len();
     let mut i = 0;
@@ -521,6 +536,7 @@ pub unsafe fn relu_and_overwrite_block_avx2(head_input: &mut [f32], block: &mut 
 /// mask, so the remainder lanes compute `seed + max(0, block)` identically to
 /// full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn relu_and_accumulate_with_seed_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -556,6 +572,7 @@ unsafe fn relu_and_accumulate_with_seed_avx2_tail(
 ///   `block.len()` on all three slices; shorter slices are accessed out of
 ///   bounds (UB).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn relu_and_accumulate_with_seed_avx2(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -607,6 +624,7 @@ pub unsafe fn relu_and_accumulate_with_seed_avx2(
 /// loop under an AVX2 mask, so the remainder lanes activate identically to
 /// full vectors.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn gated_activation_and_overwrite_block_avx2_tail(
     head_input: &mut [f32],
     block: &mut [f32],
@@ -652,6 +670,7 @@ unsafe fn gated_activation_and_overwrite_block_avx2_tail(
 ///   `block[f * 2 * ch + {c, ch + c}]`; a shorter `block` is accessed out of
 ///   bounds (UB). `ch == 0` also divides by zero.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gated_activation_and_overwrite_block_avx2(
     head_input: &mut [f32],
     block: &mut [f32],

@@ -220,6 +220,7 @@ impl A2HeadConv {
     reason = "FFI design or complex DSP kernel signature required by construction"
 )]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn head_process_ch8_avx2(
     head_w: &[f32],
     head_b: f32,
@@ -309,6 +310,7 @@ pub unsafe fn head_process_ch8_avx2(
     reason = "FFI design or complex DSP kernel signature required by construction"
 )]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn head_process_ch3_sse(
     head_w: &[f32],
     head_b: f32,

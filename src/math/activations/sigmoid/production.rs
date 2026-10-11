@@ -22,6 +22,7 @@ use crate::math::constants::*;
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_sigmoid_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-SIGMOID_MINIMAX_CLAMP);
     let clamp_hi = _mm256_set1_ps(SIGMOID_MINIMAX_CLAMP);
@@ -63,6 +64,7 @@ pub unsafe fn simd_sigmoid_avx2(x: __m256) -> __m256 {
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_sigmoid_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let clamp_lo = _mm256_set1_ps(-SIGMOID_MINIMAX_CLAMP);
     let clamp_hi = _mm256_set1_ps(SIGMOID_MINIMAX_CLAMP);
@@ -158,6 +160,7 @@ pub unsafe fn simd_sigmoid_avx512(x: __m512) -> __m512 {
 /// Requires AVX2 and FMA support.
 #[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn sigmoid_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

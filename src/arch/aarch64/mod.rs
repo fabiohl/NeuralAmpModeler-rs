@@ -24,19 +24,6 @@
 //! take it as a plain `i32`; they are `#[inline(always)]`, so it folds to a
 //! constant at each call site and the selection logic compiles away.
 
-// SAFETY (module-wide): every `unsafe` block in these modules either calls
-// NEON intrinsics on register values, which is sound because NEON is part of
-// the aarch64 baseline (enforced by a `compile_error!` in `lib.rs`), or
-// dereferences a pointer that the enclosing `unsafe fn` received under the
-// same contract as the x86 intrinsic it mirrors.
-#![allow(
-    non_camel_case_types,
-    dead_code,
-    clippy::missing_safety_doc,
-    clippy::undocumented_unsafe_blocks,
-    clippy::too_many_arguments
-)]
-
 use core::arch::aarch64::*;
 
 mod convert;
@@ -60,9 +47,11 @@ pub struct __m256(pub float32x4_t, pub float32x4_t);
 pub struct __m256i(pub int32x4_t, pub int32x4_t);
 
 /// 128-bit vector of four `f32`.
+#[expect(non_camel_case_types, reason = "mirrors core::arch::x86_64::__m128")]
 pub type __m128 = float32x4_t;
 
 /// 128-bit integer vector (bit container, viewed as four `i32`).
+#[expect(non_camel_case_types, reason = "mirrors core::arch::x86_64::__m128i")]
 pub type __m128i = int32x4_t;
 
 // ── Comparison predicates (`_mm256_cmp_ps`), same values as x86 ─────────────
@@ -113,24 +102,31 @@ pub const _MM_HINT_T1: i32 = 2;
 pub const _MM_HINT_T2: i32 = 1;
 pub const _MM_HINT_NTA: i32 = 0;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn f32x4_to_array(v: float32x4_t) -> [f32; 4] {
-    // `float32x4_t` and `[f32; 4]` have the same size and lane order.
+    // SAFETY: `float32x4_t` and `[f32; 4]` have the same size and lane order.
     unsafe { core::mem::transmute(v) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn f32x4_from_array(a: [f32; 4]) -> float32x4_t {
+    // SAFETY: `a` is a live local array of 4 `f32`, valid for the 16-byte read.
     unsafe { vld1q_f32(a.as_ptr()) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn i32x4_to_array(v: int32x4_t) -> [i32; 4] {
+    // SAFETY: `int32x4_t` and `[i32; 4]` have the same size and lane order.
     unsafe { core::mem::transmute(v) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn i32x4_from_array(a: [i32; 4]) -> int32x4_t {
+    // SAFETY: `a` is a live local array of 4 `i32`, valid for the 16-byte read.
     unsafe { vld1q_s32(a.as_ptr()) }
 }
 

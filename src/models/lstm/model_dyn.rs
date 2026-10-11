@@ -107,6 +107,7 @@ impl LstmModelDyn {
     // =====================================================================
 
     #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn process_avx2(&mut self, input: &[f32], output: &mut [f32]) {
         if self.layers.is_empty() || self.in_channels == 0 || self.out_channels == 0 {
             return;

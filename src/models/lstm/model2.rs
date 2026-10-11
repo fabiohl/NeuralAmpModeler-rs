@@ -8,10 +8,10 @@ use super::layer::LstmLayer;
 macro_rules! define_lstm2_process_pipelined {
     (
         $fn_name:ident,
-        $target_meta:meta,
+        [$($target_meta:meta),+ $(,)?],
         $layer_proc:ident,
     ) => {
-        #[$target_meta]
+        $(#[$target_meta])+
         unsafe fn $fn_name(&mut self, input: &[f32], output: &mut [f32]) {
             // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
             // `$target_meta` and only reachable under its documented
@@ -91,17 +91,20 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
     }
     define_lstm2_process_pipelined!(
         process_avx2,
-        cfg_attr(
-            target_arch = "x86_64",
-            target_feature(enable = "avx2,fma,f16c")
-        ),
+        [
+            cfg_attr(
+                target_arch = "x86_64",
+                target_feature(enable = "avx2,fma,f16c")
+            ),
+            cfg_attr(target_arch = "aarch64", target_feature(enable = "neon")),
+        ],
         process_sample_avx2,
     );
 
     #[cfg(feature = "avx512")]
     define_lstm2_process_pipelined!(
         process_avx512,
-        target_feature(enable = "avx512f,avx512vl"),
+        [target_feature(enable = "avx512f,avx512vl")],
         process_sample_avx512,
     );
     /// Processes an audio block through the model (SIMD dispatch).

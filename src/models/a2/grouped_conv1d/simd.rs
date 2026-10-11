@@ -62,6 +62,7 @@ pub(crate) unsafe fn load_mixin_4(
 /// # Safety
 /// Only call when `groups == in_ch == out_ch`.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(crate) unsafe fn process_single_frame_depthwise_avx2(
     conv: &A2GroupedConv1d,
     layer_buffer: &[f32],
@@ -236,6 +237,7 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
 ///   (release-asserted).
 /// - The CPU must support AVX2+FMA (runtime dispatch by the caller).
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn grouped_conv1d_single_frame_simd(
     conv: &A2GroupedConv1d,
     layer_buffer: &[f32],
