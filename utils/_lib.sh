@@ -38,6 +38,7 @@
 #   * maybe_restart_low_priority (nice/ionice re-exec, opt-out via env)
 #   * ensure_third_party (mirror provisioning)
 #   * ensure_namcore_render (C++ render build)
+#   * ensure_qa_bin (on-demand QA binary build & resolution with freshness guarantee)
 #   * ensure_long_receipt_bin (on-demand nam_long_receipt build)
 #   * Thin wrappers over the QA binaries:
 #     - assert_ran_tests        → nam_long_receipt count-log
@@ -189,6 +190,80 @@ phase_elapsed_str() {
     echo "0ms"
 }
 
+# ---------------------------------------------------------------------------
+# QA Binary Freshness & Resolution Helper
+# ---------------------------------------------------------------------------
+# ensure_qa_bin <bin_name> [features] [override_var]
+#   Resolves and guarantees freshness for an internal QA/testing binary via
+#   cargo's machine-readable compiler-artifact message stream.
+#
+#   If the binary path was explicitly provided by the operator via environment
+#   (e.g., NAM_QUALITY_BIN, NAM_PERF_GATE, etc.):
+#     - Emits a warning to stderr: "binário fornecido pelo operador, freshness não verificada: ..."
+#     - Verifies executable permissions (fail-closed if missing)
+#     - Returns the path directly without invoking cargo.
+#
+#   Otherwise:
+#     - Runs `cargo build --locked [--features <features>] --bin <bin_name> --message-format=json-render-diagnostics`
+#     - Parses the compiler-artifact stream to locate the exact executable path.
+#     - Fails closed with a clear diagnostic if compilation fails or the artifact is missing/unusable.
+ensure_qa_bin() {
+    local bin_name="$1"
+    local features="${2:-testing}"
+    local override_var="${3:-}"
+
+    if [ -z "$override_var" ]; then
+        case "$bin_name" in
+            nam_quality) override_var="NAM_QUALITY_BIN" ;;
+            nam_perf_gate) override_var="NAM_PERF_GATE" ;;
+            nam_long_receipt) override_var="NAM_LONG_RECEIPT_BIN" ;;
+            nam_freshness) override_var="NAM_FRESHNESS_BIN" ;;
+        esac
+    fi
+
+    if [ -n "$override_var" ]; then
+        local override_val="${!override_var:-}"
+        if [ -n "$override_val" ]; then
+            echo -e "  ${YELLOW}ⓘ${NC} binário fornecido pelo operador, freshness não verificada: $override_val ($override_var)" >&2
+            if [ ! -x "$override_val" ]; then
+                die "binário fornecido pelo operador não é executável: $override_val"
+            fi
+            echo "$override_val"
+            return 0
+        fi
+    fi
+
+    local build_output build_rc=0
+    local -a cargo_cmd=(cargo build --locked)
+    if [ -n "$features" ]; then
+        cargo_cmd+=(--features "$features")
+    fi
+    cargo_cmd+=(--bin "$bin_name" --message-format=json-render-diagnostics)
+
+    build_output=$(cd "$PROJECT_DIR" && "${cargo_cmd[@]}" 2>&1) || build_rc=$?
+    if [ "$build_rc" -ne 0 ]; then
+        echo -e "  ${RED}${BOLD}❌ FATAL: cargo build falhou para o binário ${bin_name} (rc=${build_rc}):${NC}" >&2
+        echo "$build_output" >&2
+        die "falha de compilação de QA binário ${bin_name}"
+    fi
+
+    local exe
+    exe=$(printf '%s\n' "$build_output" \
+        | grep -F '"reason":"compiler-artifact"' \
+        | grep -F "\"name\":\"$bin_name\"" \
+        | grep -F '"executable":"' \
+        | tail -1 \
+        | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
+
+    if [ -z "$exe" ] || [ ! -x "$exe" ]; then
+        echo -e "  ${RED}${BOLD}❌ FATAL: executável não encontrado na saída do cargo para ${bin_name}:${NC}" >&2
+        echo "$build_output" >&2
+        die "artefato executável ausente para ${bin_name}"
+    fi
+
+    echo "$exe"
+}
+
 # ── Phase receipt machinery (fail-closed foundation) ──────────────────────────
 # Each dashboard phase records a typed outcome in JSONL.
 # Schema: phase_id, status (PASS|FAIL|SKIP_CAPABILITY|SKIP_OPTIONAL_FIXTURE|NOT_RUN|NOT_VERIFIED),
@@ -208,12 +283,11 @@ dashboard_phase_receipt() {
         warn "DASHBOARD_PHASE_RECEIPT not set — receipt stream lost"
         return 1
     fi
-    local bin="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
-    if [ ! -x "$bin" ]; then
-        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_quality >/dev/null 2>&1 ); then
-            die "failed to build nam_quality — phase receipt for ${phase_id} not recorded (fail-closed)"
-        fi
+    if [ -z "${NAM_QUALITY_BIN:-}" ] || [ ! -x "$NAM_QUALITY_BIN" ]; then
+        NAM_QUALITY_BIN=$(ensure_qa_bin nam_quality testing) || die "failed to resolve nam_quality — phase receipt for ${phase_id} not recorded (fail-closed)"
+        export NAM_QUALITY_BIN
     fi
+    local bin="$NAM_QUALITY_BIN"
     if ! "$bin" receipt append --phase-id "$phase_id" --status "$status" \
         --exit-code "$exit_code" --observed-records "$observed_records" \
         --expected-records "$expected_records" --reason "$reason" \
@@ -235,21 +309,19 @@ count_jsonl_records() {
 
 # Structured long-audit receipt machinery (shared with tests-long.sh and
 # remote-simd-gate.sh): resolve the emitter binary once and build it on demand.
-LONG_RECEIPT_BIN="${NAM_LONG_RECEIPT_BIN:-$PROJECT_DIR/target/debug/nam_long_receipt}"
+LONG_RECEIPT_BIN=""
 
 # ensure_long_receipt_bin
 #   Idempotently guarantees $LONG_RECEIPT_BIN exists and is executable,
-#   building it with `cargo build --features testing` when missing.
+#   resolving it via ensure_qa_bin.
 #   Fail-closed: returns 1 (never a silent skip) when the binary cannot be
 #   provided — receipt emission is mandatory, not best-effort.
 ensure_long_receipt_bin() {
-    if [ -x "$LONG_RECEIPT_BIN" ]; then
+    if [ -n "$LONG_RECEIPT_BIN" ] && [ -x "$LONG_RECEIPT_BIN" ]; then
         return 0
     fi
-    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_long_receipt >/dev/null 2>&1 ); then
-        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_long_receipt${NC}" >&2
-        return 1
-    fi
+    LONG_RECEIPT_BIN=$(ensure_qa_bin nam_long_receipt testing) || return 1
+    export LONG_RECEIPT_BIN
     return 0
 }
 
@@ -611,13 +683,8 @@ check_freshness() {
         echo -e "  ${YELLOW}⚠ NAM_BYPASS_FRESHNESS=1 — freshness check skipped (gap recorded by caller)${NC}"
         return 0
     fi
-    local bin="${NAM_FRESHNESS_BIN:-$PROJECT_DIR/target/debug/nam_freshness}"
-    if [ ! -x "$bin" ]; then
-        if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_freshness >/dev/null 2>&1 ); then
-            echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_freshness${NC}" >&2
-            return 1
-        fi
-    fi
+    local bin
+    bin=$(ensure_qa_bin nam_freshness testing)
     "$bin" --root "$PWD" "$mode"
 }
 

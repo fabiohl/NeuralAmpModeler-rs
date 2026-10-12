@@ -772,6 +772,7 @@ run_heap_audit_phase() {
     timed_cargo_test "resampler_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag resampler_heap_audit) || status=1
     timed_cargo_test "cabsim_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag cabsim_heap_audit) || status=1
     timed_cargo_test "a2_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag a2_heap_audit) || status=1
+    timed_cargo_test "a2_max_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag a2_heap_audit) -- --ignored --exact a2_heap_audit::audit_tests::test_a2_dyn_max_heap_audit || status=1
     timed_cargo_test "sequential_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag sequential_heap_audit) -- --ignored || status=1
     timed_cargo_test "diagnostic_bundle_heap_audit" --release --no-fail-fast --features heap-audit $(_test_flag diagnostic_bundle) -- heap_audit || status=1
     return $status
@@ -798,8 +799,10 @@ run_rt_deadline_gate_phase() {
     cargo test --features testing --release --no-run $flag >/dev/null 2>&1 || true
     if [ "$HAS_TASKSET" = "1" ] && [ -n "${BENCH_CORE:-}" ]; then
         taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
+        taskset -c "${BENCH_CORE}" cargo test --features testing --release --no-fail-fast $flag -- --ignored --exact rt_deadline::test_rt_deadline_a2_max --nocapture || status=$?
     else
         cargo test --features testing --release --no-fail-fast $flag -- --nocapture || status=$?
+        cargo test --features testing --release --no-fail-fast $flag -- --ignored --exact rt_deadline::test_rt_deadline_a2_max --nocapture || status=$?
     fi
     return $status
 }

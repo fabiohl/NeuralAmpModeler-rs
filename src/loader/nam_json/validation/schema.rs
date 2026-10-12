@@ -31,7 +31,7 @@ const MAX_TRAINING_BYTES: usize = 1024 * 1024; // 1 MiB
 const MAX_TRAINING_DEPTH: usize = 16;
 
 /// Maximum number of submodels in a SlimmableContainer.
-const MAX_SUBMODELS: usize = 8;
+pub(crate) const MAX_SUBMODELS: usize = 8;
 
 // ── Custom serde visitors ──
 

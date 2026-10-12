@@ -20,7 +20,7 @@ use log::warn;
 /// Must remain strictly <= `MAX_UNIFIED_DEPTH` (8) defined in
 /// `src/loader/dispatcher/wavenet/dynamic.rs` to bound memory consumption
 /// and prevent stack exhaustion across nested container and condition models.
-const MAX_CONTAINER_DEPTH: usize = 4;
+pub(crate) const MAX_CONTAINER_DEPTH: usize = 4;
 
 /// Builds a `Box<StaticModel>` for the `SlimmableContainer` architecture.
 ///

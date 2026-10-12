@@ -89,6 +89,81 @@ pub fn missing_baseline_coverage(
         .collect())
 }
 
+/// Canonical 22 benchmark ids defined in `RT_BENCH_TABLE` for `regression_gate`.
+pub fn canonical_regression_bench_ids() -> Vec<String> {
+    let mut ids: Vec<String> = crate::testing::qa::ids::RT_BENCH_TABLE
+        .iter()
+        .map(|e| e.bench_label.to_string())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Reads expected benchmark ids from a manifest file.
+/// Non-empty, non-comment lines (ignoring `#`) are trimmed and collected.
+pub fn read_manifest_bench_ids(manifest_path: &Path) -> Result<Vec<String>, std::io::Error> {
+    let content = std::fs::read_to_string(manifest_path)?;
+    let mut ids: Vec<String> = content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(String::from)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Resolves expected benchmark ids for a given suite:
+/// - If `suite == "regression_gate"`: uses canonical `RT_BENCH_TABLE` ids.
+/// - If `suite != "regression_gate"`: requires a manifest file path.
+pub fn expected_bench_ids_for_suite(
+    suite: &str,
+    manifest_path: Option<&Path>,
+) -> Result<Vec<String>, String> {
+    if suite == "regression_gate" {
+        Ok(canonical_regression_bench_ids())
+    } else if let Some(path) = manifest_path {
+        read_manifest_bench_ids(path).map_err(|e| {
+            format!(
+                "failed to read benchmark manifest at {}: {e}",
+                path.display()
+            )
+        })
+    } else {
+        Err(format!(
+            "alternative suite '{suite}' requires a declared benchmark manifest (--manifest <path>)"
+        ))
+    }
+}
+
+/// Checks that all expected benchmark ids were executed in `log_text`.
+///
+/// Returns `Ok(missing)` where `missing` contains any expected benchmark id
+/// not found in the parsed `executed_bench_ids(log_text)`.
+/// Returns `Err(BaselineCoverageGap)` if the log is empty or carries no parseable benchmarks.
+pub fn missing_expected_benchmarks(
+    log_text: &str,
+    expected_ids: &[String],
+) -> Result<Vec<String>, BaselineCoverageGap> {
+    let executed = executed_bench_ids(log_text);
+    let words: Vec<&str> = executed
+        .iter()
+        .map(String::as_str)
+        .filter(|id| is_word(id))
+        .collect();
+    if words.is_empty() {
+        return Err(BaselineCoverageGap);
+    }
+    let missing: Vec<String> = expected_ids
+        .iter()
+        .filter(|expected| !words.contains(&expected.as_str()))
+        .cloned()
+        .collect();
+    Ok(missing)
+}
+
 #[cfg(test)]
 #[path = "coverage_test.rs"]
 mod coverage_test;

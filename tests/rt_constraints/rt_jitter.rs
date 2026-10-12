@@ -183,7 +183,7 @@ fn measure_latency(
     };
 
     println!(
-        "[{label}] P50={}μs  P90={}μs  P99={}μs  P99.9={}μs  exact_max={}μs  \
+        "[{label}] P50≈{}μs  P90≈{}μs  P99≈{}μs  P99.9≈{}μs  exact_max={}μs  \
          violations={}/{} ({:.2}%)",
         stats.p50_us,
         stats.p90_us,
@@ -228,7 +228,7 @@ fn emit_skip_receipt(label: &str, stress_workers: usize, reason: &str) {
     );
 }
 
-/// Runs one jitter characterization scenario at the given stress level.
+/// Runs one jitter character scenario at the given stress level.
 ///
 /// The stress count is explicit — a scenario labeled `stress-N` spawns
 /// exactly N CPU-burn workers for the whole measurement. When the process
@@ -250,7 +250,7 @@ fn run_jitter_characterization(
             b.violation_pct()
         );
         println!(
-            "[{label}] Baseline P50={}μs  P90={}μs  P99={}μs  P99.9={}μs  exact_max={}μs",
+            "[{label}] Baseline P50≈{}μs  P90≈{}μs  P99≈{}μs  P99.9≈{}μs  exact_max={}μs",
             b.p50_us, b.p90_us, b.p99_us, b.p999_us, b.exact_max_us
         );
     } else {
@@ -263,7 +263,7 @@ fn run_jitter_characterization(
         println!("[STATUS] SKIP_CAPABILITY reason=\"Single core affinity\"");
         println!(
             "[{label}] Requested {stress_threads} stress worker(s) but only \
-             {affinity_cores} core(s) available via affinity mask — skipping"
+              {affinity_cores} core(s) available via affinity mask — skipping"
         );
         emit_skip_receipt(label, stress_threads, "Single core affinity");
         return None;
@@ -273,7 +273,7 @@ fn run_jitter_characterization(
 
     if let Some(b) = baseline {
         println!(
-            "[{label}] Δ P50: {}  Δ P90: {}  Δ P99: {}  Δ P99.9: {}  Δ max: {}  \
+            "[{label}] Δ P50≈: {}  Δ P90≈: {}  Δ P99≈: {}  Δ P99.9≈: {}  Δ max: {}  \
              Δ violations: {}→{}",
             delta_pct(stats.p50_us, b.p50_us),
             delta_pct(stats.p90_us, b.p90_us),
@@ -352,7 +352,7 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
         if let Some(sat_stats) = sat_stats {
             println!(
                 "[WaveNet-Std-char-saturate] Δ violations: {}→{}  \
-                 Δ P99: {}  Δ max: {}",
+                 Δ P99≈: {}  Δ max: {}",
                 baseline.violations,
                 sat_stats.violations,
                 delta_pct(sat_stats.p99_us, baseline.p99_us),

@@ -139,52 +139,76 @@ pub fn huge_page_status() -> MirrorHugePageStatus {
 ///   instantiation, so no `Drop` runs through the aliased mapping; `T` must
 ///   remain `Copy`-like (`Deref` requires no `Drop` of an aliased slot).
 ///
-/// # Element type (`T`) contract
+pub(crate) mod private {
+    /// Private sealing trait preventing external arbitrary implementations of [`super::MirrorSafe`].
+    pub trait Sealed {}
+}
+
+/// Marker trait for types that are safe to inhabit a [`MirroredBuffer`].
+///
+/// # Safety
+/// Implementing types must satisfy all sound virtual memory mirroring invariants:
+/// 1. An all-zero byte representation (`[0u8; size_of::<Self>()]`) is a valid and sound value.
+/// 2. `Self: Copy`, ensuring bitwise duplicability without running custom `Drop` glue.
+/// 3. `Self` does not rely on address identity or address-derived indirection.
+pub unsafe trait MirrorSafe: Copy + private::Sealed {}
+
+macro_rules! impl_mirror_safe {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl private::Sealed for $t {}
+            // SAFETY: Primitive numeric types are Copy, zero-bit patterns are sound representations, and types have no address identity dependencies.
+            unsafe impl MirrorSafe for $t {}
+        )*
+    };
+}
+
+impl_mirror_safe!(f32, f64, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+
+/// A zero-copy circular ring buffer implemented via dual contiguous virtual memory mappings.
+///
+/// # Element type (`T`) contract and `MirrorSafe` trait
 ///
 /// The mirror mapping makes every physical slot reachable through two virtual
 /// addresses, and the storage is zero-filled at creation. Soundness of
 /// `Deref`/`DerefMut` — which reinterpret the mapping as a `2N`-element
-/// `[T]` — therefore requires every `T` used with this buffer to satisfy **all**
-/// of the following. This is a safety contract of the type: it is enforced by
-/// this documentation and the internal-usage audit below, not by a trait
-/// bound (a public bound such as `unsafe trait MirrorSafe` would change the
-/// public API — see the crate changelog for any future restriction):
+/// `[T]` — requires every `T` used with this buffer to satisfy:
 ///
 /// 1. **All-bits-zero is a valid `T`.** Storage is created zero-filled
 ///    (fresh mmap/ftruncate pages), so an all-zero bit pattern must be a
 ///    valid value of `T` — types with niches forbidding it (e.g.
-///    `NonNull<u8>`, a `bool` with an invalid-zero layout) are forbidden.
+///    `NonZeroU32`, references `&T`, `NonNull<u8>`) are forbidden.
 /// 2. **No `Drop` glue.** A slot is reachable and overwritable through two
-///    virtual addresses; a destructor could run twice over the same physical
-///    value (or be skipped after an aliased overwrite). Every production
-///    instantiation is `f32` (plain old data).
+///    virtual addresses; memory is unmapped without running element drops.
+///    `Self: Copy` guarantees absence of custom destructors.
 /// 3. **Aliasing tolerance under `&mut`.** Writes through the mirrored view
 ///    intentionally create aliased observations of the same physical bytes;
-///    `T` must not rely on reference identity or on unique addresses for its
-///    own validity.
-/// 4. **No address-derived indirection.** The two virtual halves of one slot
-///    have different addresses but identical contents; `T` must not derive
-///    meaning from its own address.
+///    `T` must not rely on reference identity or unique addresses.
+/// 4. **No address-derived indirection.** `T` must not derive meaning from its
+///    own virtual memory address.
 ///
-/// Internal audit of every `MirroredBuffer<T>` instantiation in this crate:
-/// production uses only `MirroredBuffer<f32>` (`models/a2/model/static`,
-/// `models/a2/model/dynamic`, `models/wavenet/common`, `models/linear`);
-/// the remaining instantiations (u8/u32/i32/f64 and a 64-byte-aligned
-/// plain-data test type) live exclusively in this module's unit tests, and
-/// all satisfy items 1–4. Zero-sized types are rejected at construction
-/// (`mirror_buf/alloc.rs` returns `InvalidInput` for `size_of::<T>() == 0`),
-/// so `T` always occupies ≥ 1 byte.
-///
-/// # Alignment
-///
-/// `from_raw_parts` requires the base pointer to be aligned to
-/// `align_of::<T>()`. The `mmap` base is page-aligned, so construction proves
-/// `align_of::<T>() <= page_size` (runtime assert in `mirror_buf/alloc.rs`) on
-/// top of the compile-time `const { assert!(align_of::<T>() <= 64) }`.
+/// These requirements are statically enforced by the sealed [`MirrorSafe`] trait.
 ///
 /// Struct layout (16 bytes): optimized for cache — the hot-path Deref
 /// accesses only the first two fields.
-pub struct MirroredBuffer<T> {
+///
+/// # Examples
+///
+/// ```compile_fail
+/// use std::num::NonZeroU32;
+/// use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+///
+/// // NonZeroU32 does not implement MirrorSafe (all-zero is invalid), preventing unsound instantiation:
+/// let _ = MirroredBuffer::<NonZeroU32>::new(1);
+/// ```
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+///
+/// // Zero-Sized Types () do not implement MirrorSafe:
+/// let _ = MirroredBuffer::<()>::new(1024);
+/// ```
+pub struct MirroredBuffer<T: MirrorSafe> {
     ptr: *mut T,
     size_elements: usize,
     _marker: PhantomData<T>,
@@ -198,14 +222,14 @@ pub fn set_simulate_fail(fail: bool) {
     SIMULATE_FAIL.with(|f| f.set(fail));
 }
 
-impl<T> MirroredBuffer<T> {
+impl<T: MirrorSafe> MirroredBuffer<T> {
     /// Returns the physical buffer size (before mirroring) in elements.
     pub fn size(&self) -> usize {
         self.size_elements
     }
 }
 
-impl<T> std::fmt::Debug for MirroredBuffer<T> {
+impl<T: MirrorSafe> std::fmt::Debug for MirroredBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MirroredBuffer")
             .field("ptr", &self.ptr)
@@ -215,7 +239,7 @@ impl<T> std::fmt::Debug for MirroredBuffer<T> {
     }
 }
 
-impl<T> Deref for MirroredBuffer<T> {
+impl<T: MirrorSafe> Deref for MirroredBuffer<T> {
     type Target = [T];
 
     #[inline(always)]
@@ -225,31 +249,32 @@ impl<T> Deref for MirroredBuffer<T> {
         // mapping the same physical pages twice. Page alignment (>= 4096 bytes) satisfies
         // align_of::<T>() <= 64 guaranteed at compile time by const assertions in constructors,
         // and align_of::<T>() <= page_size guaranteed at construction by the runtime assert
-        // in mirror_buf/alloc.rs (A7 / R-5). The two halves physically alias (half-aliasing
-        // contract, see the struct docs), which is sound for the Copy element types used in
-        // the crate and for shared reads. ptr is initialized by mmap/ftruncate (or std heap
-        // fallback validated by the alloc module) and remains valid for the full virtual
-        // extent until Drop.
+        // in mirror_buf/alloc.rs (A7 / R-5). The underlying physical pages are zero-filled by the kernel,
+        // which is guaranteed to be a valid representation of T by the sealed T: MirrorSafe bound.
+        // The two halves physically alias, which is sound for shared reads and Copy elements.
+        // ptr is initialized by mmap/ftruncate and remains valid for the full virtual extent until Drop.
         unsafe { std::slice::from_raw_parts(self.ptr, self.size_elements * 2) }
     }
 }
 
-impl<T> DerefMut for MirroredBuffer<T> {
+impl<T: MirrorSafe> DerefMut for MirroredBuffer<T> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: Same invariants as Deref: ptr covers size_elements*2 valid virtual elements
-        // (two mirrored halves mapping the same physical pages). Page alignment satisfies
-        // align_of::<T>() <= 64 (const assert) and align_of::<T>() <= page_size (runtime
-        // assert in mirror_buf/alloc.rs, A7 / R-5). The &mut self reference guarantees exclusive
-        // access through a single &mut [T] over the whole 2N view — callers must not split it
-        // into two independently-mutated halves (see the half-aliasing contract in the struct
-        // docs); a wrap write crossing the N boundary through this single view is the supported
-        // pattern and intentionally aliases the physical start of the buffer.
+        // SAFETY: Same virtual mapping invariants as Deref: ptr covers size_elements*2 valid
+        // elements of type T: MirrorSafe. Page alignment satisfies align_of::<T>() <= 64 and
+        // align_of::<T>() <= page_size.
+        // The &mut self borrow guarantees exclusive access to this MirroredBuffer instance
+        // through a single &mut [T] over the 2N virtual extent.
+        // Note on half-aliasing: the two virtual halves map the same physical pages. Callers
+        // must not attempt to split this slice (e.g. via split_at_mut) into two simultaneously
+        // active mutable references to the same physical memory. A wrap write crossing the N
+        // boundary through this single continuous slice is the supported pattern and intentionally
+        // aliases the physical start of the buffer.
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size_elements * 2) }
     }
 }
 
-impl<T> Drop for MirroredBuffer<T> {
+impl<T: MirrorSafe> Drop for MirroredBuffer<T> {
     fn drop(&mut self) {
         let element_size = std::mem::size_of::<T>();
         let size_bytes = self.size_elements * element_size;
@@ -257,14 +282,15 @@ impl<T> Drop for MirroredBuffer<T> {
         // (memfd with MAP_SHARED) spanning size_bytes * 2 (two contiguous mirrored halves).
         // munmap receives the original base address and the full virtual extent (size_bytes * 2),
         // cleanly unmapping both virtual mirrors. Drop consumes self by value, ensuring
-        // this is the exclusive and final use of the pointer.
+        // this is the exclusive and final use of the pointer. Individual elements are not
+        // dropped, which is sound because T: MirrorSafe bounds T to Copy types with no Drop glue.
         unsafe {
             munmap(self.ptr as *mut c_void, size_bytes * 2);
         }
     }
 }
 
-impl<T: Clone> MirroredBuffer<T> {
+impl<T: MirrorSafe> MirroredBuffer<T> {
     /// Fallible clone — returns `Err` on allocation failure instead of panicking.
     ///
     /// Preferred over `Clone::clone()` in host activation paths where panic
@@ -286,7 +312,7 @@ impl<T: Clone> MirroredBuffer<T> {
 /// For **fallible** duplication in host activation paths, use `try_clone()` instead.
 /// Panicking across the FFI boundary is undefined behavior, so `Clone::clone()` must
 /// only be called in initialization/control paths where allocation failures are fatal.
-impl<T: Clone> Clone for MirroredBuffer<T> {
+impl<T: MirrorSafe> Clone for MirroredBuffer<T> {
     #[cold]
     fn clone(&self) -> Self {
         self.try_clone()
@@ -298,13 +324,14 @@ impl<T: Clone> Clone for MirroredBuffer<T> {
 // unlinked anonymous memfd (MAP_SHARED across the two adjacent mirror halves of this
 // buffer only, with no external process sharing or fd leaks). Moving the struct
 // across threads is sound because the underlying memory is uniquely owned by this
-// MirroredBuffer instance.
-unsafe impl<T: Send> Send for MirroredBuffer<T> {}
-// SAFETY: T: Sync ensures that shared references to T elements are sound across threads.
-// MirroredBuffer's internal ptr is accessed exclusively through Deref/DerefMut which follow
+// MirroredBuffer instance, and T: MirrorSafe + Send.
+unsafe impl<T: MirrorSafe + Send> Send for MirroredBuffer<T> {}
+
+// SAFETY: T: MirrorSafe + Sync ensures that shared references to T elements are sound across
+// threads. MirroredBuffer's internal ptr is accessed exclusively through Deref/DerefMut which follow
 // standard Rust borrowing rules (&self vs &mut self). The exclusive process-local virtual
 // mapping prevents data races from external writers.
-unsafe impl<T: Sync> Sync for MirroredBuffer<T> {}
+unsafe impl<T: MirrorSafe + Sync> Sync for MirroredBuffer<T> {}
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "mirror_buf_test.rs"]

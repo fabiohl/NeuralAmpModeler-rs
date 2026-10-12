@@ -50,6 +50,9 @@ use neural_amp_modeler_rs::testing::qa::QualityContract;
 use neural_amp_modeler_rs::testing::qa::classify::{
     classify_fresh_regression, classify_regression_outcome,
 };
+use neural_amp_modeler_rs::testing::qa::criterion::{
+    DEFAULT_DSP_MICRO_BATCH, extract_criterion_latencies, parse_bench_constants_env,
+};
 use neural_amp_modeler_rs::testing::qa::ids;
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
@@ -112,7 +115,8 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  nam_quality ingest [--receipt <path>] [--metrics <path>] [--latency <path>]");
-    println!("                          [--out <path>]");
+    println!("                          [--criterion-dir <path>] [--bench-constants-env <path>]");
+    println!("                          [--contract <path>] [--out <path>]");
     println!("  nam_quality verify --contract <path> --report <path> [--fidelity-only]");
     println!("  nam_quality render --report <path> [--ansi | --plain]");
     println!("  nam_quality classify --status <STATUS> --reason <text>");
@@ -222,7 +226,19 @@ fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
 /// malformed lines. Lines are passed through verbatim — the verify parser
 /// routes them by shape (`phase_id` / `median_latency_us` / fidelity `kind`).
 fn cmd_ingest(args: &[String]) {
-    let flags = match parse_flags(args, &["receipt", "metrics", "latency", "out"], &[]) {
+    let flags = match parse_flags(
+        args,
+        &[
+            "receipt",
+            "metrics",
+            "latency",
+            "criterion-dir",
+            "bench-constants-env",
+            "contract",
+            "out",
+        ],
+        &[],
+    ) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_ingest_help();
@@ -265,7 +281,57 @@ fn cmd_ingest(args: &[String]) {
     }
 
     let metrics = read_optional_stream("metrics", &flags);
-    let latency = read_optional_stream("latency", &flags);
+
+    // Latency stream resolution:
+    // If `--criterion-dir` is provided, ingest directly from Criterion's `estimates.json`.
+    // Otherwise fallback to reading `--latency` stream.
+    let latency: Vec<String> = if let Some(criterion_dir) = flags.get("criterion-dir") {
+        let micro_batch = match flags.get("bench-constants-env") {
+            Some(env_path) => {
+                let content = match fs::read_to_string(env_path) {
+                    Ok(c) => c,
+                    Err(e) => run_error(format!("cannot read bench constants env {env_path}: {e}")),
+                };
+                parse_bench_constants_env(&content).unwrap_or(DEFAULT_DSP_MICRO_BATCH)
+            }
+            None => DEFAULT_DSP_MICRO_BATCH,
+        };
+
+        let contract = match flags.get("contract") {
+            Some(cpath) => {
+                let content = match fs::read_to_string(cpath) {
+                    Ok(c) => c,
+                    Err(e) => run_error(format!("cannot read quality contract {cpath}: {e}")),
+                };
+                let c: QualityContract = match serde_json::from_str(&content) {
+                    Ok(parsed) => parsed,
+                    Err(e) => run_error(format!("malformed quality contract JSON {cpath}: {e}")),
+                };
+                Some(c)
+            }
+            None => None,
+        };
+
+        let entries = match extract_criterion_latencies(
+            Path::new(criterion_dir),
+            micro_batch,
+            contract.as_ref(),
+        ) {
+            Ok(ent) => ent,
+            Err(e) => run_error(format!("failed to extract Criterion latencies: {e}")),
+        };
+
+        entries
+            .into_iter()
+            .map(|e| {
+                serde_json::to_string(&e).unwrap_or_else(|err| {
+                    run_error(format!("cannot serialize latency entry: {err}"))
+                })
+            })
+            .collect()
+    } else {
+        read_optional_stream("latency", &flags)
+    };
 
     // Join the f64-oracle table (`kind: f64_table`) onto the fidelity
     // records: `verify_contract` reads `esr_f64` from the SAME record as the
@@ -383,14 +449,31 @@ fn join_f64_oracle_esr(metrics: &[String]) -> Vec<String> {
 
 fn print_ingest_help() {
     println!("Usage: nam_quality ingest [--receipt <path>] [--metrics <path>]");
-    println!("                             [--latency <path>] [--out <path>]");
+    println!("                             [--latency <path>] [--criterion-dir <path>]");
+    println!("                             [--bench-constants-env <path>] [--contract <path>]");
+    println!("                             [--out <path>]");
     println!();
     println!("Merges the dashboard artifacts into one verify report (JSONL):");
-    println!("  --receipt <path>  phase receipt (dashboard_phase_receipt schema) — required;");
-    println!("                    every line must carry string `phase_id` and `status`.");
-    println!("  --metrics <path>  fidelity metrics JSONL (NAM_METRICS_JSONL shape) — optional.");
-    println!("  --latency <path>  latency JSONL (kind `latency`) — optional.");
-    println!("  --out <path>      report destination; stdout when omitted.");
+    println!(
+        "  --receipt <path>              phase receipt (dashboard_phase_receipt schema) — required;"
+    );
+    println!(
+        "                                every line must carry string `phase_id` and `status`."
+    );
+    println!(
+        "  --metrics <path>              fidelity metrics JSONL (NAM_METRICS_JSONL shape) — optional."
+    );
+    println!("  --latency <path>              latency JSONL (kind `latency`) — optional.");
+    println!(
+        "  --criterion-dir <path>        directory containing Criterion benchmarks (extracts median point estimates) — optional."
+    );
+    println!(
+        "  --bench-constants-env <path>  path to bench_constants.env for DSP_MICRO_BATCH factor — optional."
+    );
+    println!(
+        "  --contract <path>             quality contract for benchmark batch_factor resolution — optional."
+    );
+    println!("  --out <path>                  report destination; stdout when omitted.");
     println!();
     println!("Fail-closed: any malformed line in a given input aborts with exit 1.");
 }

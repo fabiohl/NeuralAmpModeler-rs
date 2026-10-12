@@ -413,3 +413,43 @@ fn test_gc_tier3_overflow_sets_status_flag() {
     assert_eq!(drained, 21);
     assert_eq!(Arc::strong_count(&counter), 2);
 }
+
+#[test]
+fn test_setup_spsc_valid_capacities() {
+    let channels = setup_spsc(64).expect("setup_spsc(64) should succeed");
+    assert_eq!(channels.param_producer.slots(), 64);
+    assert_eq!(channels.gc_producer.slots(), 256);
+    assert_eq!(channels.resampler_producer.slots(), 4);
+    assert_eq!(channels.cabsim_producer.slots(), 4);
+    assert_eq!(channels.slimmable_producer.slots(), 4);
+    assert_eq!(channels.os_producer.slots(), 4);
+
+    let ch1 = setup_spsc(1).expect("setup_spsc(1) should succeed");
+    assert_eq!(ch1.param_producer.slots(), 1);
+    assert_eq!(ch1.gc_producer.slots(), 4);
+}
+
+#[test]
+fn test_setup_spsc_invalid_zero_capacity() {
+    let err = setup_spsc(0).expect_err("setup_spsc(0) must fail");
+    assert_eq!(err, SpscSetupError::ZeroCapacity);
+    assert_eq!(
+        err.error_code(),
+        crate::common::diagnostics::NamErrorCode::InvalidSpscCapacity
+    );
+    assert_eq!(err.error_code().code(), "E3103");
+    assert_eq!(err.error_code().mnemonic(), "INVALID_SPSC_CAPACITY");
+}
+
+#[test]
+fn test_setup_spsc_capacity_overflow() {
+    let err_max = setup_spsc(usize::MAX).expect_err("setup_spsc(usize::MAX) must fail");
+    assert_eq!(err_max, SpscSetupError::CapacityOverflow);
+    assert_eq!(
+        err_max.error_code(),
+        crate::common::diagnostics::NamErrorCode::InvalidSpscCapacity
+    );
+
+    let err_half = setup_spsc(usize::MAX / 2).expect_err("setup_spsc(usize::MAX / 2) must fail");
+    assert_eq!(err_half, SpscSetupError::CapacityOverflow);
+}

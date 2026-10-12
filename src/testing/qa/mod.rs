@@ -302,6 +302,9 @@ pub mod verify;
 /// (ANSI/plain), consumed by `nam_quality render` and the dashboard wrapper.
 pub mod render;
 
+/// Criterion `estimates.json` parser (extracts median point estimate).
+pub mod criterion;
+
 #[cfg(test)]
 #[path = "qa_test.rs"]
 mod qa_test;

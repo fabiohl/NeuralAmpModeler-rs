@@ -83,6 +83,7 @@ fn test_all_codes_have_unique_numeric() {
         ParamChannelFull,
         GcOverflow,
         GcCorrupted,
+        InvalidSpscCapacity,
         InvalidGainValue,
         UnknownCommand,
         CtrlCHandlerFailed,

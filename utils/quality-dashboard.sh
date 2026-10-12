@@ -785,7 +785,10 @@ parse_benchmarks() {
                 if (bench in micro_batch && micro_batch[bench] > 0) {
                     us = us / micro_batch[bench]
                 }
-                printf "LATENCY\t%s\t%.2f\n", bench, us
+                # Label as CRITERION_CENTER (Criterion textual time-center slope estimate).
+                # Canonical contract verification ingests the real median directly from
+                # target/criterion/<label>/new/estimates.json via nam_quality ingest.
+                printf "CRITERION_CENTER\t%s\t%.2f\n", bench, us
             }
         }
         bench = ""
@@ -793,7 +796,7 @@ parse_benchmarks() {
     ' "$log" > "$parsed"
 
     while IFS=$'\t' read -r metric bench latency; do
-        if [[ "$metric" == "LATENCY" ]]; then
+        if [[ "$metric" == "CRITERION_CENTER" ]]; then
             LATENCY_US["$bench"]="$latency"
         fi
     done < "$parsed"
@@ -905,16 +908,14 @@ extract_test_counts() {
 # `nam_quality` CLI contract: exit 0 success, exit 1 run-time failure,
 # exit 2 usage error.
 
-NAM_QUALITY_BIN="${NAM_QUALITY_BIN:-$PROJECT_DIR/target/debug/nam_quality}"
+NAM_QUALITY_BIN=""
 
 ensure_nam_quality_bin() {
-    if [ -x "$NAM_QUALITY_BIN" ]; then
+    if [ -n "$NAM_QUALITY_BIN" ] && [ -x "$NAM_QUALITY_BIN" ]; then
         return 0
     fi
-    if ! ( cd "$PROJECT_DIR" && cargo build --quiet --features testing --bin nam_quality >/dev/null 2>&1 ); then
-        echo -e "  ${RED}${BOLD}❌ FATAL: failed to build nam_quality${NC}" >&2
-        return 1
-    fi
+    NAM_QUALITY_BIN=$(ensure_qa_bin nam_quality testing) || return 1
+    export NAM_QUALITY_BIN
     return 0
 }
 
@@ -945,7 +946,15 @@ run_quality_ingest() {
     if [ -f "$NAM_METRICS_JSONL" ]; then
         ingest_args+=(--metrics "$NAM_METRICS_JSONL")
     fi
-    if [ -s "$latency_stream" ]; then
+    if [ -d "$PROJECT_DIR/target/criterion" ]; then
+        ingest_args+=(--criterion-dir "$PROJECT_DIR/target/criterion")
+        if [ -f "$PROJECT_DIR/target/bench_constants.env" ]; then
+            ingest_args+=(--bench-constants-env "$PROJECT_DIR/target/bench_constants.env")
+        fi
+        if [ -f "$CHECK_FILE" ]; then
+            ingest_args+=(--contract "$CHECK_FILE")
+        fi
+    elif [ -s "$latency_stream" ]; then
         ingest_args+=(--latency "$latency_stream")
     fi
     if ! "$NAM_QUALITY_BIN" ingest "${ingest_args[@]}" --out "$report_file"; then

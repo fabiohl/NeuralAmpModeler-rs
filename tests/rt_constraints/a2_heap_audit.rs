@@ -12,7 +12,46 @@ mod audit_tests {
     use neural_amp_modeler_rs::models::NamModel;
     use neural_amp_modeler_rs::models::a2::{A2_KERNEL_SIZES, WaveNetA2, a2_weight_count};
 
-    use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+    use crate::common::alloc_audit::{
+        TrackingGuard, get_alloc_count, get_dealloc_count, get_realloc_count,
+    };
+
+    fn assert_zero_heap(allocs: usize, reallocs: usize, deallocs: usize, label: &str) {
+        assert_eq!(
+            allocs, 0,
+            "Heap allocations detected on {label} hot-path! allocs={allocs}"
+        );
+        assert_eq!(
+            reallocs, 0,
+            "Heap reallocations detected on {label} hot-path! reallocs={reallocs}"
+        );
+        assert_eq!(
+            deallocs, 0,
+            "Heap deallocations detected on {label} hot-path! deallocs={deallocs}"
+        );
+    }
+
+    /// Affirmative positive control: proves TrackingGuard detects allocations and deallocations.
+    #[test]
+    fn test_heap_audit_positive_control() {
+        let (allocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            let boxed = Box::new(42u64);
+            std::hint::black_box(&boxed);
+            let a = get_alloc_count();
+            drop(boxed);
+            let d = get_dealloc_count();
+            (a, d)
+        };
+        assert!(
+            allocs >= 1,
+            "Positive control failed: TrackingGuard did not detect heap allocation (allocs={allocs})"
+        );
+        assert!(
+            deallocs >= 1,
+            "Positive control failed: TrackingGuard did not detect heap deallocation (deallocs={deallocs})"
+        );
+    }
 
     // =============================================================================
     // A2 Helper — Synthetic Weights
@@ -71,9 +110,9 @@ mod audit_tests {
             sample_offset += block_size;
         }
 
-        // Audit — must have zero allocations on hot-path
+        // Audit — must have zero allocations, reallocations, and deallocations on hot-path
         let iters = if cfg!(debug_assertions) { 50 } else { 1000 };
-        let count = {
+        let (allocs, reallocs, deallocs) = {
             let _guard = TrackingGuard::new();
             for _ in 0..iters {
                 for (bi, &block_size) in block_sizes.iter().enumerate() {
@@ -88,14 +127,10 @@ mod audit_tests {
                     sample_offset += block_size;
                 }
             }
-            get_alloc_count()
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
         };
 
-        assert_eq!(
-            count, 0,
-            "Heap allocations detected on A2-{label} hot-path! count={}",
-            count
-        );
+        assert_zero_heap(allocs, reallocs, deallocs, &format!("A2-{label}"));
     }
 
     #[test]
@@ -142,9 +177,9 @@ mod audit_tests {
             sample_offset += block_size;
         }
 
-        // Audit — must have zero allocations on hot-path
+        // Audit — must have zero allocations, reallocations, and deallocations on hot-path
         let iters = if cfg!(debug_assertions) { 50 } else { 1000 };
-        let count = {
+        let (allocs, reallocs, deallocs) = {
             let _guard = TrackingGuard::new();
             for _ in 0..iters {
                 for (bi, &block_size) in block_sizes.iter().enumerate() {
@@ -159,13 +194,9 @@ mod audit_tests {
                     sample_offset += block_size;
                 }
             }
-            get_alloc_count()
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
         };
 
-        assert_eq!(
-            count, 0,
-            "Heap allocations detected on A2-Max dynamic hot-path! count={}",
-            count
-        );
+        assert_zero_heap(allocs, reallocs, deallocs, "A2-Max dynamic");
     }
 }

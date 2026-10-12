@@ -46,6 +46,13 @@ pub(crate) fn build_model_with_prewarm(
         }
     }
 
+    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+    {
+        // Force SIMD_MATH LazyLock initialization off-RT during model building
+        // to prevent first-touch CPU feature detection in audio callback (R-03).
+        let _ = std::sync::LazyLock::force(&crate::math::common::SIMD_MATH);
+    }
+
     match data.architecture.as_str() {
         "WaveNet" => wavenet::build_wavenet(data),
         "LSTM" => lstm::build_lstm(data),

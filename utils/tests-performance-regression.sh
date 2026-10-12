@@ -55,6 +55,7 @@ DEFAULT_CORE="$(pick_bench_core)"
 BENCH_CORE="${NAM_BENCH_CORE:-}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
 BENCH_SUITE="${NAM_BENCH_SUITE:-regression_gate}"
+BENCH_MANIFEST="${NAM_BENCH_MANIFEST:-}"
 MODE="${1:---check}"
 # Single point of truth for mode routing: this gate admits exactly the modes
 # the dispatcher at the end of the script implements. `--save` is deliberately
@@ -92,10 +93,8 @@ else
     warn "taskset not found — running without core pinning."
 fi
 
-NAM_PERF_GATE="${NAM_PERF_GATE:-target/debug/nam_perf_gate}"
-if [ ! -x "$NAM_PERF_GATE" ]; then
-    cargo build --quiet --features testing --bin nam_perf_gate
-fi
+NAM_PERF_GATE=$(ensure_qa_bin nam_perf_gate testing)
+export NAM_PERF_GATE
 
 echo -e "${BLUE}${BOLD}  Performance Regression Gate${NC}" >&2
 echo -e "  Core: ${YELLOW}${BENCH_CORE}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}" >&2
@@ -350,11 +349,17 @@ check_regression() {
     fi
 
     # Coverage cross-check
+    local suite_args=(--suite "$BENCH_SUITE")
+    if [ -n "$BENCH_MANIFEST" ]; then
+        suite_args+=(--manifest "$BENCH_MANIFEST")
+    fi
+
     set +e
     "$NAM_PERF_GATE" coverage \
         --log "$LOG_FILE" \
         --root "$CRITERION_BASELINE_TARGET" \
-        --baseline "$BASELINE_NAME" > "$LOG_FILE.coverage" 2>&1
+        --baseline "$BASELINE_NAME" \
+        "${suite_args[@]}" > "$LOG_FILE.coverage" 2>&1
     COVERAGE_STATUS=$?
     set -e
 
@@ -383,7 +388,8 @@ check_regression() {
     set +e
     "$NAM_PERF_GATE" verdict \
         --log "$LOG_FILE" \
-        --root "$CRITERION_BASELINE_TARGET" > "$LOG_FILE.verdict" 2>&1
+        --root "$CRITERION_BASELINE_TARGET" \
+        "${suite_args[@]}" > "$LOG_FILE.verdict" 2>&1
     VERDICT_STATUS=$?
     set -e
 
@@ -416,8 +422,8 @@ check_regression() {
     # Audit trail: record verified benchmark set. Coverage and verdict above
     # already fail-closed on a blind log; the explicit `>= 1` guard keeps
     # `observed == expected` from ever certifying zero executed benches (R-3).
-    local executed_count
-    executed_count=$(grep -c "^Benchmarking " "$LOG_FILE" 2>/dev/null || true)
+    local executed_count expected_count
+    executed_count=$(grep "^Benchmarking " "$LOG_FILE" 2>/dev/null | sed -n 's/^Benchmarking \([^:]*\):.*/\1/p' | grep -v '^[[:space:]]*$' | sort -u | wc -l | tr -d ' ' || true)
     executed_count="${executed_count:-0}"
     if [ "$executed_count" -lt 1 ]; then
         echo -e "\n${RED}${BOLD}❌ NO BENCHMARK EXECUTED — refusing to certify observed==expected${NC}"
@@ -432,12 +438,34 @@ check_regression() {
             --out "$REGRESSION_RECEIPT" >&2
         exit 1
     fi
+
+    local expected_args=(--suite "$BENCH_SUITE")
+    if [ -n "$BENCH_MANIFEST" ]; then
+        expected_args+=(--manifest "$BENCH_MANIFEST")
+    fi
+    expected_count=$("$NAM_PERF_GATE" expected-count "${expected_args[@]}" 2>/dev/null || true)
+    expected_count="${expected_count:-0}"
+
+    if [ "$executed_count" -ne "$expected_count" ]; then
+        echo -e "\n${RED}${BOLD}❌ BENCHMARK COVERAGE MISMATCH — observed ${executed_count} != expected ${expected_count}${NC}"
+        "$NAM_PERF_GATE" receipt append \
+            --phase-id "regression_baseline_coverage" \
+            --status "FAIL" \
+            --exit-code 1 \
+            --observed-records "$executed_count" \
+            --expected-records "$expected_count" \
+            --reason "EXPECTED_BENCHMARK_MISSING" \
+            --run-id "$NAM_RUN_ID" \
+            --out "$REGRESSION_RECEIPT" >&2
+        exit 1
+    fi
+
     "$NAM_PERF_GATE" receipt append \
         --phase-id "regression_baseline_coverage" \
         --status "PASS" \
         --exit-code 0 \
         --observed-records "$executed_count" \
-        --expected-records "$executed_count" \
+        --expected-records "$expected_count" \
         --reason "" \
         --run-id "$NAM_RUN_ID" \
         --out "$REGRESSION_RECEIPT" >&2

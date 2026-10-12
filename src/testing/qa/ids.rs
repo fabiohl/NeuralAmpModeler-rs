@@ -234,6 +234,11 @@ pub static RT_BENCH_TABLE: &[RtBenchEntry] = &[
         contract_id: "RT_DSP_Pipeline_HQ_4xOS",
         fixture: None,
     },
+    RtBenchEntry {
+        bench_label: "RT_DSP_Pipeline_AdaptiveOn",
+        contract_id: "RT_DSP_Pipeline_AdaptiveOn",
+        fixture: Some("BossWN-standard.nam"),
+    },
 ];
 
 /// Resolves a Criterion bench label of `regression_gate.rs` to its canonical

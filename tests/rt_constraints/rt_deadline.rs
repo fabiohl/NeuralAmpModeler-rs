@@ -35,7 +35,7 @@ use common::*;
 use std::fs;
 use std::sync::OnceLock;
 
-use neural_amp_modeler_rs::dsp::telemetry::LatencyHistogram;
+use neural_amp_modeler_rs::dsp::telemetry::{ExactLatencyReservoir, LatencyHistogram};
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
@@ -62,6 +62,7 @@ struct DeadlineStats {
     p90_us: u64,
     p99_us: u64,
     p999_us: u64,
+    exact_p99_us: u64,
     exact_max_us: u64,
     violations: u64,
     total_blocks: usize,
@@ -98,6 +99,7 @@ fn measure_rt_deadline(
     let output_size = out_ch * BLOCK_SIZE;
     let mut output = vec![0.0f32; output_size];
     let hist = LatencyHistogram::new();
+    let reservoir = ExactLatencyReservoir::<MEASURE_BLOCKS>::new();
     let mut violations: u64 = 0;
 
     // `black_box` around the process call and the output
@@ -117,6 +119,7 @@ fn measure_rt_deadline(
         model.process(&input, &mut output);
         let elapsed_ns = start.elapsed().as_nanos() as u64;
         hist.record(elapsed_ns);
+        reservoir.record(elapsed_ns);
 
         if elapsed_ns > RT_DEADLINE_US * 1000 {
             violations += 1;
@@ -139,6 +142,7 @@ fn measure_rt_deadline(
         p90_us: hist.get_percentile(0.90) / 1000,
         p99_us: hist.get_percentile(0.99) / 1000,
         p999_us: hist.get_percentile(0.999) / 1000,
+        exact_p99_us: reservoir.percentile_exact(0.99) / 1000,
         exact_max_us: hist.get_exact_max() / 1000,
         violations,
         total_blocks: MEASURE_BLOCKS,
@@ -154,12 +158,13 @@ fn emit_and_assert(label: &str, stats: &DeadlineStats) {
     let pflight_ok = preflight_ok();
 
     println!(
-        "[{label}] P50={}μs  P90={}μs  P99={}μs  P99.9={}μs  \
-         exact_max={}μs  violations={}/{}  deadline={}μs",
+        "[{label}] P50≈{}μs  P90≈{}μs  P99≈{}μs  P99.9≈{}μs  \
+         exact_p99={}μs  exact_max={}μs  violations={}/{}  deadline={}μs",
         stats.p50_us,
         stats.p90_us,
         stats.p99_us,
         stats.p999_us,
+        stats.exact_p99_us,
         stats.exact_max_us,
         stats.violations,
         stats.total_blocks,
@@ -188,8 +193,9 @@ fn emit_and_assert(label: &str, stats: &DeadlineStats) {
                 stats.total_blocks,
             );
             assert!(
-                stats.p99_us < RT_DEADLINE_US,
-                "[{label}] P99={}μs exceeds RT deadline {RT_DEADLINE_US}μs — regression detected",
+                stats.exact_p99_us < RT_DEADLINE_US,
+                "[{label}] exact P99={}μs (bucket P99≈{}μs) exceeds RT deadline {RT_DEADLINE_US}μs — regression detected",
+                stats.exact_p99_us,
                 stats.p99_us,
             );
         }

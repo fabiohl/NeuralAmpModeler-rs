@@ -108,6 +108,7 @@ Below is the committed reference baseline measured on release builds under an is
 | `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.22 µs / block | 0.09%                  |
 | `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)    | 43.57 µs        | 3.27%                  |
 | `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS) | 177.39 µs       | 13.31%                 |
+| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic)| 63.52 µs        | 4.76%                  |
 
 *Note: All single-model inferences consume $\le 4.3\%$ of the real-time block budget; even dynamic A2 topologies and 4× oversampled pipelines maintain $> 85\%$ real-time headroom.*
 

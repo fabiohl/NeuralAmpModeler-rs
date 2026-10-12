@@ -21,14 +21,16 @@
 //! their own host surfaces. Changes to this reservation must be synchronized
 //! with `docs/architecture.md` (§7).
 //!
-//! The **exceptions** to this rule are the DSP-constructor validation codes
+//! The **exceptions** to this rule are the constructor validation codes
 //! constructed by the core crate itself:
 //! [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize)
-//! (E2202, `ConvEngine::new` with `partition_size == 0`) and
+//! (E2202, `ConvEngine::new` with `partition_size == 0`),
 //! [`ResamplerBuildFailed`](NamErrorCode::ResamplerBuildFailed) (E2200, the
 //! typed `NamResampler::new_typed` / `new_linear_typed` constructors when a
-//! sample rate is outside `4_000..=384_000` Hz). Both are pure DSP
-//! constructor-parameter validation errors, not host/backend surfaces.
+//! sample rate is outside `4_000..=384_000` Hz), and
+//! [`InvalidSpscCapacity`](NamErrorCode::InvalidSpscCapacity) (E3103, the
+//! `setup_spsc` constructor when `capacity == 0` or `capacity * 4` overflows).
+//! All are pure parameter validation errors, not host/backend surfaces.
 
 use std::fmt;
 
@@ -45,8 +47,9 @@ use std::fmt;
 /// The **E2xxx–E4xxx** ranges are reserved for downstream integrations
 /// (e.g., plugin wrappers, standalone hosts, offline renderers) and are never constructed by this
 /// host-agnostic core crate, except [`ResamplerBuildFailed`](NamErrorCode::ResamplerBuildFailed)
-/// (E2200) and [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize) (E2202),
-/// both DSP constructor-parameter validation errors. See the module documentation.
+/// (E2200), [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize) (E2202),
+/// and [`InvalidSpscCapacity`](NamErrorCode::InvalidSpscCapacity) (E3103),
+/// which are constructor-parameter validation errors. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NamErrorCode {
@@ -190,14 +193,14 @@ pub enum NamErrorCode {
     BackendFailure,
 
     // E3xxx — SPSC / Communication
-    // Reserved for downstream integrations (e.g., plugin wrappers, standalone hosts):
-    // this host-agnostic core crate never constructs these variants.
     /// CLI→DSP parameter SPSC channel full.
     ParamChannelFull,
     /// Overflow detected in the Garbage Collection (GC) channel.
     GcOverflow,
     /// Corrupted GC overflow buffer slot (inconsistent type/pointer).
     GcCorrupted,
+    /// Invalid SPSC channel capacity (must be greater than 0 and capacity * 4 must not overflow).
+    InvalidSpscCapacity,
 
     // E4xxx — Runtime / CLI
     // Reserved for downstream integrations (e.g., CLI tools, plugin wrappers):
@@ -282,6 +285,7 @@ impl NamErrorCode {
             Self::ParamChannelFull => "E3100",
             Self::GcOverflow => "E3101",
             Self::GcCorrupted => "E3102",
+            Self::InvalidSpscCapacity => "E3103",
             Self::InvalidGainValue => "E4100",
             Self::UnknownCommand => "E4101",
             Self::CtrlCHandlerFailed => "E4102",
@@ -391,6 +395,9 @@ impl NamErrorCode {
             Self::ParamChannelFull => "Parameter channel full",
             Self::GcOverflow => "Garbage collection overflow",
             Self::GcCorrupted => "Garbage collection corruption",
+            Self::InvalidSpscCapacity => {
+                "Invalid SPSC channel capacity (must be greater than 0 and capacity * 4 must not overflow)"
+            }
             Self::InvalidGainValue => "Invalid gain value",
             Self::UnknownCommand => "Unknown command",
             Self::CtrlCHandlerFailed => "Ctrl-C handler setup failed",
@@ -462,6 +469,7 @@ impl NamErrorCode {
             Self::ParamChannelFull => "PARAM_CHANNEL_FULL",
             Self::GcOverflow => "GC_OVERFLOW",
             Self::GcCorrupted => "GC_CORRUPTED",
+            Self::InvalidSpscCapacity => "INVALID_SPSC_CAPACITY",
             Self::InvalidGainValue => "INVALID_GAIN_VALUE",
             Self::UnknownCommand => "UNKNOWN_COMMAND",
             Self::CtrlCHandlerFailed => "CTRL_C_HANDLER_FAILED",

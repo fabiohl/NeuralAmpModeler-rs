@@ -293,15 +293,37 @@ fn downsample_cardinality_every_block_size() {
     }
 }
 
-/// T5.4-7: `X2Stage::downsample` requires an even per-call input length; an
-/// odd call would otherwise emit an unsupported `ceil(n/2)` leftover sample.
+/// `X2Stage::downsample` requires an even per-call input length in debug builds,
+/// guarded by `debug_assert!`. An odd call panics under debug assertions.
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "requires an even input length")]
 fn downsample_rejects_odd_input_length() {
     let mut s = X2Stage::new().unwrap();
     let input = vec![0.1f32; 5];
     let mut out = vec![0.0f32; 3];
     let _ = s.downsample(&input, &mut out);
+}
+
+/// In release builds (`not(debug_assertions)`), `X2Stage::downsample` omits the
+/// debug assertion to preserve RT-safety and deterministically clamps emission
+/// to `floor(len/2)`. Unwritten output slots must remain untouched NaN canaries.
+#[test]
+#[cfg(not(debug_assertions))]
+fn downsample_odd_input_release_clamps_without_panic() {
+    let mut s = X2Stage::new().unwrap();
+    let input = vec![0.1f32; 5];
+    let mut out = vec![f32::NAN; 4];
+    let n = s.downsample(&input, &mut out);
+    assert_eq!(n, 2, "5 input samples clamp to floor(5/2) = 2");
+    assert!(
+        out[0..2].iter().all(|s| s.is_finite()),
+        "emitted samples must be finite"
+    );
+    assert!(
+        out[2..].iter().all(|s| s.is_nan()),
+        "unwritten output slots must remain untouched NaN canaries"
+    );
 }
 
 /// T5.4-7 boundary: an X4 block whose length is not a multiple of the factor

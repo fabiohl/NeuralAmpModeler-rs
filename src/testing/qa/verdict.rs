@@ -94,6 +94,11 @@ pub enum VerdictFinding {
         /// Executed Criterion benchmark id (from the log).
         id: String,
     },
+    /// An expected benchmark was not executed in the Criterion run.
+    MissingExpectedBenchmark {
+        /// Expected Criterion benchmark id that was absent from the log.
+        id: String,
+    },
     /// Machine regression: the whole mean-change CI lies above the positive
     /// noise band.
     Regression {
@@ -164,18 +169,13 @@ fn read_change_estimates(criterion_root: &Path, id: &str) -> Option<ChangeEstima
     serde_json::from_str(&text).ok()
 }
 
-/// Machine regression verdict over a Criterion log and its persisted
-/// comparison artifacts (B2 / R-3).
-///
-/// - no executed id survives bash word splitting ⇒
-///   [`Err(VerdictBlind)`](VerdictBlind) — same blind gate as coverage;
-/// - otherwise ⇒ `Ok(outcome)` with a finding per executed id whose
-///   `change/estimates.json` is missing (blind for that id) or whose
-///   mean-change CI is entirely above the noise band (regression).
-pub fn regression_verdict(
+/// Machine regression verdict over a Criterion log, with optional expected benchmark ids
+/// cross-check.
+pub fn regression_verdict_with_expected(
     log_text: &str,
     criterion_root: &Path,
     noise: f64,
+    expected_ids: Option<&[String]>,
 ) -> Result<VerdictOutcome, VerdictBlind> {
     let ids: Vec<String> = executed_bench_ids(log_text)
         .into_iter()
@@ -186,6 +186,15 @@ pub fn regression_verdict(
     }
     let executed = ids.len();
     let mut findings = Vec::new();
+
+    if let Some(expected) = expected_ids {
+        for exp_id in expected {
+            if !ids.contains(exp_id) {
+                findings.push(VerdictFinding::MissingExpectedBenchmark { id: exp_id.clone() });
+            }
+        }
+    }
+
     for id in ids {
         match read_change_estimates(criterion_root, &id) {
             None => findings.push(VerdictFinding::MissingEstimates { id }),
@@ -204,6 +213,22 @@ pub fn regression_verdict(
         }
     }
     Ok(VerdictOutcome { executed, findings })
+}
+
+/// Machine regression verdict over a Criterion log and its persisted
+/// comparison artifacts (B2 / R-3).
+///
+/// - no executed id survives bash word splitting ⇒
+///   [`Err(VerdictBlind)`](VerdictBlind) — same blind gate as coverage;
+/// - otherwise ⇒ `Ok(outcome)` with a finding per executed id whose
+///   `change/estimates.json` is missing (blind for that id) or whose
+///   mean-change CI is entirely above the noise band (regression).
+pub fn regression_verdict(
+    log_text: &str,
+    criterion_root: &Path,
+    noise: f64,
+) -> Result<VerdictOutcome, VerdictBlind> {
+    regression_verdict_with_expected(log_text, criterion_root, noise, None)
 }
 
 #[cfg(test)]

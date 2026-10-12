@@ -73,6 +73,47 @@ pub struct SpscChannels {
     pub rt_status: Arc<RtStatusFlags>,
 }
 
+impl std::fmt::Debug for SpscChannels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpscChannels")
+            .field("param_slots", &self.param_producer.slots())
+            .field("gc_slots", &self.gc_producer.slots())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Errors that can occur when initializing the SPSC communication channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpscSetupError {
+    /// Requested capacity is 0 (channels must have positive capacity).
+    ZeroCapacity,
+    /// Requested capacity overflows when multiplied for GC channel sizing (`capacity * 4`).
+    CapacityOverflow,
+}
+
+impl SpscSetupError {
+    /// Returns the diagnostic error code associated with this failure.
+    pub fn error_code(self) -> crate::common::diagnostics::NamErrorCode {
+        crate::common::diagnostics::NamErrorCode::InvalidSpscCapacity
+    }
+}
+
+impl std::fmt::Display for SpscSetupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroCapacity => write!(f, "SPSC channel capacity must be greater than zero"),
+            Self::CapacityOverflow => {
+                write!(
+                    f,
+                    "SPSC channel capacity calculation overflowed (capacity * 4)"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpscSetupError {}
+
 /// Creates and returns the complete lock-free SPSC mesh for the pipeline.
 ///
 /// Includes channels for:
@@ -82,9 +123,21 @@ pub struct SpscChannels {
 /// - RT→Main atomic status flags
 ///
 /// `capacity` should preferably be a power of 2.
-pub fn setup_spsc(capacity: usize) -> SpscChannels {
+///
+/// # Errors
+///
+/// Returns [`SpscSetupError::ZeroCapacity`] if `capacity` is 0.
+/// Returns [`SpscSetupError::CapacityOverflow`] if `capacity * 4` overflows `usize`.
+pub fn setup_spsc(capacity: usize) -> Result<SpscChannels, SpscSetupError> {
+    if capacity == 0 {
+        return Err(SpscSetupError::ZeroCapacity);
+    }
+    let gc_capacity = capacity
+        .checked_mul(4)
+        .ok_or(SpscSetupError::CapacityOverflow)?;
+
     let (param_prod, param_cons) = RingBuffer::new(capacity);
-    let (gc_prod, gc_cons) = RingBuffer::new(capacity * 4); // Quadrupled capacity for safe garbage collection
+    let (gc_prod, gc_cons) = RingBuffer::new(gc_capacity); // Quadrupled capacity for safe garbage collection
     // Resampler channel: small capacity (only 1 in transit at a time, typically)
     let (rs_prod, rs_cons) = RingBuffer::new(4);
     // Cab-sim IR channel: small capacity (only 1 in transit at a time)
@@ -98,7 +151,7 @@ pub fn setup_spsc(capacity: usize) -> SpscChannels {
     // We use 64 as a base, or the requested capacity if higher.
     let gc_overflow = Arc::new(GcOverflowBuffer::new(capacity.max(64)));
 
-    SpscChannels {
+    Ok(SpscChannels {
         param_producer: param_prod,
         param_consumer: param_cons,
         gc_producer: gc_prod,
@@ -113,7 +166,7 @@ pub fn setup_spsc(capacity: usize) -> SpscChannels {
         os_producer: os_prod,
         os_consumer: os_cons,
         rt_status,
-    }
+    })
 }
 
 #[cfg(test)]

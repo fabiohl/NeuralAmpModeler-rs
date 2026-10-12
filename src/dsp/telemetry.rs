@@ -68,44 +68,65 @@ impl LatencyHistogram {
     }
 
     /// Computes the approximate value of a percentile (e.g., 0.95 for P95).
-    /// Returns the value in nanoseconds of the bin's upper edge.
+    ///
+    /// Uses rank `ceil(N * p)` with minimum 1 over the total observations.
+    /// Returns the nanoseconds value of the matched bin's true upper edge:
+    /// - Bin 0: [0, 64) ns -> upper edge 64 ns (`1 << 6`)
+    /// - Bin i (1 <= i <= 30): [2^(i+5), 2^(i+6)) ns -> upper edge 2^(i+6) ns (`1 << (i + 6)`)
+    /// - Bin 31: [2^36, ∞) ns -> upper edge 2^37 ns (`1 << 37`)
+    ///
+    /// An empty histogram, or a percentile `p` outside `[0.0, 1.0]` (or NaN),
+    /// safely returns the documented sentinel `0` without panic.
     pub fn get_percentile(&self, p: f32) -> u64 {
+        self.get_percentile_opt(p).unwrap_or(0)
+    }
+
+    /// Computes the approximate value of a percentile as an `Option<u64>`.
+    ///
+    /// Returns `None` when empty or when `p` is outside `[0.0, 1.0]`.
+    pub fn get_percentile_opt(&self, p: f32) -> Option<u64> {
+        if !(0.0..=1.0).contains(&p) || p.is_nan() {
+            return None;
+        }
+
         let counts: [u64; 32] = core::array::from_fn(|i| self.bins[i].load(Ordering::Relaxed));
         let total: u64 = counts.iter().sum();
 
         if total == 0 {
-            return 0;
+            return None;
         }
 
-        let target = (total as f64 * p as f64) as u64;
+        let rank = ((total as f64 * p as f64).ceil() as u64).max(1);
         let mut accum: u64 = 0;
 
         for (i, &count) in counts.iter().enumerate() {
             accum += count;
-            if accum >= target {
-                // Returns 2^(i + 5)
-                return 1u64 << (i + 5);
+            if accum >= rank {
+                // Returns real upper edge 2^(i + 6)
+                return Some(1u64 << (i + 6));
             }
         }
 
-        1u64 << 36
+        Some(1u64 << 37)
     }
 
-    /// Returns the maximum observed value (upper edge of the highest non-empty bin).
+    /// Returns the maximum observed value (real upper edge of the highest non-empty bin).
+    /// Returns 0 when empty.
     pub fn get_max(&self) -> u64 {
         for i in (0..32).rev() {
             if self.bins[i].load(Ordering::Relaxed) > 0 {
-                return 1u64 << (i + 5);
+                return 1u64 << (i + 6);
             }
         }
         0
     }
 
-    /// Returns the minimum observed value (lower edge of the lowest non-empty bin).
+    /// Returns the minimum observed value (real lower edge of the lowest non-empty bin).
+    /// Returns 0 when empty or when the lowest non-empty bin is bin 0 ([0, 64) ns).
     pub fn get_min(&self) -> u64 {
         for i in 0..32 {
             if self.bins[i].load(Ordering::Relaxed) > 0 {
-                return if i == 0 { 0 } else { 1u64 << (i + 4) };
+                return if i == 0 { 0 } else { 1u64 << (i + 5) };
             }
         }
         0
@@ -273,14 +294,16 @@ mod tests {
         // in the correct "drawers" (bins), separating ultra-fast from slow.
         let hist = LatencyHistogram::new();
 
-        hist.record(10); // bin 0 (sub-32ns)
-        hist.record(40); // bin 0 (2^5 = 32)
-        hist.record(100); // bin 1 (2^6 = 64)
-        hist.record(1000); // bin 4 (2^9 = 512)
+        hist.record(10); // bin 0 (0..64 ns)
+        hist.record(40); // bin 0 (0..64 ns)
+        hist.record(100); // bin 1 (64..128 ns)
+        hist.record(1000); // bin 4 (512..1024 ns)
 
         assert_eq!(hist.bins[0].load(Ordering::Relaxed), 2);
         assert_eq!(hist.bins[1].load(Ordering::Relaxed), 1);
         assert_eq!(hist.bins[4].load(Ordering::Relaxed), 1);
+        assert_eq!(hist.get_min(), 0); // bin 0 lower edge is 0
+        assert_eq!(hist.get_max(), 1024); // bin 4 upper edge is 1024
         assert_eq!(hist.get_exact_min(), 10);
         assert_eq!(hist.get_exact_max(), 1000);
         assert_eq!(hist.get_mean(), (10 + 40 + 100 + 1000) / 4);
@@ -295,19 +318,62 @@ mod tests {
         // 100 samples
         for _ in 0..50 {
             hist.record(100);
-        } // P50 should be in bin 1 (2^6 = 64)
+        } // P50 in bin 1 (upper edge 128)
         for _ in 0..45 {
             hist.record(1000);
-        } // P95 should be in bin 4 (2^9 = 512)
+        } // P95 in bin 4 (upper edge 1024)
         for _ in 0..5 {
             hist.record(10000);
-        } // P99 should be in bin 8 (2^13 = 8192)
+        } // P99 in bin 8 (upper edge 16384)
 
-        assert!(hist.get_percentile(0.50) <= 64);
-        assert!(hist.get_percentile(0.95) <= 512);
-        assert!(hist.get_percentile(0.99) <= 16384);
+        assert_eq!(hist.get_percentile(0.50), 128);
+        assert_eq!(hist.get_percentile(0.95), 1024);
+        assert_eq!(hist.get_percentile(0.99), 16384);
         assert_eq!(hist.get_exact_min(), 100);
         assert_eq!(hist.get_exact_max(), 10000);
+    }
+
+    #[test]
+    fn test_histogram_edge_cases() {
+        let hist = LatencyHistogram::new();
+        // Empty population
+        assert_eq!(hist.get_percentile(0.50), 0);
+        assert_eq!(hist.get_percentile_opt(0.50), None);
+        assert_eq!(hist.get_min(), 0);
+        assert_eq!(hist.get_max(), 0);
+
+        // Invalid p
+        hist.record(64);
+        assert_eq!(hist.get_percentile(-0.1), 0);
+        assert_eq!(hist.get_percentile(1.1), 0);
+        assert_eq!(hist.get_percentile(f32::NAN), 0);
+        assert_eq!(hist.get_percentile_opt(-0.1), None);
+        assert_eq!(hist.get_percentile_opt(1.1), None);
+        assert_eq!(hist.get_percentile_opt(f32::NAN), None);
+
+        // Single sample population: rank ceil(1 * p) with min 1 => rank 1 for any p in [0, 1]
+        assert_eq!(hist.get_percentile(0.0), 128); // 64 ns is in bin 1 (64..128)
+        assert_eq!(hist.get_percentile(1.0), 128);
+        assert_eq!(hist.get_min(), 64);
+        assert_eq!(hist.get_max(), 128);
+
+        // Boundary values: 0, 31, 32, 33, 63, 64, 1000 ns
+        let h2 = LatencyHistogram::new();
+        for val in [0u64, 31, 32, 33, 63] {
+            h2.record(val);
+        }
+        // All [0, 63] belong to bin 0 [0, 64)
+        assert_eq!(h2.bins[0].load(Ordering::Relaxed), 5);
+        assert_eq!(h2.get_min(), 0);
+        assert_eq!(h2.get_max(), 64);
+
+        h2.record(64); // bin 1 [64, 128)
+        assert_eq!(h2.bins[1].load(Ordering::Relaxed), 1);
+        assert_eq!(h2.get_max(), 128);
+
+        h2.record(1000); // bin 4 [512, 1024)
+        assert_eq!(h2.bins[4].load(Ordering::Relaxed), 1);
+        assert_eq!(h2.get_max(), 1024);
     }
 
     /// Exact percentiles resolve sub-bucket drift the log2 buckets hide.

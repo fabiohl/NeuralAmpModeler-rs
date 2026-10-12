@@ -600,6 +600,28 @@ pub const PREFLIGHT_PHASE_IDS: [&str; 6] = [
     "preflight-simd-probe",
 ];
 
+/// Canonical 14-phase roster of the long audit suite.
+///
+/// In strict mode (`--strict`), every canonical phase must be present
+/// in the receipt without duplicates or unknown IDs, with 'overall' as the
+/// final entry, and with timed phases (`phase1`..`phase7`) executing > 0 tests.
+pub const CANONICAL_ROSTER: [&str; 14] = [
+    "preflight-render",
+    "preflight-catalog",
+    "preflight-package",
+    "preflight-freshness",
+    "preflight-meta",
+    "preflight-simd-probe",
+    "phase1",
+    "phase2",
+    "phase3",
+    "phase4",
+    "phase5",
+    "phase6",
+    "phase7",
+    "overall",
+];
+
 /// `true` when `phase_id` belongs to the preflight namespace (`preflight-*`).
 pub fn is_preflight_id(phase_id: &str) -> bool {
     phase_id.starts_with("preflight-")
@@ -845,9 +867,68 @@ impl LongAuditReceipt {
         })
     }
 
-    /// Fail-closed strict-pre-release verdict: `Ok(())` only when the derived
-    /// `overall` status is `PASSED` (no failures and no declared gaps).
-    pub fn strict_verdict(&self) -> Result<(), String> {
+    /// Fail-closed strict campaign verdict: enforces the canonical 14-phase roster,
+    /// presence of terminal 'overall' record, no duplicate or unknown phases,
+    /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
+    pub fn campaign_strict_verdict(&self) -> Result<(), String> {
+        if self.phases.is_empty() {
+            return Err("audit strictly invalid: empty receipt".to_string());
+        }
+
+        // 1. Terminal 'overall' entry check
+        let last = self.phases.last().unwrap();
+        if last.phase_id != "overall" {
+            return Err(format!(
+                "audit strictly invalid: terminal phase must be 'overall', found '{}'",
+                last.phase_id
+            ));
+        }
+
+        // 2. Count and canonical membership check
+        let mut seen = std::collections::BTreeSet::new();
+        for p in &self.phases {
+            if !CANONICAL_ROSTER.contains(&p.phase_id.as_str()) {
+                return Err(format!(
+                    "audit strictly invalid: unknown phase '{}' (not in canonical roster)",
+                    p.phase_id
+                ));
+            }
+            if !seen.insert(p.phase_id.as_str()) {
+                return Err(format!(
+                    "audit strictly invalid: duplicate phase '{}'",
+                    p.phase_id
+                ));
+            }
+        }
+
+        // 3. Ensure all 14 canonical phases are present
+        for expected in CANONICAL_ROSTER {
+            if !seen.contains(expected) {
+                return Err(format!(
+                    "audit strictly invalid: missing required canonical phase '{expected}'"
+                ));
+            }
+        }
+
+        // 4. Timed phases (phase1..phase7) must have executed > 0 tests
+        for p in self.phase_entries() {
+            if p.phase_id.starts_with("phase") && p.tests_executed == 0 {
+                return Err(format!(
+                    "audit strictly invalid: timed phase '{}' executed 0 tests",
+                    p.phase_id
+                ));
+            }
+        }
+
+        // 5. Terminal 'overall' phase status check
+        if last.status != LongPhaseStatus::Passed {
+            return Err(format!(
+                "audit FAILED: terminal 'overall' status is {}",
+                last.status
+            ));
+        }
+
+        // 6. Evaluate summary verdict & gaps
         let summary = self.summary_receipt();
         match summary.status {
             LongPhaseStatus::Passed => Ok(()),
@@ -861,6 +942,12 @@ impl LongAuditReceipt {
                 summary.gaps.len()
             )),
         }
+    }
+
+    /// Fail-closed strict-pre-release verdict: enforces canonical campaign roster
+    /// and clean PASSED status.
+    pub fn strict_verdict(&self) -> Result<(), String> {
+        self.campaign_strict_verdict()
     }
 
     /// First phase entry with the given `phase_id` (`overall` excluded).
@@ -907,7 +994,7 @@ impl LongAuditReceipt {
     /// `NOT_RUN`, never a vacuous `PASS`. The bash override that used to
     /// patch `PHASE_STATUS` is gone (S5) — the marker is authoritative, and
     /// "exit-0 with internal measurement bypass" must not be promoted to
-    /// PASS.
+    /// PASS. If phase5 was never executed (None), returns `NOT_RUN`.
     pub fn rt_deadline_verdict(&self) -> &'static str {
         if self.is_simulated_only() {
             return "NOT_RUN";
@@ -926,7 +1013,7 @@ impl LongAuditReceipt {
                 }
                 _ => "PASS",
             },
-            None => "PASS",
+            None => "NOT_RUN",
         }
     }
 
@@ -937,13 +1024,13 @@ impl LongAuditReceipt {
     /// SKIPPED → INCONCLUSIVE), with the typed log markers as the carrier
     /// for bypasses now that the bash `PHASE_STATUS` overrides are gone. A
     /// `SIMULATED` phase (never executed) reports `NOT_RUN`, never a vacuous
-    /// `PASS`.
+    /// `PASS`. If phase6 was never executed (None), returns `NOT_RUN`.
     pub fn rt_jitter_verdict(&self) -> &'static str {
         if self.is_simulated_only() {
             return "NOT_RUN";
         }
         match self.phase_by_id("phase6") {
-            None => "PASS",
+            None => "NOT_RUN",
             Some(p) => match p.status {
                 LongPhaseStatus::Failed => "FAIL",
                 LongPhaseStatus::Inconclusive | LongPhaseStatus::Skipped => "INCONCLUSIVE",

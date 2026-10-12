@@ -166,3 +166,23 @@ fn empty_or_garbage_log_is_the_blind_gate() {
         "empty/whitespace-only ids are dropped like bash word splitting"
     );
 }
+
+/// An expected benchmark absent from the log produces a `MissingExpectedBenchmark` finding.
+#[test]
+fn missing_expected_benchmark_is_reported_in_findings() {
+    let root = temp_root();
+    write_change(&root, "RT_A", &change_json(0.010, 0.001, 0.020));
+
+    let expected = vec!["RT_A".to_string(), "RT_MISSING".to_string()];
+    let outcome =
+        regression_verdict_with_expected(&crit_log(&["RT_A"]), &root, 0.05, Some(&expected))
+            .unwrap();
+
+    assert_eq!(outcome.executed, 1);
+    assert_eq!(
+        outcome.findings,
+        vec![VerdictFinding::MissingExpectedBenchmark {
+            id: "RT_MISSING".to_string(),
+        }]
+    );
+}

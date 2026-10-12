@@ -460,6 +460,127 @@ fn f24_baseline_coverage_cases() {
 
     let out = run(&work.join("absent-crit.log"));
     assert_eq!(out.status.code(), Some(1), "absent log is the blind gate");
+
+    // Suite-aware coverage (T2.2): --suite regression_gate requires all 22 benchmarks.
+    let run_suite = |log: &Path, suite: &str| {
+        Command::new(bin)
+            .args([
+                "coverage",
+                "--log",
+                log.to_str().unwrap(),
+                "--root",
+                crit.to_str().unwrap(),
+                "--baseline",
+                "ci-baseline",
+                "--suite",
+                suite,
+            ])
+            .output()
+            .expect("nam_perf_gate must run")
+    };
+    let out_suite = run_suite(&crit_log, "regression_gate");
+    assert_eq!(
+        out_suite.status.code(),
+        Some(1),
+        "only 3 of 22 benches must fail"
+    );
+    assert!(
+        stdout(&out_suite)
+            .contains("BASELINE_COVERAGE_GAP expected benchmark(s) were not executed"),
+        "got: {}",
+        stdout(&out_suite)
+    );
+
+    // Alternative suite requires --manifest and reports alternative scope.
+    let manifest_file = work.join("custom_suite.manifest");
+    write_file(
+        &manifest_file,
+        "# Custom suite manifest\nRT_A\nRT_B\nRT_C\n",
+    );
+    let out_custom = Command::new(bin)
+        .args([
+            "coverage",
+            "--log",
+            crit_log.to_str().unwrap(),
+            "--root",
+            crit.to_str().unwrap(),
+            "--baseline",
+            "ci-baseline",
+            "--suite",
+            "custom_suite",
+            "--manifest",
+            manifest_file.to_str().unwrap(),
+        ])
+        .output()
+        .expect("nam_perf_gate must run");
+    assert_eq!(
+        out_custom.status.code(),
+        Some(0),
+        "custom suite matching manifest must pass"
+    );
+    assert!(
+        stdout(&out_custom).contains("alternative scope: custom_suite"),
+        "got: {}",
+        stdout(&out_custom)
+    );
+}
+
+/// Synthetic Criterion log with 2 benchmarks x 4 lines each must count 2 distinct
+/// benchmarks, not 8 (T6.1 / F-24). An empty log maintains the blind gate.
+#[test]
+fn f24_executed_benchmark_count_dedup_and_blind_gate() {
+    let synthetic_log = "\
+Benchmarking RT_A\n\
+Benchmarking RT_A: Warming up for 1.0000 s\n\
+Benchmarking RT_A: Collecting 100 samples in estimated 5.0004 s (121k iterations)\n\
+Benchmarking RT_A: Analyzing\n\
+Benchmarking RT_B\n\
+Benchmarking RT_B: Warming up for 1.0000 s\n\
+Benchmarking RT_B: Collecting 100 samples in estimated 5.0004 s (121k iterations)\n\
+Benchmarking RT_B: Analyzing\n";
+
+    let ids = executed_bench_ids(synthetic_log);
+    assert_eq!(
+        ids.len(),
+        2,
+        "synthetic log with 2 benches x 4 progress lines must report executed_count == 2, not 8"
+    );
+    assert_eq!(ids, ["RT_A", "RT_B"]);
+
+    let work = temp_dir();
+    let crit = work.join("crit-root");
+    assert!(
+        missing_baseline_coverage("", &crit, "ci-baseline").is_err(),
+        "empty log maintains the blind gate (BaselineCoverageGap)"
+    );
+
+    // Shell one-liner semantics in tests-performance-regression.sh matching executed_bench_ids:
+    let script = r#"
+        log="$1"
+        executed_count=$(grep "^Benchmarking " "$log" 2>/dev/null | sed -n 's/^Benchmarking \([^:]*\):.*/\1/p' | grep -v '^[[:space:]]*$' | sort -u | wc -l | tr -d ' ' || true)
+        echo "${executed_count:-0}"
+    "#;
+    let log_file = work.join("synthetic.log");
+    write_file(&log_file, synthetic_log);
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .arg("--")
+        .arg(log_file.to_str().unwrap())
+        .output()
+        .expect("bash must run");
+    assert_eq!(stdout(&out).trim(), "2");
+
+    let empty_file = work.join("empty.log");
+    write_file(&empty_file, "");
+    let out_empty = Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .arg("--")
+        .arg(empty_file.to_str().unwrap())
+        .output()
+        .expect("bash must run");
+    assert_eq!(stdout(&out_empty).trim(), "0");
 }
 
 // ── F-27: canonical JSONL fidelity parse ─────────────────────────────────────
@@ -749,5 +870,155 @@ fn ensure_namcore_render_fake_toolchain_flows() {
     assert_eq!(
         read_trim(&rb.join(".build_config")),
         fingerprint("fake-clang:Debug")
+    );
+}
+
+// ── PR-03 / S1: QA binary freshness & resolution defense ─────────────────────
+
+/// Acceptance test for `ensure_qa_bin` in `utils/_lib.sh`:
+/// 1. Successful compilation via mock cargo outputting compiler-artifact JSON.
+/// 2. Fail-closed on cargo build failure (non-zero exit).
+/// 3. Fail-closed on missing executable in compiler-artifact output.
+/// 4. Operator override accepts valid binary, warns on stderr, skips cargo.
+/// 5. Operator override fails closed if path is not executable.
+#[test]
+fn ensure_qa_bin_contract_and_failure_modes() {
+    let work = temp_dir();
+    let bash = bash_abs();
+    let lib_sh = project_root().join("utils/_lib.sh");
+    let bin_dir = work.join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin dir must be creatable");
+
+    let cargo_script = bin_dir.join("cargo");
+    let target_bin = work.join("nam_mock_bin");
+    write_file(&target_bin, "#!/bin/sh\nexit 0\n");
+    let mut perms = fs::metadata(&target_bin).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&target_bin, perms).unwrap();
+
+    let run_ensure = |env_vars: &[(&str, &str)], bin_name: &str| {
+        let mut cmd = Command::new(&bash);
+        cmd.arg("-c")
+            .arg(format!(
+                "NAM_LIB_NO_CD=1 source \"{}\" && ensure_qa_bin \"$1\" testing",
+                lib_sh.display()
+            ))
+            .arg("--")
+            .arg(bin_name)
+            .env("PATH", path_with_prefix(&bin_dir))
+            .env("PROJECT_DIR", project_root());
+        for (k, v) in env_vars {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("bash must execute")
+    };
+
+    // 1. Success case: mock cargo returns valid compiler-artifact JSON
+    write_file(
+        &cargo_script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' '{{\"reason\":\"compiler-artifact\",\"package_id\":\"p\",\"target\":{{\"name\":\"nam_mock_bin\"}},\"executable\":\"{}\"}}'\nexit 0\n",
+            target_bin.display()
+        ),
+    );
+    let mut perms = fs::metadata(&cargo_script).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&cargo_script, perms).unwrap();
+
+    let out = run_ensure(&[], "nam_mock_bin");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "successful cargo build exits 0 (stderr: {})",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out).trim(),
+        target_bin.display().to_string(),
+        "prints resolved executable path"
+    );
+
+    // 2. Compilation failure: mock cargo exits 101 with error
+    write_file(
+        &cargo_script,
+        "#!/bin/sh\necho 'error: failed to compile' >&2\nexit 101\n",
+    );
+    let out = run_ensure(&[], "nam_mock_bin");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "cargo build failure must fail closed"
+    );
+    assert!(
+        stderr(&out).contains("cargo build falhou"),
+        "stderr must report compilation failure: {}",
+        stderr(&out)
+    );
+
+    // 3. Missing artifact: mock cargo exits 0 but doesn't output compiler-artifact for the binary
+    write_file(
+        &cargo_script,
+        "#!/bin/sh\nprintf '%s\\n' '{\"reason\":\"build-finished\",\"success\":true}'\nexit 0\n",
+    );
+    let out = run_ensure(&[], "nam_mock_bin");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "missing artifact must fail closed"
+    );
+    assert!(
+        stderr(&out).contains("executável não encontrado na saída do cargo"),
+        "stderr must report missing artifact: {}",
+        stderr(&out)
+    );
+
+    // 4. Operator override with valid executable: skips cargo, warns on stderr
+    let custom_bin = work.join("custom_quality");
+    write_file(&custom_bin, "#!/bin/sh\nexit 0\n");
+    let mut perms = fs::metadata(&custom_bin).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&custom_bin, perms).unwrap();
+
+    let out = run_ensure(
+        &[("NAM_QUALITY_BIN", &custom_bin.display().to_string())],
+        "nam_quality",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "operator override exits 0 (stderr: {})",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&out).trim(),
+        custom_bin.display().to_string(),
+        "prints operator-provided path"
+    );
+    assert!(
+        stderr(&out).contains("binário fornecido pelo operador, freshness não verificada"),
+        "stderr must warn about operator override: {}",
+        stderr(&out)
+    );
+
+    // 5. Operator override with non-executable file: fails closed
+    let non_exec = work.join("non_exec_binary");
+    write_file(&non_exec, "not executable");
+    let mut perms = fs::metadata(&non_exec).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&non_exec, perms).unwrap();
+
+    let out = run_ensure(
+        &[("NAM_QUALITY_BIN", &non_exec.display().to_string())],
+        "nam_quality",
+    );
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "operator override with non-executable must fail closed"
+    );
+    assert!(
+        stderr(&out).contains("não é executável"),
+        "stderr must report non-executable binary: {}",
+        stderr(&out)
     );
 }

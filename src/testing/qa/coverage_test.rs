@@ -147,3 +147,59 @@ fn empty_id_captures_are_dropped_like_bash_word_splitting() {
         "empty captures must not be listed as missing"
     );
 }
+
+#[test]
+fn test_canonical_regression_bench_ids() {
+    let ids = canonical_regression_bench_ids();
+    assert_eq!(ids.len(), 22);
+    assert!(ids.contains(&"RT_WaveNet_Std_CH16".to_string()));
+    assert!(ids.contains(&"RT_A2_Max_CH4".to_string()));
+    assert!(ids.contains(&"RT_DSP_Pipeline_HQ_4xOS".to_string()));
+    assert!(ids.contains(&"RT_DSP_Pipeline_AdaptiveOn".to_string()));
+}
+
+#[test]
+fn test_missing_expected_benchmarks_matrix() {
+    let canonical = canonical_regression_bench_ids();
+
+    // 1. Full canonical log
+    let mut full_log = String::new();
+    for id in &canonical {
+        full_log.push_str(&format!("Benchmarking {id}: Collecting samples\n"));
+    }
+    let missing_none = missing_expected_benchmarks(&full_log, &canonical).unwrap();
+    assert!(missing_none.is_empty());
+
+    // 2. Log missing one expected bench
+    let partial_log = "Benchmarking RT_WaveNet_Std_CH16: ok\n";
+    let missing = missing_expected_benchmarks(partial_log, &canonical).unwrap();
+    assert_eq!(missing.len(), 21);
+    assert!(!missing.contains(&"RT_WaveNet_Std_CH16".to_string()));
+    assert!(missing.contains(&"RT_A2_Max_CH4".to_string()));
+
+    // 3. Alternative suite with manifest
+    let manifest_path = temp_root().join("bench_manifest.txt");
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(
+        &manifest_path,
+        "# Custom Benchmarks\nCUSTOM_A\n\n# Another\nCUSTOM_B\n",
+    )
+    .unwrap();
+    let manifest_ids = expected_bench_ids_for_suite("custom_suite", Some(&manifest_path)).unwrap();
+    assert_eq!(
+        manifest_ids,
+        vec!["CUSTOM_A".to_string(), "CUSTOM_B".to_string()]
+    );
+
+    let custom_log = "Benchmarking CUSTOM_A: ok\n";
+    let custom_missing = missing_expected_benchmarks(custom_log, &manifest_ids).unwrap();
+    assert_eq!(custom_missing, vec!["CUSTOM_B".to_string()]);
+
+    let custom_complete_log = "Benchmarking CUSTOM_A: ok\nBenchmarking CUSTOM_B: ok\n";
+    let custom_missing_none =
+        missing_expected_benchmarks(custom_complete_log, &manifest_ids).unwrap();
+    assert!(custom_missing_none.is_empty());
+
+    // 4. Alternative suite without manifest -> Err
+    assert!(expected_bench_ids_for_suite("custom_suite", None).is_err());
+}

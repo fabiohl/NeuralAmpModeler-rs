@@ -531,7 +531,7 @@ fn verdict_lines_preserve_pre_s5_mappings() {
     }
     assert_eq!(
         LongAuditReceipt { phases: vec![] }.rt_deadline_verdict(),
-        "PASS"
+        "NOT_RUN"
     );
 
     // Jitter: PASSED → PASS; FAILED → FAIL; SKIPPED → INCONCLUSIVE.
@@ -552,7 +552,7 @@ fn verdict_lines_preserve_pre_s5_mappings() {
     );
     assert_eq!(
         LongAuditReceipt { phases: vec![] }.rt_jitter_verdict(),
-        "PASS"
+        "NOT_RUN"
     );
 
     // Fidelity: FAIL only on a failed non-performance phase; performance
@@ -805,6 +805,15 @@ fn mk_phase(
     }
 }
 
+fn mk_canonical_clean_receipt() -> LongAuditReceipt {
+    let mut phases = Vec::new();
+    for &id in &CANONICAL_ROSTER {
+        let tests = if id.starts_with("phase") { 10 } else { 0 };
+        phases.push(mk_phase(id, LongPhaseStatus::Passed, tests, &[]));
+    }
+    LongAuditReceipt { phases }
+}
+
 #[test]
 fn clean_log_classifies_as_passed_with_empty_gaps() {
     // Fixture: a fully clean execution — no markers, real tests executed.
@@ -822,7 +831,13 @@ fn clean_log_classifies_as_passed_with_empty_gaps() {
     let s = receipt.summary_receipt();
     assert_eq!(s.status, LongPhaseStatus::Passed);
     assert!(s.gaps.is_empty());
-    assert_eq!(receipt.strict_verdict(), Ok(()));
+    // Partial receipt is accepted in diagnostic summary mode, but rejected
+    // in strict mode (which requires the complete 14-phase canonical roster).
+    assert!(receipt.strict_verdict().is_err());
+
+    let canonical = mk_canonical_clean_receipt();
+    assert_eq!(canonical.summary_receipt().status, LongPhaseStatus::Passed);
+    assert_eq!(canonical.strict_verdict(), Ok(()));
 }
 
 #[test]
@@ -905,7 +920,7 @@ fn zero_test_pass_is_detected_as_inconsistency() {
     };
     assert_eq!(preflight.zero_test_passes().count(), 0);
     assert_eq!(preflight.summary_receipt().status, LongPhaseStatus::Passed);
-    assert_eq!(preflight.strict_verdict(), Ok(()));
+    assert!(preflight.strict_verdict().is_err());
 }
 
 #[test]
@@ -974,14 +989,92 @@ fn strict_verdict_rejects_every_gap_condition() {
         );
     }
 
-    let clean = LongAuditReceipt {
-        phases: vec![
-            mk_phase("phase1", LongPhaseStatus::Passed, 10, &[]),
-            mk_phase("phase2", LongPhaseStatus::Passed, 5, &[]),
-        ],
-    };
+    let clean = mk_canonical_clean_receipt();
     assert_eq!(clean.strict_verdict(), Ok(()));
     assert_eq!(clean.summary_receipt().status, LongPhaseStatus::Passed);
+}
+
+#[test]
+fn test_strict_verdict_canonical_roster_matrix() {
+    // 1. Empty receipt
+    let empty = LongAuditReceipt { phases: vec![] };
+    assert!(empty.strict_verdict().is_err());
+
+    // 2. Only whitespace from JSONL
+    let parsed_ws = LongAuditReceipt::parse_jsonl("   \n\t\n").unwrap();
+    assert!(parsed_ws.strict_verdict().is_err());
+
+    // 3. Only overall
+    let only_overall = LongAuditReceipt {
+        phases: vec![mk_phase("overall", LongPhaseStatus::Passed, 100, &[])],
+    };
+    assert!(only_overall.strict_verdict().is_err());
+
+    // 4. Prefix up to phase3
+    let mut prefix_phases = Vec::new();
+    for &id in &CANONICAL_ROSTER {
+        if id == "phase4" {
+            break;
+        }
+        let tests = if id.starts_with("phase") { 10 } else { 0 };
+        prefix_phases.push(mk_phase(id, LongPhaseStatus::Passed, tests, &[]));
+    }
+    let prefix = LongAuditReceipt {
+        phases: prefix_phases,
+    };
+    assert!(prefix.strict_verdict().is_err());
+
+    // 5. Repeated/duplicate phase
+    let mut dup_phases = mk_canonical_clean_receipt().phases;
+    dup_phases.insert(0, mk_phase("phase1", LongPhaseStatus::Passed, 5, &[]));
+    let dup = LongAuditReceipt { phases: dup_phases };
+    assert!(dup.strict_verdict().is_err());
+
+    // 6. Unknown phase ID
+    let mut unknown_phases = mk_canonical_clean_receipt().phases;
+    unknown_phases.insert(0, mk_phase("phaseX", LongPhaseStatus::Passed, 5, &[]));
+    let unknown = LongAuditReceipt {
+        phases: unknown_phases,
+    };
+    assert!(unknown.strict_verdict().is_err());
+
+    // 7. phase4 with zero tests
+    let mut zero_phase4 = mk_canonical_clean_receipt().phases;
+    for p in &mut zero_phase4 {
+        if p.phase_id == "phase4" {
+            p.tests_executed = 0;
+        }
+    }
+    let zero_p4_receipt = LongAuditReceipt {
+        phases: zero_phase4,
+    };
+    assert!(zero_p4_receipt.strict_verdict().is_err());
+
+    // 8. Full canonical PASSED
+    let full_passed = mk_canonical_clean_receipt();
+    assert_eq!(full_passed.strict_verdict(), Ok(()));
+
+    // 9. Full canonical with one FAILED phase
+    let mut failed_phase = mk_canonical_clean_receipt().phases;
+    for p in &mut failed_phase {
+        if p.phase_id == "phase3" {
+            p.status = LongPhaseStatus::Failed;
+        }
+    }
+    let failed_receipt = LongAuditReceipt {
+        phases: failed_phase,
+    };
+    assert!(failed_receipt.strict_verdict().is_err());
+
+    // 10. SIMULATED receipt
+    let mut simulated_phases = Vec::new();
+    for &id in &CANONICAL_ROSTER {
+        simulated_phases.push(mk_phase(id, LongPhaseStatus::Simulated, 0, &["simulated"]));
+    }
+    let simulated_receipt = LongAuditReceipt {
+        phases: simulated_phases,
+    };
+    assert!(simulated_receipt.strict_verdict().is_err());
 }
 
 #[test]

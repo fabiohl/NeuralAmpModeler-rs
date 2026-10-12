@@ -77,10 +77,8 @@ fn test_mirror_buf_clone() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[test]
-fn test_mirror_buf_zst_error() {
-    assert!(MirroredBuffer::<()>::new(1024).is_err());
-}
+// Note: ZST error is statically prevented at compile-time by the MirrorSafe trait bound
+// (verified via compile_fail doctests on MirroredBuffer).
 
 #[test]
 fn test_mirror_buf_zero_size_error() {
@@ -163,6 +161,10 @@ fn test_mirror_buf_alignment_invariants_r8() -> Result<(), Box<dyn std::error::E
     #[repr(align(64))]
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct Align64([u8; 64]);
+
+    impl private::Sealed for Align64 {}
+    // SAFETY: Align64 is Plain Old Data (Copy, zero-valid, no pointers/drop).
+    unsafe impl MirrorSafe for Align64 {}
 
     // Types with align <= 64 compile and instantiate cleanly
     let buf_u8 = MirroredBuffer::<u8>::new(1)?;

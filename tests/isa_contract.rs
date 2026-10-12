@@ -35,3 +35,19 @@ fn contract_default_build_never_dispatches_avx512() {
         }
     }
 }
+
+#[test]
+fn contract_simd_math_initialized_off_rt() {
+    #[cfg(feature = "avx512")]
+    {
+        // Under opt-in avx512, SIMD_MATH LazyLock is accessible off-RT (R-03).
+        let config = *neural_amp_modeler_rs::math::common::SIMD_MATH;
+        if neural_amp_modeler_rs::math::common::has_full_avx512() {
+            assert_eq!(config.instruction_set, InstructionSet::Avx512);
+            assert!(config.is_avx512);
+        } else {
+            assert_eq!(config.instruction_set, InstructionSet::Avx2);
+            assert!(!config.is_avx512);
+        }
+    }
+}

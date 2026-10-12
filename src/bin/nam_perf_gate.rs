@@ -16,6 +16,7 @@
 //! - `coverage`: fail-closed baseline coverage cross-check (F-24): every
 //!   `Benchmarking <id>:` line of the Criterion log must have a persisted
 //!   `…/<id>/<baseline>/` series.
+//! - `expected-count`: print the expected benchmark count for a suite.
 //! - `verdict`: the machine regression verdict (R-3/B2) — parses Criterion's
 //!   persisted `…/<id>/change/estimates.json` comparison artifacts, never the
 //!   human console wording. `REGRESSION_DETECTED` / `REGRESSION_BLIND` fail
@@ -47,12 +48,13 @@ use neural_amp_modeler_rs::testing::qa::baseline_store::{
     DEFAULT_BASELINE_NAME, persist_baseline, restore_baseline,
 };
 use neural_amp_modeler_rs::testing::qa::coverage::{
-    BaselineCoverageGap, executed_bench_ids, missing_baseline_coverage,
+    BaselineCoverageGap, executed_bench_ids, expected_bench_ids_for_suite,
+    missing_baseline_coverage, missing_expected_benchmarks,
 };
 use neural_amp_modeler_rs::testing::qa::fingerprint::Fingerprint;
 use neural_amp_modeler_rs::testing::qa::fingerprint::FingerprintError;
 use neural_amp_modeler_rs::testing::qa::verdict::{
-    DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, regression_verdict,
+    DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, regression_verdict_with_expected,
 };
 
 /// Store directory of persisted baselines (gitignored).
@@ -92,6 +94,7 @@ fn main() {
         "probe" => cmd_probe(&args[1..]),
         "compare" => cmd_compare(&args[1..]),
         "coverage" => cmd_coverage(&args[1..]),
+        "expected-count" => cmd_expected_count(&args[1..]),
         "verdict" => cmd_verdict(&args[1..]),
         "persist-baseline" => cmd_persist_baseline(&args[1..]),
         "restore-baseline" => cmd_restore_baseline(&args[1..]),
@@ -117,7 +120,10 @@ fn print_help() {
     println!("  nam_perf_gate compare [--baseline <path>] [--bench-core <core>]");
     println!("                        [--baseline-dir <dir>]");
     println!("  nam_perf_gate coverage --log <path> [--root <dir>] [--baseline <name>]");
+    println!("                         [--suite <name>] [--manifest <path>]");
+    println!("  nam_perf_gate expected-count [--suite <name>] [--manifest <path>]");
     println!("  nam_perf_gate verdict --log <path> [--root <dir>] [--noise <fraction>]");
+    println!("                        [--suite <name>] [--manifest <path>]");
     println!("  nam_perf_gate persist-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
     println!("                                 [--baseline <name>]");
     println!("  nam_perf_gate restore-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
@@ -330,7 +336,7 @@ fn cmd_compare(args: &[String]) {
 // ── coverage ─────────────────────────────────────────────────────────────────
 
 fn cmd_coverage(args: &[String]) {
-    let flags = match parse_flags(args, &["log", "root", "baseline"]) {
+    let flags = match parse_flags(args, &["log", "root", "baseline", "suite", "manifest"]) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_help();
@@ -351,6 +357,37 @@ fn cmd_coverage(args: &[String]) {
     // An absent/unreadable log maps to empty text — the same blind gate as
     // the bash `sed` on a missing file (fail-closed, F-24).
     let log_text = fs::read_to_string(log_path).unwrap_or_default();
+
+    if let Some(suite) = flags.get("suite") {
+        let manifest_path = flags.get("manifest").map(Path::new);
+        let expected_ids = match expected_bench_ids_for_suite(suite, manifest_path) {
+            Ok(ids) => ids,
+            Err(e) => run_error(e),
+        };
+        if suite != "regression_gate" {
+            println!("(alternative scope: {suite})");
+        }
+        match missing_expected_benchmarks(&log_text, &expected_ids) {
+            Err(BaselineCoverageGap) => {
+                println!(
+                    "BASELINE_COVERAGE_GAP no executed benchmark could be parsed from {log_path}"
+                );
+                println!("The coverage cross-check is blind: nothing passes unverified.");
+                exit(1);
+            }
+            Ok(missing) if !missing.is_empty() => {
+                println!(
+                    "BASELINE_COVERAGE_GAP expected benchmark(s) were not executed in {log_path}:"
+                );
+                for id in &missing {
+                    println!("  {id}");
+                }
+                exit(1);
+            }
+            Ok(_) => {}
+        }
+    }
+
     match missing_baseline_coverage(&log_text, Path::new(&criterion_root), &name) {
         Err(BaselineCoverageGap) => {
             println!("BASELINE_COVERAGE_GAP no executed benchmark could be parsed from {log_path}");
@@ -378,6 +415,28 @@ fn cmd_coverage(args: &[String]) {
     }
 }
 
+// ── expected-count ───────────────────────────────────────────────────────────
+
+fn cmd_expected_count(args: &[String]) {
+    let flags = match parse_flags(args, &["suite", "manifest"]) {
+        Ok(f) => f,
+        Err(e) if e == HELP_REQUEST => {
+            print_help();
+            exit(0);
+        }
+        Err(e) => usage_error("expected-count", &e),
+    };
+    let suite = flags.get("suite").unwrap_or("regression_gate");
+    let manifest_path = flags.get("manifest").map(Path::new);
+    match expected_bench_ids_for_suite(suite, manifest_path) {
+        Ok(ids) => {
+            println!("{}", ids.len());
+            exit(0);
+        }
+        Err(e) => run_error(e),
+    }
+}
+
 // ── verdict ──────────────────────────────────────────────────────────────────
 
 /// Prints the machine regression verdict over Criterion's persisted
@@ -389,7 +448,7 @@ fn cmd_coverage(args: &[String]) {
 /// green. A significant machine regression prints `REGRESSION_DETECTED` and
 /// exits 1.
 fn cmd_verdict(args: &[String]) {
-    let flags = match parse_flags(args, &["log", "root", "noise"]) {
+    let flags = match parse_flags(args, &["log", "root", "noise", "suite", "manifest"]) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_help();
@@ -410,7 +469,27 @@ fn cmd_verdict(args: &[String]) {
     // An absent/unreadable log maps to empty text — the same blind gate as
     // the bash `grep` on a missing file (fail-closed, R-3).
     let log_text = fs::read_to_string(log_path).unwrap_or_default();
-    match regression_verdict(&log_text, Path::new(&criterion_root), noise) {
+
+    let expected_ids = if let Some(suite) = flags.get("suite") {
+        let manifest_path = flags.get("manifest").map(Path::new);
+        let ids = match expected_bench_ids_for_suite(suite, manifest_path) {
+            Ok(ids) => ids,
+            Err(e) => run_error(e),
+        };
+        if suite != "regression_gate" {
+            println!("(alternative scope: {suite})");
+        }
+        Some(ids)
+    } else {
+        None
+    };
+
+    match regression_verdict_with_expected(
+        &log_text,
+        Path::new(&criterion_root),
+        noise,
+        expected_ids.as_deref(),
+    ) {
         Err(VerdictBlind) => {
             println!("REGRESSION_BLIND no executed benchmark could be parsed from {log_path}");
             println!("The machine regression verdict is blind: nothing passes unverified.");
@@ -428,6 +507,11 @@ fn cmd_verdict(args: &[String]) {
         Ok(outcome) => {
             for finding in &outcome.findings {
                 match finding {
+                    VerdictFinding::MissingExpectedBenchmark { id } => {
+                        println!(
+                            "REGRESSION_BLIND expected benchmark {id} was not executed in {log_path}"
+                        );
+                    }
                     VerdictFinding::MissingEstimates { id } => {
                         println!(
                             "REGRESSION_BLIND {id} has no readable Criterion comparison \

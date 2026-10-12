@@ -6,8 +6,8 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use super::{
-    HUGEPAGE_STATE_HUGETLB, HUGEPAGE_STATE_THP, MIRROR_BUF_HUGEPAGE_STATE, MirroredBuffer,
-    SIMULATE_FAIL,
+    HUGEPAGE_STATE_HUGETLB, HUGEPAGE_STATE_THP, MIRROR_BUF_HUGEPAGE_STATE, MirrorSafe,
+    MirroredBuffer, SIMULATE_FAIL,
 };
 use crate::math::common::huge_alloc::{HUGE_PAGE_2M, create_backing_fd, try_mmap_huge};
 use libc::{
@@ -42,7 +42,7 @@ fn round_up_to_multiple(value: usize, align: usize) -> Option<usize> {
     Some(padded - (padded % align))
 }
 
-impl<T> MirroredBuffer<T> {
+impl<T: MirrorSafe> MirroredBuffer<T> {
     /// Creates a new mirrored buffer with huge-page preference.
     ///
     /// The `requested_size` (in elements) will be rounded up to the next
