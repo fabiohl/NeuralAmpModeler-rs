@@ -466,10 +466,30 @@ pub fn _mm256_blend_ps(a: __m256, b: __m256, imm8: i32) -> __m256 {
 #[inline]
 #[target_feature(enable = "neon")]
 fn shuffle4(a: float32x4_t, b: float32x4_t, imm8: i32) -> float32x4_t {
-    let a = f32x4_to_array(a);
-    let b = f32x4_to_array(b);
-    let idx = |shift: i32| ((imm8 >> shift) & 0x3) as usize;
-    f32x4_from_array([a[idx(0)], a[idx(2)], b[idx(4)], b[idx(6)]])
+    // Immediates used by the kernels map to single NEON permutes; anything
+    // else takes the generic lane-select path (correct, but several lane moves).
+    match imm8 & 0xff {
+        // [a0, a1, b0, b1] and [a2, a3, b2, b3]: the 8x8 transpose halves.
+        0x44 => vreinterpretq_f32_f64(vzip1q_f64(
+            vreinterpretq_f64_f32(a),
+            vreinterpretq_f64_f32(b),
+        )),
+        0xee => vreinterpretq_f32_f64(vzip2q_f64(
+            vreinterpretq_f64_f32(a),
+            vreinterpretq_f64_f32(b),
+        )),
+        // [aN, aN, bN, bN]: per-source lane broadcasts.
+        0x00 => vcombine_f32(vdup_laneq_f32::<0>(a), vdup_laneq_f32::<0>(b)),
+        0x55 => vcombine_f32(vdup_laneq_f32::<1>(a), vdup_laneq_f32::<1>(b)),
+        0xaa => vcombine_f32(vdup_laneq_f32::<2>(a), vdup_laneq_f32::<2>(b)),
+        0xff => vcombine_f32(vdup_laneq_f32::<3>(a), vdup_laneq_f32::<3>(b)),
+        _ => {
+            let a = f32x4_to_array(a);
+            let b = f32x4_to_array(b);
+            let idx = |shift: i32| ((imm8 >> shift) & 0x3) as usize;
+            f32x4_from_array([a[idx(0)], a[idx(2)], b[idx(4)], b[idx(6)]])
+        }
+    }
 }
 
 #[inline]
