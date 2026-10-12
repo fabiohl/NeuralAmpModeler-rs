@@ -74,8 +74,8 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         // runtime CPUID feature checks matching its `#[target_feature]` backend.
         unsafe {
             // Slots for which we have specialised const-generic kernels
-            // (endereçamento imediato — no leaq chains).
-            #[cfg(target_arch = "x86_64")]
+            // (endereçamento imediato — no leaq chains). Built from the shared
+            // intrinsic surface, so they serve both x86_64 (AVX2) and aarch64 (NEON).
             {
                 if IN == 4 && OUT == 4 {
                     crate::math::gemm::gemm_batch::fused_gemm_residual_batch_f32_const::<4, 4>(
@@ -155,13 +155,12 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         output: &mut [f32],
         num_frames: usize,
     ) {
-        // SAFETY: the AVX2 broadcast GEMV kernels are only reached under `#[cfg(target_arch =
-        // "x86_64")]` with the target-feature guarantee of the caller's dispatch path, and the
+        // SAFETY: the broadcast GEMV kernels are reached with the target-feature guarantee
+        // of the caller's dispatch path (AVX2+FMA on x86_64, NEON on aarch64), and the
         // buffer sizes (`IN`/`OUT` per frame, `num_frames` frames) satisfy the kernel lane counts
         // per this wrapper's documented contract; the generic `M::gemv_*` paths require the same
         // sizes plus `M`'s backend features validated by the runtime CPUID dispatch.
         unsafe {
-            #[cfg(target_arch = "x86_64")]
             {
                 if IN == 1 {
                     if self.do_bias {
