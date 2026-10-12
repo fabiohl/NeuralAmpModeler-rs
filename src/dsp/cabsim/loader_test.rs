@@ -494,6 +494,40 @@ fn test_ir_resample_long_ir_chunking() {
     }
 }
 
+/// Regression: downsampling an IR longer than `MAX_RESAMP_BUF` overran the input buffer.
+#[test]
+fn test_ir_resample_long_ir_downsampling() {
+    let rate_pairs: &[(u32, u32)] = &[(48000, 44100), (96000, 48000), (192000, 44100)];
+    for &(input_rate, output_rate) in rate_pairs {
+        // 0.5 s, a typical cab IR.
+        let ir_len = input_rate as usize / 2;
+        assert!(ir_len > crate::dsp::pipeline::MAX_RESAMP_BUF);
+        let samples: Vec<f32> = (0..ir_len)
+            .map(|i| {
+                let t = i as f32 / input_rate as f32;
+                (std::f32::consts::TAU * 300.0 * t).sin() * (-4.0 * t).exp()
+            })
+            .collect();
+
+        let resampled = ir_resample::resample(&samples, input_rate, output_rate)
+            .unwrap_or_else(|e| panic!("resample {input_rate}→{output_rate} failed: {e}"));
+
+        let theoretical_min =
+            (ir_len as f64 * output_rate as f64 / input_rate as f64).ceil() as usize;
+        assert!(
+            resampled.len() >= theoretical_min,
+            "resampled length {} below theoretical min {theoretical_min} for {input_rate}→{output_rate}",
+            resampled.len(),
+        );
+        for (i, &s) in resampled.iter().enumerate() {
+            assert!(
+                s.is_finite(),
+                "non-finite sample at index {i} for {input_rate}→{output_rate}"
+            );
+        }
+    }
+}
+
 /// Regression for the resampler flush (Finding F-1).
 ///
 /// The flush must drain only the polyphase FIR delay line (`TAPS_PER_PHASE`
