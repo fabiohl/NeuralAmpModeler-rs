@@ -292,6 +292,18 @@ pub(crate) unsafe fn create_backing_fd(
     size: usize,
     _use_huge: bool,
 ) -> std::io::Result<std::os::raw::c_int> {
+    // SAFETY: forwards the caller's contract; the global counter is the
+    // production name sequence.
+    unsafe { create_backing_fd_with_seq(size, &SHM_NAME_SEQ) }
+}
+
+/// [`create_backing_fd`] with an explicit name-sequence counter, so tests can
+/// drive the name collision path deterministically.
+#[cfg(target_vendor = "apple")]
+unsafe fn create_backing_fd_with_seq(
+    size: usize,
+    seq: &std::sync::atomic::AtomicU64,
+) -> std::io::Result<std::os::raw::c_int> {
     use std::sync::atomic::Ordering;
 
     /// Appends the decimal digits of `n` at `buf[pos..]`, returning the new end.
@@ -329,7 +341,7 @@ pub(crate) unsafe fn create_backing_fd(
         end = push_decimal(
             &mut name,
             end + 1,
-            SHM_NAME_SEQ.fetch_add(1, Ordering::Relaxed) % 1_000_000_000,
+            seq.fetch_add(1, Ordering::Relaxed) % 1_000_000_000,
         );
         debug_assert!(end < name.len());
         // SAFETY: `name` is a valid NUL-terminated C string; O_EXCL guarantees a fresh object.

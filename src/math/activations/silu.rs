@@ -24,7 +24,7 @@ use crate::arch::simd::*;
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
     // SAFETY: `simd_sigmoid_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     unsafe {
         let s = simd_sigmoid_avx2(x);
         _mm256_mul_ps(x, s)
@@ -39,7 +39,7 @@ pub unsafe fn simd_silu_avx2(x: __m256) -> __m256 {
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     // SAFETY: `simd_sigmoid_dual_avx2` requires AVX2+FMA, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     unsafe {
         let (s1, s2) = simd_sigmoid_dual_avx2(x1, x2);
         (_mm256_mul_ps(x1, s1), _mm256_mul_ps(x2, s2))
@@ -153,7 +153,7 @@ pub fn silu_hf(x: f32) -> f32 {
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_silu_poly_avx2(x: __m256) -> __m256 {
     // SAFETY: `simd_sigmoid_poly_avx2` requires AVX2+FMA, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     unsafe {
         let s = simd_sigmoid_poly_avx2(x);
         _mm256_mul_ps(x, s)

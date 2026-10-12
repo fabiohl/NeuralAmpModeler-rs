@@ -190,50 +190,78 @@ fn generic_timer_frequency() -> u64 {
     freq
 }
 
-/// Maximum relative disagreement between the reported (`CNTFRQ_EL0`) and the
-/// measured generic-timer rate before the reported value is distrusted.
+/// Plausible generic-timer frequency range. Armv8.6+ fixes the frequency at
+/// 1 GHz; earlier systems commonly use 19.2–100 MHz (24 MHz on Apple Silicon).
 #[cfg(target_arch = "aarch64")]
-const GENERIC_TIMER_MAX_DEVIATION: f64 = 0.02;
+const GENERIC_TIMER_PLAUSIBLE_HZ: std::ops::RangeInclusive<u64> = 1_000_000..=1_000_000_000;
+
+/// Where the aarch64 calibration rate came from.
+#[cfg(target_arch = "aarch64")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GenericTimerSource {
+    /// `CNTFRQ_EL0`, used as-is (exact).
+    Register,
+    /// Measured against `Instant` because `CNTFRQ_EL0` was implausible.
+    Measured,
+}
 
 /// Chooses the calibration multiplier for the aarch64 generic timer.
 ///
-/// Uses the exact `reported_hz` (`CNTFRQ_EL0`) when it agrees with the rate
-/// measured over a wall-clock window to within
-/// [`GENERIC_TIMER_MAX_DEVIATION`]; otherwise (firmware that programs
-/// CNTFRQ_EL0 wrongly, or reports 0) falls back to the measured rate, as the
-/// x86_64 path does. Returns `(mult, reported_trusted)`, or `None` when
-/// neither source is usable. Pure helper so tests can pin the inputs.
+/// A plausible `reported_hz` (`CNTFRQ_EL0`) is used as-is and `measure` is not
+/// called: a single short wall-clock window is noisier than the register, and
+/// on macOS `Instant` is derived from this same counter, so a measurement could
+/// not detect a wrong register value anyway. Only a zero or out-of-range value
+/// (misprogrammed firmware) falls back to `measure`, which returns
+/// `(elapsed_cycles, elapsed_nanos)`. Returns `None` when neither is usable.
 #[cfg(target_arch = "aarch64")]
 fn choose_generic_timer_mult(
     reported_hz: u64,
-    measured_cycles: u64,
-    measured_nanos: u64,
-) -> Option<(u64, bool)> {
-    let measured = mult_for_rate(measured_cycles, measured_nanos);
-    let Some(reported) = mult_for_rate(reported_hz, 1_000_000_000) else {
-        return measured.map(|m| (m, false));
-    };
-    match measured {
-        Some(m) => {
-            let deviation = (reported as f64 - m as f64).abs() / m as f64;
-            if deviation <= GENERIC_TIMER_MAX_DEVIATION {
-                Some((reported, true))
-            } else {
-                Some((m, false))
-            }
-        }
-        // No usable measurement window: nothing to contradict the register.
-        None => Some((reported, true)),
+    measure: impl FnOnce() -> Option<(u64, u64)>,
+) -> Option<(u64, GenericTimerSource)> {
+    if GENERIC_TIMER_PLAUSIBLE_HZ.contains(&reported_hz) {
+        return mult_for_rate(reported_hz, 1_000_000_000)
+            .map(|m| (m, GenericTimerSource::Register));
     }
+    let (cycles, nanos) = measure()?;
+    mult_for_rate(cycles, nanos).map(|m| (m, GenericTimerSource::Measured))
+}
+
+/// Measures the generic timer against `Instant` over `windows` windows of
+/// `window` each and returns the `(cycles, nanos)` of the least-disturbed one.
+///
+/// Each counter read is bracketed by `Instant` readings taken immediately
+/// before and after it, and the wall-clock interval is taken between the
+/// bracket midpoints, so a preemption shows up as bracket slack instead of
+/// skewing only one side. The window with the smallest total slack wins.
+#[cfg(target_arch = "aarch64")]
+fn measure_generic_timer(window: Duration, windows: usize) -> Option<(u64, u64)> {
+    let mut best: Option<(u128, u64, u64)> = None;
+    for _ in 0..windows {
+        let a0 = Instant::now();
+        let c0 = read_counter();
+        let a1 = Instant::now();
+        std::thread::sleep(window);
+        let b0 = Instant::now();
+        let c1 = read_counter();
+        let b1 = Instant::now();
+
+        let slack = (a1 - a0).as_nanos() + (b1 - b0).as_nanos();
+        // Midpoint-to-midpoint wall time: (b0 + b1)/2 - (a0 + a1)/2.
+        let nanos = ((b0 - a0).as_nanos() + (b1 - a1).as_nanos()) / 2;
+        let cycles = c1.wrapping_sub(c0);
+        if best.is_none_or(|(s, _, _)| slack < s) {
+            best = Some((slack, cycles, nanos as u64));
+        }
+    }
+    best.map(|(_, cycles, nanos)| (cycles, nanos))
 }
 
 /// Calibrates the cycle counter.
 ///
 /// aarch64: from the architected generic-timer frequency (`CNTFRQ_EL0`),
-/// exact when correct. Because some firmware programs CNTFRQ_EL0 wrongly, the
-/// value is checked against a 20 ms window measured with `Instant`; on a
-/// disagreement above [`GENERIC_TIMER_MAX_DEVIATION`] the measured rate is used
-/// and a warning is logged.
+/// exact and without blocking whenever the value is plausible. Only a zero or
+/// implausible value (misprogrammed firmware) triggers a short measurement
+/// (best of three 5 ms windows), with a warning.
 ///
 /// Runs only once at program startup (cold-path).
 #[cfg(target_arch = "aarch64")]
@@ -243,36 +271,27 @@ pub fn calibrate_tsc() {
         return;
     }
     let reported_hz = generic_timer_frequency();
-
-    let start_inst = Instant::now();
-    let start = read_counter();
-    std::thread::sleep(Duration::from_millis(20));
-    let end = read_counter();
-    let elapsed_nanos = start_inst.elapsed().as_nanos() as u64;
-    let elapsed_cycles = end.wrapping_sub(start);
-
-    match choose_generic_timer_mult(reported_hz, elapsed_cycles, elapsed_nanos) {
-        Some((mult, true)) => {
+    let measure = || measure_generic_timer(Duration::from_millis(5), 3);
+    match choose_generic_timer_mult(reported_hz, measure) {
+        Some((mult, GenericTimerSource::Register)) => {
             publish_calibration(mult);
             log::info!(
-                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0 \
-                 (confirmed by a {} ms measurement)",
-                reported_hz as f64 / 1.0e6,
-                elapsed_nanos / 1_000_000
+                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
+                reported_hz as f64 / 1.0e6
             );
         }
-        Some((mult, false)) => {
+        Some((mult, GenericTimerSource::Measured)) => {
             publish_calibration(mult);
             log::warn!(
-                "CNTFRQ_EL0 reports {:.3} MHz but the generic timer measured {:.3} MHz; \
-                 using the measured rate",
-                reported_hz as f64 / 1.0e6,
-                elapsed_cycles as f64 * 1.0e3 / elapsed_nanos.max(1) as f64
+                "CNTFRQ_EL0 reports an implausible {} Hz; generic timer calibrated \
+                 from a measurement instead",
+                reported_hz
             );
         }
         None => log::warn!(
-            "Generic timer could not be calibrated (CNTFRQ_EL0 = 0 and no measurable \
-             window) — cycle clock left uncalibrated (Instant fallback)"
+            "Generic timer could not be calibrated (CNTFRQ_EL0 = {} Hz, no usable \
+             measurement) — cycle clock left uncalibrated (Instant fallback)",
+            reported_hz
         ),
     }
 }
@@ -455,41 +474,48 @@ mod tests {
         set_mult_for_test(0);
     }
 
-    /// aarch64: the reported CNTFRQ_EL0 rate is used when the measurement
-    /// agrees, and replaced by the measured rate when firmware misreports it.
+    /// aarch64: a plausible CNTFRQ_EL0 is used as-is without measuring; a zero
+    /// or implausible value falls back to the measurement.
     #[cfg(target_arch = "aarch64")]
     #[test]
-    fn generic_timer_rate_falls_back_to_measurement_on_mismatch() {
-        let window_ns = 20_000_000;
-        let reported = mult_for_rate(24_000_000, 1_000_000_000).expect("24 MHz");
-        // 24 MHz measured over 20 ms = 480_000 cycles: agrees, register trusted.
-        assert_eq!(
-            choose_generic_timer_mult(24_000_000, 480_000, window_ns),
-            Some((reported, true))
+    fn generic_timer_uses_register_unless_implausible() {
+        let not_called = || -> Option<(u64, u64)> { panic!("must not measure") };
+        for hz in [1_000_000, 24_000_000, 25_000_000, 1_000_000_000] {
+            let expect = mult_for_rate(hz, 1_000_000_000).expect("valid rate");
+            assert_eq!(
+                choose_generic_timer_mult(hz, not_called),
+                Some((expect, GenericTimerSource::Register)),
+                "{hz} Hz"
+            );
+        }
+        // 25 MHz measured over 20 ms = 500_000 cycles.
+        let measured = mult_for_rate(500_000, 20_000_000).expect("valid window");
+        for hz in [0, 999_999, 1_000_000_001, u64::MAX] {
+            assert_eq!(
+                choose_generic_timer_mult(hz, || Some((500_000, 20_000_000))),
+                Some((measured, GenericTimerSource::Measured)),
+                "{hz} Hz"
+            );
+        }
+        // Implausible register and no usable measurement.
+        assert_eq!(choose_generic_timer_mult(0, || None), None);
+        assert_eq!(choose_generic_timer_mult(0, || Some((0, 0))), None);
+    }
+
+    /// aarch64: the bracketed measurement agrees with CNTFRQ_EL0 on real
+    /// hardware (where the register is correct) to well within 1%.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn generic_timer_measurement_matches_register() {
+        let (cycles, nanos) =
+            measure_generic_timer(Duration::from_millis(5), 3).expect("measurement");
+        let measured_hz = cycles as f64 * 1.0e9 / nanos as f64;
+        let reported_hz = generic_timer_frequency() as f64;
+        let deviation = (measured_hz - reported_hz).abs() / reported_hz;
+        assert!(
+            deviation < 0.01,
+            "measured {measured_hz:.0} Hz vs CNTFRQ_EL0 {reported_hz:.0} Hz"
         );
-        // 1% off is within tolerance.
-        assert_eq!(
-            choose_generic_timer_mult(24_000_000, 484_800, window_ns),
-            Some((reported, true))
-        );
-        // Firmware claims 24 MHz but the timer runs at 25 MHz (500_000 cycles).
-        let measured = mult_for_rate(500_000, window_ns).expect("valid window");
-        assert_eq!(
-            choose_generic_timer_mult(24_000_000, 500_000, window_ns),
-            Some((measured, false))
-        );
-        // Register reports 0 Hz: measured rate.
-        assert_eq!(
-            choose_generic_timer_mult(0, 500_000, window_ns),
-            Some((measured, false))
-        );
-        // No usable measurement: nothing contradicts the register.
-        assert_eq!(
-            choose_generic_timer_mult(24_000_000, 0, 0),
-            Some((reported, true))
-        );
-        // Neither source usable.
-        assert_eq!(choose_generic_timer_mult(0, 0, 0), None);
     }
 
     /// aarch64: the CNTFRQ_EL0-derived conversion tracks `Instant` over a

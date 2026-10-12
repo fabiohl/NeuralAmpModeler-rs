@@ -9,6 +9,12 @@
 //! implementation of the same `__m256`/`__m128` surface, so the AVX2-shaped
 //! kernels compile unchanged and keep identical per-lane operation order.
 //!
+//! Naming convention: kernels keep their x86 names (`*_avx2`, `Avx2Math`) and
+//! their `# Safety` docs keep the x86 wording ("requires AVX2 and FMA"). On
+//! aarch64 those refer to the same kernel compiled against the NEON layer, and
+//! the precondition is `#[target_feature(enable = "neon")]`, which every
+//! kernel carries next to its x86 `#[target_feature]` attribute.
+//!
 //! AVX-512 kernels (behind the `avx512` feature) are x86_64-only: the feature
 //! is rejected on other targets, and their `#[target_feature]` attributes stay
 //! unconditional. Files that hold only AVX-512 code import `core::arch::x86_64`

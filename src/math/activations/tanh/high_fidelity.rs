@@ -92,7 +92,7 @@ pub unsafe fn simd_tanh_poly_avx2(x: __m256) -> __m256 {
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x); // e²ˣ
     let num = _mm256_sub_ps(u2, one); // e²ˣ − 1
@@ -120,7 +120,7 @@ pub unsafe fn simd_tanh_poly_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m25
     let x2 = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x2));
 
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp1 = unsafe { simd_exp_poly_avx2(x1) };
     // SAFETY: `simd_exp_poly_avx2` requires the same AVX2+FMA support guaranteed
     // by this `unsafe fn`'s `#[target_feature]` and caller contract.
@@ -176,7 +176,7 @@ pub unsafe fn simd_tanh_poly_nr1_avx2(x: __m256) -> __m256 {
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x);
     let num = _mm256_sub_ps(u2, one);
@@ -209,7 +209,7 @@ pub unsafe fn simd_tanh_poly_nr2_avx2(x: __m256) -> __m256 {
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
 
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp_x = unsafe { simd_exp_poly_avx2(x) };
     let u2 = _mm256_mul_ps(exp_x, exp_x);
     let num = _mm256_sub_ps(u2, one);
@@ -239,7 +239,7 @@ pub unsafe fn simd_tanh_poly_nr2_avx2(x: __m256) -> __m256 {
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_sigmoid_dual_poly_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     // SAFETY: `simd_tanh_poly_avx2` requires AVX2+FMA, guaranteed by this
-    // `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let t1 = unsafe { simd_tanh_poly_avx2(x1) };
     // SAFETY: `simd_sigmoid_poly_avx2` needs the same AVX2+FMA support
     // guaranteed by this `unsafe fn`'s `#[target_feature]` and caller contract.

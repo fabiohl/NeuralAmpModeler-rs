@@ -45,7 +45,7 @@ macro_rules! avx2_add {
 ///
 /// # Safety
 /// The CPU must support AVX2 (the function uses `_mm256_*` intrinsics and
-/// carries `#[target_feature(enable = "avx2,fma")]`) — callers must dispatch
+/// carries `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64)) — callers must dispatch
 /// through the runtime CPUID before calling. There is no memory access; any
 /// register value is valid input.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]

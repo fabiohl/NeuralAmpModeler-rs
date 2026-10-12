@@ -18,11 +18,17 @@
 //! - `_mm256_cvtps_epi32`: out-of-range inputs saturate instead of producing
 //!   the x86 "integer indefinite" value `i32::MIN`.
 //!
-//! Safety split mirrors `core::arch::x86_64` (Rust 1.99): intrinsics that take
-//! a raw pointer or reference are `unsafe fn`; all others are safe. Intrinsics
-//! the kernels call with an immediate argument (`_mm256_cmp_ps(a, b, IMM)`)
-//! take it as a plain `i32`; they are `#[inline(always)]`, so it folds to a
-//! constant at each call site and the selection logic compiles away.
+//! Safety mirrors `core::arch::x86_64` (Rust 1.99): every function is
+//! `#[target_feature(enable = "neon")]`, safe unless it takes a raw pointer, so
+//! call sites have the same `unsafe` requirements on both architectures.
+//!
+//! Intrinsics the kernels call with an immediate argument
+//! (`_mm256_cmp_ps(a, b, IMM)`, `_mm256_shuffle_ps`, `_mm256_blend_ps`, ...)
+//! take it as a plain `i32`. They are `#[inline]` (`#[target_feature]`
+//! functions cannot be `#[inline(always)]`), so the immediate folds to a
+//! constant and the selection logic compiles away only when LLVM inlines the
+//! call. That is expected for these small functions in optimized builds but is
+//! not guaranteed; check the generated code for hot kernels.
 
 use core::arch::aarch64::*;
 

@@ -87,7 +87,7 @@ pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
     let neg_x = _mm256_sub_ps(zero, x);
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp_neg_x = unsafe { simd_exp_poly_avx2(neg_x) };
     let den = _mm256_add_ps(one, exp_neg_x);
     let sig = _mm256_div_ps(one, den);
