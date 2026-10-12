@@ -87,8 +87,8 @@ fn process_full_with_prefix(
     let mut output = Vec::with_capacity(signal.len() + p * 4);
     let mut pos = 0;
     let mut sub_idx = 0;
-    let mut zero_prefix = 0usize;
-    let mut first_partition_done = false;
+    // Output is delayed by exactly one partition.
+    let zero_prefix = adapter.latency_samples();
 
     while pos < signal.len() {
         let sub = if sub_idx < sub_sizes.len() {
@@ -102,13 +102,6 @@ fn process_full_with_prefix(
         }
         let mut buf_out = vec![0.0f32; sub];
         adapter.process_variable(&signal[pos..pos + sub], &mut buf_out, None);
-        if !first_partition_done {
-            if buf_out.iter().any(|&s| s.abs() > 1e-8) {
-                first_partition_done = true;
-            } else {
-                zero_prefix += sub;
-            }
-        }
         output.extend_from_slice(&buf_out);
         pos += sub;
         sub_idx += 1;
@@ -122,7 +115,7 @@ fn process_full_with_prefix(
         output.extend_from_slice(&buf_out);
     }
 
-    let expected_output = (signal.len().div_ceil(p) + adapter.num_partitions()) * p;
+    let expected_output = (signal.len().div_ceil(p) + adapter.num_partitions()) * p + zero_prefix;
     if output.len() > expected_output {
         output.truncate(expected_output);
     }
@@ -246,10 +239,11 @@ fn regular_blocks_parity() {
     let sub_sizes: Vec<usize> = (0..signal.len()).map(|_| partition).collect();
     let (var_out, prefix) = process_full_with_prefix(&mut adapter, &signal, &sub_sizes);
 
-    assert_eq!(prefix, 0, "regular blocks should have no zero prefix");
+    assert_eq!(prefix, partition, "output is delayed by one partition");
+    assert!(var_out[..prefix].iter().all(|&s| s == 0.0));
 
-    let min_len = fixed_out.len().min(var_out.len());
-    let esr = compute_esr(&fixed_out[..min_len], &var_out[..min_len]);
+    let min_len = fixed_out.len().min(var_out.len() - prefix);
+    let esr = compute_esr(&fixed_out[..min_len], &var_out[prefix..prefix + min_len]);
     assert!(
         esr < 1e-5,
         "ESR = {:.2e} for regular P-sized sub-blocks",
@@ -387,10 +381,10 @@ fn sub_block_of_exact_partition_size() {
 
     let mut adapter = adapter_from_ir(&ir, partition);
     let sub_sizes: Vec<usize> = vec![partition; signal.len().div_ceil(partition)];
-    let (var_out, _prefix) = process_full_with_prefix(&mut adapter, &signal, &sub_sizes);
+    let (var_out, prefix) = process_full_with_prefix(&mut adapter, &signal, &sub_sizes);
 
-    let min_len = fixed_out.len().min(var_out.len());
-    let esr = compute_esr(&fixed_out[..min_len], &var_out[..min_len]);
+    let min_len = fixed_out.len().min(var_out.len() - prefix);
+    let esr = compute_esr(&fixed_out[..min_len], &var_out[prefix..prefix + min_len]);
     assert!(esr < 1e-10, "ESR = {:.2e} for P-sized sub-blocks", esr);
 }
 
@@ -1130,11 +1124,9 @@ fn drive_process_block(
     out
 }
 
-/// Causal silence prefix of a fresh adapter driven with host blocks of
-/// `block` samples: the samples delivered before the first partition
-/// completes (`block * (ceil(P / block) - 1)` for `block <= partition`).
-fn accumulation_prefix(partition: usize, block: usize) -> usize {
-    block * (partition.div_ceil(block) - 1)
+/// Silence prefix of a fresh adapter's output: always one partition.
+fn accumulation_prefix(partition: usize, _block: usize) -> usize {
+    partition
 }
 
 /// Sweep: for every partition × host-block combination, `process_block` must
@@ -1168,10 +1160,8 @@ fn process_block_bit_exact_blocking_sweep() {
     }
 }
 
-/// The convolved body is blocking-invariant: for host blocks that divide the
-/// partition (aligned FIFO windows, no causal underrun gaps), stripping each
-/// stream's accumulation prefix yields the exact same sample sequence for
-/// every host-block size.
+/// Stripping the one-partition prefix yields identical output for every
+/// host-block size, including sizes that do not divide the partition.
 #[test]
 fn process_block_body_blocking_invariant() {
     let partition = 64usize;
@@ -1181,7 +1171,7 @@ fn process_block_body_blocking_invariant() {
     let probe = adapter_from_ir(&ir, partition);
     let total = signal.len() + probe.tail_samples() + partition;
     let mut golden: Option<Vec<f32>> = None;
-    for &b in &[16usize, 32, 64, 256] {
+    for &b in &[16usize, 32, 48, 64, 256, 333] {
         let mut adapter = adapter_from_ir(&ir, partition);
         let out = drive_process_block(&mut adapter, &signal, total, b);
         let prefix = accumulation_prefix(partition, b);
@@ -1423,5 +1413,35 @@ fn pair_process_block_stereo_matches_individual_adapters() {
         pos_l += n_l;
         pos_r += n_r;
         block += 1;
+    }
+}
+
+/// Regression: blocks that do not tile the partition underran the output
+/// queue and the delay drifted (88-124 samples for 300-sample blocks).
+#[test]
+fn impulse_delay_is_constant_for_any_blocking() {
+    let partition = 128usize;
+    let positions = [1000usize, 3001, 5050, 7127, 9999, 12_345];
+    let total = 16_000;
+    let mut signal = vec![0.0f32; total];
+    for &p in &positions {
+        signal[p] = 1.0;
+    }
+
+    for &block in &[1usize, 17, 100, 128, 300, 512, 1000] {
+        // Single-tap IR: the output is the input, delayed.
+        let mut adapter = adapter_from_ir(&[1.0], partition);
+        let latency = adapter.latency_samples();
+        assert_eq!(latency, partition);
+        let out = drive_process_block(&mut adapter, &signal, total, block);
+
+        let hits: Vec<usize> = out
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.abs() > 0.5)
+            .map(|(i, _)| i)
+            .collect();
+        let expected: Vec<usize> = positions.iter().map(|p| p + latency).collect();
+        assert_eq!(hits, expected, "block {block}: impulse delays drifted");
     }
 }

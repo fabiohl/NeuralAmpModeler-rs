@@ -32,9 +32,9 @@
 //! *   **In-place processing** — [`process_in_place()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_in_place)
 //!     reads and writes the same buffer, eliminating the destination copy
 //!     on the audio callback.
-//! *   **Causal output** — the adapter respects the engine's intrinsic
-//!     latency. Until the first partition is fully accumulated, output is
-//!     silence.
+//! *   **Constant latency** — the output queue starts with one partition of
+//!     silence, so output is delayed by exactly `partition_size` for any
+//!     sub-block sizes.
 
 use super::conv::ConvEngine;
 use crate::common::diagnostics::NamErrorCode;
@@ -72,7 +72,8 @@ impl CabSimAdapter {
             output_buf: AlignedVec::new(2 * partition, 0.0_f32)?,
             input_count: 0,
             output_read: 0,
-            output_write: 0,
+            // Primed with one partition of silence.
+            output_write: partition,
             tail_pending: 0,
         })
     }
@@ -113,11 +114,10 @@ impl CabSimAdapter {
         &mut self.engine
     }
 
-    /// Returns `true` if the adapter has unprocessed input in its
-    /// accumulator or unconsumed output in its queue.
+    /// Returns `true` if the accumulator holds a partial partition.
     #[inline(always)]
     pub fn needs_flush(&self) -> bool {
-        self.input_count > 0 || self.output_read < self.output_write
+        self.input_count > 0
     }
 
     /// Resets the adapter to its post-construction state: clears the input
@@ -134,7 +134,8 @@ impl CabSimAdapter {
         self.output_buf.fill(0.0);
         self.input_count = 0;
         self.output_read = 0;
-        self.output_write = 0;
+        // Re-prime the queue with one partition of silence.
+        self.output_write = self.partition;
         self.tail_pending = 0;
         self.engine.reset();
     }
@@ -347,7 +348,7 @@ impl CabSimAdapter {
     ///     block into `partition_size`-capped windows and calling
     ///     [`process_in_place`](Self::process_in_place) per window: same
     ///     accumulate order, same partition MAC order, same delivery order,
-    ///     same causal underrun silence at host-block remainders. The number
+    ///     same constant `partition_size` delay. The number
     ///     of internal FIFO copies per partition is the same as the
     ///     consumer-side loop, minus the per-call contract checks and call
     ///     overhead.
@@ -438,6 +439,7 @@ impl CabSimAdapter {
             output[..n].copy_from_slice(&self.output_buf[self.output_read..self.output_read + n]);
             self.output_read += n;
         }
+        // Unreachable: the primed queue never underruns.
         output[n..].fill(0.0);
 
         if self.output_read >= self.output_write {
