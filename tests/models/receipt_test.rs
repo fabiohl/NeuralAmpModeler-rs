@@ -51,6 +51,7 @@ fn mk_receipt(phase_id: &str, status: LongPhaseStatus) -> LongPhaseReceipt {
         tests_executed: 2,
         gaps: vec![],
         timestamp: "2026-08-14T00:00:00Z".to_string(),
+        ..Default::default()
     }
 }
 
@@ -100,6 +101,7 @@ fn test_long_phase_receipt_jsonl_schema_and_roundtrip() {
         tests_executed: 3,
         gaps: vec!["inconclusive_environment".to_string()],
         timestamp: "2026-08-14T00:00:00Z".to_string(),
+        ..Default::default()
     };
 
     let line = entry.render_jsonl_line();
@@ -274,26 +276,74 @@ fn test_long_receipt_cli_end_to_end() {
         "missing PERF_REGRESSION line: {human}"
     );
 
-    // Validate: every line is valid JSON with the receipt schema.
+    // Semantic validation is fail-closed: a PARTIAL receipt (missing canonical
+    // phases) is rejected even WITHOUT --strict (S4-T4.2).
     let val_run = run(&["validate", "--out", out.to_str().unwrap()]);
-    assert!(val_run.status.success(), "validate failed: {:?}", val_run);
+    assert!(
+        !val_run.status.success(),
+        "validate must reject a partial receipt: {val_run:?}"
+    );
+    let stderr = String::from_utf8_lossy(&val_run.stderr);
+    assert!(
+        stderr.contains("missing required canonical phase"),
+        "unexpected validate error: {stderr}"
+    );
+
+    // Complete the canonical roster; `summary` replaces the overall line and
+    // the full, self-consistent receipt now validates.
+    for id in [
+        "preflight-render",
+        "preflight-catalog",
+        "preflight-package",
+        "preflight-freshness",
+        "preflight-meta",
+        "preflight-simd-probe",
+        "phase2",
+        "phase3",
+        "phase4",
+        "phase6",
+        "phase7",
+    ] {
+        let tests = if id.starts_with("phase") { "1" } else { "0" };
+        let r = run(&[
+            "append",
+            "--phase-id",
+            id,
+            "--name",
+            id,
+            "--status",
+            "PASSED",
+            "--duration-ms",
+            "1",
+            "--tests-executed",
+            tests,
+            "--out",
+            out.to_str().unwrap(),
+        ]);
+        assert!(r.status.success(), "append {id} failed: {r:?}");
+    }
+    let sum_run = run(&["summary", "--out", out.to_str().unwrap()]);
+    assert!(sum_run.status.success(), "summary failed: {sum_run:?}");
+
+    let val_run = run(&["validate", "--out", out.to_str().unwrap()]);
+    assert!(val_run.status.success(), "validate failed: {val_run:?}");
     let stdout = String::from_utf8_lossy(&val_run.stdout);
     assert!(
-        stdout.contains("VALID: 3 receipt line(s)"),
+        stdout.contains("VALID: 14 receipt line(s)"),
         "unexpected validate output: {stdout}"
     );
 
-    // File-level contract: 3 lines, all valid schema JSON; overall line last.
+    // File-level contract: 14 lines, all valid schema JSON; overall line last.
     let content = fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 3, "unexpected receipt content: {content}");
+    assert_eq!(lines.len(), 14, "unexpected receipt content: {content}");
     let audit = LongAuditReceipt::parse_jsonl(&content)
         .expect("every receipt line must parse as LongPhaseReceipt");
-    assert_eq!(audit.phases.len(), 3);
+    assert_eq!(audit.phases.len(), 14);
     let overall = audit.phases.last().unwrap();
     assert_eq!(overall.phase_id, "overall");
     assert_eq!(overall.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(overall.tests_executed, 5);
+    assert_eq!(overall.tests_executed, 10);
     assert_eq!(overall.gaps, vec!["phase5:INCONCLUSIVE"]);
 
     // Bad status must fail with usage error (exit 2).

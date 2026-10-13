@@ -135,6 +135,14 @@ fn print_help() {
     println!("  nam_perf_gate receipt summary [--out <path>]");
     println!("  nam_perf_gate --help");
     println!();
+    println!("A --manifest file lists expected Criterion ids (one per line, blank");
+    println!("lines and '#' comments ignored); a trailing 'Group/*' entry matches any");
+    println!("executed id with that prefix, so a downstream suite declares group");
+    println!("coverage without enumerating parametric ids. A group entry certifies that");
+    println!("the group ran, not exhaustive per-id coverage — use exact ids when");
+    println!("completeness matters. A non-regression_gate suite without --manifest fails");
+    println!("closed.");
+    println!();
     println!("Defaults: baseline dir .performance-baselines/, criterion root");
     println!("target/criterion/, baseline name ci-baseline (NAM_BASELINE_NAME),");
     println!("bench core NAM_BENCH_CORE (empty = unpinned), verdict noise band");

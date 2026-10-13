@@ -209,12 +209,50 @@ The audio thread operates under strict real-time guarantees:
 
 ### Host Hardening (Linux RT)
 
-When real-time host hardening is enabled (via the `rt-hardening` feature or external configuration):
+When real-time host hardening is enabled (via the `rt-hardening` feature), the
+engine exposes a host-agnostic bring-up API under
+[`src/rt_hardening/`](../src/rt_hardening/) — never enabled by default and never
+naming a specific host or sibling project:
 
-- **Scheduling:** `SCHED_FIFO` with IRQ-aware core affinity (`select_optimal_cpu`).
+- **Scheduling:** `SCHED_FIFO` promotion plus IRQ-aware CPU affinity. The
+  optimal core is chosen by `select_cpu_with_source` /
+  `select_optimal_cpu_with_receipt` (sysfs topology, `isolcpus`, `nohz_full`,
+  process cpuset and `/proc/interrupts` load) and returned as a typed
+  `CpuSelectionReceipt` carrying the selected core and the derived housekeeping
+  set.
+- **Housekeeping confinement:** `apply_housekeeping_affinity` pins non-RT
+  threads (control loops, I/O workers, host event loops) to the receipt's
+  `housekeeping_cpus`, keeping scheduler/IRQ noise off the dedicated core;
+  `pin_current_thread` offers the same pinning with a typed `PinThreadError`.
 - **Memory Locking:** `mlockall(MCL_CURRENT | MCL_FUTURE)` to eliminate page faults.
 - **Power Management:** PM-QoS lock (`/dev/cpu_dma_latency`) prevents CPU deep C-state sleep transitions.
 - **Kernel Spikes:** THP compaction spikes are disabled via `prctl(PR_SET_THP_DISABLE)`.
+
+#### CPU Isolation (generic Linux RT guidance)
+
+Any host embedding the engine benefits from excluding one core from the
+scheduler, IRQ delivery and the periodic tick so the audio thread owns it
+exclusively. The kernel's own documentation is the reference:
+`Documentation/admin-guide/kernel-parameters.txt` (`isolcpus=`,
+`nohz_full=`, `rcu_nocbs=`, `irqaffinity=`), `Documentation/timers/no_hz.rst`
+and `Documentation/admin-guide/pm/`. A representative boot line for a core
+pair (dedicated core 8, SMT sibling 9 kept offline) is:
+
+```text
+isolcpus=managed_irq,domain,8,9 nohz_full=8,9 rcu_nocbs=8,9 \
+irqaffinity=0-7,10-15 nmi_watchdog=0 skew_tick=1
+```
+
+Beyond the boot line, pin the housekeeping set so no IRQ lands on the
+dedicated core (`/proc/irq/*/smp_affinity_list`), keep the SMT sibling
+offline, and prefer PM-QoS (`/dev/cpu_dma_latency`, already used by the
+`rt-hardening` feature) over forcing C-states for latency control. Note that
+`nohz_full` only removes the tick while a single runnable task occupies the
+core; syscalls issued *from* the isolated core reintroduce noise, and
+firmware SMIs are an independent, kernel-invisible source. Attribute any
+residual tail latency with the kernel's own tracers (`rtla osnoise`,
+`rtla timerlat`, and the `hwlat` tracer for SMIs) before attempting to
+optimize application code.
 
 ---
 

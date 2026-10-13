@@ -8,6 +8,7 @@
 //! - Audio primitives ported from t3k-mushra (MIT-licensed)
 //! - Perceptual metrics (ESR, LUFS) calibrated against published baselines
 //! - ASR (Aliasing-to-Signal Ratio) metric per Sato & Smith DAFx 2025
+//! - Host/RT environment probes (`/proc`, PMU, affinity) and generic numeric metrics
 //! - Centralized fixture-path resolution for models, goldens, and stress signals
 //! - WAV I/O helpers for test fixtures
 
@@ -16,7 +17,11 @@ pub mod catalog;
 pub mod diagnostics;
 pub mod fixtures;
 pub mod freshness;
+#[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
+pub mod host;
 pub mod isa_guard;
+pub mod metrics;
 pub mod mushra;
 pub mod perceptual;
 #[cfg(feature = "testing")]

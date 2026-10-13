@@ -7,7 +7,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 This document replaces the working notes used during the investigation and fix of a real,
 indefinite hang in `--release` builds (also confirmed in the standalone
-binary and the CLAP `cdylib`). It intentionally does **not** preserve the
+binary and the plugin `cdylib`). It intentionally does **not** preserve the
 investigation's chronology, dead ends, or every experiment run — that
 detail no longer has operational value. What follows is the durable
 knowledge: what the bug actually was, why it was hard to see, and the
@@ -61,8 +61,8 @@ class of bug.
 into the GOT slot from a live, attached process (not just the relocation
 *type*, which is not sufficient — see §3). Confirmed clean across all
 production link targets: the engine test suite (`--lib`), integration suites
-(`--features testing,dual-mono`), and downstream targets (CLAP cdylib plugins
-and standalone hosts).
+(`--features testing,dual-mono`), and downstream targets (dynamic-library plugin
+builds and standalone hosts).
 
 ## 2. Why this was hard to find
 

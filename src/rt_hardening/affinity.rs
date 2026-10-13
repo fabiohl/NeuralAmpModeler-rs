@@ -101,8 +101,19 @@ pub fn parse_interrupts_per_cpu() -> HashMap<usize, u64> {
     use std::fs::File;
     use std::io::BufReader;
 
-    let Ok(file) = File::open("/proc/interrupts") else {
-        return HashMap::new();
+    let file = match File::open("/proc/interrupts") {
+        Ok(file) => file,
+        Err(e) => {
+            // Fail-open: selection proceeds with zero IRQ counts on every core,
+            // which biases the least-interrupted ranking. Kept observable so a
+            // missing or inaccessible `/proc` mount can be investigated.
+            log::warn!(
+                "Cannot read /proc/interrupts ({e}) — CPU selection proceeds with zero IRQ \
+                 counts for all cores; the IRQ-load heuristic is disabled and core ranking \
+                 may be suboptimal."
+            );
+            return HashMap::new();
+        }
     };
     parse_proc_interrupts(BufReader::new(file))
 }
@@ -136,6 +147,16 @@ pub fn get_allowed_cpus() -> Vec<usize> {
                 allowed.push(i);
             }
         }
+    } else {
+        // Fail-open: in a strict-egress or seccomp sandbox `sched_getaffinity`
+        // can fail, in which case selection degrades to the full online CPU
+        // set and ignores `taskset`/cgroup/`isolcpus` constraints. Kept
+        // observable so the constraint loss is never silent.
+        log::warn!(
+            "sched_getaffinity failed — the process cpuset cannot be read; CPU selection \
+             falls back to the full online CPU set and may ignore taskset, cgroup and \
+             isolcpus constraints."
+        );
     }
     allowed
 }
@@ -157,8 +178,18 @@ pub struct SystemSysfsSource;
 
 impl SysfsTopologySource for SystemSysfsSource {
     fn read_cpu_indices(&self) -> Vec<usize> {
-        let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") else {
-            return Vec::new();
+        let entries = match std::fs::read_dir("/sys/devices/system/cpu") {
+            Ok(entries) => entries,
+            Err(e) => {
+                // Fail-open: without sysfs the selection degrades to a
+                // cpuset-only heuristic with no package/core/SMT awareness.
+                log::warn!(
+                    "Cannot read /sys/devices/system/cpu ({e}) — hardware CPU topology \
+                     (core ids, SMT siblings, cpu_capacity) is unavailable; CPU selection \
+                     degrades to a cpuset-only heuristic without topology awareness."
+                );
+                return Vec::new();
+            }
         };
         let mut cpus: Vec<usize> = entries
             .filter_map(|entry| {
@@ -244,6 +275,11 @@ pub enum CpuSelectionReason {
 }
 
 /// Typed receipt of CPU selection and isolation proof.
+///
+/// Intentionally **not** `#[non_exhaustive]`: consumers build receipts in their
+/// own tests and destructure [`CpuSelectionReason`], so the public field set is
+/// part of the (additive) API surface. Any future field addition is therefore a
+/// documented breaking change rather than a silent expansion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CpuSelectionReceipt {
     /// Selected CPU index.
@@ -366,7 +402,7 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
                 housekeeping_cpus
             };
 
-            return CpuSelectionReceipt {
+            let receipt = CpuSelectionReceipt {
                 selected_cpu: target,
                 is_dedicated: is_isolated,
                 package_id: pkg_id,
@@ -381,6 +417,13 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
                 housekeeping_cpus: final_housekeeping,
                 topology,
             };
+            log::info!(
+                "CPU selection: explicit request honoured (cpu {}, isolated: {}, nohz_full: {}).",
+                receipt.selected_cpu,
+                receipt.is_isolated,
+                receipt.is_nohz_full,
+            );
+            return receipt;
         }
         log::warn!(
             "Requested CPU {target} is NOT in the process cpuset ({allowed_cpus:?}). \
@@ -414,7 +457,6 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
             topology,
         };
     }
-
     // Proven isolated cores first: nohz_full > SMT primary > capacity > lowest IRQ.
     let isolated_candidates: Vec<&CpuCoreTopology> = candidates
         .iter()
@@ -444,7 +486,7 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
             housekeeping_cpus
         };
 
-        return CpuSelectionReceipt {
+        let receipt = CpuSelectionReceipt {
             selected_cpu: chosen.logical_id,
             is_dedicated: true,
             package_id: chosen.package_id,
@@ -462,6 +504,16 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
             housekeeping_cpus: final_housekeeping,
             topology,
         };
+        log::info!(
+            "CPU selection: proven isolated core {} (package {:?}, core {:?}, siblings {:?}, \
+             nohz_full: {}).",
+            receipt.selected_cpu,
+            receipt.package_id,
+            receipt.core_id,
+            receipt.smt_siblings,
+            receipt.is_nohz_full,
+        );
+        return receipt;
     }
 
     // Conservative heuristic: capacity > SMT primary > lowest IRQ > highest id.
@@ -492,7 +544,7 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
         housekeeping_cpus
     };
 
-    CpuSelectionReceipt {
+    let receipt = CpuSelectionReceipt {
         selected_cpu: chosen.logical_id,
         is_dedicated: false,
         package_id: chosen.package_id,
@@ -508,7 +560,18 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
         },
         housekeeping_cpus: final_housekeeping,
         topology,
-    }
+    };
+    log::info!(
+        "CPU selection: conservative heuristic core {} (capacity {}, irqs {}, package {:?}, \
+         core {:?}, siblings {:?}).",
+        receipt.selected_cpu,
+        chosen.capacity,
+        chosen.irq_count,
+        receipt.package_id,
+        receipt.core_id,
+        receipt.smt_siblings,
+    );
+    receipt
 }
 
 /// Selects the ideal CPU core to pin the audio thread, returning the receipt.

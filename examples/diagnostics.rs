@@ -35,10 +35,7 @@ fn main() {
     println!("\n[1/5] Installed Zero-Alloc Panic Hook");
 
     // 2. Initialize global logging facade (NamLogger).
-    let config = LoggerConfig {
-        level_filter: LevelFilter::Debug,
-        emit_stderr: false, // Set to false here so example output is controlled in main
-    };
+    let config = LoggerConfig::new(LevelFilter::Debug);
 
     let _logger = NamLogger::init(config).expect("Failed to initialize NamLogger");
     println!("[2/5] Initialized NamLogger facade (LevelFilter::Debug)");

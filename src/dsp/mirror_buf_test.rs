@@ -7,6 +7,10 @@ use serial_test::serial;
 use std::sync::atomic::Ordering;
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_page_alignment() -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
     let page_size = unsafe { sysconf(libc::_SC_PAGESIZE) } as usize;
@@ -22,6 +26,10 @@ fn test_mirror_buf_page_alignment() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_mirroring() -> Result<(), Box<dyn std::error::Error>> {
     // Mirroring Test: Verifies that the virtual memory "trick" works.
     // Any value written to the first half should instantly appear in the
@@ -63,6 +71,10 @@ fn test_mirror_buf_mirroring() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_clone() -> Result<(), Box<dyn std::error::Error>> {
     let mut buf = MirroredBuffer::<i32>::new(100)?;
     buf[0] = 42;
@@ -86,6 +98,10 @@ fn test_mirror_buf_zero_size_error() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_large_allocation() -> Result<(), Box<dyn std::error::Error>> {
     // Tests allocation of ~1MB
     let size = 1024 * 1024 / 4;
@@ -96,6 +112,10 @@ fn test_mirror_buf_large_allocation() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_debug() -> Result<(), Box<dyn std::error::Error>> {
     let buf = MirroredBuffer::<f32>::new(1024)?;
     let debug_str = format!("{:?}", buf);
@@ -106,6 +126,10 @@ fn test_mirror_buf_debug() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_channel_alignment() -> Result<(), Box<dyn std::error::Error>> {
     // MirroredBuffer::new_aligned guarantees size_elements % channels == 0
     // for all channel counts, including non-power-of-two channels (6, 12 — Lite).
@@ -157,6 +181,10 @@ fn test_hugepage_state_is_monotonic() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
+)]
 fn test_mirror_buf_alignment_invariants_r8() -> Result<(), Box<dyn std::error::Error>> {
     #[repr(align(64))]
     #[derive(Clone, Copy, Debug, PartialEq)]

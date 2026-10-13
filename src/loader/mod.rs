@@ -21,6 +21,8 @@ pub mod nam_json;
 pub mod namb;
 /// `.namb` encoder: serializes `NamModelData` into the binary compact profile format.
 pub mod namb_encoder;
+/// Host-neutral metadata peek for `.nam`/`.namb` without materializing weights.
+pub mod peek;
 /// Sample-rate provenance resolution across nested model graphs.
 pub(crate) mod sample_rate;
 /// Weight matrix transposition utilities for interleaved memory layouts.
@@ -36,7 +38,9 @@ pub use build::{
 pub use error::LoadError;
 pub use loaded_model_pair::*;
 pub use nam_json::JsonError;
+pub use namb::NAMB_HEADER_LEN;
 pub use namb::NambError;
+pub use peek::{DEFAULT_METADATA_PEEK_BYTES, peek_metadata, peek_metadata_from_reader};
 pub use wav::{WavError, WavIrData, parse_wav_ir, wav_ir_to_model_data};
 
 #[cfg(test)]

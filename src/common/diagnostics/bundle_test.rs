@@ -16,8 +16,8 @@ fn test_purge_old_reports_in_dir() {
 
     std::fs::create_dir_all(&temp_dir).expect("Failed to create temporary directory for test");
 
-    let crash_txt = temp_dir.join("crash-1000-clap.txt");
-    let crash_tmp = temp_dir.join("crash-1001-pipe.tmp");
+    let crash_txt = temp_dir.join("crash-1000-host.txt");
+    let crash_tmp = temp_dir.join("crash-1001-host.tmp");
     let non_crash_file = temp_dir.join("keep_me.txt");
     let regular_log = temp_dir.join("normal.log");
 
@@ -50,8 +50,8 @@ fn test_purge_old_reports_in_dir() {
     let count_purged = DiagnosticBundle::purge_old_reports_in_dir(&temp_dir, 0)
         .expect("purge with zero threshold failed");
     assert_eq!(count_purged, 2, "Both crash files should have been purged");
-    assert!(!crash_txt.exists(), "crash-1000-clap.txt must be removed");
-    assert!(!crash_tmp.exists(), "crash-1001-pipe.tmp must be removed");
+    assert!(!crash_txt.exists(), "crash-1000-host.txt must be removed");
+    assert!(!crash_tmp.exists(), "crash-1001-host.tmp must be removed");
     assert!(non_crash_file.exists(), "keep_me.txt must be retained");
     assert!(regular_log.exists(), "normal.log must be retained");
 

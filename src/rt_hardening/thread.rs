@@ -5,6 +5,12 @@
 //!
 //! These functions must be called exclusively outside the RT thread, during
 //! audio host initialization. Errors are returned as `Result` — never as panic.
+//!
+//! The housekeeping-pinning helpers ([`apply_housekeeping_affinity`],
+//! [`pin_current_thread`], [`build_housekeeping_affinity_mask`]) are
+//! host-agnostic: they operate on the plain CPU set produced by the affinity
+//! receipt, so any host keeps its non-RT threads off the dedicated RT core
+//! without duplicating this logic.
 
 #![cfg(all(feature = "rt-hardening", target_os = "linux"))]
 
@@ -186,7 +192,7 @@ impl ThreadConfigurator for SystemThreadConfigurator {
 /// Builds the `cpu_set_t` mask pinning a thread to `target_cpu`.
 ///
 /// Returns `None` when `target_cpu` is outside `[0, CPU_SETSIZE)`.
-pub(crate) fn build_cpu_affinity_mask(target_cpu: usize) -> Option<libc::cpu_set_t> {
+pub fn build_cpu_affinity_mask(target_cpu: usize) -> Option<libc::cpu_set_t> {
     if target_cpu >= libc::CPU_SETSIZE as usize {
         return None;
     }
@@ -220,12 +226,12 @@ pub fn set_cpu_affinity(
         rt_status.rt_target_cpu.store(-1, Ordering::Relaxed);
         return Err(-1);
     };
-    set_cpu_affinity_one(target, rt_status, &SystemThreadConfigurator)
+    set_cpu_affinity_with(target, rt_status, &SystemThreadConfigurator)
 }
 
-/// Pins `thread_id` to `target_cpu` via `cfg`, recording the outcome in
+/// Pins the calling thread to `target_cpu` via `cfg`, recording the outcome in
 /// `rt_status` (RT-safe: no logging or allocation on this path).
-pub(crate) fn set_cpu_affinity_one<C: ThreadConfigurator>(
+pub fn set_cpu_affinity_with<C: ThreadConfigurator>(
     target_cpu: usize,
     rt_status: &crate::common::spsc::RtStatusFlags,
     cfg: &C,
@@ -249,6 +255,156 @@ pub(crate) fn set_cpu_affinity_one<C: ThreadConfigurator>(
         return Err(ret);
     }
     Ok(())
+}
+
+/// Error returned when pinning the calling thread to a CPU fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinThreadError {
+    /// CPU index is outside the supported `[0, CPU_SETSIZE)` range.
+    CpuOutOfBounds {
+        /// Requested CPU index.
+        cpu: usize,
+        /// Exclusive upper bound (`CPU_SETSIZE`).
+        max: usize,
+    },
+    /// Kernel affinity syscall failed with an errno.
+    SyscallFailed {
+        /// Requested CPU index.
+        cpu: usize,
+        /// Kernel errno.
+        errno: i32,
+    },
+}
+
+impl std::fmt::Display for PinThreadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CpuOutOfBounds { cpu, max } => {
+                write!(f, "CPU index {cpu} is outside supported range [0, {max})")
+            }
+            Self::SyscallFailed { cpu, errno } => {
+                write!(f, "could not pin thread to CPU {cpu} (errno {errno})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PinThreadError {}
+
+/// Pins the **calling** thread to `cpu` using `sched_setaffinity` (off-RT).
+///
+/// Returns `Ok(())` when `cpu` is `None` (no pinning requested) or when the
+/// affinity mask was applied to the current thread; a typed error otherwise.
+/// This is the application-side counterpart of [`set_cpu_affinity`] for
+/// threads that are not the RT data thread (bench harnesses, workers).
+pub fn pin_current_thread(cpu: Option<usize>) -> Result<(), PinThreadError> {
+    let Some(cpu) = cpu else {
+        return Ok(());
+    };
+    let Some(set) = build_cpu_affinity_mask(cpu) else {
+        return Err(PinThreadError::CpuOutOfBounds {
+            cpu,
+            max: libc::CPU_SETSIZE as usize,
+        });
+    };
+    // SAFETY: `set` is zeroed and populated by `build_cpu_affinity_mask`, which
+    // guarantees `cpu < libc::CPU_SETSIZE`. `sched_setaffinity` only touches
+    // the supplied mask and the calling thread (pid = 0).
+    let ret = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
+    if ret != 0 {
+        // SAFETY: `__errno_location` returns a valid thread-local errno pointer.
+        let errno = unsafe { *libc::__errno_location() };
+        return Err(PinThreadError::SyscallFailed { cpu, errno });
+    }
+    Ok(())
+}
+
+/// Builds the `cpu_set_t` mask covering every CPU in `housekeeping_cpus`.
+///
+/// Returns `None` when the set is empty (documented no-op used by tests) or
+/// when any index falls outside `[0, CPU_SETSIZE)`.
+pub fn build_housekeeping_affinity_mask(housekeeping_cpus: &[usize]) -> Option<libc::cpu_set_t> {
+    if housekeeping_cpus.is_empty() {
+        return None;
+    }
+
+    // SAFETY: zero-initialized `cpu_set_t` is a fully valid empty C bitmask on
+    // the supported Linux targets (see `build_cpu_affinity_mask`).
+    let mut cpuset: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+
+    // SAFETY: `CPU_ZERO`/`CPU_SET` only mutate the already-initialized bitmask
+    // in place; out-of-range CPUs are rejected by the bounds check below, so
+    // libc's bit index always stays within `cpu_set_t` storage.
+    unsafe {
+        libc::CPU_ZERO(&mut cpuset);
+        for &cpu in housekeeping_cpus {
+            if cpu >= libc::CPU_SETSIZE as usize {
+                return None;
+            }
+            libc::CPU_SET(cpu, &mut cpuset);
+        }
+    }
+
+    Some(cpuset)
+}
+
+/// Pins the **calling** thread to the housekeeping CPU set (off-RT).
+///
+/// Housekeeping threads (control loops, I/O workers, host event-loop threads)
+/// are pinned to every cpuset-allowed CPU *except* the selected RT core and its
+/// SMT siblings (the receipt's `housekeeping_cpus`), keeping scheduler noise,
+/// IRQ handling and I/O off the real-time core. This applies the application
+/// side of the affinity receipt produced by
+/// [`select_optimal_cpu_with_receipt`](super::affinity::select_optimal_cpu_with_receipt).
+///
+/// An empty list is a documented no-op (`Ok(())` without syscalls) so tests can
+/// spawn workers without disturbing the test-runner scheduling. A kernel
+/// rejection is reported as `Err(errno)` and logged here: unlike RT-thread
+/// pinning, a housekeeping affinity failure is an optimization loss, not a
+/// correctness gate — the affected thread keeps running unpinned.
+pub fn apply_housekeeping_affinity(housekeeping_cpus: &[usize]) -> std::io::Result<()> {
+    let Some(cpuset) = build_housekeeping_affinity_mask(housekeeping_cpus) else {
+        return Ok(());
+    };
+
+    // SAFETY: `0` selects the calling thread; `cpuset` was built by
+    // `build_housekeeping_affinity_mask` with every index bounds-checked
+    // against `CPU_SETSIZE` and `size` is `size_of::<cpu_set_t>()`.
+    let ret =
+        unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpuset) };
+    if ret != 0 {
+        let errno = std::io::Error::last_os_error();
+        log::error!(
+            "Housekeeping affinity FAILED for thread '{}' (tid={}): {errno} — continuing \
+             unpinned (non-fatal optimization loss).",
+            thread_name(),
+            current_tid(),
+        );
+        return Err(errno);
+    }
+
+    log::info!(
+        "Housekeeping affinity applied: thread '{}' (tid={}) pinned to {:?} — RT core \
+         excluded from scheduler noise.",
+        thread_name(),
+        current_tid(),
+        housekeeping_cpus,
+    );
+    Ok(())
+}
+
+/// Current thread name for affinity logs (falls back to `<unnamed>`).
+fn thread_name() -> String {
+    std::thread::current()
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "<unnamed>".to_owned())
+}
+
+/// Current kernel TID for affinity logs.
+fn current_tid() -> i32 {
+    // SAFETY: `gettid` has no preconditions and cannot fail.
+    unsafe { libc::gettid() }
 }
 
 /// Promotes the calling thread to `SCHED_FIFO` at `priority` (off-RT setup).

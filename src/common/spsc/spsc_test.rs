@@ -130,12 +130,12 @@ fn test_gc_corrupted_slot_unknown_type() {
     let overflow = GcOverflowBuffer::new(4);
     let counter = Arc::new(AtomicU32::new(0));
 
-    // Create a valid packed value to extract a real pointer from
+    // Create a valid packed value to extract a real pointer address from
     let valid_item = GcItem::Test(Box::new(counter.clone()));
     let valid_packed = valid_item
         .into_packed()
         .expect("56-bit packing must succeed on x86-64 (GcOverflowBuffer::new probe passed)");
-    let ptr = (valid_packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
+    let ptr_bits = valid_packed & 0x00FF_FFFF_FFFF_FFFF;
 
     // Push 3 valid items (slots 0, 1, 2 — write_idx reaches 2)
     overflow.push(GcItem::Test(Box::new(counter.clone())));
@@ -143,11 +143,8 @@ fn test_gc_corrupted_slot_unknown_type() {
     overflow.push(GcItem::Test(Box::new(counter.clone())));
 
     // Manually inject a corrupted slot at position 3 (beyond write_idx):
-    // unknown type_id (99) with a valid pointer
-    overflow.slots[3].store(
-        (99u64 << 56) | (ptr as u64 & 0x00FF_FFFF_FFFF_FFFF),
-        Ordering::Release,
-    );
+    // unknown type_id (99) with a valid pointer address.
+    overflow.slots[3].store((99u64 << 56) | ptr_bits, Ordering::Release);
 
     assert!(!rt_status.check_flag(RT_STATUS_GC_CORRUPTED));
 
@@ -176,19 +173,19 @@ fn test_gc_corrupted_slot_null_type_non_null_ptr() {
     let overflow = GcOverflowBuffer::new(4);
     let counter = Arc::new(AtomicU32::new(0));
 
-    // Create a valid packed value to extract a real pointer from
+    // Create a valid packed value to extract a real pointer address from
     let valid_item = GcItem::Test(Box::new(counter.clone()));
     let packed = valid_item
         .into_packed()
         .expect("56-bit packing must succeed on x86-64 (GcOverflowBuffer::new probe passed)");
-    let ptr = (packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
+    let ptr_bits = packed & 0x00FF_FFFF_FFFF_FFFF;
 
     // Push 2 valid items (slots 0, 1)
     overflow.push(GcItem::Test(Box::new(counter.clone())));
     overflow.push(GcItem::Test(Box::new(counter.clone())));
 
     // Manually inject inconsistent slot at position 2: type_id=0 with valid pointer
-    overflow.slots[2].store(ptr as u64 & 0x00FF_FFFF_FFFF_FFFF, Ordering::Release);
+    overflow.slots[2].store(ptr_bits, Ordering::Release);
 
     assert!(!rt_status.check_flag(RT_STATUS_GC_CORRUPTED));
 

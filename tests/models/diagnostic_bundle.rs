@@ -72,7 +72,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
             sample_rate: 48000,
             buffer_size: 256,
             channel_count: 2,
-            host_name: "CLAP".to_string(),
+            host_name: "PluginHost".to_string(),
         },
         rt: RtInfo {
             thread_priority: 90,
@@ -95,7 +95,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
         flags: 0x1a,
     };
 
-    let consumer = AudioMetadata::new(2, "CLAP");
+    let consumer = AudioMetadata::new(2, "PluginHost");
     let bundle = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
     let rendered = bundle.render();
 
@@ -111,7 +111,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
     assert!(rendered.contains("audio.sr=48000"));
     assert!(rendered.contains("audio.buffer_size=256"));
     assert!(rendered.contains("audio.channel_count=2"));
-    assert!(rendered.contains("audio.host_name=CLAP"));
+    assert!(rendered.contains("audio.host_name=PluginHost"));
 
     // Verify RT info
     assert!(rendered.contains("rt.prio=90"));
@@ -328,7 +328,7 @@ fn test_diagnostic_bundle_path_redaction() {
     }
 
     let home_path = format!("{}/nam-rs/models/test_model.nam", home);
-    let xdg_path = format!("{}/pipewire-0", xdg);
+    let xdg_path = format!("{}/audio-0", xdg);
 
     // Mock provider with a full path in model.path_basename
     let provider = MockSnapshotProvider {
@@ -345,7 +345,7 @@ fn test_diagnostic_bundle_path_redaction() {
             sample_rate: 48000,
             buffer_size: 256,
             channel_count: 2,
-            host_name: "CLAP".to_string(),
+            host_name: "PluginHost".to_string(),
         },
         rt: RtInfo {
             thread_priority: 90,
@@ -385,7 +385,7 @@ fn test_diagnostic_bundle_path_redaction() {
 
     // Verifications for default error parameters
     assert!(rendered_err_default.contains("model_path=~/nam-rs/models/test_model.nam"));
-    assert!(rendered_err_default.contains("socket_path=$XDG_RUNTIME_DIR/pipewire-0"));
+    assert!(rendered_err_default.contains("socket_path=$XDG_RUNTIME_DIR/audio-0"));
     assert!(!rendered_err_default.contains(&home_path));
     assert!(!rendered_err_default.contains(&xdg_path));
 
@@ -478,7 +478,7 @@ fn test_diagnostic_bundle_regex_roundtrip() {
             sample_rate: 96000,
             buffer_size: 128,
             channel_count: 1,
-            host_name: "PipeWire".to_string(),
+            host_name: "PluginHost".to_string(),
         },
         rt: RtInfo {
             thread_priority: 95,
@@ -501,7 +501,7 @@ fn test_diagnostic_bundle_regex_roundtrip() {
         flags: 0x01,
     };
 
-    let consumer = AudioMetadata::new(1, "PipeWire");
+    let consumer = AudioMetadata::new(1, "PluginHost");
     let bundle = DiagnosticBundle::capture_with_runtime(&provider, &consumer);
     let rendered = bundle.render();
 
@@ -546,7 +546,7 @@ fn test_diagnostic_bundle_regex_roundtrip() {
     );
     assert_eq!(
         keys.get("audio.host_name").map(|s| s.as_str()),
-        Some("PipeWire")
+        Some("PluginHost")
     );
 
     assert_eq!(keys.get("rt.prio").map(|s| s.as_str()), Some("95"));
@@ -607,7 +607,7 @@ fn test_diagnostic_bundle_model_sample_rate_mismatch() {
             sample_rate: 48000,
             buffer_size: 256,
             channel_count: 2,
-            host_name: "CLAP".to_string(),
+            host_name: "PluginHost".to_string(),
         },
         rt: RtInfo {
             thread_priority: 90,

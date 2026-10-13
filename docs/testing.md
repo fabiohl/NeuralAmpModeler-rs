@@ -236,11 +236,24 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
   - `[STATUS] KNOWN_GAP id="<id>" reason="<detail>"`: Upstream gap under active tracking.
   - `[STATUS] INCONCLUSIVE reason="<detail>"`: Measurement bypass in non-calibrated environments.
 
-- **Fail-Closed Invariant:** `overall: PASSED` is emitted only when all phases complete with `gaps: []` and no timed phase executed zero tests. In strict mode (`--strict`), `nam_long_receipt` strictly validates the full campaign roster (`CANONICAL_ROSTER`: 6 preflights + `phase1`..`phase7` + terminal `overall`), rejecting partial receipts, missing/duplicate/unknown IDs, zero-test timed passes, and any declared gap. Verification is enforced via:
+- **Fail-Closed Invariant:** `overall: PASSED` is emitted only when all phases complete with `gaps: []` and no timed phase executed zero tests. `nam_long_receipt validate` is a **semantic** verifier — never a substring search: it enforces the canonical roster (`CANONICAL_ROSTER`: 6 preflights + `phase1`..`phase7` + terminal `overall`), rejecting empty/partial receipts, missing/duplicate/unknown IDs, a timed phase that claims `PASSED` with zero executed tests, and a declared `OVERALL:` verdict that disagrees with the verdict derived from the phase/gap evidence (a forged/injected `OVERALL: PASSED` line — including one pasted into a comment — is rejected at parse time). In strict mode (`--strict`) it additionally rejects any declared gap or failure. Verification is enforced via:
 
   ```bash
   cargo run --locked --features testing --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl
   ```
+
+  The roster is a parameter (`LongAuditReceipt::semantic_verdict_with_roster` /
+  `campaign_strict_verdict_with_roster`) so downstream producers (hosts,
+  standalone applications, plugins) reuse the exact schema and semantics with
+  their own phase matrix.
+
+- **Referenced-Artifact Provenance:** each JSONL line may carry the optional
+  SHA-256 of the artifacts that backed its verdict — `oracle_sha256`,
+  `fixture_sha256`, `artifact_sha256` (producer-neutral names; no host-specific
+  field is ever encoded). The fields are omitted when absent
+  (`skip_serializing_if`) and default when absent on read (`#[serde(default)]`),
+  so historical goldens remain byte-compatible. `nam_long_receipt append`
+  accepts `--oracle-sha256` / `--fixture-sha256` / `--artifact-sha256`.
 
 ---
 
@@ -270,6 +283,8 @@ The test framework applies two distinct execution paradigms depending on the ope
 ### 7.3 Operator Delegation
 
 The long audit suite (`utils/tests-long.sh`), baseline renewal (`utils/tests-performance-regression.sh --bootstrap-baseline`), and contract snapshots (`utils/quality-dashboard.sh --save`) are executed **exclusively by human operators** on calibrated, isolated machines. The complete manual testing protocol and release certification checklist reside in [functional-tests.md](functional-tests.md).
+
+The performance gate is **fail-closed**: a missing baseline is `MISSING_BASELINE`, and a fingerprint drift (CPU model, ISA, toolchain, governor, pinned core, producing commit) is `INCOMPARABLE_ENVIRONMENT` — neither silently re-creates or ignores a baseline; renewal is an explicit operator operation under a calibrated environment. The gate binary `nam_perf_gate` is reusable by downstream suites (installed via `cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate`, or `NAM_PERF_GATE`); `coverage`/`expected-count`/`verdict` accept an external `--manifest` of expected ids (trailing-`*` group patterns) so any Criterion suite is verified without engine-internal names. See [benchmarks.md §4](benchmarks.md) for the full contract.
 
 ---
 
@@ -377,7 +392,7 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | **[`utils/lints.sh`](../utils/lints.sh)**   | Static analysis & quality defense | 9 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, `cargo doc`+doctests, SPDX, and policy checks (§2). |
 | **`utils/tests-quick.sh`**                  | Agile first-line test suite       | Three-phase gate (Phase 1: unit + structural integration `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `freshness_guard`, `isa_contract`, `pipeline_capture_test`, `state_compat`; Phase 2: release float oracles; Phase 3: capped parser fuzzing). Runs in ~2 minutes (§3). |
 | **`utils/tests-long.sh`**                   | Nightly & pre-release audit suite | 6 preflights + 7 exhaustive stress and verification phases (~10 min). Emits structured JSONL receipts (§5). Operador humano / noturno. |
-| **`utils/_lib.sh`**                         | Shared shell library              | Dynamic project path resolution, log formatting, process priority management, and typed receipt helpers.                           |
+| **`utils/_lib.sh`**                         | Shared shell library              | Dynamic project path resolution, log formatting, process priority management, QA-binary resolution and typed receipt helpers. Sourcing it pulls in the canonical, project-neutral core `utils/_lib_core.sh` (byte-identical across the NAM ecosystem, drift-pinned by `utils/test-lib-drift.sh`). |
 | **`utils/quality-dashboard.sh`**            | Quality contract manager          | Executes fidelity and latency matrices; verifies or updates `docs/quality-contract.json` (§10). Uso pontual / sob demanda.         |
 | **`utils/tests-performance-regression.sh`** | Performance regression wall       | Baseline-gated Criterion evaluation; statistical confidence interval verification against ±5% noise bands. Uso sob demanda.       |
 | **`utils/setup-third-party.sh`**            | Upstream vendor mirror manager    | Clones or updates pinned commits of `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin`.                                           |
@@ -385,7 +400,12 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper       | Uso pontual / diagnóstico: relata capacidades SIMD da CPU, estado AVX-512 do SO e backend de dispatch ativo com checksum.         |
 | **`utils/check-model.sh`**                  | Model inspection CLI wrapper      | Uso pontual / diagnóstico: inspeciona modelos `.nam` (JSON) e `.namb` (binário), relatando topologia, metadados e tensores.       |
 | **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking          | Uso estritamente pontual: executa benchmarking comparativo automatizado em instâncias de hardware remoto com AVX-512 via SSH.     |
-| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Uso estritamente pontual: teste sintético com mock de sysfs para validar os branches de `pick_bench_core` em `utils/_lib.sh`.      |
+| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Uso estritamente pontual: teste sintético com mock de sysfs para validar os branches de `pick_bench_core` (canônico em `utils/_lib_core.sh`). Corpo byte-idêntico ao dos projetos irmãos (T5.4); diferem apenas no header SPDX e no caminho de include de `_lib.sh`. |
+| **`utils/test-lib-drift.sh`**               | Shell-core drift guard            | Uso estritamente pontual: recomputa o `sha256` da região canônica de `utils/_lib_core.sh` e o do corpo de `utils/dsp-hotpath-filter.py` (ignorando o header SPDX), falhando em divergência (T5.1/T5.2). Um teste verde nos três repos prova que os corpos compartilhados são byte-idênticos. |
+| **`utils/dsp-hotpath-filter.py`**           | Unified RT-codegen filter & gate  | Filtro único (perfis por repo) para disassembly: gates `zmm`/`libm`/`alloc`/`div`/`tls`, com `--test-synthetic-violation` (T5.2). Compartilhado com os produtores downstream — idêntico exceto pelo header de licença (SPDX); o corpo é drift-pinado por `utils/test-lib-drift.sh`. |
+| **`utils/codegen-profile.json`**            | Codegen symbol profile            | Perfil de símbolos/gates do motor consumido por `verify-kernel-codegen.sh` e pelo filtro unificado (T5.2). |
+| **`utils/verify-kernel-codegen.sh`**        | Kernel static-codegen guard (opt-in) | Uso estritamente pontual/operador: disassembla um binário release com símbolos dos kernels (ex.: `examples/offline_render`, `strip=false`) e aplica o filtro unificado com o perfil do motor (T5.2). |
+| **`utils/miri-audit.sh`**                   | Miri UB/aliasing audit (opt-in)   | Uso estritamente pontual: auditoria out-of-band de proveniência/aliasing sob o interpretador MIR (Stacked/Tree Borrows) em alvos lock-free. Requer nightly isolado; **nunca** nos gates estáveis (§13). |
 
 ---
 
@@ -398,3 +418,59 @@ cargo llvm-cov --features testing
 ```
 
 Coverage reports serve as an informative diagnostic tool and are excluded from official verification scripts.
+
+---
+
+## 13. Out-of-Band Miri Concurrency & Aliasing Audit (`utils/miri-audit.sh`)
+
+Standard release and CI gates remain strictly **stable-only** ([§2](#2-static-analysis--quality-defense-utilslintssh), [§5](#5-decoupled-long-qa-audits-utilstests-longsh)). To verify formal pointer provenance and
+compliance with the Stacked Borrows / Tree Borrows aliasing models on the unsafe lock-free
+primitives, an **opt-in, out-of-band** audit tool is provided (requires an isolated nightly
+toolchain plus the `miri` component):
+
+```bash
+# Optional manual audit (NOT part of lints.sh / tests-quick.sh / tests-long.sh):
+./utils/miri-audit.sh
+```
+
+**Relationship to Loom.** Miri *complements* `loom` (`utils/tests-long.sh` phase 7) and does not
+replace it: `loom` exhaustively explores atomic interleavings to prove the **absence of data
+races**, whereas Miri interprets concrete executions to prove **pointer provenance / aliasing
+validity** (UB detection) that `loom` cannot see.
+
+**Target matrix** (each target fails closed unless it executes a real minimum number of tests;
+full log at `target/logs/miri-audit.log`):
+
+| Target (`--lib` filter)     | Min tests | Notes                                                                                 |
+|:--------------------------- |:---------:|:------------------------------------------------------------------------------------- |
+| `common::spsc`              | 28        | SPSC ring, GC cascade/overflow, status flags.                                         |
+| `dsp::pipeline::bridge`     | 4         | `DspBridge` double-buffer lock-free protocol (interior mutability via `UnsafeCell`).  |
+| `dsp::mirror_buf`           | 3         | Mirrored-buffer state machine; the `memfd_create`/`mmap` allocation tests are `#[cfg_attr(miri, ignore)]` (Miri cannot interpret the FFI). |
+| `dsp::smoother`             | 5         | One-pole smoother primitives.                                                         |
+| `dsp::utils::delay_line`    | 16        | `DelayLine` ring arithmetic.                                                          |
+
+**Flags.** `-Zmiri-disable-isolation` (host clock / pseudo-sleeps in timing paths) and
+`-Zmiri-ignore-leaks`. The latter is required because the GC overflow tests deliberately leak the
+displaced items (the `GcOverflowBuffer` controlled-leak contract) and the corrupted-slot tests leak
+on purpose; without it, Miri reports those *intentional* leaks and drowns the provenance/aliasing
+signal being audited.
+
+**Accepted provenance limitation (GC overflow packing).** The `GcOverflowBuffer`
+packs a heap pointer and a `type_id` into a single `AtomicU64`
+(`GcItem::into_packed` / `from_packed`) — the only audited path that must
+reconstruct a pointer from an address. The packing side exposes provenance
+explicitly through the stable `expose_provenance` API and the recovery side uses
+the stable `with_exposed_provenance_mut`; no raw integer-to-pointer `as` cast
+remains. Because that recovery is still an address-to-pointer operation, Miri
+emits a single (deduplicated) *"integer-to-pointer cast"* warning at that site.
+This is **inherent to the 56-bit packing scheme**, not a soundness defect, and is
+an accepted, documented limitation. Consequently the `common::spsc` target
+validates the SPSC protocol and the GC cascade/overflow dispatch, but **not** the
+strict provenance of the overflow packing itself. To study that site under
+strict provenance, run with `MIRIFLAGS="-Zmiri-strict-provenance ..."` — it flags
+the packing by design and is an out-of-band experiment, never a stable gate.
+
+**Fail-closed gap.** When the nightly toolchain or the `miri` component is unavailable, the script
+emits a typed `GAP:` line and exits non-zero (code `2`) — never a silent success. A target that
+executes zero (or too few) tests is a hard failure (code `1`). The audit therefore never turns a
+missing toolchain into a green gate.

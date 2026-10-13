@@ -542,6 +542,7 @@ fn test_cab_sim_ir_log_buffer_observability() {
     let _ = crate::common::diagnostics::NamLogger::init(crate::common::diagnostics::LoggerConfig {
         level_filter: log::LevelFilter::Debug,
         emit_stderr: false,
+        buffer_capacity: None,
     });
 
     let path = create_temp_cab_ir_wav("log_obs");

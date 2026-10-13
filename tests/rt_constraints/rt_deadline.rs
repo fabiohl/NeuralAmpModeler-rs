@@ -35,7 +35,7 @@ use common::*;
 use std::fs;
 use std::sync::OnceLock;
 
-use neural_amp_modeler_rs::dsp::telemetry::{ExactLatencyReservoir, LatencyHistogram};
+use neural_amp_modeler_rs::dsp::telemetry::{AtomicHistogram, ExactLatencyReservoir};
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
@@ -98,7 +98,7 @@ fn measure_rt_deadline(
     };
     let output_size = out_ch * BLOCK_SIZE;
     let mut output = vec![0.0f32; output_size];
-    let hist = LatencyHistogram::new();
+    let hist = AtomicHistogram::new();
     let reservoir = ExactLatencyReservoir::<MEASURE_BLOCKS>::new();
     let mut violations: u64 = 0;
 

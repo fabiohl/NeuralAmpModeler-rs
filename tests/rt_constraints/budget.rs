@@ -27,7 +27,7 @@
 /// RT deadline for 64 samples at 48 kHz: 1.33 ms (see module docs for the margin).
 pub const RT_DEADLINE_US: u64 = 1330;
 
-/// DSP block size in samples (standard 48 kHz JACK/PipeWire buffer).
+/// DSP block size in samples (standard 48 kHz audio-host buffer).
 pub const BLOCK_SIZE: usize = 64;
 
 /// Canonical sample rate of the RT budget operating point.

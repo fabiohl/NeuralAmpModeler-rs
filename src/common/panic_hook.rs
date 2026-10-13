@@ -294,12 +294,23 @@ pub fn format_panic_report_for_audit_test(
 
 /// Returns the path to the directory used for crash reports:
 /// 1. `NAM_CRASH_DIR` environment variable, if set and non-empty.
-/// 2. `$HOME/.cache/neural-amp-modeler-rs`, if `HOME` environment variable is set.
-/// 3. `None` if neither is set.
+/// 2. Under `cfg(test)` or feature `testing`: `CARGO_TARGET_TMPDIR` or `target/test_crashes`.
+/// 3. In production: `$HOME/.cache/neural-amp-modeler-rs`, if `HOME` environment variable is set.
+/// 4. `None` if neither is set.
 pub fn crash_directory() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("NAM_CRASH_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
+    #[cfg(any(test, feature = "testing"))]
+    {
+        if let Some(tmp) = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .or_else(|| option_env!("CARGO_TARGET_TMPDIR").map(Into::into))
+        {
+            return Some(PathBuf::from(tmp));
+        }
+        Some(PathBuf::from("target/test_crashes"))
+    }
+    #[cfg(not(any(test, feature = "testing")))]
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/neural-amp-modeler-rs"))
 }
 

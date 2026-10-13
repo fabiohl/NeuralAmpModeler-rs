@@ -48,7 +48,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use neural_amp_modeler_rs::dsp::telemetry::LatencyHistogram;
+use neural_amp_modeler_rs::dsp::telemetry::AtomicHistogram;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
@@ -139,7 +139,7 @@ fn measure_latency(
 
     let input = generate_sine_440hz(BLOCK_SIZE);
     let mut output = vec![0.0f32; BLOCK_SIZE];
-    let hist = LatencyHistogram::new();
+    let hist = AtomicHistogram::new();
     let mut violations: u64 = 0;
 
     // `black_box` around the process call and the

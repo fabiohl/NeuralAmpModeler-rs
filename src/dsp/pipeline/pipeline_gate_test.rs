@@ -116,7 +116,9 @@ fn test_hotpath_gate_closed_and_silence() {
 
     // Final verification: Since the gate is closed, no sample should have been sent to the bridge.
     let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
-    let out_buf = &bridge.buffers[1 - read_idx];
+    // SAFETY: single-threaded read after the pipeline stopped writing; the
+    // non-active buffer is read race-free through `UnsafeCell::get`.
+    let out_buf = unsafe { &*bridge.buffers[1 - read_idx].get() };
     assert_eq!(
         out_buf.n_samples, 0,
         "There should be no processed samples when the gate is in absolute silence"

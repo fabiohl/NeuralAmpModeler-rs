@@ -28,7 +28,7 @@ use common::*;
 ///   - Non-silent output (max_abs_out > 0)
 ///   - SPSC transparency: SPSC output == direct output bit-exact
 ///
-/// This test validates the entire chain without PipeWire/Jack dependency.
+/// This test validates the entire chain without an external audio-server dependency.
 #[test]
 fn test_end_to_end_spsc_pipeline() {
     let path = model_path("BossWN-standard.nam");

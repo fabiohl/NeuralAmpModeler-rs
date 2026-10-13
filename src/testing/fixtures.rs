@@ -16,6 +16,7 @@
 //! 4. `third-party/community_models/{name}`
 //! 5. `tests/fixtures/models/{name}` (default, may be absent)
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::loader::loaded_model_pair::{DEFAULT_INPUT_LEVEL_DBU, DEFAULT_LOUDNESS_DB};
@@ -250,4 +251,80 @@ pub fn calibration_multipliers_from_model_json(model_json_path: &Path) -> (f32, 
     let output_mult_adj = lut.db_to_linear(output_db_adj);
 
     (input_mult_adj, output_mult_adj)
+}
+
+/// Error returned by [`require_model_path`] when a required model fixture is
+/// absent from every search location.
+///
+/// Published crates ship without the test assets, so this makes the failure
+/// explicit and actionable instead of handing back a non-existent path the
+/// caller might mistake for a valid fixture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingModelFixture {
+    /// Requested model basename.
+    pub name: String,
+    /// Resolved path that does not exist on disk.
+    pub resolved: PathBuf,
+}
+
+impl fmt::Display for MissingModelFixture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "required model fixture '{}' not found (resolved: {}); the published crate ships \
+             without test assets — point NAM_MODELS_DIR (or \
+             NAM_THIRD_PARTY_DIR/community_models) at a directory that contains it",
+            self.name,
+            self.resolved.display()
+        )
+    }
+}
+
+impl std::error::Error for MissingModelFixture {}
+
+/// Resolves a model fixture path and fails loudly when it is absent.
+///
+/// Unlike [`model_path`] — which always returns a candidate path so callers can
+/// SKIP on absence — this returns a typed [`MissingModelFixture`] naming the
+/// resolved path and the environment override that would satisfy the request.
+/// Use it where a missing fixture must be a hard, legible error rather than a
+/// silent non-existent path.
+pub fn require_model_path(name: &str) -> Result<PathBuf, MissingModelFixture> {
+    let resolved = model_path(name);
+    if resolved.exists() {
+        Ok(resolved)
+    } else {
+        Err(MissingModelFixture {
+            name: name.to_string(),
+            resolved,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_model_path_returns_existing_fixture() {
+        // The v2 stress-signal manifest is a committed, always-present fixture
+        // used purely to prove the success branch resolves a real file.
+        let path = require_model_path("wavenet_a1_standard.nam");
+        // Only assert the happy path when the fixture is actually checked in;
+        // published/clean checkouts legitimately lack it.
+        if let Ok(p) = path {
+            assert!(p.exists());
+            assert!(p.ends_with("wavenet_a1_standard.nam"));
+        }
+    }
+
+    #[test]
+    fn require_model_path_missing_is_legible_error() {
+        let err = require_model_path("__definitely_absent_fixture__.nam")
+            .expect_err("an absent model must not resolve");
+        assert_eq!(err.name, "__definitely_absent_fixture__.nam");
+        let msg = err.to_string();
+        assert!(msg.contains("__definitely_absent_fixture__.nam"), "{msg}");
+        assert!(msg.contains("NAM_MODELS_DIR"), "{msg}");
+    }
 }

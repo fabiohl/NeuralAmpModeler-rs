@@ -8,7 +8,7 @@
 //  real-time audio processing. The `CountingAllocator` tracks `malloc` calls
 //  per-thread via thread-local storage (TLS) and a `TrackingGuard` RAII gate.
 //
-//  When the `heap-audit` + `clap-plugin` features are active, the guard delegates
+//  When the `heap-audit` feature is active, the guard delegates
 //  to `neural_amp_modeler_rs::common::alloc_audit::TrackingGuard`. Otherwise, it uses the local
 //  `CountingAllocator` global allocator.
 

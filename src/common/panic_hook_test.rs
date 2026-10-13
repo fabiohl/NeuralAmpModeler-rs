@@ -90,21 +90,46 @@ fn test_crash_directory_env_override() {
     }
     assert_eq!(crash_directory(), Some(custom_path.clone()));
 
-    // When empty, falls back to HOME/.cache/neural-amp-modeler-rs
+    // When empty, falls back to CARGO_TARGET_TMPDIR or target/test_crashes under test harness
     // SAFETY: isolated unit test thread; setting NAM_CRASH_DIR for this process.
     unsafe {
         std::env::set_var("NAM_CRASH_DIR", "");
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        assert_eq!(
-            crash_directory(),
-            Some(std::path::PathBuf::from(home).join(".cache/neural-amp-modeler-rs"))
-        );
-    }
+    let fallback = crash_directory().expect("crash directory must be set under test");
+    let fallback_str = fallback.to_string_lossy();
+    assert!(
+        fallback_str.contains("target") || fallback_str.contains("tmp"),
+        "fallback must resolve to test harness directory, got: {:?}",
+        fallback
+    );
 
     // Clean up
     // SAFETY: isolated unit test thread; removing NAM_CRASH_DIR for this process.
     unsafe {
         std::env::remove_var("NAM_CRASH_DIR");
     }
+}
+
+#[test]
+fn test_crash_directory_contract_avoids_user_cache() {
+    // Under testing/cfg(test), if NAM_CRASH_DIR is unset or empty,
+    // the directory MUST NOT start with $HOME/.cache
+    // SAFETY: isolated unit test thread; clearing NAM_CRASH_DIR for this process.
+    unsafe {
+        std::env::remove_var("NAM_CRASH_DIR");
+    }
+    let dir = crash_directory().expect("crash directory must be available in test harness");
+    let dir_str = dir.to_string_lossy();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_cache = std::path::PathBuf::from(home).join(".cache");
+        let home_cache_str = home_cache.to_string_lossy();
+        assert!(
+            !dir_str.starts_with(home_cache_str.as_ref()),
+            "crash directory in test harness must not point to user cache, got: {dir_str}"
+        );
+    }
+    assert!(
+        dir_str.contains("target") || dir_str.contains("tmp"),
+        "crash directory in test harness must resolve to CARGO_TARGET_TMPDIR or target/test_crashes, got: {dir_str}"
+    );
 }

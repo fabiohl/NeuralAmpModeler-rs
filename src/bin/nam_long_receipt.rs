@@ -12,8 +12,11 @@
 //! - `append`:  validate one phase outcome and append its JSONL line.
 //! - `summary`: read the receipt, derive the suite-level `overall` line and
 //!   append it (verdict: PASSED | FAILED | COMPLETED_WITH_GAPS).
-//! - `validate`: fail-closed check that every line is valid JSON with the
-//!   receipt schema.
+//! - `validate`: fail-closed semantic check that every line is valid JSON with
+//!   the receipt schema, that the canonical roster is complete and
+//!   duplicate-free, and that the declared `overall` verdict is consistent with
+//!   the phase/gap evidence (never a substring search). `--strict` additionally
+//!   rejects any declared gap or failure.
 //! - `count-log`: print how many tests/benchmarks a phase log proves executed
 //!   (F-21 counter behind `_lib.sh::assert_ran_tests`).
 //!
@@ -66,6 +69,8 @@ fn print_help() {
     println!("  nam_long_receipt append --phase-id <id> --name <name> --status <STATUS>");
     println!("                        --duration-ms <ms> [--tests-executed <n>] [--log <path>]");
     println!("                        [--gaps <a,b,...>] [--out <file>]");
+    println!("                        [--oracle-sha256 <hex>] [--fixture-sha256 <hex>]");
+    println!("                        [--artifact-sha256 <hex>]");
     println!("  nam_long_receipt summary [--out <file>]");
     println!("  nam_long_receipt validate [--out <file>] [--strict]");
     println!("  nam_long_receipt count-log --log <path>");
@@ -78,7 +83,10 @@ fn print_help() {
         PREFLIGHT_PHASE_IDS.join(", ")
     );
     println!("Default output file: {DEFAULT_OUT}");
-    println!("validate --strict: fail-closed (exit 1) on any declared gap or failure.");
+    println!(
+        "validate: fail-closed semantic verification (canonical roster + OVERALL consistency)."
+    );
+    println!("validate --strict: additionally rejects any declared gap or failure.");
 }
 
 /// Flags that do not take a value (boolean switches).
@@ -195,6 +203,9 @@ fn cmd_append(args: &[String]) {
         tests_executed,
         gaps,
         timestamp: now_iso8601(),
+        oracle_sha256: flags.get("oracle-sha256").cloned(),
+        fixture_sha256: flags.get("fixture-sha256").cloned(),
+        artifact_sha256: flags.get("artifact-sha256").cloned(),
     };
 
     if let Err(e) = append_line(&out, &receipt.render_jsonl_line()) {
@@ -282,6 +293,15 @@ fn cmd_validate(args: &[String]) {
             exit(1);
         }
     };
+    // Semantic verification is always fail-closed — never a substring search and
+    // never a mere parse check: the canonical roster must be complete and
+    // duplicate-free, timed phases must have run real tests, and the declared
+    // `overall` verdict must match the verdict derived from the phase/gap
+    // evidence (a forged/injected OVERALL line is rejected here).
+    if let Err(e) = audit.semantic_verdict() {
+        eprintln!("validate: {e}");
+        exit(1);
+    }
     let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     let mut preflight_count = 0u64;
     for phase in &audit.phases {

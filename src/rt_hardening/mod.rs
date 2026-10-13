@@ -34,6 +34,8 @@ pub use affinity::{
 };
 pub use pm_qos::{PmQosGuard, request_cpu_dma_latency};
 pub use thread::{
-    ThreadConfigurator, disable_thp, mlockall_current, promote_sched_fifo, promote_sched_fifo_with,
-    set_cpu_affinity, set_ftz_daz,
+    PinThreadError, SystemThreadConfigurator, ThreadConfigurator, apply_housekeeping_affinity,
+    build_cpu_affinity_mask, build_housekeeping_affinity_mask, disable_thp, mlockall_current,
+    pin_current_thread, promote_sched_fifo, promote_sched_fifo_with, set_cpu_affinity,
+    set_cpu_affinity_with, set_ftz_daz,
 };

@@ -18,10 +18,10 @@
 //!   (all storage is pre-allocated at construction).
 //!
 //! The abstraction is generic, pure and host-agnostic (Apache-2.0): it does not
-//! reference any CLAP/DAW concept. The neural model is injected as a plain
+//! reference any plugin-host concept. The neural model is injected as a plain
 //! `FnMut(&[f32], &[f32], &mut [f32], &mut [f32]) -> usize` processor at model
-//! rate (mono or stereo), so any consumer (CLAP plugin, PipeWire host, offline
-//! renderer) can drive it.
+//! rate (mono or stereo), so any consumer (plugin host, standalone audio host,
+//! offline renderer) can drive it.
 
 use crate::common::diagnostics::NamErrorCode;
 use crate::dsp::resampler::NamResampler;

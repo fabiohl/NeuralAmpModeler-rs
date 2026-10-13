@@ -466,6 +466,7 @@ fn init_plugin_idempotent_from_multiple_threads() {
     let first = NamLogger::init(LoggerConfig {
         level_filter: LevelFilter::Info,
         emit_stderr: false,
+        buffer_capacity: None,
     });
     assert!(first.is_ok());
 
@@ -475,6 +476,7 @@ fn init_plugin_idempotent_from_multiple_threads() {
                 let result = NamLogger::init(LoggerConfig {
                     level_filter: LevelFilter::Debug,
                     emit_stderr: false,
+                    buffer_capacity: None,
                 });
                 assert!(result.is_ok());
             })
@@ -494,6 +496,7 @@ fn init_standalone_returns_ok() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: LevelFilter::Warn,
         emit_stderr: true,
+        buffer_capacity: None,
     });
     assert!(NamLogger::global().is_some());
 }
@@ -507,6 +510,7 @@ fn global_returns_some_after_init() {
     let result = NamLogger::init(LoggerConfig {
         level_filter: LevelFilter::Warn,
         emit_stderr: false,
+        buffer_capacity: None,
     });
     assert!(result.is_ok());
     assert!(NamLogger::global().is_some());
@@ -518,6 +522,7 @@ fn log_buffer_returns_some_after_init() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: LevelFilter::Warn,
         emit_stderr: false,
+        buffer_capacity: None,
     });
     let buf = NamLogger::log_buffer();
     assert!(buf.is_some());
@@ -529,6 +534,7 @@ fn global_and_log_buffer_reference_roundtrip() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: LevelFilter::Info,
         emit_stderr: false,
+        buffer_capacity: None,
     });
     let global = NamLogger::global().unwrap();
     let buf = NamLogger::log_buffer().unwrap();
@@ -933,4 +939,26 @@ fn test_unregister_instance_sink() {
         logs_inst_2.lock().unwrap()[1],
         "after unregister 20".to_string()
     );
+}
+
+// =========================================================================
+// LoggerConfig builder tests (U-03 / F-PR-13 hygiene)
+// =========================================================================
+
+#[test]
+fn logger_config_default_matches_historical_behaviour() {
+    let cfg = LoggerConfig::default();
+    assert_eq!(cfg.level_filter, LevelFilter::Info);
+    assert!(!cfg.emit_stderr);
+    assert_eq!(cfg.buffer_capacity, None);
+}
+
+#[test]
+fn logger_config_builder_sets_all_fields() {
+    let cfg = LoggerConfig::new(LevelFilter::Warn)
+        .with_stderr(true)
+        .with_buffer_capacity(1024);
+    assert_eq!(cfg.level_filter, LevelFilter::Warn);
+    assert!(cfg.emit_stderr);
+    assert_eq!(cfg.buffer_capacity, Some(1024));
 }

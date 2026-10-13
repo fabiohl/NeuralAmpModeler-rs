@@ -3,19 +3,98 @@
 
 //! Real-time latency telemetry for the DSP pipeline.
 //!
-//! The binary RT gate reads `LatencyHistogram` bucket edges. The
-//! complementary `ExactLatencyReservoir` (`testing`/`heap-audit`
+//! Two complementary atomic histograms coexist:
+//!
+//! * `AtomicHistogram` — the legacy 32-bin octave histogram. Cheap and
+//!   stable; its percentile output is always a power-of-two upper edge
+//!   (relative error up to 100 %).
+//! * `LatencyHistogram` — the log-linear 256-bin histogram (32 octaves ×
+//!   8 sub-bins, HdrHistogram style) with a bounded **≤ 12.5 %** relative
+//!   error, so `p50 ≠ p99` is observable and gate thresholds can be relative
+//!   to a quantum instead of snapping to the next power of two.
+//!
+//! The complementary `ExactLatencyReservoir` (`testing`/`heap-audit`
 //! only, never production) stores exact samples for trend reports so
 //! sub-bucket drift is visible without touching the gate.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Number of sub-bins per octave in [`LatencyHistogram`] (3 bits ⇒ 8).
+const SUB_BITS: u32 = 3;
+/// Number of sub-bins per octave.
+const SUB_COUNT: usize = 1 << SUB_BITS;
+/// Total number of atomic counters in [`LatencyHistogram`] (32 octaves × 8 sub-bins).
+const LATENCY_BIN_COUNT: usize = 32 * SUB_COUNT;
+
+/// Maps a nanosecond latency to its [`LatencyHistogram`] sub-bin index.
+///
+/// The index is `(msb << 3) | ((v >> (msb - 3)) & 7)` for `msb >= 3`. Values
+/// below 8 ns (`msb < 3`) are clamped to their own exact bin (`index == v`) so
+/// the shift never underflows. Values at or above `2^31` ns saturate into the
+/// top octave; the documented ≤ 12.5 % relative-error bound of the reported
+/// upper edge holds across the whole `[1, 2^31)` range, far beyond any
+/// real-time audio latency.
+#[inline(always)]
+fn latency_bin_index(value: u64) -> usize {
+    if value == 0 {
+        return 0;
+    }
+    let msb = (63 - value.leading_zeros()).min(31);
+    if msb < SUB_BITS {
+        value as usize
+    } else {
+        (((msb as u64) << SUB_BITS) | ((value >> (msb - SUB_BITS)) & (SUB_COUNT as u64 - 1)))
+            as usize
+    }
+}
+
+/// Inclusive lower edge of a [`LatencyHistogram`] sub-bin.
+///
+/// For the clamp region (`index < 8`) the bin holds the single exact value
+/// `index`. Bins `8..24` are unreachable (no value maps to them) and keep the
+/// identity edge so the helper stays total; the reachable bins are strictly
+/// monotone, which is what percentile scanning relies on.
+#[inline]
+fn latency_bin_lower_edge(index: usize) -> u64 {
+    if index < SUB_COUNT {
+        return index as u64;
+    }
+    let msb = index >> SUB_BITS;
+    if msb < SUB_BITS as usize {
+        return index as u64;
+    }
+    let sub = (index & (SUB_COUNT - 1)) as u64;
+    (SUB_COUNT as u64 + sub) << (msb - SUB_BITS as usize)
+}
+
+/// Exclusive upper edge of a [`LatencyHistogram`] sub-bin.
+///
+/// The clamp region (`index < 8`) returns the exact value `index` (0 % error);
+/// every populated log-linear bin returns its true exclusive upper edge
+/// `2^msb + (sub + 1)·2^(msb-3)`, guaranteeing a relative error of at most
+/// 1/8 (12.5 %) against any sample it holds.
+#[inline]
+fn latency_bin_upper_edge(index: usize) -> u64 {
+    if index < SUB_COUNT {
+        return index as u64;
+    }
+    let msb = index >> SUB_BITS;
+    if msb < SUB_BITS as usize {
+        return index as u64;
+    }
+    let sub = (index & (SUB_COUNT - 1)) as u64;
+    (SUB_COUNT as u64 + 1 + sub) << (msb - SUB_BITS as usize)
+}
+
 /// Exponential histogram for tracking the latency distribution of the RT callback.
 ///
 /// Has 32 bins covering powers of 2 from 2^5 ns (~32 ns) to 2^36 ns (~68 s).
 /// Uses atomic operations to ensure RT-safety (lock-free, zero-allocation).
+///
+/// Kept alongside [`LatencyHistogram`] for consumers that rely on the coarse
+/// power-of-two bucket edges; behavior is frozen.
 #[repr(align(128))]
-pub struct LatencyHistogram {
+pub struct AtomicHistogram {
     /// Histogram atomic bins.
     bins: [AtomicU64; 32],
     /// Exact maximum latency observed (lock-free, via fetch_max).
@@ -26,13 +105,13 @@ pub struct LatencyHistogram {
     sum_ns: AtomicU64,
 }
 
-impl Default for LatencyHistogram {
+impl Default for AtomicHistogram {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LatencyHistogram {
+impl AtomicHistogram {
     /// Creates a new zeroed histogram.
     #[cold]
     pub fn new() -> Self {
@@ -183,6 +262,174 @@ impl LatencyHistogram {
     }
 }
 
+/// Log-linear atomic latency histogram (HdrHistogram style) with a bounded error.
+///
+/// 256 `AtomicU64` counters (2 KiB) partitioned into 32 octaves × 8 sub-bins.
+/// The sub-bin is derived from the three bits below the leading `1`
+/// (`index = (msb << 3) | ((v >> (msb-3)) & 7)`), so each recorded sample is
+/// resolved to a value whose relative error over the reported upper edge is at
+/// most 12.5 % — versus the up-to-100 % error of the power-of-two
+/// [`AtomicHistogram`]. The hot path cost is one `lzcnt` + `shr` + `fetch_add`,
+/// identical in spirit to the octave histogram.
+///
+/// `record` is lock-free and zero-allocation. Percentile reads snapshot the
+/// 256 counters off-RT (never from the audio callback) and follow the same
+/// rank/`None`/NaN semantics as [`AtomicHistogram`].
+#[repr(align(128))]
+pub struct LatencyHistogram {
+    /// Histogram atomic sub-bins (32 octaves × 8 sub-bins).
+    bins: [AtomicU64; LATENCY_BIN_COUNT],
+    /// Exact maximum latency observed (lock-free, via fetch_max).
+    exact_max: AtomicU64,
+    /// Exact minimum latency observed (lock-free, via fetch_min).
+    exact_min: AtomicU64,
+    /// Sum of all observations in nanoseconds for computing mean.
+    sum_ns: AtomicU64,
+}
+
+impl Default for LatencyHistogram {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LatencyHistogram {
+    /// Creates a new zeroed histogram.
+    #[cold]
+    pub fn new() -> Self {
+        Self {
+            bins: [const { AtomicU64::new(0) }; LATENCY_BIN_COUNT],
+            exact_max: AtomicU64::new(0),
+            exact_min: AtomicU64::new(u64::MAX),
+            sum_ns: AtomicU64::new(0),
+        }
+    }
+
+    /// Records a latency observation in nanoseconds.
+    ///
+    /// # RT-Safety
+    /// Lock-free and zero-allocation: safe for the DSP hot-path.
+    #[inline(always)]
+    pub fn record(&self, duration_ns: u64) {
+        self.exact_max.fetch_max(duration_ns, Ordering::Relaxed);
+        self.exact_min.fetch_min(duration_ns, Ordering::Relaxed);
+        self.sum_ns.fetch_add(duration_ns, Ordering::Relaxed);
+        let index = latency_bin_index(duration_ns);
+        // `index < LATENCY_BIN_COUNT` by construction; `get` keeps the hot path panic-free.
+        if let Some(bin) = self.bins.get(index) {
+            bin.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Computes the approximate value of a percentile (e.g., 0.99 for P99).
+    ///
+    /// Uses rank `ceil(N * p)` with minimum 1 over the total observations and
+    /// returns the true exclusive upper edge of the matched sub-bin. An empty
+    /// histogram, or `p` outside `[0.0, 1.0]` (or NaN), safely returns `0`.
+    pub fn get_percentile(&self, p: f32) -> u64 {
+        self.get_percentile_opt(p).unwrap_or(0)
+    }
+
+    /// Computes the approximate value of a percentile as an `Option<u64>`.
+    ///
+    /// Returns `None` when empty or when `p` is outside `[0.0, 1.0]`.
+    pub fn get_percentile_opt(&self, p: f32) -> Option<u64> {
+        if !(0.0..=1.0).contains(&p) || p.is_nan() {
+            return None;
+        }
+
+        let counts: [u64; LATENCY_BIN_COUNT] =
+            core::array::from_fn(|i| self.bins[i].load(Ordering::Relaxed));
+        let total: u64 = counts.iter().sum();
+
+        if total == 0 {
+            return None;
+        }
+
+        let rank = ((total as f64 * p as f64).ceil() as u64).max(1);
+        let mut accum: u64 = 0;
+
+        for (i, &count) in counts.iter().enumerate() {
+            accum += count;
+            if accum >= rank {
+                return Some(latency_bin_upper_edge(i));
+            }
+        }
+
+        Some(latency_bin_upper_edge(LATENCY_BIN_COUNT - 1))
+    }
+
+    /// Returns the upper edge of the highest non-empty sub-bin; 0 when empty.
+    pub fn get_max(&self) -> u64 {
+        for i in (0..LATENCY_BIN_COUNT).rev() {
+            if self.bins[i].load(Ordering::Relaxed) > 0 {
+                return latency_bin_upper_edge(i);
+            }
+        }
+        0
+    }
+
+    /// Returns the lower edge of the lowest non-empty sub-bin; 0 when empty.
+    pub fn get_min(&self) -> u64 {
+        for i in 0..LATENCY_BIN_COUNT {
+            if self.bins[i].load(Ordering::Relaxed) > 0 {
+                return latency_bin_lower_edge(i);
+            }
+        }
+        0
+    }
+
+    /// Returns the mean/average observed latency in nanoseconds.
+    pub fn get_mean(&self) -> u64 {
+        let total = self.total_count();
+        self.sum_ns
+            .load(Ordering::Relaxed)
+            .checked_div(total)
+            .unwrap_or(0)
+    }
+
+    /// Returns the total number of observations recorded since the last reset.
+    pub fn total_count(&self) -> u64 {
+        self.bins.iter().map(|b| b.load(Ordering::Relaxed)).sum()
+    }
+
+    /// Zeros all sub-bins and resets statistics.
+    ///
+    /// `swap` (RMW) guarantees visibility via cache-coherence. Best-effort
+    /// reset: concurrent `fetch_add` records may be lost during the sweep;
+    /// `record` calls are lock-free and never blocked.
+    pub fn reset(&self) {
+        for bin in &self.bins {
+            bin.swap(0, Ordering::Relaxed);
+        }
+        self.exact_max.swap(0, Ordering::Relaxed);
+        self.exact_min.swap(u64::MAX, Ordering::Relaxed);
+        self.sum_ns.swap(0, Ordering::Relaxed);
+    }
+
+    /// Returns the exact maximum latency observed via lock-free fetch_max (in nanoseconds).
+    pub fn get_exact_max(&self) -> u64 {
+        self.exact_max.load(Ordering::Relaxed)
+    }
+
+    /// Atomically reads and resets the exact maximum (in nanoseconds).
+    pub fn take_exact_max(&self) -> u64 {
+        self.exact_max.swap(0, Ordering::Relaxed)
+    }
+
+    /// Returns the exact minimum latency observed via lock-free fetch_min (in nanoseconds).
+    pub fn get_exact_min(&self) -> u64 {
+        let val = self.exact_min.load(Ordering::Relaxed);
+        if val == u64::MAX { 0 } else { val }
+    }
+
+    /// Atomically reads and resets the exact minimum (in nanoseconds).
+    pub fn take_exact_min(&self) -> u64 {
+        let val = self.exact_min.swap(u64::MAX, Ordering::Relaxed);
+        if val == u64::MAX { 0 } else { val }
+    }
+}
+
 /// Complementary exact-sample reservoir for trend reports.
 ///
 /// Stores up to `N` raw latency samples (ring overwrite) so exact
@@ -292,7 +539,7 @@ mod tests {
     fn test_histogram_mapping() {
         // Organization Test: Verifies that the system stores processing times
         // in the correct "drawers" (bins), separating ultra-fast from slow.
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
 
         hist.record(10); // bin 0 (0..64 ns)
         hist.record(40); // bin 0 (0..64 ns)
@@ -313,7 +560,7 @@ mod tests {
     fn test_percentiles() {
         // Statistics Test: Verifies that the system can correctly identify
         // the "median" (P50) and "worst cases" (P95 and P99) in a batch of measurements.
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
 
         // 100 samples
         for _ in 0..50 {
@@ -335,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_histogram_edge_cases() {
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
         // Empty population
         assert_eq!(hist.get_percentile(0.50), 0);
         assert_eq!(hist.get_percentile_opt(0.50), None);
@@ -358,7 +605,7 @@ mod tests {
         assert_eq!(hist.get_max(), 128);
 
         // Boundary values: 0, 31, 32, 33, 63, 64, 1000 ns
-        let h2 = LatencyHistogram::new();
+        let h2 = AtomicHistogram::new();
         for val in [0u64, 31, 32, 33, 63] {
             h2.record(val);
         }
@@ -380,7 +627,7 @@ mod tests {
     /// Unit tests compile with `cfg(test)`, so this runs in every suite.
     #[test]
     fn test_exact_reservoir_resolves_sub_bucket_drift() {
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
         let exact = ExactLatencyReservoir::<2048>::new();
         for value in [700u64, 750, 800, 950, 1050] {
             for _ in 0..400 {
@@ -418,5 +665,115 @@ mod tests {
         assert_eq!(exact.percentile_exact(0.0), 300);
         assert_eq!(exact.percentile_exact(1.0), 1000);
         assert_eq!(exact.percentile_exact(0.50), 600);
+    }
+
+    // ── Log-linear LatencyHistogram (U-01 / F-PR-07) ─────────────────────────
+
+    #[test]
+    fn test_loglinear_mapping_is_monotone_and_resolved() {
+        // Values below the log region map to exact bins; beyond it, to the
+        // 8-sub-bin scheme. The reported upper edge is never below the sample.
+        for value in [0u64, 1, 7, 8, 15, 16, 255, 256, 3000, 1_000_000] {
+            let upper = latency_bin_upper_edge(latency_bin_index(value));
+            assert!(
+                upper >= value,
+                "upper edge {upper} must bound sample {value}"
+            );
+        }
+        // A non-power-of-two sample resolves to a non-power-of-two edge.
+        let hist = LatencyHistogram::new();
+        for _ in 0..1000 {
+            hist.record(3000);
+        }
+        assert_eq!(hist.get_percentile(0.50), 3072);
+        assert_eq!(hist.get_percentile(1.0), 3072);
+        assert_eq!(hist.get_exact_max(), 3000);
+    }
+
+    #[test]
+    fn test_loglinear_distinguishes_p50_from_p99() {
+        let hist = LatencyHistogram::new();
+        for _ in 0..980 {
+            hist.record(1000); // 1 µs cluster (p50)
+        }
+        for _ in 0..20 {
+            hist.record(5000); // 5 µs tail (p99)
+        }
+        let p50 = hist.get_percentile(0.50);
+        let p99 = hist.get_percentile(0.99);
+        assert!(p50 < p99, "p50 {p50} must be below p99 {p99}");
+        assert_eq!(p50, 1024); // 1000 ∈ [896, 1024)
+        assert_eq!(p99, 5120); // 5000 ∈ [4608, 5120)
+        assert_eq!(hist.total_count(), 1000);
+    }
+
+    #[test]
+    fn test_loglinear_empty_invalid_and_reset() {
+        let hist = LatencyHistogram::new();
+        assert_eq!(hist.get_percentile(0.50), 0);
+        assert_eq!(hist.get_percentile_opt(0.50), None);
+        assert_eq!(hist.get_max(), 0);
+        assert_eq!(hist.get_min(), 0);
+        assert_eq!(hist.total_count(), 0);
+
+        hist.record(1234);
+        assert_eq!(hist.get_percentile(-0.1), 0);
+        assert_eq!(hist.get_percentile(1.1), 0);
+        assert_eq!(hist.get_percentile(f32::NAN), 0);
+        assert_eq!(hist.get_percentile_opt(-0.1), None);
+        assert_eq!(hist.get_percentile_opt(1.1), None);
+        assert_eq!(hist.get_percentile_opt(f32::NAN), None);
+
+        hist.reset();
+        assert_eq!(hist.total_count(), 0);
+        assert_eq!(hist.get_percentile(0.99), 0);
+        assert_eq!(hist.get_exact_max(), 0);
+        assert_eq!(hist.get_exact_min(), 0);
+    }
+
+    #[test]
+    fn test_loglinear_percentile_monotonic() {
+        let hist = LatencyHistogram::new();
+        for value in 1u64..=2048 {
+            hist.record(value);
+        }
+        let mut last = 0u64;
+        for p in [0.0f32, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0] {
+            let v = hist.get_percentile(p);
+            assert!(v >= last, "percentile p={p} regressed: {v} < {last}");
+            last = v;
+        }
+    }
+
+    mod loglinear_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// The reported sub-bin edge never undershoots a sample and keeps
+            /// the relative error within the documented 12.5 % bound.
+            #[test]
+            fn relative_error_within_twelfth(value in 1u64..=(1u64 << 31)) {
+                let edge = latency_bin_upper_edge(latency_bin_index(value));
+                prop_assert!(edge >= value, "edge {edge} < sample {value}");
+                // edge <= value * 9 / 8  ⇔  8·edge <= 9·value (integer, overflow-safe via u128).
+                prop_assert!(
+                    (edge as u128) * 8 <= (value as u128) * 9,
+                    "relative error > 12.5%: edge {edge} vs sample {value}"
+                );
+            }
+
+            /// Reachable log-region bins are mapped monotonically: a larger
+            /// index never reports a smaller upper edge (clamp bins `0..8` are
+            /// exact and below the first log bin).
+            #[test]
+            fn edges_are_monotone(i in (3 * SUB_COUNT)..LATENCY_BIN_COUNT, j in (3 * SUB_COUNT)..LATENCY_BIN_COUNT) {
+                let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+                prop_assert!(latency_bin_upper_edge(lo) <= latency_bin_upper_edge(hi));
+                prop_assert!(
+                    latency_bin_upper_edge(SUB_COUNT - 1) <= latency_bin_upper_edge(3 * SUB_COUNT)
+                );
+            }
+        }
     }
 }

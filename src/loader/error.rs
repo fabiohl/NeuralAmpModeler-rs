@@ -99,6 +99,14 @@ pub enum LoadError {
     #[error("Invalid model metadata: {0}")]
     InvalidMetadata(#[from] MetadataError),
 
+    /// The file carries no usable `metadata` object (e.g. absent, JSON `null`,
+    /// or outside the readable section for `.namb`).
+    #[error("Model file contains no '{format}' metadata section")]
+    MetadataNotFound {
+        /// Source format the peek targeted (`"nam"` or `"namb"`).
+        format: &'static str,
+    },
+
     /// Model topology validation failed or requested unsupported feature topology.
     #[error("Invalid model topology ({code:?}): {reason}")]
     InvalidTopology {
@@ -179,6 +187,7 @@ impl LoadError {
             Self::NonFiniteWeights => NamErrorCode::NamJsonWeightNotFinite,
             Self::ModelTooLarge => NamErrorCode::ModelTooLarge,
             Self::InvalidMetadata(_) => NamErrorCode::InvalidMetadata,
+            Self::MetadataNotFound { .. } => NamErrorCode::InvalidMetadata,
             Self::InvalidTopology { code, .. } => *code,
             Self::ModelBuildFailed(_) => NamErrorCode::ModelBuildFailed,
             Self::Internal(_) => NamErrorCode::ModelBuildFailed,

@@ -1,0 +1,5 @@
+{
+  "sections": [".text", ".text.cold"],
+  "symbols": "neural_amp_modeler_rs::math::activations::|neural_amp_modeler_rs::math::gemm::gemv::|neural_amp_modeler_rs::math::gemm::gemm_batch::fused_residual_batch::|neural_amp_modeler_rs::math::wavenet::accumulate::|neural_amp_modeler_rs::dsp::oversample::OversampleEngine::",
+  "gates": { "zmm": 0, "libm": 0, "alloc": 0 }
+}

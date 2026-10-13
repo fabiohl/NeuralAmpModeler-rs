@@ -34,6 +34,8 @@ scratch.rs
 !tests/fixtures/**/*.json
 # Canonical quality-contract authority is JSON — do not ignore
 !docs/quality-contract.json
+# Unified codegen symbol profile is JSON — do not ignore (T5.2)
+!utils/codegen-profile.json
 
 # Proptest regression files (auto-generated)
 *.proptest-regressions

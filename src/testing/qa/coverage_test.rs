@@ -203,3 +203,30 @@ fn test_missing_expected_benchmarks_matrix() {
     // 4. Alternative suite without manifest -> Err
     assert!(expected_bench_ids_for_suite("custom_suite", None).is_err());
 }
+
+/// A trailing-`*` manifest entry matches any executed id with that prefix, so a
+/// downstream suite can declare whole Criterion groups without enumerating the
+/// parametric ids; exact entries stay exact.
+#[test]
+fn test_expected_prefix_wildcard_matches_group() {
+    let executed = vec![
+        "SUITE_WorstCase/DryDelay/Mono/64_samp_d12".to_string(),
+        "SUITE_Evidence/InferenceE2E/LSTM/64_samp".to_string(),
+    ];
+    assert!(expected_id_matches("SUITE_WorstCase/*", &executed));
+    assert!(expected_id_matches("SUITE_Evidence/*", &executed));
+    assert!(!expected_id_matches("SUITE_Inference/*", &executed));
+    assert!(expected_id_matches(
+        "SUITE_Evidence/InferenceE2E/LSTM/64_samp",
+        &executed
+    ));
+
+    // An unmatched group pattern is reported missing (fail-closed).
+    let log = "Benchmarking SUITE_WorstCase/DryDelay/Mono/64_samp_d12: Warming up\n";
+    let expected = vec![
+        "SUITE_WorstCase/*".to_string(),
+        "SUITE_Inference/*".to_string(),
+    ];
+    let missing = missing_expected_benchmarks(log, &expected).unwrap();
+    assert_eq!(missing, vec!["SUITE_Inference/*".to_string()]);
+}

@@ -338,13 +338,13 @@ fn test_hf_mode_switch_functional() {
 // Integration Tests: Zero-Alloc Activation Precision Switch
 // =============================================================================
 //
-// These tests simulate the CLI and CLAP control flow for activation precision
+// These tests simulate the CLI and plugin-host control flow for activation precision
 // switching and verify that set_activation_tls() is zero-alloc
 // (no heap allocation occurs during the mode switch, meeting RT-safety guarantee).
 //
-// For the CLAP simulation: PARAM_ACTIVATION=8 is declared but the RT-thread
+// For the plugin-host simulation: PARAM_ACTIVATION=8 is declared but the RT-thread
 // wiring is pending. These tests exercise the global atomic switch
-// path that both CLI and CLAP share, proving the mechanism is RT-safe.
+// path that both CLI and plugin host share, proving the mechanism is RT-safe.
 //
 // LSTM models are included in the audit: the switch call itself is zero-alloc
 // regardless of whether the model dispatches to the HF kernel (WaveNet does,
@@ -353,7 +353,7 @@ fn test_hf_mode_switch_functional() {
 /// Zero-alloc: `set_activation_tls()` global atomic write.
 ///
 /// Proves that switching activation precision (the global atomic store)
-/// performs zero heap allocations. This is the primitive both CLI and CLAP
+/// performs zero heap allocations. This is the primitive both CLI and plugin host
 /// rely on for RT-safe mode switching.
 #[test]
 fn test_zero_alloc_activation_switch_primitive() {
@@ -374,7 +374,7 @@ fn test_zero_alloc_activation_switch_primitive() {
 
 /// Zero-alloc: activation switch while model is loaded and processing.
 ///
-/// Simulates per-block mode switching (CLAP pattern): load model, prewarm,
+/// Simulates per-block mode switching (plugin-host pattern): load model, prewarm,
 /// run inference, switch activation precision mid-stream, and confirm
 /// zero allocations throughout the entire sequence.
 #[test]
@@ -510,16 +510,16 @@ fn test_activation_switch_output_idempotent() {
     }
 }
 
-/// CLAP simulation: block-boundary activation switch pattern.
+/// Plugin-host simulation: block-boundary activation switch pattern.
 ///
-/// Simulates the CLAP processor pattern for activation precision switching:
+/// Simulates the plugin-host processor pattern for activation precision switching:
 /// the RT thread reads PARAM_ACTIVATION from UiToRt at block boundaries
 /// and calls set_activation_tls() without model rebuild.
 ///
 /// While PARAM_ACTIVATION=8 is pending, the global setter path
-/// exercised here is the identical code path the CLAP processor will use.
+/// exercised here is the identical code path the plugin-host processor will use.
 #[test]
-fn test_clap_pattern_block_boundary_activation_switch() {
+fn test_plugin_host_pattern_block_boundary_activation_switch() {
     let path = models_dir().join("BossLSTM-1x16.nam");
     if !path.exists() {
         return;
@@ -545,7 +545,7 @@ fn test_clap_pattern_block_boundary_activation_switch() {
     let count = {
         let _guard = TrackingGuard::new();
 
-        // Simulate the CLAP pattern: at every block boundary (64 samples),
+        // Simulate the plugin-host pattern: at every block boundary (64 samples),
         // check param_activation (simulated as toggling every 4 blocks)
         let mut toggle = false;
         for block_start in (0..512).step_by(64) {
@@ -568,12 +568,12 @@ fn test_clap_pattern_block_boundary_activation_switch() {
 
     assert_eq!(
         count, 0,
-        "CLAP block-boundary activation switch allocated {} times!",
+        "Plugin-host block-boundary activation switch allocated {} times!",
         count
     );
 
     assert!(
         output.iter().all(|&x| x.is_finite()),
-        "non-finite output after CLAP-style activation switching"
+        "non-finite output after plugin-host-style activation switching"
     );
 }

@@ -262,6 +262,150 @@ fn coverage_blind_gate_fails_closed() {
     );
 }
 
+/// The horizontal coverage path: an alternative suite is verified against an
+/// explicit expected-ID manifest (`--suite <name> --manifest <file>`), so a
+/// downstream Criterion suite never needs an engine-internal benchmark name.
+#[test]
+fn coverage_alternative_suite_manifest() {
+    let crit = temp_path("alt-crit");
+    let manifest = temp_path("alt-manifest.txt");
+    write_file(&manifest, "# downstream suite ids\nCUSTOM_A\n\nCUSTOM_B\n");
+    let log = temp_path("alt.log");
+    write_file(&log, "Benchmarking CUSTOM_A: Warming up for 1.0000 s\n");
+
+    let suite_args = [
+        "--suite",
+        "custom_bench",
+        "--manifest",
+        manifest.to_str().unwrap(),
+    ];
+
+    // Manifest declares two ids but only CUSTOM_A ran -> coverage gap listing
+    // the unexecuted CUSTOM_B.
+    let mut args = vec![
+        "coverage",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&suite_args);
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1), "stdout: {}", stdout(&out));
+    let text = stdout(&out);
+    assert!(text.contains("BASELINE_COVERAGE_GAP"), "unexpected: {text}");
+    assert!(
+        text.contains("CUSTOM_B"),
+        "missing id must be listed: {text}"
+    );
+
+    // An alternative suite without a manifest is a fail-closed run error.
+    let out = run(&[
+        "coverage",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--suite",
+        "custom_bench",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("manifest"),
+        "unexpected: {}",
+        stderr(&out)
+    );
+
+    // `expected-count` resolves the same manifest (2 ids).
+    let mut args = vec!["expected-count"];
+    args.extend_from_slice(&suite_args);
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "2");
+
+    // Full coverage of both ids and their series -> green.
+    fs::create_dir_all(crit.join("CUSTOM_A").join("ci-baseline")).unwrap();
+    fs::create_dir_all(crit.join("CUSTOM_B").join("ci-baseline")).unwrap();
+    write_file(
+        &log,
+        "Benchmarking CUSTOM_A: Warming up\nBenchmarking CUSTOM_B: Collecting\n",
+    );
+    let mut args = vec![
+        "coverage",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&suite_args);
+    let out = run(&args);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+}
+
+/// The horizontal verdict path shares one engine with the downstream gate: an
+/// expected manifest id that did not execute is `REGRESSION_BLIND`, and a
+/// declared id whose mean-change CI is entirely above the noise band is
+/// `REGRESSION_DETECTED`.
+#[test]
+fn verdict_alternative_suite_manifest() {
+    let crit = temp_path("alt-verdict-crit");
+    let manifest = temp_path("alt-verdict-manifest.txt");
+    write_file(&manifest, "DOWN_A\nDOWN_B\n");
+    let log = temp_path("alt-verdict.log");
+    write_file(
+        &log,
+        "Benchmarking DOWN_A: Warming up\nBenchmarking DOWN_B: Collecting\n",
+    );
+    write_change_estimates(&crit, "DOWN_A", 0.010, 0.001, 0.020);
+    write_change_estimates(&crit, "DOWN_B", 0.080, 0.061, 0.099);
+
+    let suite_args = [
+        "--suite",
+        "custom_bench",
+        "--manifest",
+        manifest.to_str().unwrap(),
+    ];
+
+    let mut args = vec![
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&suite_args);
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("REGRESSION_DETECTED"), "unexpected: {text}");
+    assert!(
+        text.contains("DOWN_B"),
+        "regressed id must be named: {text}"
+    );
+
+    // DOWN_B present in the manifest but absent from the log -> blind.
+    write_file(&log, "Benchmarking DOWN_A: Warming up\n");
+    let mut args = vec![
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ];
+    args.extend_from_slice(&suite_args);
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1));
+    let text = stdout(&out);
+    assert!(text.contains("REGRESSION_BLIND"), "unexpected: {text}");
+    assert!(text.contains("DOWN_B"), "blind id must be named: {text}");
+}
+
 /// `verdict` is the single machine source of the regression decision (R-3/B2):
 /// a clean comparison JSON passes, and a mean-change CI entirely above the
 /// noise band fails with the typed `REGRESSION_DETECTED` token naming the id.

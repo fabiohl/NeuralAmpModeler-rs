@@ -102,6 +102,12 @@ pub fn canonical_regression_bench_ids() -> Vec<String> {
 
 /// Reads expected benchmark ids from a manifest file.
 /// Non-empty, non-comment lines (ignoring `#`) are trimmed and collected.
+///
+/// An entry may be an exact Criterion id (`RT_A2_Max_CH4`) or a trailing-`*`
+/// **prefix pattern** (`SUITE_WorstCase/*`): the wildcard form lets a downstream
+/// suite declare whole Criterion groups without enumerating every parametric id
+/// ([`expected_id_matches`] implements the match). Both forms sort/dedup
+/// unchanged.
 pub fn read_manifest_bench_ids(manifest_path: &Path) -> Result<Vec<String>, std::io::Error> {
     let content = std::fs::read_to_string(manifest_path)?;
     let mut ids: Vec<String> = content
@@ -113,6 +119,22 @@ pub fn read_manifest_bench_ids(manifest_path: &Path) -> Result<Vec<String>, std:
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+/// `true` when an expected manifest entry is satisfied by the executed id set.
+///
+/// An entry whose form is `<prefix>*` (trailing asterisk) matches when **any**
+/// executed id starts with `<prefix>`; every other entry is an exact id match.
+/// This is the single matcher shared by coverage
+/// ([`missing_expected_benchmarks`]) and the machine verdict
+/// ([`crate::testing::qa::verdict::regression_verdict_with_expected`]), so a
+/// downstream group pattern can never mean two different things.
+pub fn expected_id_matches(expected: &str, executed: &[String]) -> bool {
+    if let Some(prefix) = expected.strip_suffix('*') {
+        executed.iter().any(|id| id.starts_with(prefix))
+    } else {
+        executed.iter().any(|id| id == expected)
+    }
 }
 
 /// Resolves expected benchmark ids for a given suite:
@@ -140,8 +162,10 @@ pub fn expected_bench_ids_for_suite(
 
 /// Checks that all expected benchmark ids were executed in `log_text`.
 ///
-/// Returns `Ok(missing)` where `missing` contains any expected benchmark id
-/// not found in the parsed `executed_bench_ids(log_text)`.
+/// Returns `Ok(missing)` where `missing` contains any expected benchmark entry
+/// not satisfied by the parsed `executed_bench_ids(log_text)` — exact entries
+/// must appear verbatim, trailing-`*` entries must match some executed id's
+/// prefix (see [`expected_id_matches`]).
 /// Returns `Err(BaselineCoverageGap)` if the log is empty or carries no parseable benchmarks.
 pub fn missing_expected_benchmarks(
     log_text: &str,
@@ -158,7 +182,7 @@ pub fn missing_expected_benchmarks(
     }
     let missing: Vec<String> = expected_ids
         .iter()
-        .filter(|expected| !words.contains(&expected.as_str()))
+        .filter(|expected| !expected_id_matches(expected, &executed))
         .cloned()
         .collect();
     Ok(missing)

@@ -78,6 +78,8 @@ The CLI tool [`utils/check-model.sh`](../utils/check-model.sh) (backed by [`exam
 ./utils/check-model.sh --manifest tests/fixtures/models/*.nam > tests/fixtures/models/manifest.json
 ```
 
+**Peek equivalence.** The host-neutral [`loader::peek_metadata`](../src/loader/peek.rs) API extracts the `metadata` object without materializing weights. Its unit suite (`src/loader/peek_test.rs`) asserts 100 % equivalence with `parse_nam_json` over **every** loadable `tests/fixtures/models/*.nam`, plus a `.namb` encode→peek round-trip and a property test where a `"metadata"` literal is embedded inside a string value. Any change to the metadata schema must keep that equivalence green before the fixture set can be trusted.
+
 ---
 
 ## 3. Model Inventory & Provenance Registry

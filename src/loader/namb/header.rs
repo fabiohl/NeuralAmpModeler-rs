@@ -76,6 +76,13 @@ pub fn check_crc(
 /// Flag bitmask for the NAMB header `flags` field.
 pub const FLAG_HAS_CRC32: u8 = 0x01;
 
+/// Fixed size, in bytes, of the `.namb` binary header.
+///
+/// Derived from `size_of::<NambHeader>()` so downstream consumers never
+/// hardcode the on-disk header length (`80`) when computing the metadata
+/// section or the weight-section offset.
+pub const NAMB_HEADER_LEN: usize = std::mem::size_of::<NambHeader>();
+
 /// Fixed binary header of the `.namb` format.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]

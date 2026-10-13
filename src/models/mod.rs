@@ -515,6 +515,51 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
         0
     }
 
+    /// Measures this model's steady-state per-sample inference cost, in
+    /// nanoseconds, on the calling thread, then restores the model to its
+    /// zero/prewarm-equivalent (reset) condition.
+    ///
+    /// # Method
+    /// After one untimed warm-up pass, executes five timed passes of a
+    /// `frames`-sample block of deterministic pseudo-random
+    /// excitation (fixed-seed `xorshift32`) and returns the **minimum**
+    /// observed `ns / sample`. The minimum — not the mean — makes the estimate
+    /// robust to OS preemption, frequency transitions, and other external
+    /// jitter on the calibration host.
+    ///
+    /// Timing uses the calibrated TSC ([`crate::common::tsc::rdtsc_nanos`]);
+    /// when the TSC is not calibrated, that helper's `Instant` fallback is
+    /// used, so an uncalibrated host never panics here.
+    ///
+    /// # State restoration
+    /// Measurement drives real audio through [`process`](Self::process), which
+    /// mutates temporal state. Before returning, the model is restored with the
+    /// engine's two-phase stabilization
+    /// ([`prewarm_reset`](Self::prewarm_reset), then
+    /// [`prewarm_step`](Self::prewarm_step) until
+    /// [`prewarm_complete`](Self::prewarm_complete)) — the same split pass as
+    /// [`reset`](Self::reset), which the engine proves bit-exact against the
+    /// integral reset. The restored state is therefore the **zero/prewarm
+    /// equivalent** state, which for families with `prewarm_samples() == 0`
+    /// (e.g. `Linear`) still advances their canonical cursor by the single
+    /// zeroed stabilization sample, and does not restore an in-flight
+    /// `Container` crossfade transition. Callers that need the exact state of a
+    /// separately constructed instance must not rely on a bit-for-bit match for
+    /// those families. The excitation/output buffers are allocated here, off-RT.
+    ///
+    /// # Real-time safety
+    /// This method MUST NOT be called on the audio thread: it allocates
+    /// (`Vec`), runs several off-deadline inference passes, and performs the
+    /// full stabilization pass. It is intended for the control thread during
+    /// model load or reconfiguration. `frames` should not exceed the model's
+    /// negotiated maximum block size.
+    fn measure_cost_ns_per_sample(&mut self, frames: usize) -> f32
+    where
+        Self: Sized,
+    {
+        measure_cost_ns_per_sample_impl(self, frames)
+    }
+
     /// Returns quality-tier breakpoints `[0.0, 1.0]` for slimmable model bundles.
     ///
     /// # Allocation note
@@ -522,6 +567,73 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     fn slimmable_breakpoints(&self) -> Box<[f64]> {
         Box::new([])
     }
+}
+
+/// Core of [`NamModel::measure_cost_ns_per_sample`], generic over the concrete
+/// model so the provided trait method can require `Self: Sized` (keeping the
+/// trait object-safe) while still measuring every family through the shared
+/// [`NamModel`] surface.
+fn measure_cost_ns_per_sample_impl<M: NamModel>(model: &mut M, frames: usize) -> f32 {
+    /// Number of timed passes; one extra untimed warm-up pass precedes them.
+    const RUNS: usize = 5;
+
+    let frames = frames.max(1);
+    let in_ch = model.num_input_channels().max(1);
+    let out_ch = model.num_output_channels().max(1);
+
+    // Deterministic excitation (fixed-seed xorshift32): identical arithmetic
+    // for every pass, so data-dependent branches never perturb the estimate.
+    let mut state: u32 = 0x9E37_79B9;
+    let mut excitation = vec![0.0f32; frames];
+    for sample in excitation.iter_mut() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        *sample = (state as f32) * (2.0 / u32::MAX as f32) - 1.0;
+    }
+
+    let mut outputs: Vec<Vec<f32>> = (0..out_ch).map(|_| vec![0.0f32; frames]).collect();
+
+    // Minimum of RUNS timed passes, one per pass plus an initial warm-up.
+    let mut best = u64::MAX;
+    if in_ch == 1 && out_ch == 1 {
+        for pass in 0..=RUNS {
+            let start = crate::common::tsc::rdtsc_nanos();
+            model.process(&excitation, &mut outputs[0]);
+            if pass == 0 {
+                continue;
+            }
+            best = best.min(crate::common::tsc::rdtsc_nanos().wrapping_sub(start));
+        }
+    } else {
+        let in_planes: Vec<&[f32]> = (0..in_ch).map(|_| excitation.as_slice()).collect();
+        let mut out_planes: Vec<&mut [f32]> = outputs
+            .iter_mut()
+            .map(|plane| plane.as_mut_slice())
+            .collect();
+        for pass in 0..=RUNS {
+            let start = crate::common::tsc::rdtsc_nanos();
+            let _ = model.process_multichannel(&in_planes, &mut out_planes);
+            if pass == 0 {
+                continue;
+            }
+            best = best.min(crate::common::tsc::rdtsc_nanos().wrapping_sub(start));
+        }
+    }
+
+    // Restore the freshly-built, stabilized condition via the bit-exact split
+    // pass shared with `reset`, so the caller observes no state drift.
+    model.prewarm_reset();
+    while !model.prewarm_complete() {
+        if model.prewarm_step(usize::MAX) == 0 {
+            break;
+        }
+    }
+
+    if best == u64::MAX {
+        return 0.0;
+    }
+    best as f32 / frames as f32
 }
 
 // ── API Return Type Policy ────────────────────────────────────────────────────
@@ -614,3 +726,7 @@ pub enum StaticModel {
 impl sealed::Sealed for StaticModel {}
 
 pub(crate) use static_model::clone_condition_dsp;
+
+#[cfg(test)]
+#[path = "nam_model_measure_test.rs"]
+mod nam_model_measure_test;

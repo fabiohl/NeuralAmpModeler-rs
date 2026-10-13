@@ -32,7 +32,7 @@ pub fn bench_wavenet_standard_process(c: &mut Criterion) {
 
 /// Benchmarks WaveNet Standard inference at small RT buffer sizes (1, 16, 64
 /// samples) covering the full RT range: 1 (per-sample minimum), 16 (small plugin
-/// buffer), 64 (common CLAP/JACK buffer).
+/// buffer), 64 (common plugin-host buffer).
 ///
 /// Records throughput (elem/s) and latency (ns) for each size.
 pub fn bench_wavenet_p10_small_block_sizes(c: &mut Criterion) {

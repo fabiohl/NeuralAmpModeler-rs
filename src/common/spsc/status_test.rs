@@ -43,7 +43,7 @@ fn test_rt_status_flags_alignment_and_cache_isolation() {
     let rt_hot_line = offset_of!(RtStatusFlags, status_bits) / 64;
     let hist_line_start = hist_offset / 64;
     let hist_line_end =
-        (hist_offset + size_of::<crate::dsp::telemetry::LatencyHistogram>() - 1) / 64;
+        (hist_offset + size_of::<crate::dsp::telemetry::AtomicHistogram>() - 1) / 64;
 
     assert_ne!(
         capture_line, playback_line,

@@ -194,7 +194,7 @@ impl CabSimAdapter {
     /// block-size-agnostic: `output` has **no partition cap** — the driver
     /// chunks it internally (full partitions first, then the partial
     /// remainder), so a partition installed below the host quantum (e.g. a
-    /// 128-sample policy under a 512-sample PipeWire buffer) still drains the
+    /// 128-sample policy under a 512-sample host buffer) still drains the
     /// ring-out contiguously per callback instead of clamping the stream and
     /// raising [`RT_STATUS_CABSIM_CONTRACT_VIOLATION`].
     ///

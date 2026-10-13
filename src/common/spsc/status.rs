@@ -315,7 +315,7 @@ pub struct RtStatusFlags {
     // Lines 4..9: Histogram (Latency histogram, 128-byte aligned, 384 bytes)
     // =========================================================================
     /// Latency histogram for statistical analysis of DSP core execution (P50, P95, P99).
-    pub latency_hist: crate::dsp::telemetry::LatencyHistogram,
+    pub latency_hist: crate::dsp::telemetry::AtomicHistogram,
 
     // =========================================================================
     // Line 10: Capture-owned (Host audio capture thread)
@@ -415,7 +415,7 @@ impl RtStatusFlags {
             applied_os_generation: AtomicU64::new(0),
             _pad_rt_handshake: [0; 96],
 
-            latency_hist: crate::dsp::telemetry::LatencyHistogram::new(),
+            latency_hist: crate::dsp::telemetry::AtomicHistogram::new(),
 
             input_buffer_miss: AtomicU32::new(0),
             _pad_capture: [0; 60],

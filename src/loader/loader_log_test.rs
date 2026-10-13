@@ -29,6 +29,7 @@ fn ensure_logger() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: log::LevelFilter::Debug,
         emit_stderr: false,
+        buffer_capacity: None,
     });
 }
 

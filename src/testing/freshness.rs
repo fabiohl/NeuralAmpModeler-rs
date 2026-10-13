@@ -147,11 +147,21 @@ pub enum FreshnessError {
     },
 }
 
-/// Run the SHA-256 freshness gate against `.golden_manifest.sha256` under `root`.
+/// Manifest filenames searched under `tests/fixtures/`, in priority order.
 ///
-/// The layout expected under `root` mirrors the crate checkout:
+/// `.manifest.sha256` is the canonical name shared with the downstream sibling
+/// repositories, which ship no engine golden entries; `.golden_manifest.sha256`
+/// is this crate's own checked-in golden catalog and is retained so existing
+/// callers keep resolving their manifest unchanged.
+pub const MANIFEST_FILENAMES: [&str; 2] = [".manifest.sha256", ".golden_manifest.sha256"];
+
+/// Run the SHA-256 freshness gate against the fixture manifest under `root`.
 ///
-/// - `tests/fixtures/.golden_manifest.sha256` — the manifest.
+/// The manifest is resolved by searching [`MANIFEST_FILENAMES`] under
+/// `tests/fixtures/`; the first candidate present on disk wins. The layout
+/// expected under `root` mirrors the crate checkout:
+///
+/// - `tests/fixtures/{.manifest,.golden_manifest}.sha256` — the manifest.
 /// - `tests/fixtures/models/*.nam` — model files.
 /// - `tests/fixtures/*` — fixture/golden files.
 ///
@@ -162,15 +172,30 @@ pub fn check_freshness(
     mode: FreshnessMode,
 ) -> Result<FreshnessOutcome, FreshnessError> {
     let root = root.as_ref();
-    let manifest_path = root.join("tests/fixtures/.golden_manifest.sha256");
-    let models_dir = root.join("tests/fixtures/models");
     let fixtures_dir = root.join("tests/fixtures");
+    let manifest_path = MANIFEST_FILENAMES
+        .iter()
+        .map(|name| fixtures_dir.join(name))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| fixtures_dir.join(MANIFEST_FILENAMES[0]));
 
     if !manifest_path.exists() {
         return Err(FreshnessError::ManifestNotFound(manifest_path));
     }
 
-    let manifest_text = fs::read_to_string(&manifest_path)?;
+    check_freshness_manifest(root, &manifest_path, mode)
+}
+
+/// Core freshness gate for an explicit, already-resolved `manifest_path`.
+fn check_freshness_manifest(
+    root: &Path,
+    manifest_path: &Path,
+    mode: FreshnessMode,
+) -> Result<FreshnessOutcome, FreshnessError> {
+    let models_dir = root.join("tests/fixtures/models");
+    let fixtures_dir = root.join("tests/fixtures");
+
+    let manifest_text = fs::read_to_string(manifest_path)?;
     let manifest_toolchain = ToolchainFingerprint::from_manifest(&manifest_text);
     let current_toolchain = ToolchainFingerprint::current();
     let toolchain_drift = manifest_toolchain.drift_against(&current_toolchain);

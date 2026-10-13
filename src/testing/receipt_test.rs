@@ -63,6 +63,7 @@ fn receipt_line_roundtrips_with_schema() {
         tests_executed: 3,
         gaps: vec!["inconclusive_environment".to_string()],
         timestamp: "2026-08-14T00:00:00Z".to_string(),
+        ..Default::default()
     };
     let line = entry.render_jsonl_line();
     let parsed = LongPhaseReceipt::parse_jsonl_line(&line).unwrap();
@@ -85,6 +86,7 @@ fn jsonl_parser_accepts_stream_and_rejects_bad_lines() {
         tests_executed: 5,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let b = LongPhaseReceipt {
         phase_id: "phase2".to_string(),
@@ -94,6 +96,7 @@ fn jsonl_parser_accepts_stream_and_rejects_bad_lines() {
         tests_executed: 0,
         gaps: vec!["skipped".to_string()],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let input = format!("{}\n{}\n", a.render_jsonl_line(), b.render_jsonl_line());
     let parsed = LongAuditReceipt::parse_jsonl(&input).unwrap();
@@ -119,6 +122,7 @@ fn jsonl_parser_skips_empty_lines() {
         tests_executed: 1,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let input = format!("\n{}\n\n", a.render_jsonl_line());
     let parsed = LongAuditReceipt::parse_jsonl(&input).unwrap();
@@ -286,6 +290,7 @@ fn typed_skip_changes_receipt_verdict_to_completed_with_gaps() {
         tests_executed: 2,
         gaps: gaps.clone(),
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let receipt = LongAuditReceipt {
         phases: vec![phase],
@@ -323,6 +328,7 @@ fn avx512_opt_in_declaration_counts_as_declared_gap() {
         tests_executed: 42,
         gaps: detect_gap_markers(&log),
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let receipt = LongAuditReceipt {
         phases: vec![phase],
@@ -342,6 +348,7 @@ fn summary_derives_verdict_and_gaps() {
         tests_executed: 2,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let all_pass = LongAuditReceipt {
         phases: vec![
@@ -404,6 +411,7 @@ fn passed_phase_with_log_markers_counts_as_declared_gap() {
         tests_executed: 2,
         gaps: gaps.iter().map(|s| s.to_string()).collect(),
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let bypassed = LongAuditReceipt {
         phases: vec![
@@ -438,6 +446,7 @@ fn human_summary_lines_flag_only_alarms_and_verdicts() {
             tests_executed: 2,
             gaps: gaps.iter().map(|s| s.to_string()).collect(),
             timestamp: "t".to_string(),
+            ..Default::default()
         };
     let receipt = LongAuditReceipt {
         phases: vec![
@@ -508,6 +517,7 @@ fn verdict_lines_preserve_pre_s5_mappings() {
         tests_executed: 1,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
 
     // Deadline: FAILED → FAIL; SKIPPED/PASSED → PASS; absent → PASS.
@@ -589,6 +599,7 @@ fn simulated_receipt_never_prints_green_verdicts() {
         tests_executed: 0,
         gaps: vec!["simulated".to_string()],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let receipt = LongAuditReceipt {
         phases: vec![
@@ -634,6 +645,7 @@ fn simulated_receipt_never_prints_green_verdicts() {
                 tests_executed: 3,
                 gaps: vec![],
                 timestamp: "t".to_string(),
+                ..Default::default()
             },
             mk("phase6"),
         ],
@@ -701,6 +713,7 @@ fn preflight_ids_are_canonical_and_roundtrip() {
             tests_executed: 0,
             gaps: vec![],
             timestamp: "t".to_string(),
+            ..Default::default()
         };
         let line = entry.render_jsonl_line();
         assert_eq!(LongPhaseReceipt::parse_jsonl_line(&line).unwrap(), entry);
@@ -721,6 +734,7 @@ fn jsonl_parser_accepts_canonical_preflight_ids_and_rejects_unknown() {
         tests_executed: 0,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     let canonical = format!(
         "{}\n{}\n",
@@ -757,6 +771,7 @@ fn preflight_failure_drives_overall_failed_verdict() {
         tests_executed: 1,
         gaps: vec![],
         timestamp: "t".to_string(),
+        ..Default::default()
     };
     // Preflight failure acceptance: an aborted preflight leaves its FAILED line and
     // the summary derives `overall FAILED` — even with all timed phases
@@ -802,6 +817,7 @@ fn mk_phase(
         tests_executed,
         gaps: gaps.iter().map(|s| s.to_string()).collect(),
         timestamp: "t".to_string(),
+        ..Default::default()
     }
 }
 
@@ -1131,4 +1147,115 @@ fn simulated_preregistration_derives_simulated_and_rejects_strict() {
     );
     assert!(receipt.has_declared_gaps());
     assert!(receipt.strict_verdict().is_err());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Referenced-artifact provenance fields (S4-T4.1) and fail-closed semantic
+// verification (S4-T4.2): the unified receipt schema must stay backward
+// compatible with historical goldens and must reject tampering structurally.
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn provenance_fields_are_optional_and_backward_compatible() {
+    // A line without provenance must NOT serialize the optional keys (keeps the
+    // historical JSONL byte-identical) and must round-trip to `None`.
+    let bare = mk_phase("phase2", LongPhaseStatus::Passed, 1, &[]);
+    let bare_line = bare.render_jsonl_line();
+    assert!(!bare_line.contains("oracle_sha256"));
+    assert!(!bare_line.contains("fixture_sha256"));
+    assert!(!bare_line.contains("artifact_sha256"));
+
+    // An old golden line (predating the fields) parses with `None` provenance.
+    let old_golden = r#"{"phase_id":"phase2","name":"phase2","status":"PASSED","duration_ms":1000,"tests_executed":1,"gaps":[],"timestamp":"t"}"#;
+    let parsed_old = LongPhaseReceipt::parse_jsonl_line(old_golden).unwrap();
+    assert_eq!(parsed_old.oracle_sha256, None);
+    assert_eq!(parsed_old.fixture_sha256, None);
+    assert_eq!(parsed_old.artifact_sha256, None);
+
+    // Populated provenance survives the round-trip and is emitted.
+    let with_hashes = bare.clone().with_referenced_artifacts(
+        Some("aa".repeat(32)),
+        Some("bb".repeat(32)),
+        Some("cc".repeat(32)),
+    );
+    let line = with_hashes.render_jsonl_line();
+    assert!(line.contains("\"oracle_sha256\":\"aaaa"));
+    assert!(line.contains("\"fixture_sha256\":\"bbbb"));
+    assert!(line.contains("\"artifact_sha256\":\"cccc"));
+    assert_eq!(
+        LongPhaseReceipt::parse_jsonl_line(&line).unwrap(),
+        with_hashes
+    );
+}
+
+#[test]
+fn semantic_verdict_accepts_clean_and_consistent_gap_receipts() {
+    let clean = mk_canonical_clean_receipt();
+    assert_eq!(clean.semantic_verdict(), Ok(()));
+    assert_eq!(clean.campaign_strict_verdict(), Ok(()));
+
+    // A declared COMPLETED_WITH_GAPS that matches a real gap phase is
+    // semantically consistent (it is rejected only by the strict policy).
+    let mut gapped = mk_canonical_clean_receipt().phases;
+    for p in &mut gapped {
+        if p.phase_id == "phase2" {
+            p.status = LongPhaseStatus::Skipped;
+            p.gaps = vec!["skipped".to_string()];
+        }
+        if p.phase_id == "overall" {
+            p.status = LongPhaseStatus::CompletedWithGaps;
+        }
+    }
+    let gapped = LongAuditReceipt { phases: gapped };
+    assert_eq!(gapped.semantic_verdict(), Ok(()));
+    assert!(gapped.campaign_strict_verdict().is_err());
+}
+
+#[test]
+fn semantic_verdict_rejects_forged_overall_verdict() {
+    // A forged/injected green verdict over real gap evidence must be rejected:
+    // the declared terminal `overall` disagrees with the derived verdict.
+    let mut phases = mk_canonical_clean_receipt().phases;
+    for p in &mut phases {
+        if p.phase_id == "phase3" {
+            p.status = LongPhaseStatus::Skipped;
+            p.gaps = vec!["skipped".to_string()];
+        }
+    }
+    // terminal `overall` is still PASSED (forged).
+    let forged = LongAuditReceipt { phases };
+    let err = forged.semantic_verdict().unwrap_err();
+    assert!(err.contains("disagrees"), "unexpected error: {err}");
+}
+
+#[test]
+fn semantic_verdict_rejects_missing_and_duplicate_phases() {
+    let mut missing = mk_canonical_clean_receipt().phases;
+    missing.retain(|p| p.phase_id != "phase4");
+    let missing = LongAuditReceipt { phases: missing };
+    assert!(missing.semantic_verdict().unwrap_err().contains("missing"));
+
+    let mut duplicated = mk_canonical_clean_receipt().phases;
+    duplicated.insert(0, mk_phase("phase1", LongPhaseStatus::Passed, 5, &[]));
+    let duplicated = LongAuditReceipt { phases: duplicated };
+    assert!(
+        duplicated
+            .semantic_verdict()
+            .unwrap_err()
+            .contains("duplicate")
+    );
+}
+
+#[test]
+fn semantic_verdict_rejects_injected_overall_comment_line() {
+    // The classic substring-search bypass: an `OVERALL: PASSED` line pasted
+    // into a comment/echo is not a receipt line and must fail closed at parse
+    // time (never promoted to a green verdict).
+    let clean = mk_canonical_clean_receipt().render_jsonl();
+    let tampered = format!("{clean}# OVERALL: PASSED\n");
+    let err = LongAuditReceipt::parse_jsonl(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("invalid JSONL line 15"),
+        "unexpected error: {err}"
+    );
 }

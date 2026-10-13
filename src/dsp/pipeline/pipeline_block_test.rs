@@ -164,7 +164,9 @@ mod block_tests {
         );
 
         let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
-        let out_buf = &bridge.buffers[read_idx];
+        // SAFETY: single-threaded read after the pipeline stopped writing; the
+        // front buffer is read race-free through `UnsafeCell::get`.
+        let out_buf = unsafe { &*bridge.buffers[read_idx].get() };
         assert_eq!(out_buf.n_samples as usize, n);
 
         // Mathematical sanity check: audio must not "blow up" (become NaN or Infinity).
@@ -366,7 +368,9 @@ mod block_tests {
         );
 
         let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
-        let out_buf = &bridge.buffers[read_idx];
+        // SAFETY: single-threaded read after the pipeline stopped writing; the
+        // front buffer is read race-free through `UnsafeCell::get`.
+        let out_buf = unsafe { &*bridge.buffers[read_idx].get() };
         assert_eq!(
             out_buf.n_samples as usize, n,
             "Incomplete output at host_rate={}, nam_rate={}: expected {} samples, got {}",

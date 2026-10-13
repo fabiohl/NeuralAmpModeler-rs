@@ -134,7 +134,9 @@ mod tests {
         );
 
         let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
-        let out_buf = &bridge.buffers[read_idx];
+        // SAFETY: single-threaded read after the pipeline stopped writing; the
+        // front buffer is read race-free through `UnsafeCell::get`.
+        let out_buf = unsafe { &*bridge.buffers[read_idx].get() };
         let n_out = out_buf.n_samples as usize;
 
         assert_eq!(

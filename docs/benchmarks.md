@@ -138,7 +138,64 @@ Below is the committed reference baseline measured on release builds under an is
 | `NAM_BENCH_CORE`         | `pick_bench_core` (isolated or `nproc / 2`)  | Dedicated CPU core to pin benchmarks via `taskset`.                 |
 | `NAM_BASELINE_NAME`      | `ci-baseline`                               | Name of the Criterion baseline series.                              |
 | `NAM_BENCH_SUITE`        | `regression_gate` | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
+| `NAM_BENCH_MANIFEST`     | *(empty)*         | Expected-ID manifest for a non-`regression_gate` suite (see below). |
 | `NAM_THERMAL_COOLDOWN_S` | `180`             | Cooldown period before benchmarking to stabilize clock frequencies. |
+
+### Downstream Adoption (External Suites)
+
+`nam_perf_gate` is the only component that interprets performance-governance JSON:
+fingerprint, coverage, machine verdict, baseline persistence and receipts are all
+serde — the shell wrapper only orchestrates `taskset`/`cargo bench`. A different
+repository (a host, a plugin, any Criterion suite) reuses the **same binary** and
+never duplicates the logic, and the crate is not coupled to any consumer name.
+
+1. **Install (route a — recommended).** The crate publishes `/src/bin/`, so the
+   gate binary installs from crates.io pinned to the engine version:
+
+   ```bash
+   cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate --version =1.0.0
+   ```
+
+   Alternatively, point `NAM_PERF_GATE` at any pre-built `nam_perf_gate`
+   executable (an operator-provided binary skips the freshness build and is
+   used as-is). The downstream wrapper never reaches into the engine source
+   tree.
+
+2. **Horizontal coverage (any suite).** `coverage`, `expected-count` and
+   `verdict` accept `--suite <name> --manifest <file>`: the manifest is a plain
+   text file with one expected Criterion benchmark id per line (blank lines and
+   `#` comments ignored). A trailing `Group/*` entry matches any executed id with
+   that prefix, so a suite can declare whole Criterion groups without enumerating
+   the parametric ids; every other entry is an exact id. A `Group/*` entry
+   certifies only that the group **ran** (at least one matching id executed), not
+   that every parametric id inside it did — use exact ids whenever exhaustive
+   per-id coverage is the requirement. Independently of the manifest, any
+   executed id that lacks a saved baseline series still fails closed. This lets an
+   **arbitrary** suite — not just the engine's `regression_gate` — be verified for
+   coverage and evaluated by the machine verdict, without referencing any
+   engine-internal benchmark name:
+
+   ```bash
+   nam_perf_gate coverage --log bench.log --suite custom_bench --manifest ids.txt
+   nam_perf_gate expected-count --suite custom_bench --manifest ids.txt
+   nam_perf_gate verdict  --log bench.log --suite custom_bench --manifest ids.txt
+   ```
+
+   Omitting `--manifest` for a non-`regression_gate` suite fails closed (exit 1):
+   a suite with no declared expectation can never certify coverage.
+
+3. **Stable exit codes.** Every run-time failure is exit `1` with a typed token on
+   stdout, so a downstream wrapper can branch without parsing prose:
+
+   | Token                      | Meaning                                                        |
+   |:-------------------------- |:-------------------------------------------------------------- |
+   | `MISSING_BASELINE`         | No persisted fingerprint/baseline for the current environment. |
+   | `INCOMPARABLE_ENVIRONMENT` | Fingerprint drifted from the persisted baseline.               |
+   | `BASELINE_COVERAGE_GAP`    | Executed/expected benchmark without a saved baseline series.   |
+   | `REGRESSION_DETECTED`      | Mean-change CI entirely above the noise band.                  |
+   | `REGRESSION_BLIND`         | Missing comparison artifact or unexecuted expected id.         |
+
+   Usage errors (unknown subcommand/flag, malformed argument) are exit `2`.
 
 ### Environmental Noise, False Alarms & Hardware Isolation
 
@@ -279,7 +336,7 @@ The Linear model family supports multichannel FIR convolution across $1 \to N$ (
      | **ManyToManyShared $2 \to 2$** | RF = 2048 | 18.65 µs | 10.21 µs | 0.77% |
 
 3. **In-Place (`input == output`) vs. Out-of-Place Overhead:**
-   * In DAW and low-latency host environments (CLAP, PipeWire, JACK), channel buffers frequently alias. All multichannel variants employ early circular buffer absorption (`MirroredBuffer`) where input frames are absorbed into the ring buffer *before* computing output samples.
+   * In DAW and low-latency host environments (plugin hosts, audio servers), channel buffers frequently alias. All multichannel variants employ early circular buffer absorption (`MirroredBuffer`) where input frames are absorbed into the ring buffer *before* computing output samples.
    * Benchmarks comparing in-place aliasing against separate out-of-place buffers show **virtually 0.0% overhead** (within ±1–2% environmental noise). In partitioned FFT mode, buffer address reuse slightly improves L1/L2 cache hit rate (e.g. 10.17 µs in-place vs 10.34 µs out-of-place for $2 \to 2$).
 
 4. **Direct vs. FFT Crossover Across Block Sizes:**

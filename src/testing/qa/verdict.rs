@@ -39,7 +39,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::coverage::executed_bench_ids;
+use super::coverage::{executed_bench_ids, expected_id_matches};
 
 /// Noise band of `benches/regression_gate.rs` (`noise_threshold(0.05)`):
 /// a relative mean change whose whole 95% CI lies above `+5%` is a machine
@@ -189,7 +189,7 @@ pub fn regression_verdict_with_expected(
 
     if let Some(expected) = expected_ids {
         for exp_id in expected {
-            if !ids.contains(exp_id) {
+            if !expected_id_matches(exp_id, &ids) {
                 findings.push(VerdictFinding::MissingExpectedBenchmark { id: exp_id.clone() });
             }
         }

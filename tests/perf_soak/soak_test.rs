@@ -71,7 +71,7 @@ impl SimplePcg {
 /// // 10+2 layers of one_by_one/rechannel dense projections and accumulate in the
 /// // head. F16/BF16 weight quantization contributes a secondary drift (scales
 /// // the bias propagation slightly). No denormal involvement — DAZ/FTZ is active
-/// // (src/math/common/ops.rs:163, src/clap/processor/mod.rs:268).
+/// // (src/math/common/ops.rs:201, src/dsp/pipeline/capture.rs:64).
 /// //
 /// // This is faithful to NAMCore C++ v0.5.3 (NAM/dsp.h:67: "don't expect the
 /// // model to be outputting zeroes after this"). Biases make tanh(bias) ≠ 0 by

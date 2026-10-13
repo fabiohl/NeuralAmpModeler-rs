@@ -9,7 +9,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 **NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
-Engineered for seamless embedding into audio plugins (CLAP, VST3, AU), standalone real-time hosts, offline renderers, and embedded audio pipelines, it guarantees **strict zero heap allocations**, **zero mutex locks**, and **zero blocking system calls** on the real-time audio thread.
+Engineered for seamless embedding into audio plugins, standalone real-time hosts, offline renderers, and embedded audio pipelines, it guarantees **strict zero heap allocations**, **zero mutex locks**, and **zero blocking system calls** on the real-time audio thread.
 
 The crate is host-agnostic, standalone, and general-purpose: public APIs remain decoupled from specific plugin wrappers or audio servers, allowing downstream applications to integrate the engine cleanly into any audio processing graph.
 

@@ -67,10 +67,13 @@ fn test_bridge_reset_to_silence_teardown_only() {
     bridge.reset_to_silence();
 
     // Buffers are silent and generations re-synchronized for the next session.
-    assert_eq!(bridge.buffers[0].n_samples, 0);
-    assert_eq!(bridge.buffers[1].n_samples, 0);
-    assert_eq!(bridge.buffers[0].generation, 0);
-    assert_eq!(bridge.buffers[1].generation, 0);
+    // SAFETY: single-threaded teardown access — no producer/consumer is live, so
+    // the buffers are read race-free through `UnsafeCell::get`.
+    let (b0, b1) = unsafe { (&*bridge.buffers[0].get(), &*bridge.buffers[1].get()) };
+    assert_eq!(b0.n_samples, 0);
+    assert_eq!(b1.n_samples, 0);
+    assert_eq!(b0.generation, 0);
+    assert_eq!(b1.generation, 0);
     let generation = bridge.generation.load(Ordering::Relaxed);
     let consumed = bridge.consumed_gen.load(Ordering::Relaxed);
     assert_eq!(generation, 2);
@@ -95,10 +98,67 @@ fn test_bridge_reset_to_silence_teardown_only() {
     );
 }
 
+/// F-PR-11 / S6-T4: off-RT `prime_silence` pre-rolls one real silence block so
+/// a fresh reader's first `read_block` returns through the normal wet path
+/// (never the starvation path) and consumes the primed generation. The write is
+/// skipped (no drop) when a previous block is still unconsumed.
+#[test]
+fn test_bridge_prime_silence_pre_rolls_first_block() {
+    let mut bridge = new_bridge();
+
+    let bridge_ptr = &raw mut *bridge;
+    // SAFETY: Pointer is valid and points to an allocated DspBridge instance.
+    let reader = unsafe { DspBridgeReader::new(bridge_ptr) };
+
+    // Off-RT pre-roll (exclusive `&mut`).
+    bridge.prime_silence(64);
+    assert_eq!(bridge.generation.load(Ordering::Relaxed), 1);
+
+    let mut last_bridge_gen = 0u64;
+    let seen = reader.read_block(&mut last_bridge_gen, |l, r| (l.len(), l[0], r[0]));
+    let (len, l0, r0) = seen.expect("pre-rolled silence must surface as a block, not starvation");
+    assert_eq!(
+        len, 64,
+        "pre-roll must publish the requested quantum length"
+    );
+    assert_eq!(
+        (l0, r0),
+        (0.0, 0.0),
+        "pre-roll block must be analytical silence"
+    );
+    assert_eq!(
+        last_bridge_gen, 1,
+        "reader must consume the primed generation"
+    );
+    assert_eq!(
+        bridge.consumed_gen.load(Ordering::Relaxed),
+        1,
+        "primed block must be marked consumed"
+    );
+    assert_eq!(
+        bridge.dropped_frames.load(Ordering::Relaxed),
+        0,
+        "pre-roll must never account a drop"
+    );
+
+    // A second pre-roll with the primed block still... now consumed: it advances.
+    bridge.prime_silence(64);
+    assert_eq!(bridge.generation.load(Ordering::Relaxed), 2);
+
+    // Unconsumed primed block: a further pre-roll must be skipped (no drop, no
+    // generation advance) to preserve the skip-on-overflow invariant.
+    bridge.prime_silence(64);
+    assert_eq!(
+        bridge.generation.load(Ordering::Relaxed),
+        2,
+        "pre-roll over an unconsumed block must be skipped"
+    );
+    assert_eq!(bridge.dropped_frames.load(Ordering::Relaxed), 0);
+}
+
 #[test]
 fn test_dsp_bridge_alignment_and_cache_isolation() {
     use core::mem::{align_of, offset_of, size_of};
-
     // Overall struct alignment and sizing
     assert_eq!(
         align_of::<DspBridge>(),

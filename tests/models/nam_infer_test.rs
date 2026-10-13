@@ -4,7 +4,7 @@
 //  Integration Tests for topology validation, neural inference stability,
 //  and miscellaneous edge cases (denormals, block size invariance, community models).
 
-use neural_amp_modeler_rs::dsp::telemetry::LatencyHistogram;
+use neural_amp_modeler_rs::dsp::telemetry::AtomicHistogram;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::{
     NamWavenetTopology, WavenetTopologyResult, get_wavenet_topology, parse_nam_json,
@@ -677,7 +677,7 @@ fn test_denormal_stability_silence() {
 
         let silence = [0.0f32; BLOCK_SIZE];
         let mut output = [0.0f32; BLOCK_SIZE];
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
 
         for block_idx in 0..SILENCE_BLOCKS {
             let start = std::time::Instant::now();
@@ -749,7 +749,7 @@ fn test_denormal_stability_silence() {
 
         let silence = [0.0f32; BLOCK_SIZE];
         let mut output = [0.0f32; BLOCK_SIZE];
-        let hist = LatencyHistogram::new();
+        let hist = AtomicHistogram::new();
 
         for block_idx in 0..SILENCE_BLOCKS {
             let start = std::time::Instant::now();

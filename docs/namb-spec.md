@@ -207,6 +207,8 @@ UTF-8 between offset 80 (0x50) and `weights_offset`. If `weights_offset > 80`, t
 
 The JSON is null-terminated; null bytes after the terminator are ignored. If the JSON is empty or `weights_offset == 80`, the decoder synthesizes a fallback configuration (WaveNet Standard).
 
+The header size is exposed as the public constant `NAMB_HEADER_LEN` (in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)), derived from `std::mem::size_of::<NambHeader>()`; consumers must use it instead of hardcoding `80`. The host-neutral `loader::peek_metadata(path, max_bytes)` API reads only this section — streaming past (never materializing) the weights block in §4.2 — and is the canonical way to show model name/author/gear in preset browsers and CLIs.
+
 ### 4.2 Weights Block
 
 Contiguous array of little-endian `f32` starting from `weights_offset` to the end of the file. Each `f32` occupies 4 bytes. The number of floats is `(file_len - weights_offset) / 4`.
@@ -392,7 +394,7 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 |:------------------- |:----------------------- |:------------------------------------------------------------------------------ |
 | `FLAG_HAS_CRC32`    | `0x01` (u8)             | [`src/loader/namb/header.rs:77`](../src/loader/namb/header.rs#L77)             |
 | `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | [`src/loader/loaded_model_pair.rs:16`](../src/loader/loaded_model_pair.rs#L16) |
-| Header size         | `80` bytes (0x50)       | `std::mem::size_of::<NambHeader>()`                                            |
+| Header size         | `80` bytes (0x50)       | `NAMB_HEADER_LEN` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs) |
 | CRC polynomial      | `0xEDB88320`            | [`src/loader/namb/header.rs:15`](../src/loader/namb/header.rs#L15)             |
 | CRC init            | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24`](../src/loader/namb/header.rs#L24)             |
 | CRC xorout          | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:30`](../src/loader/namb/header.rs#L30)             |

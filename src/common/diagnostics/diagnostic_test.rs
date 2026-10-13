@@ -325,6 +325,7 @@ fn test_diagnostic_bundle_includes_log_trace_when_logger_initialized() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: log::LevelFilter::Info,
         emit_stderr: true,
+        buffer_capacity: None,
     });
 
     log::info!("Test log message 1");
@@ -496,6 +497,7 @@ fn test_diagnostic_emit_does_not_pollute_log_buffer_recursively() {
     let _ = NamLogger::init(LoggerConfig {
         level_filter: log::LevelFilter::Debug,
         emit_stderr: false,
+        buffer_capacity: None,
     });
 
     let snap = SystemSnapshot::capture();

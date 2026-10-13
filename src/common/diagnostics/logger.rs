@@ -458,12 +458,58 @@ pub struct NamLogger {
 }
 
 /// Configuration for `NamLogger::init()`.
+///
+/// Construct with [`LoggerConfig::new`] plus the `with_*` builder methods, or
+/// [`LoggerConfig::default`]. The struct is `#[non_exhaustive]` so additional
+/// optional settings can be introduced without a downstream-breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LoggerConfig {
     /// Maximum log level to record.
     pub level_filter: LevelFilter,
     /// Whether to emit log records to stderr (standalone/CLI mode).
     pub emit_stderr: bool,
+    /// Optional override for the diagnostic `LogBuffer` capacity (ring slots).
+    ///
+    /// `None` keeps [`LogBuffer::default`] (256 slots). Verbose
+    /// diagnostic/test hosts can raise it to avoid evicting early records.
+    pub buffer_capacity: Option<usize>,
+}
+
+impl Default for LoggerConfig {
+    fn default() -> Self {
+        Self {
+            level_filter: LevelFilter::Info,
+            emit_stderr: false,
+            buffer_capacity: None,
+        }
+    }
+}
+
+impl LoggerConfig {
+    /// Creates a config that records up to `level_filter`, with the default
+    /// buffer capacity and stderr emission disabled.
+    pub fn new(level_filter: LevelFilter) -> Self {
+        Self {
+            level_filter,
+            ..Self::default()
+        }
+    }
+
+    /// Enables or disables stderr emission (standalone/CLI mode).
+    pub fn with_stderr(mut self, emit_stderr: bool) -> Self {
+        self.emit_stderr = emit_stderr;
+        self
+    }
+
+    /// Overrides the diagnostic [`LogBuffer`] capacity (ring slots).
+    ///
+    /// A capacity of `0` is clamped to `1` so the underlying ring always has a
+    /// valid positive capacity.
+    pub fn with_buffer_capacity(mut self, capacity: usize) -> Self {
+        self.buffer_capacity = Some(capacity);
+        self
+    }
 }
 
 impl NamLogger {
@@ -473,8 +519,11 @@ impl NamLogger {
     /// Returns a reference to the global instance (or `None` if already
     /// initialized without setting the logger).
     pub fn init(config: LoggerConfig) -> Result<&'static NamLogger, SetLoggerError> {
+        // `None` keeps the historical default (256 slots); `0` is clamped so the
+        // ring always gets a valid positive capacity.
+        let capacity = config.buffer_capacity.unwrap_or(DEFAULT_CAPACITY).max(1);
         let logger = NAM_LOGGER.get_or_init(|| NamLogger {
-            buffer: LogBuffer::default(),
+            buffer: LogBuffer::new(capacity),
             sinks: Mutex::new(Vec::new()),
             emit_stderr: Mutex::new(config.emit_stderr),
             max_level: Mutex::new(config.level_filter),

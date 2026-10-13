@@ -7,6 +7,7 @@
 //! `DspBridgeReader` and the constants `MAX_BRIDGE_BUF` / `MAX_RESAMP_BUF`.
 
 use crate::common::atomics::{AtomicExt, AtomicU32, AtomicU64, AtomicUsize};
+use core::cell::UnsafeCell;
 use core::sync::atomic::Ordering;
 
 /// Maximum intermediate buffer size between the two streams (capture → playback).
@@ -106,7 +107,19 @@ impl Default for BridgeBuffer {
 #[repr(C, align(128))]
 pub struct DspBridge {
     /// The two physical buffers (front/back) for double-buffering.
-    pub buffers: [BridgeBuffer; 2],
+    ///
+    /// Each buffer is wrapped in [`UnsafeCell`] to provide *interior
+    /// mutability*: the capture callback mutates the complementary back-buffer
+    /// while the playback callback reads the front-buffer, both reached through
+    /// raw pointers obtained via [`UnsafeCell::get`]. This lets the lock-free
+    /// protocol avoid materializing an aliasing whole-struct `&DspBridge` /
+    /// `&mut DspBridge` on the hot path — which is undefined behavior under the
+    /// Stacked Borrows / Tree Borrows aliasing models.
+    ///
+    /// `UnsafeCell` is `#[repr(transparent)]`, so the layout, field offsets and
+    /// 128-byte cache-line isolation of `DspBridge` and `BridgeBuffer` are
+    /// unchanged; the wrapper compiles to zero runtime cost.
+    pub buffers: [UnsafeCell<BridgeBuffer>; 2],
 
     // =========================================================================
     // Writer-Owned Line (64 bytes):
@@ -142,7 +155,10 @@ impl DspBridge {
     /// Creates a new zero-initialized `DspBridge`.
     pub fn new() -> Self {
         Self {
-            buffers: [BridgeBuffer::new(), BridgeBuffer::new()],
+            buffers: [
+                UnsafeCell::new(BridgeBuffer::new()),
+                UnsafeCell::new(BridgeBuffer::new()),
+            ],
             active_read_idx: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             dropped_frames: AtomicU32::new(0),
@@ -218,12 +234,56 @@ impl DspBridge {
     pub fn reset_to_silence(&mut self) {
         let curr_gen = self.generation.load(Ordering::Relaxed);
         let next_gen = curr_gen.wrapping_add(1);
-        self.buffers[0].n_samples = 0;
-        self.buffers[0].generation = 0;
-        self.buffers[1].n_samples = 0;
-        self.buffers[1].generation = 0;
+        // `&mut self` proves exclusive access (teardown-only contract), so the
+        // safe `UnsafeCell::get_mut` accessor reaches each buffer without unsafe.
+        let buf0 = self.buffers[0].get_mut();
+        buf0.n_samples = 0;
+        buf0.generation = 0;
+        let buf1 = self.buffers[1].get_mut();
+        buf1.n_samples = 0;
+        buf1.generation = 0;
         self.active_read_idx.store(0, Ordering::Release);
         self.consumed_gen.store(next_gen, Ordering::Release);
+        self.generation.store(next_gen, Ordering::Release);
+    }
+
+    /// Pre-loads one `frames`-sample silence block during off-RT setup/teardown
+    /// windows where the caller holds exclusive access (same `&mut self`
+    /// contract as [`reset_to_silence`](Self::reset_to_silence): no live
+    /// producer/consumer).
+    ///
+    /// Without this pre-roll, a fresh session's first playback quantum observes
+    /// `generation == last_bridge_gen` (both `0`) and reports bridge
+    /// starvation, delivering the muted silence path and paying one quantum of
+    /// zero-order-hold delay before the capture producer's first real block
+    /// lands. Publishing one real zero-filled block advances the generation so
+    /// the first read returns silence through the normal wet path (no
+    /// starvation event); the capture producer overwrites it on its first
+    /// callback.
+    ///
+    /// `frames` is clamped to [`MAX_BRIDGE_BUF`]; a `0` is treated as one sample
+    /// so the block is never zero-length (which the reader treats as silence
+    /// and does not surface as a block). `dropped_frames` is never touched
+    /// here; the write is skipped, preserving the skip-on-overflow invariant,
+    /// when a previous block is still unconsumed (`generation > consumed_gen`).
+    pub fn prime_silence(&mut self, frames: usize) {
+        let current_gen = self.generation.load(Ordering::Relaxed);
+        let consumed_gen = self.consumed_gen.load(Ordering::Acquire);
+        if current_gen > consumed_gen {
+            return;
+        }
+
+        let n = frames.clamp(1, MAX_BRIDGE_BUF);
+        let next_gen = current_gen.wrapping_add(1);
+        let back_idx = 1 - self.active_read_idx.load(Ordering::Relaxed);
+        // `&mut self` proves exclusive access (off-RT setup/teardown window), so
+        // `UnsafeCell::get_mut` is the sound safe accessor for the back buffer.
+        let back_buf = self.buffers[back_idx].get_mut();
+        back_buf.buf_l[..n].fill(0.0);
+        back_buf.buf_r[..n].fill(0.0);
+        back_buf.n_samples = n as u32;
+        back_buf.generation = next_gen;
+        self.active_read_idx.store(back_idx, Ordering::Release);
         self.generation.store(next_gen, Ordering::Release);
     }
 }
@@ -233,6 +293,16 @@ impl Default for DspBridge {
         Self::new()
     }
 }
+
+// SAFETY: before `buffers` became `UnsafeCell`, `DspBridge` was automatically
+// `Sync` (all fields were `Send + Sync`). `UnsafeCell<T>` suppresses the auto
+// `Sync`, so this manual impl preserves the pre-existing public trait surface.
+// It is sound because the only interior-mutable state is the audio buffers,
+// whose mutation is confined to the single-writer/single-reader discipline
+// enforced by `DspBridgeWriter`/`DspBridgeReader`; every safe `&self` method on
+// `DspBridge` (`drain_dropped_frames`) touches only atomics, so sharing
+// `&DspBridge` across threads cannot introduce a data race.
+unsafe impl Sync for DspBridge {}
 
 #[derive(Clone, Copy)]
 /// Safe reference to the DspBridge (shared across threads via pointer).
@@ -353,53 +423,59 @@ impl DspBridgeWriter {
             "resamp_out_r slice smaller than n_bridge in stereo mode"
         );
 
-        // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The back-buffer
-        // (1 - active_read_idx) is exclusively written here; the reader only accesses the
+        // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The
+        // whole-struct pointer is only ever narrowed to field places and raw
+        // buffer pointers — no `&DspBridge` or `&mut DspBridge` is materialized
+        // concurrently with a write, so the aliasing rules of Stacked Borrows /
+        // Tree Borrows hold. `UnsafeCell::get` yields the exclusively-owned
+        // back-buffer (1 - active_read_idx); the reader only accesses the
         // complementary front-buffer.
-        // Bounds & non-overlap: `n_bridge <= MAX_BRIDGE_BUF` by definition; `back_buf.buf_l` and
-        // `back_buf.buf_r` have capacity `MAX_BRIDGE_BUF`. `resamp_out_l.len() >= n_bridge` and
-        // (in stereo) `resamp_out_r.len() >= n_bridge` by caller contract (verified by debug_assert).
-        // Memory regions do not overlap (input is resampler scratch, output is bridge back-buffer).
-        // Atomic fences (Release) synchronize visibility.
+        // Bounds & non-overlap: `n_bridge <= MAX_BRIDGE_BUF` by definition;
+        // `buf_l`/`buf_r` have capacity `MAX_BRIDGE_BUF`; the caller contract
+        // (checked by the debug_asserts above) guarantees
+        // `resamp_out_l.len() >= n_bridge` and, in stereo,
+        // `resamp_out_r.len() >= n_bridge`. The input (resampler scratch) and
+        // output (bridge back-buffer) regions do not overlap. Release stores
+        // synchronize visibility with the reader's Acquire loads.
         unsafe {
-            let bridge = self.0.as_ref();
+            let bridge = self.0.as_ptr();
 
-            let current_gen = bridge.generation.load(Ordering::Relaxed);
-            let consumed_gen = bridge.consumed_gen.load(Ordering::Acquire);
+            let current_gen = (*bridge).generation.load(Ordering::Relaxed);
+            let consumed_gen = (*bridge).consumed_gen.load(Ordering::Acquire);
             if current_gen > consumed_gen {
-                let _ = bridge
+                let _ = (*bridge)
                     .dropped_frames
                     .saturating_inc(Ordering::Relaxed, Ordering::Relaxed);
                 return;
             }
 
             let next_gen = current_gen + 1;
-            let back_idx = 1 - bridge.active_read_idx.load(Ordering::Relaxed);
-            let back_buf = &mut (*self.0.as_ptr()).buffers[back_idx];
+            let back_idx = 1 - (*bridge).active_read_idx.load(Ordering::Relaxed);
+            let back_buf = (*bridge).buffers[back_idx].get();
 
             core::ptr::copy_nonoverlapping(
                 resamp_out_l.as_ptr(),
-                back_buf.buf_l.as_mut_ptr(),
+                (*back_buf).buf_l.as_mut_ptr(),
                 n_bridge,
             );
             if process_mono {
                 core::ptr::copy_nonoverlapping(
                     resamp_out_l.as_ptr(),
-                    back_buf.buf_r.as_mut_ptr(),
+                    (*back_buf).buf_r.as_mut_ptr(),
                     n_bridge,
                 );
             } else {
                 core::ptr::copy_nonoverlapping(
                     resamp_out_r.as_ptr(),
-                    back_buf.buf_r.as_mut_ptr(),
+                    (*back_buf).buf_r.as_mut_ptr(),
                     n_bridge,
                 );
             }
-            back_buf.n_samples = n_bridge as u32;
-            back_buf.generation = next_gen;
+            (*back_buf).n_samples = n_bridge as u32;
+            (*back_buf).generation = next_gen;
 
-            bridge.active_read_idx.store(back_idx, Ordering::Release);
-            bridge.generation.store(next_gen, Ordering::Release);
+            (*bridge).active_read_idx.store(back_idx, Ordering::Release);
+            (*bridge).generation.store(next_gen, Ordering::Release);
         }
     }
 
@@ -408,29 +484,31 @@ impl DspBridgeWriter {
     /// Skip-on-overflow: same prevention as `write_block` — if the reader hasn't consumed
     /// the last published generation, the write is skipped and `dropped_frames` is incremented.
     pub fn write_silence(&self) {
-        // SAFETY: Same rationale as write_block: pointer is NonNull into heap-immortal
-        // memory, back-buffer is write-exclusive, atomic Release fences synchronize
-        // with the reader's Acquire loads.
+        // SAFETY: Same rationale as `write_block`: the pointer is NonNull into
+        // heap-immortal memory and is narrowed only to field places / the
+        // exclusive back-buffer via `UnsafeCell::get` (no whole-struct reference
+        // is materialized). Release stores synchronize with the reader's
+        // Acquire loads.
         unsafe {
-            let bridge = self.0.as_ref();
+            let bridge = self.0.as_ptr();
 
-            let current_gen = bridge.generation.load(Ordering::Relaxed);
-            let consumed_gen = bridge.consumed_gen.load(Ordering::Acquire);
+            let current_gen = (*bridge).generation.load(Ordering::Relaxed);
+            let consumed_gen = (*bridge).consumed_gen.load(Ordering::Acquire);
             if current_gen > consumed_gen {
-                let _ = bridge
+                let _ = (*bridge)
                     .dropped_frames
                     .saturating_inc(Ordering::Relaxed, Ordering::Relaxed);
                 return;
             }
 
             let next_gen = current_gen + 1;
-            let back_idx = 1 - bridge.active_read_idx.load(Ordering::Relaxed);
-            let back_buf = &mut (*self.0.as_ptr()).buffers[back_idx];
-            back_buf.n_samples = 0;
-            back_buf.generation = next_gen;
+            let back_idx = 1 - (*bridge).active_read_idx.load(Ordering::Relaxed);
+            let back_buf = (*bridge).buffers[back_idx].get();
+            (*back_buf).n_samples = 0;
+            (*back_buf).generation = next_gen;
 
-            bridge.active_read_idx.store(back_idx, Ordering::Release);
-            bridge.generation.store(next_gen, Ordering::Release);
+            (*bridge).active_read_idx.store(back_idx, Ordering::Release);
+            (*bridge).generation.store(next_gen, Ordering::Release);
         }
     }
 }
@@ -489,35 +567,43 @@ impl DspBridgeReader {
     where
         F: FnOnce(&[f32], &[f32]) -> R,
     {
-        // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The front-buffer
-        // (active_read_idx) is exclusively read here; the writer only accesses the
-        // complementary back-buffer. Acquire loads synchronize with the writer's Release stores.
+        // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The
+        // pointer is narrowed only to field places and the front-buffer raw
+        // pointer (`UnsafeCell::get`) — no whole-struct `&DspBridge` is
+        // materialized, so access concurrent with the single writer stays within
+        // the Stacked/Tree Borrows aliasing rules. The front-buffer
+        // (active_read_idx) is read exclusively here; the writer mutates only the
+        // complementary back-buffer. Acquire loads synchronize with the writer's
+        // Release stores.
         unsafe {
-            let bridge = self.0.as_ref();
-            let current_gen = bridge.generation.load(Ordering::Acquire);
+            let bridge = self.0.as_ptr();
+            let current_gen = (*bridge).generation.load(Ordering::Acquire);
             if current_gen == *last_bridge_gen {
                 return None;
             }
-            let read_idx = bridge.active_read_idx.load(Ordering::Acquire);
-            let post_gen = bridge.generation.load(Ordering::Acquire);
+            let read_idx = (*bridge).active_read_idx.load(Ordering::Acquire);
+            let post_gen = (*bridge).generation.load(Ordering::Acquire);
             if current_gen != post_gen {
                 return None;
             }
-            let front_buf = &bridge.buffers[read_idx];
-            if front_buf.generation != current_gen {
+            let front_buf = (*bridge).buffers[read_idx].get();
+            if (*front_buf).generation != current_gen {
                 return None;
             }
-            let n_samples = front_buf.n_samples as usize;
+            let n_samples = (*front_buf).n_samples as usize;
             if n_samples == 0 || n_samples > MAX_BRIDGE_BUF {
                 *last_bridge_gen = current_gen;
-                bridge.consumed_gen.store(current_gen, Ordering::Release);
+                (*bridge).consumed_gen.store(current_gen, Ordering::Release);
                 return None;
             }
 
-            let result = f(&front_buf.buf_l[..n_samples], &front_buf.buf_r[..n_samples]);
+            let result = f(
+                &(&(*front_buf).buf_l)[..n_samples],
+                &(&(*front_buf).buf_r)[..n_samples],
+            );
 
             *last_bridge_gen = current_gen;
-            bridge.consumed_gen.store(current_gen, Ordering::Release);
+            (*bridge).consumed_gen.store(current_gen, Ordering::Release);
 
             Some(result)
         }

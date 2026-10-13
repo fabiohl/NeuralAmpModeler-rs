@@ -66,32 +66,36 @@ macro_rules! define_gc_item {
                 }
             }
 
-            /// Reconstructs a GcItem from a raw pointer and a type ID.
+            /// Reconstructs a `GcItem` from an exposed-provenance address and a type ID.
             ///
             /// Returns `None` if the type ID is unknown. In that case, the caller
-            /// must intentionally leak the pointer to avoid UB from `Box::from_raw`
+            /// must intentionally leak the allocation to avoid UB from `Box::from_raw`
             /// with a mismatched type.
             ///
             /// # Safety
-            /// The pointer must have been generated via `Box::into_raw` of an object
-            /// of the corresponding type, validated by the caller against type_id.
+            /// `addr` must be the address of a pointer produced by `Box::into_raw`
+            /// whose provenance was exposed via `expose_provenance`, and `type_id`
+            /// must identify that allocation's type.
             ///
             /// ## Dispatch protocol
             ///
             /// Each variant is assigned a fixed `type_id`.
             /// The ID is validated before `Box::from_raw` — an unknown ID results in
-            /// `None`, and the caller must leak the raw pointer. This ensures that
+            /// `None`, and the caller must leak the allocation. This ensures that
             /// even if the packed u64 is corrupted in the overflow buffer, the RT
             /// thread never calls `Box::from_raw` with a mismatched layout.
-            unsafe fn from_raw_parts(ptr: *mut std::ffi::c_void, type_id: u8) -> Option<Self> {
+            unsafe fn from_raw_parts(addr: usize, type_id: u8) -> Option<Self> {
                 match type_id {
                     $(
                         $(#[$attr])*
-                        // SAFETY: `ptr` was produced by `Box::into_raw` of a
-                        // live `Box<$inner>` and the caller validated `type_id`,
-                        // so this arm's `$inner` matches the original allocation.
+                        // SAFETY: `addr` was produced by `Box::into_raw` of a live
+                        // `Box<$inner>` and its provenance exposed; the caller
+                        // validated `type_id`, so this arm's `$inner` matches the
+                        // original allocation. Provenance recovery goes through the
+                        // stable `with_exposed_provenance_mut` API rather than an
+                        // integer-to-pointer `as` cast, so Miri can track it.
                         $id => Some(GcItem::$variant(unsafe {
-                            Box::from_raw(ptr as *mut $inner)
+                            Box::from_raw(std::ptr::with_exposed_provenance_mut::<$inner>(addr))
                         })),
                     )*
                     _ => None,
@@ -133,10 +137,13 @@ macro_rules! define_gc_item {
             /// `Box::from_raw` with a mismatched type — UB — so it must never happen.
             pub(crate) fn into_packed(self) -> Option<u64> {
                 let type_id = self.type_id();
-                let ptr = match self {
+                // Expose provenance explicitly (stable) before packing the address
+                // into a plain integer, so the round trip in `from_packed` recovers
+                // a pointer with the same provenance instead of a wildcard.
+                let addr = match self {
                     $(
                         $(#[$attr])*
-                        GcItem::$variant(b) => Box::into_raw(b) as *mut std::ffi::c_void,
+                        GcItem::$variant(b) => Box::into_raw(b).expose_provenance() as u64,
                     )*
                 };
 
@@ -146,14 +153,15 @@ macro_rules! define_gc_item {
                 // after `GcOverflowBuffer::new`'s setup probe on conforming systems, so
                 // the defensive action is: leak the raw pointer (no `Box::from_raw`, no
                 // heap drop on RT) and signal via `None` instead of aborting the thread.
-                if (ptr as u64) >= (1u64 << 56) {
-                    // Intentional leak: `ptr` is dropped without `Box::from_raw`, so the
-                    // allocation is never freed on the RT thread (Zero-Heap-Drop preserved).
-                    // Deterministic fail-fast is owned by the `GcOverflowBuffer::new` probe.
+                if addr >= (1u64 << 56) {
+                    // Intentional leak: the raw pointer is dropped without
+                    // `Box::from_raw`, so the allocation is never freed on the RT thread
+                    // (Zero-Heap-Drop preserved). Deterministic fail-fast is owned by
+                    // the `GcOverflowBuffer::new` probe.
                     return None;
                 }
 
-                Some(((type_id as u64) << 56) | (ptr as u64 & 0x00FF_FFFF_FFFF_FFFF))
+                Some(((type_id as u64) << 56) | (addr & 0x00FF_FFFF_FFFF_FFFF))
             }
         }
     };
@@ -200,15 +208,16 @@ impl GcItem {
     /// ## Platform dependency
     ///
     /// See [`into_packed`](Self::into_packed) — the same 56-bit canonical
-    /// address assumption applies here, as the pointer is extracted via
-    /// `packed & 0x00FF_FFFF_FFFF_FFFF`.  If that assumption does not hold,
-    /// `into_packed` returns `None` (leaking the raw allocation in place on the
-    /// RT thread — never freed, no heap drop) instead of ever producing a
-    /// truncated pointer that could reach this function; the deterministic
-    /// fail-fast owner is the setup probe in `GcOverflowBuffer::new`.
+    /// address assumption applies here, as the address is extracted via
+    /// `packed & 0x00FF_FFFF_FFFF_FFFF` and its provenance is recovered with
+    /// the stable `with_exposed_provenance_mut` API.  If that assumption does
+    /// not hold, `into_packed` returns `None` (leaking the raw allocation in
+    /// place on the RT thread — never freed, no heap drop) instead of ever
+    /// producing a truncated pointer that could reach this function; the
+    /// deterministic fail-fast owner is the setup probe in `GcOverflowBuffer::new`.
     ///
     /// # Safety
-    /// The pointer embedded in `packed` must be valid for the type encoded
+    /// The address embedded in `packed` must be valid for the type encoded
     /// in bits 56–63.  A corrupted type ID leads to a `None` return and a
     /// controlled leak by the caller.
     unsafe fn from_packed(packed: u64) -> Option<Self> {
@@ -219,13 +228,14 @@ impl GcItem {
         if type_id == 0 {
             return None;
         }
-        let ptr = (packed & 0x00FF_FFFF_FFFF_FFFF) as *mut std::ffi::c_void;
-        // SAFETY: `ptr` and `type_id` were recovered from a value produced by
-        // `GcItem::into_packed`, which packs the exact `Box::into_raw` pointer
-        // (checked to fit in 56 bits; otherwise it returns `None` and leaks the
-        // raw allocation instead of truncating) with the type_id of that same
-        // box; `from_raw_parts` re-boxes only known type_ids and leaks unknown ones.
-        unsafe { Self::from_raw_parts(ptr, type_id) }
+        let addr = (packed & 0x00FF_FFFF_FFFF_FFFF) as usize;
+        // SAFETY: `addr` and `type_id` were recovered from a value produced by
+        // `GcItem::into_packed`, which packs the exact `Box::into_raw` address
+        // after exposing its provenance (checked to fit in 56 bits; otherwise it
+        // returns `None` and leaks the raw allocation instead of truncating) with
+        // the type_id of that same box; `from_raw_parts` recovers the provenance
+        // and re-boxes only known type_ids, leaking unknown ones.
+        unsafe { Self::from_raw_parts(addr, type_id) }
     }
 }
 
@@ -258,12 +268,14 @@ impl GcOverflowBuffer {
         // at setup) instead of silently colliding with the type_id at runtime.
         let probe_addr = {
             let probe = Box::new(0u8);
-            let addr = Box::into_raw(probe) as u64;
-            // SAFETY: immediately re-box the probe pointer — same type, same
-            // allocation, no aliasing — restoring its ownership for a normal
-            // drop. This only observes the address; nothing is leaked or freed.
+            let raw = Box::into_raw(probe);
+            let addr = raw.expose_provenance() as u64;
+            // SAFETY: re-box the very raw pointer returned by `Box::into_raw` of
+            // the probe (same type, same allocation, no aliasing) to restore its
+            // ownership for a normal drop. No integer round trip is involved, so
+            // this only observes the address; nothing is leaked or freed.
             unsafe {
-                drop(Box::from_raw(addr as *mut u8));
+                drop(Box::from_raw(raw));
             }
             addr
         };

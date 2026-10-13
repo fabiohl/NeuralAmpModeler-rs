@@ -553,6 +553,17 @@ impl std::fmt::Display for LongPhaseStatus {
 }
 
 /// Single JSONL line: structured audit receipt entry for one long-suite phase.
+///
+/// The optional `*_sha256` fields carry the provenance of the **referenced
+/// artifacts** that backed the phase's verdict (e.g. the render oracle, the
+/// input fixture and the produced artifact). They are producer-neutral and
+/// fully optional: a receipt written before these fields existed still parses
+/// (`#[serde(default)]`) and a line that does not declare provenance omits them
+/// entirely (`skip_serializing_if`), keeping the JSONL byte-compatible with the
+/// historical schema. Producers that can prove provenance (e.g. a C++/f64
+/// parity phase) populate them on whichever line owns the evidence — typically
+/// the `overall` line — never encoding a specific host or downstream project in
+/// the field names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LongPhaseReceipt {
     /// Stable phase identifier (e.g. `phase1`..`phase7`, `overall`).
@@ -571,6 +582,50 @@ pub struct LongPhaseReceipt {
     pub gaps: Vec<String>,
     /// ISO-8601 emission timestamp (UTC).
     pub timestamp: String,
+    /// Optional SHA-256 of the oracle/render artifact referenced by the phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_sha256: Option<String>,
+    /// Optional SHA-256 of the input fixture referenced by the phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture_sha256: Option<String>,
+    /// Optional SHA-256 of the produced artifact referenced by the phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_sha256: Option<String>,
+}
+
+impl Default for LongPhaseReceipt {
+    /// Neutral default used to fill the optional provenance fields at
+    /// construction sites that predate them (`..Default::default()`).
+    fn default() -> Self {
+        LongPhaseReceipt {
+            phase_id: String::new(),
+            name: String::new(),
+            status: LongPhaseStatus::Passed,
+            duration_ms: 0,
+            tests_executed: 0,
+            gaps: Vec::new(),
+            timestamp: String::new(),
+            oracle_sha256: None,
+            fixture_sha256: None,
+            artifact_sha256: None,
+        }
+    }
+}
+
+impl LongPhaseReceipt {
+    /// Builds a receipt entry with the optional referenced-artifact provenance
+    /// hashes attached from three `Option<String>` values, omitting `None`.
+    pub fn with_referenced_artifacts(
+        mut self,
+        oracle_sha256: Option<String>,
+        fixture_sha256: Option<String>,
+        artifact_sha256: Option<String>,
+    ) -> Self {
+        self.oracle_sha256 = oracle_sha256;
+        self.fixture_sha256 = fixture_sha256;
+        self.artifact_sha256 = artifact_sha256;
+        self
+    }
 }
 
 impl LongPhaseReceipt {
@@ -841,6 +896,7 @@ impl LongAuditReceipt {
             tests_executed: self.tests_executed_total(),
             gaps,
             timestamp: now_iso8601(),
+            ..Default::default()
         }
     }
 
@@ -867,10 +923,25 @@ impl LongAuditReceipt {
         })
     }
 
-    /// Fail-closed strict campaign verdict: enforces the canonical 14-phase roster,
-    /// presence of terminal 'overall' record, no duplicate or unknown phases,
-    /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
-    pub fn campaign_strict_verdict(&self) -> Result<(), String> {
+    /// Fail-closed **semantic** verification against a caller-supplied canonical
+    /// roster, independent of the gap/failure policy.
+    ///
+    /// Rejects a receipt that cannot be trusted structurally or that lies about
+    /// its own verdict:
+    /// 1. no entries;
+    /// 2. last entry is not the terminal `overall` record;
+    /// 3. an unknown or duplicated phase id (a duplicated `overall` included);
+    /// 4. a missing mandatory roster phase;
+    /// 5. a timed phase (`phase<N>`) that passed with zero executed tests;
+    /// 6. a declared terminal `OVERALL` verdict that disagrees with the verdict
+    ///    *derived* from the phase/gap evidence in the same receipt (this is the
+    ///    class of tampering where a forged `overall PASSED` line is prepended
+    ///    or a green verdict is pasted over gap evidence).
+    ///
+    /// The roster is a parameter so downstream producers (a plugin host, a
+    /// standalone host) can reuse the exact schema and semantics with their own
+    /// phase matrix without the engine hardcoding a consumer.
+    pub fn semantic_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
         if self.phases.is_empty() {
             return Err("audit strictly invalid: empty receipt".to_string());
         }
@@ -884,10 +955,10 @@ impl LongAuditReceipt {
             ));
         }
 
-        // 2. Count and canonical membership check
+        // 2. Canonical membership + duplicate detection
         let mut seen = std::collections::BTreeSet::new();
         for p in &self.phases {
-            if !CANONICAL_ROSTER.contains(&p.phase_id.as_str()) {
+            if !roster.contains(&p.phase_id.as_str()) {
                 return Err(format!(
                     "audit strictly invalid: unknown phase '{}' (not in canonical roster)",
                     p.phase_id
@@ -901,8 +972,8 @@ impl LongAuditReceipt {
             }
         }
 
-        // 3. Ensure all 14 canonical phases are present
-        for expected in CANONICAL_ROSTER {
+        // 3. Every mandatory roster phase present
+        for expected in roster {
             if !seen.contains(expected) {
                 return Err(format!(
                     "audit strictly invalid: missing required canonical phase '{expected}'"
@@ -910,17 +981,57 @@ impl LongAuditReceipt {
             }
         }
 
-        // 4. Timed phases (phase1..phase7) must have executed > 0 tests
+        // 4. A phase that claims PASSED must have executed > 0 tests (a
+        //    zero-test pass is a mandatory-subphase gate violation). Phases that
+        //    declare a gap status may legitimately have zero executed tests.
         for p in self.phase_entries() {
-            if p.phase_id.starts_with("phase") && p.tests_executed == 0 {
+            if is_zero_test_pass(p) {
                 return Err(format!(
-                    "audit strictly invalid: timed phase '{}' executed 0 tests",
+                    "audit strictly invalid: timed phase '{}' PASSED with 0 executed tests",
                     p.phase_id
                 ));
             }
         }
 
-        // 5. Terminal 'overall' phase status check
+        // 5. Declared terminal verdict must equal the verdict derived from the
+        //    phase/gap evidence — a receipt must never certify a verdict it does
+        //    not back (forged/injected OVERALL line).
+        let derived = self.summary_receipt().status;
+        if last.status != derived {
+            return Err(format!(
+                "audit strictly invalid: declared OVERALL={} disagrees with derived verdict {}",
+                last.status.as_str(),
+                derived.as_str()
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Fail-closed semantic verification against the engine's canonical
+    /// 14-phase roster ([`CANONICAL_ROSTER`]).
+    pub fn semantic_verdict(&self) -> Result<(), String> {
+        self.semantic_verdict_with_roster(&CANONICAL_ROSTER)
+    }
+
+    /// Fail-closed strict campaign verdict: enforces the canonical 14-phase roster,
+    /// presence of terminal 'overall' record, no duplicate or unknown phases,
+    /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
+    pub fn campaign_strict_verdict(&self) -> Result<(), String> {
+        self.campaign_strict_verdict_with_roster(&CANONICAL_ROSTER)
+    }
+
+    /// Roster-parameterized strict campaign verdict. Consumers (a plugin host, a
+    /// standalone host) reuse the exact schema and semantics with their own
+    /// phase matrix: semantic structural verification against `roster`, then a
+    /// clean `OVERALL: PASSED` requirement (no gaps, no failures, no simulation).
+    pub fn campaign_strict_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
+        // Structural + declared-vs-derived consistency first (fail-closed).
+        self.semantic_verdict_with_roster(roster)?;
+
+        let last = self.phases.last().unwrap();
+
+        // Terminal 'overall' phase status check
         if last.status != LongPhaseStatus::Passed {
             return Err(format!(
                 "audit FAILED: terminal 'overall' status is {}",
@@ -928,7 +1039,7 @@ impl LongAuditReceipt {
             ));
         }
 
-        // 6. Evaluate summary verdict & gaps
+        // Evaluate summary verdict & gaps
         let summary = self.summary_receipt();
         match summary.status {
             LongPhaseStatus::Passed => Ok(()),

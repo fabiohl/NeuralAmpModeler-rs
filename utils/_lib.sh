@@ -49,6 +49,15 @@
 # Delegated to Rust:
 #   * classify_regression_outcome → src/testing/qa/classify.rs
 #   * check_toolchain_fingerprint → freshness.rs ToolchainFingerprint
+#
+# Project-neutral helpers (ANSI colors, phase/ok/warn/die,
+# format_duration_ms/phase_elapsed_str, emit/emit_to, assert_ran_tests/
+# assert_subphase_ran, pick_bench_core) live in the canonical, byte-identical
+# `_lib_core.sh` block (drift-pinned by utils/test-lib-drift.sh). This file
+# adds only the engine-specific glue on top.
+
+# Canonical project-neutral core (drift-pinned; see utils/test-lib-drift.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/_lib_core.sh"
 
 # ---------------------------------------------------------------------------
 # Resolve project root dynamically relative to this helper script
@@ -75,17 +84,6 @@ NAM_CORE_DIR="${NAM_CORE_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerCore}"
 NAM_PLUGIN_DIR="${NAM_PLUGIN_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerPlugin}"
 VARIABLES_ENV="${NAM_VARIABLES_ENV:-$PROJECT_DIR/variables.env}"
 SETUP_THIRD_PARTY_SH="${SETUP_THIRD_PARTY_SH:-$PROJECT_DIR/utils/setup-third-party.sh}"
-
-# ---------------------------------------------------------------------------
-# ANSI style helpers
-# ---------------------------------------------------------------------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
 
 # ---------------------------------------------------------------------------
 # Low-priority re-exec (shared by lints.sh and tests-quick.sh)
@@ -121,25 +119,8 @@ maybe_restart_low_priority() {
 }
 
 # ---------------------------------------------------------------------------
-# Standard output & control helpers
+# Engine-specific output helpers (UI/governance helpers live in _lib_core.sh)
 # ---------------------------------------------------------------------------
-PHASE_NUM=0
-PHASE_START_NS=0
-
-phase() {
-    PHASE_NUM=$((PHASE_NUM + 1))
-    PHASE_START_NS=$(date +%s%N 2>/dev/null || echo 0)
-    echo -e "\n${BLUE}${BOLD}[${PHASE_NUM}/${PHASE_TOTAL:-?}]${NC} $*"
-}
-
-ok() {
-    echo -e "  ${GREEN}✓${NC} $*"
-}
-
-warn() {
-    echo -e "  ${YELLOW}ⓘ${NC} $*"
-}
-
 log_warn() {
     warn "$@"
 }
@@ -148,46 +129,6 @@ json_escape_string() {
     # Escapes backslashes and double quotes for safe JSON string embedding.
     local s="$1"
     printf '%s' "$s" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
-}
-
-die() {
-    echo -e "${RED}${BOLD}[FATAL]${NC} $*" >&2
-    exit 1
-}
-
-# format_duration_ms <milliseconds>
-#   Formats an interval in ms to human-readable scale:
-#   < 1000 ms: "Xms" (e.g. 790ms, 45ms)
-#   < 10000 ms: "X.YYs" (e.g. 1.35s)
-#   >= 10000 ms: "X.Ys" (e.g. 65.2s)
-format_duration_ms() {
-    local ms="${1:-0}"
-    if [ "$ms" -lt 1000 ]; then
-        echo "${ms}ms"
-    elif [ "$ms" -lt 10000 ]; then
-        local sec=$(( ms / 1000 ))
-        local dec=$(( (ms % 1000) / 10 ))
-        printf "%d.%02ds\n" "$sec" "$dec"
-    else
-        local sec=$(( ms / 1000 ))
-        local dec=$(( (ms % 1000) / 100 ))
-        printf "%d.%ds\n" "$sec" "$dec"
-    fi
-}
-
-# phase_elapsed_str
-#   Returns the formatted duration elapsed since the last phase() call.
-phase_elapsed_str() {
-    if [ "${PHASE_START_NS:-0}" -ne 0 ]; then
-        local now_ns dur_ms
-        now_ns=$(date +%s%N 2>/dev/null || echo 0)
-        if [ "$now_ns" -ge "$PHASE_START_NS" ]; then
-            dur_ms=$(( (now_ns - PHASE_START_NS) / 1000000 ))
-            format_duration_ms "$dur_ms"
-            return 0
-        fi
-    fi
-    echo "0ms"
 }
 
 # ---------------------------------------------------------------------------
@@ -325,59 +266,17 @@ ensure_long_receipt_bin() {
     return 0
 }
 
-# _count_log_total <log_file>
-#   Single implementation of the "how many tests/benchmarks did this log prove"
-#   query. The counting (libtest `passed`/`measured` counters + Criterion
-#   `time:` fallback) lives in src/testing/receipt.rs::
-#   count_tests_executed_from_log; this thin wrapper prints the total on stdout.
-#   Returns 1 (fail-closed) when the bin cannot be provided. Callers must emit
-#   their own fail-closed notice: stdout here is captured by the callers'
-#   command substitution, so anything printed on this path would be swallowed.
-_count_log_total() {
+# _nam_count_log_total <log_file>
+#   Engine override of the canonical core hook: delegates the counting
+#   (libtest `passed`/`measured` counters + Criterion `time:` fallback) to the
+#   Rust QA binary (src/testing/receipt.rs::count_tests_executed_from_log) —
+#   no `grep -oP`. Prints the total on stdout and returns 1 (fail-closed) when
+#   the binary cannot be provided; the core gates (`assert_ran_tests` /
+#   `assert_subphase_ran`) surface the failure with a generic notice.
+_nam_count_log_total() {
     local log_file="$1"
     ensure_long_receipt_bin || return 1
     "$LONG_RECEIPT_BIN" count-log --log "$log_file" 2>/dev/null || echo 0
-}
-
-# assert_ran_tests <log_file> [min_count]
-# Verifies that a test/benchmark log proves real execution. This is a thin
-# wrapper over `nam_long_receipt count-log` — no grep -oP.
-assert_ran_tests() {
-    local log_file="$1" min_count="${2:-1}"
-    local total
-    total=$(_count_log_total "$log_file") || {
-        warn "failed to build nam_long_receipt — gate fails closed"
-        return 1
-    }
-    if [ "$total" -lt "$min_count" ]; then
-        echo -e "${RED}${BOLD}❌ Gate failed: phase executed 0 tests/benchmarks (empty selection or filter mismatch).${NC}"
-        return 1
-    fi
-    echo -e "  Gate: ${total} test(s)/benchmark(s) executed ≥ ${min_count}  ✓"
-    return 0
-}
-
-# assert_subphase_ran <phase_name> <log_file> [min_count]
-# Per-subphase counterpart of assert_ran_tests: proves that ONE
-# mandatory subphase of a multi-subphase phase executed at least `min_count`
-# tests/benchmarks. The counting delegates to `nam_long_receipt count-log`
-# (src/testing/receipt.rs::count_tests_executed_from_log); the caller passes
-# a log file that isolates exactly that subphase's invocation.
-# Invariant: a phase can never be registered PASSED if a mandatory
-# subphase executed zero tests due to `#[cfg]` compilation filters.
-assert_subphase_ran() {
-    local phase_name="$1" log_file="$2" min_count="${3:-1}"
-    local total
-    total=$(_count_log_total "$log_file") || {
-        warn "failed to build nam_long_receipt — subphase gate fails closed"
-        return 1
-    }
-    if [ "$total" -lt "$min_count" ]; then
-        echo -e "${RED}${BOLD}❌ Subphase gate failed: '${phase_name}' executed ${total} test(s)/benchmark(s) (< ${min_count}).${NC}"
-        return 1
-    fi
-    echo -e "  Gate: subphase '${phase_name}' executed ${total} test(s)/benchmark(s) ≥ ${min_count}  ✓"
-    return 0
 }
 
 # Run a dashboard phase with strict exit code capture.
@@ -687,82 +586,3 @@ check_freshness() {
     bin=$(ensure_qa_bin nam_freshness testing)
     "$bin" --root "$PWD" "$mode"
 }
-
-# ---------------------------------------------------------------------------
-# Benchmark Core Resolution Helper
-# ---------------------------------------------------------------------------
-
-# pick_bench_core [sysfs_cpu_dir]
-#   Resolves the deterministic benchmark CPU core according to policy:
-#     1. $NAM_BENCH_CORE if explicitly set and non-empty.
-#     2. First online isolated CPU from /sys/devices/system/cpu/isolated
-#        (treating 8-9 as a physical core, preferring 8 with cpu9=offline intentional).
-#     3. Fallback to $((nproc / 2)) with a warning.
-pick_bench_core() {
-    local sysfs_cpu="${1:-/sys/devices/system/cpu}"
-
-    # 1. Explicit override
-    if [ -n "${NAM_BENCH_CORE:-}" ]; then
-        echo "$NAM_BENCH_CORE"
-        return 0
-    fi
-
-    # 2. Inspect /sys/devices/system/cpu/isolated
-    local isolated_file="$sysfs_cpu/isolated"
-    if [ -f "$isolated_file" ]; then
-        local raw_isolated
-        raw_isolated=$(cat "$isolated_file" 2>/dev/null | tr -d '[:space:]')
-        if [ -n "$raw_isolated" ]; then
-            local -a candidate_cpus=()
-            local IFS=','
-            local -a parts=($raw_isolated)
-            unset IFS
-            for part in "${parts[@]}"; do
-                if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    local start="${BASH_REMATCH[1]}"
-                    local end="${BASH_REMATCH[2]}"
-                    for ((c = start; c <= end; c++)); do
-                        candidate_cpus+=("$c")
-                    done
-                elif [[ "$part" =~ ^[0-9]+$ ]]; then
-                    candidate_cpus+=("$part")
-                fi
-            done
-
-            # Special policy: treat 8-9 as a physical core; if 8 is in isolated and online, prefer 8.
-            # Document cpu9=offline intentional.
-            local preferred_8=0
-            for c in "${candidate_cpus[@]}"; do
-                if [ "$c" -eq 8 ]; then
-                    preferred_8=1
-                    break
-                fi
-            done
-
-            if [ "$preferred_8" -eq 1 ]; then
-                local online_file="$sysfs_cpu/cpu8/online"
-                if [ ! -f "$online_file" ] || [ "$(cat "$online_file" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
-                    echo 8
-                    return 0
-                fi
-            fi
-
-            for c in "${candidate_cpus[@]}"; do
-                local online_file="$sysfs_cpu/cpu$c/online"
-                if [ ! -f "$online_file" ] || [ "$(cat "$online_file" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
-                    echo "$c"
-                    return 0
-                fi
-            done
-        fi
-    fi
-
-    # 3. Fallback: nproc / 2
-    local num_cores
-    num_cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-    local fallback_core=$(( ${num_cores:-1} / 2 ))
-    echo -e "  \033[1;33mⓘ WARN: no online isolated CPU found in $sysfs_cpu/isolated; falling back to core $fallback_core (nproc/2)\033[0m" >&2
-    echo "$fallback_core"
-    return 0
-}
-
