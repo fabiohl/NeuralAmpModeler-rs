@@ -33,71 +33,73 @@ fn model_path(filename: &str) -> PathBuf {
 }
 
 fn make_a2_data(channels: u8, dilations: Vec<usize>) -> NamModelData {
-    NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![NamLayerConfig {
-                input_size: Some(1),
-                condition_size: Some(1),
-                head_size: None,
-                channels: Some(channels as usize),
-                kernel_size: None,
-                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
-                dilations: Some(dilations),
-                activation: Some("LeakyReLU".to_string()),
-                gated: None,
-                head_bias: None,
-                bottleneck: Some(channels as usize),
-                ..Default::default()
-            }],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
+    let config = {
+        let mut config = NamConfig::new(vec![NamLayerConfig {
+            input_size: Some(1),
+            condition_size: Some(1),
+            head_size: None,
+            channels: Some(channels as usize),
+            kernel_size: None,
+            kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+            dilations: Some(dilations),
+            activation: Some("LeakyReLU".to_string()),
+            gated: None,
+            head_bias: None,
+            bottleneck: Some(channels as usize),
             ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        }]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
+    };
+    NamModelData::new(
+        Some("0.6.0".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 fn make_unrecognized_a2_like_data(channels: usize) -> NamModelData {
-    NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![NamLayerConfig {
-                input_size: Some(1),
-                condition_size: Some(1),
-                head_size: None,
-                channels: Some(channels),
-                kernel_size: None,
-                dilations: Some(vec![1, 2, 4, 8, 16, 32, 64]),
-                activation: Some("LeakyReLU".to_string()),
-                gated: None,
-                head_bias: None,
-                ..Default::default()
-            }],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
+    let config = {
+        let mut config = NamConfig::new(vec![NamLayerConfig {
+            input_size: Some(1),
+            condition_size: Some(1),
+            head_size: None,
+            channels: Some(channels),
+            kernel_size: None,
+            dilations: Some(vec![1, 2, 4, 8, 16, 32, 64]),
+            activation: Some("LeakyReLU".to_string()),
+            gated: None,
+            head_bias: None,
             ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        }]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
+    };
+    NamModelData::new(
+        Some("0.6.0".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 // =============================================================================
@@ -198,52 +200,53 @@ fn test_is_a2_shape_rejects_wrong_dilations() {
 fn test_is_a2_shape_accepts_multiple_layers() {
     // Multi-array A2 topologies are now accepted.
     // The first layer must have valid A2 shape characteristics.
-    let data = NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![
-                NamLayerConfig {
-                    input_size: Some(1),
-                    condition_size: Some(1),
-                    head_size: None,
-                    channels: Some(8),
-                    kernel_size: None,
-                    kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
-                    dilations: Some(A2_DILATIONS.to_vec()),
-                    activation: Some("LeakyReLU".to_string()),
-                    gated: None,
-                    head_bias: None,
-                    ..Default::default()
-                },
-                NamLayerConfig {
-                    input_size: Some(1),
-                    condition_size: Some(1),
-                    head_size: None,
-                    channels: Some(8),
-                    kernel_size: None,
-                    kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
-                    dilations: Some(A2_DILATIONS.to_vec()),
-                    activation: Some("LeakyReLU".to_string()),
-                    gated: None,
-                    head_bias: None,
-                    ..Default::default()
-                },
-            ],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
-            ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
+    let config = {
+        let mut config = NamConfig::new(vec![
+            NamLayerConfig {
+                input_size: Some(1),
+                condition_size: Some(1),
+                head_size: None,
+                channels: Some(8),
+                kernel_size: None,
+                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+                dilations: Some(A2_DILATIONS.to_vec()),
+                activation: Some("LeakyReLU".to_string()),
+                gated: None,
+                head_bias: None,
+                ..Default::default()
+            },
+            NamLayerConfig {
+                input_size: Some(1),
+                condition_size: Some(1),
+                head_size: None,
+                channels: Some(8),
+                kernel_size: None,
+                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+                dilations: Some(A2_DILATIONS.to_vec()),
+                activation: Some("LeakyReLU".to_string()),
+                gated: None,
+                head_bias: None,
+                ..Default::default()
+            },
+        ]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
     };
+    let data = NamModelData::new(
+        Some("0.6.0".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    );
     assert!(
         is_a2_shape(&data).is_some(),
         "multi-array A2 models with valid shape must now be accepted"
@@ -252,36 +255,37 @@ fn test_is_a2_shape_accepts_multiple_layers() {
 
 #[test]
 fn test_is_a2_shape_rejects_non_wavenet_architecture() {
-    let data = NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "LSTM".to_string(),
-        config: NamConfig {
-            layers: vec![NamLayerConfig {
-                input_size: Some(1),
-                condition_size: Some(1),
-                head_size: None,
-                channels: Some(8),
-                kernel_size: None,
-                dilations: Some(A2_DILATIONS.to_vec()),
-                activation: Some("LeakyReLU".to_string()),
-                gated: None,
-                head_bias: None,
-                ..Default::default()
-            }],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
+    let config = {
+        let mut config = NamConfig::new(vec![NamLayerConfig {
+            input_size: Some(1),
+            condition_size: Some(1),
+            head_size: None,
+            channels: Some(8),
+            kernel_size: None,
+            dilations: Some(A2_DILATIONS.to_vec()),
+            activation: Some("LeakyReLU".to_string()),
+            gated: None,
+            head_bias: None,
             ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
+        }]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
     };
+    let data = NamModelData::new(
+        Some("0.6.0".to_string()),
+        "LSTM".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    );
     assert!(
         is_a2_shape(&data).is_none(),
         "LSTM architecture should not match A2 shape"
@@ -302,50 +306,51 @@ fn test_is_a2_shape_rejects_wrong_dilations_length() {
 #[test]
 fn test_a2_shape_does_not_match_standard_wavenet() {
     let a1_std_dils = vec![1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
-    let data = NamModelData {
-        version: Some("0.5.4".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![
-                NamLayerConfig {
-                    channels: Some(16),
-                    dilations: Some(a1_std_dils.clone()),
-                    activation: Some("Tanh".to_string()),
-                    input_size: None,
-                    condition_size: None,
-                    head_size: None,
-                    kernel_size: None,
-                    gated: Some(false),
-                    head_bias: Some(false),
-                    ..Default::default()
-                },
-                NamLayerConfig {
-                    channels: Some(16),
-                    dilations: Some(a1_std_dils),
-                    activation: Some("Tanh".to_string()),
-                    input_size: None,
-                    condition_size: None,
-                    head_size: None,
-                    kernel_size: None,
-                    gated: Some(false),
-                    head_bias: Some(true),
-                    ..Default::default()
-                },
-            ],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
-            ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
+    let config = {
+        let mut config = NamConfig::new(vec![
+            NamLayerConfig {
+                channels: Some(16),
+                dilations: Some(a1_std_dils.clone()),
+                activation: Some("Tanh".to_string()),
+                input_size: None,
+                condition_size: None,
+                head_size: None,
+                kernel_size: None,
+                gated: Some(false),
+                head_bias: Some(false),
+                ..Default::default()
+            },
+            NamLayerConfig {
+                channels: Some(16),
+                dilations: Some(a1_std_dils),
+                activation: Some("Tanh".to_string()),
+                input_size: None,
+                condition_size: None,
+                head_size: None,
+                kernel_size: None,
+                gated: Some(false),
+                head_bias: Some(true),
+                ..Default::default()
+            },
+        ]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
     };
+    let data = NamModelData::new(
+        Some("0.5.4".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    );
 
     assert!(
         is_a2_shape(&data).is_none(),
@@ -377,11 +382,9 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
     let cases = vec![
         Case {
             desc: "A1 Standard v0.5.4 — baseline A1",
-            data: NamModelData {
-                version: Some("0.5.4".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![
                         NamLayerConfig {
                             channels: Some(16),
                             dilations: Some(a1_std_dils.clone()),
@@ -406,31 +409,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                             head_bias: Some(true),
                             ..Default::default()
                         },
-                    ],
-                    head: None,
-                    head_scale: None,
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    ]);
+                    config.head = None;
+                    config.head_scale = None;
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.5.4".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
         },
         Case {
             desc: "A1 Standard v0.7.0 — high version, NOT A2",
-            data: NamModelData {
-                version: Some("0.7.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![
                         NamLayerConfig {
                             channels: Some(16),
                             dilations: Some(a1_std_dils.clone()),
@@ -455,31 +461,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                             head_bias: Some(true),
                             ..Default::default()
                         },
-                    ],
-                    head: None,
-                    head_scale: None,
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    ]);
+                    config.head = None;
+                    config.head_scale = None;
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.7.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
         },
         Case {
             desc: "A1 Lite v0.8.0 — high version, NOT A2",
-            data: NamModelData {
-                version: Some("0.8.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![
                         NamLayerConfig {
                             channels: Some(12),
                             dilations: Some(a1_lite_dils_0.clone()),
@@ -504,31 +513,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                             head_bias: Some(true),
                             ..Default::default()
                         },
-                    ],
-                    head: None,
-                    head_scale: None,
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    ]);
+                    config.head = None;
+                    config.head_scale = None;
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.8.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
         },
         Case {
             desc: "A1 Feather v0.9.0 — high version, NOT A2",
-            data: NamModelData {
-                version: Some("0.9.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![
                         NamLayerConfig {
                             channels: Some(8),
                             dilations: Some(a1_lite_dils_0.clone()),
@@ -553,31 +565,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                             head_bias: Some(true),
                             ..Default::default()
                         },
-                    ],
-                    head: None,
-                    head_scale: None,
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    ]);
+                    config.head = None;
+                    config.head_scale = None;
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.9.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
         },
         Case {
             desc: "A2 real CH=3 (Lite shape)",
-            data: NamModelData {
-                version: Some("0.6.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![NamLayerConfig {
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![NamLayerConfig {
                         channels: Some(3),
                         dilations: Some(A2_DILATIONS.to_vec()),
                         activation: Some("LeakyReLU".to_string()),
@@ -590,20 +605,25 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                         kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
                         bottleneck: Some(3),
                         ..Default::default()
-                    }],
-                    head: None,
-                    head_scale: Some(1.0),
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    }]);
+                    config.head = None;
+                    config.head_scale = Some(1.0);
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.6.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: Some(
                 neural_amp_modeler_rs::loader::nam_json::A2TopologyResult::KnownFastPath(3),
@@ -612,11 +632,9 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
         },
         Case {
             desc: "A2 real CH=8 (Full shape)",
-            data: NamModelData {
-                version: Some("0.6.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![NamLayerConfig {
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![NamLayerConfig {
                         channels: Some(8),
                         dilations: Some(A2_DILATIONS.to_vec()),
                         activation: Some("LeakyReLU".to_string()),
@@ -629,20 +647,25 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                         kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
                         bottleneck: Some(8),
                         ..Default::default()
-                    }],
-                    head: None,
-                    head_scale: Some(1.0),
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    }]);
+                    config.head = None;
+                    config.head_scale = Some(1.0);
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.6.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: Some(
                 neural_amp_modeler_rs::loader::nam_json::A2TopologyResult::KnownFastPath(8),
@@ -651,11 +674,9 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
         },
         Case {
             desc: "Ambiguous: CH=3, wrong dils, LeakyReLU — A2 via activation",
-            data: NamModelData {
-                version: Some("0.6.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![NamLayerConfig {
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![NamLayerConfig {
                         channels: Some(3),
                         dilations: Some(vec![1, 2, 4, 8]),
                         activation: Some("LeakyReLU".to_string()),
@@ -666,31 +687,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                         gated: None,
                         head_bias: None,
                         ..Default::default()
-                    }],
-                    head: None,
-                    head_scale: Some(1.0),
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    }]);
+                    config.head = None;
+                    config.head_scale = Some(1.0);
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.6.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: true,
         },
         Case {
             desc: "Ambiguous: CH=8, wrong dils, Tanh, high version — NOT A2",
-            data: NamModelData {
-                version: Some("0.7.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![NamLayerConfig {
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![NamLayerConfig {
                         channels: Some(8),
                         dilations: Some(vec![1, 2, 4, 8, 16, 32, 64]),
                         activation: Some("Tanh".to_string()),
@@ -701,31 +725,34 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                         gated: None,
                         head_bias: None,
                         ..Default::default()
-                    }],
-                    head: None,
-                    head_scale: Some(1.0),
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    }]);
+                    config.head = None;
+                    config.head_scale = Some(1.0);
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.7.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
         },
         Case {
             desc: "Ambiguous: CH=4 (A1 Nano channels), single layer, high version, Tanh — NOT A2",
-            data: NamModelData {
-                version: Some("0.6.0".to_string()),
-                architecture: "WaveNet".to_string(),
-                config: NamConfig {
-                    layers: vec![NamLayerConfig {
+            data: {
+                let config = {
+                    let mut config = NamConfig::new(vec![NamLayerConfig {
                         channels: Some(4),
                         dilations: Some(vec![1, 2, 4, 8, 16, 32, 64]),
                         activation: Some("Tanh".to_string()),
@@ -736,20 +763,25 @@ fn test_dispatch_table_a1_high_version_not_misrouted() {
                         gated: None,
                         head_bias: None,
                         ..Default::default()
-                    }],
-                    head: None,
-                    head_scale: Some(1.0),
-                    num_layers: None,
-                    hidden_size: None,
-                    receptive_field: None,
-                    bias: None,
-                    submodels: None,
-                    ..Default::default()
-                },
-                weights: vec![],
-                sample_rate: Some(48000.0),
-                metadata: None,
-                weights_layout: WeightsLayout::Original,
+                    }]);
+                    config.head = None;
+                    config.head_scale = Some(1.0);
+                    config.num_layers = None;
+                    config.hidden_size = None;
+                    config.receptive_field = None;
+                    config.bias = None;
+                    config.submodels = None;
+                    config
+                };
+                NamModelData::new(
+                    Some("0.6.0".to_string()),
+                    "WaveNet".to_string(),
+                    config,
+                    vec![],
+                    Some(48000.0),
+                    None,
+                    WeightsLayout::Original,
+                )
             },
             expect_a2_shape: None,
             expect_wavenet_a2: false,
@@ -1082,38 +1114,39 @@ fn make_a2_data_with_topology(
     kernel_sizes: Vec<usize>,
     dilations: Vec<usize>,
 ) -> NamModelData {
-    NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![NamLayerConfig {
-                input_size: Some(1),
-                condition_size: Some(1),
-                head_size: None,
-                channels: Some(channels as usize),
-                kernel_size: None,
-                kernel_sizes: Some(kernel_sizes),
-                dilations: Some(dilations),
-                activation: Some("LeakyReLU".to_string()),
-                gated: None,
-                head_bias: None,
-                bottleneck: Some(channels as usize),
-                ..Default::default()
-            }],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
+    let config = {
+        let mut config = NamConfig::new(vec![NamLayerConfig {
+            input_size: Some(1),
+            condition_size: Some(1),
+            head_size: None,
+            channels: Some(channels as usize),
+            kernel_size: None,
+            kernel_sizes: Some(kernel_sizes),
+            dilations: Some(dilations),
+            activation: Some("LeakyReLU".to_string()),
+            gated: None,
+            head_bias: None,
+            bottleneck: Some(channels as usize),
             ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        }]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = None;
+        config.hidden_size = None;
+        config.receptive_field = None;
+        config.bias = None;
+        config.submodels = None;
+        config
+    };
+    NamModelData::new(
+        Some("0.6.0".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 /// F-03: a zero kernel size would underflow `(kernel - 1)` in the A2 dynamic
@@ -1169,20 +1202,21 @@ fn test_a2_rejects_divergent_activation_array_length() {
         })),
         ..Default::default()
     };
-    let data = NamModelData {
-        version: Some("0.6.0".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![layer],
-            head: None,
-            head_scale: Some(1.0),
-            ..Default::default()
-        },
-        weights: vec![],
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
+    let config = {
+        let mut config = NamConfig::new(vec![layer]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config
     };
+    let data = NamModelData::new(
+        Some("0.6.0".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    );
     let err = match build_model(&data) {
         Ok(_) => panic!("activation-array length divergence must be rejected"),
         Err(e) => e.to_string(),
@@ -1230,38 +1264,39 @@ fn test_a2_dynamic_synthetic_model_with_head_kernel_size_16_builds() {
     total_weights += 1;
     total_weights += 1;
 
-    let data = NamModelData {
-        version: Some("0.5.4".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![NamLayerConfig {
-                input_size: Some(1),
-                condition_size: Some(1),
-                channels: Some(channels),
-                bottleneck: Some(bottleneck),
-                kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
-                dilations: Some(A2_DILATIONS.to_vec()),
-                activation: Some("LeakyReLU".to_string()),
-                gated: Some(true),
-                head_bias: Some(true),
-                layer_raw: Some(serde_json::json!({
-                    "head": {
-                        "out_channels": 1,
-                        "kernel_size": head_k,
-                        "bias": true
-                    }
-                })),
-                ..Default::default()
-            }],
-            head: None,
-            head_scale: Some(0.02),
+    let config = {
+        let mut config = NamConfig::new(vec![NamLayerConfig {
+            input_size: Some(1),
+            condition_size: Some(1),
+            channels: Some(channels),
+            bottleneck: Some(bottleneck),
+            kernel_sizes: Some(A2_KERNEL_SIZES.to_vec()),
+            dilations: Some(A2_DILATIONS.to_vec()),
+            activation: Some("LeakyReLU".to_string()),
+            gated: Some(true),
+            head_bias: Some(true),
+            layer_raw: Some(serde_json::json!({
+                "head": {
+                    "out_channels": 1,
+                    "kernel_size": head_k,
+                    "bias": true
+                }
+            })),
             ..Default::default()
-        },
-        weights: vec![0.01; total_weights],
-        weights_layout: WeightsLayout::Original,
-        sample_rate: Some(48000.0),
-        metadata: None,
+        }]);
+        config.head = None;
+        config.head_scale = Some(0.02);
+        config
     };
+    let data = NamModelData::new(
+        Some("0.5.4".to_string()),
+        "WaveNet".to_string(),
+        config,
+        vec![0.01; total_weights],
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    );
 
     let mut model = build_model(&data).expect("Synthetic A2-Dynamic model build must succeed");
     model.prewarm(64);

@@ -81,25 +81,25 @@ fn make_synthetic_lstm(num_layers: usize, hidden_size: usize) -> NamModelData {
     }
     weights.push(0.01);
 
-    NamModelData {
-        version: Some("0.5.0".to_string()),
-        architecture: "LSTM".to_string(),
-        config: NamConfig {
-            layers: vec![],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: Some(num_layers),
-            hidden_size: Some(hidden_size),
-            receptive_field: None,
-            bias: None,
-            submodels: None,
-            ..Default::default()
+    NamModelData::new(
+        Some("0.5.0".to_string()),
+        "LSTM".to_string(),
+        {
+            let mut config = NamConfig::new(vec![]);
+            config.head = None;
+            config.head_scale = Some(1.0);
+            config.num_layers = Some(num_layers);
+            config.hidden_size = Some(hidden_size);
+            config.receptive_field = None;
+            config.bias = None;
+            config.submodels = None;
+            config
         },
         weights,
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 fn make_synthetic_lstm_io(
@@ -141,28 +141,28 @@ fn make_synthetic_lstm_io(
     }
     weights.resize(weights.len() + out_channels, 0.01);
 
-    NamModelData {
-        version: Some("0.5.0".to_string()),
-        architecture: "LSTM".to_string(),
-        config: NamConfig {
-            layers: vec![],
-            head: None,
-            head_scale: Some(1.0),
-            num_layers: Some(num_layers),
-            hidden_size: Some(hidden_size),
-            input_size: Some(in_channels),
-            in_channels: Some(in_channels),
-            out_channels: Some(out_channels),
-            receptive_field: None,
-            bias: None,
-            submodels: None,
-            ..Default::default()
+    NamModelData::new(
+        Some("0.5.0".to_string()),
+        "LSTM".to_string(),
+        {
+            let mut config = NamConfig::new(vec![]);
+            config.head = None;
+            config.head_scale = Some(1.0);
+            config.num_layers = Some(num_layers);
+            config.hidden_size = Some(hidden_size);
+            config.input_size = Some(in_channels);
+            config.in_channels = Some(in_channels);
+            config.out_channels = Some(out_channels);
+            config.receptive_field = None;
+            config.bias = None;
+            config.submodels = None;
+            config
         },
         weights,
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 // =============================================================================
@@ -325,11 +325,11 @@ fn make_synthetic_wavenet(cfg: &WavenetTopoCfg) -> NamModelData {
     weights.push(0.04); // head_bias
     weights.push(0.06); // head_scale
 
-    NamModelData {
-        version: Some("0.5.4".to_string()),
-        architecture: "WaveNet".to_string(),
-        config: NamConfig {
-            layers: vec![
+    NamModelData::new(
+        Some("0.5.4".to_string()),
+        "WaveNet".to_string(),
+        {
+            let mut config = NamConfig::new(vec![
                 NamLayerConfig {
                     input_size: Some(1),
                     condition_size: Some(1),
@@ -354,21 +354,21 @@ fn make_synthetic_wavenet(cfg: &WavenetTopoCfg) -> NamModelData {
                     head_bias: Some(true),
                     ..Default::default()
                 },
-            ],
-            head: None,
-            head_scale: None,
-            num_layers: None,
-            hidden_size: None,
-            receptive_field: None,
-            bias: None,
-            submodels: None,
-            ..Default::default()
+            ]);
+            config.head = None;
+            config.head_scale = None;
+            config.num_layers = None;
+            config.hidden_size = None;
+            config.receptive_field = None;
+            config.bias = None;
+            config.submodels = None;
+            config
         },
         weights,
-        sample_rate: Some(48000.0),
-        metadata: None,
-        weights_layout: WeightsLayout::Original,
-    }
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
 }
 
 // =============================================================================

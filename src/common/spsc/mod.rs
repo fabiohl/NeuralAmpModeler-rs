@@ -84,6 +84,7 @@ impl std::fmt::Debug for SpscChannels {
 
 /// Errors that can occur when initializing the SPSC communication channels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpscSetupError {
     /// Requested capacity is 0 (channels must have positive capacity).
     ZeroCapacity,

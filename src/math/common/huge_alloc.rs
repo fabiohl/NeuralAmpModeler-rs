@@ -38,6 +38,7 @@ pub enum AllocInfo {
 }
 
 /// Result of a huge-page allocation attempt.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HugePageStatus {
     /// Explicit 2 MB huge pages via MAP_HUGETLB succeeded.

@@ -19,6 +19,10 @@ pub static ACTIVE_MODEL_INFO: RwLock<Option<ModelInfo>> = RwLock::new(None);
 pub static ACTIVE_MODEL_MEMORY_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// Detailed model information for runtime diagnostic snapshot.
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct ModelInfo {
     /// Neural network architecture type (e.g. "WaveNet" or "LSTM").
@@ -35,6 +39,29 @@ pub struct ModelInfo {
     pub weights_layout: String,
     /// Basename of the model file.
     pub path_basename: String,
+}
+
+impl ModelInfo {
+    /// Creates a model information snapshot with every field populated.
+    pub fn new(
+        arch_label: impl Into<String>,
+        topology: impl Into<String>,
+        channels: usize,
+        receptive_field: usize,
+        model_sample_rate: u32,
+        weights_layout: impl Into<String>,
+        path_basename: impl Into<String>,
+    ) -> Self {
+        Self {
+            arch_label: arch_label.into(),
+            topology: topology.into(),
+            channels,
+            receptive_field,
+            model_sample_rate,
+            weights_layout: weights_layout.into(),
+            path_basename: path_basename.into(),
+        }
+    }
 }
 
 /// Consumer-provided audio metadata for snapshot capture.
@@ -61,6 +88,10 @@ impl AudioMetadata {
 }
 
 /// Detailed audio configuration for runtime diagnostic snapshot.
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct AudioInfo {
     /// Active sample rate in Hz.
@@ -71,6 +102,23 @@ pub struct AudioInfo {
     pub channel_count: usize,
     /// Audio host name provided by the consumer.
     pub host_name: String,
+}
+
+impl AudioInfo {
+    /// Creates an audio configuration snapshot with every field populated.
+    pub fn new(
+        sample_rate: u32,
+        buffer_size: usize,
+        channel_count: usize,
+        host_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            sample_rate,
+            buffer_size,
+            channel_count,
+            host_name: host_name.into(),
+        }
+    }
 }
 
 impl Default for AudioInfo {
@@ -85,6 +133,10 @@ impl Default for AudioInfo {
 }
 
 /// Real-time thread scheduling and affinity information.
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct RtInfo {
     /// Thread priority.
@@ -97,6 +149,25 @@ pub struct RtInfo {
     pub huge_pages_active: bool,
     /// Huge page allocation mode: "off", "thp", or "hugetlb".
     pub huge_page_mode: String,
+}
+
+impl RtInfo {
+    /// Creates a real-time scheduling snapshot with every field populated.
+    pub fn new(
+        thread_priority: i32,
+        scheduler: impl Into<String>,
+        cpu_pinned: Option<usize>,
+        huge_pages_active: bool,
+        huge_page_mode: impl Into<String>,
+    ) -> Self {
+        Self {
+            thread_priority,
+            scheduler: scheduler.into(),
+            cpu_pinned,
+            huge_pages_active,
+            huge_page_mode: huge_page_mode.into(),
+        }
+    }
 }
 
 impl Default for RtInfo {
@@ -112,6 +183,10 @@ impl Default for RtInfo {
 }
 
 /// Snapshot of the dynamic latency telemetry.
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct TelemetrySnapshot {
     /// Median latency in microseconds.
@@ -132,6 +207,34 @@ pub struct TelemetrySnapshot {
     pub input_buffer_miss: u32,
     /// Total host buffer misses on the playback (output) side.
     pub output_buffer_miss: u32,
+}
+
+impl TelemetrySnapshot {
+    /// Creates a telemetry snapshot with every field populated.
+    #[expect(clippy::too_many_arguments)]
+    pub fn new(
+        p50_us: u64,
+        p99_us: u64,
+        p999_us: u64,
+        max_us: u64,
+        total_blocks: u64,
+        xruns: u32,
+        drains: u32,
+        input_buffer_miss: u32,
+        output_buffer_miss: u32,
+    ) -> Self {
+        Self {
+            p50_us,
+            p99_us,
+            p999_us,
+            max_us,
+            total_blocks,
+            xruns,
+            drains,
+            input_buffer_miss,
+            output_buffer_miss,
+        }
+    }
 }
 
 /// Snapshot of the dynamic runtime state, captured on-demand.

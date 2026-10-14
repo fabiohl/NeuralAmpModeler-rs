@@ -239,6 +239,7 @@ pub struct CpuCoreTopology {
 }
 
 /// Structured explanation of why a specific CPU was selected.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuSelectionReason {
     /// Explicitly pinned via host CLI/config.

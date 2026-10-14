@@ -61,6 +61,7 @@ fn test_thp_coherence_smaps_consistency() {
                 "is_huge_page_active() should be false when Standard"
             );
         }
+        _ => {}
     }
 
     let anon_hp = read_anon_huge_pages_kb();

@@ -316,6 +316,20 @@ pub fn crash_directory() -> Option<PathBuf> {
 
 /// Installs a panic hook that writes a zero-alloc crash report to
 /// `<crash_directory>/crash-<unix_ts>-<component>.txt`.
+///
+/// # Examples
+///
+/// Installation is a one-time, process-wide setup; the hook stays dormant and
+/// only writes a report if a later panic occurs. `component` labels the report
+/// so multiple hosts (or test binaries) sharing the crash directory remain
+/// distinguishable.
+///
+/// ```
+/// use neural_amp_modeler_rs::install_panic_hook;
+///
+/// install_panic_hook("my-host-application");
+/// // From here on, an unexpected panic writes a crash report on unwind.
+/// ```
 pub fn install_panic_hook(component: &'static str) {
     SYSTEM_SNAPSHOT.get_or_init(SystemSnapshot::capture);
 

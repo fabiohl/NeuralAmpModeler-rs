@@ -378,19 +378,17 @@ fn arbitrary_nam_config() -> impl Strategy<Value = NamConfig> {
         any::<Option<usize>>(),
         any::<Option<usize>>(),
     )
-        .prop_map(
-            |(layers, head, head_scale, num_layers, hidden_size)| NamConfig {
-                layers,
-                head,
-                head_scale,
-                num_layers,
-                hidden_size,
-                receptive_field: None,
-                bias: None,
-                submodels: None,
-                ..Default::default()
-            },
-        )
+        .prop_map(|(layers, head, head_scale, num_layers, hidden_size)| {
+            let mut config = NamConfig::new(layers);
+            config.head = head;
+            config.head_scale = head_scale;
+            config.num_layers = num_layers;
+            config.hidden_size = hidden_size;
+            config.receptive_field = None;
+            config.bias = None;
+            config.submodels = None;
+            config
+        })
 }
 
 /// Strategy for `NamDate` with shrinking.
@@ -449,19 +447,19 @@ fn arbitrary_nam_metadata() -> impl Strategy<Value = NamMetadata> {
                         None
                     }
                 });
-                NamMetadata {
-                    date,
-                    name,
-                    modeled_by,
-                    gear_make,
-                    gear_model,
-                    gear_type,
-                    tone_type,
-                    training,
-                    input_level_dbu,
-                    output_level_dbu,
-                    loudness,
-                }
+                let mut meta = NamMetadata::default();
+                meta.date = date;
+                meta.name = name;
+                meta.modeled_by = modeled_by;
+                meta.gear_make = gear_make;
+                meta.gear_model = gear_model;
+                meta.gear_type = gear_type;
+                meta.tone_type = tone_type;
+                meta.training = training;
+                meta.input_level_dbu = input_level_dbu;
+                meta.output_level_dbu = output_level_dbu;
+                meta.loudness = loudness;
+                meta
             },
         )
 }
@@ -503,7 +501,7 @@ pub fn arbitrary_nam_model_data() -> impl Strategy<Value = NamModelData> {
     )
         .prop_map(
             |(version, architecture, config, weights, sample_rate, metadata, weights_layout)| {
-                NamModelData {
+                NamModelData::new(
                     version,
                     architecture,
                     config,
@@ -511,7 +509,7 @@ pub fn arbitrary_nam_model_data() -> impl Strategy<Value = NamModelData> {
                     sample_rate,
                     metadata,
                     weights_layout,
-                }
+                )
             },
         )
 }

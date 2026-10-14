@@ -984,6 +984,7 @@ fn test_adaptive_fsm_endurance() {
                         i
                     );
                 }
+                _ => {}
             }
 
             // slimmable_size() bounds

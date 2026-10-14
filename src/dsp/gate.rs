@@ -198,6 +198,7 @@ impl GateParamsBuilder {
 }
 
 /// Represents the possible states of the gate with hysteresis.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GateState {
     /// Gate open: normal processing.

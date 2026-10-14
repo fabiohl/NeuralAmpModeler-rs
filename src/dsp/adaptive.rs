@@ -99,6 +99,7 @@ impl AdaptiveComputeMode {
 }
 
 /// Degradation level.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AdaptiveState {

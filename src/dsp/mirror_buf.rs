@@ -80,6 +80,7 @@ pub fn sync_huge_page_flag(rt_status: &crate::common::spsc::RtStatusFlags) {
 }
 
 /// Tracks whether huge pages were successfully activated.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MirrorHugePageStatus {
     /// Explicit 2 MB huge pages via MAP_HUGETLB | MFD_HUGETLB.

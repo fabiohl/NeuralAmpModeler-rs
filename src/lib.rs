@@ -4,7 +4,134 @@
 #![warn(missing_docs)]
 // Every `unsafe` block must carry a `// SAFETY:` justification (enforced by clippy::undocumented_unsafe_blocks).
 #![warn(clippy::undocumented_unsafe_blocks)]
-#![doc = include_str!("../README.md")]
+// Rustdoc resolves intra-doc links in a module's inner docs against the parent
+// module scope on the stable toolchain, but against the module's own scope on
+// nightly (docs.rs). A short label that references an imported item therefore
+// needs an explicit target to resolve on stable, while the same target is
+// flagged as redundant on nightly. Keep a single source that is warning-free on
+// both toolchains by allowing the nightly-only redundancy lint; explicit
+// targets remain so stable documentation keeps resolving these links.
+#![allow(rustdoc::redundant_explicit_links)]
+//! # NeuralAmpModeler-rs
+//!
+//! `NeuralAmpModeler-rs` is a high-performance, low-latency real-time neural
+//! inference DSP engine written in pure Rust. It loads, builds, and executes
+//! [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models —
+//! WaveNet (A1/A2), LSTM, ConvNet, Linear, and Sequential — together with
+//! speaker-cabinet impulse-response convolution, multi-rate sinc resampling,
+//! and polyphase anti-aliasing oversampling.
+//!
+//! The engine is host-agnostic: its public API is decoupled from any plugin
+//! wrapper or audio server, and it guarantees strict zero heap allocation,
+//! zero mutex locks, and zero blocking system calls on the real-time audio
+//! thread.
+//!
+//! ## Feature highlights
+//!
+//! * **Strict zero-allocation real-time safety** — deterministic audio
+//!   callbacks with zero heap drops, locks, or blocking syscalls, audited via a
+//!   counting allocator. Parameter and model hot-swaps travel through lock-free
+//!   SPSC channels backed by a three-tier garbage-collection cascade.
+//! * **`x86-64-v3` SIMD baseline** — mandatory AVX2/FMA/BMI2 vectorization with
+//!   hand-written SIMD kernels, tap-major memory layouts, and compile-time
+//!   monomorphized dispatch with no vtables or indirect calls.
+//! * **Dual-oracle numerical parity** — validated against canonical C++ NAMCore
+//!   and a double-precision `f64` oracle; per-model baselines are pinned in
+//!   [`docs/quality-contract.json`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/quality-contract.json).
+//! * **Complete native DSP stack** — polyphase FIR sinc resampler, UPOLS FFT
+//!   cabinet convolution, and multi-stage half-band anti-aliasing oversampling,
+//!   with no external audio crates.
+//!
+//! ## Quick start
+//!
+//! Add the crate to `Cargo.toml`. The published package is
+//! `NeuralAmpModeler-rs`, but the imported library name is
+//! `neural_amp_modeler_rs`:
+//!
+//! ```toml
+//! [dependencies]
+//! NeuralAmpModeler-rs = "1.0"
+//! ```
+//!
+//! For test harnesses, audio generators, and perceptual fidelity tooling:
+//!
+//! ```toml
+//! [dependencies]
+//! NeuralAmpModeler-rs = { version = "1.0", features = ["testing"] }
+//! ```
+//!
+//! ```no_run
+//! use std::path::Path;
+//! use neural_amp_modeler_rs::prelude::*;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // 1. Capture the host hardware capabilities (SIMD features, CPU topology).
+//!     let sys = SystemSnapshot::capture();
+//!
+//!     // 2. Load a `.nam` (JSON) or `.namb` (binary) model.
+//!     let mut model_pair = load_and_build_model(
+//!         Path::new("path/to/model.nam"),
+//!         &sys,
+//!         false, // dual_mono: false = mono, left-channel model only
+//!         LoadOptions::default(),
+//!     )?;
+//!
+//!     // 3. Process an audio block on the real-time thread (zero allocations, zero locks).
+//!     let input_buffer = [0.0_f32; 64];
+//!     let mut output_buffer = [0.0_f32; 64];
+//!     if let Some(ref mut model) = model_pair.model_l {
+//!         model.process(&input_buffer, &mut output_buffer);
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Model files are distributed by the community (see the official
+//! Neural Amp Modeler site and TONE3000). To run the engine without any file
+//! on disk, the crate ships a fully in-memory
+//! [`synthetic_model`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/examples/synthetic_model.rs)
+//! example (`cargo run --example synthetic_model`) that builds a deterministic
+//! LSTM model through the public API.
+//!
+//! ## Feature flags
+//!
+//! | Feature | Default | Description |
+//! |:------- |:------- |:----------- |
+//! | `dual-mono` | **Enabled** | Independent per-channel neural inference for stereo/dual-mono signals. Disable for lean single-channel mode. |
+//! | `heap-audit` | Disabled | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants. |
+//! | `testing` | Disabled | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles. |
+//! | `fft-radix4-planner` | Disabled | Radix-4 DIT FFT execution planning routines and benchmarks. |
+//! | `rt-hardening` | Disabled | Opt-in Linux real-time host hardening (THP, `mlockall`, `SCHED_FIFO`, MXCSR DAZ/FTZ, CPU affinity). |
+//! | `avx512` | Disabled | Experimental AVX-512 kernels and dispatch for research and cross-ISA validation. |
+//!
+//! ## Module map
+//!
+//! | Module | Purpose |
+//! |:------ |:------- |
+//! | [`loader`] | `.nam` (JSON) and `.namb` (binary) model parsing and construction. |
+//! | [`math`] | SIMD math primitives, activation approximations, GEMV/FFT kernels. |
+//! | [`models`] | Neural network architectures and [`StaticModel`](crate::models::StaticModel) dispatch. |
+//! | [`dsp`] | Resampler, noise gate, oversampling, and cabinet simulation. |
+//! | [`common`] | Telemetry, diagnostics, panic hooks, and lock-free SPSC channels. |
+//! | [`prelude`] | Convenience re-exports for the common inference and DSP pipeline. |
+//! | `testing` | Off-RT test utilities and perceptual metrics (feature `testing`). |
+//! | `rt_hardening` | Linux real-time host hardening (feature `rt-hardening`). |
+//!
+//! ## Platform support
+//!
+//! The crate targets **`x86_64` with the `x86-64-v3` baseline** (AVX2, FMA,
+//! BMI2, and the rest of the v3 feature set) and refuses to compile otherwise
+//! via `compile_error!`. Other architectures (for example macOS on Apple
+//! silicon/aarch64) are unsupported by design. When building documentation
+//! locally without the full feature set, prefer `cargo doc --lib`.
+//!
+//! ## Further documentation
+//!
+//! * [Architecture and SIMD kernels](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/architecture.md)
+//! * [Audio fidelity map and quality modes](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/audio_fidelity_map.md)
+//! * [Benchmarks and regression envelopes](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md)
+//! * [Testing and verification policies](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/testing.md)
 
 #[cfg(not(target_arch = "x86_64"))]
 compile_error!("NeuralAmpModeler-rs requires x86_64 architecture");
@@ -66,7 +193,7 @@ pub mod rt_hardening;
 /// Host applications can `use neural_amp_modeler_rs::prelude::*;` to bring the
 /// core inference and signal processing types into scope without deep paths:
 ///
-/// - **Diagnostics & Telemetry**: [`crate::SystemSnapshot`]
+/// - **Diagnostics & Telemetry**: [`crate::SystemSnapshot`], [`crate::common::diagnostics::NamErrorCode`]
 /// - **Processing Parameters**: [`crate::ActivationPrecision`], [`crate::ProcessingParams`], [`crate::RtProcessingParams`], [`crate::AdaptiveComputeMode`], [`crate::SlimOverride`]
 /// - **Model Loading & Errors**: [`crate::loader::load_and_build_model`], [`crate::loader::LoadOptions`], [`crate::loader::LoadError`], [`crate::loader::NambError`], [`crate::loader::JsonError`], [`crate::loader::LoadedModelPair`]
 /// - **Neural Models**: [`crate::models::NamModel`], [`crate::models::StaticModel`]
@@ -90,6 +217,7 @@ pub mod rt_hardening;
 /// let _: Option<GateParams> = None;
 /// let _: Option<GateParamsBuilder> = None;
 /// let _: Option<SystemSnapshot> = None;
+/// let _: Option<NamErrorCode> = None;
 /// let _: Option<ActivationPrecision> = None;
 /// let _: Option<AdaptiveComputeMode> = None;
 /// let _: Option<SlimOverride> = None;
@@ -110,8 +238,30 @@ pub mod rt_hardening;
 /// let _ = load_and_build_model_from_bytes;
 /// let _ = load_and_build_model_from_bytes_named;
 /// ```
+///
+/// # Error propagation
+///
+/// [`LoadError`] and [`NamErrorCode`](crate::common::diagnostics::NamErrorCode)
+/// both implement [`std::error::Error`], so
+/// they propagate through `?` into a boxed error without manual mapping (the
+/// same holds for `anyhow::Error`):
+///
+/// ```
+/// use neural_amp_modeler_rs::prelude::*;
+///
+/// fn load(bytes: &[u8]) -> Result<LoadedModelPair, Box<dyn std::error::Error>> {
+///     let sys = SystemSnapshot::capture();
+///     // `LoadError` is converted into the boxed trait object by `?`.
+///     let pair = load_and_build_model_from_bytes(bytes, &sys, false, LoadOptions::default())?;
+///     Ok(pair)
+/// }
+///
+/// assert!(load(br#"{"version":"0.7.0","architecture":"Linear",
+///     "config":{"receptive_field":1,"bias":false},"weights":[1.0]}"#).is_ok());
+/// assert!(load(b"not a model").is_err());
+/// ```
 pub mod prelude {
-    pub use crate::common::diagnostics::SystemSnapshot;
+    pub use crate::common::diagnostics::{NamErrorCode, SystemSnapshot};
     pub use crate::common::params::{
         ActivationPrecision, AdaptiveComputeMode, ProcessingParams, RtProcessingParams,
         SlimOverride,
@@ -188,6 +338,7 @@ mod tests {
         let _: Option<GateParams> = None;
         let _: Option<GateParamsBuilder> = None;
         let _: Option<SystemSnapshot> = None;
+        let _: Option<NamErrorCode> = None;
         let _: Option<ActivationPrecision> = None;
         let _: Option<AdaptiveComputeMode> = None;
         let _: Option<SlimOverride> = None;

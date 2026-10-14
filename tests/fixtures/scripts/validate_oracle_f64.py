@@ -72,6 +72,70 @@ def write_output_bin(path: str, data: np.ndarray):
         f.write(data.astype(np.float64).tobytes())
 
 
+# ── FiLM A2 keys & Architecture Detection ──────────────────────────────────
+
+FILM_KEYS = [
+    ("conv_pre_film", 0),
+    ("conv_post_film", 1),
+    ("input_mixin_pre_film", 2),
+    ("input_mixin_post_film", 3),
+    ("activation_pre_film", 4),
+    ("activation_post_film", 5),
+    ("layer1x1_post_film", 6),
+    ("head1x1_post_film", 7),
+]
+
+
+def is_a2_model(model: dict) -> bool:
+    """Detect whether a model dict represents an A2 architecture variant.
+
+    Mirrors Rust reference oracle detection logic in
+    `src/testing/reference_oracle/mod.rs:is_a2_model`:
+    - Explicit architecture == "A2"
+    - If architecture is not "WaveNet" and not None, return False
+    - Needs config.layers non-empty with dilations and channels
+    - Needs head_scale in config and NO post-stack head
+    - If condition_dsp is present, Tanh activation routes to WaveNet A1,
+      otherwise routes to A2
+    - Multi-layer with head1x1, FiLM, or complex activation routes to A2
+    """
+    arch = model.get("architecture")
+    if arch == "A2":
+        return True
+    if arch != "WaveNet" and arch is not None:
+        return False
+    config = model.get("config", {})
+    layers = config.get("layers", [])
+    if not layers:
+        return False
+    l0 = layers[0]
+    if "dilations" not in l0 or "channels" not in l0:
+        return False
+    if "head_scale" not in config:
+        return False
+    head = config.get("head")
+    if head is not None and head is not False and head != {}:
+        return False
+    if config.get("condition_dsp") is not None:
+        for l in layers:
+            act = l.get("activation")
+            if act == "Tanh":
+                return False
+        return True
+    if len(layers) > 1:
+        for l in layers:
+            if l.get("head1x1", {}).get("active", False):
+                return True
+            for k, _ in FILM_KEYS:
+                if l.get(k, {}).get("active", False):
+                    return True
+            act = l.get("activation")
+            if isinstance(act, (list, dict)):
+                return True
+        return False
+    return True
+
+
 # ── WaveNet f64 model ─────────────────────────────────────────────────────
 
 def wavenet_forward(model: dict, x: np.ndarray) -> np.ndarray:
@@ -121,31 +185,23 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
         cond_model = copy.deepcopy(config["condition_dsp"])
         dsp_arch = cond_model.get("architecture", None)
         raw = None
-        if dsp_arch == "WaveNet":
-            dsp_cfg = cond_model.get("config", {})
-            dsp_layers_cfg = dsp_cfg.get("layers", [])
-            is_a2 = dsp_layers_cfg and dsp_cfg.get("head_scale") is not None
-            if is_a2 and len(dsp_layers_cfg) > 1:
-                is_a2 = any(
-                    l.get("head1x1", {}).get("active", False)
-                    or any(l.get(k, {}).get("active", False) for k, _ in FILM_KEYS)
-                    for l in dsp_layers_cfg
-                ) or (
-                    isinstance(dsp_layers_cfg[0].get("activation"), str)
-                    and dsp_layers_cfg[0].get("activation") not in ("Tanh", "HardTanh", "FastTanh")
-                )
-            if not is_a2:
-                raw = wavenet_forward_all_channels(cond_model, x)
-            else:
-                raw = forward_dispatch(cond_model, x)
+        if is_a2_model(cond_model):
+            raw = a2_forward(cond_model, x, all_channels=True)
+        elif dsp_arch == "WaveNet":
+            raw = wavenet_forward_all_channels(cond_model, x)
         elif dsp_arch == "LSTM":
             raw = lstm_forward(cond_model, x)
         else:
             raw = forward_dispatch(cond_model, x)
         if raw is not None:
             first_cond = max(1, a_cond[0])
-            if first_cond > 1 and len(raw) == num_frames:
-                cond_dsp_out = np.tile(raw, (first_cond, 1)).T.ravel()
+            dsp_ch = len(raw) // num_frames if num_frames > 0 else 1
+            if first_cond > dsp_ch and num_frames > 0:
+                broadcasted = np.zeros(num_frames * first_cond, dtype=np.float64)
+                for f in range(num_frames):
+                    for c in range(first_cond):
+                        broadcasted[f * first_cond + c] = raw[f * dsp_ch + (c % dsp_ch)]
+                cond_dsp_out = broadcasted
             else:
                 cond_dsp_out = raw
 
@@ -637,18 +693,6 @@ A2_HEAD_K = 16
 
 # ── FiLM A2 helpers ───────────────────────────────────────────────────────
 
-FILM_KEYS = [
-    ("conv_pre_film", 0),
-    ("conv_post_film", 1),
-    ("input_mixin_pre_film", 2),
-    ("input_mixin_post_film", 3),
-    ("activation_pre_film", 4),
-    ("activation_post_film", 5),
-    ("layer1x1_post_film", 6),
-    ("head1x1_post_film", 7),
-]
-
-
 def film_weight_count(groups, cond_size, channels, shift):
     g = int(groups)
     ch_per_group = channels // g
@@ -668,9 +712,9 @@ def film_bias_count(channels, shift):
     return channels * 2 if shift else channels
 
 
-def film_bias_count_generic(channels):
-    """Simplified bias for A2 generic — always channels."""
-    return channels
+def film_bias_count_generic(channels, shift=True):
+    """Bias for A2 generic FiLM slot."""
+    return channels * 2 if shift else channels
 
 
 class FiLMSlot:
@@ -687,84 +731,90 @@ class FiLMSlot:
 
     def apply(self, input_slice, condition):
         """Apply FiLM modulation in-place on input_slice (variable-length, up to channels)."""
-        ch_constructed = self.channels
+        constructed_ch = len(self.buf) // 2
         g = self.groups
-        ch_per_group = ch_constructed // g
-        cond_per_group = len(condition) // g
-        out_per_group = ch_per_group * 2 if self.shift else ch_per_group
+        cond_per_group = len(condition) // g if g > 0 else 0
+        out_per_group = (constructed_ch * 2 // g) if self.shift else (constructed_ch // g)
 
         self.buf.fill(0.0)
-
         for grp in range(g):
             cond_off = grp * cond_per_group
-            row_off = grp * out_per_group
-            w_off = row_off * cond_per_group
+            w_off = grp * out_per_group * cond_per_group
             for row in range(out_per_group):
-                if row < ch_per_group:
-                    global_out = grp * ch_per_group + row
-                else:
-                    global_out = ch_constructed + grp * ch_per_group + (row - ch_per_group)
+                global_out = grp * out_per_group + row
                 s = float(self.bias[global_out])
                 for k in range(cond_per_group):
-                    s += (
-                        self.weights[w_off + row * cond_per_group + k]
-                        * condition[cond_off + k]
-                    )
+                    s += float(self.weights[w_off + row * cond_per_group + k]) * float(condition[cond_off + k])
                 self.buf[global_out] = s
 
-        apply_len = min(len(input_slice), ch_constructed)
+        apply_len = min(len(input_slice), constructed_ch)
         for c in range(apply_len):
             scale = self.buf[c]
-            shift_val = self.buf[c + ch_constructed] if self.shift else 0.0
+            shift_val = self.buf[c + constructed_ch] if self.shift else 0.0
             input_slice[c] = input_slice[c] * scale + shift_val
 
 
 def apply_activation_a2(z: np.ndarray, act_config, activation_mode="exact"):
     """Apply f64 activation matching Rust oracle::oracle_apply_activation."""
-    if activation_mode == "exact":
-        sigmoid_fn = lambda x: 1.0 / (1.0 + np.exp(-x))
-        tanh_fn = np.tanh
-    else:
-        sigmoid_fn = lambda x: 1.0 / (1.0 + np.exp(-x))
-        tanh_fn = np.tanh
-
     t = act_config.get("type", "Tanh") if isinstance(act_config, dict) else str(act_config)
-    if t == "Tanh":
-        return tanh_fn(z)
+    if t in ("Tanh", "FastTanh"):
+        return np.tanh(z)
     elif t == "HardTanh":
         return np.clip(z, -1.0, 1.0)
-    elif t == "FastTanh":
-        return tanh_fn(z)
     elif t == "ReLU":
         return np.maximum(z, 0.0)
     elif t == "LeakyReLU":
         slope = float(act_config.get("negative_slope", 0.01)) if isinstance(act_config, dict) else 0.01
         return np.where(z < 0, z * slope, z)
+    elif t == "PReLU":
+        slopes = act_config.get("negative_slopes", []) if isinstance(act_config, dict) else []
+        if not slopes:
+            return z
+        slopes_arr = np.array(slopes, dtype=np.float64)
+        rep = np.resize(slopes_arr, len(z))
+        return np.where(z < 0, z * rep, z)
     elif t == "Sigmoid":
-        return sigmoid_fn(z)
+        return 1.0 / (1.0 + np.exp(-z))
     elif t == "SiLU":
-        return z * sigmoid_fn(z)
-    elif t == "HardSwish":
+        sig = 1.0 / (1.0 + np.exp(-z))
+        return z * sig
+    elif t in ("HardSwish", "Hardswish"):
         relu6 = np.clip(z + 3.0, 0.0, 6.0)
         return z * relu6 / 6.0
+    elif t in ("LeakyHardTanh", "LeakyHardtanh"):
+        min_val = float(act_config.get("min_val", -1.0))
+        max_val = float(act_config.get("max_val", 1.0))
+        min_slope = float(act_config.get("min_slope", 0.0))
+        max_slope = float(act_config.get("max_slope", 0.0))
+        out = z.copy()
+        below = z < min_val
+        above = z > max_val
+        out[below] = (z[below] - min_val) * min_slope + min_val
+        out[above] = (z[above] - max_val) * max_slope + max_val
+        return out
     elif t == "Softsign":
         return z / (1.0 + np.abs(z))
     else:
-        return tanh_fn(z)
+        return np.tanh(z)
 
 
 def _extract_activation(activation_raw, li, num_layers):
     """Extract per-layer activation config (mirrors a2_read_activation in Rust)."""
     if isinstance(activation_raw, list) and li < len(activation_raw):
-        return activation_raw[li]
+        val = activation_raw[li]
+        return val if isinstance(val, dict) else {"type": str(val)}
     if isinstance(activation_raw, dict):
         return activation_raw
+    if isinstance(activation_raw, str):
+        return {"type": activation_raw}
     return {"type": "LeakyReLU", "negative_slope": 0.01}
 
 
 def _extract_gating_mode(layer_raw, li):
     """Extract per-layer gating mode (mirrors a2_read_gating_mode in Rust)."""
     gm = layer_raw.get("gating_mode")
+    if isinstance(gm, str):
+        return gm
     if isinstance(gm, list) and li < len(gm):
         return str(gm[li])
     return "none"
@@ -775,11 +825,15 @@ def _extract_secondary_activation(layer_raw, li):
     sec = layer_raw.get("secondary_activation")
     if isinstance(sec, list) and li < len(sec):
         val = sec[li]
-        if val is None:
+        if val is None or val == "":
             return {"type": "Sigmoid"}
-        return val
+        return val if isinstance(val, dict) else {"type": str(val)}
     if isinstance(sec, dict):
         return sec
+    if isinstance(sec, str):
+        if not sec:
+            return {"type": "Sigmoid"}
+        return {"type": sec}
     return {"type": "Sigmoid"}
 
 
@@ -790,7 +844,7 @@ def _extract_head1x1_active(layer_raw):
     return False
 
 
-def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
+def a2_forward(model: dict, x: np.ndarray, *, all_channels: bool = False) -> np.ndarray:
     """A2 forward pass in NumPy f64 — Multi-array cascade.
 
     Supports open topologies, multi-array cascade, condition_dsp sub-model
@@ -803,7 +857,6 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
     """
     config = model["config"]
     weights = load_weights_as_f64(model)
-    head_scale = np.float64(config.get("head_scale", 1.0))
 
     layers_cfg = config.get("layers", [])
     if not layers_cfg:
@@ -814,35 +867,31 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         return np.zeros(0, dtype=np.float64)
 
     # ── condition_dsp sub-model ──
-    # Use wavenet_forward_all_channels for WaveNet A1 condition_dsp
-    # to get ALL head output channels (matching C++ NumOutputChannels()).
-    # A2 condition_dsp falls back to forward_dispatch (mono) until §4.4.
     cond_dsp_out = None
     if config.get("condition_dsp") is not None:
         import copy
         cond_model = copy.deepcopy(config["condition_dsp"])
-        dsp_arch = cond_model.get("architecture", None)
-        if dsp_arch == "WaveNet":
-            dsp_cfg = cond_model.get("config", {})
-            dsp_layers = dsp_cfg.get("layers", [])
-            # Mirror Rust's is_a2_model: A1 (use all_channels) unless
-            # head_scale present AND (single-array OR A2-specific features).
-            is_a2 = dsp_layers and dsp_cfg.get("head_scale") is not None
-            if is_a2 and len(dsp_layers) > 1:
-                is_a2 = any(
-                    l.get("head1x1", {}).get("active", False)
-                    or any(l.get(k, {}).get("active", False) for k, _ in FILM_KEYS)
-                    for l in dsp_layers
-                ) or (
-                    isinstance(dsp_layers[0].get("activation"), str)
-                    and dsp_layers[0].get("activation") not in ("Tanh", "HardTanh", "FastTanh")
-                )
-            if is_a2:
-                cond_dsp_out = forward_dispatch(cond_model, x)
-            else:
-                cond_dsp_out = wavenet_forward_all_channels(cond_model, x)
+        if is_a2_model(cond_model):
+            raw = a2_forward(cond_model, x, all_channels=True)
         else:
-            cond_dsp_out = forward_dispatch(cond_model, x)
+            dsp_arch = cond_model.get("architecture")
+            if dsp_arch == "WaveNet":
+                raw = wavenet_forward_all_channels(cond_model, x)
+            elif dsp_arch == "LSTM":
+                raw = lstm_forward(cond_model, x)
+            else:
+                raw = forward_dispatch(cond_model, x)
+
+        first_cond = int(layers_cfg[0].get("condition_size", 1))
+        dsp_ch = len(raw) // num_frames if num_frames > 0 else 1
+        if first_cond > dsp_ch and num_frames > 0:
+            broadcasted = np.zeros(num_frames * first_cond, dtype=np.float64)
+            for f in range(num_frames):
+                for c in range(first_cond):
+                    broadcasted[f * first_cond + c] = raw[f * dsp_ch + (c % dsp_ch)]
+            cond_dsp_out = broadcasted
+        else:
+            cond_dsp_out = raw
 
     # ── Read all arrays' weights ──
     cursor = 0
@@ -862,8 +911,8 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         elif "kernel_size" in layer_raw and "dilations" in layer_raw:
             kernel_sizes = [int(layer_raw["kernel_size"])] * len(layer_raw["dilations"])
         else:
-            kernel_sizes = list(A2_KS)
-        dilations = list(layer_raw.get("dilations", A2_DIL))
+            kernel_sizes = list(A2_KS) if len(layer_raw.get("dilations", [])) == len(A2_KS) else [3] * len(layer_raw.get("dilations", []))
+        dilations = list(layer_raw.get("dilations", A2_DIL if len(kernel_sizes) == len(A2_DIL) else []))
         num_layers = len(kernel_sizes)
         if num_layers != len(dilations) or num_layers == 0:
             return np.zeros_like(x)
@@ -874,18 +923,14 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
 
         # FiLM detection
         film_active = [False] * 8
-        for key, idx in FILM_KEYS:
-            cfg = layer_raw.get(key)
-            if isinstance(cfg, dict) and cfg.get("active", False):
-                film_active[idx] = True
-
         film_slot_configs = [None] * 8
         for key, idx in FILM_KEYS:
             cfg = layer_raw.get(key)
             if isinstance(cfg, dict) and cfg.get("active", False):
+                film_active[idx] = True
                 film_slot_configs[idx] = {
                     "shift": cfg.get("shift", True),
-                    "groups": cfg.get("groups", 1),
+                    "groups": int(cfg.get("groups", 1)),
                 }
 
         # Rechannel weights (1×ch for array 0, prev_ch×ch for cascade)
@@ -901,6 +946,7 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         )
 
         # Per-layer weights
+        groups_input = int(layer_raw.get("groups_input", 1))
         mixin_groups = int(layer_raw.get("groups_input_mixin", 1))
         l1x1_groups = int(layer_raw.get("layer1x1", {}).get("groups", 1))
 
@@ -912,71 +958,57 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
             use_gating = gmode in ("gated", "blended")
             conv_out = bottleneck * 2 if use_gating else bottleneck
 
-            n_conv = ch * conv_out * ks
-            conv_w = weights[cursor : cursor + n_conv].reshape(conv_out, ch, ks).copy()
+            gi = max(1, groups_input)
+            n_conv = (ch * conv_out // gi) * ks
+            conv_w = weights[cursor : cursor + n_conv].copy()
             cursor += n_conv
             conv_b = weights[cursor : cursor + conv_out].copy()
             cursor += conv_out
 
-            # Mixin: group-aware (C++ Conv1x1 with groups).
-            if mixin_groups > 1:
-                mixin_in_pg = cond_size // mixin_groups
-                n_mixin = conv_out * mixin_in_pg
-                mixin_w_raw = weights[cursor : cursor + n_mixin].copy()
-                cursor += n_mixin
-                mixin_w = np.zeros(conv_out * mixin_in_pg, dtype=np.float64)
-                src_idx = 0
-                for g in range(mixin_groups):
-                    out_pg = conv_out // mixin_groups
-                    out_start = g * out_pg
-                    for oc in range(out_start, out_start + out_pg):
-                        dst_base = oc * mixin_in_pg
-                        for ic in range(mixin_in_pg):
-                            mixin_w[dst_base + ic] = mixin_w_raw[src_idx]
-                            src_idx += 1
-            else:
-                n_mixin = conv_out * cond_size
-                mixin_w = weights[cursor : cursor + n_mixin].reshape(conv_out, cond_size).copy()
-                cursor += n_mixin
+            mg = max(1, mixin_groups)
+            mixin_in_pg = cond_size // mg
+            n_mixin = conv_out * mixin_in_pg
+            mixin_w = weights[cursor : cursor + n_mixin].copy()
+            cursor += n_mixin
 
-            # L1x1: group-aware.
-            if l1x1_groups > 1:
-                l1x1_in_pg = bottleneck // l1x1_groups
-                n_l1x1 = ch * l1x1_in_pg
-                l1x1_w_raw = weights[cursor : cursor + n_l1x1].copy()
-                cursor += n_l1x1
-                l1x1_w = np.zeros(ch * l1x1_in_pg, dtype=np.float64)
-                src_idx = 0
-                for g in range(l1x1_groups):
-                    out_pg = ch // l1x1_groups
-                    out_start = g * out_pg
-                    for oc in range(out_start, out_start + out_pg):
-                        dst_base = oc * l1x1_in_pg
-                        for ic in range(l1x1_in_pg):
-                            l1x1_w[dst_base + ic] = l1x1_w_raw[src_idx]
-                            src_idx += 1
-            else:
-                n_l1x1 = bottleneck * ch
-                l1x1_w = weights[cursor : cursor + n_l1x1].reshape(ch, bottleneck).copy()
-                cursor += n_l1x1
+            lg = max(1, l1x1_groups)
+            l1x1_in_pg = bottleneck // lg
+            n_l1x1 = ch * l1x1_in_pg
+            l1x1_w = weights[cursor : cursor + n_l1x1].copy()
+            cursor += n_l1x1
             l1x1_b = weights[cursor : cursor + ch].copy()
             cursor += ch
+
+            # Per-layer head1x1 weights (C++ order: after l1x1, before FiLM).
+            head1x1_w = None
+            head1x1_b = None
+            head1x1_in = None
+            if head1x1_active:
+                h1_groups = int(layer_raw.get("head1x1", {}).get("groups", 1))
+                head1x1_in = bottleneck // h1_groups
+                n_h1 = head_accum_size_for_film * head1x1_in
+                head1x1_w = weights[cursor : cursor + n_h1].reshape(head_accum_size_for_film, head1x1_in).copy()
+                cursor += n_h1
+                head1x1_b = weights[cursor : cursor + head_accum_size_for_film].copy()
+                cursor += head_accum_size_for_film
 
             film_slots = [None] * 8
             for slot_idx in range(8):
                 if not film_active[slot_idx]:
                     continue
                 scfg = film_slot_configs[slot_idx]
-                g = int(scfg["groups"])
+                g = scfg["groups"]
                 shift = scfg["shift"]
                 film_ch = (
-                    head_accum_size_for_film if slot_idx == 7 else
+                    conv_out if slot_idx in (1, 3, 4) else
+                    bottleneck if slot_idx == 5 else
                     cond_size if slot_idx == 2 else
+                    head_accum_size_for_film if slot_idx == 7 else
                     ch
                 )
                 if cond_size > 1:
                     wc = film_weight_count_generic(g, cond_size, film_ch, shift)
-                    bc = film_bias_count_generic(film_ch)
+                    bc = film_bias_count_generic(film_ch, shift)
                 else:
                     wc = film_weight_count(g, cond_size, film_ch, shift)
                     bc = film_bias_count(film_ch, shift)
@@ -996,55 +1028,49 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 "conv_out": conv_out,
                 "mixin_groups": mixin_groups,
                 "l1x1_groups": l1x1_groups,
+                "groups_input": groups_input,
+                "head1x1_w": head1x1_w,
+                "head1x1_b": head1x1_b,
+                "head1x1_in": head1x1_in,
             })
 
-        # Head1x1 weights
-        head1x1_w = None
-        head1x1_b = None
-        head1x1_in = None
-        if head1x1_active:
-            h1_groups = layer_raw.get("head1x1", {}).get("groups", 1)
-            head1x1_in = bottleneck // h1_groups
-            n_h1 = head_accum_size_for_film * head1x1_in
-            head1x1_w = weights[cursor : cursor + n_h1].reshape(head_accum_size_for_film, head1x1_in).copy()
-            cursor += n_h1
-            head1x1_b = weights[cursor : cursor + head_accum_size_for_film].copy()
-            cursor += head_accum_size_for_film
-
         # Head kernel size — legacy models use implicit K=1.
-        head_k_raw = layer_raw.get("head", {})
-        if isinstance(head_k_raw, dict):
-            head_k = int(head_k_raw.get("kernel_size", 1))
-        else:
-            head_k = 1
-
-        # Head conv weights
+        head_k_raw = layer_raw.get("head")
+        head_k = int(head_k_raw.get("kernel_size", 1)) if isinstance(head_k_raw, dict) else 1
         head_accum_size = head_accum_size_for_film
-
         head_size = int(layer_raw.get("head_size", 1))
         is_head_rechannel = head_size > 1
+
         if is_head_rechannel:
-            hw_count = head_accum_size * head_size
-            head_w = weights[cursor : cursor + hw_count].copy()
+            per_oc_w_count = head_k * head_accum_size
+            hw_count = head_size * per_oc_w_count
+            head_w_raw = weights[cursor : cursor + hw_count].copy()
             cursor += hw_count
+            head_w = np.zeros(hw_count, dtype=np.float64)
+            for oc in range(head_size):
+                for tap in range(head_k):
+                    for c in range(head_accum_size):
+                        head_w[oc * per_oc_w_count + tap * head_accum_size + c] = (
+                            head_w_raw[oc * per_oc_w_count + c * head_k + tap]
+                        )
             head_bias_flag = bool(layer_raw.get("head_bias", False))
             if head_bias_flag:
-                head_b_arr = weights[cursor : cursor + head_size].copy()
+                head_b = weights[cursor : cursor + head_size].copy()
                 cursor += head_size
             else:
-                head_b_arr = np.zeros(head_size, dtype=np.float64)
-            head_b = np.float64(head_b_arr[0]) if len(head_b_arr) == 1 else head_b_arr
+                head_b = np.zeros(head_size, dtype=np.float64)
+            arr_head_scale = 1.0
         else:
-            # Legacy A2 format: K=head_k Conv1D + bias + scale from weight stream
-            head_w_raw = weights[cursor : cursor + head_k * head_accum_size]
-            cursor += head_k * head_accum_size
-            head_w = np.zeros(head_k * head_accum_size, dtype=np.float64)
+            hw_count = head_k * head_accum_size
+            head_w_raw = weights[cursor : cursor + hw_count].copy()
+            cursor += hw_count
+            head_w = np.zeros(hw_count, dtype=np.float64)
             for tap in range(head_k):
                 for c in range(head_accum_size):
                     head_w[tap * head_accum_size + c] = head_w_raw[c * head_k + tap]
-            head_b = np.float64(weights[cursor])
+            head_b = np.array([weights[cursor]], dtype=np.float64)
             cursor += 1
-            _head_scale_val = np.float64(weights[cursor])
+            arr_head_scale = float(weights[cursor])
             cursor += 1
 
         arr = ArrayWeights()
@@ -1063,12 +1089,19 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
         arr.head1x1_in = head1x1_in
         arr.head_w = head_w
         arr.head_b = head_b
+        arr.arr_head_scale = arr_head_scale
         arr.kernel_sizes = kernel_sizes
         arr.dilations = dilations
         arr.num_layers = num_layers
         arr.film_active = film_active
-        arr.layer_raw = layer_raw  # needed for head1x1 groups at runtime
+        arr.layer_raw = layer_raw
         array_list.append(arr)
+
+    if len(weights) - cursor == 1:
+        cascade_head_scale = float(weights[cursor])
+        cursor += 1
+    else:
+        cascade_head_scale = 1.0
 
     # ── Buffers ──
     max_rf = 0
@@ -1079,12 +1112,11 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
     hist_size = max_rf + num_frames + 64
     bs = max_rf
 
-    # Per-array state buffers (lazily initialized per frame)
+    # Per-array state buffers
     hr_len = 1 << (max_rf + num_frames + 64).bit_length()
     ring_mask = hr_len - 1
     max_ch = max(a.ch for a in array_list)
-    head_acc = np.zeros(hr_len * max_ch, dtype=np.float64)
-    head_wp = 0
+    head_accs = [np.zeros(hr_len * arr.head_accum_size, dtype=np.float64) for arr in array_list]
 
     # Cascade residual buffer
     cascade_residual = np.zeros(hist_size * max_ch, dtype=np.float64)
@@ -1094,13 +1126,15 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
             np.zeros(hist_size * arr.ch, dtype=np.float64) for _ in range(arr.num_layers)
         ]
 
-    output = np.zeros(num_frames, dtype=np.float64)
+    last_head_size = array_list[-1].head_size
+    out_channels = last_head_size if all_channels else 1
+    output = np.zeros(num_frames * out_channels, dtype=np.float64)
 
     for f in range(num_frames):
         fi = bs + f
         x_val = x[f]
-        head_col = head_wp
-        head_wp += 1
+        head_col = f
+        prev_head_out = None
 
         for ai, arr in enumerate(array_list):
             ch = arr.ch
@@ -1136,11 +1170,18 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 for nc in range(ch):
                     s = 0.0
                     for ic in range(prev_ch):
-                        s += cascade_residual[fi * max_ch + ic] * rw[ic * ch + nc]
+                        s += cascade_residual[fi * max_ch + ic] * rw[nc * prev_ch + ic]
                     layer_in[nc] = s
 
             for c in range(ch):
                 layer_bufs[0][fi * ch + c] = layer_in[c]
+
+            # Cascade head projection seeding
+            head_off = (head_col & ring_mask) * arr.head_accum_size
+            if ai > 0 and prev_head_out is not None:
+                copy_ch = min(len(prev_head_out), arr.head_accum_size)
+                head_accs[ai][head_off : head_off + copy_ch] = prev_head_out[:copy_ch]
+                head_accs[ai][head_off + copy_ch : head_off + arr.head_accum_size] = 0.0
 
             for li, lw in enumerate(arr.layer_weights):
                 ks = lw["ks"]
@@ -1157,43 +1198,48 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                 # Conv1d
                 z = lw["conv_b"].copy()
                 hist = layer_bufs[li]
+                gi = max(1, lw.get("groups_input", 1))
+                in_pg = ch // gi
+                out_pg = conv_out // gi
+                conv_w_arr = lw["conv_w"].reshape(conv_out, in_pg, ks)
                 for oc in range(conv_out):
+                    g = oc // out_pg
+                    in_start = g * in_pg
                     for kt in range(ks):
                         off = dil * (kt + 1 - ks)
-                        ins = (fi + off) * ch
-                        if ins >= 0 and ins + ch <= len(hist):
-                            z[oc] += np.dot(
-                                hist[ins : ins + ch], lw["conv_w"][oc, :, kt]
-                            )
+                        ins = (fi + off) * ch + in_start
+                        if 0 <= ins and ins + in_pg <= len(hist):
+                            z[oc] += np.dot(hist[ins : ins + in_pg], conv_w_arr[oc, :, kt])
 
                 # conv_post_film (slot 1)
                 if film[1] is not None:
                     film[1].apply(z, condition)
 
                 # Mixin — input_mixin_pre_film (slot 2) applied to condition
-                # (self-modulation, C++ model.cpp:188-197) before the mixin.
                 condition_mod = np.array(condition[:cond_size], dtype=np.float64).copy()
                 if film[2] is not None:
                     film[2].apply(condition_mod, condition[:cond_size])
-                mixin_contrib = np.zeros_like(z)
-                mixin_groups_fwd = lw.get("mixin_groups", 1)
-                if mixin_groups_fwd > 1:
-                    mixin_in_pg = cond_size // mixin_groups_fwd
-                    mixin_out_per_g = conv_out // mixin_groups_fwd
-                    for g in range(mixin_groups_fwd):
-                        in_start = g * mixin_in_pg
-                        out_start = g * mixin_out_per_g
-                        for oc in range(out_start, out_start + mixin_out_per_g):
-                            s = 0.0
-                            w_base = oc * mixin_in_pg
-                            for ic in range(mixin_in_pg):
-                                if in_start + ic < len(condition_mod):
-                                    s += float(lw["mixin_w"][w_base + ic]) * float(condition_mod[in_start + ic])
-                            mixin_contrib[oc] = s
-                elif len(condition_mod) > 0:
-                    k_used = min(cond_size, len(condition_mod))
-                    for c in range(conv_out):
-                        mixin_contrib[c] = np.dot(lw["mixin_w"][c, :k_used], condition_mod[:k_used])
+
+                mixin_contrib = np.zeros(conv_out, dtype=np.float64)
+                if len(condition_mod) > 0:
+                    mg = lw.get("mixin_groups", 1)
+                    if mg <= 1:
+                        k_used = min(cond_size, len(condition_mod))
+                        mix_mat = lw["mixin_w"].reshape(conv_out, cond_size)
+                        mixin_contrib = mix_mat[:, :k_used] @ condition_mod[:k_used]
+                    else:
+                        in_pg = cond_size // mg
+                        out_pg = conv_out // mg
+                        for g in range(mg):
+                            in_start = g * in_pg
+                            out_start = g * out_pg
+                            for oc in range(out_start, out_start + out_pg):
+                                w_base = oc * in_pg
+                                s = 0.0
+                                for ic in range(in_pg):
+                                    if in_start + ic < len(condition_mod):
+                                        s += float(lw["mixin_w"][w_base + ic]) * float(condition_mod[in_start + ic])
+                                mixin_contrib[oc] = s
 
                 # input_mixin_post_film (slot 3)
                 if film[3] is not None:
@@ -1230,33 +1276,32 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                     film[5].apply(z[:z_len], condition)
 
                 # Head accumulate
-                head_off = head_col * max_ch
                 if arr.head1x1_active:
-                    h1_groups = layer_raw.get("head1x1", {}).get("groups", 1)
+                    h1_groups = int(layer_raw.get("head1x1", {}).get("groups", 1))
                     ch_per_group = arr.head_accum_size // h1_groups
                     h1x1_out = np.zeros(arr.head_accum_size, dtype=np.float64)
-                    h1x1_out[:arr.head_accum_size] = arr.head1x1_b
+                    h1x1_out[:arr.head_accum_size] = lw["head1x1_b"]
+                    h1_in = lw["head1x1_in"]
                     for grp in range(h1_groups):
                         for oc in range(grp * ch_per_group, (grp + 1) * ch_per_group):
-                            for ic in range(arr.head1x1_in):
-                                h1x1_out[oc] += (
-                                    arr.head1x1_w[oc, ic]
-                                    * z[grp * arr.head1x1_in + ic]
-                                )
+                            for ic in range(h1_in):
+                                h1x1_out[oc] += lw["head1x1_w"][oc, ic] * z[grp * h1_in + ic]
                     if film[7] is not None:
                         film[7].apply(h1x1_out, condition)
                     if li == 0 and ai == 0:
-                        head_acc[head_off : head_off + arr.head_accum_size] = h1x1_out[:arr.head_accum_size]
+                        head_accs[0][head_off : head_off + arr.head_accum_size] = h1x1_out[:arr.head_accum_size]
                     else:
-                        head_acc[head_off : head_off + arr.head_accum_size] += h1x1_out[:arr.head_accum_size]
+                        head_accs[ai][head_off : head_off + arr.head_accum_size] += h1x1_out[:arr.head_accum_size]
                 else:
                     if li == 0 and ai == 0:
-                        head_acc[head_off : head_off + z_len] = z[:z_len]
+                        head_accs[0][head_off : head_off + z_len] = z[:z_len]
                     else:
-                        head_acc[head_off : head_off + z_len] += z[:z_len]
+                        head_accs[ai][head_off : head_off + z_len] += z[:z_len]
 
                 # L1x1 residual
-                if li < num_layers - 1:
+                is_last_layer = (li + 1 == num_layers)
+                skip_residual = is_last_layer and (ai + 1 == num_arrays)
+                if not skip_residual:
                     l1x1_groups_fwd = lw.get("l1x1_groups", 1)
                     if l1x1_groups_fwd > 1:
                         in_pg = bottleneck // l1x1_groups_fwd
@@ -1272,30 +1317,39 @@ def a2_forward(model: dict, x: np.ndarray) -> np.ndarray:
                                     s += float(lw["l1x1_w"][w_base + ic]) * float(z[in_start + ic])
                                 residual[oc] = s
                     else:
-                        residual = z[:bottleneck] @ lw["l1x1_w"].T + lw["l1x1_b"]
+                        residual = z[:bottleneck] @ lw["l1x1_w"].reshape(ch, bottleneck).T + lw["l1x1_b"]
                     if film[6] is not None:
                         film[6].apply(residual, condition)
                     layer_in = layer_in + residual
-                    layer_bufs[li + 1][fi * ch : fi * ch + ch] = layer_in
+                    if li + 1 < num_layers:
+                        layer_bufs[li + 1][fi * ch : fi * ch + ch] = layer_in
 
             # Save residual for next array
             if ai + 1 < num_arrays:
                 cascade_residual[fi * max_ch : fi * max_ch + ch] = layer_in
 
-        # ── Head finalize (last array) ──
-        last_arr = array_list[-1]
-        lch = last_arr.head_accum_size
-        if last_arr.head_is_rechannel:
-            k = last_arr.head_size
-        else:
-            k = last_arr.head_k if last_arr.head_size == 1 else last_arr.head_size
-        cb = head_col - (k - 1)
-        y = float(last_arr.head_b) if np.ndim(last_arr.head_b) == 0 else float(last_arr.head_b[0])
-        for t in range(k):
-            col = (cb + t) & ring_mask
-            wo = t * lch
-            y += np.dot(head_acc[col * max_ch : col * max_ch + lch], last_arr.head_w[wo : wo + lch])
-        output[f] = y * head_scale
+            # Evaluate array head projection
+            hs = arr.head_size
+            k = arr.head_k
+            channels = arr.head_accum_size
+            per_oc_w_count = k * channels
+            cur_head_out = np.zeros(hs, dtype=np.float64)
+            for oc in range(hs):
+                w_base = oc * per_oc_w_count
+                y = float(arr.head_b[oc])
+                for t in range(k):
+                    col = (head_col - (k - 1 - t)) & ring_mask
+                    ha_off = col * channels
+                    w_off = w_base + t * channels
+                    y += np.dot(arr.head_w[w_off : w_off + channels], head_accs[ai][ha_off : ha_off + channels])
+                cur_head_out[oc] = y * arr.arr_head_scale
+
+            if ai + 1 < num_arrays:
+                prev_head_out = cur_head_out
+            elif all_channels:
+                output[f * hs : (f + 1) * hs] = cur_head_out * cascade_head_scale
+            else:
+                output[f] = cur_head_out[0] * cascade_head_scale
 
     return output
 
@@ -1308,6 +1362,9 @@ def detect_architecture(model: dict) -> str:
     Used for recursive condition_dsp dispatching where the sub-model may be
     any architecture family (LSTM, A2, WaveNet, ConvNet), not just A2.
     """
+    if is_a2_model(model):
+        return "A2"
+
     arch = model.get("architecture", None)
     if arch:
         return arch
@@ -1382,25 +1439,7 @@ def main():
 
     arch = args.architecture
     if arch == "WaveNet":
-        config = model.get("config", {})
-        layers = config.get("layers", [])
-        # A2 detection: head_scale present, no post-stack head, and layers
-        # have dilations+channels (either with kernel_sizes array or
-        # kernel_size scalar).
-        # Condition_dsp models with Tanh activation route through
-        # the WaveNet A1 oracle, matching Rust's is_a2_model routing.
-        has_head_scale = "head_scale" in config
-        has_head = bool(config.get("head"))
-        has_cond_dsp = config.get("condition_dsp") is not None
-        has_tanh = has_cond_dsp and any(
-            l.get("activation") == "Tanh"
-            or (isinstance(l.get("activation"), list) and "Tanh" in l.get("activation", []))
-            for l in layers
-        )
-        if has_head_scale and not has_head and layers and any(
-            "dilations" in l and "channels" in l
-            for l in layers
-        ) and not has_tanh:
+        if is_a2_model(model):
             arch = "A2"
 
     print(f"Architecture: {arch}", file=sys.stderr)

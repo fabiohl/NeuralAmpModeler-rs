@@ -259,6 +259,7 @@ pub fn set_cpu_affinity_with<C: ThreadConfigurator>(
 
 /// Error returned when pinning the calling thread to a CPU fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PinThreadError {
     /// CPU index is outside the supported `[0, CPU_SETSIZE)` range.
     CpuOutOfBounds {

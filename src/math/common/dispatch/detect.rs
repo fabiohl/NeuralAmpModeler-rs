@@ -87,6 +87,7 @@ pub fn effective_instruction_set() -> InstructionSet {
 /// `testing::isa_guard::IsaGuard::try_set`). Safe Rust must never force
 /// dispatch towards instructions the host cannot execute (F-ROB-03).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum IsaOverrideError {
     /// The requested ISA requires CPU sub-features that are absent on the
     /// current host, or the `avx512` Cargo feature is not enabled.

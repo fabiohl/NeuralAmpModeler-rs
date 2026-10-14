@@ -34,12 +34,12 @@ impl HasRuntimeSnapshot for MockSnapshotProvider {
     }
 
     fn audio_info(&self, consumer: &AudioMetadata) -> AudioInfo {
-        AudioInfo {
-            sample_rate: self.audio.sample_rate,
-            buffer_size: self.audio.buffer_size,
-            channel_count: consumer.channel_count,
-            host_name: consumer.host_name.clone(),
-        }
+        AudioInfo::new(
+            self.audio.sample_rate,
+            self.audio.buffer_size,
+            consumer.channel_count,
+            consumer.host_name.clone(),
+        )
     }
 
     fn rt_info(&self) -> RtInfo {
@@ -59,39 +59,18 @@ impl HasRuntimeSnapshot for MockSnapshotProvider {
 fn test_diagnostic_bundle_with_mock_provider() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let provider = MockSnapshotProvider {
-        model: Some(ModelInfo {
-            arch_label: "WaveNet".to_string(),
-            topology: "Standard".to_string(),
-            channels: 16,
-            receptive_field: 2048,
-            model_sample_rate: 48000,
-            weights_layout: "Interleaved4WaveNet".to_string(),
-            path_basename: "test_model.nam".to_string(),
-        }),
-        audio: AudioInfo {
-            sample_rate: 48000,
-            buffer_size: 256,
-            channel_count: 2,
-            host_name: "PluginHost".to_string(),
-        },
-        rt: RtInfo {
-            thread_priority: 90,
-            scheduler: "FIFO".to_string(),
-            cpu_pinned: Some(3),
-            huge_pages_active: true,
-            huge_page_mode: "hugetlb".to_string(),
-        },
-        telemetry: TelemetrySnapshot {
-            p50_us: 120,
-            p99_us: 250,
-            p999_us: 400,
-            max_us: 850,
-            total_blocks: 10000,
-            xruns: 2,
-            drains: 5,
-            input_buffer_miss: 0,
-            output_buffer_miss: 0,
-        },
+        model: Some(ModelInfo::new(
+            "WaveNet",
+            "Standard",
+            16,
+            2048,
+            48000,
+            "Interleaved4WaveNet",
+            "test_model.nam",
+        )),
+        audio: AudioInfo::new(48000, 256, 2, "PluginHost"),
+        rt: RtInfo::new(90, "FIFO", Some(3), true, "hugetlb"),
+        telemetry: TelemetrySnapshot::new(120, 250, 400, 850, 10000, 2, 5, 0, 0),
         flags: 0x1a,
     };
 
@@ -332,28 +311,17 @@ fn test_diagnostic_bundle_path_redaction() {
 
     // Mock provider with a full path in model.path_basename
     let provider = MockSnapshotProvider {
-        model: Some(ModelInfo {
-            arch_label: "WaveNet".to_string(),
-            topology: "Standard".to_string(),
-            channels: 16,
-            receptive_field: 2048,
-            model_sample_rate: 48000,
-            weights_layout: "Interleaved4WaveNet".to_string(),
-            path_basename: home_path.clone(),
-        }),
-        audio: AudioInfo {
-            sample_rate: 48000,
-            buffer_size: 256,
-            channel_count: 2,
-            host_name: "PluginHost".to_string(),
-        },
-        rt: RtInfo {
-            thread_priority: 90,
-            scheduler: "FIFO".to_string(),
-            cpu_pinned: Some(3),
-            huge_pages_active: true,
-            huge_page_mode: "thp".to_string(),
-        },
+        model: Some(ModelInfo::new(
+            "WaveNet",
+            "Standard",
+            16,
+            2048,
+            48000,
+            "Interleaved4WaveNet",
+            home_path.clone(),
+        )),
+        audio: AudioInfo::new(48000, 256, 2, "PluginHost"),
+        rt: RtInfo::new(90, "FIFO", Some(3), true, "thp"),
         telemetry: TelemetrySnapshot::default(),
         flags: 0,
     };
@@ -465,39 +433,18 @@ fn test_diagnostic_bundle_mandatory_fields() {
 fn test_diagnostic_bundle_regex_roundtrip() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let provider = MockSnapshotProvider {
-        model: Some(ModelInfo {
-            arch_label: "LSTM".to_string(),
-            topology: "1x8".to_string(),
-            channels: 8,
-            receptive_field: 0,
-            model_sample_rate: 48000,
-            weights_layout: "GateMajorLstm".to_string(),
-            path_basename: "test.nam".to_string(),
-        }),
-        audio: AudioInfo {
-            sample_rate: 96000,
-            buffer_size: 128,
-            channel_count: 1,
-            host_name: "PluginHost".to_string(),
-        },
-        rt: RtInfo {
-            thread_priority: 95,
-            scheduler: "FIFO".to_string(),
-            cpu_pinned: Some(1),
-            huge_pages_active: false,
-            huge_page_mode: "off".to_string(),
-        },
-        telemetry: TelemetrySnapshot {
-            p50_us: 10,
-            p99_us: 20,
-            p999_us: 30,
-            max_us: 100,
-            total_blocks: 500,
-            xruns: 0,
-            drains: 0,
-            input_buffer_miss: 0,
-            output_buffer_miss: 0,
-        },
+        model: Some(ModelInfo::new(
+            "LSTM",
+            "1x8",
+            8,
+            0,
+            48000,
+            "GateMajorLstm",
+            "test.nam",
+        )),
+        audio: AudioInfo::new(96000, 128, 1, "PluginHost"),
+        rt: RtInfo::new(95, "FIFO", Some(1), false, "off"),
+        telemetry: TelemetrySnapshot::new(10, 20, 30, 100, 500, 0, 0, 0, 0),
         flags: 0x01,
     };
 
@@ -594,28 +541,17 @@ fn test_diagnostic_bundle_regex_roundtrip() {
 fn test_diagnostic_bundle_model_sample_rate_mismatch() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let provider = MockSnapshotProvider {
-        model: Some(ModelInfo {
-            arch_label: "WaveNet".to_string(),
-            topology: "Lite".to_string(),
-            channels: 12,
-            receptive_field: 1024,
-            model_sample_rate: 44100,
-            weights_layout: "Interleaved4WaveNet".to_string(),
-            path_basename: "wavenet_lite_44k.nam".to_string(),
-        }),
-        audio: AudioInfo {
-            sample_rate: 48000,
-            buffer_size: 256,
-            channel_count: 2,
-            host_name: "PluginHost".to_string(),
-        },
-        rt: RtInfo {
-            thread_priority: 90,
-            scheduler: "FIFO".to_string(),
-            cpu_pinned: Some(2),
-            huge_pages_active: false,
-            huge_page_mode: "off".to_string(),
-        },
+        model: Some(ModelInfo::new(
+            "WaveNet",
+            "Lite",
+            12,
+            1024,
+            44100,
+            "Interleaved4WaveNet",
+            "wavenet_lite_44k.nam",
+        )),
+        audio: AudioInfo::new(48000, 256, 2, "PluginHost"),
+        rt: RtInfo::new(90, "FIFO", Some(2), false, "off"),
         telemetry: TelemetrySnapshot::default(),
         flags: 0,
     };

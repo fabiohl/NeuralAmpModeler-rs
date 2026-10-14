@@ -71,6 +71,14 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 > **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
 
+### Supported Platforms
+
+NeuralAmpModeler-rs supports **`x86_64` with the `x86-64-v3` instruction set** only. The crate enforces this at compile time:
+
+* Non-`x86_64` targets (for example macOS on Apple silicon / `aarch64`) are rejected by design via `compile_error!` — there is no scalar fallback.
+* `x86_64` CPUs lacking any `x86-64-v3` feature fail the build with a clear, actionable message.
+* When building documentation locally, use `cargo doc --lib` (the `simd_probe` binary is incompatible with the `cfg(doc)` build).
+
 ### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
 
 ```bash
@@ -126,6 +134,16 @@ For test harnesses, audio generators, and perceptual fidelity measurement tools:
 NeuralAmpModeler-rs = { version = "1.0", features = ["testing"] }
 ```
 
+> **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
+
+### Model Files
+
+The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. To try the engine with **no external file**, use the bundled in-memory example:
+
+```bash
+cargo run --example synthetic_model
+```
+
 ### Minimal Code Example: Load & Process Audio
 
 ```rust,no_run
@@ -138,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Load a .nam (JSON) or .namb (binary) model
     let mut model_pair = load_and_build_model(
-        Path::new("models/BossWN-standard.nam"),
+        Path::new("path/to/model.nam"),
         &sys,
         false, // dual_mono: false = mono left-channel only
         LoadOptions::default(),
@@ -246,6 +264,8 @@ Execution times measured per 64-sample block at 48 kHz (1.33 ms real-time deadli
 | **Full Pipeline HQ (Model + CabSim + 4× OS)**  | **177.4 µs**   | 13.3%                   |
 
 > Detailed benchmarking methodologies, throughput curves, and regression envelopes are documented in [`docs/benchmarks.md`](docs/benchmarks.md).
+
+> **MSRV vs. measurement note:** the timings above were measured with `rustc 1.98.1`, which is **below** the public MSRV promise of `1.99.0`. The numbers are kept verbatim until a fresh measurement is captured on the guaranteed toolchain (maintainer task, via `utils/quality-dashboard.sh`); they are not relabeled without a re-run.
 
 ---
 

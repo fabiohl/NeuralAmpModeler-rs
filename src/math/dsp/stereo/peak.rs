@@ -96,6 +96,7 @@ pub fn compute_peak_abs_stereo_avx2(left: &[f32], right: &[f32]) -> (f32, f32) {
 /// inlining) is an unsafe operation and requires an `unsafe` block; the caller
 /// must guarantee the CPU supports AVX-512F.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f")]
 pub fn compute_peak_abs_stereo_avx512(left: &[f32], right: &[f32]) -> (f32, f32) {

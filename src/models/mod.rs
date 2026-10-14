@@ -120,26 +120,25 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     ///
     /// # Examples
     ///
-    /// ```no_run
-    /// use std::path::Path;
-    /// use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
-    /// use neural_amp_modeler_rs::models::NamModel;
-    /// use neural_amp_modeler_rs::SystemSnapshot;
+    /// A model obtained from [`load_and_build_model`](crate::loader::load_and_build_model)
+    /// is driven block by block. This builds a deterministic synthetic
+    /// `Lstm1x3` in memory (no file on disk), primes it with
+    /// [`reset`](Self::reset), and runs a 64-sample block:
     ///
-    /// let sys = SystemSnapshot::capture();
-    /// let mut pair = load_and_build_model(
-    ///     Path::new("path/to/model.nam"),
-    ///     &sys,
-    ///     false, // dual_mono: left-channel only
-    ///     LoadOptions::default(),
-    /// )
-    /// .expect("Failed to load model");
-    /// let model = pair.model_l.as_mut().expect("mono load yields model_l");
+    /// ```
+    /// use neural_amp_modeler_rs::models::lstm::Lstm1x3;
+    /// use neural_amp_modeler_rs::prelude::*;
     ///
-    /// // Process a block of audio samples
-    /// let input = [0.0_f32; 64];
+    /// let mut model = StaticModel::Lstm1x3(Box::new(Lstm1x3::new()));
+    /// model.reset(48_000, 64)?;
+    ///
+    /// let input = [0.1_f32; 64];
     /// let mut output = [0.0_f32; 64];
     /// model.process(&input, &mut output);
+    ///
+    /// assert_eq!(output.len(), input.len());
+    /// assert!(output.iter().all(|s| s.is_finite()));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn process(&mut self, input: &[f32], output: &mut [f32]);
 
@@ -487,6 +486,18 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Implementations may return an error if internal state buffers cannot be
     /// (re)allocated for `max_buffer_size` (out of memory). The default
     /// implementation never fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::models::lstm::Lstm1x3;
+    /// use neural_amp_modeler_rs::prelude::*;
+    ///
+    /// let mut model = StaticModel::Lstm1x3(Box::new(Lstm1x3::new()));
+    /// // Negotiate the audio sample rate and maximum block size before processing.
+    /// model.reset(48_000, 128)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
         self.clear_state();
         if self.prewarm_on_reset() {

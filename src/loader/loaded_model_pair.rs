@@ -34,6 +34,7 @@ pub(crate) const MAX_PLAUSIBLE_HEAD_SCALE: f32 = 100.0;
 /// implausible values are rejected so they can never contaminate gain staging
 /// (`db_to_linear`) with NaN/Inf or zero gain (F-14).
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum MetadataError {
     /// A metadata float is non-finite (NaN, +Inf, or -Inf).
     #[error("metadata field '{field}' is not finite (value: {value:e})")]
@@ -129,6 +130,28 @@ pub(crate) fn validate_metadata_floats(
 }
 
 /// Pair of loaded models with calibration metadata.
+///
+/// # Examples
+///
+/// A pair is produced by the loader; the accessors below read the model's
+/// calibration metadata. This builds a minimal in-memory `Linear` model
+/// without touching the filesystem:
+///
+/// ```
+/// use neural_amp_modeler_rs::prelude::*;
+///
+/// let sys = SystemSnapshot::capture();
+/// let json = br#"{"version":"0.7.0","architecture":"Linear",
+///     "config":{"receptive_field":1,"bias":false},"weights":[1.0]}"#;
+/// let pair = load_and_build_model_from_bytes(json, &sys, false, LoadOptions::default())?;
+///
+/// assert!(pair.mono().is_some());
+/// // The synthetic model carries no metadata, so calibration reads are absent.
+/// assert!(!pair.has_loudness());
+/// assert!(pair.model_memory_bytes().is_some_and(|bytes| bytes > 0));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[non_exhaustive]
 pub struct LoadedModelPair {
     /// Model for the left channel.
     pub model_l: Option<Box<StaticModel>>,
@@ -151,6 +174,27 @@ pub struct LoadedModelPair {
 }
 
 impl LoadedModelPair {
+    /// Borrows the left (mono) channel model, if one was loaded.
+    ///
+    /// For mono models the left channel carries the single model; this is the
+    /// preferred accessor over reading the `model_l` field directly.
+    pub fn mono(&self) -> Option<&StaticModel> {
+        self.model_l.as_deref()
+    }
+
+    /// Mutably borrows the left (mono) channel model, if one was loaded.
+    pub fn left_mut(&mut self) -> Option<&mut StaticModel> {
+        self.model_l.as_deref_mut()
+    }
+
+    /// Mutably borrows both channel models as `(left, right)`.
+    ///
+    /// Each entry is `None` when that channel was not loaded. The two borrows
+    /// are disjoint, so callers may hold them simultaneously.
+    pub fn channels_mut(&mut self) -> (Option<&mut StaticModel>, Option<&mut StaticModel>) {
+        (self.model_l.as_deref_mut(), self.model_r.as_deref_mut())
+    }
+
     /// Overall recorded loudness from model metadata, if available.
     pub fn loudness(&self) -> Option<f32> {
         self.metadata.as_ref().and_then(|m| m.loudness)

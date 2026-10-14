@@ -164,6 +164,7 @@ fn verify_fsm_step(
                 state
             );
         }
+        _ => {}
     }
 
     // 5. Special check for fade_frames = 0

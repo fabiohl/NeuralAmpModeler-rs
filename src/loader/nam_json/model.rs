@@ -52,6 +52,10 @@ pub struct NamDate {
 }
 
 /// Optional metadata contained at the end of the `.nam` format.
+///
+/// Construct with [`Self::default`] and assign the public fields directly.
+/// Direct struct literals are not available outside this crate.
+#[non_exhaustive]
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct NamMetadata {
     /// Model authorship or export date.
@@ -339,6 +343,11 @@ pub struct HeadConfig {
 }
 
 /// The internal configuration of the architecture node in the JSON.
+///
+/// Construct with [`Self::new`], [`Self::default`], then assign the remaining
+/// public fields directly. Direct struct literals are not available outside
+/// this crate.
+#[non_exhaustive]
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct NamConfig {
     /// List of stacked layer configurations (present in WaveNet, ConvNet; absent in LSTM).
@@ -422,6 +431,14 @@ pub struct NamConfig {
 }
 
 impl NamConfig {
+    /// Creates a layer-only configuration with every other field at its default.
+    pub fn new(layers: Vec<NamLayerConfig>) -> Self {
+        Self {
+            layers,
+            ..Self::default()
+        }
+    }
+
     /// Extracts a typed `HeadConfig` from the raw `head` JSON value.
     ///
     /// Returns `None` if the head field is absent, `null`, or not an object.
@@ -519,7 +536,11 @@ impl NamConfig {
 }
 
 /// Root mapping structure for `.nam` files.
-#[derive(Deserialize, Serialize, Debug, Clone)]
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct NamModelData {
     /// Version in the JSON header (e.g. "0.5.4")
     pub version: Option<String>,
@@ -541,6 +562,27 @@ pub struct NamModelData {
 }
 
 impl NamModelData {
+    /// Creates a model data root with every field populated.
+    pub fn new(
+        version: Option<String>,
+        architecture: impl Into<String>,
+        config: NamConfig,
+        weights: Vec<f32>,
+        sample_rate: Option<f32>,
+        metadata: Option<NamMetadata>,
+        weights_layout: WeightsLayout,
+    ) -> Self {
+        Self {
+            version,
+            architecture: architecture.into(),
+            config,
+            weights,
+            sample_rate,
+            metadata,
+            weights_layout,
+        }
+    }
+
     /// Returns whether the model explicitly declares slimmability support in its architecture or metadata.
     pub fn is_slimmable_capable(&self) -> bool {
         if self.architecture == "SlimmableContainer" {

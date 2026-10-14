@@ -38,43 +38,6 @@ pub enum LoadError {
     #[error("WAV impulse response format error: {0}")]
     Wav(#[from] WavError),
 
-    /// The `.nam` JSON data is malformed or violates the expected schema.
-    #[deprecated(since = "0.8.0", note = "use LoadError::Json instead")]
-    #[error("Model JSON parse error: {0}")]
-    JsonParse(#[source] serde_json::Error),
-
-    /// The `.namb` file does not start with the expected magic bytes (`0x4E414D42`).
-    #[deprecated(
-        since = "0.8.0",
-        note = "use LoadError::Namb(NambError::InvalidMagic) instead"
-    )]
-    #[error("Invalid .namb magic bytes: {0}")]
-    NambInvalidMagic(String),
-
-    /// The `.namb` file is truncated or has weight offsets exceeding file bounds.
-    #[deprecated(
-        since = "0.8.0",
-        note = "use LoadError::Namb(NambError::Truncated { .. }) instead"
-    )]
-    #[error("Truncated or corrupt .namb file: {0}")]
-    NambTruncated(String),
-
-    /// The `.namb` file failed CRC32 integrity verification (corruption or incomplete download).
-    #[deprecated(
-        since = "0.8.0",
-        note = "use LoadError::Namb(NambError::CrcMismatch { .. }) instead"
-    )]
-    #[error("CRC32 integrity mismatch in .namb file")]
-    NambCrc32Mismatch,
-
-    /// CRC32 integrity field is missing in a `.namb` file (policy requires checksum verification).
-    #[deprecated(
-        since = "0.8.0",
-        note = "use LoadError::Namb(NambError::CrcMissing { .. }) instead"
-    )]
-    #[error("CRC32 integrity field missing in .namb file")]
-    NambCrc32Missing,
-
     /// The file extension is not supported (only `.nam` and `.namb` are valid).
     #[error("Unsupported model file extension: {0}")]
     UnsupportedExtension(String),
@@ -171,16 +134,6 @@ impl LoadError {
                 JsonError::Serde(_) => NamErrorCode::NamJsonParseError,
             },
             Self::Wav(e) => e.error_code(),
-            #[expect(deprecated)]
-            Self::JsonParse(_) => NamErrorCode::NamJsonParseError,
-            #[expect(deprecated)]
-            Self::NambInvalidMagic(_) => NamErrorCode::NambInvalidMagic,
-            #[expect(deprecated)]
-            Self::NambTruncated(_) => NamErrorCode::NambTruncated,
-            #[expect(deprecated)]
-            Self::NambCrc32Mismatch => NamErrorCode::NambCrc32Mismatch,
-            #[expect(deprecated)]
-            Self::NambCrc32Missing => NamErrorCode::NambCrc32Missing,
             Self::UnsupportedExtension(_) => NamErrorCode::UnknownExtension,
             Self::UnsupportedArchitecture(_) => NamErrorCode::UnsupportedArchitecture,
             Self::DimensionMismatch(_) => NamErrorCode::WeightCountMismatch,

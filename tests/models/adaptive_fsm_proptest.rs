@@ -71,6 +71,7 @@ fn verify_adaptive_step(
     // 1. State must be one of the three valid variants
     match state {
         AdaptiveState::Full | AdaptiveState::Reduced | AdaptiveState::Minimal => {}
+        _ => {}
     }
 
     // 2. slimmable_size() must be in [0.0, 1.0]
@@ -109,6 +110,7 @@ fn verify_adaptive_step(
             assert!(is_reduced, "DEGRADE_REDUCED not set in Minimal state");
             assert!(is_minimal, "DEGRADE_MINIMAL not set in Minimal state");
         }
+        _ => {}
     }
 
     // 5. degrade_transitions_total must be monotonically non-decreasing

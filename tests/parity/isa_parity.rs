@@ -87,47 +87,39 @@ static ISA_LOCK: Mutex<()> = Mutex::new(());
 macro_rules! skip_if_unsupported {
     ($isa:expr, $test_name:expr) => {
         #[expect(deprecated)]
-        match $isa {
-            InstructionSet::Avx2 => { /* always supported (x86-64-v3) */ }
+        let unsupported_reason: Option<&'static str> = match $isa {
+            InstructionSet::Avx2 => None,
             InstructionSet::Avx512 => {
                 #[cfg(feature = "avx512")]
-                if !has_full_avx512() {
-                    eprintln!(
-                        "[STATUS] SKIP_CAPABILITY reason=\"avx512_cpu_unsupported:{}\"",
-                        $test_name
-                    );
-                    return;
+                {
+                    (!has_full_avx512()).then_some("avx512_cpu_unsupported")
                 }
                 #[cfg(not(feature = "avx512"))]
                 {
-                    eprintln!(
-                        "[STATUS] SKIP_CAPABILITY reason=\"avx512_not_compiled:{}\"",
-                        $test_name
-                    );
-                    return;
+                    Some("avx512_not_compiled")
                 }
             }
             InstructionSet::Avx512VnniBf16 => {
                 #[cfg(feature = "avx512")]
-                if !has_full_avx512()
-                    || !is_x86_feature_detected!("avx512bf16")
-                    || !is_x86_feature_detected!("avx512vnni")
                 {
-                    eprintln!(
-                        "[STATUS] SKIP_CAPABILITY reason=\"vnni_bf16_cpu_unsupported:{}\"",
-                        $test_name
-                    );
-                    return;
+                    (!has_full_avx512()
+                        || !is_x86_feature_detected!("avx512bf16")
+                        || !is_x86_feature_detected!("avx512vnni"))
+                    .then_some("vnni_bf16_cpu_unsupported")
                 }
                 #[cfg(not(feature = "avx512"))]
                 {
-                    eprintln!(
-                        "[STATUS] SKIP_CAPABILITY reason=\"vnni_bf16_not_compiled:{}\"",
-                        $test_name
-                    );
-                    return;
+                    Some("vnni_bf16_not_compiled")
                 }
             }
+            _ => None,
+        };
+        if let Some(reason) = unsupported_reason {
+            eprintln!(
+                "[STATUS] SKIP_CAPABILITY reason=\"{}:{}\"",
+                reason, $test_name
+            );
+            return;
         }
     };
 }
@@ -312,12 +304,14 @@ fn assert_isa_parity(
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
+        _ => "UNKNOWN",
     };
     #[expect(deprecated)]
     let test_name = match test_isa {
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
+        _ => "UNKNOWN",
     };
 
     println!(
@@ -443,6 +437,7 @@ fn assert_isa_self_consistency(
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
+        _ => "UNKNOWN",
     };
     println!("[ISA Matrix] {label} | {isa_name:>10} self-consistency | MSE={mse:.2e}");
 
@@ -481,6 +476,7 @@ fn assert_isa_hf_self_consistency(
         InstructionSet::Avx2 => "AVX2",
         InstructionSet::Avx512 => "AVX-512",
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
+        _ => "UNKNOWN",
     };
     println!("[ISA HF Matrix] {label} | {isa_name:>10} self-consistency (HF) | MSE={mse:.2e}");
 

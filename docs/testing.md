@@ -87,6 +87,33 @@ graph LR
 NAM_NO_LOW_PRIORITY=1 ./utils/lints.sh
 ```
 
+### 2.3 docs.rs Parity Check (Opt-in, Nightly)
+
+The crate page published by docs.rs is rendered by **nightly** rustdoc with `--cfg docsrs`. Documentation diagnostics that only nightly reports — broken intra-doc links, redundant explicit link targets, and missing `doc(cfg(feature = "..."))` seals — are invisible to the stable `lints.sh` gate (§2.1, phase 4). [utils/docsrs-check.sh](../utils/docsrs-check.sh) mirrors the docs.rs configuration to catch those regressions before publishing.
+
+```bash
+# Opt-in: requires an isolated nightly toolchain (never part of the stable gates)
+./utils/docsrs-check.sh
+```
+
+The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, derives the feature scope from `package.metadata.docs.rs` in [Cargo.toml](../Cargo.toml), then runs `cargo +nightly doc --locked --lib --no-deps` with that scope (`--lib` mirrors the docs.rs build). Exit `0` means zero rustdoc warnings; exit `2` is a typed gap (nightly or metadata tooling unavailable); any rustdoc warning fails with exit `1`.
+
+### 2.4 SemVer Baseline Check (Opt-in, Pre-release)
+
+The published SemVer baseline is the **last release available on crates.io** (`0.8.0`), not the local `Cargo.toml` version. Before publishing, compare the current API surface against that baseline with [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks):
+
+```bash
+# Release gate: the local version (1.0.0) is a major bump, so every intended
+# break is already covered; a clean surface prints "no semver update required".
+cargo semver-checks check-release --baseline-rev v0.8.0
+
+# Enumeration aid (evidence only): force a non-major release type to list every
+# breaking change relative to 0.8.0, so each one can be marked as intentional.
+cargo semver-checks check-release --baseline-rev v0.8.0 --release-type minor
+```
+
+`--baseline-rev` resolves the baseline from the local `vX.Y.Z` git tag, avoiding a crates.io round-trip; `--baseline-version 0.8.0` is the registry equivalent. The tool requires an isolated nightly rustdoc toolchain and is an **opt-in, out-of-band** check: it is never part of the stable `utils/lints.sh` gate. Exit `0` from the release-gate form means the declared version bump covers every detected change. The `--release-type` form only selects which checks run; its exit code still reflects the declared version delta, so read the printed `Summary` line (not the exit code) when enumerating breaks. Reports are archived as PR/packaging evidence and are not committed as tool artifacts.
+
 ---
 
 ## 3. Test Execution Phase Architecture — Two-Axis Model

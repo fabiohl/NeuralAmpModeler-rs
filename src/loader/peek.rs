@@ -57,6 +57,24 @@ pub const DEFAULT_METADATA_PEEK_BYTES: u64 = MAX_MODEL_BYTES;
 /// A document whose `metadata` falls beyond the budget fails closed
 /// (an error, never a silent "no metadata").
 ///
+/// # Examples
+///
+/// Only the `metadata` object is deserialized, so the peek succeeds on a
+/// document whose weight tensors would be expensive to materialize:
+///
+/// ```
+/// use neural_amp_modeler_rs::loader::{peek_metadata, DEFAULT_METADATA_PEEK_BYTES};
+///
+/// let path = std::env::temp_dir().join(format!("nam_peek_{}.nam", std::process::id()));
+/// std::fs::write(&path, br#"{"metadata":{"name":"Example Amp"}}"#)?;
+///
+/// let meta = peek_metadata(&path, DEFAULT_METADATA_PEEK_BYTES)?;
+/// assert_eq!(meta.name.as_deref(), Some("Example Amp"));
+///
+/// std::fs::remove_file(&path)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`LoadError::UnsupportedExtension`] for anything other than
@@ -92,6 +110,19 @@ pub fn peek_metadata(path: &Path, max_bytes: u64) -> Result<NamMetadata, LoadErr
 ///
 /// See [`peek_metadata`] for the budget semantics. Useful when the document is
 /// already in memory (or piped) rather than a file on disk.
+///
+/// # Examples
+///
+/// No file is opened, so a reader over an in-memory document is enough:
+///
+/// ```
+/// use neural_amp_modeler_rs::loader::peek_metadata_from_reader;
+///
+/// let doc = br#"{"architecture":"Linear","metadata":{"name":"In-Memory"}}"#;
+/// let meta = peek_metadata_from_reader(&doc[..], u64::MAX)?;
+/// assert_eq!(meta.name.as_deref(), Some("In-Memory"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 ///
 /// # Errors
 ///

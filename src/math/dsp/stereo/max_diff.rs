@@ -95,6 +95,7 @@ pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
 /// # Safety
 /// The slices `a` and `b` must have the same length.
 #[cfg(feature = "avx512")]
+#[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn compute_max_diff_avx512(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());

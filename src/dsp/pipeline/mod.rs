@@ -72,6 +72,7 @@ pub mod test_util {
         pub use crate::common::alloc_audit::CountingAllocator;
 
         #[cfg(any(test, feature = "heap-audit"))]
+        #[cfg_attr(docsrs, doc(cfg(feature = "heap-audit")))]
         pub use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
 
         #[cfg(not(any(test, feature = "heap-audit")))]

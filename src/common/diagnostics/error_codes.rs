@@ -50,6 +50,27 @@ use std::fmt;
 /// (E2200), [`InvalidCabsimPartitionSize`](NamErrorCode::InvalidCabsimPartitionSize) (E2202),
 /// and [`InvalidSpscCapacity`](NamErrorCode::InvalidSpscCapacity) (E3103),
 /// which are constructor-parameter validation errors. See the module documentation.
+///
+/// # Examples
+///
+/// `NamErrorCode` implements [`std::error::Error`], so it converts into a
+/// boxed trait object through `?` without manual mapping — and
+/// [`LoadError::code`](crate::loader::LoadError::code) bridges a structured
+/// loader failure onto the same code space:
+///
+/// ```
+/// use neural_amp_modeler_rs::prelude::*;
+///
+/// fn validate(sample_rate: u32) -> Result<(), Box<dyn std::error::Error>> {
+///     if sample_rate == 0 {
+///         return Err(NamErrorCode::NamJsonInvalidSampleRate.into());
+///     }
+///     Ok(())
+/// }
+///
+/// assert!(validate(48_000).is_ok());
+/// assert!(validate(0).is_err());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NamErrorCode {

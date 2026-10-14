@@ -12,6 +12,7 @@
 /// The [`InstructionSet::Avx512`] and [`InstructionSet::Avx512VnniBf16`] variants are
 /// maintained in the stable public API for consumer neutrality, but are only selected
 /// when the crate is explicitly compiled with the `avx512` research/evaluation feature.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
 pub enum InstructionSet {
     /// AVX2 + FMA (x86-64-v3 baseline, standard production backend).

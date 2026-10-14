@@ -5,7 +5,8 @@
 //! topology.
 //!
 //! The envelope/topology gate ([`crate::loader::nam_json::get_sequential_topology`])
-//! runs first and rejects every hostile shape with a typed [`NamErrorCode`]
+//! runs first and rejects every hostile shape with a typed
+//! [`NamErrorCode`](crate::common::diagnostics::NamErrorCode)
 //! (top-level weights empty, non-empty `config.models`, complete child
 //! envelopes, recursion depth and total child/weight budgets).
 //!

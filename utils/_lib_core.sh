@@ -14,7 +14,7 @@
 # markers.
 
 # >>> NAM-LIB-CORE BEGIN >>>
-# sha256: a76e0aec721b45b009fa233d6f60424ace55f08a5ccb8d885917f3d8aa896eb4
+# sha256: 8f3720bb5abb0c140fc4b4782aa7b048e28f4b4a2b61fedd29b142856e78dcb4
 # Shared canonical block for the NAM ecosystem QA shell library.
 # ---------------------------------------------------------------------------
 # ANSI style helpers
@@ -274,7 +274,7 @@ pick_bench_core() {
 #   downstream scripts stay thin configuration. The caller sources its
 #   repository `_lib.sh` (which cd's into the project root and sources this
 #   core) and passes:
-#     <script_dir>        the wrapper's own directory (for --legacy delegation)
+#     <script_dir>        the wrapper's own directory
 #     <bench_suite>       Criterion bench suite name (e.g. clap_bench, rt_gate)
 #     <manifest_default>  default expected-id manifest path; NAM_BENCH_MANIFEST overrides
 #     [args...]           the wrapper's command-line arguments
@@ -288,31 +288,24 @@ run_perf_regression_gate() {
 
     # ── Mode parsing ─────────────────────────────────────────────────────────
     local mode="--check"
-    local -a legacy_args=()
     local arg
     for arg in "$@"; do
         case "$arg" in
             --bootstrap-baseline) mode="--bootstrap-baseline" ;;
             --check) mode="--check" ;;
-            --legacy) mode="--legacy" ;;
+            --legacy)
+                die "--legacy is retired: performance gates now strictly use nam_perf_gate"
+                ;;
             --help|-h)
-                echo "Usage: $0 [--check|--bootstrap-baseline|--legacy]"
+                echo "Usage: $0 [--check|--bootstrap-baseline]"
                 return 0
                 ;;
             *)
-                if [ "$mode" = "--legacy" ]; then
-                    legacy_args+=("$arg")
-                else
-                    echo "Unknown argument: $arg" >&2
-                    return 2
-                fi
+                echo "Unknown argument: $arg" >&2
+                return 2
                 ;;
         esac
     done
-
-    if [ "$mode" = "--legacy" ]; then
-        exec "$script_dir/tests-performance-regression-legacy.sh" ${legacy_args[@]+"${legacy_args[@]}"}
-    fi
 
     # ── Configuration ────────────────────────────────────────────────────────
     local baseline_name="${NAM_BASELINE_NAME:-ci-baseline}"

@@ -167,7 +167,11 @@ impl WavError {
 }
 
 /// Decoded impulse response data parsed from a WAV container.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
+/// are not available outside this crate.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct WavIrData {
     /// Audio sample rate in Hz from the `fmt ` header.
     pub sample_rate: f32,
@@ -180,6 +184,23 @@ pub struct WavIrData {
     /// For mono: `[Ch0_tap0, Ch0_tap1, ..., Ch0_tapN]`.
     /// For stereo: `[Ch0_tap0, ..., Ch0_tapN, Ch1_tap0, ..., Ch1_tapN]`.
     pub weights: Vec<f32>,
+}
+
+impl WavIrData {
+    /// Creates a decoded impulse response with every field populated.
+    pub fn new(
+        sample_rate: f32,
+        channels: usize,
+        receptive_field: usize,
+        weights: Vec<f32>,
+    ) -> Self {
+        Self {
+            sample_rate,
+            channels,
+            receptive_field,
+            weights,
+        }
+    }
 }
 
 #[inline]

@@ -47,6 +47,17 @@ impl SystemSnapshot {
     ///
     /// Should be called once in `main()` and the result propagated
     /// to functions that emit diagnostics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::SystemSnapshot;
+    ///
+    /// let sys = SystemSnapshot::capture();
+    /// assert!(!sys.version.is_empty());
+    /// assert_eq!(sys.arch, std::env::consts::ARCH);
+    /// assert_eq!(sys.os, std::env::consts::OS);
+    /// ```
     pub fn capture() -> Self {
         let kernel = read_kernel_version();
         let features = detect_advanced_features();

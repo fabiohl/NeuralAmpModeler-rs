@@ -575,6 +575,15 @@ fn test_decomposition_wavenet() {
         result.esr_combined_display() > 0.0,
         "Combined ΔESR should be non-zero"
     );
+
+    // F-09: Validate high-fidelity unquantized f32 weights — ESR < 1e-10 (SNR > 100 dB)
+    // Measured: ESR = 1.82e-12 (SNR = 117.4 dB)
+    assert!(
+        total_esr < 1e-10,
+        "WaveNet f32 vs f64 oracle ESR {:.2e} ({:.1} dB) must be < 1e-10 (SNR > 100 dB)",
+        total_esr,
+        neural_amp_modeler_rs::testing::reference_oracle::esr_to_db_f64(total_esr)
+    );
 }
 
 #[test]
@@ -932,6 +941,15 @@ fn test_decomposition_a2() {
         result.esr_combined_display() > 0.0,
         "Combined ΔESR should be non-zero"
     );
+
+    // F-09: Validate high-fidelity unquantized f32 weights for WaveNet A2 — ESR < 1e-10 (SNR > 100 dB)
+    // Measured: ESR = 2.22e-14 (SNR = 136.5 dB)
+    assert!(
+        total_esr < 1e-10,
+        "WaveNet A2 f32 vs f64 oracle ESR {:.2e} ({:.1} dB) must be < 1e-10 (SNR > 100 dB)",
+        total_esr,
+        neural_amp_modeler_rs::testing::reference_oracle::esr_to_db_f64(total_esr)
+    );
 }
 
 // ── Combined simulation acceptance tests ───────────────────────────────────
@@ -1098,6 +1116,15 @@ fn test_decomposition_convnet() {
         result.esr_combined_display() > 0.0,
         "Combined ΔESR should be non-zero"
     );
+
+    // F-09: Validate high-fidelity unquantized f32 weights for ConvNet — ESR < 1e-10 (SNR > 100 dB)
+    // Measured: ESR = 4.97e-16 (SNR = 153.0 dB)
+    assert!(
+        total_esr < 1e-10,
+        "ConvNet f32 vs f64 oracle ESR {:.2e} ({:.1} dB) must be < 1e-10 (SNR > 100 dB)",
+        total_esr,
+        neural_amp_modeler_rs::testing::reference_oracle::esr_to_db_f64(total_esr)
+    );
 }
 
 #[test]
@@ -1184,9 +1211,9 @@ fn test_combined_simulation_a2_film() {
 
 use common::A2_GENERIC_ESR_LIMIT;
 
-// on-demand: Python anchor reconciliation pending (§4.4 condition_dsp multi-channel cascade); standalone f64 oracle gate active
+// Measured: ESR = 5.79e-32 (-312.4 dB), limit = 1e-12
+// External NumPy anchor reconciled: matches independent validate_oracle_f64.py
 #[test]
-#[ignore = "External NumPy anchor reconciliation pending: validate_oracle_f64.py condition_dsp multi-channel cascade gap (§4.4)"]
 fn test_oracle_vs_python_anchor_a2_generic() {
     let anchor_path = anchors_dir().join("a2_max_256_f64.bin");
     if !anchor_path.exists() {
