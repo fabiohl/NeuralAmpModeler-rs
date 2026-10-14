@@ -121,13 +121,25 @@ enum OsStages {
 ///
 /// ## Usage (per stereo channel)
 ///
-/// ```ignore
+/// ```
+/// use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
+///
+/// const BLOCK_SIZE: usize = 128;
+/// let mut engine = OversampleEngine::new(OversampleFactor::X2, BLOCK_SIZE)
+///     .expect("Failed to create oversampling engine");
+///
+/// let input = [0.1_f32; BLOCK_SIZE];
+/// let mut os_up_buf = [0.0_f32; BLOCK_SIZE * 2];
+/// let mut os_model_buf = [0.0_f32; BLOCK_SIZE * 2];
+/// let mut output = [0.0_f32; BLOCK_SIZE];
+///
 /// // 1. Upsample model-rate input to oversampled rate
-/// let n_os = engine.upsample(&input[..n_native], os_up_buf, None);
-/// // 2. Model processes at oversampled rate
-/// model.process(&os_up_buf[..n_os], &mut os_model_buf[..n_os]);
+/// let n_os = engine.upsample(&input, &mut os_up_buf, None);
+/// // 2. Model processes at oversampled rate (simulated)
+/// os_model_buf[..n_os].copy_from_slice(&os_up_buf[..n_os]);
 /// // 3. Downsample back to native rate
-/// let n_out = engine.downsample(&os_model_buf[..n_os], output, None);
+/// let n_out = engine.downsample(&os_model_buf[..n_os], &mut output, None);
+/// assert_eq!(n_out, BLOCK_SIZE);
 /// ```
 pub struct OversampleEngine {
     factor: OversampleFactor,

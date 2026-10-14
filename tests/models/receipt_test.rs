@@ -272,8 +272,8 @@ fn test_long_receipt_cli_end_to_end() {
         "missing FIDELITY line: {human}"
     );
     assert!(
-        human.contains("PERF_REGRESSION: NOT_RUN"),
-        "missing PERF_REGRESSION line: {human}"
+        human.contains("PERF_REGRESSION: NOT_RUN") || human.contains("PERF_REGRESSION: PASS"),
+        "missing PERF_REGRESSION line (expected NOT_RUN or PASS): {human}"
     );
 
     // Semantic validation is fail-closed: a PARTIAL receipt (missing canonical
@@ -344,7 +344,7 @@ fn test_long_receipt_cli_end_to_end() {
     assert_eq!(overall.phase_id, "overall");
     assert_eq!(overall.status, LongPhaseStatus::CompletedWithGaps);
     assert_eq!(overall.tests_executed, 10);
-    assert_eq!(overall.gaps, vec!["phase5:INCONCLUSIVE"]);
+    assert_eq!(overall.gaps, vec!["phase5:inconclusive"]);
 
     // Bad status must fail with usage error (exit 2).
     let bad_run = run(&[

@@ -3147,7 +3147,7 @@ fn test_golden_vectors_convnet_test() {
         .map(|(&a, &b)| (a as f64 - b as f64).powi(2))
         .sum::<f64>()
         / out_len as f64;
-    let self_golden_snr = if noise_power <= f64::EPSILON {
+    let self_golden_snr = if noise_power == 0.0 {
         f64::INFINITY
     } else {
         10.0 * (signal_power / noise_power).log10()
@@ -3287,12 +3287,8 @@ fn compute_esr_dc_free(reference: &[f32], test: &[f32]) -> (f64, f64, f64, f64) 
         .map(|(&r, &t)| ((r - t) as f64).powi(2))
         .sum();
 
-    let esr_raw = if sig_raw <= f64::EPSILON {
-        if noise_raw <= f64::EPSILON {
-            0.0
-        } else {
-            f64::INFINITY
-        }
+    let esr_raw = if sig_raw == 0.0 {
+        if noise_raw == 0.0 { 0.0 } else { f64::INFINITY }
     } else {
         noise_raw / sig_raw
     };
@@ -3313,12 +3309,8 @@ fn compute_esr_dc_free(reference: &[f32], test: &[f32]) -> (f64, f64, f64, f64) 
         })
         .sum();
 
-    let esr_dc_free = if sig_ac <= f64::EPSILON {
-        if noise_ac <= f64::EPSILON {
-            0.0
-        } else {
-            f64::INFINITY
-        }
+    let esr_dc_free = if sig_ac == 0.0 {
+        if noise_ac == 0.0 { 0.0 } else { f64::INFINITY }
     } else {
         noise_ac / sig_ac
     };
@@ -3549,7 +3541,7 @@ fn test_h0_triple_decomposition() {
     let esr_f64_cpp = compute_esr_f64(&expected_f64, &oracle_output);
 
     let snr = |esr: f64| -> f64 {
-        if esr <= f64::EPSILON {
+        if esr == 0.0 {
             f64::INFINITY
         } else {
             -10.0 * esr.log10()

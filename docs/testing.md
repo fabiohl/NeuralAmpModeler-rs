@@ -220,7 +220,7 @@ The long-duration stress and audit suite executes comprehensive numerical valida
 Before entering timed test execution, six preflight steps run:
 
 1. **`preflight-render`:** Validates or builds the upstream C++ reference `render` CLI via `utils/ensure_namcore_render.sh`.
-2. **`preflight-catalog`:** Asserts the presence and integrity of all required model fixtures and V1/V2 goldens registered in [src/testing/catalog.rs](../src/testing/catalog.rs).
+2. **`preflight-catalog`:** Asserts the presence and integrity of all required model fixtures and V1/V2 goldens registered in [src/testing/catalog.rs](../src/testing/catalog.rs). Enforces the strict counting invariant: `present + missing_required.len() + missing_optional.len() + known_gap_files == fixtures_checked`.
 3. **`preflight-package`:** Checks crate packaging hygiene via `cargo package --list`.
 4. **`preflight-freshness`:** Verifies SHA-256 integrity against `tests/fixtures/.golden_manifest.sha256`.
 5. **`preflight-meta`:** Validates catalog-to-test coherence via [tests/models/meta_coherence.rs](../tests/models/meta_coherence.rs).
@@ -232,8 +232,8 @@ Before entering timed test execution, six preflight steps run:
 2. **Phase 2 — Defense Scripts & Invariant Tests:** Rust defense harness ([tests/qa_defense.rs](../tests/qa_defense.rs)) asserting metric sanitization, classification, freshness edge cases, and dynamic linker export guards ([tests/libm_export_guard.rs](../tests/libm_export_guard.rs)).
 3. **Phase 3 — Exhaustive Matrix & Parity:** Full C++ NAMCore live parity matrix, multi-sample-rate V2 goldens, cross-ISA validation, spectral fidelity baselines, and full 100k-case proptests.
 4. **Phase 4 — Heap Audit:** Strict verification of zero heap allocations on the audio processing hot path (`CountingAllocator` via `--features heap-audit`, including resampler, cabsim, A2 standard, A2-Max dynamic `test_a2_dyn_max_heap_audit`, and sequential chains).
-5. **Phase 5 — RT Deadline Gate:** Processing budget enforcement ($p99 < 1.33\text{ ms}$ for 64-sample blocks at 48 kHz across all SKUs, including A2-Max `test_rt_deadline_a2_max`).
-6. **Phase 6 — RT Jitter Telemetry:** Measures processing latency distribution under simulated CPU contention.
+5. **Phase 5 — RT Deadline Gate:** Processing budget enforcement ($p99 < 1.33\text{ ms}$ for 64-sample blocks at 48 kHz across all SKUs, including A2-Max `test_rt_deadline_a2_max`). Measured using high-resolution `LatencyHistogram` (256 log-linear sub-bins, relative error bound $\le 12.5\%$) paired with `ExactLatencyReservoir` for exact $p99$ arbitration.
+6. **Phase 6 — RT Jitter Telemetry:** Measures processing latency distribution under simulated CPU contention (`stress-1`, `stress-2`, `saturate-N`) across $\ge 16384$ blocks with initial 512-block cache/branch warmup to eliminate cold-start transients. Latency distributions are collected using `LatencyHistogram`.
 7. **Phase 7 — Concurrency Model Checking:** Loom model verification for lock-free queues and atomic bitmasks (`--cfg loom`).
 
 ### 5.3 Structured Audit Receipt (`long-audit-receipt.jsonl`)
@@ -253,6 +253,10 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
 ```
 
 - **Receipt Statuses:** `PASSED`, `FAILED`, `SKIPPED`, `INCONCLUSIVE`, `SKIP_CAPABILITY`, `NOT_RUN`, `SIMULATED`. The suite line uses `PASSED`, `FAILED`, `COMPLETED_WITH_GAPS`, or `SIMULATED`.
+
+- **Aggregated Overall Gaps:** The terminal `overall` record aggregates the deduplicated union of gaps from all phases prefixed by `phase_id` (`<phase_id>:<gap_id>`), guaranteeing full traceability and exact match with `overall.gaps.len()`.
+
+- **Performance Regression Integration:** The `PERF_REGRESSION` human summary line is evaluated dynamically from `target/logs/regression_phase_receipt.jsonl` (within 24 hours / matching run ID). If absent or simulated, it emits `NOT_RUN`. Any failed regression evaluates to `FAIL`, promotes `OVERALL` to `FAILED`, emits `ERROR: perf_regression — FAILED`, and causes `utils/tests-long.sh` to fail closed.
 
 - **Simulated Receipts:** `utils/tests-long.sh --simulate` (alias `--dry-run`) pre-registers the six preflights and seven phases as `SIMULATED` with `tests_executed: 0` without executing any test. The derived suite line is `SIMULATED` and every verdict line reads `NOT_RUN` (`FIDELITY`, `RT_DEADLINE`, `RT_JITTER`, `PERF_REGRESSION`) — a simulated receipt never prints `OK`/`PASS`, and `--strict-pre-release` always rejects it.
 
@@ -281,6 +285,17 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
   (`skip_serializing_if`) and default when absent on read (`#[serde(default)]`),
   so historical goldens remain byte-compatible. `nam_long_receipt append`
   accepts `--oracle-sha256` / `--fixture-sha256` / `--artifact-sha256`.
+
+### 5.4 Build Target Segregation (`CARGO_TARGET_DIR`)
+
+To eliminate wasteful full recompilations caused by feature flag or compiler flag switches across phases (e.g. `release-default` vs `--features heap-audit` vs `RUSTFLAGS="... --cfg loom"`), `utils/tests-long.sh` segregates build outputs into profile-specific subdirectories under `target/long/`:
+
+- `target/long/release-default`: Used by preflights and phases 1, 2, 3, 5, and 6.
+- `target/long/release-heap-audit`: Used by phase 4 (heap-audit).
+- `target/long/loom`: Used by phase 7 (loom model checking).
+
+This segregation ensures that repeated runs reuse build artifacts across phases, significantly accelerating subsequent test cycles.
+Note: Profile segregation increases transient disk space usage under `target/` (~1.5–2 GB additional). If disk space is constrained or for debugging purposes, setting `NAM_LONG_SHARED_TARGET=1` acts as a rollback switch to restore a single shared `target/` directory.
 
 ---
 
@@ -333,8 +348,38 @@ Audio fidelity assessment combines physical error metrics with perceptual domain
 ### 8.2 Core Principles
 
 - **Dual Reference Systems:** Parity (C++ NAMCore f32) measures implementation alignment; absolute fidelity (f64 Oracle) measures intrinsic precision loss from single-precision approximations. Discrepancies between both references mandate review; neither oracle overrides the other unconditionally.
-- **Energy-to-Signal Ratio (ESR):** Primary validation metric, normalizing squared error against reference energy to remain scale-invariant.
+- **Energy-to-Signal Ratio (ESR) & Signal-to-Noise Ratio (SNR):** Exact zero comparisons (`noise_power == 0.0`, `signal_power == 0.0`) govern edge conditions. Bit-identical parity yields `SNR = +∞` (and `ESR = 0.0` / `ESR_dB = -∞`). Any non-zero error energy, even at the sub-epsilon numerical noise floor ($\sim 10^{-16}$, e.g. 5–6 ULPs across samples), yields finite logarithmic values, preventing false infinities during high-fidelity model validation.
 - **Off-RT Execution:** All perceptual and spectral metrics allocate memory and run strictly off-RT. Hot-path audio threads use sample-peak detection only.
+
+### 8.3 Cross-ISA Verification & Declared Skips (`SKIP_CAPABILITY`)
+
+The test suite enforces a strict boundary between **single-architecture determinism** and **cross-ISA numerical parity**:
+
+1. **Declared Skips (`SKIP_CAPABILITY`):**
+   - The engine targets `x86-64-v3` (AVX2, FMA, BMI2) as its strict compile-time baseline. On host machines without AVX-512 hardware or when compiling without `--features avx512`, AVX-512 execution paths cannot physically run.
+   - Tests in [tests/parity/isa_parity.rs](../tests/parity/isa_parity.rs) detect missing hardware capabilities or disabled Cargo features via `skip_if_unsupported!` and emit machine-parseable markers:
+     ```text
+     [STATUS] SKIP_CAPABILITY reason="<reason>:<test_name>"
+     ```
+   - In local runs and the QA dashboard ([utils/quality-dashboard.sh](../utils/quality-dashboard.sh)), only the AVX2-vs-AVX2 self-consistency check executes (`isa_self_consistency`). The inter-ISA matrix (`isa_parity_cross_isa`) is declared as an explicit gap (`cross_isa_matrix_requires_avx512_remote`), avoiding false failures while preventing unvetted assumptions.
+
+2. **`FIDELITY: OK` Scope Boundary:**
+   - A local test run reporting `FIDELITY: OK` validates that all active single-architecture mathematical reference oracles (`reference_oracle_f64`), committed golden vectors (`golden_vectors`), and C++ reference parity (`cpp_parity`) passed within contractual error budgets on the local host architecture.
+   - **`FIDELITY: OK` does NOT cover cross-ISA parity.** Local self-consistency (AVX2 vs. AVX2) guarantees local determinism (an MSE = 0 tautology), not mathematical or numerical parity across differing SIMD instruction sets.
+
+3. **Remote SIMD Verification (`utils/remote-simd-gate.sh`):**
+   - Full cross-ISA parity gating (AVX2 vs. AVX-512) and comparative SIMD micro-benchmarks must be executed on AVX-512 hardware or under emulation using [utils/remote-simd-gate.sh](../utils/remote-simd-gate.sh):
+     ```bash
+     # Execute locally under Intel SDE emulator:
+     ./utils/remote-simd-gate.sh --sde
+
+     # Execute on a remote machine with native AVX-512 hardware via SSH:
+     ./utils/remote-simd-gate.sh user@remote-host
+
+     # Specify custom destination for the receipt JSON:
+     ./utils/remote-simd-gate.sh --out target/logs/remote-simd-receipt.json user@remote-host
+     ```
+   - The script compiles with `--features avx512 --include-ignored`, executes the full `isa_parity` test battery across all topologies, and validates the resulting receipt `target/logs/remote-simd-receipt.jsonl` using Criterion statistical confidence intervals ($p < 0.05$).
 
 ---
 
@@ -403,7 +448,7 @@ The `--check` mode distinguishes measurement noise from true regressions:
 > **Decoupling Fidelity from Performance:**
 > Latency deviations do **not** constitute audio degradation. The verification pipeline reports these domains independently:
 >
-> - `FIDELITY: OK` / `PERFORMANCE: NOT_VERIFIED`: All mathematical and audio fidelity checks passed; only benchmark timings varied. Sonic output is intact.
+> - `FIDELITY: OK` / `PERFORMANCE: NOT_VERIFIED`: All mathematical and audio fidelity checks passed; only benchmark timings varied. Sonic output is intact. Note: as detailed in §8.3, `FIDELITY: OK` reflects local single-architecture validation and does not cover cross-ISA parity between AVX2 and AVX-512.
 > - `FIDELITY: FAIL`: Numerical or spectral degradation detected. Requires immediate DSP investigation.
 >
 > Primary statistical authority for performance regressions belongs to [utils/tests-performance-regression.sh](../utils/tests-performance-regression.sh) via Criterion confidence intervals; the quality contract serves as an integrated secondary check.
@@ -450,7 +495,9 @@ Coverage reports serve as an informative diagnostic tool and are excluded from o
 
 ## 13. Out-of-Band Miri Concurrency & Aliasing Audit (`utils/miri-audit.sh`)
 
-Standard release and CI gates remain strictly **stable-only** ([§2](#2-static-analysis--quality-defense-utilslintssh), [§5](#5-decoupled-long-qa-audits-utilstests-longsh)). To verify formal pointer provenance and
+Standard release, CI, and long audit gates remain strictly **stable-only** ([§2](#2-static-analysis--quality-defense-utilslintssh), [§5](#5-decoupled-long-qa-audits-utilstests-longsh)). The `nightly` toolchain is never used by automated gates; it is used strictly on demand for isolated, out-of-band developer audits (`utils/miri-audit.sh` and `utils/docsrs-check.sh`).
+
+To verify formal pointer provenance and
 compliance with the Stacked Borrows / Tree Borrows aliasing models on the unsafe lock-free
 primitives, an **opt-in, out-of-band** audit tool is provided (requires an isolated nightly
 toolchain plus the `miri` component):

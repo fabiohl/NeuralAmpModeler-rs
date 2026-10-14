@@ -397,6 +397,8 @@ pub enum MalformedReason {
     Missing,
     /// Non-finite or unparseable literal, verbatim.
     NonFinite(String),
+    /// Inconsistent metric values in the report (e.g. `null` / +∞ SNR when ESR > 0).
+    Inconsistent(String),
 }
 
 /// Latency check of one contract performance entry.
@@ -675,10 +677,28 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             if let Some(snr_baseline) = entry.snr_db.filter(|v| v.is_finite()) {
                 match &record.snr_db {
                     MetricValue::Null => {
-                        metrics.push(MetricCheck {
-                            metric: Metric::SnrDb,
-                            outcome: MetricOutcome::Ok,
-                        });
+                        // A null SNR represents positive non-finite SNR — bit-identical
+                        // perfect parity (`+∞` dB), which is above any floor (P0.T3).
+                        // However, SNR = +∞ is mathematically consistent only if ESR == 0.
+                        // If ESR is present and strictly positive, `null` SNR is inconsistent (Malformed).
+                        let esr_is_positive = match &record.esr {
+                            MetricValue::Raw(raw) if is_finite_num(raw) => parse_finite(raw) > 0.0,
+                            _ => false,
+                        };
+                        if esr_is_positive {
+                            fidelity_violations += 1;
+                            metrics.push(MetricCheck {
+                                metric: Metric::SnrDb,
+                                outcome: MetricOutcome::Malformed(MalformedReason::Inconsistent(
+                                    "esr > 0 with snr == null".to_string(),
+                                )),
+                            });
+                        } else {
+                            metrics.push(MetricCheck {
+                                metric: Metric::SnrDb,
+                                outcome: MetricOutcome::Ok,
+                            });
+                        }
                     }
                     MetricValue::Na => {
                         fidelity_violations += 1;

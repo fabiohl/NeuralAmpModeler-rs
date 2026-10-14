@@ -207,7 +207,7 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
     // Forensic JSONL sink (kind `activation`) — human log unchanged.
     // Only finite pairs are reported; skips stay human-log-only.
     if snr_fast.is_finite() && snr_exact.is_finite() {
-        common::report_activation(label, snr_fast, snr_exact);
+        common::report_activation_with_oracle(label, Some("namcore"), snr_fast, snr_exact);
     }
 
     (snr_fast, snr_exact)
@@ -467,7 +467,7 @@ fn measure_lstm_snr_stress_v2(model_filename: &str, label: &str) -> (f64, f64) {
 
     // Forensic JSONL sink (kind `activation`) — human log unchanged.
     if snr_fast.is_finite() && snr_exact.is_finite() {
-        common::report_activation(label, snr_fast, snr_exact);
+        common::report_activation_with_oracle(label, Some("f64"), snr_fast, snr_exact);
     }
 
     (snr_fast, snr_exact)

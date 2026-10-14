@@ -349,3 +349,76 @@ fn f64_decomp_steady_state_emits_yellow_violation() {
         "violation must use yellow alert color: {rendered}"
     );
 }
+
+#[test]
+fn activation_precision_splits_into_two_tables_for_mixed_populations() {
+    let lines = [
+        r#"{"kind":"activation","model":"LSTM 1×16","snr_fast_db":92.5,"snr_exact_db":96.1,"gain_db":3.6}"#,
+        r#"{"kind":"activation","model":"LSTM 2×8","snr_fast_db":91.0,"snr_exact_db":94.0,"gain_db":3.0}"#,
+        r#"{"kind":"activation","model":"LSTM Official","snr_fast_db":89.0,"snr_exact_db":92.0,"gain_db":3.0}"#,
+        r#"{"kind":"activation","model":"LSTM 1×16","snr_fast_db":15.8,"snr_exact_db":102.3,"gain_db":86.5}"#,
+        r#"{"kind":"activation","model":"LSTM 2×8","snr_fast_db":25.8,"snr_exact_db":110.0,"gain_db":84.2}"#,
+        r#"{"kind":"activation","model":"LSTM Official","snr_fast_db":34.0,"snr_exact_db":114.4,"gain_db":80.4}"#,
+    ]
+    .join("\n");
+
+    let report = parse_quality_report(&lines).expect("must parse 6 activation records");
+    let palette = Palette::new(RenderStyle::Plain);
+    let rendered = render_activation_precision(&report, &palette);
+
+    // Must contain both distinct table headers
+    assert!(
+        rendered.contains("ACTIVATION PRECISION — vs NAMCore (Warm, Goldens)"),
+        "must render NAMCore warm table: {rendered}"
+    );
+    assert!(
+        rendered.contains("ACTIVATION PRECISION — vs f64 Reference Oracle (Cold-Start / Stress)"),
+        "must render f64 oracle table: {rendered}"
+    );
+
+    // Must NOT contain mixed aggregate mean over 6 models
+    assert!(
+        !rendered.contains("over 6 LSTM model(s)"),
+        "must NOT contain mixed aggregate mean over 6 models: {rendered}"
+    );
+    assert!(
+        !rendered.contains("+44.8 dB"),
+        "must NOT contain contaminated mean: {rendered}"
+    );
+
+    // Must contain individual subpopulation means (over 3 LSTM model(s))
+    assert!(
+        rendered.contains("over 3 LSTM model(s)"),
+        "must contain subpopulation means over 3 models: {rendered}"
+    );
+}
+
+#[test]
+fn activation_precision_splits_with_explicit_oracle_field() {
+    let lines = [
+        r#"{"kind":"activation","oracle":"namcore","model":"LSTM 1×16","snr_fast_db":92.5,"snr_exact_db":96.1,"gain_db":3.6}"#,
+        r#"{"kind":"activation","oracle":"namcore","model":"LSTM 2×8","snr_fast_db":91.0,"snr_exact_db":94.0,"gain_db":3.0}"#,
+        r#"{"kind":"activation","oracle":"namcore","model":"LSTM Official","snr_fast_db":89.0,"snr_exact_db":92.0,"gain_db":3.0}"#,
+        r#"{"kind":"activation","oracle":"f64","model":"LSTM 1×16","snr_fast_db":15.8,"snr_exact_db":102.3,"gain_db":86.5}"#,
+        r#"{"kind":"activation","oracle":"f64","model":"LSTM 2×8","snr_fast_db":25.8,"snr_exact_db":110.0,"gain_db":84.2}"#,
+        r#"{"kind":"activation","oracle":"f64","model":"LSTM Official","snr_fast_db":34.0,"snr_exact_db":114.4,"gain_db":80.4}"#,
+    ]
+    .join("\n");
+
+    let report = parse_quality_report(&lines).expect("must parse 6 activation records with oracle");
+    let palette = Palette::new(RenderStyle::Plain);
+    let rendered = render_activation_precision(&report, &palette);
+
+    assert!(
+        rendered.contains("ACTIVATION PRECISION — vs NAMCore (Warm, Goldens)"),
+        "must render NAMCore warm table: {rendered}"
+    );
+    assert!(
+        rendered.contains("ACTIVATION PRECISION — vs f64 Reference Oracle (Cold-Start / Stress)"),
+        "must render f64 oracle table: {rendered}"
+    );
+    assert!(
+        !rendered.contains("over 6 LSTM model(s)"),
+        "must NOT contain mixed aggregate mean over 6 models: {rendered}"
+    );
+}

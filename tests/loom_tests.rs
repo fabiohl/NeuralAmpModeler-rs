@@ -29,6 +29,39 @@ use neural_amp_modeler_rs::common::spsc::{
 use neural_amp_modeler_rs::dsp::pipeline::{DspBridge, DspBridgeReader, DspBridgeWriter};
 
 // =============================================================================
+// Negative-control helper
+// =============================================================================
+//
+// The `*_relaxed_fails` controls MUST panic inside loom; the default hook would
+// print a backtrace that looks like a real failure in the log. A process-wide
+// hook is installed once and only diverts panics raised while the current
+// thread is inside `expect_loom_panic`; every other panic (a genuine failure)
+// is forwarded to the previous hook untouched, so parallel tests stay honest.
+
+thread_local! {
+    static EXPECTING_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn expect_loom_panic<F: FnOnce() + std::panic::UnwindSafe>(label: &str, f: F) -> bool {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if EXPECTING_PANIC.with(|e| e.get()) {
+                return;
+            }
+            previous(info);
+        }));
+    });
+    EXPECTING_PANIC.with(|e| e.set(true));
+    let result = std::panic::catch_unwind(f);
+    EXPECTING_PANIC.with(|e| e.set(false));
+    let panicked = result.is_err();
+    println!("[EXPECTED-NEGATIVE-CONTROL] {label}: panicked={panicked}");
+    panicked
+}
+
+// =============================================================================
 // Loom self-tests: canonical handshake pattern (not production-coupled)
 // =============================================================================
 //
@@ -67,7 +100,7 @@ fn test_handshake_correct_passes() {
 
 #[test]
 fn test_handshake_relaxed_fails() {
-    let result = std::panic::catch_unwind(|| {
+    let panicked = expect_loom_panic("handshake_relaxed", || {
         loom::model(|| {
             let flag = Arc::new(AtomicBool::new(false));
             let cell = Arc::new(UnsafeCell::new(0));
@@ -94,7 +127,7 @@ fn test_handshake_relaxed_fails() {
         });
     });
     assert!(
-        result.is_err(),
+        panicked,
         "Expected loom to catch a data race under Relaxed ordering"
     );
 }
@@ -156,7 +189,7 @@ fn test_rt_status_production_handshake() {
 /// publication establishes no happens-before edge.
 #[test]
 fn test_rt_status_production_relaxed_fails() {
-    let result = std::panic::catch_unwind(|| {
+    let panicked = expect_loom_panic("rt_status_relaxed", || {
         loom::model(|| {
             let status = Arc::new(RtStatusFlags::new());
             let data = Arc::new(UnsafeCell::new(0u32));
@@ -185,7 +218,7 @@ fn test_rt_status_production_relaxed_fails() {
         });
     });
     assert!(
-        result.is_err(),
+        panicked,
         "Expected loom to catch the data race: `set_flag` (Relaxed) does not order \
          the payload write — only `set_flag_release` + `check_flag_acquire` do"
     );

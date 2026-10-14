@@ -326,7 +326,7 @@ pub fn compute_rms_dbfs(samples: &[f32]) -> f64 {
     let sum_sq: f64 = samples.iter().map(|&s| (s as f64).powi(2)).sum();
     let mean_sq = sum_sq / samples.len() as f64;
     let rms = mean_sq.sqrt();
-    if rms <= f64::EPSILON {
+    if rms <= 0.0 {
         f64::NEG_INFINITY
     } else {
         20.0 * rms.log10()
@@ -342,7 +342,7 @@ pub fn compute_peak_dbfs(samples: &[f32]) -> f64 {
         .iter()
         .map(|&s| (s as f64).abs())
         .fold(0.0f64, f64::max);
-    if max_abs <= f64::EPSILON {
+    if max_abs <= 0.0 {
         f64::NEG_INFINITY
     } else {
         20.0 * max_abs.log10()

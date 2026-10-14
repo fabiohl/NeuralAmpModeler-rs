@@ -226,6 +226,23 @@ Because the DSP engine operates in a state of extreme micro-architectural optimi
 4. **Low Background Load & Host Quiescence:**
    Ensure workstation background load is minimal ($\text{load average} \ll 1.0$), with browsers, container engines, and heavy background services closed.
 
+#### Reference Noise Floor & Run-to-Run Variance (Sprint 3 Baseline Audit)
+
+During the empirical contract bisection audit (Sprint 3, Finding A3), consecutive back-to-back executions of the canonical `regression_gate` under core pinning (`taskset -c 8`) and thermal cooldown (`NAM_THERMAL_COOLDOWN_S=180`) established the empirical reference noise floor:
+
+| Benchmark Target | Run 1 Median | Run 2 Median | Observed Variance (Δ) | Typical Latency Scale |
+|:---|:---:|:---:|:---:|:---:|
+| `RT_Linear_Direct_RF4` | 0.137 µs | 0.132 µs | **−3.8%** | Sub-microsecond (~130 ns) |
+| `RT_A2_Dyn_Blended_CH3` | 132.9 µs | 136.0 µs | **+2.3%** | Large complex model (~136 µs) |
+| `RT_ConvNet` | 9.40 µs | 9.37 µs | **−0.3%** | Medium network (~9.4 µs) |
+| `RT_WaveNet_Std_CH16` | 41.60 µs | 41.46 µs | **−0.3%** | Standard WaveNet (~41.5 µs) |
+| `RT_DSP_Resampler_44k1_to_48k` | 1.30 µs | 1.31 µs | **+0.8%** | Ultra-fast DSP routine (~1.3 µs) |
+
+**Key Invariants & Implications for Quality Contracts (Sprint 7):**
+
+1. **Empirical Noise Band:** Even under host core pinning and performance governors, environmental noise spans approximately **−3.8% to +2.3%** on complex pipelines, widening up to $\pm 5\%$ on sub-microsecond primitives (`RT_Linear_Direct_RF4`).
+2. **Minimum Safety Margin:** To prevent false-positive regression alarms in CI and automated gates, contract tolerance envelopes in Sprint 7 (S7) must maintain a minimum margin of **$\ge 5\%$** (`latency_mult \ge 1.05` to `1.10` and `latency_floor_us \ge 0.05`). Any tolerance band tighter than $\pm 4\%$ will trigger sporadic false alarms caused purely by OS timer granularity and thermal jitter.
+
 ### Pre-Flight Checklist
 
 Run this verification before executing `--check` or `--bootstrap-baseline`:
@@ -430,9 +447,20 @@ Real-time resource updates (model swaps, IR reloading, oversampling mode changes
 
 *Real-time guarantees:* All queue operations on the audio thread complete in under 2 µs even under extreme saturation, with zero heap allocations or system calls.
 
-### Kahan Summation Policy
+### Real-Time Latency Telemetry: `LatencyHistogram` vs. `AtomicHistogram`
 
-Kahan compensated summation is deliberately **omitted from the static Conv1D tap loop**. For filter kernels with $K \le 3$, standard single-precision accumulation error is bounded by $O(3\varepsilon) < 10^{-7}$, which is inaudible and within golden test tolerances. Eliminating per-tap Kahan compensation removed redundant arithmetic operations without degrading audio fidelity. Compensated summation is retained only in dense GEMM reduction tails where accumulation lengths span hundreds of elements.
+High-frequency latency monitoring in the audio callback requires zero locks, zero memory allocation, and negligible CPU overhead. Two complementary histogram structures serve distinct operational domains:
+
+1. **`AtomicHistogram` (Runtime Telemetry in `RtStatusFlags`):**
+   * Structure: 32 octave buckets (power-of-two boundaries: $[0, 1), [1, 2), \dots, [2^{30}, 2^{31})\text{ ns}$).
+   * Memory Footprint: 384 bytes (`#[repr(align(128))]`, 6 cache lines).
+   * Trade-off: Compact cache footprint on `RtStatusFlags`, but relative quantization error spans up to $100\%$ ($2\times$) between adjacent power-of-two bucket edges.
+
+2. **`LatencyHistogram` (High-Resolution Verification Telemetry):**
+   * Structure: 256 log-linear sub-bins (8 sub-bins per power-of-two octave), covering dynamic range up to $1.07\text{ s}$ ($2^{30}\text{ ns}$).
+   * Relative Error Bound: $\le 12.5\%$ maximum relative error across all percentiles ($p50, p90, p99, p99.9$).
+   * Micro-Benchmark Cost: Measured at **~15.9 ns per `record()` call** (64 calls in $1.019\ \mu\text{s}$ via `dsp_bench`). Zero dynamic allocations, lock-free relaxed atomic increments.
+   * Testing Deployment: Adopted in real-time constraint verification suites ([`tests/rt_constraints/rt_deadline.rs`](../tests/rt_constraints/rt_deadline.rs) and [`tests/rt_constraints/rt_jitter.rs`](../tests/rt_constraints/rt_jitter.rs)), eliminating power-of-two quantization artifacts and providing fine-grained tail latency visibility without bloating `RtStatusFlags` in production host pipelines.
 
 ---
 

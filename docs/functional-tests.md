@@ -225,14 +225,24 @@ All test runners persist execution logs under `target/logs/`:
 | **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`       | CMake configuration output when compiling C++ `render` CLI.                                                         |
 | **`target/logs/cmake-build.log`**                | `utils/ensure_namcore_render.sh`       | Compilation logs for the C++ reference render binary.                                                               |
 | **`target/logs/phase1-soak.log`**                | `tests-long.sh` (Phase 1)              | Numerical soak logs, SPSC queue sweeps, and endurance metrics.                                                      |
-| **`target/logs/phase-defense-scripts.log`**      | `tests-long.sh` (Phase 2)              | Structural invariant checks, QA defenses (`qa_defense.rs`), and symbol export guards (`libm_export_guard.rs`).      |
-| **`target/logs/phase2-proptests-parity.log`**    | `tests-long.sh` (Phase 3)              | Full C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                                             |
+| **`target/logs/phase2-defense-scripts.log`**      | `tests-long.sh` (Phase 2)              | Structural invariant checks, QA defenses (`qa_defense.rs`), and symbol export guards (`libm_export_guard.rs`).      |
+| **`target/logs/phase3-proptests-parity.log`**    | `tests-long.sh` (Phase 3)              | Full C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                                             |
 | **`target/logs/subphase-isa-parity.log`**        | `tests-long.sh` (Phase 3 Subphase)     | Cross-ISA determinism validation logs (`isa_parity`).                                                               |
-| **`target/logs/phase3-heap-audit.log`**          | `tests-long.sh` (Phase 4)              | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                             |
-| **`target/logs/phase4-rt-deadline.log`**         | `tests-long.sh` (Phase 5)              | Latency histograms and deadline statistics ($p99 < 1.33\text{ ms}$). Note: percentiles are log2 bucket upper edges. |
-| **`target/logs/phase5-rt-jitter.log`**           | `tests-long.sh` (Phase 6)              | Real-time jitter telemetry and thread contention profiles.                                                          |
-| **`target/logs/phase6-loom.log`**                | `tests-long.sh` (Phase 7)              | Loom model-checking state-space exploration logs.                                                                   |
+| **`target/logs/phase4-heap-audit.log`**          | `tests-long.sh` (Phase 4)              | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                             |
+| **`target/logs/phase5-rt-deadline.log`**         | `tests-long.sh` (Phase 5)              | Latency histograms and deadline statistics ($p99 < 1.33\text{ ms}$). High-resolution linear bins (0.5 µs resolution via `LatencyHistogram`). |
+| **`target/logs/phase6-rt-jitter.log`**           | `tests-long.sh` (Phase 6)              | Real-time jitter telemetry and thread contention profiles.                                                          |
+| **`target/logs/phase7-loom.log`**                | `tests-long.sh` (Phase 7)              | Loom model-checking state-space exploration logs.                                                                   |
+| **`target/logs/regression_phase_receipt.jsonl`** | `tests-performance-regression.sh` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary.                    |
+| **`target/logs/perf-regression.log`**            | `tests-performance-regression.sh`      | Criterion evaluation logs and statistical delta metrics across benchmark SKUs.                                     |
+| **`target/logs/regression-check.log`**           | `tests-performance-regression.sh`      | Detailed Criterion output and statistical confidence interval results during regression checks.                      |
+| **`target/logs/remote-simd-receipt.jsonl`**      | `utils/remote-simd-gate.sh`            | Structured multi-ISA verification receipt emitted from remote or emulated AVX-512 runs.                             |
+| **`target/logs/remote-simd-parity.log`**         | `utils/remote-simd-gate.sh`            | Detailed parity output comparing AVX2 and AVX-512 execution streams.                                               |
+| **`target/logs/dashboard/`**                     | `utils/quality-dashboard.sh`           | Structured JSON outputs for individual model fidelity and latency benchmarks.                                       |
 | **`~/.cache/neural-amp-modeler-rs/crash-*.txt`** | Runtime Panic Hook                     | Diagnostic crash reports rendered without heap allocations.                                                         |
+
+> [!NOTE]
+> **Compilation Profile Segregation:**
+> To eliminate build cache thrashing across phases with incompatible Cargo feature sets, `utils/tests-long.sh` automatically segregates `CARGO_TARGET_DIR` per profile (e.g. `target/profile_default`, `target/profile_heap_audit`, and `target/profile_loom`). Independent logs in `target/logs/` are preserved across runs.
 
 ---
 

@@ -1146,6 +1146,8 @@ pub struct CatalogStatus {
     pub missing_optional: Vec<String>,
     /// Golden names with a documented skip reason — absence is expected.
     pub known_gaps: Vec<&'static str>,
+    /// Number of known gap fixture files (goldens skipped due to known gaps).
+    pub known_gap_files: usize,
 }
 
 impl CatalogStatus {
@@ -1267,6 +1269,74 @@ impl std::error::Error for CatalogError {}
 /// - entries with a documented `skip_reason` (KnownGap) are recorded as
 ///   expected-absent and never fail the gate.
 ///
+/// Validates a sequence of golden catalog entries against disk paths.
+///
+/// Invariant:
+/// `status.present + status.missing_required.len() + status.missing_optional.len() + status.known_gap_files == status.fixtures_checked`
+pub fn validate_v2_catalog_entries<F>(
+    entries: &[&GoldenGenEntry],
+    fixtures_root: &Path,
+    model_exists: F,
+) -> CatalogStatus
+where
+    F: Fn(&str) -> bool,
+{
+    let mut status = CatalogStatus::default();
+
+    for &entry in entries {
+        status.entries_checked += 1;
+
+        // Model fixture check
+        status.fixtures_checked += 1;
+        let model_ok = model_exists(entry.nam_file);
+        if model_ok {
+            status.present += 1;
+        } else {
+            let path = format!("tests/fixtures/models/{}", entry.nam_file);
+            match entry.model_distribution {
+                V2Distribution::RequiredLocal => status.missing_required.push(path),
+                V2Distribution::OptionalExternal => status.missing_optional.push(path),
+            }
+        }
+
+        // Golden fixtures check
+        let sample_rates = v2_sample_rates_for(entry.nam_file);
+        if entry.skip_reason.is_some() {
+            status.known_gaps.push(entry.golden_name);
+            status.fixtures_checked += sample_rates.len();
+            status.known_gap_files += sample_rates.len();
+            continue;
+        }
+
+        for &sr in sample_rates {
+            status.fixtures_checked += 1;
+            let file = format!("{}_v2_{}.bin", entry.golden_name, sr);
+            let path = fixtures_root.join(&file);
+            if path.exists() {
+                status.present += 1;
+            } else {
+                let rel = format!("tests/fixtures/{file}");
+                match entry.golden_distribution {
+                    V2Distribution::RequiredLocal => status.missing_required.push(rel),
+                    V2Distribution::OptionalExternal => status.missing_optional.push(rel),
+                }
+            }
+        }
+    }
+
+    status
+}
+
+/// Validates the canonical V2 golden catalog against disk.
+///
+/// For every entry of the validated V2 subset (24):
+/// - the model fixture must resolve via `fixtures::model_path` (required or
+///   optional per `model_distribution`);
+/// - every golden binary expected by the entry's sample-rate scope must exist
+///   in `tests/fixtures/` (required or optional per `golden_distribution`);
+/// - entries with a documented `skip_reason` (KnownGap) are recorded as
+///   expected-absent and never fail the gate.
+///
 /// Returns `Ok(CatalogStatus)` describing disk integrity, or `Err` when the
 /// environment is not a valid crate checkout. Consumable by integration tests
 /// (`tests/models/golden_vectors.rs::catalog_preflight`) and binaries.
@@ -1283,43 +1353,9 @@ pub fn validate_v2_catalog() -> Result<CatalogStatus, CatalogError> {
         return Err(CatalogError::FixturesRootUnavailable(fixtures_root));
     }
 
-    let mut status = CatalogStatus::default();
-
-    for entry in entries {
-        status.entries_checked += 1;
-
-        let model_ok = crate::testing::fixtures::model_path(entry.nam_file).exists();
-        if !model_ok {
-            status.fixtures_checked += 1;
-            let path = format!("tests/fixtures/models/{}", entry.nam_file);
-            match entry.model_distribution {
-                V2Distribution::RequiredLocal => status.missing_required.push(path),
-                V2Distribution::OptionalExternal => status.missing_optional.push(path),
-            }
-        } else {
-            status.present += 1;
-        }
-
-        if entry.skip_reason.is_some() {
-            status.known_gaps.push(entry.golden_name);
-            continue;
-        }
-
-        for &sr in v2_sample_rates_for(entry.nam_file) {
-            status.fixtures_checked += 1;
-            let file = format!("{}_v2_{}.bin", entry.golden_name, sr);
-            let path = fixtures_root.join(&file);
-            if path.exists() {
-                status.present += 1;
-            } else {
-                let rel = format!("tests/fixtures/{file}");
-                match entry.golden_distribution {
-                    V2Distribution::RequiredLocal => status.missing_required.push(rel),
-                    V2Distribution::OptionalExternal => status.missing_optional.push(rel),
-                }
-            }
-        }
-    }
+    let status = validate_v2_catalog_entries(&entries, &fixtures_root, |nam_file| {
+        crate::testing::fixtures::model_path(nam_file).exists()
+    });
 
     Ok(status)
 }

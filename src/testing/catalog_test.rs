@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use std::fs;
 
 /// The 24 validated V2 golden names (single source of truth snapshot).
 const EXPECTED_V2_GOLDEN_NAMES: &[&str] = &[
@@ -126,6 +127,119 @@ fn test_validate_v2_catalog_ok_on_committed_fixtures() {
         status.missing_required
     );
     assert_eq!(status.entries_checked, EXPECTED_V2_GOLDEN_NAMES.len());
+    assert_eq!(status.fixtures_checked, 70);
+    assert_eq!(status.present, 69);
+    assert_eq!(status.known_gap_files, 1);
+    assert_eq!(status.known_gaps.len(), 1);
+    assert_eq!(
+        status.present
+            + status.missing_required.len()
+            + status.missing_optional.len()
+            + status.known_gap_files,
+        status.fixtures_checked
+    );
+}
+
+#[test]
+fn test_validate_v2_catalog_entries_synthetic() {
+    // T2.3: Synthetic catalog with 3 entries:
+    // 1 normal (model and goldens present)
+    // 1 missing optional model (OptionalExternal)
+    // 1 known-gap (skip_reason set)
+    let temp_dir = std::env::temp_dir().join(format!("nam_cat_test_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    // Entry 1: normal model with 48k scope, present on disk
+    let entry_normal = GoldenGenEntry {
+        nam_file: "synthetic_normal.nam",
+        golden_name: "golden_synthetic_normal",
+        label: "Synthetic Normal",
+        v2_scope: V2GenScope::Sr48kOnly,
+        in_v2_catalog: true,
+        model_distribution: V2Distribution::RequiredLocal,
+        golden_distribution: V2Distribution::RequiredLocal,
+        skip_reason: None,
+    };
+    let normal_bin = temp_dir.join("golden_synthetic_normal_v2_48000.bin");
+    fs::write(&normal_bin, b"fake_golden").unwrap();
+
+    // Entry 2: missing optional model, golden present
+    let entry_missing_opt = GoldenGenEntry {
+        nam_file: "synthetic_missing_opt.nam",
+        golden_name: "golden_synthetic_missing_opt",
+        label: "Synthetic Missing Optional",
+        v2_scope: V2GenScope::Sr48kOnly,
+        in_v2_catalog: true,
+        model_distribution: V2Distribution::OptionalExternal,
+        golden_distribution: V2Distribution::RequiredLocal,
+        skip_reason: None,
+    };
+    let opt_bin = temp_dir.join("golden_synthetic_missing_opt_v2_48000.bin");
+    fs::write(&opt_bin, b"fake_golden").unwrap();
+
+    // Entry 3: known-gap entry (skip_reason set), model present, golden skipped
+    let entry_known_gap = GoldenGenEntry {
+        nam_file: "synthetic_known_gap.nam",
+        golden_name: "golden_synthetic_known_gap",
+        label: "Synthetic Known Gap",
+        v2_scope: V2GenScope::Sr48kOnly,
+        in_v2_catalog: true,
+        model_distribution: V2Distribution::RequiredLocal,
+        golden_distribution: V2Distribution::RequiredLocal,
+        skip_reason: Some("Known gap for testing"),
+    };
+
+    let entries = [&entry_normal, &entry_missing_opt, &entry_known_gap];
+
+    let model_exists = |nam_file: &str| -> bool {
+        match nam_file {
+            "synthetic_normal.nam" => true,
+            "synthetic_missing_opt.nam" => false,
+            "synthetic_known_gap.nam" => true,
+            _ => false,
+        }
+    };
+
+    let status = validate_v2_catalog_entries(&entries, &temp_dir, model_exists);
+
+    // Entries: 3
+    assert_eq!(status.entries_checked, 3);
+    // Fixtures checked:
+    // entry 1: 1 model + 1 golden = 2
+    // entry 2: 1 model + 1 golden = 2
+    // entry 3: 1 model + 1 golden (known gap) = 2
+    // total fixtures_checked = 6
+    assert_eq!(status.fixtures_checked, 6);
+    // Present:
+    // entry 1: model present (1) + golden present (1) = 2
+    // entry 2: model missing (0) + golden present (1) = 1
+    // entry 3: model present (1) + golden skipped (0) = 1
+    // total present = 4
+    assert_eq!(status.present, 4);
+    // Missing required: 0
+    assert_eq!(status.missing_required.len(), 0);
+    // Missing optional: 1 (model for entry 2)
+    assert_eq!(status.missing_optional.len(), 1);
+    assert_eq!(
+        status.missing_optional[0],
+        "tests/fixtures/models/synthetic_missing_opt.nam"
+    );
+    // Known gaps: 1
+    assert_eq!(status.known_gaps.len(), 1);
+    assert_eq!(status.known_gaps[0], "golden_synthetic_known_gap");
+    assert_eq!(status.known_gap_files, 1);
+
+    // Invariant: present + missing_required + missing_optional + known_gap_files == fixtures_checked
+    assert_eq!(
+        status.present
+            + status.missing_required.len()
+            + status.missing_optional.len()
+            + status.known_gap_files,
+        status.fixtures_checked
+    );
+    assert!(status.is_ok());
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 /// The 13 v1 golden files (single source of truth snapshot) — mirrors the

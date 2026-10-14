@@ -782,6 +782,7 @@ fn malformed_reason(reason: &MalformedReason) -> String {
     match reason {
         MalformedReason::Missing => "N/A or empty in report".to_string(),
         MalformedReason::NonFinite(raw) => format!("non-finite literal {raw}"),
+        MalformedReason::Inconsistent(detail) => format!("inconsistent metrics: {detail}"),
     }
 }
 

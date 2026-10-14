@@ -35,7 +35,7 @@ use common::*;
 use std::fs;
 use std::sync::OnceLock;
 
-use neural_amp_modeler_rs::dsp::telemetry::{AtomicHistogram, ExactLatencyReservoir};
+use neural_amp_modeler_rs::dsp::telemetry::{ExactLatencyReservoir, LatencyHistogram};
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::models::NamModel;
@@ -98,7 +98,7 @@ fn measure_rt_deadline(
     };
     let output_size = out_ch * BLOCK_SIZE;
     let mut output = vec![0.0f32; output_size];
-    let hist = AtomicHistogram::new();
+    let hist = LatencyHistogram::new();
     let reservoir = ExactLatencyReservoir::<MEASURE_BLOCKS>::new();
     let mut violations: u64 = 0;
 
@@ -345,4 +345,33 @@ fn test_rt_deadline_a2_dynamic() {
 #[ignore]
 fn test_rt_deadline_a2_max() {
     run_deadline_test("wavenet_a2_max.nam", "A2-Max");
+}
+
+#[test]
+fn test_latency_histogram_synthetic_percentiles_accuracy() {
+    let hist = LatencyHistogram::new();
+    let reservoir = ExactLatencyReservoir::<1024>::new();
+
+    // Populate with 1000 synthetic samples covering realistic DSP durations
+    // across multiple octaves and log-linear sub-bins (1234 ns to 1.234 ms).
+    for i in 1..=1000 {
+        let sample_ns = (i * 1234) as u64;
+        hist.record(sample_ns);
+        reservoir.record(sample_ns);
+    }
+
+    for &p in &[0.10f32, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99] {
+        let bucket_ns = hist.get_percentile(p);
+        let exact_ns = reservoir.percentile_exact(p as f64);
+        assert!(
+            bucket_ns >= exact_ns,
+            "bucket upper edge {bucket_ns} must bound exact sample {exact_ns} for p={p}"
+        );
+        // Bounded <= 12.5% relative error (+ 1 ns margin)
+        let max_upper = (exact_ns as f64 * 1.125 + 1.0).ceil() as u64;
+        assert!(
+            bucket_ns <= max_upper,
+            "bucket {bucket_ns} exceeds exact {exact_ns} * 1.125 + 1 ({max_upper}) for p={p}"
+        );
+    }
 }

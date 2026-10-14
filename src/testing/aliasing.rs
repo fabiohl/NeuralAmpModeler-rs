@@ -79,7 +79,7 @@ pub struct AsrResult {
 impl AsrResult {
     /// Returns `true` if any aliasing was detected (aliased energy > 0).
     pub fn has_aliasing(&self) -> bool {
-        self.aliased_energy > f64::EPSILON
+        self.aliased_energy > 0.0
     }
 }
 
@@ -239,13 +239,13 @@ pub fn compute_asr(output: &[f32], f0: f64, sample_rate: u32) -> AsrResult {
     }
 
     // 8. Compute ASR
-    let asr_linear = if harmonic_energy > f64::EPSILON {
+    let asr_linear = if harmonic_energy > 0.0 {
         aliased_energy / harmonic_energy
     } else {
         f64::INFINITY
     };
 
-    let asr_db = if asr_linear <= f64::EPSILON {
+    let asr_db = if asr_linear <= 0.0 {
         f64::NEG_INFINITY
     } else {
         10.0 * asr_linear.log10()
@@ -275,7 +275,7 @@ pub fn asr_aggregate(results: &[AsrResult]) -> f64 {
     }
     let sum: f64 = results.iter().map(|r| r.asr_linear).sum();
     let mean = sum / results.len() as f64;
-    if mean <= f64::EPSILON {
+    if mean <= 0.0 {
         f64::NEG_INFINITY
     } else {
         10.0 * mean.log10()

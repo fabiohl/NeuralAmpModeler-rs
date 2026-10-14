@@ -121,6 +121,8 @@ pub struct F64Decomp {
 pub struct ActivationRow {
     /// Model label.
     pub model: String,
+    /// Reference oracle or test regime (`namcore`, `f64`, etc.).
+    pub oracle: Option<String>,
     /// SNR of the Fast (Padé) path in dB.
     pub snr_fast_db: MetricValue,
     /// SNR of the Standard (exact) path in dB.
@@ -437,8 +439,13 @@ fn f64_decomp_from_json(value: &Value) -> Option<F64Decomp> {
 
 fn activation_from_json(value: &Value) -> Option<ActivationRow> {
     let model = value.get("model")?.as_str()?.to_string();
+    let oracle = value
+        .get("oracle")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
     Some(ActivationRow {
         model,
+        oracle,
         snr_fast_db: canon_metric(value.get("snr_fast_db")),
         snr_exact_db: canon_metric(value.get("snr_exact_db")),
         gain_db: canon_metric(value.get("gain_db")),
@@ -1170,12 +1177,19 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
+fn render_activation_table_body<'a>(
+    title: &str,
+    rows: impl IntoIterator<Item = &'a ActivationRow>,
+    p: &Palette,
+) -> String {
     let mut out = String::new();
-    out.push_str("ACTIVATION PRECISION\n");
-    out.push_str("════════════════════\n\n");
+    out.push_str(title);
+    out.push('\n');
+    out.push_str(&"═".repeat(title.chars().count()));
+    out.push_str("\n\n");
 
-    if report.activation.is_empty() {
+    let rows: Vec<&'a ActivationRow> = rows.into_iter().collect();
+    if rows.is_empty() {
         out.push_str(&p.yellow("  (i) No activation-precision results available.\n\n"));
         return out;
     }
@@ -1191,7 +1205,7 @@ fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
 
     let mut total: f64 = 0.0;
     let mut count: u64 = 0;
-    for row in &report.activation {
+    for row in rows {
         let fast = fmt_snr(&row.snr_fast_db);
         let exact = fmt_snr(&row.snr_exact_db);
         let gain = fmt_snr(&row.gain_db);
@@ -1219,6 +1233,65 @@ fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
         ));
     }
     out.push('\n');
+    out
+}
+
+fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
+    if report.activation.is_empty() {
+        return render_activation_table_body("ACTIVATION PRECISION", &[], p);
+    }
+
+    let has_explicit_oracle = report.activation.iter().any(|r| r.oracle.is_some());
+    let mut seen = std::collections::HashSet::new();
+    let has_duplicate_model = report.activation.iter().any(|r| !seen.insert(&r.model));
+
+    if !has_explicit_oracle && !has_duplicate_model {
+        // Single population (or backward-compatible single table)
+        return render_activation_table_body("ACTIVATION PRECISION", &report.activation, p);
+    }
+
+    let mut namcore_rows = Vec::new();
+    let mut f64_rows = Vec::new();
+
+    if has_explicit_oracle {
+        for row in &report.activation {
+            match row.oracle.as_deref() {
+                Some("f64") => f64_rows.push(row),
+                _ => namcore_rows.push(row),
+            }
+        }
+    } else {
+        // Partition by first-seen vs repeated model name
+        let mut first_seen = std::collections::HashSet::new();
+        for row in &report.activation {
+            if first_seen.insert(&row.model) {
+                namcore_rows.push(row);
+            } else {
+                f64_rows.push(row);
+            }
+        }
+    }
+
+    let has_namcore = !namcore_rows.is_empty();
+    let has_f64 = !f64_rows.is_empty();
+
+    let mut out = String::new();
+    if has_namcore {
+        let title = if !has_f64 {
+            "ACTIVATION PRECISION"
+        } else {
+            "ACTIVATION PRECISION — vs NAMCore (Warm, Goldens)"
+        };
+        out.push_str(&render_activation_table_body(title, namcore_rows, p));
+    }
+    if has_f64 {
+        let title = if !has_namcore {
+            "ACTIVATION PRECISION"
+        } else {
+            "ACTIVATION PRECISION — vs f64 Reference Oracle (Cold-Start / Stress)"
+        };
+        out.push_str(&render_activation_table_body(title, f64_rows, p));
+    }
     out
 }
 

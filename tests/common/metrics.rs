@@ -56,12 +56,8 @@ pub fn compute_esr(reference: &[f32], test: &[f32]) -> f64 {
         .zip(test.iter())
         .map(|(r, t)| ((r - t) as f64).powi(2))
         .sum();
-    if sig <= f64::EPSILON {
-        if noise <= f64::EPSILON {
-            0.0
-        } else {
-            f64::INFINITY
-        }
+    if sig == 0.0 {
+        if noise == 0.0 { 0.0 } else { f64::INFINITY }
     } else {
         noise / sig
     }

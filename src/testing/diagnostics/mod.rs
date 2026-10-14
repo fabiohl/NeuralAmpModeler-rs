@@ -8,10 +8,38 @@
 //! Release builds carry zero dump symbols; the hot path performs no allocation or I/O.
 //!
 //! ## Usage
-//! ```ignore
-//! model.enable_diagnostics(DiagnosticConfig { capture_condition_dsp: true, .. });
-//! model.process(&input, &mut output);
-//! let dump = model.take_diagnostics().unwrap();
+//! ```no_run
+//! use std::path::Path;
+//! use neural_amp_modeler_rs::loader::{load_and_build_model, LoadOptions};
+//! use neural_amp_modeler_rs::models::StaticModel;
+//! use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;
+//! use neural_amp_modeler_rs::SystemSnapshot;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let sys = SystemSnapshot::capture();
+//! let pair = load_and_build_model(
+//!     Path::new("models/amp.nam"),
+//!     &sys,
+//!     false,
+//!     LoadOptions::default(),
+//! )?;
+//!
+//! if let Some(model_box) = pair.model_l {
+//!     if let StaticModel::WavenetA2Dyn(mut model) = *model_box {
+//!         model.enable_diagnostics(DiagnosticConfig {
+//!             capture_condition_dsp: true,
+//!             capture_head_per_layer: true,
+//!             capture_final_output: true,
+//!         });
+//!         let input = [0.0_f32; 64];
+//!         let mut output = [0.0_f32; 64];
+//!         model.process(&input, &mut output);
+//!         let dump = model.take_diagnostics().expect("dump captured");
+//!         let _hash = dump.bit_stable_hash();
+//!     }
+//! }
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::math::common::AlignedVec;

@@ -270,13 +270,27 @@ pub fn report_f64_decomp(
 /// exact-grade), `tests/models/lstm_activation_precision.rs`. Callers report
 /// only finite pairs — skips are human-log-only, exactly like today.
 pub fn report_activation(model: &str, snr_fast_db: f64, snr_exact_db: f64) {
-    append_metric_line(serde_json::json!({
+    report_activation_with_oracle(model, None, snr_fast_db, snr_exact_db);
+}
+
+/// `activation` measurement with explicit oracle provenance (`"namcore"` or `"f64"`).
+pub fn report_activation_with_oracle(
+    model: &str,
+    oracle: Option<&str>,
+    snr_fast_db: f64,
+    snr_exact_db: f64,
+) {
+    let mut obj = serde_json::json!({
         "kind": "activation",
         "model": model,
         "snr_fast_db": json_metric(snr_fast_db),
         "snr_exact_db": json_metric(snr_exact_db),
         "gain_db": json_metric(snr_exact_db - snr_fast_db),
-    }));
+    });
+    if let Some(o) = oracle {
+        obj["oracle"] = serde_json::json!(o);
+    }
+    append_metric_line(obj);
 }
 
 /// `isa` — one ISA-parity comparison (`tests/parity/isa_parity.rs`):
@@ -517,26 +531,32 @@ fn report_dsp_fidelity_impl(
     }
     let mse = noise_power / n;
     let mae = max_abs_diff;
-    let snr = if noise_power <= f64::EPSILON {
+    let snr = if noise_power == 0.0 {
         f64::INFINITY
+    } else if signal_power == 0.0 {
+        f64::NEG_INFINITY
     } else {
         10.0 * (signal_power / noise_power).log10()
     };
-    let psnr = if mse <= f64::EPSILON {
+    let psnr = if mse == 0.0 {
         f64::INFINITY
+    } else if peak_ref == 0.0 {
+        f64::NEG_INFINITY
     } else {
         10.0 * (peak_ref * peak_ref / mse).log10()
     };
     let signal_avg_power = signal_power / n;
-    let bits = if mse <= f64::EPSILON || signal_avg_power <= f64::EPSILON {
+    let bits = if mse == 0.0 {
         f64::INFINITY
+    } else if signal_avg_power == 0.0 {
+        f64::NEG_INFINITY
     } else {
         -0.5 * (mse / signal_avg_power).log2()
     };
 
     // ESR (linear + dB)
-    let esr_linear = if signal_power <= f64::EPSILON {
-        if noise_power <= f64::EPSILON {
+    let esr_linear = if signal_power == 0.0 {
+        if noise_power == 0.0 {
             0.0
         } else {
             f64::INFINITY

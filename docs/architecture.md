@@ -289,7 +289,23 @@ Dynamic changes to off-RT resources (model switching, IR loading, resampler reco
   - `RtSwapDrain`: Per-channel swap receiver and deferred slot manager.
   - `SwapBudget`: Shared per-callback swap allowance.
   - `GcSink`: Encapsulates the 3-tier GC cascade dependencies.
-  - `RtSwapHandler`: Trait defining payload classification, coalescing keys, and `#[cold]` installation/discard hooks.
+
+### 2.3 ADR: Latency Telemetry Resolution vs. Runtime Cache Footprint
+
+**Context:**
+NeuralAmpModeler-rs tracks callback latency distributions via atomic, lock-free telemetry structures defined in [`src/dsp/telemetry.rs`](../src/dsp/telemetry.rs):
+- **`AtomicHistogram`**: 32-bin octave histogram (power-of-two bucket edges). Size: 384 bytes (`align(128)`, 6 cache lines). Fast and compact, but with relative quantization error up to 100 % (2×).
+- **`LatencyHistogram`**: 256-bin log-linear histogram (32 octaves × 8 sub-bins, HdrHistogram style). Size: 2176 bytes (`align(128)`, 34 cache lines). High resolution with bounded relative error $\le 12.5\%$.
+
+**Options Evaluated:**
+- **Option A:** Replace `RtStatusFlags.latency_hist` with `LatencyHistogram` (256 atomic counters = 2 KiB vs 256 B; +1792 B footprint increase).
+- **Option B (Selected):** Retain `AtomicHistogram` in `RtStatusFlags` for runtime production telemetry, and utilize `LatencyHistogram` in RT timing verification suites (`tests/rt_constraints/rt_deadline.rs`, `tests/rt_constraints/rt_jitter.rs`) and micro-benchmarks ([`benches/dsp_bench.rs`](../benches/dsp_bench.rs)).
+- **Option C:** Option A combined with explicit `size_of` reporting and telemetry overhead gates.
+
+**Decision & Rationale (Option B):**
+1. **L1d Cache Defense on Audio Hot-Path:** `RtStatusFlags` is updated on every audio block in the DSP callback. Expanding `latency_hist` from 384 B to 2176 B adds 28 cache lines to the shared status block, unnecessarily consuming L1d cache capacity and risking cache line thrashing during heavy neural inference.
+2. **Domain-Specific Granularity:** Production hosts poll `RtStatusFlags` off-RT for health checks (mean cycle time, overload alerts, rough order of magnitude). Conversely, the tight percentile resolution ($P50 \ne P90 \ne P99$ with $\le 12.5\%$ error) is vital for qualification gates, jitter characterization, and regression detection, which are verified by integration test harnesses and benchmarks.
+3. **Downstream API & ABI Stability:** Retaining `AtomicHistogram` preserves the frozen memory layout, cache alignment, and field offsets verified in [`status_test.rs`](../src/common/spsc/status_test.rs), ensuring zero ABI breakage or memory bloat in downstream hosts (`NAM-Plug`, `NAM-Audio-Pipe`).
 
 ---
 

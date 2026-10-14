@@ -196,6 +196,41 @@ Continuous long sequences (e.g., 960,000 samples) at 192 kHz exhibit cumulative 
 - 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog.rs`).
 - All catalog LSTM captures are verified at `[44100, 48000, 88200, 96000]`.
 
+### 2.8 Activation Functions & Oracle Divergence Analysis (T6.1)
+
+#### 2.8.1 Activation Mapping Matrix
+
+LSTM gate computation relies on hyperbolic tangent ($\tanh$) for cell input activation and output squashing, and sigmoid ($\sigma$) for forget, input, and output gating. The table below details the mathematical formulation and precision implementation across engines and execution modes:
+
+| Engine / Mode | Activation Function | Implementation / Kernel | Max Error / Bound | Source File |
+|:---|:---|:---|:---|:---|
+| **NAMCore C++** (`using_fast_tanh = false`, default) | $\tanh(x)$ | `std::tanh(x)` (libm `float`) | IEEE 754 f32 precision | `NAM/activations.h:20` |
+| | $\sigma(x)$ | `1.0f / (1.0f + expf(-x))` (libm `expf`) | IEEE 754 f32 precision | `NAM/activations.h:24` |
+| **NAMCore C++** (`using_fast_tanh = true`, opt-in) | $\tanh(x)$ | `fast_tanh(x)` rational approximation | $\approx 10^{-3}$ relative error | `NAM/activations.h:29` |
+| | $\sigma(x)$ | `fast_sigmoid(x)` rational approximation | $\approx 10^{-3}$ relative error | `NAM/activations.h:34` |
+| **Rust Prod (`Standard`, default)** | $\tanh(x)$ | `simd_tanh_poly_avx2` / `exact_tanh` (degree-6 Taylor/minimax exp: $\frac{e^{2x}-1}{e^{2x}+1}$) | $< 2.4 \times 10^{-7}$ absolute error | `src/math/activations/tanh/high_fidelity.rs` |
+| | $\sigma(x)$ | `simd_sigmoid_poly_avx2` / `exact_sigmoid` ($\frac{1}{1 + e^{-x}}$ via exact exp) | $< 2.0 \times 10^{-7}$ absolute error | `src/math/activations/sigmoid/high_fidelity.rs` |
+| **Rust Prod (`Fast`, opt-in)** | $\tanh(x)$ | `simd_tanh_avx2` (Padé [5,4] rational approximant) | $< 1.2 \times 10^{-5}$ absolute error | `src/math/activations/tanh/production.rs` |
+| | $\sigma(x)$ | `simd_sigmoid_minimax_avx2` (degree-17 piecewise minimax) | $< 2.4 \times 10^{-6}$ absolute error | `src/math/activations/sigmoid/production.rs` |
+| **f64 Reference Oracle** | $\tanh(x)$ | `f64::tanh(x)` (64-bit IEEE double float) | Exact machine epsilon ($\approx 2.2 \times 10^{-16}$) | `src/testing/reference_oracle/mod.rs` |
+| | $\sigma(x)$ | `1.0 / (1.0 + (-x).exp())` (64-bit IEEE double float) | Exact machine epsilon ($\approx 2.2 \times 10^{-16}$) | `src/testing/reference_oracle/mod.rs` |
+
+#### 2.8.2 Technical Analysis of Oracle Divergence on BossLSTM-1×16
+
+On `BossLSTM-1x16`, the measured baseline demonstrates an apparent anomaly where the Rust engine aligns more closely with the ideal mathematical oracle than with the upstream C++ implementation:
+- $\text{ESR}(\text{Rust Standard} \times \text{f64 Oracle}) = 9.08 \times 10^{-13}$ ($\text{SNR} = 120.4\text{ dB}$)
+- $\text{ESR}(\text{Rust Standard} \times \text{NAMCore C++}) = 8.51 \times 10^{-12}$ ($\text{SNR} = 110.7\text{ dB}$)
+
+**Root Cause: Kahan Compensation vs. Uncompensated Float Truncation:**
+1. In LSTM recurrent cells, the state recurrence updates as:
+   $$c_t = f_t \odot c_{t-1} + i_t \odot g_t$$
+2. In NAMCore C++ (`NAM/lstm.cpp:52`), this step is computed as naive uncompensated single-precision float addition:
+   `c[i] = f[i] * c[i] + in[i] * g[i];`
+   Over sequences of thousands of audio frames, single-precision (24-bit mantissa) floating-point addition accumulates directional roundoff error and low-order truncation bias.
+3. In Rust (`src/models/lstm/layer_kernels.rs` and `src/math/lstm/gates.rs`), the recurrent cell state accumulation uses **Kahan-compensated summation** (`cell_error`), explicitly tracking and compensating low-order rounding residual at each frame step.
+4. Because the f64 oracle evaluates the recurrence with 53-bit mantissa precision, Rust's compensated single-precision recurrence matches the 64-bit ideal state trajectory almost an order of magnitude more faithfully than C++'s uncompensated single-precision drift.
+5. Consequently, the residual difference between Rust and the f64 oracle reflects purely the activation approximation floor ($\approx 10^{-13}$), whereas the difference between Rust and NAMCore C++ is dominated by upstream C++ floating-point truncation drift ($\approx 10^{-11}$). Both engines remain in excellent acoustic parity ($\text{SNR} > 110\text{ dB}$), and no alteration to Rust production kernels is needed.
+
 ---
 
 ## 3. WaveNet A1 Architecture
@@ -661,7 +696,7 @@ upstream rejection outcomes:
 
 | ID  | Target / Feature                        | Classification        | Contract / Enforcement Mechanism                                                                                                                        |
 |:--- |:--------------------------------------- |:--------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | `wavenet_condition_lstm.nam`            | **Policy Reject**     | Loader returns `Err("LSTM condition_dsp is not supported")`. Upstream toolchain cannot train or validate this geometry.                                 |
+| P1  | `wavenet_condition_lstm.nam`            | **Upstream Bug / Policy Reject** | C++ NAMCore crashes with `std::runtime_error` during construction; Rust safely rejects fail-closed with `UnsupportedTopology` ("LSTM condition_dsp is not supported"). Minimal repro in [§7.5](#75-upstream-bug-ledger-known_gapcondition_lstm_cpp_crash). |
 | P2  | WaveNet A1 models declaring A2 features | **Fail-Closed**       | Rejects `gated`, FiLM, `head1x1`, `layer1x1` (`active == false` / `groups > 1`), and secondary activations at topology detection with `E1305` (`InvalidModelTopology`; slimmable-metadata divergences use `E1316`) ([§3.4](#34-fail-closed-rejection-of-a2-features-in-a1)). |
 | P3  | LSTM degenerate topologies              | **Fail-Closed**       | Multi-channel routes to dynamic path; mismatches (`input_size != in_channels` or zero channels) reject with `E1316` ([§2.6](#26-multi-channel-io-topology-scope)). |
 | P4  | Multi-array receptive field summation   | **Canonical Sum**     | `prewarm_samples()` sums all array RFs + condition_dsp + post-stack head ([§3.2](#32-structural-implementation-mapping)).                               |
@@ -670,6 +705,53 @@ upstream rejection outcomes:
 | P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat** | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                              |
 | P8  | Linear $M \to N$ Channel Mismatch       | **Fail-Closed**       | Rejects topologies where both $in > 1$ and $out > 1$ with $in \neq out$ (e.g. $2 \to 3$) ([§6.2.1](#621-namcore-v060-multichannel-topology--weight-specification)). |
 | P9  | Sequential Child & Top-Level Invariants | **Fail-Closed**       | Rejects non-empty top-level weights, non-matching inter-stage channels, and conflicting known sample rates ([§6.6](#66-sequential-namcore-v060)).       |
+
+### 7.5 Upstream Bug Ledger: `known_gap:condition_lstm_cpp_crash` (T6.4)
+
+#### 7.5.1 Upstream Symptom & Minimal Reproduction
+
+When attempting to execute or render a WaveNet model conditioned on an LSTM sub-module (such as `tests/fixtures/models/wavenet_condition_lstm.nam`) with the canonical C++ reference `render` CLI tool, the upstream process aborts with an unhandled exception:
+
+**Minimal Reproduction Command:**
+```bash
+build/namcore_render/tools/render \
+  tests/fixtures/models/wavenet_condition_lstm.nam \
+  /tmp/test_in.wav \
+  /tmp/test_out.wav
+```
+
+**Upstream Error Output & Process Termination:**
+```text
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  condition_size of layer 0 (3) doesn't match output channels of condition DSP (1!)
+Aborted (core dumped)
+```
+
+#### 7.5.2 Upstream Root Cause Analysis
+
+In upstream `NeuralAmpModelerCore` (`NAM/wavenet/model.cpp:L30–L35` and `NAM/get_dsp.cpp`):
+1. The conditioning submodule is parsed and instantiated via `get_dsp(config["condition_dsp"])`.
+2. When the submodule is an LSTM (`architecture: "LSTM"`), it exposes a single output channel (`num_channels = 1`), whereas the parent WaveNet layers declare a condition dimension of `condition_size = 3`.
+3. In C++, layer construction executes a strict assertion check without channel broadcasting or adapter reconciliation:
+   ```cpp
+   if (condition_size != condition_dsp->get_num_channels()) {
+       throw std::runtime_error("condition_size of layer 0 (" + std::to_string(condition_size) +
+                                ") doesn't match output channels of condition DSP (" +
+                                std::to_string(condition_dsp->get_num_channels()) + "!)");
+   }
+   ```
+4. This unhandled `std::runtime_error` terminates the process with `SIGABRT`. No official models in the NAM ecosystem use or have ever trained this configuration; it is an upstream limitation and training artifact.
+
+#### 7.5.3 Rust Engine Behavior & Governance Status
+
+- **Fail-Closed Rejection:** In `NeuralAmpModeler-rs` (`src/loader/nam_json/` and `src/loader/dispatcher/`), the loader inspects `condition_dsp` during pre-allocation parsing. When an LSTM condition submodule is detected, it fails closed cleanly:
+  ```rust
+  Err(JsonError::UnsupportedTopology("LSTM condition_dsp is not supported"))
+  ```
+  This is mapped to diagnostic error code `NamErrorCode::InvalidModelConfig` (`E1215`).
+- **Memory & Process Safety:** The Rust engine never panics, never crashes, and avoids allocating resources for broken models.
+- **Upstream Gap Classification:** Classified as an unfixable upstream toolchain limitation. In test receipts (`receipt.rs`) and parity suites (`tests/parity/cpp_parity.rs`), this gap is formally tracked under the stable identifier:
+  `[STATUS] KNOWN_GAP id="condition_lstm_cpp_crash" reason="C++ render tool limitation (condition_size mismatch)"`
 
 ---
 

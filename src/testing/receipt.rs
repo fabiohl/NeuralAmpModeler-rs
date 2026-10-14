@@ -20,6 +20,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -876,17 +877,34 @@ impl LongAuditReceipt {
             LongPhaseStatus::Passed
         };
 
-        let gaps = self
-            .phase_entries()
-            .filter(|p| has_declared_gap(p))
-            .map(|p| {
-                if is_zero_test_pass(p) {
-                    format!("{}:ZERO_TESTS", p.phase_id)
-                } else {
-                    format!("{}:{}", p.phase_id, p.status.as_str())
+        let mut gaps = Vec::new();
+        for p in self.phase_entries().filter(|p| has_declared_gap(p)) {
+            if is_zero_test_pass(p) {
+                let entry = format!("{}:ZERO_TESTS", p.phase_id);
+                if !gaps.contains(&entry) {
+                    gaps.push(entry);
                 }
-            })
-            .collect();
+            }
+            if p.gaps.is_empty() {
+                if !is_zero_test_pass(p) {
+                    let entry = format!("{}:{}", p.phase_id, p.status.as_str());
+                    if !gaps.contains(&entry) {
+                        gaps.push(entry);
+                    }
+                }
+            } else {
+                for g in &p.gaps {
+                    let entry = if g.starts_with(&format!("{}:", p.phase_id)) {
+                        g.clone()
+                    } else {
+                        format!("{}:{}", p.phase_id, g)
+                    };
+                    if !gaps.contains(&entry) {
+                        gaps.push(entry);
+                    }
+                }
+            }
+        }
 
         LongPhaseReceipt {
             phase_id: "overall".to_string(),
@@ -1171,7 +1189,120 @@ impl LongAuditReceipt {
     /// A simulated receipt (all phases `SIMULATED`) yields
     /// `OVERALL: SIMULATED` and `NOT_RUN` on every verdict line — no `OK` /
     /// `PASS` is ever printed for a run that executed nothing (F-07).
-    pub fn human_summary_lines(&self) -> Vec<String> {
+    /// Evaluates the performance regression gate verdict by inspecting
+    /// `target/logs/regression_phase_receipt.jsonl` (or a custom path).
+    ///
+    /// Fail-closed semantics:
+    /// - Absent file => `NOT_RUN`
+    /// - Expired file (> 24 hours without matching run id) => `NOT_RUN`
+    /// - Corrupted JSON / empty receipt with zero phases => `FAIL` (fail-closed)
+    /// - Any phase or overall status `FAIL` (or exit_code != 0) => `FAIL`
+    /// - Mismatched non-empty run_id (when `NAM_RUN_ID` is present in env) => `NOT_RUN`
+    /// - All phases `PASS` (and exit_code == 0) => `PASS`
+    pub fn perf_regression_verdict_at(
+        path: &Path,
+        max_age: Option<Duration>,
+        expected_run_id: Option<&str>,
+    ) -> &'static str {
+        if !path.exists() {
+            return "NOT_RUN";
+        }
+
+        // Check file recency (default 24 hours)
+        let recency_ok = match max_age {
+            Some(max_dur) => {
+                if let Ok(mtime) = fs::metadata(path).and_then(|m| m.modified()) {
+                    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(mtime) {
+                        elapsed <= max_dur
+                    } else if let Ok(drift) = mtime.duration_since(std::time::SystemTime::now()) {
+                        drift < Duration::from_secs(300)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            None => true,
+        };
+
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return "FAIL",
+        };
+
+        let mut phase_count = 0usize;
+        let mut fail_detected = false;
+        let mut matched_run_id = false;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => return "FAIL",
+            };
+
+            // Skip non-phase records (e.g. build_metadata)
+            if value.get("phase_id").is_none() {
+                continue;
+            }
+
+            phase_count += 1;
+
+            if let Some(exp) = expected_run_id.filter(|s| !s.is_empty()) {
+                let run_id = value.get("run_id").and_then(|v| v.as_str()).unwrap_or("");
+                if !run_id.is_empty() {
+                    if run_id == exp {
+                        matched_run_id = true;
+                    } else {
+                        continue;
+                    }
+                }
+            }
+
+            let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let exit_code = value.get("exit_code").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            if status != "PASS" || exit_code != 0 {
+                fail_detected = true;
+            }
+        }
+
+        if phase_count == 0 {
+            return "FAIL";
+        }
+
+        if let Some(exp) = expected_run_id {
+            if !exp.is_empty() && !matched_run_id {
+                return "NOT_RUN";
+            }
+        } else if !recency_ok {
+            return "NOT_RUN";
+        }
+
+        if fail_detected { "FAIL" } else { "PASS" }
+    }
+
+    /// Evaluates the performance regression verdict from the default receipt file
+    /// (`target/logs/regression_phase_receipt.jsonl`).
+    pub fn perf_regression_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
+        let env_run_id = std::env::var("NAM_RUN_ID").ok();
+        Self::perf_regression_verdict_at(
+            Path::new("target/logs/regression_phase_receipt.jsonl"),
+            Some(Duration::from_secs(24 * 3600)),
+            env_run_id.as_deref(),
+        )
+    }
+
+    /// Human one-line summary printed by `nam_long_receipt summary` (S5),
+    /// with an optional custom regression receipt file path for testing.
+    pub fn human_summary_lines_with_regression_path(&self, reg_path: Option<&Path>) -> Vec<String> {
         let mut lines = Vec::new();
         for p in self.phase_entries() {
             if p.status == LongPhaseStatus::Failed {
@@ -1194,12 +1325,50 @@ impl LongAuditReceipt {
             }
         }
         let overall = self.summary_receipt();
-        lines.push(format!("OVERALL: {}", overall.status.as_str()));
+        let perf_verdict = if self.is_simulated_only() {
+            "NOT_RUN"
+        } else if let Some(p) = reg_path {
+            Self::perf_regression_verdict_at(
+                p,
+                Some(Duration::from_secs(24 * 3600)),
+                std::env::var("NAM_RUN_ID").ok().as_deref(),
+            )
+        } else {
+            self.perf_regression_verdict()
+        };
+
+        if perf_verdict == "FAIL" {
+            lines.push("ERROR: perf_regression — FAILED".to_string());
+        }
+
+        let overall_status = if perf_verdict == "FAIL" && overall.status != LongPhaseStatus::Failed
+        {
+            LongPhaseStatus::Failed
+        } else {
+            overall.status
+        };
+
+        lines.push(format!("OVERALL: {}", overall_status.as_str()));
         lines.push(format!("FIDELITY: {}", self.fidelity_verdict()));
         lines.push(format!("RT_DEADLINE: {}", self.rt_deadline_verdict()));
         lines.push(format!("RT_JITTER: {}", self.rt_jitter_verdict()));
-        lines.push("PERF_REGRESSION: NOT_RUN".to_string());
+        lines.push(format!("PERF_REGRESSION: {}", perf_verdict));
         lines
+    }
+
+    /// Human one-line summary printed by `nam_long_receipt summary` (S5).
+    ///
+    /// Replaces the giant ASCII table + top-N block of `utils/tests-long.sh`:
+    /// the forensic data lives in the JSONL, and the human gets only alarms
+    /// (WARNING/ERROR) plus the verdict lines. The runner echoes these lines
+    /// verbatim and maps `OVERALL:` to its exit code — it never reclassifies
+    /// logs.
+    ///
+    /// A simulated receipt (all phases `SIMULATED`) yields
+    /// `OVERALL: SIMULATED` and `NOT_RUN` on every verdict line — no `OK` /
+    /// `PASS` is ever printed for a run that executed nothing (F-07).
+    pub fn human_summary_lines(&self) -> Vec<String> {
+        self.human_summary_lines_with_regression_path(None)
     }
 }
 

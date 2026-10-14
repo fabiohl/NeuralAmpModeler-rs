@@ -271,6 +271,27 @@ fn activation_sink_emits_valid_jsonl() {
 }
 
 #[test]
+fn activation_sink_with_oracle_emits_valid_jsonl() {
+    let jsonl = JsonlFileGuard::new();
+    common::validation::report_activation_with_oracle("LSTM 1×16", Some("namcore"), 92.5, 96.1);
+
+    let content = std::fs::read_to_string(jsonl.path()).expect("JSONL output file must exist");
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(lines.len(), 1, "expected one line, got:\n{content}");
+    let obj: serde_json::Value =
+        serde_json::from_str(lines[0]).expect("activation line must be valid JSON");
+    assert_eq!(obj["kind"], "activation");
+    assert_eq!(obj["model"], "LSTM 1×16");
+    assert_eq!(obj["oracle"], "namcore");
+    assert_eq!(obj["snr_fast_db"].as_f64().unwrap(), 92.5);
+    assert_eq!(obj["snr_exact_db"].as_f64().unwrap(), 96.1);
+    assert!(
+        (obj["gain_db"].as_f64().unwrap() - 3.6).abs() < 1e-12,
+        "gain must be snr_exact − snr_fast: {obj}"
+    );
+}
+
+#[test]
 fn isa_sink_emits_valid_jsonl() {
     let jsonl = JsonlFileGuard::new();
     // Cross-ISA pair: full field set.

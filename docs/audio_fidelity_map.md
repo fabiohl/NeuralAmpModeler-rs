@@ -270,6 +270,59 @@ The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforc
 
 ---
 
+## 12. Fidelity Drift Analysis & Contract Bisection (Sprint 3 — Findings A2, A3)
+
+### 12.1 Deriva observada (Observed Fidelity Drift)
+
+Following the identification of baseline discrepancies in the Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)), a systematic bisection audit was conducted across the commit history between the reference contract date (2026-09-19) and current HEAD (`d059088`). The audit isolates real algorithmic regressions from benign compiler code-generation differences (FMA contraction/reassociation) and upstream dependency updates (NAMCore v0.6.0).
+
+#### Fidelity Drift Matrix (`modelo × commit × ESR_NAMCore × ESR_f64`)
+
+| Model | Reference Commit | Bisected / Active Commit | Contract ESR (NAMCore) | Measured ESR (NAMCore) | Contract ESR (f64 Oracle) | Measured ESR (f64 Oracle) | Δ ESR (NAMCore) | Root Cause Hypothesis & Mechanism | Classification |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---|:---:|
+| **`wavenet-a2-dyn-gated`** | `58e2d02` | `bfdb21e` | $5.03 \times 10^{-11}$ | **$2.56 \times 10^{-14}$** | $1.00 \times 10^{-10}$ | **$1.34 \times 10^{-14}$** | **−99.95%** (~4 orders) | **Algorithmic Fix (F-PERF-05):** Single-channel condition broadcast bug fixed in `bfdb21e` (`for c in 0..cond_size`). Fixtures untouched. | **Legitimate Improvement** |
+| **`convnet-nobn`** | `58e2d02` / `fb24067` | `0e0d09e` / `d059088` | $3.17 \times 10^{-14}$ | **$8.77 \times 10^{-14}$** | N/A | N/A | $+177\%$ ($+5.6 \times 10^{-14}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` LLVM FMA contraction reordered un-normalized direct convolutions. Still $< 10^{-13}$. | **Expected / Compiler Noise** |
+| **`bosswn-nano`** | `58e2d02` | `0e0d09e` / `d059088` | $6.43 \times 10^{-14}$ | **$8.70 \times 10^{-14}$** | $3.05 \times 10^{-14}$ | **$3.05 \times 10^{-14}$** | $+35\%$ ($+2.3 \times 10^{-14}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` 4-channel AVX2 loop scheduling. **f64 oracle strictly identical** ($3.05 \times 10^{-14}$), proving zero DSP engine divergence. | **Expected / Compiler Noise** |
+| **`evh-5150-lite`** (optional) | `58e2d02` | `0e0d09e` / `d059088` | $7.87 \times 10^{-13}$ | **$1.46 \times 10^{-12}$** | $2.64 \times 10^{-13}$ | **$2.64 \times 10^{-13}$** | $+86\%$ ($+6.7 \times 10^{-13}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` FMA reordering on 12-channel padded convolutions. **f64 oracle strictly identical** ($2.64 \times 10^{-13}$). | **Expected / Compiler Noise** |
+| **`linear-fft-rf4096`** | `58e2d02` | `829b3d3` | $1.62 \times 10^{-14}$ | **$2.14 \times 10^{-14}$** | N/A | N/A | $+32\%$ ($+5.2 \times 10^{-15}$) | **Upstream Golden Regen (H1, H3):** Pinned NAMCore upgraded to v0.6.0 (`829b3d3`); Eigen FFT summation reordering shifted golden binary. Still at float32 noise floor. | **Expected / Pinned Golden Update** |
+| **`linear-fft-rf8192`** | `58e2d02` | `829b3d3` | $1.69 \times 10^{-14}$ | **$2.85 \times 10^{-14}$** | N/A | N/A | $+69\%$ ($+1.16 \times 10^{-14}$) | **Upstream Golden Regen (H1, H3):** Same as rf4096: NAMCore v0.6.0 golden regeneration in commit `829b3d3`. | **Expected / Pinned Golden Update** |
+
+### 12.2 Confirmation of the `wavenet-a2-dyn-gated` Fidelity Improvement (T3.2)
+
+1. **Identification of Root Cause Commit:**
+   Forensic commit inspection and bisection pinpoint commit `bfdb21e` ("*feat: add condition broadcast tests and optimize SIMD GEMM kernels for A2 and WaveNet models*", 2026-09-21) as the exact revision that shifted ESR from $5.03 \times 10^{-11}$ down to $2.56 \times 10^{-14}$.
+2. **Algorithmic Defect & Fix:**
+   In `src/models/a2/model/dynamic/process.rs` (lines 117–124), the single-channel condition broadcast path (`dsp_ch == 1`) contained an off-by-one loop initialization:
+   ```rust
+   // Prior to bfdb21e (Defective):
+   for f in (0..nf).rev() {
+       let val = buf[f];
+       for c in 1..cond_size { // Bug: c=0 was skipped for frames f >= 1!
+           buf[f * cond_size + c] = val;
+       }
+   }
+
+   // Fixed in bfdb21e:
+   for f in (0..nf).rev() {
+       let val = buf[f];
+       for c in 0..cond_size { // Correct: all condition channels updated
+           buf[f * cond_size + c] = val;
+       }
+   }
+   ```
+   Prior to `bfdb21e`, channel 0 of the broadcast condition vector was unassigned for all frames $f \ge 1$, retaining stale memory or uninitialized samples during dynamic gated layer evaluation.
+3. **Absence of Golden Vector Replacement Artifacts:**
+   Both `tests/fixtures/models/a2_dynamic_gated_ch8.nam` and `tests/fixtures/golden_a2_dynamic_gated_ch8.bin` have remained bit-identical and untouched since commit `4356666`. The golden vector was **not** regenerated or replaced.
+4. **Dual Oracle Corroboration:**
+   The improvement was corroborated simultaneously across both reference axes:
+   - **Parity Reference (NAMCore f32):** ESR dropped from $5.03 \times 10^{-11}$ to $2.56 \times 10^{-14}$ ($\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$).
+   - **Absolute Reference (f64 Oracle):** ESR vs the double-precision f64 oracle dropped from $\sim 1.0 \times 10^{-10}$ to $1.34 \times 10^{-14}$.
+   This simultaneous convergence against independent C++ and 64-bit mathematical implementations definitively proves that the shift represents a genuine bug fix in the dynamic A2 inference engine.
+5. **Contract Action for Sprint 7:**
+   The baseline in [`docs/quality-contract.json`](quality-contract.json) must be updated to $2.56 \times 10^{-14}$ during the next formal baseline renewal (`--save` by the human operator), preventing the quality gate from masking regressions up to $5.03 \times 10^{-11}$.
+
+---
+
 ## See Also
 
 - [`docs/fastmath-approximations.md`](fastmath-approximations.md) — Numerical error bounds and polynomial activation kernel specifications.
@@ -277,3 +330,4 @@ The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforc
 - [`docs/architecture.md`](architecture.md) — Architectural overview, pipeline lifecycle, and memory layouts.
 - [`docs/quality-contract.json`](quality-contract.json) — Automated Quality Dashboard Baseline (JSON).
 - [`docs/fixtures.md`](fixtures.md) — Golden vector test supply chain contract.
+

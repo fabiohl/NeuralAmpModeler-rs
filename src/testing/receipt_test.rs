@@ -297,7 +297,10 @@ fn typed_skip_changes_receipt_verdict_to_completed_with_gaps() {
     };
     let summary = receipt.summary_receipt();
     assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(summary.gaps, vec!["phase2:PASSED"]);
+    assert_eq!(
+        summary.gaps,
+        vec!["phase2:skip_optional:model_not_found:linear_test.nam"]
+    );
     assert!(receipt.strict_verdict().is_err());
     assert_eq!(
         detect_gap_markers(&write_temp("all good\n")),
@@ -335,7 +338,7 @@ fn avx512_opt_in_declaration_counts_as_declared_gap() {
     };
     let summary = receipt.summary_receipt();
     assert_eq!(summary.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(summary.gaps, vec!["phase2:PASSED"]);
+    assert_eq!(summary.gaps, vec!["phase2:avx512_opt_in_not_run"]);
 }
 
 #[test]
@@ -425,7 +428,10 @@ fn passed_phase_with_log_markers_counts_as_declared_gap() {
     };
     let s = bypassed.summary_receipt();
     assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(s.gaps, vec!["phase5:PASSED", "phase6:PASSED"]);
+    assert_eq!(
+        s.gaps,
+        vec!["phase5:inconclusive_environment", "phase6:inconclusive"]
+    );
 
     let clean = LongAuditReceipt {
         phases: vec![mk("phase5", LongPhaseStatus::Passed, &[])],
@@ -466,7 +472,8 @@ fn human_summary_lines_flag_only_alarms_and_verdicts() {
             ),
         ],
     };
-    let lines = receipt.human_summary_lines();
+    let nonexistent = Path::new("target/logs/nonexistent_regression_fixture.jsonl");
+    let lines = receipt.human_summary_lines_with_regression_path(Some(nonexistent));
     assert!(
         lines.iter().any(|l| l == "ERROR: phase2 Defense — FAILED"),
         "missing ERROR line: {lines:?}"
@@ -880,7 +887,7 @@ fn skip_optional_nondist_log_classifies_as_completed_with_gaps() {
     };
     let s = receipt.summary_receipt();
     assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(s.gaps, vec!["phase2:PASSED"]);
+    assert_eq!(s.gaps, vec!["phase2:skip_optional:models_nondist_absent"]);
     assert!(receipt.strict_verdict().is_err());
 }
 
@@ -909,7 +916,7 @@ fn known_gap_condition_lstm_registers_gap_with_correct_id() {
     };
     let s = receipt.summary_receipt();
     assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(s.gaps, vec!["phase2:PASSED"]);
+    assert_eq!(s.gaps, vec!["phase2:known_gap:condition_lstm_cpp_crash"]);
     assert!(receipt.strict_verdict().is_err());
 }
 
@@ -1140,9 +1147,9 @@ fn simulated_preregistration_derives_simulated_and_rejects_strict() {
     assert_eq!(
         summary.gaps,
         vec![
-            "preflight-render:SIMULATED",
-            "phase1:SIMULATED",
-            "phase7:SIMULATED"
+            "preflight-render:simulated",
+            "phase1:simulated",
+            "phase7:simulated"
         ]
     );
     assert!(receipt.has_declared_gaps());
@@ -1257,5 +1264,142 @@ fn semantic_verdict_rejects_injected_overall_comment_line() {
     assert!(
         err.to_string().contains("invalid JSONL line 15"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn three_phases_with_two_gaps_aggregates_into_overall_gaps() {
+    // T2.1: 3 phases, one with 2 gaps: overall.gaps.len() == 2 and
+    // the summary counter prints matching gaps count.
+    let p1 = mk_phase("phase1", LongPhaseStatus::Passed, 10, &[]);
+    let p2 = mk_phase(
+        "phase2",
+        LongPhaseStatus::Passed,
+        25,
+        &[
+            "known_gap:condition_lstm_cpp_crash",
+            "avx512_opt_in_not_run",
+        ],
+    );
+    let p3 = mk_phase("phase3", LongPhaseStatus::Passed, 5, &[]);
+    let mut receipt = LongAuditReceipt {
+        phases: vec![p1, p2, p3],
+    };
+    receipt.push_summary();
+    let overall = receipt.phases.last().unwrap();
+    assert_eq!(overall.phase_id, "overall");
+    assert_eq!(overall.status, LongPhaseStatus::CompletedWithGaps);
+    assert_eq!(overall.gaps.len(), 2);
+    assert_eq!(
+        overall.gaps,
+        vec![
+            "phase2:known_gap:condition_lstm_cpp_crash",
+            "phase2:avx512_opt_in_not_run"
+        ]
+    );
+    assert_eq!(overall.tests_executed, 40);
+}
+
+#[test]
+fn perf_regression_verdict_fixtures() {
+    // T2.2: Fail-closed perf regression verdict integration:
+    // PASS, FAIL, absent, corrupt, expired >24h.
+    let dir = temp_path();
+    fs::create_dir_all(&dir).unwrap();
+
+    let absent = dir.join("absent.jsonl");
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&absent, None, None),
+        "NOT_RUN"
+    );
+
+    let corrupt = dir.join("corrupt.jsonl");
+    fs::write(&corrupt, "this is not json\n").unwrap();
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&corrupt, None, None),
+        "FAIL"
+    );
+
+    let empty = dir.join("empty.jsonl");
+    fs::write(&empty, "\n").unwrap();
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&empty, None, None),
+        "FAIL"
+    );
+
+    let pass_line = serde_json::json!({
+        "phase_id": "perf_gate",
+        "status": "PASS",
+        "exit_code": 0,
+        "run_id": "test_run_123"
+    })
+    .to_string();
+    let pass_file = dir.join("pass.jsonl");
+    fs::write(&pass_file, format!("{pass_line}\n")).unwrap();
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&pass_file, None, None),
+        "PASS"
+    );
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&pass_file, None, Some("test_run_123")),
+        "PASS"
+    );
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&pass_file, None, Some("other_run")),
+        "NOT_RUN"
+    );
+
+    let fail_line = serde_json::json!({
+        "phase_id": "perf_gate",
+        "status": "FAIL",
+        "exit_code": 1,
+        "run_id": "test_run_123"
+    })
+    .to_string();
+    let fail_file = dir.join("fail.jsonl");
+    fs::write(&fail_file, format!("{fail_line}\n")).unwrap();
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(&fail_file, None, None),
+        "FAIL"
+    );
+
+    // Expired receipt (>24h window)
+    assert_eq!(
+        LongAuditReceipt::perf_regression_verdict_at(
+            &pass_file,
+            Some(Duration::from_millis(0)),
+            None
+        ),
+        "NOT_RUN"
+    );
+}
+
+#[test]
+fn human_summary_lines_integrates_perf_regression_fail_closed() {
+    let dir = temp_path();
+    fs::create_dir_all(&dir).unwrap();
+
+    let fail_file = dir.join("fail.jsonl");
+    let fail_line = serde_json::json!({
+        "phase_id": "perf_gate",
+        "status": "FAIL",
+        "exit_code": 1
+    })
+    .to_string();
+    fs::write(&fail_file, format!("{fail_line}\n")).unwrap();
+
+    let clean_receipt = mk_canonical_clean_receipt();
+    let lines = clean_receipt.human_summary_lines_with_regression_path(Some(&fail_file));
+    assert!(
+        lines.iter().any(|l| l == "PERF_REGRESSION: FAIL"),
+        "must report PERF_REGRESSION: FAIL"
+    );
+    assert!(
+        lines.iter().any(|l| l == "OVERALL: FAILED"),
+        "PERF_REGRESSION: FAIL must promote OVERALL to FAILED"
+    );
+    assert!(
+        lines.iter().any(|l| l == "ERROR: perf_regression — FAILED"),
+        "must emit ERROR alarm for failed perf regression"
     );
 }

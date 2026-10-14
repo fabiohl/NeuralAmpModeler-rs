@@ -680,6 +680,7 @@ fn null_snr_from_perfect_parity_is_ok() {
         |e| {
             let mut obj = canonical_fidelity(e)?;
             if e.id == TARGET {
+                obj["esr"] = json!(0.0);
                 obj["snr_db"] = json!(null);
             }
             Some(obj)
@@ -692,6 +693,95 @@ fn null_snr_from_perfect_parity_is_ok() {
     assert_eq!(
         metric_check(&outcome, TARGET, Metric::SnrDb),
         &MetricOutcome::Ok
+    );
+}
+
+/// If ESR > 0 and SNR is null, the record is inconsistent (`Malformed`),
+/// because SNR = +∞ (encoded as null) requires bit-identical parity (ESR = 0).
+#[test]
+fn null_snr_com_esr_nao_nulo_e_malformado() {
+    let contract = load_contract();
+    let report = build_report(
+        &contract,
+        &ALL_PASS,
+        |e| {
+            let mut obj = canonical_fidelity(e)?;
+            if e.id == TARGET {
+                // TARGET has esr_namcore = 8.51e-12 > 0.0
+                obj["snr_db"] = json!(null);
+            }
+            Some(obj)
+        },
+        canonical_latency,
+    );
+    let outcome = verify(&contract, &report);
+
+    assert_matches!(outcome.fidelity, FidelityVerdict::Fail { violations: 1 });
+    assert_eq!(
+        metric_check(&outcome, TARGET, Metric::SnrDb),
+        &MetricOutcome::Malformed(MalformedReason::Inconsistent(
+            "esr > 0 with snr == null".to_string(),
+        ))
+    );
+}
+
+/// Regression test for convnet_silu SNR gate:
+/// When silu has a baseline SNR (e.g. 124.9 dB), a record with finite SNR passes,
+/// while legacy buggy records with null SNR and positive ESR (3.24e-13) are rejected as Malformed.
+#[test]
+fn regression_silu_record_with_finite_snr() {
+    let mut contract = load_contract();
+    const SILU_ID: &str = "convnet-silu@48000:live";
+    if let Some(entry) = contract.fidelity.iter_mut().find(|e| e.id == SILU_ID) {
+        entry.snr_db = Some(124.9);
+    }
+
+    // Report with newly fixed finite SNR (~124.9 dB) and ESR = 3.24e-13 passes.
+    let report_valid = build_report(
+        &contract,
+        &ALL_PASS,
+        |e| {
+            let mut obj = canonical_fidelity(e)?;
+            if e.id == SILU_ID {
+                obj["snr_db"] = json!(124.9);
+            }
+            Some(obj)
+        },
+        canonical_latency,
+    );
+    let outcome_valid = verify(&contract, &report_valid);
+    assert!(
+        outcome_valid.fidelity.is_ok(),
+        "valid silu report must pass: {outcome_valid:?}"
+    );
+    assert_eq!(
+        metric_check(&outcome_valid, SILU_ID, Metric::SnrDb),
+        &MetricOutcome::Ok
+    );
+
+    // Report with legacy buggy null SNR and positive ESR is rejected as Malformed.
+    let report_buggy = build_report(
+        &contract,
+        &ALL_PASS,
+        |e| {
+            let mut obj = canonical_fidelity(e)?;
+            if e.id == SILU_ID {
+                obj["snr_db"] = json!(null);
+            }
+            Some(obj)
+        },
+        canonical_latency,
+    );
+    let outcome_buggy = verify(&contract, &report_buggy);
+    assert_matches!(
+        outcome_buggy.fidelity,
+        FidelityVerdict::Fail { violations: 1 }
+    );
+    assert_eq!(
+        metric_check(&outcome_buggy, SILU_ID, Metric::SnrDb),
+        &MetricOutcome::Malformed(MalformedReason::Inconsistent(
+            "esr > 0 with snr == null".to_string(),
+        ))
     );
 }
 

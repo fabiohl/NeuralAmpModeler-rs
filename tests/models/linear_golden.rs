@@ -155,7 +155,7 @@ fn verify_linear_golden(
     };
 
     // Compute SNR for diagnostics
-    let snr = if sum_sq_err <= f64::EPSILON {
+    let snr = if sum_sq_err == 0.0 {
         f64::INFINITY
     } else {
         10.0 * (sum_sq_ref / sum_sq_err).log10()
