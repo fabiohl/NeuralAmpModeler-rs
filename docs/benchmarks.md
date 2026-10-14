@@ -87,28 +87,28 @@ Below is the committed reference baseline measured on release builds under an is
 
 | Target ID                      | Description                           | Median Latency  | % of 1.33 ms RT Budget |
 |:------------------------------ |:------------------------------------- |:--------------- |:---------------------- |
-| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)              | 43.29 µs        | 3.25%                  |
-| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                | 19.85 µs        | 1.49%                  |
-| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)       | 56.40 µs        | 4.23%                  |
-| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                   | 17.83 µs        | 1.34%                  |
-| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)        | 25.64 µs        | 1.92%                  |
-| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)         | 22.55 µs        | 1.69%                  |
-| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)          | 6.83 µs         | 0.51%                  |
-| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)           | 7.13 µs         | 0.53%                  |
-| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain) | 0.33 µs         | 0.02%                  |
-| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)      | 4.84 µs         | 0.36%                  |
-| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)              | 8.66 µs         | 0.65%                  |
-| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape            | 21.69 µs        | 1.63%                  |
-| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                      | 8.81 µs         | 0.66%                  |
-| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)               | 188.35 µs       | 14.13%                 |
-| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)             | 147.50 µs       | 11.06%                 |
-| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)           | 190.60 µs       | 14.30%                 |
-| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k   | 1.22 µs / block | 0.09%                  |
-| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k     | 0.62 µs / block | 0.05%                  |
-| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.22 µs / block | 0.09%                  |
-| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)    | 43.57 µs        | 3.27%                  |
-| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS) | 177.39 µs       | 13.31%                 |
-| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic)| 63.52 µs        | 4.76%                  |
+| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)              | 41.77 µs        | 3.13%                  |
+| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                | 20.11 µs        | 1.51%                  |
+| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)       | 57.16 µs        | 4.29%                  |
+| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                   | 18.29 µs        | 1.37%                  |
+| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)        | 19.75 µs        | 1.48%                  |
+| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)         | 14.00 µs        | 1.05%                  |
+| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)          | 6.77 µs         | 0.51%                  |
+| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)           | 7.58 µs         | 0.57%                  |
+| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain) | 0.13 µs         | 0.01%                  |
+| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)      | 4.93 µs         | 0.37%                  |
+| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)              | 9.48 µs         | 0.71%                  |
+| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape            | 21.57 µs        | 1.62%                  |
+| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                      | 8.24 µs         | 0.62%                  |
+| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)               | 177.12 µs       | 13.28%                 |
+| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)             | 131.09 µs       | 9.83%                  |
+| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)           | 190.06 µs       | 14.25%                 |
+| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k   | 1.32 µs / block | 0.10%                  |
+| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k     | 0.66 µs / block | 0.05%                  |
+| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.29 µs / block | 0.10%                  |
+| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)    | 42.80 µs        | 3.21%                  |
+| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS) | 174.36 µs       | 13.08%                 |
+| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic)| 64.29 µs        | 4.82%                  |
 
 *Note: All single-model inferences consume $\le 4.3\%$ of the real-time block budget; even dynamic A2 topologies and 4× oversampled pipelines maintain $> 85\%$ real-time headroom.*
 

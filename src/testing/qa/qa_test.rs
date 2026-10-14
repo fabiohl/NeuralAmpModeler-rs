@@ -320,8 +320,8 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     );
     assert_eq!(
         contract.performance.len(),
-        21,
-        "latency count (16 core + 5 DSP)"
+        22,
+        "latency count (16 core + 6 DSP)"
     );
     let optional: Vec<&FidelityEntry> = contract.fidelity.iter().filter(|f| f.optional).collect();
     assert_eq!(optional.len(), 1, "optional:true only on EVH-5150-Lite");
@@ -329,7 +329,7 @@ fn committed_quality_contract_json_loads_and_matches_snapshot_counts() {
     assert_eq!(contract.schema_version, SCHEMA_VERSION);
     assert_eq!(
         contract.provenance.git_commit,
-        "f2ac1a8703eb63682984b09660ed26457a5d45f4"
+        "d91643ca1f228914d77fce54947641d2373d279a"
     );
     assert!(!contract.provenance.git_dirty);
 }

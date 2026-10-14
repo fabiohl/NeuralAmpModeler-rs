@@ -93,14 +93,14 @@ fn transcribe_quality_contract_to_json() {
              antes de comparar ao threshold."
                 .into(),
         ),
-        generated_at: "2026-09-17T22:04:30-03:00".into(),
+        generated_at: "2026-10-14T15:30:00-03:00".into(),
         provenance: Provenance {
-            git_commit: "7576d49305bb079ec6435516d97b0e415e524466".into(),
+            git_commit: "d91643ca1f228914d77fce54947641d2373d279a".into(),
             git_dirty: false,
-            run_id: "1789692961050429696-14880".into(),
+            run_id: "1792002753056508658-12386".into(),
             effective_isa: "x86-64-v3 (AVX2/FMA/F16C/BMI)".into(),
             cpu_model: "AMD Ryzen 7 5700U with Radeon Graphics".into(),
-            rustc: "rustc 1.98.1 (48a229cea 2026-09-01)".into(),
+            rustc: "rustc 1.99.0 (b940084d7 2026-09-28)".into(),
             cargo_profile: "release".into(),
         },
         envelopes: Envelopes::policy_v1(),
@@ -157,9 +157,9 @@ fn transcribe_quality_contract_to_json() {
             fid_optional(
                 "evh-5150-lite@48000:live",
                 "EVH-5150-Lite @48000 Live",
-                7.87e-13,
+                1.46e-12,
                 Some(2.64e-13),
-                Some(121.0),
+                Some(118.4),
                 4.31e-06,
             ),
             fid(
@@ -181,17 +181,17 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "linear-fft-rf4096@48000",
                 "Linear FFT RF=4096 (C++ golden) @48000",
-                1.62e-14,
+                2.14e-14,
                 None,
-                Some(137.9),
+                Some(135.5),
                 4.09e-06,
             ),
             fid(
                 "linear-fft-rf8192@48000",
                 "Linear FFT RF=8192 (C++ golden) @48000",
-                1.69e-14,
+                2.85e-14,
                 None,
-                Some(137.7),
+                Some(134.3),
                 5.20e-06,
             ),
             fid(
@@ -213,10 +213,10 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "wavenet-a2-dyn-gated@48000:live",
                 "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live",
-                5.03e-11,
-                Some(1.00e-10),
-                Some(103.0),
-                6.64e-05,
+                2.56e-14,
+                Some(1.34e-14),
+                Some(135.9),
+                8.78e-06,
             ),
             fid(
                 "wavenet-a2-film-chaos@48000:live",
@@ -246,7 +246,7 @@ fn transcribe_quality_contract_to_json() {
                 "wavenet-a2-film-lite@48000:live",
                 "WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference @48000 Live",
                 3.82e-13,
-                Some(1.61e-13),
+                Some(1.72e-13),
                 Some(124.2),
                 1.69e-05,
             ),
@@ -318,10 +318,10 @@ fn transcribe_quality_contract_to_json() {
             fid(
                 "convnet-nobn@48000:live",
                 "convnet_nobn @48000 Live",
-                3.17e-14,
+                8.77e-14,
                 None,
-                Some(135.0),
-                5.74e-06,
+                Some(130.6),
+                9.27e-06,
             ),
             fid(
                 "convnet-relu@48000:live",
@@ -534,56 +534,59 @@ fn transcribe_quality_contract_to_json() {
                     Alert when the next long-suite run exceeds alert_above."
                 .into(),
             worst_esr_parity: MonitoringAlertF64 {
-                measured: 5.03e-11,
+                measured: 1.00e-11,
                 threshold: 1.0e-10,
-                alert_above: 8.0e-11,
+                alert_above: 3.0e-11,
             },
             rt_p99_9_under_contention_us: MonitoringAlertUs {
-                measured_us: 131,
+                measured_us: 147,
                 threshold_us: 1_330,
                 alert_above_us: 200,
             },
         }),
         performance: vec![
-            // ── Model Inference Core — 15 entries ──────────────────────────
-            perf("RT_WaveNet_Std_CH16", "WaveNet Standard CH16", 44.89),
-            perf("RT_WaveNet_Feather_CH8", "WaveNet Feather CH8", 19.96),
-            perf("RT_WaveNet_Lite_CH12", "WaveNet Lite CH12", 58.76),
-            perf("RT_WaveNet_Nano_CH4", "WaveNet Nano CH4", 18.0),
-            perf("RT_A2_Full_CH8", "A2 Full CH8", 25.74),
-            perf("RT_A2_Lite_CH3", "A2 Lite CH3", 20.96),
-            perf("RT_LSTM_1x16", "LSTM 1x16", 6.69),
-            perf("RT_LSTM_2x8", "LSTM 2x8", 7.26),
-            perf("RT_Linear_Direct_RF4", "Linear RF=4 Direct", 0.26),
-            perf("RT_Linear_Fft_RF2048", "Linear FFT RF=2048", 4.84),
-            perf("RT_ConvNet", "ConvNet", 8.69),
-            perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 21.56),
-            perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.06),
-            perf("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8", 176.96),
-            // Measured (regression_gate Ryzen 7 5700U): median=147.50 us
-            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 147.50),
-            // Measured (regression_gate Ryzen 7 5700U): median=190.6 us
-            perf("RT_A2_Max_CH4", "A2 Max CH4", 190.6),
-            // ── DSP Infrastructure — 5 entries ─────────────────────────────
+            // ── Model Inference Core — 16 entries ──────────────────────────
+            perf("RT_WaveNet_Std_CH16", "WaveNet Standard CH16", 41.77),
+            perf("RT_WaveNet_Feather_CH8", "WaveNet Feather CH8", 20.11),
+            perf("RT_WaveNet_Lite_CH12", "WaveNet Lite CH12", 57.16),
+            perf("RT_WaveNet_Nano_CH4", "WaveNet Nano CH4", 18.29),
+            perf("RT_A2_Full_CH8", "A2 Full CH8", 19.75),
+            perf("RT_A2_Lite_CH3", "A2 Lite CH3", 14.00),
+            perf("RT_LSTM_1x16", "LSTM 1x16", 6.77),
+            perf("RT_LSTM_2x8", "LSTM 2x8", 7.58),
+            perf("RT_Linear_Direct_RF4", "Linear RF=4 Direct", 0.13),
+            perf("RT_Linear_Fft_RF2048", "Linear FFT RF=2048", 4.93),
+            perf("RT_ConvNet", "ConvNet", 9.48),
+            perf("RT_WaveNet_Dyn_Free", "WaveNet Dyn Free", 21.57),
+            perf("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7", 8.24),
+            perf("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8", 177.12),
+            perf("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3", 131.09),
+            perf("RT_A2_Max_CH4", "A2 Max CH4", 190.06),
+            // ── DSP Infrastructure — 6 entries ─────────────────────────────
             perf_micro_batch(
                 "RT_DSP_Resampler_44k1_to_48k",
                 "DSP Resampler 44.1k->48k",
-                1.24,
+                1.32,
                 64,
             ),
             perf_micro_batch(
                 "RT_DSP_Resampler_96k_to_48k",
                 "DSP Resampler 96k->48k",
-                0.62,
+                0.66,
                 64,
             ),
-            perf_micro_batch("RT_DSP_CabSim_IR_Medium", "DSP CabSim IR Medium", 1.23, 64),
+            perf_micro_batch("RT_DSP_CabSim_IR_Medium", "DSP CabSim IR Medium", 1.29, 64),
             perf(
                 "RT_DSP_Pipeline_Base_NoOS",
                 "DSP Pipeline Base (No OS)",
-                45.62,
+                42.80,
             ),
-            perf("RT_DSP_Pipeline_HQ_4xOS", "DSP Pipeline HQ (4x OS)", 185.59),
+            perf("RT_DSP_Pipeline_HQ_4xOS", "DSP Pipeline HQ (4x OS)", 174.36),
+            perf(
+                "RT_DSP_Pipeline_AdaptiveOn",
+                "DSP Pipeline (Adaptive On)",
+                64.29,
+            ),
         ],
     };
 
@@ -603,7 +606,7 @@ fn transcribe_quality_contract_to_json() {
     );
     assert_eq!(
         contract.performance.len(),
-        21,
+        22,
         "performance count must match snapshot"
     );
     assert_eq!(

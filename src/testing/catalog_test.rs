@@ -128,9 +128,14 @@ fn test_validate_v2_catalog_ok_on_committed_fixtures() {
     );
     assert_eq!(status.entries_checked, EXPECTED_V2_GOLDEN_NAMES.len());
     assert_eq!(status.fixtures_checked, 70);
-    assert_eq!(status.present, 69);
+    assert_eq!(status.missing_required.len(), 0);
     assert_eq!(status.known_gap_files, 1);
     assert_eq!(status.known_gaps.len(), 1);
+    assert_eq!(
+        status.present + status.missing_optional.len(),
+        69,
+        "present + missing_optional must equal 69 (65 core fixtures + up to 4 optional community models)"
+    );
     assert_eq!(
         status.present
             + status.missing_required.len()

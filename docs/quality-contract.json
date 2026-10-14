@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "schema_notes": "Benchmarks com `batch_factor > 1` reportam tempo total de `batch_factor` blocos; o dashboard divide por `batch_factor` antes de comparar ao threshold.",
-  "generated_at": "2026-09-19T22:56:10-03:00",
+  "generated_at": "2026-10-14T15:30:00-03:00",
   "provenance": {
-    "git_commit": "f2ac1a8703eb63682984b09660ed26457a5d45f4",
+    "git_commit": "d91643ca1f228914d77fce54947641d2373d279a",
     "git_dirty": false,
-    "run_id": "1789866755538572185-53493",
+    "run_id": "1792002753056508658-12386",
     "effective_isa": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
     "cpu_model": "AMD Ryzen 7 5700U with Radeon Graphics",
-    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
     "cargo_profile": "release"
   },
   "envelopes": {
@@ -30,7 +30,7 @@
       "esr_namcore": 8.51e-12,
       "esr_f64": 9.08e-13,
       "snr_db": 110.7,
-      "mrstft": 0.0000282,
+      "mrstft": 2.82e-05,
       "optional": false
     },
     {
@@ -39,7 +39,7 @@
       "esr_namcore": 1e-11,
       "esr_f64": 5.78e-13,
       "snr_db": 110.0,
-      "mrstft": 0.0000165,
+      "mrstft": 1.65e-05,
       "optional": false
     },
     {
@@ -48,7 +48,7 @@
       "esr_namcore": 4.74e-14,
       "esr_f64": 2e-14,
       "snr_db": 133.2,
-      "mrstft": 8.86e-6,
+      "mrstft": 8.86e-06,
       "optional": false
     },
     {
@@ -57,7 +57,7 @@
       "esr_namcore": 6.43e-14,
       "esr_f64": 3.05e-14,
       "snr_db": 131.9,
-      "mrstft": 7.67e-6,
+      "mrstft": 7.67e-06,
       "optional": false
     },
     {
@@ -66,7 +66,7 @@
       "esr_namcore": 2.31e-14,
       "esr_f64": 9.05e-15,
       "snr_db": 136.4,
-      "mrstft": 6.46e-6,
+      "mrstft": 6.46e-06,
       "optional": false
     },
     {
@@ -75,25 +75,25 @@
       "esr_namcore": 7.65e-14,
       "esr_f64": 7.63e-14,
       "snr_db": 131.2,
-      "mrstft": 5.26e-6,
+      "mrstft": 5.26e-06,
       "optional": false
     },
     {
       "id": "evh-5150-lite@48000:live",
       "label": "EVH-5150-Lite @48000 Live",
-      "esr_namcore": 7.87e-13,
+      "esr_namcore": 1.46e-12,
       "esr_f64": 2.64e-13,
-      "snr_db": 121.0,
-      "mrstft": 4.31e-6,
+      "snr_db": 118.4,
+      "mrstft": 4.31e-06,
       "optional": true
     },
     {
       "id": "lstm-dyn-1x7@48000:live",
-      "label": "LSTM-Dyn 1×7 (dynamic path) C++ cross-reference @48000 Live",
+      "label": "LSTM-Dyn 1\u00d77 (dynamic path) C++ cross-reference @48000 Live",
       "esr_namcore": 3.67e-15,
       "esr_f64": 3.02e-15,
       "snr_db": 144.4,
-      "mrstft": 1.46e-6,
+      "mrstft": 1.46e-06,
       "optional": false
     },
     {
@@ -102,34 +102,34 @@
       "esr_namcore": 1.7e-14,
       "esr_f64": null,
       "snr_db": 137.7,
-      "mrstft": 2.17e-6,
+      "mrstft": 2.17e-06,
       "optional": false
     },
     {
       "id": "linear-fft-rf4096@48000",
       "label": "Linear FFT RF=4096 (C++ golden) @48000",
-      "esr_namcore": 1.62e-14,
+      "esr_namcore": 2.14e-14,
       "esr_f64": null,
-      "snr_db": 137.9,
-      "mrstft": 4.09e-6,
+      "snr_db": 135.5,
+      "mrstft": 4.09e-06,
       "optional": false
     },
     {
       "id": "linear-fft-rf8192@48000",
       "label": "Linear FFT RF=8192 (C++ golden) @48000",
-      "esr_namcore": 1.69e-14,
+      "esr_namcore": 2.85e-14,
       "esr_f64": null,
-      "snr_db": 137.7,
-      "mrstft": 5.2e-6,
+      "snr_db": 134.3,
+      "mrstft": 5.2e-06,
       "optional": false
     },
     {
       "id": "slim-a2-example@48000:live",
-      "label": "SlimmableContainer A2 Example (CH=3→6) C++ cross-reference @48000 Live",
+      "label": "SlimmableContainer A2 Example (CH=3\u21926) C++ cross-reference @48000 Live",
       "esr_namcore": 7.28e-14,
       "esr_f64": 1.82e-14,
       "snr_db": 131.4,
-      "mrstft": 0.0000173,
+      "mrstft": 1.73e-05,
       "optional": false
     },
     {
@@ -138,16 +138,16 @@
       "esr_namcore": 5.35e-14,
       "esr_f64": 2.65e-14,
       "snr_db": 132.7,
-      "mrstft": 9.97e-6,
+      "mrstft": 9.97e-06,
       "optional": false
     },
     {
       "id": "wavenet-a2-dyn-gated@48000:live",
       "label": "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live",
-      "esr_namcore": 5.03e-11,
-      "esr_f64": 1e-10,
-      "snr_db": 103.0,
-      "mrstft": 0.0000664,
+      "esr_namcore": 2.56e-14,
+      "esr_f64": 1.34e-14,
+      "snr_db": 135.9,
+      "mrstft": 8.78e-06,
       "optional": false
     },
     {
@@ -156,7 +156,7 @@
       "esr_namcore": 1.26e-14,
       "esr_f64": 1.03e-14,
       "snr_db": 139.0,
-      "mrstft": 7e-6,
+      "mrstft": 7e-06,
       "optional": false
     },
     {
@@ -165,7 +165,7 @@
       "esr_namcore": 1.16e-14,
       "esr_f64": 6.42e-15,
       "snr_db": 139.4,
-      "mrstft": 7.85e-6,
+      "mrstft": 7.85e-06,
       "optional": false
     },
     {
@@ -174,16 +174,16 @@
       "esr_namcore": 3.44e-14,
       "esr_f64": 2.21e-14,
       "snr_db": 134.6,
-      "mrstft": 6.92e-6,
+      "mrstft": 6.92e-06,
       "optional": false
     },
     {
       "id": "wavenet-a2-film-lite@48000:live",
       "label": "WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference @48000 Live",
       "esr_namcore": 3.82e-13,
-      "esr_f64": 1.61e-13,
+      "esr_f64": 1.72e-13,
       "snr_db": 124.2,
-      "mrstft": 0.0000169,
+      "mrstft": 1.69e-05,
       "optional": false
     },
     {
@@ -192,7 +192,7 @@
       "esr_namcore": 1.46e-13,
       "esr_f64": 7.83e-14,
       "snr_db": 128.3,
-      "mrstft": 0.0000168,
+      "mrstft": 1.68e-05,
       "optional": false
     },
     {
@@ -201,7 +201,7 @@
       "esr_namcore": 1.46e-13,
       "esr_f64": null,
       "snr_db": 128.3,
-      "mrstft": 0.0000168,
+      "mrstft": 1.68e-05,
       "optional": false
     },
     {
@@ -210,7 +210,7 @@
       "esr_namcore": 8.36e-14,
       "esr_f64": 1.82e-14,
       "snr_db": 130.8,
-      "mrstft": 9.54e-6,
+      "mrstft": 9.54e-06,
       "optional": false
     },
     {
@@ -219,7 +219,7 @@
       "esr_namcore": 2.57e-14,
       "esr_f64": 1.66e-14,
       "snr_db": 135.9,
-      "mrstft": 5.9e-6,
+      "mrstft": 5.9e-06,
       "optional": false
     },
     {
@@ -228,7 +228,7 @@
       "esr_namcore": 1.11e-14,
       "esr_f64": 6.33e-15,
       "snr_db": 139.6,
-      "mrstft": 3.59e-6,
+      "mrstft": 3.59e-06,
       "optional": false
     },
     {
@@ -237,7 +237,7 @@
       "esr_namcore": 9.03e-14,
       "esr_f64": 6.13e-14,
       "snr_db": 130.4,
-      "mrstft": 0.0000166,
+      "mrstft": 1.66e-05,
       "optional": false
     },
     {
@@ -246,25 +246,25 @@
       "esr_namcore": 2.31e-14,
       "esr_f64": null,
       "snr_db": 136.4,
-      "mrstft": 6.46e-6,
+      "mrstft": 6.46e-06,
       "optional": false
     },
     {
       "id": "wavenetdyn-free-shape@48000:live",
-      "label": "WaveNetDyn Free-Shape (CH=7→4, dynamic path) C++ cross-reference @48000 Live",
+      "label": "WaveNetDyn Free-Shape (CH=7\u21924, dynamic path) C++ cross-reference @48000 Live",
       "esr_namcore": 4.1e-13,
       "esr_f64": 1.06e-12,
       "snr_db": 123.9,
-      "mrstft": 0.0000258,
+      "mrstft": 2.58e-05,
       "optional": false
     },
     {
       "id": "convnet-nobn@48000:live",
       "label": "convnet_nobn @48000 Live",
-      "esr_namcore": 3.17e-14,
+      "esr_namcore": 8.77e-14,
       "esr_f64": null,
-      "snr_db": 135.0,
-      "mrstft": 5.74e-6,
+      "snr_db": 130.6,
+      "mrstft": 9.27e-06,
       "optional": false
     },
     {
@@ -273,7 +273,7 @@
       "esr_namcore": 9.33e-16,
       "esr_f64": null,
       "snr_db": 150.3,
-      "mrstft": 8.14e-7,
+      "mrstft": 8.14e-07,
       "optional": false
     },
     {
@@ -282,7 +282,7 @@
       "esr_namcore": 3.24e-13,
       "esr_f64": null,
       "snr_db": null,
-      "mrstft": 0.000011,
+      "mrstft": 1.1e-05,
       "optional": false
     },
     {
@@ -291,7 +291,7 @@
       "esr_namcore": 3.89e-15,
       "esr_f64": null,
       "snr_db": 144.1,
-      "mrstft": 1.64e-6,
+      "mrstft": 1.64e-06,
       "optional": false
     },
     {
@@ -300,7 +300,7 @@
       "esr_namcore": 7.86e-13,
       "esr_f64": 2.71e-12,
       "snr_db": 121.0,
-      "mrstft": 0.0000308,
+      "mrstft": 3.08e-05,
       "optional": false
     },
     {
@@ -309,7 +309,7 @@
       "esr_namcore": 4.08e-15,
       "esr_f64": null,
       "snr_db": 143.9,
-      "mrstft": 1.19e-6,
+      "mrstft": 1.19e-06,
       "optional": false
     },
     {
@@ -318,7 +318,7 @@
       "esr_namcore": 2.83e-14,
       "esr_f64": null,
       "snr_db": 135.5,
-      "mrstft": 3.7e-6,
+      "mrstft": 3.7e-06,
       "optional": false
     },
     {
@@ -327,7 +327,7 @@
       "esr_namcore": 3.7e-15,
       "esr_f64": null,
       "snr_db": 144.3,
-      "mrstft": 5.79e-7,
+      "mrstft": 5.79e-07,
       "optional": false
     },
     {
@@ -336,7 +336,7 @@
       "esr_namcore": 1.2e-13,
       "esr_f64": 1.05e-13,
       "snr_db": 129.2,
-      "mrstft": 2.26e-6,
+      "mrstft": 2.26e-06,
       "optional": false
     },
     {
@@ -345,7 +345,7 @@
       "esr_namcore": 1.46e-13,
       "esr_f64": 7.83e-14,
       "snr_db": 128.3,
-      "mrstft": 0.0000168,
+      "mrstft": 1.68e-05,
       "optional": false
     },
     {
@@ -354,7 +354,7 @@
       "esr_namcore": 8.36e-14,
       "esr_f64": 1.82e-14,
       "snr_db": 130.8,
-      "mrstft": 9.54e-6,
+      "mrstft": 9.54e-06,
       "optional": false
     },
     {
@@ -363,7 +363,7 @@
       "esr_namcore": 1.46e-13,
       "esr_f64": 7.83e-14,
       "snr_db": 128.3,
-      "mrstft": 0.0000168,
+      "mrstft": 1.68e-05,
       "optional": false
     },
     {
@@ -372,7 +372,7 @@
       "esr_namcore": 8.36e-14,
       "esr_f64": 1.82e-14,
       "snr_db": 130.8,
-      "mrstft": 9.54e-6,
+      "mrstft": 9.54e-06,
       "optional": false
     },
     {
@@ -381,7 +381,7 @@
       "esr_namcore": 1.46e-13,
       "esr_f64": 7.83e-14,
       "snr_db": 128.3,
-      "mrstft": 0.0000168,
+      "mrstft": 1.68e-05,
       "optional": false
     },
     {
@@ -390,7 +390,7 @@
       "esr_namcore": 1.57e-13,
       "esr_f64": null,
       "snr_db": 128.0,
-      "mrstft": 0.0000276,
+      "mrstft": 2.76e-05,
       "optional": false
     },
     {
@@ -399,7 +399,7 @@
       "esr_namcore": 3.17e-14,
       "esr_f64": null,
       "snr_db": 135.0,
-      "mrstft": 5.74e-6,
+      "mrstft": 5.74e-06,
       "optional": false
     },
     {
@@ -408,7 +408,7 @@
       "esr_namcore": 9.33e-16,
       "esr_f64": null,
       "snr_db": 150.3,
-      "mrstft": 8.14e-7,
+      "mrstft": 8.14e-07,
       "optional": false
     },
     {
@@ -417,43 +417,43 @@
       "esr_namcore": 3.24e-13,
       "esr_f64": null,
       "snr_db": null,
-      "mrstft": 0.000011,
+      "mrstft": 1.1e-05,
       "optional": false
     },
     {
       "id": "quick-lstm-1x10@48000:live",
-      "label": "Quick LSTM 1×10 @48000 Live",
+      "label": "Quick LSTM 1\u00d710 @48000 Live",
       "esr_namcore": 4.08e-15,
       "esr_f64": null,
       "snr_db": 143.9,
-      "mrstft": 1.19e-6,
+      "mrstft": 1.19e-06,
       "optional": false
     },
     {
       "id": "quick-lstm-1x16@48000:live",
-      "label": "Quick LSTM 1×16 @48000 Live",
+      "label": "Quick LSTM 1\u00d716 @48000 Live",
       "esr_namcore": 8.19e-12,
       "esr_f64": 9.08e-13,
       "snr_db": 110.9,
-      "mrstft": 0.0000301,
+      "mrstft": 3.01e-05,
       "optional": false
     },
     {
       "id": "quick-lstm-2x24@48000:live",
-      "label": "Quick LSTM 2×24 @48000 Live",
+      "label": "Quick LSTM 2\u00d724 @48000 Live",
       "esr_namcore": 2.83e-14,
       "esr_f64": null,
       "snr_db": 135.5,
-      "mrstft": 3.7e-6,
+      "mrstft": 3.7e-06,
       "optional": false
     },
     {
       "id": "quick-lstm-3x8@48000:live",
-      "label": "Quick LSTM 3×8 @48000 Live",
+      "label": "Quick LSTM 3\u00d78 @48000 Live",
       "esr_namcore": 3.69e-15,
       "esr_f64": null,
       "snr_db": 144.3,
-      "mrstft": 5.79e-7,
+      "mrstft": 5.79e-07,
       "optional": false
     },
     {
@@ -462,7 +462,7 @@
       "esr_namcore": 3.89e-15,
       "esr_f64": null,
       "snr_db": 144.1,
-      "mrstft": 1.64e-6,
+      "mrstft": 1.64e-06,
       "optional": false
     },
     {
@@ -480,7 +480,7 @@
       "esr_namcore": 2.31e-14,
       "esr_f64": 9.05e-15,
       "snr_db": 136.4,
-      "mrstft": 6.46e-6,
+      "mrstft": 6.46e-06,
       "optional": false
     },
     {
@@ -489,7 +489,7 @@
       "esr_namcore": 9.92e-14,
       "esr_f64": null,
       "snr_db": 130.0,
-      "mrstft": 0.0000431,
+      "mrstft": 4.31e-05,
       "optional": false
     }
   ],
@@ -497,124 +497,129 @@
     {
       "id": "RT_WaveNet_Std_CH16",
       "label": "WaveNet Standard CH16",
-      "median_latency_us": 43.29
+      "median_latency_us": 41.77
     },
     {
       "id": "RT_WaveNet_Feather_CH8",
       "label": "WaveNet Feather CH8",
-      "median_latency_us": 19.85
+      "median_latency_us": 20.11
     },
     {
       "id": "RT_WaveNet_Lite_CH12",
       "label": "WaveNet Lite CH12",
-      "median_latency_us": 56.4
+      "median_latency_us": 57.16
     },
     {
       "id": "RT_WaveNet_Nano_CH4",
       "label": "WaveNet Nano CH4",
-      "median_latency_us": 17.83
+      "median_latency_us": 18.29
     },
     {
       "id": "RT_A2_Full_CH8",
       "label": "A2 Full CH8",
-      "median_latency_us": 25.64
+      "median_latency_us": 19.75
     },
     {
       "id": "RT_A2_Lite_CH3",
       "label": "A2 Lite CH3",
-      "median_latency_us": 22.55
+      "median_latency_us": 14.0
     },
     {
       "id": "RT_LSTM_1x16",
       "label": "LSTM 1x16",
-      "median_latency_us": 6.83
+      "median_latency_us": 6.77
     },
     {
       "id": "RT_LSTM_2x8",
       "label": "LSTM 2x8",
-      "median_latency_us": 7.13
+      "median_latency_us": 7.58
     },
     {
       "id": "RT_Linear_Direct_RF4",
       "label": "Linear RF=4 Direct",
-      "median_latency_us": 0.33
+      "median_latency_us": 0.13
     },
     {
       "id": "RT_Linear_Fft_RF2048",
       "label": "Linear FFT RF=2048",
-      "median_latency_us": 4.84
+      "median_latency_us": 4.93
     },
     {
       "id": "RT_ConvNet",
       "label": "ConvNet",
-      "median_latency_us": 8.66
+      "median_latency_us": 9.48
     },
     {
       "id": "RT_WaveNet_Dyn_Free",
       "label": "WaveNet Dyn Free",
-      "median_latency_us": 21.69
+      "median_latency_us": 21.57
     },
     {
       "id": "RT_LSTM_Dyn_1x7",
       "label": "LSTM Dyn 1x7",
-      "median_latency_us": 8.81
+      "median_latency_us": 8.24
     },
     {
       "id": "RT_A2_Dyn_Gated_CH8",
       "label": "A2 Dyn Gated CH8",
-      "median_latency_us": 188.35
+      "median_latency_us": 177.12
     },
     {
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
-      "median_latency_us": 147.5
+      "median_latency_us": 131.09
     },
     {
       "id": "RT_A2_Max_CH4",
       "label": "A2 Max CH4",
-      "median_latency_us": 190.6
+      "median_latency_us": 190.06
     },
     {
       "id": "RT_DSP_Resampler_44k1_to_48k",
       "label": "DSP Resampler 44.1k->48k",
-      "median_latency_us": 1.22,
+      "median_latency_us": 1.32,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Resampler_96k_to_48k",
       "label": "DSP Resampler 96k->48k",
-      "median_latency_us": 0.62,
+      "median_latency_us": 0.66,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_CabSim_IR_Medium",
       "label": "DSP CabSim IR Medium",
-      "median_latency_us": 1.22,
+      "median_latency_us": 1.29,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Pipeline_Base_NoOS",
       "label": "DSP Pipeline Base (No OS)",
-      "median_latency_us": 43.57
+      "median_latency_us": 42.8
     },
     {
       "id": "RT_DSP_Pipeline_HQ_4xOS",
       "label": "DSP Pipeline HQ (4x OS)",
-      "median_latency_us": 177.39
+      "median_latency_us": 174.36
+    },
+    {
+      "id": "RT_DSP_Pipeline_AdaptiveOn",
+      "label": "DSP Pipeline (Adaptive On)",
+      "median_latency_us": 64.29
     }
   ],
   "monitoring_alerts": {
-    "notes": "Trend-monitoring only — never a blocking gate. Alert when the next long-suite run exceeds alert_above.",
+    "notes": "Trend-monitoring only \u2014 never a blocking gate. Alert when the next long-suite run exceeds alert_above.",
     "worst_esr_parity": {
-      "measured": 5.03e-11,
+      "measured": 1e-11,
       "threshold": 1e-10,
-      "alert_above": 8e-11
+      "alert_above": 3e-11
     },
     "rt_p99_9_under_contention_us": {
-      "measured_us": 131,
+      "measured_us": 147,
       "threshold_us": 1330,
       "alert_above_us": 200
     }

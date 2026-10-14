@@ -811,11 +811,13 @@ parse_benchmarks() {
         RT_LSTM_1x16
         RT_LSTM_2x8
         RT_Linear_Direct_RF4
+        RT_Linear_Fft_RF2048
         RT_ConvNet
         RT_WaveNet_Dyn_Free
         RT_LSTM_Dyn_1x7
         RT_A2_Dyn_Gated_CH8
         RT_A2_Dyn_Blended_CH3
+        RT_A2_Max_CH4
     )
 
     DSP_BENCH_NAMES=(
@@ -824,6 +826,7 @@ parse_benchmarks() {
         RT_DSP_CabSim_IR_Medium
         RT_DSP_Pipeline_Base_NoOS
         RT_DSP_Pipeline_HQ_4xOS
+        RT_DSP_Pipeline_AdaptiveOn
     )
 
     ALL_BENCH_NAMES=("${MODEL_BENCH_NAMES[@]}" "${DSP_BENCH_NAMES[@]}")

@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DspBridgeReader` faces are unaffected and remain the supported API.
 - **Activation Precision Table Partitioning (Sprint 6 / B2)** (`docs(lstm): triage oracle divergence, partition activation tables, and characterize cold transients`):
   Partitioned QA activation reports in `src/testing/qa/render.rs` into two independent tables: Warm NAMCore goldens vs. Cold-Start f64 reference oracles. Eliminates mixed-sample aggregate distortion.
+- **Quality Contract Resealing & 22nd Benchmark Calibration (Sprint 7 / A1, A2, A3, A4)** (`test(qa): recalibrate quality contract baselines, register 22nd benchmark, and calibrate alerts`):
+  Resealed `docs/quality-contract.json` with empirical proveniência (`git_commit`, `rustc 1.99.0`, `git_dirty: false`), tightened `wavenet-a2-dyn-gated` ESR to $2.56 \times 10^{-14}$, registered `RT_DSP_Pipeline_AdaptiveOn` as the 22nd real-time latency target, and calibrated `monitoring_alerts` (`worst_esr_parity` at $1.00 \times 10^{-11}$ with alert at $3.00 \times 10^{-11}$; `rt_p99_9_under_contention_us` at $147\ \mu\text{s}$ with alert at $200\ \mu\text{s}$).
 - **Compilation Profile Segregation (Sprint 5 / B7)** (`test(loom): silenciar panicos loom, segregar CARGO_TARGET_DIR por perfil e alinhar logs de fases`):
   `utils/tests-long.sh` segregates `CARGO_TARGET_DIR` by profile (`release-default`, `release-heap-audit`, `loom`), preventing cross-phase compilation churn and cache invalidation.
 - **Doctest Compilation (Sprint 8 / B8)** (`docs: convert ignored doctests to compilable examples and document cross-ISA skips`):
