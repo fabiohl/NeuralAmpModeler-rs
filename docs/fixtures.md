@@ -3,7 +3,7 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# Fixture Governance & Golden Vector Reference — NeuralAmpModeler-rs
+# Fixture Governance & Golden Vector Reference - NeuralAmpModeler-rs
 
 This document establishes the fixture supply chain, catalog governance, and ground-truth references for the `NeuralAmpModeler-rs` engine. It details how test vectors, model weights, impulse responses, and numerical anchors are generated, resolved, validated, and kept synchronized with upstream implementations.
 
@@ -41,6 +41,8 @@ NeuralAmpModeler-rs/
 │   ├── models/                    # Version-controlled models (.nam, mocks)
 │   ├── models-nondist/            # Local non-distributable models (gitignored)
 │   ├── f64_anchors/               # Ground-truth f64 reference vectors
+│   ├── qa/                        # QA report fixtures (e.g. report_gate_not_verified.jsonl)
+│   ├── dumps_a2_max/              # Forensic A2-Max intermediate activations (manifest.json, capture_meta.txt)
 │   ├── scripts/                   # Specialized Python/NumPy reference generators
 │   ├── .golden_manifest.sha256    # SHA-256 freshness integrity manifest
 │   ├── golden_*.bin               # Pre-committed golden vectors (v1 and v2)
@@ -88,43 +90,57 @@ The single source of truth for model identities and architectural categorization
 
 ### Model Provenance & Classification
 
-| Model File                              | Nature         | Architecture & Topology              | License & Provenance                     | Purpose in Engine Validation                                            |
-|:--------------------------------------- |:-------------- |:------------------------------------ |:---------------------------------------- |:----------------------------------------------------------------------- |
-| `wavenet_a1_standard.nam`               | Official Real  | WaveNet A1 (CH=16, K=3, HEAD=8, 20L) | CC0 / S. Atkinson                        | V1 and V2 multi-SR baseline; canonical A1 architecture.                 |
-| `wavenet_official.nam`                  | Official Real  | WaveNet (CH=3, K=3, free geom)       | CC0 / S. Atkinson                        | V1/V2 golden tests; dynamic path clone determinism.                     |
-| `lstm.nam`                              | Official Real  | LSTM (1 layer, H=3)                  | CC0 / S. Atkinson                        | Official LSTM sample; V1/V2 golden and live C++ parity.                 |
-| `wavenet_condition_dsp.nam`             | Official Real  | WaveNet (CH=3, cond=3 FiLM + DSP)    | CC0 / S. Atkinson                        | FiLM dynamic path with post-FiLM DSP conditioning.                      |
-| `BossWN-standard.nam`                   | Community Real | WaveNet (CH=16, K=3, 20L)            | Permissive / Boss Waza TAE               | Full-scale WaveNet; V1/V2 golden and zero-allocation gates.             |
-| `BossWN-feather.nam`                    | Community Real | WaveNet (CH=8, K=3, 20L)             | Permissive / Boss Waza TAE               | Medium-scale WaveNet; V1/V2 golden multi-SR validation.                 |
-| `BossWN-nano.nam`                       | Community Real | WaveNet (CH=4, K=3, 20L)             | Permissive / Boss Waza TAE               | Compact WaveNet; V1/V2 golden multi-SR validation.                      |
-| `BossLSTM-1x16.nam`                     | Community Real | LSTM (1 layer, H=16)                 | Permissive / Boss Waza TAE               | Real amp weights; V1/V2 multi-SR recurrent validation.                  |
-| `BossLSTM-2x8.nam`                      | Community Real | LSTM (2 layers, H=8)                 | Permissive / Boss Waza TAE               | Multi-layer LSTM; V1/V2 multi-SR weight layout tests.                   |
-| `EVH-5150-Lite.nam`                     | Community Real | WaveNet Lite (CH=12, K=3, 20L)       | Non-distributable community              | Real WaveNet Lite capture; replaces obsolete synthetic fixture.         |
-| `wavenet_a2_full.nam`                   | Synthetic      | WaveNet A2 (CH=8, K=6/15, 23L)       | Apache-2.0 / `generate_a2_fixtures.py`   | Fast-path A2 parity; calibrated audio regime (LUFS ≈ −22.6).            |
-| `wavenet_a2_lite.nam`                   | Synthetic      | WaveNet A2 (CH=3, K=6/15, 23L)       | Apache-2.0 / `generate_a2_fixtures.py`   | Fast-path A2 parity; calibrated audio regime (LUFS ≈ −20.0).            |
-| `wavenet_a2_film_full.nam`              | Synthetic      | WaveNet A2 (CH=8, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`   | FiLM dynamic path parity against generic WaveNet reference.             |
-| `wavenet_a2_film_lite.nam`              | Synthetic      | WaveNet A2 (CH=3, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`   | FiLM dynamic path parity against generic WaveNet reference.             |
-| `wavenet_a2_film_chaos_stress.nam`      | Synthetic      | WaveNet A2 (CH=3, non-identity FiLM) | Apache-2.0 / `generate_a2_fixtures.py`   | High-variance FiLM routing and dimension stress probe.                  |
-| `wavenet_a2_film_input_mixin_pre.nam`   | Synthetic      | WaveNet A2 (CH=3, slot 2 FiLM only)  | Apache-2.0 / `generate_a2_fixtures.py`   | Regression fixture for Bug C1 (input_mixin_pre channel dimensions).     |
-| `a2_example.nam`                        | Synthetic      | SlimmableContainer (A2 submodels)    | Apache-2.0 / `generate_a2_fixtures.py`   | Container routing and submodel swapping for A2 architectures.           |
-| `a2_dynamic_gated_ch8.nam`              | Synthetic      | WaveNet A2 (CH=8, dynamic gating)    | Apache-2.0 / `generate_a2_fixtures.py`   | Dynamic gating inference engine validation.                             |
-| `a2_dynamic_blended_ch3.nam`            | Synthetic      | WaveNet A2 (CH=3, dynamic blending)  | Apache-2.0 / `generate_a2_fixtures.py`   | Dynamic blending inference engine validation.                           |
-| `convnet_test.nam`                      | Synthetic      | ConvNet (CH=8, 6 blocks, Tanh)       | Apache-2.0 / `generate_b1_2_fixtures.py` | ConvNet baseline architecture parity.                                   |
-| `convnet_nobn.nam`                      | Synthetic      | ConvNet (CH=8, no BatchNorm)         | Apache-2.0 / `generate_fixtures.py`      | ConvNet batchnorm bypass topology validation.                           |
-| `convnet_relu.nam`                      | Synthetic      | ConvNet (CH=8, ReLU activation)      | Apache-2.0 / `generate_fixtures.py`      | ConvNet ReLU activation path validation.                                |
-| `convnet_silu.nam`                      | Synthetic      | ConvNet (CH=8, SiLU activation)      | Apache-2.0 / `generate_fixtures.py`      | ConvNet SiLU activation path validation.                                |
-| `linear_test.nam`                       | Synthetic      | Linear (RF=4, direct FIR)            | Apache-2.0 / deterministic               | Direct FIR time-domain dot-product parity.                              |
-| `linear_nobias.nam`                     | Synthetic      | Linear (RF=4, bias=0.0)              | Apache-2.0 / `generate_fixtures.py`      | Zero-bias linear inference validation.                                  |
-| `linear_fft_rf{320,2048,4096,8192}.nam` | Synthetic      | Linear FFT (RF 320 to 8192)          | Apache-2.0 / deterministic               | Partitioned frequency-domain convolution cross-validation.              |
-| `lstm_dyn_test.nam`                     | Synthetic      | LSTM Dynamic (1 layer, H=7)          | Apache-2.0 / `generate_b1_2_fixtures.py` | Uncatalogued hidden size routing to dynamic LSTM path.                  |
-| `lstm_1x10.nam`                         | Synthetic      | LSTM (1 layer, H=10)                 | Apache-2.0 / `generate_fixtures.py`      | LSTM hidden dimension boundary validation.                              |
-| `lstm_2x24.nam`                         | Synthetic      | LSTM (2 layers, H=24)                | Apache-2.0 / `generate_fixtures.py`      | Multi-layer LSTM scaling validation.                                    |
-| `lstm_3x8.nam`                          | Synthetic      | LSTM (3 layers, H=8)                 | Apache-2.0 / `generate_fixtures.py`      | 3-layer recurrent topology validation.                                  |
-| `wavenet_dyn_free.nam`                  | Synthetic      | WaveNetDyn (CH=7/4, free geom)       | Apache-2.0 / `generate_b1_2_fixtures.py` | Dynamic WaveNet path with non-power-of-two channel geometries.          |
-| `keras_unsupported.json`                | Mock           | Legacy Keras / H5 dictionary         | Apache-2.0 / clean structure             | Verifies graceful rejection of unsupported legacy formats (F13).        |
-| `mock_a2.nam`                           | Mock           | Zero weights / ReLU config           | Apache-2.0 / clean structure             | Verifies audio thread error transition (`RT_STATUS_MODEL_LOAD_FAILED`). |
-| `wavenet_a1_secondary_act.nam`          | Mock           | WaveNet A1 (non-null secondary)      | Apache-2.0 / `generate_fixtures.py`      | Verifies rejection of unsupported secondary activations (F1/F5).        |
-| `slimmable_container.nam`               | Mock           | Container (LSTM + WaveNet + Nano)    | Apache-2.0 / clean structure             | Validates heterogeneous topology routing across submodels.              |
+| Model File                              | Nature         | Architecture & Topology              | License & Provenance                             | Purpose in Engine Validation                                            |
+|:--------------------------------------- |:-------------- |:------------------------------------ |:------------------------------------------------ |:----------------------------------------------------------------------- |
+| `wavenet_a1_standard.nam`               | Official Real  | WaveNet A1 (CH=16, K=3, HEAD=8, 20L) | CC0 / S. Atkinson                                | V1 and V2 multi-SR baseline; canonical A1 architecture.                 |
+| `wavenet_official.nam`                  | Official Real  | WaveNet (CH=3, K=3, free geom)       | CC0 / S. Atkinson                                | V1/V2 golden tests; dynamic path clone determinism.                     |
+| `lstm.nam`                              | Official Real  | LSTM (1 layer, H=3)                  | CC0 / S. Atkinson                                | Official LSTM sample; V1/V2 golden and live C++ parity.                 |
+| `wavenet_condition_dsp.nam`             | Official Real  | WaveNet (CH=3, cond=3 FiLM + DSP)    | CC0 / S. Atkinson                                | FiLM dynamic path with post-FiLM DSP conditioning.                      |
+| `BossWN-standard.nam`                   | Community Real | WaveNet (CH=16, K=3, 20L)            | Permissive / Boss Waza TAE                       | Full-scale WaveNet; V1/V2 golden and zero-allocation gates.             |
+| `BossWN-feather.nam`                    | Community Real | WaveNet (CH=8, K=3, 20L)             | Permissive / Boss Waza TAE                       | Medium-scale WaveNet; V1/V2 golden multi-SR validation.                 |
+| `BossWN-nano.nam`                       | Community Real | WaveNet (CH=4, K=3, 20L)             | Permissive / Boss Waza TAE                       | Compact WaveNet; V1/V2 golden multi-SR validation.                      |
+| `BossLSTM-1x16.nam`                     | Community Real | LSTM (1 layer, H=16)                 | Permissive / Boss Waza TAE                       | Real amp weights; V1/V2 multi-SR recurrent validation.                  |
+| `BossLSTM-2x8.nam`                      | Community Real | LSTM (2 layers, H=8)                 | Permissive / Boss Waza TAE                       | Multi-layer LSTM; V1/V2 multi-SR weight layout tests.                   |
+| `EVH-5150-Lite.nam`                     | Community Real | WaveNet Lite (CH=12, K=3, 20L)       | Non-distributable community                      | Real WaveNet Lite capture; replaces obsolete synthetic fixture.         |
+| `wavenet_a2_full.nam`                   | Synthetic      | WaveNet A2 (CH=8, K=6/15, 23L)       | Apache-2.0 / `generate_a2_fixtures.py`           | Fast-path A2 parity; calibrated audio regime (LUFS ≈ −22.6).            |
+| `wavenet_a2_lite.nam`                   | Synthetic      | WaveNet A2 (CH=3, K=6/15, 23L)       | Apache-2.0 / `generate_a2_fixtures.py`           | Fast-path A2 parity; calibrated audio regime (LUFS ≈ −20.0).            |
+| `wavenet_a2_film_full.nam`              | Synthetic      | WaveNet A2 (CH=8, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`           | FiLM dynamic path parity against generic WaveNet reference.             |
+| `wavenet_a2_film_lite.nam`              | Synthetic      | WaveNet A2 (CH=3, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`           | FiLM dynamic path parity against generic WaveNet reference.             |
+| `wavenet_a2_film_chaos_stress.nam`      | Synthetic      | WaveNet A2 (CH=3, non-identity FiLM) | Apache-2.0 / `generate_a2_fixtures.py`           | High-variance FiLM routing and dimension stress probe.                  |
+| `wavenet_a2_film_input_mixin_pre.nam`   | Synthetic      | WaveNet A2 (CH=3, slot 2 FiLM only)  | Apache-2.0 / `generate_a2_fixtures.py`           | Regression fixture for Bug C1 (input_mixin_pre channel dimensions).     |
+| `a2_example.nam`                        | Synthetic      | SlimmableContainer (A2 submodels)    | Apache-2.0 / `generate_a2_fixtures.py`           | Container routing and submodel swapping for A2 architectures.           |
+| `a2_dynamic_gated_ch8.nam`              | Synthetic      | WaveNet A2 (CH=8, dynamic gating)    | Apache-2.0 / `generate_a2_fixtures.py`           | Dynamic gating inference engine validation.                             |
+| `a2_dynamic_blended_ch3.nam`            | Synthetic      | WaveNet A2 (CH=3, dynamic blending)  | Apache-2.0 / `generate_a2_fixtures.py`           | Dynamic blending inference engine validation.                           |
+| `convnet_test.nam`                      | Synthetic      | ConvNet (CH=8, 6 blocks, Tanh)       | Apache-2.0 / `generate_b1_2_fixtures.py`         | ConvNet baseline architecture parity.                                   |
+| `convnet_nobn.nam`                      | Synthetic      | ConvNet (CH=8, no BatchNorm)         | Apache-2.0 / `generate_fixtures.py`              | ConvNet batchnorm bypass topology validation.                           |
+| `convnet_relu.nam`                      | Synthetic      | ConvNet (CH=8, ReLU activation)      | Apache-2.0 / `generate_fixtures.py`              | ConvNet ReLU activation path validation.                                |
+| `convnet_silu.nam`                      | Synthetic      | ConvNet (CH=8, SiLU activation)      | Apache-2.0 / `generate_fixtures.py`              | ConvNet SiLU activation path validation.                                |
+| `linear_test.nam`                       | Synthetic      | Linear (RF=4, direct FIR)            | Apache-2.0 / deterministic                       | Direct FIR time-domain dot-product parity.                              |
+| `linear_nobias.nam`                     | Synthetic      | Linear (RF=4, bias=0.0)              | Apache-2.0 / `generate_fixtures.py`              | Zero-bias linear inference validation.                                  |
+| `linear_fft_rf{320,2048,4096,8192}.nam` | Synthetic      | Linear FFT (RF 320 to 8192)          | Apache-2.0 / deterministic                       | Partitioned frequency-domain convolution cross-validation.              |
+| `lstm_dyn_test.nam`                     | Synthetic      | LSTM Dynamic (1 layer, H=7)          | Apache-2.0 / `generate_b1_2_fixtures.py`         | Uncatalogued hidden size routing to dynamic LSTM path.                  |
+| `lstm_1x10.nam`                         | Synthetic      | LSTM (1 layer, H=10)                 | Apache-2.0 / `generate_fixtures.py`              | LSTM hidden dimension boundary validation.                              |
+| `lstm_2x24.nam`                         | Synthetic      | LSTM (2 layers, H=24)                | Apache-2.0 / `generate_fixtures.py`              | Multi-layer LSTM scaling validation.                                    |
+| `lstm_3x8.nam`                          | Synthetic      | LSTM (3 layers, H=8)                 | Apache-2.0 / `generate_fixtures.py`              | 3-layer recurrent topology validation.                                  |
+| `wavenet_dyn_free.nam`                  | Synthetic      | WaveNetDyn (CH=7/4, free geom)       | Apache-2.0 / `generate_b1_2_fixtures.py`         | Dynamic WaveNet path with non-power-of-two channel geometries.          |
+| `keras_unsupported.json`                | Mock           | Legacy Keras / H5 dictionary         | Apache-2.0 / clean structure                     | Verifies graceful rejection of unsupported legacy formats (F13).        |
+| `mock_a2.nam`                           | Mock           | Zero weights / ReLU config           | Apache-2.0 / clean structure                     | Verifies audio thread error transition (`RT_STATUS_MODEL_LOAD_FAILED`). |
+| `wavenet_a1_secondary_act.nam`          | Mock           | WaveNet A1 (non-null secondary)      | Apache-2.0 / `generate_fixtures.py`              | Verifies rejection of unsupported secondary activations (F1/F5).        |
+| `slimmable_container.nam`               | Mock           | Container (LSTM + WaveNet + Nano)    | Apache-2.0 / clean structure                     | Validates heterogeneous topology routing across submodels.              |
+| `linear_1x2.nam`                        | Synthetic      | Multichannel Linear (1->2, RF=8)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 1-to-2 direct FIR time-domain parity.               |
+| `linear_2x1.nam`                        | Synthetic      | Multichannel Linear (2->1, RF=8)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 2-to-1 direct FIR time-domain parity.               |
+| `linear_2x2_shared.nam`                 | Synthetic      | Multichannel Linear (2->2, shared)   | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 2-to-2 shared direct FIR parity.                    |
+| `linear_1x2_fft.nam`                    | Synthetic      | Multichannel Linear FFT (1->2)       | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 1-to-2 partitioned FFT convolution parity.          |
+| `sequential_linear_chain.nam`           | Synthetic      | Sequential (Linear 1->1 into 1->1)   | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Two-stage mono Linear pipeline evaluation.                              |
+| `sequential_multichannel.nam`           | Synthetic      | Sequential (1->2 into 2->1 Linear)   | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel stage transition (1->2 into 2->1) verification.            |
+| `sequential_nested.nam`                 | Synthetic      | Sequential (Nested child Sequential) | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Recursive/nested sequential container dispatch validation.              |
+| `sequential_sr_homogeneous.nam`         | Synthetic      | Sequential (matching 48k/48k SR)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Homogeneous child sample rate validation.                               |
+| `sequential_sr_mixed_unknown.nam`       | Synthetic      | Sequential (unknown + 48k SR)        | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Mixed unknown child sample rate resolution.                             |
+| `sequential_sr_conflict.nam`            | Synthetic      | Sequential (44.1k vs 48k conflict)   | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Fail-closed validation of conflicting child sample rates.               |
+| `sequential_linear2.nam`                | Synthetic      | Sequential Linear (unspecified SR)   | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Unspecified rate propagation across linear stages.                      |
+| `sequential_linear_wavenet.nam`         | Synthetic      | Sequential (Linear into WaveNet)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Heterogeneous stage pipeline (Linear into WaveNet) validation.          |
+| `sequential_double_lstm.nam`            | Synthetic      | Sequential (LSTM into LSTM, 48k)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Recurrent multi-stage pipeline validation.                              |
+| `wavenet_head_dilation.nam`             | Synthetic      | WaveNet (head_dilation=2, K=3)       | Apache-2.0 / `generate_namcore_v060_fixtures.py` | WaveNet non-unit head dilation inference validation.                    |
 
 ### Tracked Known Gaps & Specific Guardrails
 
@@ -169,7 +185,7 @@ Governed by [`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`](../src/testing/catalo
 | Scope               | Sample Rates                 | Target Models                                                                                                                                         | Architectural Rationale                                                                                                                                                                       |
 |:------------------- |:---------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`AllRates`**      | 44.1k, 48k, 88.2k, 96k, 192k | `wavenet_feather`, `wavenet_nano`, `wavenet_lite`, `wavenet_a1_standard`                                                                              | Models without fixed `sample_rate` JSON field; validate multi-rate resampling and inference across all supported host rates.                                                                  |
-| **`Exclude192k`**   | 44.1k, 48k, 88.2k, 96k       | `lstm_1x16`, `lstm_2x8`                                                                                                                               | At 192 kHz (960,000 samples), recursive LSTM evaluation exhibits cumulative drift across long sequences (causa não adjudicada). Formally capped at 96 kHz.                                    |
+| **`Exclude192k`**   | 44.1k, 48k, 88.2k, 96k       | `lstm_1x16`, `lstm_2x8`                                                                                                                               | At 192 kHz (960,000 samples), recursive LSTM evaluation exhibits cumulative drift across long sequences (unadjudicated cause). Formally capped at 96 kHz.                                     |
 | **`Sr48kOnly`**     | 48 kHz only                  | `wavenet_standard`, `lstm_official`, `wavenet_a2_full`, `wavenet_a2_lite`, `convnet_test`, `wavenet_official`, dynamic and non-distributable captures | Models declaring `"sample_rate": 48000` in their NAM JSON; C++ render tool enforces single-rate rendering for these files.                                                                    |
 | **`v2_scope=none`** | None (V1 only)               | FiLM models (`wavenet_a2_film_*`), Linear FFT (`linear_fft_rf*`), container models                                                                    | C++ `a2_fast` rejects FiLM, falling back to generic WaveNet; dynamic FiLM paths are validated via live C++ cross-validation in [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs). |
 
@@ -262,24 +278,29 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 - **`mrstft_golden.bin`:** Binary reference generated by [`tests/fixtures/scripts/gen_mrstft_golden.py`](../tests/fixtures/scripts/gen_mrstft_golden.py) to validate multi-resolution spectral loss computation in [`tests/parity/parity_primitives.rs`](../tests/parity/parity_primitives.rs).
 - **`spectral_fidelity_baseline.json`:** Multi-model baseline storing per-model spectral divergence limits for [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs).
 
+### QA & Gate Acceptance Fixtures (`tests/fixtures/qa/`)
+
+- **`report_gate_not_verified.jsonl`:** Committed synthetic QA report fixture used by [`tests/scripts/test_regression_guard.sh`](../tests/scripts/test_regression_guard.sh) (Scenario 2b). Freezes the acceptance scenario where all functional fidelity phases pass while the performance benchmark phase is `NOT_VERIFIED`. Used to test `nam_quality verify` fail-closed verification and prove PERF-006 domain separation (`FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED`, exit code 1).
+
 ---
 
 ## 6. Generation Pipeline & Maintenance Workflow
 
 ### Generator Scripts Catalog
 
-| Script                                           | Primary Outputs                                                                    | Prerequisites                                               |
-|:------------------------------------------------ |:---------------------------------------------------------------------------------- |:----------------------------------------------------------- |
-| `tests/fixtures/golden_gen_build.sh`             | Orchestrates vendor checkout, C++ build, stimulus generation, and golden rendering | `cmake`, C++20 (`g++`/`clang++`), `cargo`, `python3`, `git` |
-| `tests/fixtures/generate_a2_fixtures.py`         | Synthetic A2, FiLM, container, and dynamic gating `.nam` models                    | `python3`                                                   |
-| `tests/fixtures/generate_b1_2_fixtures.py`       | Dynamic ConvNet, WaveNetDyn, and LstmDyn `.nam` models                             | `python3`                                                   |
-| `tests/fixtures/generate_fixtures.py`            | Hidden-size LSTMs, ConvNet activation variants, linear `.nam` models               | `python3`                                                   |
-| `tests/fixtures/generate_ebu_sequences.py`       | EBU R 128 / Tech 3341 compliance WAV signals                                       | `python3`                                                   |
-| `tests/fixtures/generate_resampler_reference.py` | Polyphase multitone input and reference output buffers (`.f32`)                    | `python3`, `ffmpeg` (with `libsoxr`)                        |
-| `tests/fixtures/scripts/gen_mrstft_golden.py`    | `mrstft_golden.bin`                                                                | `python3`, `numpy`                                          |
-| `tests/fixtures/scripts/validate_oracle_f64.py`  | `f64_anchors/*.bin`                                                                | `python3`, `numpy`, C++20                                   |
-| `src/bin/gen_stress.rs`                          | `stress_signal.wav`, `stress_signal_v2_{sr}.wav`                                   | `cargo`                                                     |
-| `src/bin/wav_to_golden.rs`                       | Converts rendered WAVs and stimuli into `.golden.bin`                              | `cargo`                                                     |
+| Script                                             | Primary Outputs                                                                               | Prerequisites                                               |
+|:-------------------------------------------------- |:--------------------------------------------------------------------------------------------- |:----------------------------------------------------------- |
+| `tests/fixtures/golden_gen_build.sh`               | Orchestrates vendor checkout, C++ build, stimulus generation, and golden rendering            | `cmake`, C++20 (`g++`/`clang++`), `cargo`, `python3`, `git` |
+| `tests/fixtures/generate_a2_fixtures.py`           | Synthetic A2, FiLM, container, and dynamic gating `.nam` models                               | `python3`                                                   |
+| `tests/fixtures/generate_b1_2_fixtures.py`         | Dynamic ConvNet, WaveNetDyn, and LstmDyn `.nam` models                                        | `python3`                                                   |
+| `tests/fixtures/generate_fixtures.py`              | Hidden-size LSTMs, ConvNet activation variants, linear `.nam` models                          | `python3`                                                   |
+| `tests/fixtures/generate_namcore_v060_fixtures.py` | Multichannel Linear (1->2, 2->1, 2->2), Sequential pipelines, and head dilation `.nam` models | `python3`                                                   |
+| `tests/fixtures/generate_ebu_sequences.py`         | EBU R 128 / Tech 3341 compliance WAV signals                                                  | `python3`                                                   |
+| `tests/fixtures/generate_resampler_reference.py`   | Polyphase multitone input and reference output buffers (`.f32`)                               | `python3`, `ffmpeg` (with `libsoxr`)                        |
+| `tests/fixtures/scripts/gen_mrstft_golden.py`      | `mrstft_golden.bin`                                                                           | `python3`, `numpy`                                          |
+| `tests/fixtures/scripts/validate_oracle_f64.py`    | `f64_anchors/*.bin`                                                                           | `python3`, `numpy`, C++20                                   |
+| `src/bin/gen_stress.rs`                            | `stress_signal.wav`, `stress_signal_v2_{sr}.wav`                                              | `cargo`                                                     |
+| `src/bin/wav_to_golden.rs`                         | Converts rendered WAVs and stimuli into `.golden.bin`                                         | `cargo`                                                     |
 
 ### Full Regeneration Walkthrough
 

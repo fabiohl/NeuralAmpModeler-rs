@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "schema_notes": "Benchmarks com `batch_factor > 1` reportam tempo total de `batch_factor` blocos; o dashboard divide por `batch_factor` antes de comparar ao threshold.",
+  "schema_notes": "Benchmarks with `batch_factor > 1` report total time for `batch_factor` blocks; the dashboard divides by `batch_factor` before comparing against threshold.",
   "generated_at": "2026-10-14T15:30:00-03:00",
   "provenance": {
     "git_commit": "d91643ca1f228914d77fce54947641d2373d279a",

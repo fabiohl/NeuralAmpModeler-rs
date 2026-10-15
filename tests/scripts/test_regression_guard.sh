@@ -28,7 +28,7 @@ echo -e "${BLUE}${BOLD}    Regression Guard Shell Test Suite                    
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
 
 START_TIME=$(date +%s%N)
-TOTAL_SCENARIOS=4
+TOTAL_SCENARIOS=5
 
 # ── Scenario 1: Absence of baseline in .performance-baselines/ ───────────────
 echo -e "\n${BLUE}[1/${TOTAL_SCENARIOS}] Testing Scenario 1: Absence of baseline in .performance-baselines/${NC}"
@@ -222,6 +222,11 @@ if [ "$top_count" -ne 1 ]; then
     exit 1
 fi
 echo -e "  ${GREEN}✓ Scenario 4 passed: sanitize + replace-copy keep a single flat baseline layer.${NC}"
+
+# ── Scenario 5: CPU core pinning unit tests via test-pick-bench-core.sh ────────
+echo -e "\n${BLUE}[5/${TOTAL_SCENARIOS}] Testing Scenario 5: pick_bench_core sysfs mock tests${NC}"
+"$PROJECT_DIR/utils/test-pick-bench-core.sh"
+echo -e "  ${GREEN}✓ Scenario 5 passed: pick_bench_core mock sysfs unit tests confirmed.${NC}"
 
 END_TIME=$(date +%s%N)
 ELAPSED_MS=$(awk -v start="$START_TIME" -v end="$END_TIME" 'BEGIN { printf "%.0f", (end - start) / 1000000 }')

@@ -164,7 +164,11 @@ if [ -n "$invalid" ]; then
     echo "$invalid" | sed 's/^/    /'
     exit 1
 fi
-ok "All files have valid SPDX headers (Apache-2.0, MIT) ($(phase_elapsed_str))."
+ok "All files have valid SPDX headers (Apache-2.0, MIT)."
+
+echo -e "  ${YELLOW}${BOLD}Verifying shared shell core & filter body digests (test-lib-drift.sh)...${NC}"
+"$SCRIPT_DIR/test-lib-drift.sh"
+ok "SPDX headers and shell core integrity verified ($(phase_elapsed_str))."
 
 # ---------------------------------------------------------------------------
 # [6/8] Anti-pattern check: #[test] in tests/common/

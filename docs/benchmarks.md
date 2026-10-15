@@ -123,10 +123,10 @@ Below is the committed reference baseline measured on release builds under an is
 
 ### Core Mechanisms
 
-1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>`. The core is resolved automatically via `pick_bench_core` using the 3-step precedence: (1) `NAM_BENCH_CORE` if explicitly set; (2) first online isolated CPU from `/sys/devices/system/cpu/isolated` (preferring core 8 when 8-9 are isolated, with cpu9 offline intentional); (3) fallback `nproc / 2` (integer division). This prevents OS scheduler migrations and cache thrashing.
+1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>`. The core is resolved automatically via `pick_bench_core` using the 3-step precedence: (1) `NAM_BENCH_CORE` if explicitly set; (2) first online isolated CPU from `/sys/devices/system/cpu/isolated` (preferring core 8 when 8-9 are isolated, with cpu9 offline intentional); (3) fallback `nproc / 2` (integer division). Tested synthetically with mock sysfs via [`utils/test-pick-bench-core.sh`](../utils/test-pick-bench-core.sh) and drift-pinned by [`utils/test-lib-drift.sh`](../utils/test-lib-drift.sh). This prevents OS scheduler migrations and cache thrashing.
 2. **Controlled Statistical Rigor:** Executes the `regression_gate` suite with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Enforces `InstructionSet::Avx2` via `ForceAvx2Guard` so that AVX-512 hosts evaluate the exact `x86-64-v3` baseline.
 3. **Machine Verdict (`nam_perf_gate verdict`):** Evaluates Criterion's `target/criterion/<id>/change/estimates.json`. If the bootstrapped mean-change confidence interval lies entirely above the `+5%` noise band, the script exits with `REGRESSION_DETECTED`. If comparison artifacts are missing or unreadable, it fails closed with `REGRESSION_BLIND`.
-4. **Baseline Storage & Fingerprinting:** Authoritative baselines reside in `.performance-baselines/` (gitignored). A machine fingerprint file (`baseline-fingerprint.json`) captures the CPU model, ISA extension flags, compiler version, target triple, governor, pinned core, and producing git commit.
+4. **Baseline Storage & Fingerprinting:** Authoritative baselines reside in `.performance-baselines/` (gitignored). A machine fingerprint file (`baseline-fingerprint.json`) captures the CPU model, ISA extension flags, compiler version, target triple, governor, pinned core, and producing git commit. Managed by [`src/testing/qa/baseline_store.rs`](../src/testing/qa/baseline_store.rs) (`nam_perf_gate restore-baseline`) with recursive sanitization and replace-copy.
 5. **Sub-Microsecond Batching:** Ultra-fast DSP routines (`RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium`) process batches of **64 blocks** per Criterion sample to maintain timer resolution above the noise floor. Reported values are divided by 64 to represent per-block latency.
 
 ### Script Modes & Environment Variables
@@ -199,6 +199,24 @@ never duplicates the logic, and the crate is not coupled to any consumer name.
    | `REGRESSION_BLIND`         | Missing comparison artifact or unexecuted expected id.         |
 
    Usage errors (unknown subcommand/flag, malformed argument) are exit `2`.
+
+### Regression Guard Automated Suite (`tests/scripts/test_regression_guard.sh`)
+
+The integrity and fail-closed defense mechanisms of the performance regression wall and baseline storage engine are continuously validated by [`tests/scripts/test_regression_guard.sh`](../tests/scripts/test_regression_guard.sh):
+
+```bash
+# Execute performance regression guard suite:
+bash tests/scripts/test_regression_guard.sh
+```
+
+The suite exercises four critical failure modes:
+
+1. **Scenario 1 — Missing Baseline Gate:** Moves `.performance-baselines/` aside and runs `utils/tests-performance-regression.sh --check`. Asserts that the runner fails closed (`exit 1`) and emits `MISSING_BASELINE`.
+2. **Scenario 2 — Contract Format Rejection & Domain Separation:**
+   * **2a:** Rejects legacy ASCII `.txt` contracts (`docs/quality-contract.txt`) with `ERROR` and `exit 2`.
+   * **2b:** Uses the frozen report fixture `tests/fixtures/qa/report_gate_not_verified.jsonl` with `nam_quality verify` to assert that when benchmark regression data is `NOT_VERIFIED`, the system reports `FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED` (`exit 1`), proving PERF-006 domain separation.
+3. **Scenario 3 — Stale Log Truncation:** Asserts that `target/logs/regression-check.log` is truncated immediately at the start of `check_regression()`, preventing historical entries from masquerading as current results.
+4. **Scenario 4 — Baseline Store Sanitization & Replace-Copy:** Synthesizes deeply nested baseline directories (`RT_Dummy/ci-baseline/ci-baseline/...`) and exercises `nam_perf_gate restore-baseline` ([`src/testing/qa/baseline_store.rs`](../src/testing/qa/baseline_store.rs)). Verifies that nested paths are sanitized and replace-copied into a single flat baseline layer without recursive nesting.
 
 ### Environmental Noise, False Alarms & Hardware Isolation
 

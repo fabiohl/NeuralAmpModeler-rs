@@ -950,7 +950,7 @@ fn ensure_qa_bin_contract_and_failure_modes() {
         "cargo build failure must fail closed"
     );
     assert!(
-        stderr(&out).contains("cargo build falhou"),
+        stderr(&out).contains("cargo build failed"),
         "stderr must report compilation failure: {}",
         stderr(&out)
     );
@@ -967,7 +967,7 @@ fn ensure_qa_bin_contract_and_failure_modes() {
         "missing artifact must fail closed"
     );
     assert!(
-        stderr(&out).contains("executável não encontrado na saída do cargo"),
+        stderr(&out).contains("executable artifact not found in cargo compiler-artifact stream"),
         "stderr must report missing artifact: {}",
         stderr(&out)
     );
@@ -995,7 +995,7 @@ fn ensure_qa_bin_contract_and_failure_modes() {
         "prints operator-provided path"
     );
     assert!(
-        stderr(&out).contains("binário fornecido pelo operador, freshness não verificada"),
+        stderr(&out).contains("operator-supplied binary, freshness not verified"),
         "stderr must warn about operator override: {}",
         stderr(&out)
     );
@@ -1017,7 +1017,7 @@ fn ensure_qa_bin_contract_and_failure_modes() {
         "operator override with non-executable must fail closed"
     );
     assert!(
-        stderr(&out).contains("não é executável"),
+        stderr(&out).contains("is not executable"),
         "stderr must report non-executable binary: {}",
         stderr(&out)
     );

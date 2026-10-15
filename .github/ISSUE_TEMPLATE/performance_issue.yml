@@ -55,6 +55,7 @@ body:
         - Measured Throughput / Time: e.g. WaveNet Standard: 28.1 us / 64 samples (2.26x slower)
         - Regression Gate output: `cargo bench --bench regression_gate` or `utils/tests-performance-regression.sh`
         - Quality Contract comparison: `utils/quality-dashboard.sh --check docs/quality-contract.json`
+        - Receipt / Log excerpt: (from target/logs/regression_phase_receipt.jsonl or criterion reports)
         - Cycles per Sample / IPC: ...
       render: shell
     validations:
@@ -76,12 +77,16 @@ body:
     id: steps_to_reproduce
     attributes:
       label: Steps to Reproduce the Benchmark / Regression
-      description: Exact commands to reproduce the benchmark or profiling run.
+      description: Exact commands used to reproduce the benchmark, including isolation and governor parameters.
       placeholder: |
-        1. cargo bench --bench regression_gate
-        # or
-        2. utils/tests-performance-regression.sh
-        3. Observe regression on benchmark group `wavenet_standard`
+        # Recommended isolated reproduction commands:
+        1. utils/simd-probe.sh                                                 # Probe CPU SIMD flags & governor
+        2. NAM_NO_LOW_PRIORITY=1 taskset -c <isolated-core> cargo bench --bench regression_gate
+        # Or using the performance regression wall (with thermal cooldown):
+        3. NAM_NO_LOW_PRIORITY=1 NAM_THERMAL_COOLDOWN_S=60 utils/tests-performance-regression.sh
+        # Quality contract baseline validation:
+        4. utils/quality-dashboard.sh --check docs/quality-contract.json
+        5. Observe regression on benchmark group `wavenet_standard`
     validations:
       required: true
 

@@ -136,12 +136,12 @@ pub fn prefetch_t1<T>(base: *const T, offset: usize) {
 /// `step = dilation * in_ch` fits inside one cache line. For larger strides
 /// the prefetched line is never read by any tap (misaligned junk work on a
 /// load port slot), and for the short strides the hardware prefetcher already
-/// streams the rows. Medido (conv1d_hotpath_bench, rustc 1.98.1, Zen 2 5700U):
-/// remover o prefetch com stride > 16 melhora os kernels 8-wide em ~9%
-/// (d <= 8), é neutro no 4-wide (o streamer de hardware domina) e regredir
-/// +3..5% se removido nos casos alinhados (16x16 d=1, 12x12 d=1) — por isso
-/// o limiar é no stride, não na dilatação pura: dilatações altas com IN
-/// pequeno continuam desalinhadas, e dilatação 1 com IN 12/16 continua útil.
+/// streams the rows. Measured (conv1d_hotpath_bench, rustc 1.98.1, Zen 2 5700U):
+/// removing prefetch with stride > 16 improves 8-wide kernels by ~9%
+/// (d <= 8), is neutral on 4-wide (the hardware streamer dominates), and regresses
+/// +3..5% if removed on aligned cases (16x16 d=1, 12x12 d=1) — which is why
+/// the threshold applies to stride rather than pure dilation: large dilations with
+/// small IN remain misaligned, whereas dilation 1 with IN 12/16 remains beneficial.
 #[inline(always)]
 pub fn prefetch_strategy_simple(
     base_ptr: *const f32,

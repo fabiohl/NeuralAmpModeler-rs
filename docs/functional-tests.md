@@ -22,14 +22,15 @@ This guide defines the manual functional verification procedures and the formal 
 
 ### Verification Hierarchy & Cadence
 
-| Tier / Runner           | Scope & Purpose                                                                         | Target Duration              | Execution Cadence                                  |
-|:----------------------- |:--------------------------------------------------------------------------------------- |:---------------------------- |:-------------------------------------------------- |
-| **Static Quality Gate** | 🔍 **Static Analysis & Lints:** Formatting, 7-axis check, Clippy, doc-tests, SPDX       | ~45s                         | Routine developer loop, pre-commit & Receipt #1    |
-| **Tier 1 (Manual)**     | ⚡ **Smoke Test:** Sanity checks on model loading, dispatch, and basic inference        | ~2 min                       | After modifications to core DSP or loader modules  |
-| **Tier 2 (Manual)**     | 🎯 **Feature Verification:** Block-invariance, reset idempotency, DSP stage transitions | ~10–15 min                   | Milestone completion or major feature integration  |
-| **Tier 3 (Manual)**     | 🛡️ **Robustness & Stress:** Continuous soak, SPSC burst contention, rate modulation     | ~20–30 min                   | Pre-release audits or major engine refactorings    |
-| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing    | ~2 min (hardware-dependent)  | Pre-commit check or local iterative validation     |
-| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT     | ~10 min (hardware-dependent) | Nightly builds and pre-release human certification |
+| **Tier / Runner**       | **Scope & Purpose**                                                                      | **Target Duration**          | **Execution Cadence**                              |
+|:----------------------- |:---------------------------------------------------------------------------------------- |:---------------------------- |:-------------------------------------------------- |
+| **Static Quality Gate** | 🔍 **Static Analysis & Lints:** Formatting, 7-axis check, Clippy, doc-tests, SPDX        | ~45s                         | Routine developer loop, pre-commit & Receipt #1    |
+| **Tier 1 (Manual)**     | ⚡ **Smoke Test:** Sanity checks on model loading, dispatch, and basic inference         | ~2 min                       | After modifications to core DSP or loader modules  |
+| **Tier 2 (Manual)**     | 🎯 **Feature Verification:** Block-invariance, reset idempotency, DSP stage transitions  | ~10–15 min                   | Milestone completion or major feature integration  |
+| **Tier 3 (Manual)**     | 🛡️ **Robustness & Stress:** Continuous soak, SPSC burst contention, rate modulation      | ~20–30 min                   | Pre-release audits or major engine refactorings    |
+| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing     | ~2 min (hardware-dependent)  | Pre-commit check or local iterative validation     |
+| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, QA defenses, full matrix, heap audit, RT      | ~10 min (hardware-dependent) | Nightly builds and pre-release human certification |
+| **Regression Guard**    | 🛡️ **Fail-Closed Gate Defense:** Missing baseline gate, contract rejection, sanitization | ~5s                          | Tooling validation or pre-release verification     |
 
 ---
 
@@ -61,6 +62,13 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
 
    ```bash
    ./utils/setup-third-party.sh
+   ```
+
+5. **Toolchain & Dependency Supply Chain Maintenance:**
+   Keep the active Rust toolchain and dependencies synchronized using [`utils/mod-update.sh`](../utils/mod-update.sh):
+
+   ```bash
+   ./utils/mod-update.sh
    ```
 
 ---
@@ -207,9 +215,27 @@ The long audit suite provides exhaustive pre-release validation (~10 minutes).
 
 ---
 
-### 4.3 Disk Logs & Diagnostic Artifacts Inventory
+### 4.3 Automated Regression Guard Suite (`tests/scripts/test_regression_guard.sh`)
 
-All test runners persist execution logs under `target/logs/`:
+[`tests/scripts/test_regression_guard.sh`](../tests/scripts/test_regression_guard.sh) is an automated regression test suite designed to verify the fail-closed defenses and diagnostic invariants of the performance gate and quality contract verification tooling:
+
+```bash
+# Execute the regression guard test suite locally:
+bash tests/scripts/test_regression_guard.sh
+```
+
+- **Scenario 1 (Absence of baseline in `.performance-baselines/`):** Shelves active baselines and asserts that `utils/tests-performance-regression.sh --check` fails closed (`exit 1`) with `MISSING_BASELINE`.
+- **Scenario 2 (Contract format rejection & domain separation):**
+  - **Scenario 2a:** Rejects legacy `.txt` contracts (`docs/quality-contract.txt`) with `ERROR` and `exit 2` prior to test execution.
+  - **Scenario 2b:** Verifies `nam_quality verify` with `docs/quality-contract.json` against `tests/fixtures/qa/report_gate_not_verified.jsonl`, asserting `FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED` (`exit 1`), proving PERF-006 domain separation.
+- **Scenario 3 (Stale log truncation):** Writes a unique dummy marker to `target/logs/regression-check.log` and asserts truncation upon starting `check_regression()`.
+- **Scenario 4 (Baseline store sanitization):** Synthesizes nested baselines (`RT_Dummy/ci-baseline/ci-baseline/...`) and asserts `nam_perf_gate restore-baseline` strips nesting and preserves a single flat baseline layer.
+
+---
+
+### 4.4 Disk Logs & Diagnostic Artifacts Inventory
+
+All test runners persist execution logs under `target/logs/` (and `target/debug-logs/` for debug harnesses):
 
 | File Path                                        | Generating Component / Phase           | Diagnostic Contents                                                                                                                          |
 |:------------------------------------------------ |:-------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -234,11 +260,38 @@ All test runners persist execution logs under `target/logs/`:
 | **`target/logs/phase7-loom.log`**                | `tests-long.sh` (Phase 7)              | Loom model-checking state-space exploration logs.                                                                                            |
 | **`target/logs/regression_phase_receipt.jsonl`** | `tests-performance-regression.sh` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary.                                            |
 | **`target/logs/perf-regression.log`**            | `tests-performance-regression.sh`      | Criterion evaluation logs and statistical delta metrics across benchmark SKUs.                                                               |
-| **`target/logs/regression-check.log`**           | `tests-performance-regression.sh`      | Detailed Criterion output and statistical confidence interval results during regression checks.                                              |
+| **`target/logs/regression-check.log`**           | `tests-performance-regression.sh`      | Detailed Criterion output and statistical confidence interval results during regression checks (truncated on invocation start).              |
 | **`target/logs/remote-simd-receipt.jsonl`**      | `utils/remote-simd-gate.sh`            | Structured multi-ISA verification receipt emitted from remote or emulated AVX-512 runs.                                                      |
 | **`target/logs/remote-simd-parity.log`**         | `utils/remote-simd-gate.sh`            | Detailed parity output comparing AVX2 and AVX-512 execution streams.                                                                         |
 | **`target/logs/dashboard/`**                     | `utils/quality-dashboard.sh`           | Structured JSON outputs for individual model fidelity and latency benchmarks.                                                                |
+| **`target/debug-logs/<label>.log`**              | `utils/debug/repro_oversample_hang.sh` | Timestamped execution log and command output under systemd cgroup v2 resource limits.                                                        |
+| **`target/debug-logs/<label>.exit`**             | `utils/debug/repro_oversample_hang.sh` | Raw exit status code emitted by the wrapped command or systemd scope timeout (`143` on SIGTERM, `137` on SIGKILL).                           |
 | **`~/.cache/neural-amp-modeler-rs/crash-*.txt`** | Runtime Panic Hook                     | Diagnostic crash reports rendered without heap allocations.                                                                                  |
+
+---
+
+### 4.5 Developer Diagnostic Harness & Hang Reproduction (`utils/debug/repro_oversample_hang.sh`)
+
+When investigating suspected thread/process hangs or regressions under high contention, developers can isolate execution inside a systemd user scope:
+
+```bash
+# General syntax:
+./utils/debug/repro_oversample_hang.sh <timeout_seconds> <label> -- <command...>
+
+# Example:
+./utils/debug/repro_oversample_hang.sh 15 oversample-test -- \
+  cargo test --lib -- "dsp::oversample::oversample_test::test_x2_aliasing_rejection" \
+    --ignored --nocapture --test-threads=1
+```
+
+- Enforces strict cgroup v2 limits (`MemoryMax=1G`, `CPUQuota=100%`, `TasksMax=64`).
+- Kills all descendant processes via `RuntimeMaxSec` on the scope itself, preventing orphaned test processes.
+- Records logs to `target/debug-logs/<label>.log` and raw exit codes to `target/debug-logs/<label>.exit`.
+- Validates the presence of `test result:` in the log to detect truncated or false-negative results.
+
+---
+
+### 4.6 Known Benign Signals (False-Alarm Catalog)
 
 > [!NOTE]
 > **Compilation Profile Segregation:**

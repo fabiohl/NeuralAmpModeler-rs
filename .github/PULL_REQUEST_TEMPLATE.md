@@ -62,13 +62,29 @@ Fixes #
 ## Pre-Submission Verification Suite (Mandatory)
 <!-- Run these verification scripts from the crate root before opening or marking PR ready for review: -->
 
+### 1. One-Time Setup (Prerequisites for Parity Oracles)
+
 ```bash
-utils/lints.sh        # Static analysis, fmt, clippy (-D warnings), doc-tests, SPDX
-utils/tests-quick.sh  # Agile testing, golden vectors, C++ parity gates, parser fuzzing
+utils/setup-third-party.sh         # Fetch/update pinned C++ NAMCore and Plugin mirrors
+tests/fixtures/golden_gen_build.sh # Build the C++ NAMCore reference render binary
 ```
 
-- [ ] **`utils/lints.sh` Passed**: 100% clean across all feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`, `rt-hardening`).
-- [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
+### 2. Recommended Verification Commands
+
+```bash
+# Recommended unthrottled static analysis (runs in ~18s; avoids low CPU priority throttling):
+NAM_NO_LOW_PRIORITY=1 utils/lints.sh
+
+# Agile test suite (enforces zero skipped parity tests with NAM_QUICK_STRICT=1):
+NAM_NO_LOW_PRIORITY=1 NAM_QUICK_STRICT=1 utils/tests-quick.sh
+
+# Fast benchmark regression guard (~400ms synthetic mock):
+bash tests/scripts/test_regression_guard.sh
+```
+
+- [ ] **`utils/lints.sh` Passed**: 100% clean across all 9 gates and 7 feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`, `rt-hardening`).
+- [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions. (Receipt written to `target/logs/quick-receipt.txt`).
+- [ ] **`tests/scripts/test_regression_guard.sh` Passed**: Shell-core drift and benchmark regression guard scenarios verified.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 
   ```text

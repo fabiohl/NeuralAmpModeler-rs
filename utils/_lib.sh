@@ -140,7 +140,7 @@ json_escape_string() {
 #
 #   If the binary path was explicitly provided by the operator via environment
 #   (e.g., NAM_QUALITY_BIN, NAM_PERF_GATE, etc.):
-#     - Emits a warning to stderr: "binário fornecido pelo operador, freshness não verificada: ..."
+#     - Emits a warning to stderr: "operator-supplied binary, freshness not verified: ..."
 #     - Verifies executable permissions (fail-closed if missing)
 #     - Returns the path directly without invoking cargo.
 #
@@ -165,9 +165,9 @@ ensure_qa_bin() {
     if [ -n "$override_var" ]; then
         local override_val="${!override_var:-}"
         if [ -n "$override_val" ]; then
-            echo -e "  ${YELLOW}ⓘ${NC} binário fornecido pelo operador, freshness não verificada: $override_val ($override_var)" >&2
+            echo -e "  ${YELLOW}ⓘ${NC} operator-supplied binary, freshness not verified: $override_val ($override_var)" >&2
             if [ ! -x "$override_val" ]; then
-                die "binário fornecido pelo operador não é executável: $override_val"
+                die "operator-supplied binary is not executable: $override_val"
             fi
             echo "$override_val"
             return 0
@@ -183,9 +183,9 @@ ensure_qa_bin() {
 
     build_output=$(cd "$PROJECT_DIR" && "${cargo_cmd[@]}" 2>&1) || build_rc=$?
     if [ "$build_rc" -ne 0 ]; then
-        echo -e "  ${RED}${BOLD}❌ FATAL: cargo build falhou para o binário ${bin_name} (rc=${build_rc}):${NC}" >&2
+        echo -e "  ${RED}${BOLD}❌ FATAL: cargo build failed for QA binary ${bin_name} (rc=${build_rc}):${NC}" >&2
         echo "$build_output" >&2
-        die "falha de compilação de QA binário ${bin_name}"
+        die "compilation failed for QA binary ${bin_name}"
     fi
 
     local exe
@@ -197,9 +197,9 @@ ensure_qa_bin() {
         | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
 
     if [ -z "$exe" ] || [ ! -x "$exe" ]; then
-        echo -e "  ${RED}${BOLD}❌ FATAL: executável não encontrado na saída do cargo para ${bin_name}:${NC}" >&2
+        echo -e "  ${RED}${BOLD}❌ FATAL: executable artifact not found in cargo compiler-artifact stream for ${bin_name}:${NC}" >&2
         echo "$build_output" >&2
-        die "artefato executável ausente para ${bin_name}"
+        die "missing executable artifact for ${bin_name}"
     fi
 
     echo "$exe"

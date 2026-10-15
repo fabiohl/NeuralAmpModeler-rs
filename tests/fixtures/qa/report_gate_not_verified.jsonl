@@ -15,7 +15,8 @@
 {"kind": "fidelity", "label": "Linear FFT RF=8192 (C++ golden) @48000", "esr": 1.69e-14, "snr_db": 137.7, "mrstft": 5.2e-06}
 {"kind": "fidelity", "label": "SlimmableContainer A2 Example (CH=3\u21926) C++ cross-reference @48000 Live", "esr": 7.28e-14, "snr_db": 131.4, "mrstft": 1.73e-05, "esr_f64": 1.82e-14}
 {"kind": "fidelity", "label": "WaveNet A2 Dynamic Blended (CH=3, blended layers 2/23) C++ cross-reference @48000 Live", "esr": 5.35e-14, "snr_db": 132.7, "mrstft": 9.97e-06, "esr_f64": 2.65e-14}
-{"kind": "fidelity", "label": "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live", "esr": 5.03e-11, "snr_db": 103.0, "mrstft": 6.64e-05, "esr_f64": 1e-10}
+{"kind": "fidelity", "label": "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live", "esr": 2.56e-14, "snr_db": 135.9, "mrstft": 8.78e-06, "esr_f64": 1.34e-14}
+{"kind": "fidelity", "label": "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference @48000 Live", "esr": 2.57e-14, "snr_db": 135.9, "mrstft": 5.9e-06, "esr_f64": 1.66e-14}
 {"kind": "fidelity", "label": "WaveNet A2-FiLM Chaos Stress (CH=3, FiLM active) C++ cross-reference @48000 Live", "esr": 1.26e-14, "snr_db": 139.0, "mrstft": 7e-06, "esr_f64": 1.03e-14}
 {"kind": "fidelity", "label": "WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference @48000 Live", "esr": 1.16e-14, "snr_db": 139.4, "mrstft": 7.85e-06, "esr_f64": 6.42e-15}
 {"kind": "fidelity", "label": "WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference @48000 Live", "esr": 3.44e-14, "snr_db": 134.6, "mrstft": 6.92e-06, "esr_f64": 2.21e-14}
@@ -28,7 +29,7 @@
 {"kind": "fidelity", "label": "WaveNet Standard polynomial SIMD (regression gate) @48000 Live", "esr": 2.31e-14, "snr_db": 136.4, "mrstft": 6.46e-06}
 {"kind": "fidelity", "label": "WaveNetDyn Free-Shape (CH=7\u21924, dynamic path) C++ cross-reference @48000 Live", "esr": 4.1e-13, "snr_db": 123.9, "mrstft": 2.58e-05, "esr_f64": 1.06e-12}
 {"kind": "fidelity", "label": "convnet_nobn @48000 Live", "esr": 3.23e-14, "snr_db": 134.9, "mrstft": 5.62e-06}
-{"kind": "fidelity", "label": "convnet_relu @48000 Live", "esr": 6.84e-15, "snr_db": 141.6, "mrstft": 2.27e-06}
+{"kind": "fidelity", "label": "convnet_relu @48000 Live", "esr": 9.33e-16, "snr_db": 150.3, "mrstft": 8.14e-07}
 {"kind": "fidelity", "label": "convnet_silu @48000 Live", "esr": 2.58e-13, "snr_db": null, "mrstft": 8.67e-06}
 {"kind": "fidelity", "label": "linear_nobias @48000 Live", "esr": 3.89e-15, "snr_db": 144.1, "mrstft": 1.64e-06}
 {"kind": "fidelity", "label": "lstm (Official) @48000 Live", "esr": 7.86e-13, "snr_db": 121.0, "mrstft": 3.08e-05, "esr_f64": 2.71e-12}
@@ -43,7 +44,7 @@
 {"kind": "fidelity", "label": "Quick A2-Full @48000 Live", "esr": 1.12e-13, "snr_db": 129.5, "mrstft": 1.49e-05, "esr_f64": 7.83e-14}
 {"kind": "fidelity", "label": "Quick A2-Full v2 @48000 Live", "esr": 1.2e-13, "snr_db": 129.2, "mrstft": 2.4e-05}
 {"kind": "fidelity", "label": "Quick ConvNet No BatchNorm @48000 Live", "esr": 3.14e-14, "snr_db": 135.0, "mrstft": 5.54e-06}
-{"kind": "fidelity", "label": "Quick ConvNet ReLU @48000 Live", "esr": 6.76e-15, "snr_db": 141.7, "mrstft": 2.25e-06}
+{"kind": "fidelity", "label": "Quick ConvNet ReLU @48000 Live", "esr": 9.33e-16, "snr_db": 150.3, "mrstft": 8.14e-07}
 {"kind": "fidelity", "label": "Quick ConvNet SiLU @48000 Live", "esr": 5.26e-13, "snr_db": 122.8, "mrstft": 1.42e-05}
 {"kind": "fidelity", "label": "Quick LSTM 1\u00d710 @48000 Live", "esr": 4.08e-15, "snr_db": 143.9, "mrstft": 1.35e-06}
 {"kind": "fidelity", "label": "Quick LSTM 1\u00d716 @48000 Live", "esr": 1.45e-11, "snr_db": 108.4, "mrstft": 3.2e-05, "esr_f64": 8.9e-13}
