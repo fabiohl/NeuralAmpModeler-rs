@@ -26,6 +26,7 @@ include = [
     "/src/rt_hardening/",
     "/src/testing/",
     "/src/lib.rs",
+    "/src/lib_test.rs",
     "/Cargo.toml",
     "/README.md",
     "/LICENSE.txt",

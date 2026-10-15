@@ -186,7 +186,7 @@ LSTM keeps its state through `reset_states` rather than a dedicated
 
 **Decision (DEC-03):** keep the Rust clean-reset behaviour — a reset must clear
 all temporal state — and do not replicate the C++ no-prewarm `_xh`/`_c`
-retention absent a Product Owner decision for strict parity. While DEC-03
+retention unless explicitly required for strict legacy parity. While DEC-03
 stands, LSTM is excluded from the T3.1 reset-freshness matrix, because a Rust
 reset-without-prewarm on an LSTM is deliberately **not** bit-equivalent to a
 C++ reset-without-prewarm. If strict parity is later required, gate
@@ -294,18 +294,21 @@ Dynamic changes to off-RT resources (model switching, IR loading, resampler reco
 
 **Context:**
 NeuralAmpModeler-rs tracks callback latency distributions via atomic, lock-free telemetry structures defined in [`src/dsp/telemetry.rs`](../src/dsp/telemetry.rs):
+
 - **`AtomicHistogram`**: 32-bin octave histogram (power-of-two bucket edges). Size: 384 bytes (`align(128)`, 6 cache lines). Fast and compact, but with relative quantization error up to 100 % (2×).
 - **`LatencyHistogram`**: 256-bin log-linear histogram (32 octaves × 8 sub-bins, HdrHistogram style). Size: 2176 bytes (`align(128)`, 34 cache lines). High resolution with bounded relative error $\le 12.5\%$.
 
 **Options Evaluated:**
+
 - **Option A:** Replace `RtStatusFlags.latency_hist` with `LatencyHistogram` (256 atomic counters = 2 KiB vs 256 B; +1792 B footprint increase).
 - **Option B (Selected):** Retain `AtomicHistogram` in `RtStatusFlags` for runtime production telemetry, and utilize `LatencyHistogram` in RT timing verification suites (`tests/rt_constraints/rt_deadline.rs`, `tests/rt_constraints/rt_jitter.rs`) and micro-benchmarks ([`benches/dsp_bench.rs`](../benches/dsp_bench.rs)).
 - **Option C:** Option A combined with explicit `size_of` reporting and telemetry overhead gates.
 
 **Decision & Rationale (Option B):**
+
 1. **L1d Cache Defense on Audio Hot-Path:** `RtStatusFlags` is updated on every audio block in the DSP callback. Expanding `latency_hist` from 384 B to 2176 B adds 28 cache lines to the shared status block, unnecessarily consuming L1d cache capacity and risking cache line thrashing during heavy neural inference.
 2. **Domain-Specific Granularity:** Production hosts poll `RtStatusFlags` off-RT for health checks (mean cycle time, overload alerts, rough order of magnitude). Conversely, the tight percentile resolution ($P50 \ne P90 \ne P99$ with $\le 12.5\%$ error) is vital for qualification gates, jitter characterization, and regression detection, which are verified by integration test harnesses and benchmarks.
-3. **Downstream API & ABI Stability:** Retaining `AtomicHistogram` preserves the frozen memory layout, cache alignment, and field offsets verified in [`status_test.rs`](../src/common/spsc/status_test.rs), ensuring zero ABI breakage or memory bloat in downstream hosts (`NAM-Plug`, `NAM-Audio-Pipe`).
+3. **Downstream API & ABI Stability:** Retaining `AtomicHistogram` preserves the frozen memory layout, cache alignment, and field offsets verified in [`status_test.rs`](../src/common/spsc/status_test.rs), ensuring zero ABI breakage or memory bloat in downstream consumers and hosts (such as audio plugins, pipe servers, or standalone hosts).
 
 ---
 
@@ -512,6 +515,7 @@ For models containing advanced features, execution routes to flexible runtime en
 ### Slimmable Model Validation & Topology Invariants
 
 Slimmable WaveNet models allow dynamic channel degradation. The loader enforces strict behavioral and topological parity with C++ NAMCore (`slimmable.cpp`):
+
 - **Method Invariant:** The `slimmable.method` field is mandatory for any layer with slimmable metadata; currently only `"slice_channels_uniform"` is supported. Missing or invalid methods fail-closed with `NamErrorCode::InvalidFeatureTopology` (`E1316`).
 - **Allowed Channels & Fixed Arrays:** If `kwargs` or `allowed_channels` is absent, channel breakpoints default to `[1..=channels]`. An explicit `allowed_channels: []` designates a fixed (non-slimmable) array. At least one layer array must have non-empty `allowed_channels`; models where all layers are fixed fail-closed with `E1316`.
 - **Groups & Head Kernel Size:** All layer arrays in a slimmable model must satisfy `head_kernel_size == 1` and all convolution group parameters (`groups`, `groups_input`, `groups_input_mixin`, `layer1x1.groups`, `head1x1.groups`) must equal 1 (`slimmable.cpp:136-146`), failing with `E1316` otherwise.
@@ -529,7 +533,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 |:----------- |:----------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`E1xxx`** | Model Loading & Parsing | **Core Crate.** I/O errors, JSON/NAMB parsing, CRC32 checks, shape validation, and OOM limits.                                                                                                                         |
 | **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with two pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates) and `E2202` (`InvalidCabsimPartitionSize` for zero partition size). |
-| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                          |
+| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                          |
 | **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                        |
 | **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (Unsupported CPU Architecture lacking `x86-64-v3`).                                                                                                                   |
 

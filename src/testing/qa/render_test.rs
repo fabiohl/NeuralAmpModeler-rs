@@ -194,6 +194,7 @@ fn render_plain_matches_golden() {
 
 /// Dev tool: rebuilds `report.jsonl` + `render_plain.golden` from the
 /// committed contract. Run with `--ignored --nocapture`.
+// on-demand: dev tool rebuilding report.jsonl + render_plain.golden; not a gate.
 #[test]
 #[ignore]
 fn regenerate_render_fixture_and_golden() {
@@ -321,6 +322,72 @@ fn f64_decomp_transient_emits_notice_without_yellow_violation() {
     assert!(
         !rendered.contains("\x1b[1;33m"),
         "transient must not use yellow alert color: {rendered}"
+    );
+}
+
+#[test]
+fn f64_decomp_quant_dominated_emits_simulation_note_without_cold_start() {
+    // F-06: when the measured total is tiny but `combined` is dominated by the
+    // simulated F16C quantization (absent from the production f32 path), the
+    // large combined/total ratio must NOT be blamed on a cold-start transient.
+    let report = sample_report_with_decomp(vec![F64Decomp {
+        label: "A2-Lite".to_string(),
+        architecture: "WaveNet".to_string(),
+        esr_f32_vs_f64: MetricValue::Raw("2.22e-14".to_string()),
+        esr_quant_f16c: Some(MetricValue::Raw("5.41e-7".to_string())),
+        esr_quant_bf16: Some(MetricValue::Raw("2.0e-4".to_string())),
+        esr_activation: Some(MetricValue::Raw("0.0".to_string())),
+        esr_accumulation: Some(MetricValue::Raw("8.02e-14".to_string())),
+        esr_combined: Some(MetricValue::Raw("5.41e-7".to_string())),
+    }]);
+
+    let palette = Palette::new(RenderStyle::Ansi);
+    let rendered = render_f64_decomposition(&report, &palette);
+
+    assert!(
+        rendered.contains("dominated by the simulated F16C weight quantization"),
+        "must explain the simulated-quantization artifact: {rendered}"
+    );
+    assert!(
+        !rendered.contains("cold-start buffer fill-in transient"),
+        "must not blame a cold-start transient for the quant-dominated case: {rendered}"
+    );
+    assert!(
+        !rendered.contains("violated"),
+        "quant-simulation artifact must not be flagged as a violation: {rendered}"
+    );
+    assert!(
+        !rendered.contains("\x1b[1;33m"),
+        "quant-simulation artifact must not use yellow alert color: {rendered}"
+    );
+}
+
+#[test]
+fn f64_decomp_combined_dominated_non_quant_labels_combined_over_total() {
+    // combined > total on a non-transient architecture with no dominant F16C
+    // term must fall through to the yellow violation, still labelled
+    // `combined/total` (not the inverted `total/combined`).
+    let report = sample_report_with_decomp(vec![F64Decomp {
+        label: "LSTM-x".to_string(),
+        architecture: "LSTM".to_string(),
+        esr_f32_vs_f64: MetricValue::Raw("1.0e-8".to_string()),
+        esr_quant_f16c: None,
+        esr_quant_bf16: None,
+        esr_activation: Some(MetricValue::Raw("1.0e-3".to_string())),
+        esr_accumulation: Some(MetricValue::Raw("1.0e-8".to_string())),
+        esr_combined: Some(MetricValue::Raw("1.0e-3".to_string())),
+    }]);
+
+    let palette = Palette::new(RenderStyle::Ansi);
+    let rendered = render_f64_decomposition(&report, &palette);
+
+    assert!(
+        rendered.contains("violated: combined/total ≈"),
+        "combined-dominated violation must be labelled combined/total: {rendered}"
+    );
+    assert!(
+        !rendered.contains("violated: total/combined"),
+        "combined-dominated violation must not be labelled total/combined: {rendered}"
     );
 }
 

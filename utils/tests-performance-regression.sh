@@ -26,8 +26,17 @@
 #                        REGRESSION_BLIND when a compared bench has no readable
 #                        comparison artifact. The verdict never comes from the
 #                        human 'has regressed' console wording (R-3).
+#                        NOTE (S5-T3, F-12): a `--check` run immediately after
+#                        `--bootstrap-baseline` in the same session only proves
+#                        self-consistency (repeatability against a baseline just
+#                        written from this tree) — reserve the "REGRESSION GATE"
+#                        verdict for a `--check` against a baseline produced in
+#                        another session/commit. Effective noise band:
+#                        `noise_threshold = 0.05` (whole 95% CI above +5% is a
+#                        machine regression; see src/testing/qa/verdict.rs).
 #   --bootstrap-baseline Create a new baseline and environment fingerprint.
 #                        Must be executed by a human operator.
+#   --help, -h           Print this help and exit.
 #
 # Environment variables
 # ----------------------
@@ -39,7 +48,7 @@
 #
 # Usage
 # ------
-#   utils/tests-performance-regression.sh [--check|--bootstrap-baseline]
+#   utils/tests-performance-regression.sh [--check|--bootstrap-baseline|--help|-h]
 # =============================================================================
 
 set -euo pipefail
@@ -48,6 +57,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
 
 trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" failed at line $LINENO with status $?. Aborting.${NC}"; exit 1' ERR
+
+# `--help` is a first-class mode so the performance gate behavior and options
+# are discoverable via standard CLI conventions.
+if [ "${1:---check}" = "--help" ] || [ "${1:---check}" = "-h" ]; then
+    sed -n '1,/^# ====$/p' "$SCRIPT_DIR/tests-performance-regression.sh" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -66,7 +82,7 @@ MODE="${1:---check}"
 # rejected here before ever reaching its working dispatcher branch.
 case "$MODE" in
   --check|--bootstrap-baseline) ;;
-  *) echo -e "${RED}${BOLD}Unknown mode: $MODE (expected --check or --bootstrap-baseline)${NC}" >&2; exit 1 ;;
+  *) echo -e "${RED}${BOLD}Unknown mode: $MODE (expected --check, --bootstrap-baseline, --help)${NC}" >&2; exit 1 ;;
 esac
 
 BASELINE_DIR=".performance-baselines"
@@ -504,7 +520,7 @@ case "$MODE" in
         # future mode added to the gate without a dispatch branch here can
         # never fall through silently.
         echo -e "${RED}${BOLD}Unknown mode: $MODE (expected --check or --bootstrap-baseline)${NC}"
-        echo "Usage: $0 [--check|--bootstrap-baseline]"
+        echo "Usage: $0 [--check|--bootstrap-baseline|--help]"
         exit 1
         ;;
 esac

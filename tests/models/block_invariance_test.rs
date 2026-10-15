@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
+use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::StaticModel;
 use neural_amp_modeler_rs::testing::catalog::{ModelSupportKind, catalog_entries};
 use neural_amp_modeler_rs::testing::stress::{
@@ -86,4 +87,96 @@ fn test_block_size_invariance_across_supported_catalog() {
         tested_models > 0,
         "At least one supported catalog model must be tested for block-size invariance"
     );
+}
+
+/// Fixtures whose A2 `process` clamps to the negotiated `max_buffer_size`.
+/// F-01 evidence: the A2 inference bench never calls `set_max_buffer_size`, so
+/// block sizes above the constructor default (64) were silently truncated to 64
+/// frames — the measured time went flat from 64..512 samples.
+const A2_FIXTURES: &[&str] = &[
+    "tests/fixtures/models/wavenet_a2_full.nam",
+    "tests/fixtures/models/wavenet_a2_lite.nam",
+    "tests/fixtures/models/a2_dynamic_gated_ch8.nam",
+    "tests/fixtures/models/a2_dynamic_blended_ch3.nam",
+];
+
+/// F-01 regression guard for A2 (static Full/Lite and free-geometry dynamic).
+///
+/// Feeds a 512-frame signal as one block and as 8×64 / 16×32 partitions after
+/// negotiating `set_max_buffer_size(512)`, asserting:
+/// - **completeness**: every output frame is written (NaN-sentinel output must
+///   be fully overwritten — catches a silently truncated tail);
+/// - **invariance**: the output matches the single-block run bit-for-bit,
+///   independent of how the audio is partitioned.
+#[test]
+fn test_a2_block_invariance_full_write_and_partitioning() {
+    const N: usize = 512;
+    let input_signal = generate_stress_signal_v1();
+    assert!(
+        input_signal.len() >= N,
+        "stress signal too short for A2 guard"
+    );
+    let input = &input_signal[..N];
+
+    let mut tested_models = 0;
+    for fixture in A2_FIXTURES {
+        let model_path = match resolve_fixture_path(fixture) {
+            Some(p) => p,
+            None => continue,
+        };
+        let json_str = fs::read_to_string(&model_path)
+            .unwrap_or_else(|e| panic!("Failed to read {fixture}: {e}"));
+        let model_data =
+            parse_nam_json(&json_str).unwrap_or_else(|e| panic!("Failed to parse {fixture}: {e}"));
+
+        // `block == N` is the single-block reference; smaller values exercise
+        // explicit external partitioning (internal chunking stays at ≤ 64).
+        let run = |block: usize| -> Vec<f32> {
+            let mut model = build_model(&model_data)
+                .unwrap_or_else(|e| panic!("Failed to build {fixture}: {e}"));
+            let out_ch = model.num_output_channels().max(1);
+            model
+                .set_max_buffer_size(N)
+                .unwrap_or_else(|e| panic!("set_max_buffer_size failed for {fixture}: {e}"));
+            model.prewarm(2048);
+
+            let mut output = vec![f32::NAN; N * out_ch];
+            for (in_chunk, out_chunk) in input.chunks(block).zip(output.chunks_mut(block * out_ch))
+            {
+                model.process(in_chunk, out_chunk);
+            }
+
+            assert!(
+                output.iter().all(|v| v.is_finite()),
+                "{fixture}: output not fully written at block={block} — silent tail truncation"
+            );
+            output
+        };
+
+        let single = run(N);
+        for &block in &[64usize, 32] {
+            let partitioned = run(block);
+            assert_eq!(
+                single.len(),
+                partitioned.len(),
+                "{fixture}: output length mismatch between block={N} and block={block}"
+            );
+            for (i, (&a, &b)) in single.iter().zip(partitioned.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{fixture}: block={block} diverges from single block={N} at sample {i} \
+                     (a={a:e}, b={b:e})"
+                );
+            }
+        }
+
+        tested_models += 1;
+    }
+
+    assert!(
+        tested_models > 0,
+        "No A2 fixture resolved; block-invariance full-write guard exercised nothing"
+    );
+    eprintln!("A2 block-invariance/full-write guard validated {tested_models} fixtures.");
 }

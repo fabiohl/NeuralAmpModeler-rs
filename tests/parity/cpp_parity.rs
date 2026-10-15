@@ -1137,8 +1137,8 @@ fn live_cross_validation_wavenet_condition_lstm() {
         ParityOutcome::Completed => {}
         ParityOutcome::SkippedRateRejected => {
             eprintln!(
-                "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
-                 reason=\"C++ render tool limitation (condition_size mismatch)\""
+                "[STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" \
+                 reason=\"Concordant rejection: Rust fail-closed by policy (LSTM condition_dsp not supported); C++ NAMCore rejects via condition_size mismatch\""
             )
         }
         other => panic!("Unexpected outcome: {other:?}"),
@@ -1297,9 +1297,11 @@ fn live_cross_validation_v2_wavenet_condition_dsp() {
     );
 }
 
-/// Upstream KnownGap: C++ render rejects / cannot golden LSTM-as-condition_dsp
-/// (channel mismatch). Mirrors v1 `live_cross_validation_wavenet_condition_lstm`
-/// — allow `SkippedRateRejected` without requiring Completed SRs and without
+/// KnownGap: LSTM-as-condition_dsp is rejected by both oracles — Rust
+/// fail-closed by policy, C++ NAMCore by a `condition_size` mismatch — so no
+/// golden can be generated. Mirrors v1
+/// `live_cross_validation_wavenet_condition_lstm` — allow
+/// `SkippedRateRejected` without requiring Completed SRs and without
 /// `catch_unwind` (which polluted logs while still reporting ok).
 #[test]
 #[ignore]
@@ -1340,12 +1342,12 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
             }
             ParityOutcome::SkippedRateRejected | ParityOutcome::SkippedToolNotAvailable => {
                 eprintln!(
-                    "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
-                     reason=\"C++ render tool limitation (LSTM condition_dsp channel mismatch)\""
+                    "[STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" \
+                     reason=\"Concordant rejection: Rust fail-closed by policy; C++ NAMCore rejects via condition_size mismatch\""
                 );
                 eprintln!(
-                    "[{label_base} @ {sr} Hz] C++ render tool limitation \
-                     (LSTM condition_dsp channel mismatch / KnownGap)"
+                    "[{label_base} @ {sr} Hz] Concordant rejection: Rust fail-closed by \
+                     policy; C++ NAMCore rejects via condition_size mismatch (KnownGap)"
                 );
             }
             ParityOutcome::SkippedModelNotFound => {

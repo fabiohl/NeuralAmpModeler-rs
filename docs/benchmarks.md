@@ -42,6 +42,7 @@ cargo bench --bench conv1d_hotpath_bench
 ### Audio Block Budgets & Soak Benchmarks
 
 * **Standard Audio Block:** Default benchmarks operate on blocks of **64 samples at 48 kHz** ($\approx 1.333\text{ ms}$ / $1333\text{ µs}$). This is the primary real-time processing deadline.
+* **Block-Size Scaling IDs (`*_{N}samp_48kHz`):** The `inference_bench` scaling targets process **$N$ frames per Criterion iteration** (one block). The A2 scaling benches call `set_max_buffer_size($N$)` before timing, because A2's `process` clamps the frame count to the negotiated buffer size (constructor default = 64); without it, `128/256/512` would silently measure only 64 frames and the curve would appear flat. WaveNet/LSTM scaling benches have no such clamp and process the full buffer directly.
 * **Long-Duration Soak Benchmarks:** To measure sustained memory throughput and evaluate cache/TLB stability under continuous load, long-duration benchmarks use blocks of **4096 samples** (~85 ms):
 
 ```bash
@@ -85,30 +86,32 @@ The single canonical source of truth for committed performance baselines is [`do
 
 Below is the committed reference baseline measured on release builds under an isolated x86-64-v3 environment (AMD Ryzen 7 5700U, AVX2/FMA, 64-sample blocks @ 48 kHz):
 
-| Target ID                      | Description                           | Median Latency  | % of 1.33 ms RT Budget |
-|:------------------------------ |:------------------------------------- |:--------------- |:---------------------- |
-| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)              | 41.77 µs        | 3.13%                  |
-| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                | 20.11 µs        | 1.51%                  |
-| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)       | 57.16 µs        | 4.29%                  |
-| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                   | 18.29 µs        | 1.37%                  |
-| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)        | 19.75 µs        | 1.48%                  |
-| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)         | 14.00 µs        | 1.05%                  |
-| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)          | 6.77 µs         | 0.51%                  |
-| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)           | 7.58 µs         | 0.57%                  |
-| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain) | 0.13 µs         | 0.01%                  |
-| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)      | 4.93 µs         | 0.37%                  |
-| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)              | 9.48 µs         | 0.71%                  |
-| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape            | 21.57 µs        | 1.62%                  |
-| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                      | 8.24 µs         | 0.62%                  |
-| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)               | 177.12 µs       | 13.28%                 |
-| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)             | 131.09 µs       | 9.83%                  |
-| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)           | 190.06 µs       | 14.25%                 |
-| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k   | 1.32 µs / block | 0.10%                  |
-| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k     | 0.66 µs / block | 0.05%                  |
-| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)              | 1.29 µs / block | 0.10%                  |
-| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)    | 42.80 µs        | 3.21%                  |
-| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS) | 174.36 µs       | 13.08%                 |
-| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic)| 64.29 µs        | 4.82%                  |
+| Target ID                      | Description                            | Median Latency    | % of 1.33 ms RT Budget |
+|:------------------------------ |:-------------------------------------- |:----------------- |:---------------------- |
+| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)               | 41.77 µs          | 3.13%                  |
+| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                 | 20.11 µs          | 1.51%                  |
+| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)        | 57.16 µs          | 4.29%                  |
+| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                    | 18.29 µs          | 1.37%                  |
+| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)         | 19.75 µs          | 1.48%                  |
+| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)          | 14.00 µs          | 1.05%                  |
+| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)           | 6.77 µs           | 0.51%                  |
+| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)            | 7.58 µs           | 0.57%                  |
+| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain)  | 0.13 µs           | 0.01%                  |
+| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)       | 4.93 µs           | 0.37%                  |
+| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)               | 9.48 µs           | 0.71%                  |
+| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape             | 21.57 µs          | 1.62%                  |
+| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                       | 8.24 µs           | 0.62%                  |
+| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)                | 177.12 µs         | 13.28%                 |
+| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)              | 131.09 µs         | 9.83%                  |
+| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)            | 190.06 µs         | 14.25%                 |
+| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k    | 1.32 µs / block   | 0.10%                  |
+| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k      | 0.66 µs / block   | 0.05%                  |
+| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)               | 1.29 µs / block   | 0.10%                  |
+| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)     | 42.80 µs / block  | 3.21%                  |
+| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS)  | 174.36 µs / block | 13.08%                 |
+| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic) | 64.29 µs / block  | 4.82%                  |
+
+*Unit note: every row is **µs per 64-sample block** (the 1.333 ms RT deadline). The `RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium` Criterion ids batch `DSP_MICRO_BATCH = 64` blocks per iteration and are divided by 64 before reporting (see §4.5); the `RT_DSP_Pipeline_*` ids already process a single 64-sample block per iteration and are reported as measured. The quality dashboard renders the same convention.*
 
 *Note: All single-model inferences consume $\le 4.3\%$ of the real-time block budget; even dynamic A2 topologies and 4× oversampled pipelines maintain $> 85\%$ real-time headroom.*
 
@@ -135,11 +138,11 @@ Below is the committed reference baseline measured on release builds under an is
 
 | Variable                 | Default                                     | Purpose                                                             |
 |:------------------------ |:------------------------------------------- |:------------------------------------------------------------------- |
-| `NAM_BENCH_CORE`         | `pick_bench_core` (isolated or `nproc / 2`)  | Dedicated CPU core to pin benchmarks via `taskset`.                 |
+| `NAM_BENCH_CORE`         | `pick_bench_core` (isolated or `nproc / 2`) | Dedicated CPU core to pin benchmarks via `taskset`.                 |
 | `NAM_BASELINE_NAME`      | `ci-baseline`                               | Name of the Criterion baseline series.                              |
-| `NAM_BENCH_SUITE`        | `regression_gate` | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
-| `NAM_BENCH_MANIFEST`     | *(empty)*         | Expected-ID manifest for a non-`regression_gate` suite (see below). |
-| `NAM_THERMAL_COOLDOWN_S` | `180`             | Cooldown period before benchmarking to stabilize clock frequencies. |
+| `NAM_BENCH_SUITE`        | `regression_gate`                           | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
+| `NAM_BENCH_MANIFEST`     | *(empty)*                                   | Expected-ID manifest for a non-`regression_gate` suite (see below). |
+| `NAM_THERMAL_COOLDOWN_S` | `180`                                       | Cooldown period before benchmarking to stabilize clock frequencies. |
 
 ### Downstream Adoption (External Suites)
 
@@ -214,6 +217,7 @@ Because the DSP engine operates in a state of extreme micro-architectural optimi
    ```
 
    Combined with pinning (`NAM_BENCH_CORE=8 taskset -c 8 ...`), this eliminates OS preemption and thread migration.
+
 2. **CPU Frequency Scaling (`performance` Governor):**
    Lock the CPU scaling governor to `performance` across all cores to prevent Dynamic Voltage and Frequency Scaling (DVFS) transition delays:
 
@@ -223,25 +227,26 @@ Because the DSP engine operates in a state of extreme micro-architectural optimi
 
 3. **Thermal Stabilization & Hardware Cooldown:**
    Allow the CPU to cool down before executing baseline benchmarks (`NAM_THERMAL_COOLDOWN_S=180` by default). The regression gate sleeps between heavy phases to prevent thermal throttling from skewing Criterion iteration times.
+
 4. **Low Background Load & Host Quiescence:**
    Ensure workstation background load is minimal ($\text{load average} \ll 1.0$), with browsers, container engines, and heavy background services closed.
 
-#### Reference Noise Floor & Run-to-Run Variance (Sprint 3 Baseline Audit)
+#### Reference Noise Floor & Run-to-Run Variance (Empirical Baseline Audit)
 
-During the empirical contract bisection audit (Sprint 3, Finding A3), consecutive back-to-back executions of the canonical `regression_gate` under core pinning (`taskset -c 8`) and thermal cooldown (`NAM_THERMAL_COOLDOWN_S=180`) established the empirical reference noise floor:
+During the empirical contract bisection audit, consecutive back-to-back executions of the canonical `regression_gate` under core pinning (`taskset -c 8`) and thermal cooldown (`NAM_THERMAL_COOLDOWN_S=180`) established the empirical reference noise floor:
 
-| Benchmark Target | Run 1 Median | Run 2 Median | Observed Variance (Δ) | Typical Latency Scale |
-|:---|:---:|:---:|:---:|:---:|
-| `RT_Linear_Direct_RF4` | 0.137 µs | 0.132 µs | **−3.8%** | Sub-microsecond (~130 ns) |
-| `RT_A2_Dyn_Blended_CH3` | 132.9 µs | 136.0 µs | **+2.3%** | Large complex model (~136 µs) |
-| `RT_ConvNet` | 9.40 µs | 9.37 µs | **−0.3%** | Medium network (~9.4 µs) |
-| `RT_WaveNet_Std_CH16` | 41.60 µs | 41.46 µs | **−0.3%** | Standard WaveNet (~41.5 µs) |
-| `RT_DSP_Resampler_44k1_to_48k` | 1.30 µs | 1.31 µs | **+0.8%** | Ultra-fast DSP routine (~1.3 µs) |
+| Benchmark Target               | Run 1 Median | Run 2 Median | Observed Variance (Δ) | Typical Latency Scale            |
+|:------------------------------ |:------------:|:------------:|:---------------------:|:--------------------------------:|
+| `RT_Linear_Direct_RF4`         | 0.137 µs     | 0.132 µs     | **−3.8%**             | Sub-microsecond (~130 ns)        |
+| `RT_A2_Dyn_Blended_CH3`        | 132.9 µs     | 136.0 µs     | **+2.3%**             | Large complex model (~136 µs)    |
+| `RT_ConvNet`                   | 9.40 µs      | 9.37 µs      | **−0.3%**             | Medium network (~9.4 µs)         |
+| `RT_WaveNet_Std_CH16`          | 41.60 µs     | 41.46 µs     | **−0.3%**             | Standard WaveNet (~41.5 µs)      |
+| `RT_DSP_Resampler_44k1_to_48k` | 1.30 µs      | 1.31 µs      | **+0.8%**             | Ultra-fast DSP routine (~1.3 µs) |
 
-**Key Invariants & Implications for Quality Contracts (Sprint 7):**
+**Key Invariants & Implications for Quality Contracts:**
 
 1. **Empirical Noise Band:** Even under host core pinning and performance governors, environmental noise spans approximately **−3.8% to +2.3%** on complex pipelines, widening up to $\pm 5\%$ on sub-microsecond primitives (`RT_Linear_Direct_RF4`).
-2. **Minimum Safety Margin:** To prevent false-positive regression alarms in CI and automated gates, contract tolerance envelopes in Sprint 7 (S7) must maintain a minimum margin of **$\ge 5\%$** (`latency_mult \ge 1.05` to `1.10` and `latency_floor_us \ge 0.05`). Any tolerance band tighter than $\pm 4\%$ will trigger sporadic false alarms caused purely by OS timer granularity and thermal jitter.
+2. **Minimum Safety Margin:** To prevent false-positive regression alarms in CI and automated gates, contract tolerance envelopes must maintain a minimum margin of **$\ge 5\%$** (`latency_mult \ge 1.05` to `1.10` and `latency_floor_us \ge 0.05`). Any tolerance band tighter than $\pm 4\%$ will trigger sporadic false alarms caused purely by OS timer granularity and thermal jitter.
 
 ### Pre-Flight Checklist
 
@@ -273,6 +278,16 @@ utils/quality-dashboard.sh --save docs/quality-contract.json
 # 4. Validate the loop on the same git revision
 utils/quality-dashboard.sh --check docs/quality-contract.json
 ```
+
+> [!WARNING]
+> **S5-T3 (F-12) — `--check` after `--bootstrap-baseline` proves only
+> self-consistency.** Step 2 above compares the tree against a baseline just
+> written from that same tree in step 1: a green result means "repeatable",
+> not "no regression". Reserve the "REGRESSION GATE" verdict for a `--check`
+> against a baseline produced in another session/commit. Effective noise band:
+> `noise_threshold = 0.05` (whole 95% CI above +5% is a machine regression;
+> see `src/testing/qa/verdict.rs`). `bootstrap-repo.sh` prints this warning
+> whenever it runs the bootstrap→check pair.
 
 **Flaky dashboard `--check` after a green standalone gate:**
 The quality dashboard runs several minutes of functional fidelity checks prior to executing Criterion. This pre-test workload increases CPU die temperatures and OS noise. Very fast micro-benchmarks near the noise floor (`RT_Linear_Direct_RF4` ~340 ns, `RT_LSTM_2x8` ~7.1 µs) can report a spurious $+2–4\%$ variation. If standalone `--check` passes on a cool machine, do not bootstrap a new baseline solely to silence transient thermal drift.
@@ -338,34 +353,40 @@ The Real Fast Fourier Transform (`RfftPlanner` in `src/math/dsp/rfft.rs`) handle
 The Linear model family supports multichannel FIR convolution across $1 \to N$ (`LinearOneToMany`), $N \to 1$ (`LinearManyToOne`), and $N \to N$ shared (`LinearManyToManyShared`) geometries ([`benches/linear.rs`](../benches/linear.rs)).
 
 1. **Strict Zero-Regression on Legacy Mono ($1 \to 1$):**
+
    * Legacy mono models build with `multichannel = None`, preserving the original branch-free, time-domain and partitioned FFT inner loops.
    * Under regression gate auditing (`regression_gate`), `RT_Linear_Direct_RF4` executes in **~134 ns** (well beneath the 330 ns contract threshold), and `RT_Linear_Fft_RF2048` executes in **~4.85 µs** (statistically identical to the 4.84 µs baseline, delta = 0.0%).
 
 2. **Multichannel Allocation Isolation & Throughput Scaling:**
+
    * Audio callback routines invoke `process_raw(*const *const f32, *const *mut f32, usize)` or `process_multichannel` using stack-allocated pointer arrays (`[*const f32; 16]`, `[*mut f32; 16]`), guaranteeing **zero heap allocations** and zero GC jitter.
+
    * At 64 samples @ 48 kHz (1.33 ms deadline), latency scales linearly with active convolution operations:
 
-     | Topology Geometry | Receptive Field (Taps) | Direct Latency (64 samp) | FFT Latency (64 samp) | % of 1.33 ms RT Budget (FFT) |
-     | :--- | :--- | :--- | :--- | :--- |
-     | **Mono $1 \to 1$** | RF = 2048 | 8.86 µs | 4.85 µs | 0.36% |
-     | **OneToMany $1 \to 2$** | RF = 2048 | 18.15 µs | 10.01 µs | 0.75% |
-     | **ManyToOne $2 \to 1$** | RF = 2048 | 18.73 µs | 10.21 µs | 0.77% |
-     | **ManyToManyShared $2 \to 2$** | RF = 2048 | 18.65 µs | 10.21 µs | 0.77% |
+     | Topology Geometry              | Receptive Field (Taps) | Direct Latency (64 samp) | FFT Latency (64 samp) | % of 1.33 ms RT Budget (FFT) |
+     |:------------------------------ |:---------------------- |:------------------------ |:--------------------- |:---------------------------- |
+     | **Mono $1 \to 1$**             | RF = 2048              | 8.86 µs                  | 4.85 µs               | 0.36%                        |
+     | **OneToMany $1 \to 2$**        | RF = 2048              | 18.15 µs                 | 10.01 µs              | 0.75%                        |
+     | **ManyToOne $2 \to 1$**        | RF = 2048              | 18.73 µs                 | 10.21 µs              | 0.77%                        |
+     | **ManyToManyShared $2 \to 2$** | RF = 2048              | 18.65 µs                 | 10.21 µs              | 0.77%                        |
 
 3. **In-Place (`input == output`) vs. Out-of-Place Overhead:**
+
    * In DAW and low-latency host environments (plugin hosts, audio servers), channel buffers frequently alias. All multichannel variants employ early circular buffer absorption (`MirroredBuffer`) where input frames are absorbed into the ring buffer *before* computing output samples.
    * Benchmarks comparing in-place aliasing against separate out-of-place buffers show **virtually 0.0% overhead** (within ±1–2% environmental noise). In partitioned FFT mode, buffer address reuse slightly improves L1/L2 cache hit rate (e.g. 10.17 µs in-place vs 10.34 µs out-of-place for $2 \to 2$).
 
 4. **Direct vs. FFT Crossover Across Block Sizes:**
+
    * For short impulse responses (RF $\le 128$), time-domain direct convolution outperforms FFT due to zero transform latency and unrolled SIMD dot-products.
+
    * For longer impulse responses (RF = 2048), partitioned FFT convolution delivers a sustained **~1.8× speedup** over Direct across all block sizes:
 
-     | Block Size ($B$) | ManyToMany $2 \to 2$ Direct (RF=2048) | ManyToMany $2 \to 2$ FFT (RF=2048) | Measured Speedup |
-     | :--- | :--- | :--- | :--- |
-     | **64 samples** (1.33 ms) | 18.80 µs | 10.61 µs | **1.77×** |
-     | **256 samples** (5.33 ms) | 76.80 µs | 41.40 µs | **1.85×** |
-     | **1024 samples** (21.33 ms) | 300.65 µs | 163.82 µs | **1.84×** |
-     | **2048 samples** (42.67 ms) | 600.21 µs | 326.41 µs | **1.84×** |
+     | Block Size ($B$)            | ManyToMany $2 \to 2$ Direct (RF=2048) | ManyToMany $2 \to 2$ FFT (RF=2048) | Measured Speedup |
+     |:--------------------------- |:------------------------------------- |:---------------------------------- |:---------------- |
+     | **64 samples** (1.33 ms)    | 18.80 µs                              | 10.61 µs                           | **1.77×**        |
+     | **256 samples** (5.33 ms)   | 76.80 µs                              | 41.40 µs                           | **1.85×**        |
+     | **1024 samples** (21.33 ms) | 300.65 µs                             | 163.82 µs                          | **1.84×**        |
+     | **2048 samples** (42.67 ms) | 600.21 µs                             | 326.41 µs                          | **1.84×**        |
 
 ### Recurrent Networks: SIMD Fused Gates (AVX2)
 
@@ -423,6 +444,40 @@ The second-generation architecture (A2) features per-layer FiLM conditioning and
   * Mixin GEMV weights are transposed from row-major to column-major during model loading (`set_weights`), enabling 8-wide broadcast-FMA in the hot-path.
   * Head 1×1 and L1×1 residual projections execute via 8-wide `_mm256_fmadd_ps` with exact sequential lane reduction to maintain bit-identical golden vector parity.
 
+### A2 Pre-Warm Strategy & Settling Cost
+
+A2 stabilizes its causal history with a **full forward pass**, unlike the
+replicate-to-history backfill used by the A1 WaveNet family:
+
+* **WaveNet A1** (`wavenet/layer_array.rs::prewarm_internal`): feeds **one**
+  frame with `PREWARM = true`; each layer backfills its entire receptive-field
+  window via `copy_within` (stationary replication, `layer_array.rs:103-124`).
+  Cost is bounded by the per-layer `RF × CH` memcpy plus one frame of compute —
+  constant and independent of the requested sample count
+  (`Prewarm_WaveNet_Standard` ≈ 165 µs).
+* **A2** (static and dynamic, `a2/model/*/prewarm.rs`): `prewarm_reset` zeroes
+  every ring and arms a zero-feed of `receptive_field_size` frames; the feed
+  then runs the **full 23-layer + dilated-head forward pass** in ≤ 64-frame
+  chunks, discarding the output. The A2 receptive field is
+  `Σ (kᵢ−1)·dᵢ + (16−1) = 6346` frames, so prewarm cost ≈ `RF × per-frame
+  steady state` (≈ 0.30 µs/frame for CH=8, ≈ 0.24 µs/frame for CH=3):
+  `Prewarm_A2Full_CH8` ≈ 2.07 ms, `Prewarm_A2Lite_CH3` ≈ 1.51 ms.
+
+The `num_samples` argument to `NamModel::prewarm` is **ignored** by both A1 and
+A2 (`fn prewarm(&mut self, _num_samples: usize)`): the workload is fixed by the
+receptive field, not by the host block size. The `…_2048samp` suffix in the
+bench IDs labels the `prewarm(2048)` call, **not** the number of processed
+frames — A2 always feeds `receptive_field_size ≈ 6346` frames. Dividing the
+2.07 ms figure by 2048 (≈ 1.0 µs/sample) overstates the per-frame cost by
+~3.4×; the steady-state per-frame cost is ≈ 0.30 µs (19.75 µs / 64 frames).
+
+Because the integral prewarm can exceed one 64-sample RT callback (1.33 ms), a
+host amortizes it across callbacks: the split primitives
+(`prewarm_reset` + `prewarm_step(k)`) make the zero-feed resumable without
+allocation, and `prewarm_step(k)` performs exactly `⌈k / 64⌉` full `process`
+calls. There is no smaller-chunk penalty to reclaim — A2 already feeds the
+largest internal block (64 frames, `WAVENET_MAX_NUM_FRAMES`).
+
 ### IR CabSim Frequency-Domain Convolution (UPOLS)
 
 The cabinet simulator uses Uniform-Partitioned Overlap-Save (UPOLS) convolution:
@@ -452,11 +507,13 @@ Real-time resource updates (model swaps, IR reloading, oversampling mode changes
 High-frequency latency monitoring in the audio callback requires zero locks, zero memory allocation, and negligible CPU overhead. Two complementary histogram structures serve distinct operational domains:
 
 1. **`AtomicHistogram` (Runtime Telemetry in `RtStatusFlags`):**
+
    * Structure: 32 octave buckets (power-of-two boundaries: $[0, 1), [1, 2), \dots, [2^{30}, 2^{31})\text{ ns}$).
    * Memory Footprint: 384 bytes (`#[repr(align(128))]`, 6 cache lines).
    * Trade-off: Compact cache footprint on `RtStatusFlags`, but relative quantization error spans up to $100\%$ ($2\times$) between adjacent power-of-two bucket edges.
 
 2. **`LatencyHistogram` (High-Resolution Verification Telemetry):**
+
    * Structure: 256 log-linear sub-bins (8 sub-bins per power-of-two octave), covering dynamic range up to $1.07\text{ s}$ ($2^{30}\text{ ns}$).
    * Relative Error Bound: $\le 12.5\%$ maximum relative error across all percentiles ($p50, p90, p99, p99.9$).
    * Micro-Benchmark Cost: Measured at **~15.9 ns per `record()` call** (64 calls in $1.019\ \mu\text{s}$ via `dsp_bench`). Zero dynamic allocations, lock-free relaxed atomic increments.
@@ -559,10 +616,26 @@ cargo bloat --release --example synthetic_model --crates
 In performance-critical SIMD, naive deduplication ("Don't Repeat Yourself") must not be applied across divergent operational domains.
 
 * **Case Study (FiLM vs. GEMM Dot Product):**
-  * `film::dot_product_avx2` operates on very short vectors ($1..=8$) using 2 YMM accumulators and an aggressive `#[inline(always)]` annotation.
+  * `film::dot_product_avx2` operates on very short vectors ($1..=8$) using 2 YMM accumulators; for `len < 8` it takes a plain left-to-right scalar fast path (bit-identical to summing the zero AVX2 accumulators first, since `0.0 + x == x`). It is `#[inline(always)]` so the branch folds into each FiLM row.
   * `gemm::dot_basic::dot_product_avx2` operates on large matrices using 4 YMM accumulators and Kahan compensated summation in the tail.
 * **Floating-Point Non-Associativity:** IEEE-754 floating-point addition is non-associative: $(a + b) + c \ne a + (b + c)$. Forcing short FiLM vectors through the 4-accumulator GEMM kernel alters rounding by up to 2 ULPs and adds unnecessary branch overhead.
 * **Rule:** Kernels with distinct structural profiles remain specialized. Numerical consistency is guarded by automated parity tests (`test_dot_product_avx2_identity_with_gemm`).
+
+### FiLM Per-Frame Application Overhead (A2-Dynamic grouped topology)
+
+The A2-Dynamic engine applies FiLM **per frame per slot** (`process_frame_dyn`), so a
+topology with `L` layers and `S` active FiLM slots performs `L × S × 64` bundled
+`FiLMLayer::process` calls per 64-sample block (`23 × 8 × 64 = 11 776` for the
+canonical grouped fixture). The dominant cost is therefore call/overhead, not the
+short-vector arithmetic:
+
+* `FiLMLayer::process` is `#[inline]` (LLVM-decided), **not** `#[inline(always)]`:
+  force-inlining its full body at all 8 call sites inside `process_frame_dyn`
+  pushes the per-frame kernel past the µop cache; relaxing the hint improved the
+  end-to-end A2-Dynamic FiLM benches by ~28–33 % (e.g. `A2Dyn_FiLM_Grouped_CH4`
+  1602 → 1076 µs on the dev host), bit-exactly.
+* The isolated stage cost is unaffected (`A2Dyn_Stage_FiLM_C4_C8_G2` ≈ 68 ns/call),
+  confirming the gain is overhead relocation, not arithmetic change.
 
 ### Block Prologue Amortization
 

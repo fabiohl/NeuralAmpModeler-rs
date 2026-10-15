@@ -205,6 +205,7 @@ fn test_long_receipt_cli_end_to_end() {
 
     let run = |args: &[&str]| {
         Command::new(bin)
+            .env("NAM_RUN_ID", "receipt_test_isolated")
             .args(args)
             .output()
             .expect("nam_long_receipt must run")

@@ -155,7 +155,7 @@ pub const RT_STATUS_OUT_OF_ORDER_EVENT: u64 = RT_STATUS_EVENT_TIMING_ANOMALY;
 /// | 5 | `GC_OVERFLOW` | Garbage Collection channel overflow |
 /// | 6 | `IS_FADING` | Gate transitioning (Fading In/Out) |
 /// | 7 | `MODEL_LOAD_FAILED` | Model load failure on RT thread |
-/// | 8 | `HEAP_ALLOC` | Heap allocation detected onSprint 2 — Contenção de falhas no RT (Épico E2; F-NP-02, F-NP-09) — CRÍTICA RT thread |
+/// | 8 | `HEAP_ALLOC` | Heap allocation detected on RT thread |
 /// | 9 | `NEEDS_CABSIM_REBUILD` | DSP thread requests cabsim engine rebuild |
 /// | 10 | `RESAMP_SWAP_PENDING` | RT callback paused awaiting resampler swap |
 /// | 11 | `HUGEPAGE_OK` | Huge-page allocation confirmed active |

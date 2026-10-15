@@ -356,19 +356,26 @@ Audio fidelity assessment combines physical error metrics with perceptual domain
 The test suite enforces a strict boundary between **single-architecture determinism** and **cross-ISA numerical parity**:
 
 1. **Declared Skips (`SKIP_CAPABILITY`):**
+
    - The engine targets `x86-64-v3` (AVX2, FMA, BMI2) as its strict compile-time baseline. On host machines without AVX-512 hardware or when compiling without `--features avx512`, AVX-512 execution paths cannot physically run.
+
    - Tests in [tests/parity/isa_parity.rs](../tests/parity/isa_parity.rs) detect missing hardware capabilities or disabled Cargo features via `skip_if_unsupported!` and emit machine-parseable markers:
+
      ```text
      [STATUS] SKIP_CAPABILITY reason="<reason>:<test_name>"
      ```
+
    - In local runs and the QA dashboard ([utils/quality-dashboard.sh](../utils/quality-dashboard.sh)), only the AVX2-vs-AVX2 self-consistency check executes (`isa_self_consistency`). The inter-ISA matrix (`isa_parity_cross_isa`) is declared as an explicit gap (`cross_isa_matrix_requires_avx512_remote`), avoiding false failures while preventing unvetted assumptions.
 
 2. **`FIDELITY: OK` Scope Boundary:**
+
    - A local test run reporting `FIDELITY: OK` validates that all active single-architecture mathematical reference oracles (`reference_oracle_f64`), committed golden vectors (`golden_vectors`), and C++ reference parity (`cpp_parity`) passed within contractual error budgets on the local host architecture.
    - **`FIDELITY: OK` does NOT cover cross-ISA parity.** Local self-consistency (AVX2 vs. AVX2) guarantees local determinism (an MSE = 0 tautology), not mathematical or numerical parity across differing SIMD instruction sets.
 
 3. **Remote SIMD Verification (`utils/remote-simd-gate.sh`):**
+
    - Full cross-ISA parity gating (AVX2 vs. AVX-512) and comparative SIMD micro-benchmarks must be executed on AVX-512 hardware or under emulation using [utils/remote-simd-gate.sh](../utils/remote-simd-gate.sh):
+
      ```bash
      # Execute locally under Intel SDE emulator:
      ./utils/remote-simd-gate.sh --sde
@@ -379,6 +386,7 @@ The test suite enforces a strict boundary between **single-architecture determin
      # Specify custom destination for the receipt JSON:
      ./utils/remote-simd-gate.sh --out target/logs/remote-simd-receipt.json user@remote-host
      ```
+
    - The script compiles with `--features avx512 --include-ignored`, executes the full `isa_parity` test battery across all topologies, and validates the resulting receipt `target/logs/remote-simd-receipt.jsonl` using Criterion statistical confidence intervals ($p < 0.05$).
 
 ---
@@ -459,25 +467,25 @@ The `--check` mode distinguishes measurement noise from true regressions:
 
 The `utils/` directory provides deterministic defense tools, inspection utilities, and test runners:
 
-| Script                                      | Responsibility                    | Guarantees & Operation                                                                                                             |
-|:------------------------------------------- |:--------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------- |
-| **[`utils/lints.sh`](../utils/lints.sh)**   | Static analysis & quality defense | 9 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, `cargo doc`+doctests, SPDX, and policy checks (§2). |
-| **`utils/tests-quick.sh`**                  | Agile first-line test suite       | Three-phase gate (Phase 1: unit + structural integration `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `freshness_guard`, `isa_contract`, `pipeline_capture_test`, `state_compat`; Phase 2: release float oracles; Phase 3: capped parser fuzzing). Runs in ~2 minutes (§3). |
-| **`utils/tests-long.sh`**                   | Nightly & pre-release audit suite | 6 preflights + 7 exhaustive stress and verification phases (~10 min). Emits structured JSONL receipts (§5). Operador humano / noturno. |
-| **`utils/_lib.sh`**                         | Shared shell library              | Dynamic project path resolution, log formatting, process priority management, QA-binary resolution and typed receipt helpers. Sourcing it pulls in the canonical, project-neutral core `utils/_lib_core.sh` (byte-identical across the NAM ecosystem, drift-pinned by `utils/test-lib-drift.sh`). |
-| **`utils/quality-dashboard.sh`**            | Quality contract manager          | Executes fidelity and latency matrices; verifies or updates `docs/quality-contract.json` (§10). Uso pontual / sob demanda.         |
-| **`utils/tests-performance-regression.sh`** | Performance regression wall       | Baseline-gated Criterion evaluation; statistical confidence interval verification against ±5% noise bands. Uso sob demanda.       |
-| **`utils/setup-third-party.sh`**            | Upstream vendor mirror manager    | Clones or updates pinned commits of `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin`.                                           |
-| **`utils/ensure_namcore_render.sh`**        | C++ Reference Render Builder      | Compila de forma idempotente o binário C++ de renderização NAMCore para oráculos de paridade.                                     |
-| **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper       | Uso pontual / diagnóstico: relata capacidades SIMD da CPU, estado AVX-512 do SO e backend de dispatch ativo com checksum.         |
-| **`utils/check-model.sh`**                  | Model inspection CLI wrapper      | Uso pontual / diagnóstico: inspeciona modelos `.nam` (JSON) e `.namb` (binário), relatando topologia, metadados e tensores.       |
-| **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking          | Uso estritamente pontual: executa benchmarking comparativo automatizado em instâncias de hardware remoto com AVX-512 via SSH.     |
-| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests      | Uso estritamente pontual: teste sintético com mock de sysfs para validar os branches de `pick_bench_core` (canônico em `utils/_lib_core.sh`). Corpo byte-idêntico ao dos projetos irmãos (T5.4); diferem apenas no header SPDX e no caminho de include de `_lib.sh`. |
-| **`utils/test-lib-drift.sh`**               | Shell-core drift guard            | Uso estritamente pontual: recomputa o `sha256` da região canônica de `utils/_lib_core.sh` e o do corpo de `utils/dsp-hotpath-filter.py` (ignorando o header SPDX), falhando em divergência (T5.1/T5.2). Um teste verde nos três repos prova que os corpos compartilhados são byte-idênticos. |
-| **`utils/dsp-hotpath-filter.py`**           | Unified RT-codegen filter & gate  | Filtro único (perfis por repo) para disassembly: gates `zmm`/`libm`/`alloc`/`div`/`tls`, com `--test-synthetic-violation` (T5.2). Compartilhado com os produtores downstream — idêntico exceto pelo header de licença (SPDX); o corpo é drift-pinado por `utils/test-lib-drift.sh`. |
-| **`utils/codegen-profile.json`**            | Codegen symbol profile            | Perfil de símbolos/gates do motor consumido por `verify-kernel-codegen.sh` e pelo filtro unificado (T5.2). |
-| **`utils/verify-kernel-codegen.sh`**        | Kernel static-codegen guard (opt-in) | Uso estritamente pontual/operador: disassembla um binário release com símbolos dos kernels (ex.: `examples/offline_render`, `strip=false`) e aplica o filtro unificado com o perfil do motor (T5.2). |
-| **`utils/miri-audit.sh`**                   | Miri UB/aliasing audit (opt-in)   | Uso estritamente pontual: auditoria out-of-band de proveniência/aliasing sob o interpretador MIR (Stacked/Tree Borrows) em alvos lock-free. Requer nightly isolado; **nunca** nos gates estáveis (§13). |
+| Script                                      | Responsibility                       | Guarantees & Operation                                                                                                                                                                                                                                                                                                                               |
+|:------------------------------------------- |:------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[`utils/lints.sh`](../utils/lints.sh)**   | Static analysis & quality defense    | 9 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, `cargo doc`+doctests, SPDX, and policy checks (§2).                                                                                                                                                                                                                   |
+| **`utils/tests-quick.sh`**                  | Agile first-line test suite          | Three-phase gate (Phase 1: unit + structural integration `models`, `perf_soak`, `parity`, `dsp_core`, `cabsim_stereo`, `target_features_compliance_test`, `libm_export_guard`, `freshness_guard`, `isa_contract`, `pipeline_capture_test`, `state_compat`; Phase 2: release float oracles; Phase 3: capped parser fuzzing). Runs in ~2 minutes (§3). |
+| **`utils/tests-long.sh`**                   | Nightly & pre-release audit suite    | 6 preflights + 7 exhaustive stress and verification phases (~10 min). Emits structured JSONL receipts (§5). Operador humano / noturno.                                                                                                                                                                                                               |
+| **`utils/_lib.sh`**                         | Shared shell library                 | Dynamic project path resolution, log formatting, process priority management, QA-binary resolution and typed receipt helpers. Sourcing it pulls in the canonical, project-neutral core `utils/_lib_core.sh` (byte-identical across the NAM ecosystem, drift-pinned by `utils/test-lib-drift.sh`).                                                    |
+| **`utils/quality-dashboard.sh`**            | Quality contract manager             | Executes fidelity and latency matrices; verifies or updates `docs/quality-contract.json` (§10). Uso pontual / sob demanda.                                                                                                                                                                                                                           |
+| **`utils/tests-performance-regression.sh`** | Performance regression wall          | Baseline-gated Criterion evaluation; statistical confidence interval verification against ±5% noise bands. Uso sob demanda.                                                                                                                                                                                                                          |
+| **`utils/setup-third-party.sh`**            | Upstream vendor mirror manager       | Clones or updates pinned commits of `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin`.                                                                                                                                                                                                                                                             |
+| **`utils/ensure_namcore_render.sh`**        | C++ Reference Render Builder         | Compila de forma idempotente o binário C++ de renderização NAMCore para oráculos de paridade.                                                                                                                                                                                                                                                        |
+| **`utils/simd-probe.sh`**                   | SIMD diagnostic CLI wrapper          | Uso pontual / diagnóstico: relata capacidades SIMD da CPU, estado AVX-512 do SO e backend de dispatch ativo com checksum.                                                                                                                                                                                                                            |
+| **`utils/check-model.sh`**                  | Model inspection CLI wrapper         | Uso pontual / diagnóstico: inspeciona modelos `.nam` (JSON) e `.namb` (binário), relatando topologia, metadados e tensores.                                                                                                                                                                                                                          |
+| **`utils/remote-simd-gate.sh`**             | Remote SIMD benchmarking             | Uso estritamente pontual: executa benchmarking comparativo automatizado em instâncias de hardware remoto com AVX-512 via SSH.                                                                                                                                                                                                                        |
+| **`utils/test-pick-bench-core.sh`**         | Bench-core helper unit tests         | Uso estritamente pontual: teste sintético com mock de sysfs para validar os branches de `pick_bench_core` (canônico em `utils/_lib_core.sh`).                                                                                                                                                                                                        |
+| **`utils/test-lib-drift.sh`**               | Shell-core drift guard               | Uso estritamente pontual: recomputa o `sha256` da região canônica de `utils/_lib_core.sh` e o do corpo de `utils/dsp-hotpath-filter.py` (ignorando o header SPDX), falhando em divergência.                                                                                                                                                          |
+| **`utils/dsp-hotpath-filter.py`**           | Unified RT-codegen filter & gate     | Filtro unificado para disassembly: gates `zmm`/`libm`/`alloc`/`div`/`tls`, com `--test-synthetic-violation`. O corpo é drift-pinado por `utils/test-lib-drift.sh`.                                                                                                                                                                                   |
+| **`utils/codegen-profile.json`**            | Codegen symbol profile               | Perfil de símbolos/gates do motor consumido por `verify-kernel-codegen.sh` e pelo filtro unificado.                                                                                                                                                                                                                                                  |
+| **`utils/verify-kernel-codegen.sh`**        | Kernel static-codegen guard (opt-in) | Uso estritamente pontual/operador: disassembla um binário release com símbolos dos kernels (ex.: `examples/offline_render`, `strip=false`) e aplica o filtro unificado com o perfil do motor.                                                                                                                                                        |
+| **`utils/miri-audit.sh`**                   | Miri UB/aliasing audit (opt-in)      | Uso estritamente pontual: auditoria out-of-band de proveniência/aliasing sob o interpretador MIR (Stacked/Tree Borrows) em alvos lock-free. Requer nightly isolado; **nunca** nos gates estáveis (§13).                                                                                                                                              |
 
 ---
 
@@ -515,13 +523,13 @@ validity** (UB detection) that `loom` cannot see.
 **Target matrix** (each target fails closed unless it executes a real minimum number of tests;
 full log at `target/logs/miri-audit.log`):
 
-| Target (`--lib` filter)     | Min tests | Notes                                                                                 |
-|:--------------------------- |:---------:|:------------------------------------------------------------------------------------- |
-| `common::spsc`              | 28        | SPSC ring, GC cascade/overflow, status flags.                                         |
-| `dsp::pipeline::bridge`     | 4         | `DspBridge` double-buffer lock-free protocol (interior mutability via `UnsafeCell`).  |
-| `dsp::mirror_buf`           | 3         | Mirrored-buffer state machine; the `memfd_create`/`mmap` allocation tests are `#[cfg_attr(miri, ignore)]` (Miri cannot interpret the FFI). |
-| `dsp::smoother`             | 5         | One-pole smoother primitives.                                                         |
-| `dsp::utils::delay_line`    | 16        | `DelayLine` ring arithmetic.                                                          |
+| Target (`--lib` filter)  | Min tests | Notes                                                                                                                                      |
+|:------------------------ |:---------:|:------------------------------------------------------------------------------------------------------------------------------------------ |
+| `common::spsc`           | 28        | SPSC ring, GC cascade/overflow, status flags.                                                                                              |
+| `dsp::pipeline::bridge`  | 4         | `DspBridge` double-buffer lock-free protocol (interior mutability via `UnsafeCell`).                                                       |
+| `dsp::mirror_buf`        | 3         | Mirrored-buffer state machine; the `memfd_create`/`mmap` allocation tests are `#[cfg_attr(miri, ignore)]` (Miri cannot interpret the FFI). |
+| `dsp::smoother`          | 5         | One-pole smoother primitives.                                                                                                              |
+| `dsp::utils::delay_line` | 16        | `DelayLine` ring arithmetic.                                                                                                               |
 
 **Flags.** `-Zmiri-disable-isolation` (host clock / pseudo-sleeps in timing paths) and
 `-Zmiri-ignore-leaks`. The latter is required because the GC overflow tests deliberately leak the

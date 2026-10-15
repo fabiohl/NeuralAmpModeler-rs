@@ -93,7 +93,7 @@ AUDIO FIDELITY — Technical Details
     yellow = audible only with scientific A/B (ESR < 1e-2)
     red = audible — needs investigation (ESR >= 1e-1)
 
-PERFORMANCE — Block Latency (64 samples @ 48kHz)
+PERFORMANCE — Block Latency (µs per 64-sample block @ 48kHz)
 ══════════════════════════════════════════════════════════
   RT deadline: 1333 µs (1.33 ms)
 
@@ -127,6 +127,10 @@ PERFORMANCE — Block Latency (64 samples @ 48kHz)
   DSP Pipeline Base (No OS)    |          43.6 us |       3.3% |              96.7%
   DSP Pipeline HQ (4x OS)      |         177.4 us |      13.3% |              86.7%
 
+  (i) DSP micro-kernels (Resampler, CabSim) run 64 blocks per Criterion
+      iteration and are normalized here to µs per 64-sample block; Pipeline
+      rows already process one 64-sample block per iteration.
+
   (i) Headroom > 50%:  2x oversampling usually safe without xruns
   (i) Headroom > 75%:  4x oversampling usually safe without xruns
   (i) Headroom < 25%:  xrun risk with a 64-sample buffer
@@ -154,10 +158,12 @@ F64 ORACLE — Error Source Decomposition
 
   (i) These measurements are cold-start (256 samples, NO prewarm) — NOT
       comparable to the 'vs Ideal (f64)' values in the fidelity table
-      above (measured with 24k-sample warmup). For WaveNet/A2, the
-      receptive field is larger than the 256-sample window, so the
-      ESR total below reflects mostly the transient buffer fill-in,
-      not the steady-state precision floor.
+      above (measured with 24k-sample warmup).
+      For WaveNet/A2 the receptive field can exceed the 256-sample
+      window, so the measured total may include transient buffer fill-in;
+      for other models the measured total is close to the real f32-vs-f64
+      floor while `combined` is inflated by simulated F16C quantization,
+      which the production f32 path does not execute.
       See docs/perceptual_validation.md#decomposition-cold-start.
 
   BossLSTM-1x16 @48000 Live:

@@ -21,14 +21,19 @@ pub(crate) fn configure_adaptive_model(
     adaptive: &AdaptiveCompute,
     rt_status: &RtStatusFlags,
 ) -> bool {
+    // If adaptive compute is disabled and no manual slimmable override is requested,
+    // bypass all dynamic adjustments immediately to preserve zero overhead.
     if adaptive.mode() == AdaptiveComputeMode::Off && adaptive.slim_override() == SlimOverride::Auto
     {
         return false;
     }
 
+    // When actively crossfading between quality levels, we hold effective layers constant
+    // to avoid abrupt buffer state resets or audible discontinuity transients (pops/clicks).
     let hold_layers = adaptive.is_crossfading();
 
     match adaptive.state() {
+        // Full quality mode: execute all layers with the maximum negotiated channel width.
         AdaptiveState::Full => {
             if let Some(m) = model_l {
                 let layers = m.layer_count();
@@ -46,6 +51,8 @@ pub(crate) fn configure_adaptive_model(
             }
             false
         }
+        // Reduced load mode: decrease effective WaveNet layer count to meet deadline budgets
+        // while preserving acceptable perceptual fidelity.
         AdaptiveState::Reduced => {
             if let Some(m) = model_l.as_mut().filter(|m| m.is_wavenet()) {
                 let layers = m.layer_count();
@@ -69,6 +76,9 @@ pub(crate) fn configure_adaptive_model(
             }
             false
         }
+        // Minimal emergency mode: severe overload condition.
+        // For recurrent LSTMs, dynamic layer reduction is impossible because feedback states
+        // depend on all gates; skipping processing entirely avoids hard deadline overrun.
         AdaptiveState::Minimal => {
             let lstm_skip = model_l.as_ref().is_some_and(|m| m.is_lstm());
             if lstm_skip {

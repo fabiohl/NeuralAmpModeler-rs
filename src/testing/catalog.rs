@@ -382,7 +382,7 @@ pub static MODEL_CATALOG: &[ModelCatalogEntry] = &[
         aliases: &[],
         architecture: "{'channels': None, 'topology': 'WaveNet-Dynamic', 'type': 'WaveNet', 'weights_layout': 'Original'}",
         support: ModelSupportKind::KnownGap,
-        description: "Known architectural gap (wavenet_condition_lstm.nam)",
+        description: "Known architectural gap — LSTM condition_dsp rejected by both oracles (wavenet_condition_lstm.nam)",
     },
     ModelCatalogEntry {
         sha256: "b78568bb0b042ef6aa09600b4b62153c0bcd7e3694f131aa85ef38083df18fe6",
@@ -788,9 +788,11 @@ pub static GOLDEN_GEN_CATALOG: &[GoldenGenEntry] = &[
         model_distribution: V2Distribution::RequiredLocal,
         golden_distribution: V2Distribution::RequiredLocal,
         skip_reason: Some(
-            "C++ upstream limitation: LSTM condition_dsp sub-model channel mismatch \
-             (uses input_size=1 instead of hidden_size=3) — golden binary cannot be \
-             generated (2026-07-11)",
+            "Concordant rejection: Rust fails closed by policy (LSTM condition_dsp \
+             not supported); C++ NAMCore rejects the same fixture because its \
+             condition_size (3) does not match the LSTM condition DSP output \
+             channels (1, the upstream default out_channels) — no golden binary \
+             can be generated (2026-10-15)",
         ),
     },
     GoldenGenEntry {

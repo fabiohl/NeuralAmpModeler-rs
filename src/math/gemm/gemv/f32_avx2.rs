@@ -121,10 +121,15 @@ pub unsafe fn gemv_with_bias_f32_avx2(
     }
 
     // ── out_len == 1: batch 8 frames per YMM ────────────────────────────
+    // When projecting down to a single output channel (e.g. WaveNet head arrays or
+    // linear projections), processing one frame at a time would underutilize the 8-lane
+    // 256-bit AVX2 registers. We therefore batch 8 consecutive audio frames across the SIMD lanes.
     if out_len == 1 {
         let mut n = 0;
         if in_len > SMALL_IN_LEN_THRESHOLD_AVX2 {
+            // Process full 8-frame blocks:
             while n + 8 <= num_frames {
+                // Initialize 8 independent accumulators to break latency dependency chains.
                 let mut acc0 = _mm256_setzero_ps();
                 let mut acc1 = _mm256_setzero_ps();
                 let mut acc2 = _mm256_setzero_ps();
@@ -134,7 +139,10 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                 let mut acc6 = _mm256_setzero_ps();
                 let mut acc7 = _mm256_setzero_ps();
                 let mut ic = 0;
+
+                // Inner loop: step through channels 8 at a time.
                 while ic + 8 <= in_len {
+                    // Broadcast each weight scalar across all 8 SIMD lanes:
                     let v_w0 = _mm256_set1_ps(*weights.get_unchecked(ic));
                     let v_w1 = _mm256_set1_ps(*weights.get_unchecked(ic + 1));
                     let v_w2 = _mm256_set1_ps(*weights.get_unchecked(ic + 2));
@@ -143,6 +151,8 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                     let v_w5 = _mm256_set1_ps(*weights.get_unchecked(ic + 5));
                     let v_w6 = _mm256_set1_ps(*weights.get_unchecked(ic + 6));
                     let v_w7 = _mm256_set1_ps(*weights.get_unchecked(ic + 7));
+
+                    // Load 8 channels from 8 consecutive audio frames (rows):
                     let row0 = _mm256_loadu_ps(in_frames.as_ptr().add((n) * in_len + ic));
                     let row1 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 1) * in_len + ic));
                     let row2 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 2) * in_len + ic));
@@ -151,10 +161,15 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                     let row5 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 5) * in_len + ic));
                     let row6 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 6) * in_len + ic));
                     let row7 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 7) * in_len + ic));
+
+                    // In-register 8x8 transpose: converts 8 frames of 8 channels into
+                    // 8 SIMD registers where each register holds the same channel across the 8 frames.
                     transpose_8x8_f32_avx2!(
                         row0, row1, row2, row3, row4, row5, row6, row7, v_in0, v_in1, v_in2, v_in3,
                         v_in4, v_in5, v_in6, v_in7
                     );
+
+                    // Accumulate dot products across all 8 frames in parallel via FMA (Fused Multiply-Add):
                     acc0 = _mm256_fmadd_ps(v_in0, v_w0, acc0);
                     acc1 = _mm256_fmadd_ps(v_in1, v_w1, acc1);
                     acc2 = _mm256_fmadd_ps(v_in2, v_w2, acc2);
@@ -165,6 +180,8 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                     acc7 = _mm256_fmadd_ps(v_in7, v_w7, acc7);
                     ic += 8;
                 }
+
+                // Balanced reduction tree to sum partial accumulators into acc0:
                 acc0 = _mm256_add_ps(acc0, acc1);
                 acc2 = _mm256_add_ps(acc2, acc3);
                 acc4 = _mm256_add_ps(acc4, acc5);

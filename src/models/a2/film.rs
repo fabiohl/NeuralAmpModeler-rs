@@ -159,7 +159,15 @@ impl FiLMLayer {
     /// `condition.len()` must equal `self.cond_size`.
     /// `input.len()` may be ≤ `self.channels` (e.g. activation_post_film on
     /// bottleneck-sized slice when bottleneck < channels).
-    #[inline(always)]
+    ///
+    /// `#[inline]` (relaxed, LLVM-decided) rather than `#[inline(always)]`:
+    /// `process_frame_dyn` calls this up to 8× per frame for the grouped-FiLM
+    /// A2 topologies, and force-inlining the full `cond_to_scale_shift` +
+    /// `apply_modulation` body at every site bloats the per-frame kernel past
+    /// the µop-cache, regressing the end-to-end A2-Dynamic FiLM benches by
+    /// ~30-45% (measured). The relaxed hint lets LLVM inline where hot and
+    /// keep a single out-of-line body where the aggregate call count dominates.
+    #[inline]
     pub unsafe fn process(&mut self, input: &mut [f32], condition: &[f32]) {
         debug_assert!(
             condition.len() >= self.cond_size,
@@ -364,6 +372,23 @@ impl super::layer::A2Layer {
 #[inline(always)]
 unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
+
+    // Tiny-vector fast path: for `len < 8` the AVX2 loops never execute and the
+    // horizontal reduction below would sum two zero vectors (a pure-waste fixed
+    // cost paid on every grouped-FiLM row). A direct left-to-right scalar
+    // accumulation is bit-identical: the reduction of the zero accumulators is
+    // exactly `+0.0`, and `0.0 + x == x` for every finite `x` (including `-0.0`
+    // products, which normalize to `+0.0` — the same value the reduction yields).
+    if len < 8 {
+        let mut out = 0.0f32;
+        let mut i = 0;
+        while i < len {
+            out += *a.get_unchecked(i) * *b.get_unchecked(i);
+            i += 1;
+        }
+        return out;
+    }
+
     let mut sum0 = _mm256_setzero_ps();
     let mut sum1 = _mm256_setzero_ps();
     let mut i = 0;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! SPRINT NC-4: WaveNet layer array head configuration & parity validation (GAP-03, GAP-04).
+//! WaveNet layer array head configuration & parity validation (GAP-03, GAP-04).
 //!
 //! Validates:
 //! 1. Parity between legacy `head_size` + `head_bias` (implicit kernel=1, dilation=1)

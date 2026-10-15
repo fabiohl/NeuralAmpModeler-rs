@@ -348,6 +348,313 @@ fn test_ignored_models_are_in_catalog() {
     );
 }
 
+/// S5-T4 — `#[ignore]` × long-suite coverage roster (F-14).
+///
+/// Every `#[ignore]`d test must be either (a) routed to a `tests-long.sh`
+/// phase via a name filter below, or (b) an explicit on-demand tool with a
+/// `// on-demand:` marker at its definition site. The roster is structural:
+/// it scans `utils/tests-long.sh` for the invocation filters and every
+/// `#[ignore]` site under `tests/` + `src/`, so a new ignored test without a
+/// phase route or an on-demand marker fails this gate instead of silently
+/// orphaning.
+///
+/// Covered phases mirror the long-suite invocations (soak → defense →
+/// parity → heap → deadline → jitter → loom); the 8 justified on-demand
+/// orphans carry their reason inline.
+fn long_phase_filters() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("soak_test", "phase1"),
+        ("test_a2_dyn_blended_soak", "phase1"),
+        ("test_a2_dyn_gated_soak", "phase1"),
+        ("test_a2_full_noise_soak", "phase1"),
+        ("test_a2_full_silence_soak", "phase1"),
+        ("test_a2_lite_noise_soak", "phase1"),
+        ("test_a2_lite_silence_soak", "phase1"),
+        ("test_a2_max_noise_soak", "phase1"),
+        ("test_a2_max_silence_soak", "phase1"),
+        ("test_convnet_soak", "phase1"),
+        ("test_lstm_dyn_soak", "phase1"),
+        ("test_lstm_noise_soak", "phase1"),
+        ("test_lstm_silence_soak", "phase1"),
+        ("test_wavenet_dyn_soak", "phase1"),
+        ("test_wavenet_noise_soak", "phase1"),
+        ("test_wavenet_silence_soak", "phase1"),
+        ("test_wavenet_drift_decomposition", "phase1"),
+        ("test_resampler_drift_soak", "phase1"),
+        ("test_mirror_buf_long_run", "phase1"),
+        ("test_adaptive_fsm_endurance", "phase1"),
+        ("test_adaptive_fsm_transition_cycles", "phase1"),
+        ("test_gate_fsm_endurance", "phase1"),
+        ("pipeline_soak", "phase1"),
+        ("concurrency_stress", "phase1"),
+        ("test_model_hot_swap", "phase1"),
+        ("test_t6_3_torn_read", "phase1"),
+        ("test_cabsim_swap", "phase1"),
+        ("test_gc_cascade", "phase1"),
+        ("qa_defense", "phase2"),
+        ("libm_export_guard", "phase2"),
+        ("oversample", "phase2"),
+        ("test_cabsim_golden", "phase3"),
+        ("test_linear_golden", "phase3"),
+        ("proptest_parsers", "phase3"),
+        ("prop_fuzz", "phase3"),
+        ("prop_hostile", "phase3"),
+        ("prop_model_data", "phase3"),
+        ("proptest_math", "phase3"),
+        ("prop_dot_product", "phase3"),
+        ("prop_simd_sigmoid", "phase3"),
+        ("lstm_gate_bf16", "phase3"),
+        ("test_gemv_4gate", "phase3"),
+        ("lstm_scalar_bf16", "phase3"),
+        ("test_lstm_", "phase3"),
+        ("gate_fsm", "phase3"),
+        ("adaptive_fsm", "phase3"),
+        ("lstm_model_dyn", "phase3"),
+        ("test_model_dyn_proptest", "phase3"),
+        ("cpp_parity", "phase3"),
+        ("live_cross_validation", "phase3"),
+        ("cross_validate_cabsim", "phase3"),
+        ("cabsim_cpp_parity", "phase3"),
+        ("t33", "phase3"),
+        ("t33b_", "phase3"),
+        ("t33c_", "phase3"),
+        ("golden_vectors_v2", "phase3"),
+        ("test_golden_vectors_v2", "phase3"),
+        ("linear_golden", "phase3"),
+        ("cabsim_golden", "phase3"),
+        ("oversampling_characterization", "phase3"),
+        ("characterize_lstm_oversampling", "phase3"),
+        ("isa_parity", "phase3"),
+        ("spectral_fidelity", "phase3"),
+        ("model_baselines", "phase3"),
+        ("$test_name", "phase3-macro"),
+        ("model_baselines::baseline_", "phase3"),
+        ("generate_spectral_fidelity_baseline", "phase3-generator"),
+        ("pipeline_block_proptest", "phase3"),
+        ("test_random_block_sizes_proptest", "phase3"),
+        ("activations", "phase3"),
+        ("test_sigmoid_poly", "phase3"),
+        ("test_tanh_poly", "phase3"),
+        ("high_fidelity_test", "phase3"),
+        ("gate_envelope_continuity", "phase3"),
+        ("gate_test", "phase3"),
+        ("reference_test", "phase3"),
+        ("test_pade_", "phase3"),
+        ("resampler_heap_audit", "phase4"),
+        ("cabsim_heap_audit", "phase4"),
+        ("a2_heap_audit", "phase4"),
+        ("a2_dyn_max_heap_audit", "phase4"),
+        ("test_a2_dyn_max_heap_audit", "phase4"),
+        ("sequential_heap_audit", "phase4"),
+        ("test_sequential_prewarm_step_split_heap_audit", "phase4"),
+        ("test_sequential_process_heap_audit_after_warmup", "phase4"),
+        (
+            "test_sequential_process_raw_multichannel_heap_audit",
+            "phase4",
+        ),
+        ("diagnostic_bundle", "phase4"),
+        ("rt_deadline", "phase5"),
+        ("test_rt_deadline", "phase5"),
+        ("rt_jitter", "phase6"),
+        ("test_jitter_characterization", "phase6"),
+        ("loom_tests", "phase7"),
+    ]
+}
+
+/// Justified on-demand `#[ignore]` orphans (S5-T4 audit, 2026-10-15):
+/// name fragment → reason. Each must keep its `// on-demand:` marker (or an
+/// `#[ignore = "..."]` reason string) at the definition site.
+fn justified_ondemand_orphans() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "bench_rdtsc_overhead",
+            "empirical TSC micro-benchmark (T-P4.2.3); run manually pinned",
+        ),
+        (
+            "test_random_block_sizes_proptest",
+            "lib-level pipeline block proptest; long runs it via explicit filter",
+        ),
+        (
+            "test_a2_max_film_slot_budget",
+            "TR2b.3/H6 FiLM budget diagnostic; not a nightly gate",
+        ),
+        (
+            "test_h0_triple_decomposition",
+            "TR2b.1/H0 triple-decomposition harness; not a nightly gate",
+        ),
+        (
+            "test_tr2b2_condition_dsp_contract",
+            "TR2b.2/H5+H7 condition_dsp contract harness; not a nightly gate",
+        ),
+        (
+            "profile_wavenet_lite_kernels",
+            "WaveNet Lite CH=12 kernel profiler; obsolete synthetic fixture",
+        ),
+        (
+            "regenerate_render_fixture_and_golden",
+            "dev tool rebuilding report.jsonl + render_plain.golden",
+        ),
+        (
+            "transcribe_quality_contract_to_json",
+            "dev tool transcribing the committed quality contract",
+        ),
+    ]
+}
+
+/// Collects `(qualified_test_name, source_rel_path)` for every `#[ignore]`
+/// site under `tests/` and `src/`. The qualified name is the enclosing Rust
+/// module path prefix plus the `fn <name>` following the attribute, so it
+/// matches the long-suite invocation filters (which select by module, e.g.
+/// `cpp_parity`, `soak_test`, `math::activations::`); the source path is
+/// repo-relative.
+fn collect_ignored_tests() -> Vec<(String, String)> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    for root in ["tests", "src"] {
+        let mut files = Vec::new();
+        walk_rs_files(&manifest.join(root), &mut files);
+        for path in files {
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let rel = path
+                .strip_prefix(&manifest)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            // Enclosing `mod <name>` stack so `fn live_cross_validation_*`
+            // inside `mod cpp_parity` qualifies as `cpp_parity::live_...`.
+            let mut mod_stack: Vec<String> = Vec::new();
+            let mut brace_depth: Vec<usize> = Vec::new();
+            let mut depth: usize = 0;
+            let lines: Vec<&str> = content.lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let trimmed = lines[i].trim();
+                if let Some(rest) = trimmed
+                    .strip_prefix("mod ")
+                    .or_else(|| trimmed.strip_prefix("pub mod "))
+                    .or_else(|| trimmed.strip_prefix("pub(crate) mod "))
+                    .or_else(|| trimmed.strip_prefix("pub(super) mod "))
+                {
+                    let name = rest
+                        .split([' ', '{', ';'])
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if !name.is_empty() {
+                        mod_stack.push(name);
+                        brace_depth.push(depth + trimmed.matches('{').count());
+                    }
+                }
+                depth += trimmed.matches('{').count();
+                depth = depth.saturating_sub(trimmed.matches('}').count());
+                while brace_depth.last().is_some_and(|&d| depth < d) {
+                    mod_stack.pop();
+                    brace_depth.pop();
+                }
+                if trimmed.starts_with("#[ignore") {
+                    let mut j = i + 1;
+                    while j < lines.len()
+                        && (lines[j].trim().is_empty()
+                            || lines[j].trim().starts_with("#[")
+                            || lines[j].trim().starts_with("//"))
+                    {
+                        if lines[j].trim().starts_with("fn ") {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if j < lines.len()
+                        && let Some(name) = lines[j]
+                            .trim()
+                            .strip_prefix("fn ")
+                            .and_then(|s| s.split('(').next())
+                    {
+                        let fname = name.trim().to_string();
+                        let qualified = if mod_stack.is_empty() {
+                            fname
+                        } else {
+                            format!("{}::{fname}", mod_stack.join("::"))
+                        };
+                        out.push((qualified, rel.clone()));
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// S5-T4 gate: zero unjustified `#[ignore]` orphans. Every ignored test must
+/// match a long-phase filter or a justified on-demand entry (with its marker
+/// intact at the definition site).
+#[test]
+fn test_ignored_tests_have_long_phase_or_ondemand_reason() {
+    let filters = long_phase_filters();
+    let orphans = justified_ondemand_orphans();
+    let ignored = collect_ignored_tests();
+    assert!(
+        !ignored.is_empty(),
+        "ignored-test scanner found zero #[ignore] sites — scanner broken",
+    );
+
+    let mut unjustified = Vec::new();
+    for (name, rel) in &ignored {
+        if filters.iter().any(|(f, _)| name.contains(f)) {
+            continue;
+        }
+        if let Some((_, _)) = orphans.iter().find(|(frag, _)| name.contains(frag)) {
+            // The justification must be visible at the definition site:
+            // either `// on-demand:` above the attribute or a reason string
+            // inside `#[ignore = "..."]`. The qualified name carries the
+            // module prefix, so search for the bare fn name (after `::`).
+            let bare = name.rsplit("::").next().unwrap_or(name);
+            let full = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+            let content = fs::read_to_string(&full).unwrap_or_default();
+            let window = match content.find(&format!("fn {bare}")) {
+                Some(pos) => {
+                    let start = pos.saturating_sub(1200);
+                    content.get(start..pos).unwrap_or("")
+                }
+                None => "",
+            };
+            let has_marker = window.contains("on-demand:") || window.contains("#[ignore = \"");
+            if !has_marker {
+                unjustified.push(format!(
+                    "{name} ({rel}): justified orphan lost its on-demand marker"
+                ));
+            }
+            continue;
+        }
+        unjustified.push(format!(
+            "{name} ({rel}): no long phase filter, no on-demand reason"
+        ));
+    }
+
+    if !unjustified.is_empty() {
+        panic!(
+            "{} unjustified #[ignore] orphan(s):\n  {}\n\nRoute each to a \
+             tests-long.sh phase (long_phase_filters) or justify it in \
+             justified_ondemand_orphans with a // on-demand: marker.",
+            unjustified.len(),
+            unjustified.join("\n  "),
+        );
+    }
+
+    eprintln!(
+        "  ✓ ignore-coverage: {} #[ignore] sites all routed ({} long filters, {} justified on-demand).",
+        ignored.len(),
+        filters.len(),
+        orphans.len(),
+    );
+}
+
 /// Loads `docs/quality-contract.json` (the canonical machine contract, R-01)
 /// and ensures every fidelity entry has a unique `id` and a unique `label`,
 /// with no label being a prefix of another — preventing collisions like

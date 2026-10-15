@@ -84,6 +84,7 @@ fn perf_micro_batch(
 
 #[test]
 #[ignore]
+// on-demand: dev tool transcribing the committed quality contract; not a gate.
 fn transcribe_quality_contract_to_json() {
     let contract = QualityContract {
         schema_version: SCHEMA_VERSION,

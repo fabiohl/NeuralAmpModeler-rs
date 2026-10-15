@@ -980,7 +980,7 @@ fn latency_us(report: &QualityReport, bench_id: &str) -> Option<f64> {
 
 fn render_performance(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
-    out.push_str("PERFORMANCE — Block Latency (64 samples @ 48kHz)\n");
+    out.push_str("PERFORMANCE — Block Latency (µs per 64-sample block @ 48kHz)\n");
     out.push_str("══════════════════════════════════════════════════════════\n");
     out.push_str("  RT deadline: 1333 µs (1.33 ms)\n\n");
 
@@ -1064,6 +1064,11 @@ fn render_performance(report: &QualityReport, p: &Palette) -> String {
             out.push_str(&perf_row(display, *lat));
         }
         out.push('\n');
+        out.push_str(
+            "  (i) DSP micro-kernels (Resampler, CabSim) run 64 blocks per Criterion\n\
+             \x20     iteration and are normalized here to µs per 64-sample block; Pipeline\n\
+             \x20     rows already process one 64-sample block per iteration.\n\n",
+        );
     }
 
     out.push_str("  (i) Headroom > 50%:  2x oversampling usually safe without xruns\n");
@@ -1304,10 +1309,12 @@ fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
     out.push_str("══════════════════════════════════════════════\n\n");
     out.push_str("  (i) These measurements are cold-start (256 samples, NO prewarm) — NOT\n");
     out.push_str("      comparable to the 'vs Ideal (f64)' values in the fidelity table\n");
-    out.push_str("      above (measured with 24k-sample warmup). For WaveNet/A2, the\n");
-    out.push_str("      receptive field is larger than the 256-sample window, so the\n");
-    out.push_str("      ESR total below reflects mostly the transient buffer fill-in,\n");
-    out.push_str("      not the steady-state precision floor.\n");
+    out.push_str("      above (measured with 24k-sample warmup).\n");
+    out.push_str("      For WaveNet/A2 the receptive field can exceed the 256-sample\n");
+    out.push_str("      window, so the measured total may include transient buffer fill-in;\n");
+    out.push_str("      for other models the measured total is close to the real f32-vs-f64\n");
+    out.push_str("      floor while `combined` is inflated by simulated F16C quantization,\n");
+    out.push_str("      which the production f32 path does not execute.\n");
     out.push_str("      See docs/perceptual_validation.md#decomposition-cold-start.\n\n");
 
     for block in &report.f64_decomp {
@@ -1332,6 +1339,7 @@ fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
         let combined = block.esr_combined.as_ref().and_then(metric_f64);
         if let (Some(total), Some(combined)) = (total, combined)
             && combined != 0.0
+            && total != 0.0
         {
             let ratio = (total / combined).abs().max((combined / total).abs());
             if ratio > 10.0 {
@@ -1344,19 +1352,37 @@ fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
                     || label.contains("a2")
                     || label.contains("convnet");
 
-                if is_transient_architecture {
+                let quant_f16c = block.esr_quant_f16c.as_ref().and_then(metric_f64);
+                let quant_dominates_combined =
+                    quant_f16c.map(|q| q >= 0.5 * combined).unwrap_or(false);
+
+                if combined > total && quant_dominates_combined {
+                    // `combined` includes the simulated F16C weight quantization,
+                    // which the production f32 path never executes. The measured
+                    // total is the real f32-vs-f64 error, so a large
+                    // combined/total ratio here is an artifact of the simulation,
+                    // not a cold-start transient.
                     out.push_str(&format!(
-                        "    Rule 5 notice: total/combined ≈ {ratio:.0}x (expected cold-start buffer fill-in transient).\n"
+                        "    Note: combined/total ≈ {ratio:.0}x — combined is dominated by the simulated F16C weight quantization (absent from the production f32 path); the measured total is the real f32-vs-f64 error.\n"
+                    ));
+                } else if total > combined && is_transient_architecture {
+                    out.push_str(&format!(
+                        "    Rule 5 notice: total/combined ≈ {ratio:.0}x (expected cold-start buffer fill-in transient: receptive field exceeds the 256-sample, prewarm=0 window).\n"
                     ));
                     out.push_str(
-                        "      Do not treat this number as a calibrated precision floor without paired prewarm measurement.\n",
+                        "      Confirm against the paired warmup measurement before treating this as a precision floor.\n",
                     );
                 } else {
+                    let ratio_label = if combined > total {
+                        "combined/total"
+                    } else {
+                        "total/combined"
+                    };
                     out.push_str(&p.yellow(&format!(
-                        "    Rule 5 (Σ sources ≈ total, within 10x) violated: total/combined ≈ {ratio:.0}x.\n"
+                        "    Rule 5 (Σ sources ≈ total, within 10x) violated: {ratio_label} ≈ {ratio:.0}x.\n"
                     )));
                     out.push_str(&p.yellow(
-                        "      Expected for models whose receptive field exceeds the measurement window (cold-start).\n",
+                        "      Sources and total disagree in a regime that neither the simulated-quantization nor the cold-start transient explains.\n",
                     ));
                     out.push_str(&p.yellow(
                         "      Do not treat this number as a calibrated precision floor without paired prewarm measurement.\n",

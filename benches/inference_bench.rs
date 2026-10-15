@@ -29,6 +29,10 @@
 //! - The real-time deadline at 48 kHz with a 64-sample buffer is **1.33 ms**.
 //! - If any inference benchmark exceeds this deadline, the engine will cause
 //!   xruns (buffer underruns) in production with this buffer size.
+//! - Every ID encodes the number of samples processed **per iteration**:
+//!   `*_{N}samp_48kHz` feeds one `N`-frame block per Criterion iteration. The
+//!   A2 block-size benches negotiate `set_max_buffer_size(N)` first, so the
+//!   reported time covers all `N` frames (not just the 64-frame default).
 //!
 //! ## Running
 //!

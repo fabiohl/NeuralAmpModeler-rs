@@ -278,8 +278,8 @@ impl NamResampler {
     /// Identical construction and semantics, but failures are reported as a
     /// structured [`NamErrorCode`] instead of an opaque `anyhow` error, so a
     /// consumer can triage the failure without a downcast. The `anyhow`
-    /// constructors remain available; deprecated/replacement is deferred to
-    /// the breaking release (Épico E / E4).
+    /// constructors remain available; deprecation/replacement is deferred to
+    /// the next breaking release.
     ///
     /// # Errors
     ///

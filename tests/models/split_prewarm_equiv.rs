@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Split-vs-integral deferred-stabilization equivalence (Sprint S4, S4-T2).
+//! Split-vs-integral deferred-stabilization equivalence.
 //!
 //! For every fixture model family, the arithmetic state produced by the
 //! integral stabilization flow (`reset()` → implicit prewarm) must be

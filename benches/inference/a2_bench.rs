@@ -42,6 +42,14 @@ pub fn bench_a2_full_block_sizes(c: &mut Criterion) {
     };
 
     for &size in &[32, 128, 256, 512] {
+        // A2 `process` clamps the frame count to the negotiated `max_buffer_size`
+        // (constructor default = 64). Without this call, `128/256/512` would all
+        // measure only the first 64 frames — the flat-scaling artefact of F-01.
+        model
+            .set_max_buffer_size(size)
+            .expect("A2 set_max_buffer_size must accept the bench block size");
+        model.prewarm(2048);
+
         let input = generate_sine_440hz(size);
         let mut output = vec![0.0f32; size];
         c.bench_function(&format!("A2Full_CH8_{}samp_48kHz", size), |b| {
@@ -100,6 +108,14 @@ pub fn bench_a2_lite_block_sizes(c: &mut Criterion) {
     };
 
     for &size in &[32, 128, 256, 512] {
+        // A2 `process` clamps the frame count to the negotiated `max_buffer_size`
+        // (constructor default = 64). Without this call, `128/256/512` would all
+        // measure only the first 64 frames — the flat-scaling artefact of F-01.
+        model
+            .set_max_buffer_size(size)
+            .expect("A2 set_max_buffer_size must accept the bench block size");
+        model.prewarm(2048);
+
         let input = generate_sine_440hz(size);
         let mut output = vec![0.0f32; size];
         c.bench_function(&format!("A2Lite_CH3_{}samp_48kHz", size), |b| {

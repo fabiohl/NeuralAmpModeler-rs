@@ -181,7 +181,7 @@ fn gap_markers_are_detected_in_canonical_order() {
          [STATUS] INCONCLUSIVE\n\
          [STATUS] SKIP_CAPABILITY\n\
          [STATUS] SKIP_OPTIONAL reason=\"models_nondist_absent\"\n\
-         [STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" reason=\"C++ render limitation\"\n\
+         [STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" reason=\"Concordant rejection by both loaders\"\n\
          MISSING-REQUIRED: wavenet_lite\n\
          AVX512_OPT_IN: NOT_RUN (default runner without --features avx512)\n\
          SKIP: old-style free print not yet converted\n",
@@ -192,7 +192,7 @@ fn gap_markers_are_detected_in_canonical_order() {
             "inconclusive_environment",
             "skip_capability",
             "skip_optional:models_nondist_absent",
-            "known_gap:condition_lstm_cpp_crash",
+            "known_gap:condition_lstm_rejected_by_both",
             "inconclusive",
             "missing_required:wavenet_lite",
             "avx512_opt_in_not_run",
@@ -244,14 +244,14 @@ fn colon_form_skip_markers_are_recognized() {
         "[STATUS] SKIP_CAPABILITY: avx512_cpu_unsupported:Zen1\n\
          [STATUS] SKIP_OPTIONAL: models_nondist_empty\n\
          [STATUS] INCONCLUSIVE: governor not performance\n\
-         [STATUS] KNOWN_GAP: condition_lstm_cpp_crash\n",
+         [STATUS] KNOWN_GAP: condition_lstm_rejected_by_both\n",
     );
     assert_eq!(
         detect_gap_markers(&log),
         vec![
             "skip_capability:avx512_cpu_unsupported:Zen1",
             "skip_optional:models_nondist_empty",
-            "known_gap:condition_lstm_cpp_crash",
+            "known_gap:condition_lstm_rejected_by_both",
             "inconclusive:governor not performance",
         ]
     );
@@ -893,30 +893,33 @@ fn skip_optional_nondist_log_classifies_as_completed_with_gaps() {
 
 #[test]
 fn known_gap_condition_lstm_registers_gap_with_correct_id() {
-    // Fixture: the upstream C++ condition_lstm gap must be recorded with
-    // its stable id (`known_gap:condition_lstm_cpp_crash`).
+    // Fixture: the LSTM-as-condition_dsp gap (rejected by both oracles) must be
+    // recorded with its stable id (`known_gap:condition_lstm_rejected_by_both`).
     let log = write_temp(
-        "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" \
-         reason=\"C++ render tool limitation (LSTM condition_dsp channel mismatch)\"\n\
+        "[STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" \
+         reason=\"Concordant rejection by both loaders\"\n\
          test result: ok. 1 passed; 0 failed\n",
     );
     assert_eq!(
         detect_gap_markers(&log),
-        vec!["known_gap:condition_lstm_cpp_crash"]
+        vec!["known_gap:condition_lstm_rejected_by_both"]
     );
 
     let phase = mk_phase(
         "phase2",
         LongPhaseStatus::Passed,
         1,
-        &["known_gap:condition_lstm_cpp_crash"],
+        &["known_gap:condition_lstm_rejected_by_both"],
     );
     let receipt = LongAuditReceipt {
         phases: vec![phase],
     };
     let s = receipt.summary_receipt();
     assert_eq!(s.status, LongPhaseStatus::CompletedWithGaps);
-    assert_eq!(s.gaps, vec!["phase2:known_gap:condition_lstm_cpp_crash"]);
+    assert_eq!(
+        s.gaps,
+        vec!["phase2:known_gap:condition_lstm_rejected_by_both"]
+    );
     assert!(receipt.strict_verdict().is_err());
 }
 
@@ -1277,7 +1280,7 @@ fn three_phases_with_two_gaps_aggregates_into_overall_gaps() {
         LongPhaseStatus::Passed,
         25,
         &[
-            "known_gap:condition_lstm_cpp_crash",
+            "known_gap:condition_lstm_rejected_by_both",
             "avx512_opt_in_not_run",
         ],
     );
@@ -1293,7 +1296,7 @@ fn three_phases_with_two_gaps_aggregates_into_overall_gaps() {
     assert_eq!(
         overall.gaps,
         vec![
-            "phase2:known_gap:condition_lstm_cpp_crash",
+            "phase2:known_gap:condition_lstm_rejected_by_both",
             "phase2:avx512_opt_in_not_run"
         ]
     );

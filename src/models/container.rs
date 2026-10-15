@@ -114,7 +114,7 @@ impl ContainerModel {
     /// construction, but failures are reported as [`NamErrorCode`] instead of
     /// an opaque `anyhow` error, so a caller can triage them without a
     /// downcast. The `anyhow` constructor remains available; its replacement
-    /// is deferred to the breaking release (Épico E / E4).
+    /// is deferred to the next breaking release.
     ///
     /// # Requirements (enforced)
     ///

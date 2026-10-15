@@ -67,7 +67,9 @@ Fast mode targets severely CPU-constrained setups or ultra-low buffer sizes:
 - **Throughput:** ~54 ns for 256 elements on AVX2 (dual-register lane amortization).
 
 > [!WARNING]
-> **Recurrent State Drift in LSTMs under Fast Mode:** Fast mode approximations are bounded over compact intervals ($[-4, 4]$ for $\tanh$, $[-8, 8]$ for $\sigma$) with residual errors around $10^{-3}$. In recurrent architectures (LSTM), activation errors accumulate feedback-wise in the cell state $c_t$ and hidden state $h_t$ over thousands of consecutive samples. This causes audible tone degradation (Standard mode achieves an average **+89.5 dB SNR gain** over Fast mode in LSTM models). Fast mode is recommended primarily for feed-forward architectures (WaveNet, ConvNet); LSTM models should remain on Standard mode. Detailed topology-specific SNR measurements are catalogued in [`audio_fidelity_map.md §2`](audio_fidelity_map.md#2-activation-precision--standard-exact-grade-vs-fast-pad).
+> **Recurrent State Drift in LSTMs under Fast Mode:** Fast mode approximations are bounded over compact intervals ($[-4, 4]$ for $\tanh$, $[-8, 8]$ for $\sigma$) with residual errors around $10^{-3}$. In recurrent architectures (LSTM), activation errors accumulate feedback-wise in the cell state $c_t$ and hidden state $h_t$ over thousands of consecutive samples. This causes audible tone degradation (Standard mode achieves an average **+89.5 dB SNR gain** over Fast mode in LSTM models). Fast mode is recommended primarily for feed-forward architectures (WaveNet, ConvNet); LSTM models should remain on Standard mode. Detailed topology-specific SNR measurements are catalogued in [`audio_fidelity_map.md §2`](audio_fidelity_map.md#2-activation-precision-standard-exact-grade-vs-fast-padé).
+
+**Measured Audibility Policy (F-08).** Under the canonical paired-prewarm protocol (`24 000 + 256` @ 48 kHz) against the f64 ideal oracle (`test_s4_lstm_pade_activation_cost`, `tests/parity/reference_oracle_f64.rs`), forcing `Fast` in LSTM yields `ESR 4.9e-4 … 3.0e-2` / `SNR 15.3 … 33.1 dB`, whereas `Standard` stays at the f64 agreement floor (`ESR ≤ 5.5e-12` / `SNR ≥ 112.6 dB`), an average **+91.8 dB** gain — consistent with the +89.5 dB figure above. On the most excitable case (`BossLSTM-1×16` × stress_v2) the Padé MR-STFT (`5.06e-1`) sits ~4 orders of magnitude above the LSTM MR-STFT ceilings (`baseline × 10`), and the ESR (`2.97e-2`) crosses the `1e-2` auditory boundary. **Policy verdict: accepted by parity** — `Standard` (exact-grade) is the production default and satisfies the NAMCore parity contract; `Fast` remains an explicit opt-in for feed-forward architectures only. Full table and reading: [`perceptual_validation.md §6.1`](perceptual_validation.md#61--measured-audibility-cost-of-fast-padé-in-lstm).
 
 ### 1.3 Interaction with Oversampling & Topology Dispatch
 
@@ -202,7 +204,7 @@ Evaluating 7 polynomials of degree 5 blended branchlessly via `_mm256_blendv_ps`
 
 All neural network layers operate natively on single-precision `f32` arrays:
 
-- **No Hot-Path Compression:** Half-precision (`f16c` / `bf16`) weight compression was removed from inference paths. The decompression latency, EVEX prefix overhead, and recurrent error accumulation ($0.1\%\text{--}0.5\%$ per layer) outweighed memory bandwidth savings (see [`audio_fidelity_map.md §1`](audio_fidelity_map.md#1-native-f32-weight-representation--numerical-error-budgets)).
+- **No Hot-Path Compression:** Half-precision (`f16c` / `bf16`) weight compression was removed from inference paths. The decompression latency, EVEX prefix overhead, and recurrent error accumulation ($0.1\%\text{--}0.5\%$ per layer) outweighed memory bandwidth savings (see [`audio_fidelity_map.md §1`](audio_fidelity_map.md#1-native-f32-weight-representation--precision-architecture)).
 - **Interoperability Parity:** Standard mode native `f32` inference achieves $\text{SNR} > 130\text{ dB}$ (ESR $\sim 10^{-13}$ to $10^{-14}$) compared to upstream C++ NAMcore (Standard: 136.4 dB SNR, Feather: 133.2 dB SNR, Nano: 131.9 dB SNR).
 - **Buffer Alignment:** Delay line history circular buffers use [`MirroredBuffer::new_aligned`](../src/dsp/mirror_buf/alloc.rs) to ensure that the allocated element count is strictly divisible by the channel count (e.g. WaveNet Lite CH=12), eliminating stride misalignments across virtual memory mirror seams.
 
@@ -250,30 +252,35 @@ Denormals-Are-Zero (DAZ) and Flush-To-Zero (FTZ) flags are enforced at the DSP b
 Rust 1.99 stabilized 128-bit operands (`i128`/`u128`) in `core::arch::asm!` bound to vector registers (`inout(xmm_reg)` / `in(xmm_reg)`). In accordance with Architectural Epic E (derived from Finding F-02), an exhaustive codegen audit and empirical benchmark were conducted across the core DSP hot-path kernels (`dot_product_4x_f32_avx2`, `head_process_ch8_avx2`, `head_process_ch3_sse`, and `grouped_conv1d_single_frame_simd`).
 
 #### 1. Machine Code & Register Allocation Audit
+
 Disassembly of release builds (`--emit=asm -C opt-level=3 -C target-cpu=x86-64-v3`) of the primary inference and reduction kernels demonstrated:
+
 - **`dot_product_4x_f32_avx2` / `dot_product_8x_f32_avx2`**: Exactly **zero stack spills** (`%rsp`-relative stores/loads) within the 4-way and 8-way unrolled inner loops. Accumulators `%xmm0`–`%xmm4` (or `%ymm0`–`%ymm3`) remain entirely in registers throughout the computation.
 - **`head_process_ch8_avx2` / `head_process_ch3_sse`**: Exactly **zero stack spills** across all 16 taps. Accumulators reside exclusively in registers across all iterations.
 - **`grouped_conv1d_single_frame_simd`**: Exactly **zero vector spills** to stack in the inner frame processing loop.
 - **AVX-SSE State Penalty Transitions**: Exactly **zero legacy SSE arithmetic instructions** detected in AVX execution contexts. Under the crate's mandatory `x86-64-v3` baseline, LLVM natively emits VEX prefixes (`vmovaps`, `vfmadd231ps`, `vbroadcastss`, etc.) for all vector operations, eliminating any risk of the 75–150 cycle AVX-SSE state-transition penalty.
 
 #### 2. Empirical Benchmark: Pure Intrinsics vs. Inline `asm!`
+
 An isolated Criterion benchmark (`dot_4x_bench`) evaluated four kernel implementations across vector sizes from 4 to 4096 elements:
+
 1. `scalar`: Standard auto-vectorized loop.
 2. `avx2`: Production intrinsic implementation using `_mm_fmadd_ps` with 4-way unrolling.
 3. `asm_xmm`: Hand-written inline `asm!` with `inout(xmm_reg)` binding `__m128` vectors.
 4. `asm_u128`: Hand-written inline `asm!` with `inout(xmm_reg)` binding `u128` integers (Rust 1.99 feature).
 
 | Vector Size | `scalar` | `avx2` (Intrinsics) | `asm_xmm` (`__m128`) | `asm_u128` (Rust 1.99) |
-|:---:|:---:|:---:|:---:|:---:|
-| 4 | 2.54 ns | 1.70 ns | 1.30 ns | 4.56 ns |
-| 8 | 1.94 ns | 2.35 ns | 2.06 ns | 7.44 ns |
-| 16 | 4.50 ns | **3.92 ns** | **3.92 ns** | 14.78 ns |
-| 64 | 37.34 ns | **15.47 ns** | 19.01 ns | 58.05 ns |
-| 256 | 259.0 ns | **69.18 ns** | 69.09 ns | 233.3 ns |
-| 1024 | 1,146 ns | **296.7 ns** | 297.2 ns | 928.4 ns |
-| 4096 | 4,696 ns | **1,228 ns** | 1,232 ns | 3,721 ns |
+|:-----------:|:--------:|:-------------------:|:--------------------:|:----------------------:|
+| 4           | 2.54 ns  | 1.70 ns             | 1.30 ns              | 4.56 ns                |
+| 8           | 1.94 ns  | 2.35 ns             | 2.06 ns              | 7.44 ns                |
+| 16          | 4.50 ns  | **3.92 ns**         | **3.92 ns**          | 14.78 ns               |
+| 64          | 37.34 ns | **15.47 ns**        | 19.01 ns             | 58.05 ns               |
+| 256         | 259.0 ns | **69.18 ns**        | 69.09 ns             | 233.3 ns               |
+| 1024        | 1,146 ns | **296.7 ns**        | 297.2 ns             | 928.4 ns               |
+| 4096        | 4,696 ns | **1,228 ns**        | 1,232 ns             | 3,721 ns               |
 
 #### 3. Architectural Decision & Rationale
+
 - **`asm_u128` Regression (3.5×–4× slower)**: Rust 1.99's `xmm_reg` support for `u128`/`i128` is engineered for 128-bit wide integer math (cryptography, big-int arithmetic) without consuming pairs of 64-bit general-purpose registers (`rax:rdx`). In floating-point DSP kernels, casting or transmuting `f32` vectors through `u128` imposes severe register-reinterpretation overhead and prevents LLVM from recognizing floating-point semantics.
 - **Intrinsic Superiority over `asm!`**: Pure Rust intrinsics (`_mm_fmadd_ps`, `_mm256_fmadd_ps`) match or beat inline `asm!` across all operational vector sizes (at size 64, intrinsics are **23% faster**: 15.47 ns vs 19.01 ns). Inline assembly blocks act as opaque optimization barriers to LLVM, suppressing loop pipelining, caller inlining, and global register scheduling.
 - **Conclusion**: Manual `asm!` via `xmm_reg` does **not** provide any throughput advantage ($\ge 2\%$ gate not met; in fact showing regressions at intermediate sizes). The engine strictly maintains pure portable LLVM intrinsics (`core::arch::x86_64::*`) throughout all DSP inference paths.

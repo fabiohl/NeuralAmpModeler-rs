@@ -129,10 +129,10 @@ The single source of truth for model identities and architectural categorization
 ### Tracked Known Gaps & Specific Guardrails
 
 1. **`wavenet_a2_max.nam` (KB-A2-MAX retired — Fase 3, 2026-10-08):**
-    - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB) and triple parity closed against double-precision f64 oracle (Case A, SNR > 136 dB across all pairs). Former fail-closed guard TR1.1 retired; active CI gate. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
-2. **`wavenet_condition_lstm.nam` (Upstream C++ Channel Mismatch):**
-   - WaveNet outer model with embedded LSTM `condition_dsp`.
-   - The upstream C++ `render` tool encounters an input channel mismatch (`input_size=1` vs `hidden_size=3`), blocking golden generation. Flagged with `skip_reason` in [`src/testing/catalog.rs`](../src/testing/catalog.rs); tests skip gracefully when the golden is absent.
+   - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB) and triple parity closed against double-precision f64 oracle (Case A, SNR > 136 dB across all pairs). Former fail-closed guard TR1.1 retired; active CI gate. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
+2. **`wavenet_condition_lstm.nam` (Concordant Rejection — LSTM `condition_dsp`):**
+   - WaveNet outer model with an embedded LSTM `condition_dsp` (rejection probe).
+   - Rejected by both oracles, so no golden can be generated: Rust refuses LSTM-as-`condition_dsp` fail-closed by policy; C++ NAMCore rejects at construction because layer `condition_size` (3) $\neq$ condition DSP output channels (1, the default `out_channels`). Tracked via `skip_reason` in [`src/testing/catalog.rs`](../src/testing/catalog.rs) and the stable receipt id `known_gap:condition_lstm_rejected_by_both`; tests skip gracefully when the golden is absent. Analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §7.5.
 3. **`slimmable_wavenet.nam` (Heterogeneous Slicing & Parity):**
    - Upstream NAMCore example fixture with declared `slimmable` metadata (`slice_channels_uniform`, `allowed_channels: [1, 2, 3]`); catalogued as `KnownGap` while the multi-size parity gate matures. Supported for dynamic channel-sliced inference across layer arrays with union breakpoint resolution. Cross-validated against upstream C++ `render --slim <ratio>` and a single-precision sliced-vs-prefix-masked equivalence oracle. Invariant: slicing strictly reduces channels, never expands beyond the loaded full model.
 4. **`BossWN-lite.nam` (Obsolete):**
@@ -169,7 +169,7 @@ Governed by [`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`](../src/testing/catalo
 | Scope               | Sample Rates                 | Target Models                                                                                                                                         | Architectural Rationale                                                                                                                                                                       |
 |:------------------- |:---------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`AllRates`**      | 44.1k, 48k, 88.2k, 96k, 192k | `wavenet_feather`, `wavenet_nano`, `wavenet_lite`, `wavenet_a1_standard`                                                                              | Models without fixed `sample_rate` JSON field; validate multi-rate resampling and inference across all supported host rates.                                                                  |
-| **`Exclude192k`**   | 44.1k, 48k, 88.2k, 96k       | `lstm_1x16`, `lstm_2x8`                                                                                                                               | At 192 kHz (960,000 samples), recursive LSTM evaluation exhibits cumulative drift across long sequences (causa não adjudicada). Formally capped at 96 kHz.                                  |
+| **`Exclude192k`**   | 44.1k, 48k, 88.2k, 96k       | `lstm_1x16`, `lstm_2x8`                                                                                                                               | At 192 kHz (960,000 samples), recursive LSTM evaluation exhibits cumulative drift across long sequences (causa não adjudicada). Formally capped at 96 kHz.                                    |
 | **`Sr48kOnly`**     | 48 kHz only                  | `wavenet_standard`, `lstm_official`, `wavenet_a2_full`, `wavenet_a2_lite`, `convnet_test`, `wavenet_official`, dynamic and non-distributable captures | Models declaring `"sample_rate": 48000` in their NAM JSON; C++ render tool enforces single-rate rendering for these files.                                                                    |
 | **`v2_scope=none`** | None (V1 only)               | FiLM models (`wavenet_a2_film_*`), Linear FFT (`linear_fft_rf*`), container models                                                                    | C++ `a2_fast` rejects FiLM, falling back to generic WaveNet; dynamic FiLM paths are validated via live C++ cross-validation in [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs). |
 
@@ -189,7 +189,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
    - Committed vectors: `golden_cabsim_cpp_short.bin` (64), `golden_cabsim_cpp_medium.bin` (512), `golden_cabsim_cpp_long.bin` (8192).
    - *Engine Constraint:* C++ `dsp::ImpulseResponse` hard-caps IR length at 8192 samples (`mMaxLength`). Tests exceeding 8192 samples are evaluated exclusively against the inline direct convolution oracle.
 
-### A2-Max Intermediate C++ Anchors (Retired — Reproducible Forensic Record, Épico 1 Sprint 1.3)
+### A2-Max Intermediate C++ Anchors (Retired — Reproducible Forensic Record)
 
 > The four raw little-endian f32 tensors (`dump_array0.bin`, `dump_rechannel.bin`,
 > `dump_condition_dsp.bin`, `dump_film.bin`, 712 KB total) were removed from git
@@ -211,12 +211,12 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 > Last captured identities (SHA-256, 2026-10-07) for forensic verification of
 > regenerated dumps:
 >
-> | File | SHA-256 |
-> |:-----|:--------|
-> | `dump_array0.bin` | `8764236e76c9f2f5ff68daff1a720aea35f7f1e840eece929cb72d62860acf4a` |
-> | `dump_rechannel.bin` | `0552afcaebbc1fd45526b6dbcfb8c072d0193a2a91355227338806f107b41ec0` |
+> | File                     | SHA-256                                                            |
+> |:------------------------ |:------------------------------------------------------------------ |
+> | `dump_array0.bin`        | `8764236e76c9f2f5ff68daff1a720aea35f7f1e840eece929cb72d62860acf4a` |
+> | `dump_rechannel.bin`     | `0552afcaebbc1fd45526b6dbcfb8c072d0193a2a91355227338806f107b41ec0` |
 > | `dump_condition_dsp.bin` | `1227723e1466f390b60601f285bd744c204dfe21bf09cf75ffedd2e7eef1dceb` |
-> | `dump_film.bin` | `b30a14a1aa1cd6d91d6331f54013f9cdc0fd0b4b518abfbf107329546a4d1587` |
+> | `dump_film.bin`          | `b30a14a1aa1cd6d91d6331f54013f9cdc0fd0b4b518abfbf107329546a4d1587` |
 >
 > Shapes: `[2048, 3]` (24576 B), `[2048, 4]` (32768 B), `[2048, 8]` (65536 B),
 > `[2048, 72]` (589824 B); frame-major f32 little-endian; stimulus is the
@@ -229,10 +229,10 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 >
 > Phase-1 input identities (SHA-256, 2026-10-07):
 >
-> | Asset | SHA-256 |
-> |:------|:--------|
+> | Asset                       | SHA-256                                                            |
+> |:--------------------------- |:------------------------------------------------------------------ |
 > | `models/wavenet_a2_max.nam` | `12384c6640e1126907b366584024c4abb129ac5920b3dc2d31b29e39315e820d` |
-> | `stress_signal.wav` | `3d7d24609f8c004023b9560f7842994800bec96e4d7d35e63ed09080d8b57434` |
+> | `stress_signal.wav`         | `3d7d24609f8c004023b9560f7842994800bec96e4d7d35e63ed09080d8b57434` |
 > | `golden_wavenet_a2_max.bin` | `7248380f90391c14b75269310b7f5b0fc6146f69a4264ffea4a5e13d483c182b` |
 
 ### f64 Reference Anchors (`tests/fixtures/f64_anchors/`)
@@ -240,6 +240,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 - Generated by [`tests/fixtures/scripts/validate_oracle_f64.py`](../tests/fixtures/scripts/validate_oracle_f64.py) using an independent 64-bit floating-point NumPy implementation.
 - Evaluates 256-sample chirp inputs across WaveNet, A2, A2+FiLM, ConvNet, and LSTM architectures.
 - Consumed by [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs) to verify that the Rust f64 oracle achieves ESR < 1e-12 against ground truth before decomposing f32 numerical error budgets.
+- **Residual floor is arithmetic, not a clamp.** The `.bin` payloads are genuine f64 (`[u32 count][f64 × count]`); both the NumPy script and the Rust oracle load weights as f32 and compute in f64, and `compute_esr_f64` has no clamp. The recurring `ESR ≈ 5.00e-16` (`-153 dB`) reported for `wavenet_official`, the A2 Lite/Blended/FiLM/Gated paths and `condition_lstm` is a reproducible ~`1.6e-9` absolute rounding residual between the two independent f64 implementations on those paths; the remaining topologies (`convnet` `5.23e-33`, `condition_dsp` `3.18e-32`, `a2_generic` `5.79e-32`, `lstm` `3.49e-30`) agree to the f64 agreement floor, proving the harness can match near-exactly and the `5.00e-16` is path-specific. It is ≥3 orders of magnitude below the `< 1e-12` gate and is recorded per model as `// Measured:` in the consuming tests. Anchors are **not** regenerated: they are already f64, and regenerating without a C++ golden would be circular (regeneration policy in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.5.1).
 
 ### Resampler Reference Vectors
 

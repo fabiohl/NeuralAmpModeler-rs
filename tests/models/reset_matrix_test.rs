@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Reset idempotence and history-independence matrix (Sprint 3, T3.1; hardened T5.5).
+//! Reset idempotence and history-independence matrix.
 //!
 //! The C++ NAMcore `DSP::Reset` (`dsp.cpp:133-140`) always clears every
 //! temporal state buffer via `SetMaxBufferSize` before the optional prewarm.

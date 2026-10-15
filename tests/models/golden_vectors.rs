@@ -71,7 +71,7 @@ fn run_v2_golden_test(
         if !golden_path.exists() {
             if model_filename == "wavenet_condition_lstm.nam" {
                 eprintln!(
-                    "[STATUS] KNOWN_GAP id=\"condition_lstm_cpp_crash\" reason=\"C++ upstream limitation: LSTM condition_dsp sub-model channel mismatch — golden binary cannot be generated\""
+                    "[STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" reason=\"Concordant rejection: Rust fail-closed by policy (LSTM condition_dsp not supported); C++ NAMCore rejects the same fixture via its condition_size (3) != condition DSP output channels (LSTM defaults out_channels=1) — no golden binary can be generated\""
                 );
             } else {
                 eprintln!(

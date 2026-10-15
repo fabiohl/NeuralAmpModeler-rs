@@ -33,10 +33,21 @@
 //  ## Running
 //
 //  ```sh
-//  cargo test --release --test rt_jitter -- --ignored --nocapture
+//  cargo test --release --test rt_constraints rt_jitter -- --ignored --nocapture
 //  ```
 //
-//  Marked `#[ignore]` — runs during `tests-long.sh` Phase 5.
+//  ## Pinning (S5-T1)
+//
+//  The DSP thread is never pinned by this test: pinning is observed, not
+//  imposed. When the operator launches the suite under
+//  `taskset -c $NAM_BENCH_CORE` the process affinity resolves to a single
+//  isolated core and receipts record `pinned=true` (P50 then matches the
+//  phase5 deadline gate, ~45 µs for WaveNet-Standard). Without `taskset` the
+//  test runs in the generic multi-core environment and records
+//  `pinned=false`, so the ~98 µs vs ~45 µs delta is read as environmental,
+//  never as a regression.
+//
+//  Marked `#[ignore]` — runs during `tests-long.sh` Phase 6.
 
 pub(crate) use super::budget::{BLOCK_SIZE, RT_DEADLINE_US};
 use super::common;
@@ -80,6 +91,14 @@ impl JitterStats {
             .map(|n| n.get())
             .unwrap_or(1)
     }
+
+    /// `true` when the DSP thread runs pinned to exactly one core (the
+    /// `taskset -c $NAM_BENCH_CORE` operator shape, S5-T1). Observed via the
+    /// process affinity mask — never imposed by the test — so the default
+    /// (unpinned) behaviour is byte-identical to the pre-S5 harness.
+    fn is_pinned() -> bool {
+        Self::affinity_cores() == 1
+    }
 }
 
 fn stress_worker(running: Arc<AtomicBool>) {
@@ -114,13 +133,20 @@ fn measure_latency(
     stress_threads: usize,
 ) -> JitterStats {
     if stress_threads == 0 {
-        println!("[{label}] Baseline — {MEASURE_BLOCKS} blocks, no stress");
+        println!(
+            "[{label}] Baseline — {MEASURE_BLOCKS} blocks, no stress (pinned={})",
+            JitterStats::is_pinned()
+        );
     } else {
-        println!("[{label}] Stress: {stress_threads} worker(s), {MEASURE_BLOCKS} blocks");
+        println!(
+            "[{label}] Stress: {stress_threads} worker(s), {MEASURE_BLOCKS} blocks (pinned={})",
+            JitterStats::is_pinned()
+        );
     }
     println!(
-        "[{label}] Core affinity: {} core(s) available via affinity mask",
-        JitterStats::affinity_cores()
+        "[{label}] Core affinity: {} core(s) available via affinity mask (pinned={})",
+        JitterStats::affinity_cores(),
+        JitterStats::is_pinned(),
     );
     println!(
         "[{label}] Effective load: {stress_threads} CPU-burn worker(s) active during measurement"
@@ -216,8 +242,9 @@ fn delta_pct(current: u64, baseline: u64) -> String {
 
 fn emit_receipt(label: &str, stress_workers: usize, stats: &JitterStats) {
     println!(
-        "[RECEIPT] status=PASS label={label} stress_workers={stress_workers} \
-         p50_us={} p90_us={} p99_us={} p99.9_us={} exact_max_us={} violations={}/{}",
+        "[RECEIPT] status=CHARACTERIZED label={label} stress_workers={stress_workers} \
+         pinned={} p50_us={} p90_us={} p99_us={} p99.9_us={} exact_max_us={} violations={}/{}",
+        JitterStats::is_pinned(),
         stats.p50_us,
         stats.p90_us,
         stats.p99_us,
@@ -322,13 +349,22 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
     }
 
     println!("[STATUS] PASS — preflight OK");
+    println!(
+        "[JIT_PINS] pinned={} cores={} bench_core_env=\"{}\"",
+        JitterStats::is_pinned(),
+        JitterStats::affinity_cores(),
+        std::env::var("NAM_BENCH_CORE").unwrap_or_default(),
+    );
     if let Some(mut model) = load_and_prewarm("BossWN-standard.nam") {
         let baseline = measure_latency("WaveNet-Std-char-baseline", &mut model, 0);
 
-        // Emit typed receipt with percentiles as completion marker
+        // Emit typed receipt with percentiles as completion marker.
+        // `status=CHARACTERIZED` (S5-T2): jitter telemetry never asserts a
+        // deadline, so the token must not read as a gate approval.
         println!(
-            "[RECEIPT] status=PASS label=WaveNet-Std-char-baseline stress_workers=0 \
-             p50_us={} p90_us={} p99_us={} p99.9_us={} exact_max_us={} violations={}/{}",
+            "[RECEIPT] status=CHARACTERIZED label=WaveNet-Std-char-baseline stress_workers=0 \
+             pinned={} p50_us={} p90_us={} p99_us={} p99.9_us={} exact_max_us={} violations={}/{}",
+            JitterStats::is_pinned(),
             baseline.p50_us,
             baseline.p90_us,
             baseline.p99_us,

@@ -306,3 +306,219 @@ fn test_process_block_is_zero_alloc() {
         );
     }
 }
+
+// ── Core DelayLine Push/Pop, Lifecycle and Property Tests ───────────────────
+
+#[test]
+fn test_delay_zero_is_passthrough() {
+    let mut line = DelayLine::<f32>::new(0);
+    assert_eq!(line.latency_samples(), 0);
+    for i in 0..64 {
+        let x = i as f32 * 0.01;
+        line.push(x);
+        assert_eq!(
+            line.pop(),
+            x,
+            "delay=0 must return the just-pushed sample at {i}"
+        );
+    }
+}
+
+#[test]
+fn test_delay_n_shifts_by_n_with_zero_priming() {
+    for &delay in &[1usize, 12, 64, 256] {
+        let mut line = DelayLine::<f32>::new(delay);
+        assert_eq!(line.latency_samples(), delay);
+        let n = delay + 64;
+        let input: Vec<f32> = (0..n).map(|i| i as f32 * 0.01 + 0.5).collect();
+        for (i, &x) in input.iter().enumerate() {
+            line.push(x);
+            let expected = if i >= delay { input[i - delay] } else { 0.0 };
+            assert_eq!(line.pop(), expected, "delay={delay} shift mismatch at {i}");
+        }
+    }
+}
+
+#[test]
+fn test_push_pop_circular_wrap_exact_shift() {
+    let delay = 128usize;
+    let mut line = DelayLine::<f32>::new(delay);
+    let n = 2048;
+    let input: Vec<f32> = (0..n).map(|i| (i % 997) as f32 * 0.001).collect();
+    for (i, &x) in input.iter().enumerate() {
+        line.push(x);
+        let expected = if i >= delay { input[i - delay] } else { 0.0 };
+        assert_eq!(line.pop(), expected, "wrap shift mismatch at {i}");
+    }
+}
+
+#[test]
+fn test_resize_clears_and_updates_latency() {
+    let mut line = DelayLine::<f32>::new(8);
+    for i in 0..32 {
+        line.push(i as f32);
+        let _ = line.pop();
+    }
+    line.resize(32);
+    assert_eq!(line.latency_samples(), 32);
+    // Fresh history: first `delay` pops after resize are zero-primed.
+    for i in 0..32 {
+        line.push(0.5);
+        assert_eq!(line.pop(), 0.0, "post-resize priming at {i}");
+    }
+    line.push(0.5);
+    assert_eq!(
+        line.pop(),
+        0.5,
+        "steady state after re-prime must shift correctly"
+    );
+    line.resize(0);
+    assert_eq!(line.latency_samples(), 0);
+    line.push(1.25);
+    assert_eq!(line.pop(), 1.25);
+}
+
+#[test]
+fn test_push_pop_is_zero_alloc() {
+    let mut line = DelayLine::<f32>::new(64);
+    // Warm once outside the guard.
+    line.push(1.0);
+    let _ = line.pop();
+    let _guard = TrackingGuard::new();
+    for i in 0..256 {
+        line.push(i as f32 * 0.001);
+        let _ = line.pop();
+    }
+    assert_eq!(
+        get_alloc_count(),
+        0,
+        "push/pop must not allocate on the RT path"
+    );
+}
+
+#[test]
+fn test_with_capacity_preallocates_capacity_plus_one_and_clamps() {
+    let line = DelayLine::<f32>::with_capacity(3200, 64);
+    assert_eq!(
+        line.capacity(),
+        3200,
+        "capacity accessor must match request"
+    );
+    assert_eq!(line.latency_samples(), 64);
+
+    // Requested delay above capacity clamps to the maximum usable latency.
+    let mut clamped = DelayLine::<f32>::with_capacity(8, 100);
+    assert_eq!(clamped.capacity(), 8);
+    assert_eq!(clamped.latency_samples(), 8);
+
+    // The `capacity + 1` ring slots must sustain the maximum latency
+    // (`delay == capacity`) with exact shifts across many wrap-arounds.
+    let delay = clamped.capacity();
+    let n = 4 * (delay + 1);
+    let input: Vec<f32> = (0..n).map(|i| (i % 251) as f32 * 0.01).collect();
+    for (i, &x) in input.iter().enumerate() {
+        clamped.push(x);
+        let expected = if i >= delay { input[i - delay] } else { 0.0 };
+        assert_eq!(clamped.pop(), expected, "max-delay shift mismatch at {i}");
+    }
+
+    // Degenerate request still yields a usable passthrough line.
+    let mut degenerate = DelayLine::<f32>::with_capacity(0, 0);
+    assert_eq!(degenerate.capacity(), 0);
+    degenerate.push(1.25);
+    assert_eq!(degenerate.pop(), 1.25);
+}
+
+#[test]
+fn test_set_delay_dynamic_transition_preserves_circular_integrity() {
+    let mut line = DelayLine::<f32>::with_capacity(64, 4);
+    // Mid-stream retargets, including delay == capacity (max latency).
+    let changes = [(0usize, 4usize), (10, 31), (60, 0), (100, 63), (160, 7)];
+    let n = 256;
+    let input: Vec<f32> = (0..n).map(|i| (i % 173) as f32 * 0.01 + 0.25).collect();
+
+    let mut next_change = 0;
+    let mut delay = 0usize;
+    for (i, &x) in input.iter().enumerate() {
+        if next_change < changes.len() && changes[next_change].0 == i {
+            delay = changes[next_change].1;
+            line.set_delay(delay);
+            assert_eq!(line.latency_samples(), delay, "retarget at {i}");
+            next_change += 1;
+        }
+        line.push(x);
+        // History is continuous across retargets: `pop` must return the
+        // sample pushed exactly `delay` steps ago (zero-primed before).
+        let expected = if i >= delay { input[i - delay] } else { 0.0 };
+        assert_eq!(
+            line.pop(),
+            expected,
+            "dynamic delay mismatch at i={i} (delay={delay})"
+        );
+    }
+
+    // Retargets above capacity clamp without corrupting the ring.
+    line.set_delay(10_000);
+    assert_eq!(line.latency_samples(), 64);
+    line.set_delay(7);
+    assert_eq!(line.latency_samples(), 7);
+    line.push(-2.5);
+    assert_eq!(line.pop(), input[n - 7], "post-clamp shift mismatch");
+}
+
+#[test]
+fn test_reset_clears_history_and_re_primes() {
+    let mut line = DelayLine::<f32>::with_capacity(32, 8);
+    for i in 0..64 {
+        line.push(i as f32 * 0.5);
+        let _ = line.pop();
+    }
+
+    line.reset();
+    assert_eq!(line.capacity(), 32, "reset must preserve capacity");
+    assert_eq!(line.latency_samples(), 8, "reset must preserve delay");
+
+    // Full wipe: pops are zero-primed again, then shift exactly.
+    for i in 0..24 {
+        line.push(0.75);
+        let expected = if i >= 8 { 0.75 } else { 0.0 };
+        assert_eq!(line.pop(), expected, "post-reset priming at {i}");
+    }
+
+    // A second reset rewinds the head from an arbitrary wrap position:
+    // the ring behaves exactly like a freshly constructed line.
+    line.reset();
+    let input: Vec<f32> = (0..96).map(|i| (i % 71) as f32 * 0.02).collect();
+    for (i, &x) in input.iter().enumerate() {
+        line.push(x);
+        let expected = if i >= 8 { input[i - 8] } else { 0.0 };
+        assert_eq!(line.pop(), expected, "post-reset shift mismatch at {i}");
+    }
+}
+
+#[test]
+fn test_set_delay_and_reset_are_zero_alloc() {
+    let mut line = DelayLine::<f32>::with_capacity(3200, 16);
+    // Warm once outside the guard.
+    line.push(1.0);
+    let _ = line.pop();
+    let _guard = TrackingGuard::new();
+    for i in 0..512 {
+        line.set_delay(i % 3201);
+        line.push(i as f32 * 0.001);
+        let _ = line.pop();
+        if i % 128 == 0 {
+            line.reset();
+        }
+    }
+    assert_eq!(
+        line.capacity(),
+        3200,
+        "RT-path retargets must not reallocate"
+    );
+    assert_eq!(
+        get_alloc_count(),
+        0,
+        "set_delay/reset/push/pop must not allocate on the RT path"
+    );
+}

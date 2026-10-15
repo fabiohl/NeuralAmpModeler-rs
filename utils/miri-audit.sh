@@ -7,9 +7,9 @@
 # =============================================================================
 #
 # GOVERNANCE & POLICY NOTICE
-#   In accordance with the project policy (rules/quality.md §2 and §0.2 of the
-#   sprint plan), all CI and standard release verification gates (lints.sh,
-#   tests-quick.sh, tests-long.sh) use strictly the stable Rust toolchain.
+#   In accordance with the project quality policy (docs/testing.md §13),
+#   all CI and standard release verification gates (lints.sh, tests-quick.sh,
+#   tests-long.sh) use strictly the stable Rust toolchain.
 #
 #   This script is an OPTIONAL, out-of-tree, opt-in periodic audit for unsafe
 #   invariants, data races and Stacked Borrows / Tree Borrows aliasing soundness
