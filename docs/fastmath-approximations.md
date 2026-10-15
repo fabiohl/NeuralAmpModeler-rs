@@ -25,10 +25,10 @@ Thread-local state is managed through:
 
 ### Precision Modes Summary
 
-| Precision Mode | Tanh Kernel                            | Sigmoid Kernel                         | SiLU Kernel ($x \cdot \sigma(x)$)                                                | Max Absolute Error (vs `f32` ref)                                                | Throughput (256 elem, AVX2)       | Status                                      |
-|:-------------- |:-------------------------------------- |:-------------------------------------- |:-------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------:|:---------------------------------:|:------------------------------------------- |
-| **`Standard`** | Degree-6 Taylor minimax exp ($e^{2x}$) | Degree-6 Taylor minimax exp ($e^{-x}$) | Polynomial exp sigmoid ([`silu_slice_hf`](../src/math/activations/silu.rs))      | $\le 2.4 \times 10^{-7}$ ($\tanh$) $\le 2.1 \times 10^{-7}$ ($\sigma$)           | ~110 ns                           | **Universal Default** across all models     |
-| **`Fast`**     | Padé [5,4] rational approximant        | Degree-17 Lawson minimax polynomial    | Minimax sigmoid multiplication ([`silu_slice`](../src/math/activations/silu.rs)) | $\approx 2.32 \times 10^{-3}$ ($\tanh$) $\approx 4.09 \times 10^{-4}$ ($\sigma$) | **~54 ns** (dual) ~63 ns (single) | Opt-in via `--activation fast` / host param |
+| Precision Mode | Tanh Kernel                            | Sigmoid Kernel                         | SiLU Kernel ($x \cdot \sigma(x)$)                                                                                                 | Max Absolute Error (vs `f32` ref)                                                | Throughput (256 elem, AVX2)       | Status                                      |
+|:-------------- |:-------------------------------------- |:-------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------:|:---------------------------------:|:------------------------------------------- |
+| **`Standard`** | Degree-6 Taylor minimax exp ($e^{2x}$) | Degree-6 Taylor minimax exp ($e^{-x}$) | Polynomial exp sigmoid ([`silu_poly_slice_avx2`](../src/math/activations/silu.rs) / [`silu_hf`](../src/math/activations/silu.rs)) | $\le 2.4 \times 10^{-7}$ ($\tanh$) $\le 2.1 \times 10^{-7}$ ($\sigma$)           | ~110 ns                           | **Universal Default** across all models     |
+| **`Fast`**     | Padé [5,4] rational approximant        | Degree-17 Lawson minimax polynomial    | Minimax sigmoid multiplication ([`silu_slice_avx2`](../src/math/activations/silu.rs) / [`silu`](../src/math/activations/silu.rs)) | $\approx 2.32 \times 10^{-3}$ ($\tanh$) $\approx 4.09 \times 10^{-4}$ ($\sigma$) | **~54 ns** (dual) ~63 ns (single) | Opt-in via `--activation fast` / host param |
 
 ```text
                               ┌──────────────────────────────────┐
@@ -54,7 +54,7 @@ Standard mode uses range-reduced polynomial exponential kernels with integer exp
 
 - **Tanh:** $\text{tanh}(x) = \frac{e^{2x} - 1}{e^{2x} + 1}$, with single hardware division `_mm256_div_ps`.
 - **Sigmoid:** $\sigma(x) = \frac{1}{1 + e^{-x}}$, with single hardware division `_mm256_div_ps`.
-- **SiLU:** $\text{silu}(x) = x \cdot \sigma(x)$.
+- **SiLU:** $\text{silu}(x) = x \cdot \sigma(x)$, evaluated via [`silu_poly_slice_avx2`](../src/math/activations/silu.rs) / [`silu_poly_slice_avx512`](../src/math/activations/silu.rs) and scalar [`silu_hf`](../src/math/activations/silu.rs).
 - **Implementation:** [`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs), [`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs), and [`src/math/activations/silu.rs`](../src/math/activations/silu.rs).
 
 ### 1.2 Fast Mode (`ActivationPrecision::Fast`, Performance Opt-in)
@@ -63,7 +63,7 @@ Fast mode targets severely CPU-constrained setups or ultra-low buffer sizes:
 
 - **Tanh:** Padé [5,4] rational approximant evaluated on $[-4, 4]$ with hardware division.
 - **Sigmoid:** Degree-17 odd polynomial generated via Lawson's weighted minimax on $[-8, 8]$.
-- **SiLU:** Direct multiplication of input by degree-17 minimax sigmoid.
+- **SiLU:** Direct multiplication of input by degree-17 minimax sigmoid via [`silu_slice_avx2`](../src/math/activations/silu.rs) / [`silu_slice_avx512`](../src/math/activations/silu.rs) and scalar [`silu`](../src/math/activations/silu.rs).
 - **Throughput:** ~54 ns for 256 elements on AVX2 (dual-register lane amortization).
 
 > [!WARNING]

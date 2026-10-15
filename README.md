@@ -19,8 +19,8 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 * **Pure Rust & Strict Zero-Allocation Real-Time Safety:** Engineered for deterministic audio callbacks under sub-millisecond deadlines. Guarantees zero heap drops, zero locks, and zero blocking syscalls on the audio thread (audited via `CountingAllocator`). Parameter changes and model hot-swaps communicate via lock-free SPSC channels, backed by a 3-tier garbage-collection cascade (*SPSC queue → 16-slot parking lot → overwrite ring*) ensuring safe off-RT resource deallocation without glitches or xruns.
 * **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Enforces `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. Wide use of hand written SIMD code. The `dispatch_simd!` engine performs static compile-time monomorphization with zero vtables or indirect function pointer calls. Compute kernels employ tap-major memory layouts and instruction-level parallelism (`sum0..sum3`) unrolling. AVX2 represents the optimal production sweet spot for NAM channel geometries ($C \le 16$); an experimental AVX-512 backend is available for research and cross-ISA validation via the opt-in `avx512` feature.
-* **Dual-Oracle Numerical Parity:** Formally validated against two co-equal reference oracles: canonical C++ NAMCore (verifying behavioral parity across supported architectures — WaveNet A1/A2, LSTM, ConvNet, Linear, and Sequential) and double-precision f64 reference (measuring numerical ideality). Governed by `docs/quality-contract.json` (51 model baselines), typical WaveNet models achieve ESR $< 2.31 \times 10^{-14}$ (SNR $> 136\text{ dB}$, MR-STFT $< 6.5 \times 10^{-6}$), while ConvNet achieves ESR $< 9.33 \times 10^{-16}$ (SNR $> 150\text{ dB}$). Measured model parity is distinguished from pipeline-level extensions (polyphase resampling, half-band oversampling, adaptive crossfading).
-* **Const-Generic Optimization & Dynamic Topologies:** Provides 23 distinct model variants (16 static const-generic profiles + zero-allocation dynamic fallbacks). Channel counts ($CH=16, 12, 8, 4, 3$), kernel sizes, and receptive fields are known at compile time for canonical configurations, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies automatically route to dynamic zero-alloc fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`).
+* **Dual-Oracle Numerical Parity:** Formally validated against two co-equal reference oracles: canonical C++ NAMCore (verifying behavioral parity across supported architectures — WaveNet A1/A2, LSTM, ConvNet, Linear, and Sequential) and double-precision f64 reference (measuring numerical ideality). Governed by `docs/quality-contract.json` (52 model baselines), typical WaveNet models achieve ESR $< 2.31 \times 10^{-14}$ (SNR $> 136\text{ dB}$, MR-STFT $< 6.5 \times 10^{-6}$), while ConvNet achieves ESR $< 9.33 \times 10^{-16}$ (SNR $> 150\text{ dB}$). Measured model parity is distinguished from pipeline-level extensions (polyphase resampling, half-band oversampling, adaptive crossfading).
+* **Const-Generic Optimization & Dynamic Topologies:** Provides 24 distinct model variants (16 static const-generic profiles + zero-allocation dynamic fallbacks). Channel counts ($CH=16, 12, 8, 4, 3$), kernel sizes, and receptive fields are known at compile time for canonical configurations, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies automatically route to dynamic zero-alloc fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`).
 * **Complete Native DSP Stack (Zero External Audio Crates):** Includes a native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, $>105\text{ dB}$ stopband attenuation, zero pre-ringing, $0.7\text{–}1.3\text{ µs}$ execution), Uniform-Partitioned Overlap-Save (UPOLS) FFT cabinet IR convolution ($1.3\text{ µs}$ for 512-sample IRs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, $>100\text{ dB}$ stopband).
 * **Adaptive Compute FSM & Pre-Transposed `.namb` v2 Container:** Dynamic CPU load-monitoring state machine with hysteresis that degrades model complexity under load (Full → Reduced → Minimal) using 32 ms click-free linear crossfades to prevent buffer dropouts. The binary `.namb` v2 container (Gate-Major LSTM, Interleaved-4 WaveNet) reduces model load time from $\sim 50\text{ ms}$ to $< 1\text{ ms}$ with mandatory IEEE 802.3 CRC32 integrity checks.
 * **Denormal & Subnormal Armor:** Injects symmetric $-220\text{ dBFS}$ deterministic dither ($1.0 \times 10^{-11}$) combined with hardware MXCSR FTZ/DAZ reassertion on every processing block, preventing 10–100× CPU microcode penalties during digital silence with zero net DC drift.
@@ -29,35 +29,35 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ## 🥊 Feature Showcase
 
-| Feature / Attribute              | Technical Implementation                                                            | Benefit & Impact                                                                                             |
-|:-------------------------------- |:----------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------ |
-| **Inference Topologies**         | WaveNet (A1/A2), LSTM (1- & 2-layer, multi-I/O), ConvNet, Linear FIR/FFT, Sequential | Broad NAM ecosystem coverage with native Rust execution speed (unsupported topologies rejected fail-closed; see `docs/cpp_parity_map.md` §7) |
-| **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                       | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                  |
-| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline; static `dispatch_simd!` dispatch         | WaveNet Standard ≈ 43.3 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                      |
-| **Const-Generic Profiles**       | 23 model variants (16 static const-generic profiles + dynamic fallbacks)            | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$) |
-| **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$        | Near bit-exact accuracy on covered models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR; see `docs/quality-contract.json` for per-model baselines) |
-| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)  | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                            |
-| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)          | Ultra-low-overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                    |
-| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`Off`, `2x`, `4x`, >100 dB stopband)               | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                               |
-| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)     | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                     |
-| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                         |
-| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32    | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                  |
-| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware MXCSR FTZ/DAZ                       | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift) |
-| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks | Enterprise-grade software stability and strict regression protection                                         |
+| Feature / Attribute              | Technical Implementation                                                             | Benefit & Impact                                                                                                                                           |
+|:-------------------------------- |:------------------------------------------------------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Inference Topologies**         | WaveNet (A1/A2), LSTM (1- & 2-layer, multi-I/O), ConvNet, Linear FIR/FFT, Sequential | Broad NAM ecosystem coverage with native Rust execution speed (unsupported topologies rejected fail-closed; see `docs/cpp_parity_map.md` §7)               |
+| **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                        | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                                                                |
+| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline; static `dispatch_simd!` dispatch          | WaveNet Standard ≈ 41.8 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                                                                    |
+| **Const-Generic Profiles**       | 24 model variants (16 static const-generic profiles + dynamic fallbacks)             | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$)                                               |
+| **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$         | Near bit-exact accuracy on covered models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR; see `docs/quality-contract.json` for per-model baselines) |
+| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)   | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                                          |
+| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)           | Ultra-low-overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                                                                  |
+| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`Off`, `2x`, `4x`, >100 dB stopband)                | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                                                                             |
+| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)      | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                                                                   |
+| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                 | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                                       |
+| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32     | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                                |
+| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware MXCSR FTZ/DAZ                        | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)                            |
+| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks  | Enterprise-grade software stability and strict regression protection                                                                                       |
 
 ---
 
 ## 🧠 Supported Architectures
 
-| Architecture            | Static Profiles                                           | Dynamic Fallback  | Notes                                                        |
-|:----------------------- |:--------------------------------------------------------- |:----------------- |:------------------------------------------------------------ |
-| **WaveNet A1**          | Standard (CH=16), Lite (12), Feather (8), Nano (4)        | `WaveNetModelDyn` | Dilated causal 1D convs, gated tanh/sigmoid                  |
-| **WaveNet A2**          | Full (CH=8), Lite (CH=3), Cascade                         | `WaveNetA2Dyn`    | Headroom-optimized modern NAM architecture                   |
-| **LSTM**                | 10 profiles: 1-layer (hidden 3–40), 2-layer (hidden 8–24) | `LstmModelDyn`    | Pre-transposed gate-major SIMD GEMV kernels; multi-I/O support|
-| **ConvNet**             | Causal Conv1D + BatchNorm1D + activation                  | —                 | Fast feed-forward models; grouped conv & multi-I/O support   |
-| **Linear**              | Direct FIR or Partitioned FFT convolution                 | —                 | Clean tone equalization & linear filters                     |
-| **Sequential**          | Composite multi-stage pipeline                            | —                 | Serial composition of arbitrary supported child models       |
-| **Slimmable Container** | Multi-submodel bundles with runtime quality transitions   | —                 | Adaptive compute bundles with crossfading                    |
+| Architecture            | Static Profiles                                           | Dynamic Fallback  | Notes                                                          |
+|:----------------------- |:--------------------------------------------------------- |:----------------- |:-------------------------------------------------------------- |
+| **WaveNet A1**          | Standard (CH=16), Lite (12), Feather (8), Nano (4)        | `WaveNetModelDyn` | Dilated causal 1D convs, gated tanh/sigmoid                    |
+| **WaveNet A2**          | Full (CH=8), Lite (CH=3), Cascade                         | `WaveNetA2Dyn`    | Headroom-optimized modern NAM architecture                     |
+| **LSTM**                | 10 profiles: 1-layer (hidden 3–40), 2-layer (hidden 8–24) | `LstmModelDyn`    | Pre-transposed gate-major SIMD GEMV kernels; multi-I/O support |
+| **ConvNet**             | Causal Conv1D + BatchNorm1D + activation                  | —                 | Fast feed-forward models; grouped conv & multi-I/O support     |
+| **Linear**              | Direct FIR or Partitioned FFT convolution                 | —                 | Clean tone equalization & linear filters                       |
+| **Sequential**          | Composite multi-stage pipeline                            | —                 | Serial composition of arbitrary supported child models         |
+| **Slimmable Container** | Multi-submodel bundles with runtime quality transitions   | —                 | Adaptive compute bundles with crossfading                      |
 
 ---
 
@@ -237,35 +237,35 @@ NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities,
 
 ### Numerical Parity & Quality Contract
 
-The engine's numerical accuracy is strictly enforced through continuous baseline regression testing (`docs/quality-contract.json`), tracking 51 model baseline envelopes against both the C++ NAMCore reference and a double-precision $f64$ mathematical oracle:
+The engine's numerical accuracy is strictly enforced through continuous baseline regression testing (`docs/quality-contract.json`), tracking 52 model baseline envelopes against both the C++ NAMCore reference and a double-precision $f64$ mathematical oracle:
 
 * **Dual-Oracle Parity:** WaveNet Standard models maintain an ESR of $2.31 \times 10^{-14}$ against NAMCore and $9.05 \times 10^{-15}$ against the $f64$ oracle ($136.4\text{ dB}$ SNR). ConvNet ReLU achieves $9.33 \times 10^{-16}$ ESR ($150.3\text{ dB}$ SNR).
 * **Perceptual Validation:** All models verify multi-resolution STFT distance (MR-STFT $< 6.5 \times 10^{-6}$), spectral convergence, and LUFS loudness constancy.
 
 ### Measured CPU Headroom (Quality Contract SLA Baselines)
 
-Execution times measured per 64-sample block at 48 kHz (1.33 ms real-time deadline budget) on an AMD Ryzen 7 5700U (AVX2 baseline, `rustc 1.98.1`):
+Execution times measured per 64-sample block at 48 kHz (1.33 ms real-time deadline budget) on an AMD Ryzen 7 5700U (AVX2 baseline, `rustc 1.99.0`):
 
 | Component / Profile                            | Execution Time | RT Deadline Budget Used |
 |:---------------------------------------------- |:-------------- |:----------------------- |
-| **WaveNet Standard (CH=16)**                   | **43.3 µs**    | 3.2%                    |
-| **WaveNet Lite (CH=12)**                       | **56.4 µs**    | 4.2%                    |
-| **WaveNet Feather (CH=8)**                     | **19.9 µs**    | 1.5%                    |
-| **WaveNet Nano (CH=4)**                        | **17.8 µs**    | 1.3%                    |
-| **WaveNet A2 Full (CH=8)**                     | **25.6 µs**    | 1.9%                    |
-| **WaveNet A2 Lite (CH=3)**                     | **22.6 µs**    | 1.7%                    |
+| **WaveNet Standard (CH=16)**                   | **41.8 µs**    | 3.1%                    |
+| **WaveNet Lite (CH=12)**                       | **57.2 µs**    | 4.3%                    |
+| **WaveNet Feather (CH=8)**                     | **20.1 µs**    | 1.5%                    |
+| **WaveNet Nano (CH=4)**                        | **18.3 µs**    | 1.4%                    |
+| **WaveNet A2 Full (CH=8)**                     | **19.8 µs**    | 1.5%                    |
+| **WaveNet A2 Lite (CH=3)**                     | **14.0 µs**    | 1.1%                    |
 | **LSTM 1-Layer (Hidden=16)**                   | **6.8 µs**     | 0.5%                    |
-| **LSTM 2-Layer (Hidden=8)**                    | **7.1 µs**     | 0.5%                    |
-| **ConvNet**                                    | **8.7 µs**     | 0.7%                    |
-| **Linear FIR (RF=4 Direct)**                   | **0.3 µs**     | 0.02%                   |
-| **DSP Resampler (44.1 kHz → 48 kHz)**          | **1.2 µs**     | 0.09%                   |
-| **Cabinet IR Simulation (UPOLS 512)**          | **1.2 µs**     | 0.09%                   |
-| **Full Pipeline Base (Model + CabSim, No OS)** | **43.6 µs**    | 3.3%                    |
-| **Full Pipeline HQ (Model + CabSim + 4× OS)**  | **177.4 µs**   | 13.3%                   |
+| **LSTM 2-Layer (Hidden=8)**                    | **7.6 µs**     | 0.6%                    |
+| **ConvNet**                                    | **9.5 µs**     | 0.7%                    |
+| **Linear FIR (RF=4 Direct)**                   | **0.13 µs**    | 0.01%                   |
+| **DSP Resampler (44.1 kHz → 48 kHz)**          | **1.3 µs**     | 0.10%                   |
+| **Cabinet IR Simulation (UPOLS 512)**          | **1.3 µs**     | 0.10%                   |
+| **Full Pipeline Base (Model + CabSim, No OS)** | **42.8 µs**    | 3.2%                    |
+| **Full Pipeline HQ (Model + CabSim + 4× OS)**  | **174.4 µs**   | 13.1%                   |
 
 > Detailed benchmarking methodologies, throughput curves, and regression envelopes are documented in [`docs/benchmarks.md`](docs/benchmarks.md).
-
-> **MSRV vs. measurement note:** the timings above were measured with `rustc 1.98.1`, which is **below** the public MSRV promise of `1.99.0`. The numbers are kept verbatim until a fresh measurement is captured on the guaranteed toolchain (maintainer task, via `utils/quality-dashboard.sh`); they are not relabeled without a re-run.
+>
+> **MSRV toolchain calibration note:** the SLA baseline timings above are verified against [`docs/quality-contract.json`](docs/quality-contract.json) and were measured on the guaranteed public MSRV toolchain (`rustc 1.99.0`) on an AMD Ryzen 7 5700U with isolated CPU cores.
 
 ---
 
@@ -285,16 +285,17 @@ NAM_COMMUNITY_MODELS_SRC=/path/to/models ./utils/setup-third-party.sh
 
 The `./utils/` suite automates formatting, static analysis, parity verification, and quality gates:
 
-| Script                                                     | Purpose & Scope                                                                                                                       |
-|:---------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
-| [`utils/lints.sh`](utils/lints.sh)                         | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)             | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh) | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
-| [`utils/check-model.sh`](utils/check-model.sh)             | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
-| [`utils/simd-probe.sh`](utils/simd-probe.sh)               | **SIMD Diagnostic Probe:** Inspects CPU features, OS vector context, and runs deterministic inference smoke tests.                    |
-| [`utils/tests-long.sh`](utils/tests-long.sh)               | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
-| [`utils/setup-third-party.sh`](utils/setup-third-party.sh) | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
-| [`utils/mod-update.sh`](utils/mod-update.sh)               | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
+| Script                                                                           | Purpose & Scope                                                                                                                       |
+|:-------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
+| [`utils/lints.sh`](utils/lints.sh)                                               | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
+| [`utils/tests-quick.sh`](utils/tests-quick.sh)                                   | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
+| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)                       | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
+| [`utils/tests-performance-regression.sh`](utils/tests-performance-regression.sh) | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
+| [`utils/check-model.sh`](utils/check-model.sh)                                   | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
+| [`utils/simd-probe.sh`](utils/simd-probe.sh)                                     | **SIMD Diagnostic Probe:** Inspects CPU features, OS vector context, and runs deterministic inference smoke tests.                    |
+| [`utils/tests-long.sh`](utils/tests-long.sh)                                     | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
+| [`utils/setup-third-party.sh`](utils/setup-third-party.sh)                       | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
+| [`utils/mod-update.sh`](utils/mod-update.sh)                                     | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
 
 Standard verification workflow:
 

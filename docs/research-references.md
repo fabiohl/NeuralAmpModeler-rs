@@ -135,7 +135,7 @@ Guildford, UK, 2024.
 
 **Why relevant to NeuralAmpModeler-rs.** Addresses the core problem of sample-rate dependency in recurrent
 neural networks — the very mechanism that causes LSTM timbre to change drastically under
-oversampling (documented in `docs/perceptual_validation.md` §Oversampling Characterization, evaluated across LSTM recurrent state precision). Proposes architectural
+oversampling (documented in [`docs/perceptual_validation.md`](perceptual_validation.md) §4 ("Oversampling Characterization: Anti-Aliasing vs. Recurrent Timbre Shift"), evaluated across LSTM recurrent state precision). Proposes architectural
 modifications to make RNNs sample-rate independent, directly relevant to the observation that
 LSTM feedback delay is fixed in absolute samples. This paper anchors the theoretical
 understanding of why LSTM oversampling changes timbre (β3.1) and provides a potential path
@@ -191,7 +191,7 @@ complement to the standard (flat) ESR metric already implemented in `src/testing
 
 | Traceability | Reference                                                                                                                                   |
 |:------------ |:------------------------------------------------------------------------------------------------------------------------------------------- |
-| Finding      | P-5 (pré-ênfase A-weighting; ESR perceptual)                                                                                                |
+| Finding      | P-5 (pre-emphasis A-weighting; perceptual ESR)                                                                                              |
 | Files        | `src/testing/perceptual/mod.rs`, `tests/models/activation_precision.rs`, `docs/perceptual_validation.md`, `docs/fastmath-approximations.md` |
 
 ---
@@ -314,13 +314,32 @@ European Broadcasting Union, 2016.
 
 ---
 
+### R14 · SMPTE RP 120
+
+**SMPTE RP 120-1994 (r2000).**
+*"Measurement of Intermodulation Distortion in Audio Equipment."*
+Society of Motion Picture and Television Engineers, 1994 (reaffirmed 2000).
+
+**Why relevant to NeuralAmpModeler-rs.** Standardizes the methodology for **IMD (Intermodulation Distortion)**
+measurement using the two-tone SMPTE/DIN test signal: 60 Hz low-frequency tone and 7 kHz high-frequency
+carrier mixed at a 4:1 amplitude ratio (12 dB difference). Implemented in `src/testing/spectral/mod.rs`
+and evaluated per model SKU in `tests/models/spectral_fidelity.rs` (P-3), quantifying nonlinear modulation
+products around the carrier frequency.
+
+| Traceability | Reference                                                                                                               |
+|:------------ |:----------------------------------------------------------------------------------------------------------------------- |
+| Finding      | P-3 (IMD SMPTE/DIN standard)                                                                                            |
+| Files        | `src/testing/spectral/mod.rs`, `tests/models/spectral_fidelity.rs`, `docs/perceptual_validation.md`                     |
+
+---
+
 ## Reference Index by Finding
 
 | Finding                                     | References                                            |
 |:------------------------------------------- |:----------------------------------------------------- |
 | P-1 (non-linear activation aliasing)        | R1, R2, R3, R4, R5, R6, R7b                           |
 | P-2 (resampler fidelity)                    | R3                                                    |
-| P-3 (spectral suite — THD/IMD/FR/true-peak) | R10, R11, R12                                         |
+| P-3 (spectral suite — THD/IMD/FR/true-peak) | R10, R11, R12, R14                                    |
 | P-4 (f64 oracle)                            | — (computational standard, not externally referenced) |
 | P-5 (activation error — precision)          | R1, R8, R9, R13                                       |
 | P-6 (LUFS/LRA/true-peak)                    | R12                                                   |

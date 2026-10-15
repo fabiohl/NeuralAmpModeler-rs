@@ -353,23 +353,25 @@ Interleaved4WaveNet (Layout=2): [BLOCK][K][IN][LANE] = 48 f32
 
 ## 8. Typed Errors (`NambError`)
 
-NAMB parsing uses typed errors via `thiserror` for precise diagnostics. The `loader` module performs downcasting via `downcast_ref` to map each variant to the corresponding `NamErrorCode`.
+NAMB parsing uses typed errors via `thiserror` for precise diagnostics. The `loader` module converts `NambError` into `LoadError::Namb` and maps it to the corresponding `NamErrorCode` via `LoadError::code()` (defined in [`src/loader/error.rs`](../src/loader/error.rs)), while `src/loader/build.rs` logs structured error diagnostics:
 
-| Variant                                         | Code  | Mnemonic                    | Condition                                                                |
-|:----------------------------------------------- |:----- |:--------------------------- |:------------------------------------------------------------------------ |
-| `Truncated { got, need }`                       | E1204 | `NAMB_TRUNCATED`            | File < 80 bytes or trailing bytes do not complete 4-byte float boundary  |
-| `InvalidMagic(u32)`                             | E1202 | `NAMB_INVALID_MAGIC`        | Magic is not `0x4E414D42`                                                |
-| `InvalidVersion(u16)`                           | E1203 | `NAMB_UNSUPPORTED_VERSION`  | Version is not 1 or 2                                                    |
-| `WeightsOffsetOutOfBounds { offset, file_len }` | E1204 | `NAMB_TRUNCATED`            | `weights_offset` exceeds file size                                       |
-| `InvalidWeightsOffset { offset, header_size }`  | E1204 | `NAMB_TRUNCATED`            | `weights_offset` < 80 (less than header size)                            |
-| `CrcMismatch { got, expected }`                 | E1201 | `NAMB_CRC32_MISMATCH`       | Calculated CRC ≠ header CRC                                              |
-| `CrcMissing { version }`                        | E1205 | `NAMB_CRC32_MISSING`        | File v2+ without `FLAG_HAS_CRC32` set                                    |
-| `CrcMissingV1`                                  | E1205 | `NAMB_CRC32_MISSING`        | Legacy v1 file with `crc32 == 0` sentinel rejected by integrity policy   |
-| `WeightsTooLarge { got, max }`                  | E1304 | `MODEL_TOO_LARGE`           | Float count exceeds `MAX_MODEL_BYTES / 4` (67,108,864 floats)            |
-| `NonFiniteWeight { index, value }`              | E1212 | `NAMB_NON_FINITE_WEIGHT`    | Non-finite weight float (`NaN`, `+Inf`, `-Inf`) in binary weight section |
-| `InvalidHeaderField { field, value, reason }`   | E1213 | `NAMB_INVALID_HEADER_FIELD` | Non-finite or invalid float in header metadata fields                    |
-| `MetadataNotUtf8 { offset, len }`               | E1210 | `MODEL_BUILD_FAILED`        | Metadata section between header and weights is not valid UTF-8           |
-| `MetadataJson(JsonError)`                       | E1210 | `MODEL_BUILD_FAILED`        | Metadata section failed to parse as valid `.nam` JSON model              |
+| Variant                                         | Code (API / Log) | Mnemonic (API / Log)                   | Condition                                                                |
+|:----------------------------------------------- |:---------------- |:-------------------------------------- |:------------------------------------------------------------------------ |
+| `Truncated { got, need }`                       | E1204            | `NAMB_TRUNCATED`                       | File < 80 bytes or trailing bytes do not complete 4-byte float boundary  |
+| `InvalidMagic(u32)`                             | E1202            | `NAMB_INVALID_MAGIC`                   | Magic is not `0x4E414D42`                                                |
+| `InvalidVersion(u16)`                           | E1203            | `NAMB_UNSUPPORTED_VERSION`             | Version is not 1 or 2                                                    |
+| `WeightsOffsetOutOfBounds { offset, file_len }` | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `TRUNC`  | `weights_offset` exceeds file size                                       |
+| `InvalidWeightsOffset { offset, header_size }`  | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `TRUNC`  | `weights_offset` < 80 (less than header size)                            |
+| `CrcMismatch { got, expected }`                 | E1201            | `NAMB_CRC32_MISMATCH`                  | Calculated CRC ≠ header CRC                                              |
+| `CrcMissing { version }`                        | E1205            | `NAMB_CRC32_MISSING`                   | File v2+ without `FLAG_HAS_CRC32` set                                    |
+| `CrcMissingV1`                                  | E1205            | `NAMB_CRC32_MISSING`                   | Legacy v1 file with `crc32 == 0` sentinel rejected by integrity policy   |
+| `WeightsTooLarge { got, max }`                  | E1304            | `MODEL_TOO_LARGE`                      | Float count exceeds `MAX_MODEL_BYTES / 4` (67,108,864 floats)            |
+| `NonFiniteWeight { index, value }`              | E1212            | `NAMB_NON_FINITE_WEIGHT`               | Non-finite weight float (`NaN`, `+Inf`, `-Inf`) in binary weight section |
+| `InvalidHeaderField { field, value, reason }`   | E1213            | `NAMB_INVALID_HEADER_FIELD`            | Non-finite or invalid float in header metadata fields                    |
+| `MetadataNotUtf8 { offset, len }`               | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `BUILD_FAIL`  | Metadata section between header and weights is not valid UTF-8           |
+| `MetadataJson(JsonError)`                       | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `BUILD_FAIL`  | Metadata section failed to parse as valid `.nam` JSON model              |
+
+*Note: For `MetadataNotUtf8` and `MetadataJson`, programmatic inspection via `LoadError::code()` returns `NamErrorCode::NamJsonParseError` (`E1200`), while loader failure diagnostics in `src/loader/build.rs:441` log `NamErrorCode::ModelBuildFailed` (`E1303`). `E1210` in `error_codes.rs` is reserved for `NamJsonSubmodelsTooDeep`.*
 
 Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are rejected with `NamErrorCode::ModelTooLarge` (E1304).
 
@@ -390,29 +392,30 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 
 ## 10. Reference Constants
 
-| Constant            | Value                   | Location                                                                       |
-|:------------------- |:----------------------- |:------------------------------------------------------------------------------ |
-| `FLAG_HAS_CRC32`    | `0x01` (u8)             | [`src/loader/namb/header.rs:77`](../src/loader/namb/header.rs#L77)             |
-| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | [`src/loader/loaded_model_pair.rs:16`](../src/loader/loaded_model_pair.rs#L16) |
-| Header size         | `80` bytes (0x50)       | `NAMB_HEADER_LEN` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs) |
-| CRC polynomial      | `0xEDB88320`            | [`src/loader/namb/header.rs:15`](../src/loader/namb/header.rs#L15)             |
-| CRC init            | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24`](../src/loader/namb/header.rs#L24)             |
-| CRC xorout          | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:30`](../src/loader/namb/header.rs#L30)             |
-| Magic LE            | `0x4E414D42`            | [`src/loader/namb/header.rs:83`](../src/loader/namb/header.rs#L83)             |
-| Default sample rate | `48000.0` (f32)         | [`src/loader/loaded_model_pair.rs:14`](../src/loader/loaded_model_pair.rs#L14) |
-| Default input dBu   | `12.0` (f32)            | [`src/loader/loaded_model_pair.rs:10`](../src/loader/loaded_model_pair.rs#L10) |
-| Default output dBu  | `-6.0` (f32)            | [`src/loader/namb_encoder.rs:86`](../src/loader/namb_encoder.rs#L86)           |
-| Default loudness    | `-18.0` (f32)           | [`src/loader/loaded_model_pair.rs:12`](../src/loader/loaded_model_pair.rs#L12) |
+| Constant            | Value                   | Location                                                                          |
+|:------------------- |:----------------------- |:--------------------------------------------------------------------------------- |
+| `FLAG_HAS_CRC32`    | `0x01` (u8)             | [`src/loader/namb/header.rs:77`](../src/loader/namb/header.rs#L77)                |
+| `NAMB_HEADER_LEN`   | `80` bytes (0x50)       | [`src/loader/namb/header.rs:84`](../src/loader/namb/header.rs#L84)                |
+| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | [`src/loader/loaded_model_pair.rs:16`](../src/loader/loaded_model_pair.rs#L16)    |
+| CRC polynomial      | `0xEDB88320`            | [`src/loader/namb/header.rs:15`](../src/loader/namb/header.rs#L15)                |
+| CRC init            | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24`](../src/loader/namb/header.rs#L24)                |
+| CRC xorout          | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24,46`](../src/loader/namb/header.rs#L24)             |
+| Magic LE            | `0x4E414D42`            | [`src/loader/namb/header.rs:91`](../src/loader/namb/header.rs#L91)                |
+| Default sample rate | `48000.0` (f32)         | [`src/loader/loaded_model_pair.rs:14`](../src/loader/loaded_model_pair.rs#L14)    |
+| Default input dBu   | `12.0` (f32)            | [`src/loader/loaded_model_pair.rs:10`](../src/loader/loaded_model_pair.rs#L10)    |
+| Default output dBu  | `-6.0` (f32)            | [`src/loader/namb_encoder.rs:86`](../src/loader/namb_encoder.rs#L86)              |
+| Default loudness    | `-18.0` (f32)           | [`src/loader/loaded_model_pair.rs:12`](../src/loader/loaded_model_pair.rs#L12)    |
 
 ## 11. References
 
 - NAMB Decoder: [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs)
 - NAMB Encoder: [`src/loader/namb_encoder.rs`](../src/loader/namb_encoder.rs)
+- Metadata Peek: [`src/loader/peek.rs`](../src/loader/peek.rs)
 - Layout Definitions: [`src/loader/nam_json/model.rs`](../src/loader/nam_json/model.rs) (`WeightsLayout`)
 - LSTM Dispatcher: [`src/loader/dispatcher/lstm/mod.rs`](../src/loader/dispatcher/lstm/mod.rs)
 - WaveNet Dispatcher: [`src/loader/dispatcher/wavenet/mod.rs`](../src/loader/dispatcher/wavenet/mod.rs)
 - Error Definition: [`src/loader/namb/error.rs`](../src/loader/namb/error.rs) (`NambError`)
-- Error Mapping: [`src/loader/build.rs`](../src/loader/build.rs)
+- Error Mapping: [`src/loader/build.rs`](../src/loader/build.rs), [`src/loader/error.rs`](../src/loader/error.rs)
 - Error Codes: [`src/common/diagnostics/error_codes.rs`](../src/common/diagnostics/error_codes.rs) (`NamErrorCode`)
 - Round-trip Tests: [`tests/models/namb_v2_roundtrip.rs`](../tests/models/namb_v2_roundtrip.rs), [`tests/models/namb_v2_validation.rs`](../tests/models/namb_v2_validation.rs)
 - Architecture: [`docs/architecture.md`](architecture.md)

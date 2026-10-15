@@ -62,16 +62,19 @@ Where $r_i$ is the reference sample and $t_i$ is the test sample.
 
 ### 2.2 MR-STFT — Multi-Resolution STFT Loss (Spectral Regression Gate)
 
-**File:** [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)
+**Files:** [`src/testing/perceptual/esr.rs`](../src/testing/perceptual/esr.rs) | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)
+
+The Multi-Resolution STFT loss evaluates spectral distance across multiple time-frequency resolutions (Yamamoto, Song & Kim, ICASSP 2020), combining spectral convergence and log-magnitude distance:
 
 $$\mathcal{L}_{\text{MR-STFT}} = \sum_{w \in W} \gamma_w \cdot \frac{1}{M_w} \sum_{m=1}^{M_w} \left( \mathcal{L}_{\text{sc}}^{(w,m)} + \mathcal{L}_{\text{mag}}^{(w,m)} \right)$$
 
-Where:
+In the concrete implementation ([`compute_mr_stft` in `src/testing/perceptual/esr.rs`](../src/testing/perceptual/esr.rs)):
 
-- Analysis windows $W = [256, 1024, 4096]$ samples with Hann windowing, hop size $H_w = w / 4$.
-- Weights $\gamma = [0.1, 0.3, 0.5]$ calibrated against the Tone3000 MUSHRA dataset.
-- $\mathcal{L}_{\text{sc}}$ (Spectral Convergence): $\frac{\| |X_{\text{ref}}| - |X_{\text{test}}| \|_F}{\| |X_{\text{ref}}| \|_F}$ over frequency bins.
-- $\mathcal{L}_{\text{mag}}$ (Log-Magnitude Loss): $\frac{1}{F} \sum_{f} \left| \ln |X_{\text{ref}}[f]| - \ln |X_{\text{test}}[f]| \right|$.
+- **Analysis Windows:** $W = [256, 1024, 4096]$ samples with Hann windowing, hop size $H_w = w / 4$, evaluated via native `FftPlanner<f64>`.
+- **Weights:** $\gamma = [0.1, 0.3, 0.5]$ calibrated against the Tone3000 MUSHRA dataset.
+- **Frame Metrics:** Evaluates both $L_1$ and $L_2$ norm distances of log-magnitude spectra across frequency bins $f \in [0, w/2]$:
+  $$\mathcal{L}_1 = \frac{1}{F} \sum_{f} \left| \ln |X_{\text{ref}}[f]| - \ln |X_{\text{test}}[f]| \right|, \quad \mathcal{L}_2 = \sqrt{\frac{1}{F} \sum_{f} \left( \ln |X_{\text{ref}}[f]| - \ln |X_{\text{test}}[f]| \right)^2}$$
+- **Per-Frame Dynamic Noise Floor:** Each frame uses a relative floor at $-80\text{ dB}$ below its own spectral peak (with an absolute fallback floor of $10^{-8}$ for silent frames), preventing artificial distortion blows on low-level spectral bins.
 
 **Dual Gate Enforcement:**
 
@@ -188,12 +191,17 @@ Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_c
 | **Linear No Bias**                           | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Zero-bias FIR ($144.1\text{ dB}$)                   |
 | **Nondist Models (APP-EVH, BD-2, Marshall)** | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | External production captures                        |
 
-**Uncalibrated Fallback Formulas (`topology_thresholds` in `tests/common/validation.rs`):**
+**Uncalibrated Fallback Formulas (`topology_thresholds` & `live_parity_thresholds` in `tests/common/validation.rs`):**
 
-- WaveNet: computed via channel-dependent tables ($16\text{ CH} \implies \text{SNR}=105\text{ dB}$).
-- LSTM: $\text{SNR} = \text{clamp}(30.0 - \text{complexity} \times 0.65, 12.0, 30.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$.
-- Linear: $\text{SNR} = 135.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.12$.
-- ConvNet: $\text{SNR} = 140.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.05$.
+- **Golden Vector Suites (`topology_thresholds`):**
+  - WaveNet: computed via channel-dependent tables ($16\text{ CH} \implies \text{SNR}=105\text{ dB}$).
+  - LSTM: $\text{SNR} = \text{clamp}(30.0 - \text{complexity} \times 0.65, 12.0, 30.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$.
+  - Linear: $\text{SNR} = 135.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.12$.
+  - ConvNet: $\text{SNR} = 140.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.05$.
+- **Live C++ Cross-Validation Suites (`live_parity_thresholds`):**
+  - Uses empirical floors reflecting live runtime execution:
+  - LSTM: $\text{SNR} = \text{clamp}(85.0 - \text{complexity} \times 1.0, 45.0, 75.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$.
+  - ConvNet: $\text{SNR} = 35.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-4}, \text{MR-STFT} = 0.03$.
 
 ---
 
@@ -447,7 +455,7 @@ Computes all verification metrics simultaneously in a single pass under an atomi
 | Metric              | Mathematical Basis                                      | Threshold / Gate Target                                    |
 |:------------------- |:------------------------------------------------------- |:---------------------------------------------------------- |
 | **MSE**             | $\frac{1}{N} \sum (r_i - t_i)^2$                        | $< \text{mse\_limit}$ (Tiers 1–3 relaxed)                  |
-| **MAE**             | $\max                                                   | r_i - t_i                                                  |
+| **MAE**             | $\max \vert r_i - t_i \vert$                            | Informational                                              |
 | **SNR**             | $10 \log_{10}(\sum r_i^2 / \sum (r_i - t_i)^2)$         | $\ge \text{min\_snr\_db}$ (Tiers 1–3 relaxed)              |
 | **PSNR**            | $10 \log_{10}(\text{peak}_{\text{ref}}^2 / \text{MSE})$ | Informational                                              |
 | **Equivalent Bits** | $-0.5 \log_2(\text{MSE} / P_{\text{sig}})$              | Informational                                              |
@@ -484,7 +492,7 @@ All thresholds in [`tests/models/threshold_calibration.rs`](../tests/models/thre
 |:--------------------- |:-------------------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **ESR (f32)**         | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)                                      | [`tests/common/metrics.rs`](../tests/common/metrics.rs)                                                                                                  |
 | **ESR (f64)**         | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)                          | [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs)                                                                        |
-| **MR-STFT**           | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)                                      | [`tests/common/validation.rs`](../tests/common/validation.rs), [`tests/parity/parity_primitives.rs`](../tests/parity/parity_primitives.rs)               |
+| **MR-STFT**           | [`src/testing/perceptual/esr.rs`](../src/testing/perceptual/esr.rs)                                      | [`tests/common/validation.rs`](../tests/common/validation.rs), [`tests/parity/parity_primitives.rs`](../tests/parity/parity_primitives.rs)               |
 | **ASR**               | [`src/testing/aliasing.rs`](../src/testing/aliasing.rs)                                                  | [`src/testing/aliasing_test.rs`](../src/testing/aliasing_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)           |
 | **Farina FR+THD**     | [`src/testing/spectral/farina.rs`](../src/testing/spectral/farina.rs)                                    | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs)                                                                                        |
 | **THD+N / IMD**       | [`src/testing/spectral/thd.rs`](../src/testing/spectral/thd.rs)                                          | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs)                                                                                        |

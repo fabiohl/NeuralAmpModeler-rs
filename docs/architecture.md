@@ -19,7 +19,7 @@ The engine operates as an independent, standalone library. Downstream applicatio
 
 ### 1.1 Structural Dispatch: `StaticModel` Enum (Zero Vtable Routing)
 
-To eliminate virtual table (vtable) dispatch and dynamic allocation on the real-time audio thread, NeuralAmpModeler-rs routes all neural inference through the **`StaticModel` enum** ([`src/models/mod.rs`](../src/models/mod.rs)). The enum encapsulates 23 concrete variants covering all supported architectures:
+To eliminate virtual table (vtable) dispatch and dynamic allocation on the real-time audio thread, NeuralAmpModeler-rs routes all neural inference through the **`StaticModel` enum** ([`src/models/mod.rs`](../src/models/mod.rs)). The enum encapsulates 24 concrete variants covering all supported architectures (16 static const-generic profiles + 8 dynamic/composite/linear profiles):
 
 | Family                   | Variants                                                                                                            | Dispatch Strategy                        |
 |:------------------------ |:------------------------------------------------------------------------------------------------------------------- |:---------------------------------------- |
@@ -33,6 +33,7 @@ To eliminate virtual table (vtable) dispatch and dynamic allocation on the real-
 | **Container**            | `Container` (backed by `ContainerModel`)                                                                            | Nested `StaticModel` multi-size dispatch |
 | **ConvNet**              | `ConvNet` (backed by `ConvNetModel`)                                                                                | Feed-forward causal convolution chain    |
 | **Linear**               | `Linear` (backed by `LinearModel`)                                                                                  | Direct SIMD FIR / Partitioned FFT        |
+| **Sequential**           | `Sequential` (backed by `SequentialModel`)                                                                          | Composite multi-stage pipeline           |
 
 The audio processing entry point [`NamModel::process()`](../src/models/nam_model.rs) matches directly on `StaticModel` variants. Monomorphization and inlining allow the compiler to generate direct branches or jump tables at call sites. Within a few blocks, branch prediction stabilizes, achieving **zero dispatch overhead** in steady-state audio processing.
 
@@ -495,7 +496,7 @@ and is the single source of truth for all boundary code.
 
 ## 5. WaveNet A2 Architecture
 
-The WaveNet A2 format represents the next-generation architecture of Neural Amp Modeler (NeuralAmpModelerCore v0.5.2+). Its architectural provenance and design principles derive from the author's public presentation: <https://youtu.be/24FCS8tFHcE> (see cross-reference in [docs/cpp_parity_map.md](cpp_parity_map.md#40-proveniência)).
+The WaveNet A2 format represents the next-generation architecture of Neural Amp Modeler (NeuralAmpModelerCore v0.5.2+). Its architectural provenance and design principles derive from the author's public presentation: <https://youtu.be/24FCS8tFHcE> (see cross-reference in [docs/cpp_parity_map.md](cpp_parity_map.md#40-provenance)).
 
 ### Fast-Path Engines
 
@@ -521,7 +522,7 @@ Slimmable WaveNet models allow dynamic channel degradation. The loader enforces 
 - **Groups & Head Kernel Size:** All layer arrays in a slimmable model must satisfy `head_kernel_size == 1` and all convolution group parameters (`groups`, `groups_input`, `groups_input_mixin`, `layer1x1.groups`, `head1x1.groups`) must equal 1 (`slimmable.cpp:136-146`), failing with `E1316` otherwise.
 - **Typed Loader Errors:** Topology and feature rejections carry structured `NamErrorCode` values via `LoadError::InvalidTopology { code, reason }`, exposed programmatically through `LoadError::code(&self) -> NamErrorCode` rather than string parsing.
 
-*(Note: The flagship model `wavenet_a2_max.nam` reached production×C++ parity in Fase 3 (V1 SNR 135.90 dB, V2 SNR 135.97 dB); the former fail-closed guard `reject_wavenet_a2_max_class` was retired. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4.3).*
+*(Note: The flagship model `wavenet_a2_max.nam` achieves production×C++ parity (V1 SNR 135.90 dB, V2 SNR 135.97 dB); the former fail-closed guard `reject_wavenet_a2_max_class` was retired. See [docs/cpp_parity_map.md](cpp_parity_map.md) §4.3).*
 
 ---
 
@@ -529,13 +530,13 @@ Slimmable WaveNet models allow dynamic channel degradation. The loader enforces 
 
 Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../src/common/diagnostics/error_codes.rs).
 
-| Range       | Domain                  | Status & Responsibility                                                                                                                                                                                                |
-|:----------- |:----------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`E1xxx`** | Model Loading & Parsing | **Core Crate.** I/O errors, JSON/NAMB parsing, CRC32 checks, shape validation, and OOM limits.                                                                                                                         |
-| **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with two pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates) and `E2202` (`InvalidCabsimPartitionSize` for zero partition size). |
-| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                          |
-| **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                        |
-| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (Unsupported CPU Architecture lacking `x86-64-v3`).                                                                                                                   |
+| Range       | Domain                  | Status & Responsibility                                                                                                                                                                                                                                                                                                                                   |
+|:----------- |:----------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`E1xxx`** | Model Loading & Parsing | **Core Crate.** I/O errors, JSON/NAMB parsing, CRC32 checks, shape validation, and OOM limits.                                                                                                                                                                                                                                                            |
+| **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with three pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates), `E2202` (`InvalidCabsimPartitionSize` for zero partition size), and `E2304` (`HostFormatContractViolation` when planar processing helpers receive fewer channel planes than declared by the model). |
+| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                                                                                                                                                             |
+| **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                                                                                                                                                           |
+| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (Unsupported CPU Architecture lacking `x86-64-v3`).                                                                                                                                                                                                                                                      |
 
 ### Complete Error Code Reference
 

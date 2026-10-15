@@ -121,7 +121,7 @@ Audited against `NAM/lstm.h`, `NAM/lstm.cpp`, and corresponding Rust modules:
 | LSTM Official (1×3)           | 48 kHz              | 48000                      | 48000                      |
 | LSTM Synthetic (1/2/3 layers) | 48 kHz              | 48000                      | 44100, 48000, 88200, 96000 |
 
-*Note: 192 kHz is excluded across all LSTM evaluations across long continuous sequences (causa não adjudicada, [§2.7](#27-192-khz-evaluation-exclusion)).*
+*Note: 192 kHz is excluded across all LSTM evaluations across long continuous sequences (unadjudicated cause, [§2.7](#27-192-khz-evaluation-exclusion)).*
 
 ### 2.1 Reference Algorithm (`NAM/lstm.cpp`)
 
@@ -191,7 +191,7 @@ Canonical const-generic static profiles (`LstmModel1`, `LstmModel2`) are monomor
 
 ### 2.7 192 kHz Evaluation Exclusion
 
-**Status:** Causa não adjudicada.
+**Status:** Unadjudicated cause.
 Continuous long sequences (e.g., 960,000 samples) at 192 kHz exhibit cumulative drift across recurrent states. To maintain rigorous determinism without unadjudicated baseline divergences:
 
 - 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog.rs`).
@@ -211,8 +211,8 @@ LSTM gate computation relies on hyperbolic tangent ($\tanh$) for cell input acti
 |                                                      | $\sigma(x)$         | `fast_sigmoid(x)` rational approximation                                                        | $\approx 10^{-3}$ relative error                      | `NAM/activations.h:34`                          |
 | **Rust Prod (`Standard`, default)**                  | $\tanh(x)$          | `simd_tanh_poly_avx2` / `exact_tanh` (degree-6 Taylor/minimax exp: $\frac{e^{2x}-1}{e^{2x}+1}$) | $< 2.4 \times 10^{-7}$ absolute error                 | `src/math/activations/tanh/high_fidelity.rs`    |
 |                                                      | $\sigma(x)$         | `simd_sigmoid_poly_avx2` / `exact_sigmoid` ($\frac{1}{1 + e^{-x}}$ via exact exp)               | $< 2.0 \times 10^{-7}$ absolute error                 | `src/math/activations/sigmoid/high_fidelity.rs` |
-| **Rust Prod (`Fast`, opt-in)**                       | $\tanh(x)$          | `simd_tanh_avx2` (Padé [5,4] rational approximant)                                              | $< 1.2 \times 10^{-5}$ absolute error                 | `src/math/activations/tanh/production.rs`       |
-|                                                      | $\sigma(x)$         | `simd_sigmoid_minimax_avx2` (degree-17 piecewise minimax)                                       | $< 2.4 \times 10^{-6}$ absolute error                 | `src/math/activations/sigmoid/production.rs`    |
+| **Rust Prod (`Fast`, opt-in)**                       | $\tanh(x)$          | `simd_tanh_avx2` (Padé [5,4] rational approximant, clamped $\|x\| \le 4.0$)                     | $\approx 2.32 \times 10^{-3}$ on $[-4, 4]$            | `src/math/activations/tanh/production.rs`       |
+|                                                      | $\sigma(x)$         | `simd_sigmoid_avx2` / `simd_sigmoid_minimax_avx2` (degree-17 Lawson minimax)                    | $\approx 4.09 \times 10^{-4}$ on $[-8, 8]$            | `src/math/activations/sigmoid/production.rs`    |
 | **f64 Reference Oracle**                             | $\tanh(x)$          | `f64::tanh(x)` (64-bit IEEE double float)                                                       | Exact machine epsilon ($\approx 2.2 \times 10^{-16}$) | `src/testing/reference_oracle/mod.rs`           |
 |                                                      | $\sigma(x)$         | `1.0 / (1.0 + (-x).exp())` (64-bit IEEE double float)                                           | Exact machine epsilon ($\approx 2.2 \times 10^{-16}$) | `src/testing/reference_oracle/mod.rs`           |
 
@@ -300,7 +300,7 @@ Measured against NAMcore baseline at 48 kHz:
 | WaveNet Standard (CH16) | 2.31e-14        | 9.05e-15          | 136.4    | 6.46e-06 | ✅ Bit-exact floor |
 | WaveNet Feather (CH8)   | 4.74e-14        | 2.00e-14          | 133.2    | 8.86e-06 | ✅ Bit-exact floor |
 | WaveNet Nano (CH4)      | 6.43e-14        | 3.05e-14          | 131.9    | 7.67e-06 | ✅ Bit-exact floor |
-| EVH-5150-Lite (CH12)    | 7.87e-13        | 2.64e-13          | 121.0    | 4.31e-06 | ✅ Near-bit-exact  |
+| EVH-5150-Lite (CH12)    | 1.46e-12        | 2.64e-13          | 118.4    | 4.31e-06 | ✅ Near-bit-exact  |
 | WaveNet Official (CH3)  | 9.03e-14        | 6.13e-14          | 130.4    | 1.66e-05 | ✅ Bit-exact floor |
 
 ### 3.6 Formal `condition_dsp` Specification
@@ -323,9 +323,9 @@ Audited against `NAM/wavenet/a2_fast.h/.cpp` (fast path), `NAM/wavenet/model.cpp
 - Dynamic Cascade: [`src/models/a2/model/cascade/`](../src/models/a2/model/cascade/)
 - Topology: [`src/loader/nam_json/topology/a2.rs`](../src/loader/nam_json/topology/a2.rs)
 
-### 4.0 Proveniência
+### 4.0 Provenance
 
-A especificação e a fundamentação conceitual da arquitetura WaveNet A2 têm como proveniência a apresentação pública do autor: <https://youtu.be/24FCS8tFHcE>. Consulte a remissão cruzada em [docs/architecture.md](architecture.md#5-wavenet-a2-architecture).
+The specification and conceptual foundation of the WaveNet A2 architecture originate from the author's public presentation: <https://youtu.be/24FCS8tFHcE>. See cross-reference in [docs/architecture.md](architecture.md#5-wavenet-a2-architecture).
 
 ### 4.1 Topology Classification & Fast Path
 
@@ -349,14 +349,14 @@ Measured against NAMcore at 48 kHz:
 | WaveNet A2-Lite (CH3, Fast)      | 6.43e-14        | 1.82e-14          | 131.9    | 9.54e-06 | ✅ Bit-exact floor |
 | WaveNet A2-FiLM-Full (CH8, Dyn)  | 1.18e-14        | 8.75e-15          | 139.3    | 7.85e-06 | ✅ Bit-exact floor |
 | WaveNet A2-FiLM-Lite (CH3, Dyn)  | 3.82e-13        | 1.61e-13          | 124.2    | 1.69e-05 | ✅ Near-bit-exact  |
-| WaveNet A2 Dynamic Gated (CH8)   | 5.03e-11        | 1.00e-10          | 103.0    | 6.63e-05 | ✅ Parity verified |
+| WaveNet A2 Dynamic Gated (CH8)   | 2.56e-14        | 1.34e-14          | 135.9    | 8.78e-06 | ✅ Bit-exact floor |
 | WaveNet A2 Dynamic Blended (CH3) | 5.35e-14        | 2.65e-14          | 132.7    | 9.97e-06 | ✅ Bit-exact floor |
 
-### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified (Fase 3, 2026-10-08)
+### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified (2026-10-08)
 
 **Status:** Resolved. Former fail-closed guard (`reject_wavenet_a2_max_class`) retired.
 
-Production f32 × C++ golden (Fase 2, reconfirmed Fase 3) + f64 oracle (T2.1.1, 2026-10-08):
+Production f32 × C++ golden (Phase 2, reconfirmed Phase 3) + f64 oracle (T2.1.1, 2026-10-08):
 
 | Evaluation Pair              | Metric                                                       | Status                                    |
 |:---------------------------- |:------------------------------------------------------------ |:----------------------------------------- |
@@ -365,7 +365,7 @@ Production f32 × C++ golden (Fase 2, reconfirmed Fase 3) + f64 oracle (T2.1.1, 
 | **Rust f32 × f64 Oracle**    | **SNR = 136.65 dB** (ESR ≈ 2.16e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
 | **f64 Oracle × C++ Golden**  | **SNR = 137.01 dB** (ESR ≈ 1.99e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
 
-Root causes fixed in Fase 2 (see §4.3.2 historical record below):
+Root causes fixed (see §4.3.2 historical record below):
 secondary-activation parser, grouped-FiLM scale/shift rows, last-layer
 residual in cascade, head-seed ring position. The f64 reference oracle
 ported these 4 semantics — plus grouped dilated conv (`groups_input`),
@@ -390,7 +390,7 @@ Evidence: `test_h0_triple_decomposition --ignored` (all three legs ≥ 90 dB).
 3. **Grouped Layouts:** Row-major group-to-output mapping verified in `build.rs`.
 4. **Cascade Buffer Stride:** Multi-channel buffer indexing and slicing verified (`max_diff = 0.0` across 64-sample and 256-sample chunks).
 
-#### 4.3.2 Root Divergence Analysis (Historical — Case D Closed)
+#### 4.3.2 Root Divergence Analysis (Historical — Case Closed)
 
 > Historical record. During the investigation, `f64 Oracle × C++ Golden`
 > diverged ($ESR \approx 0.89$, Case D): the mathematical reference oracle
@@ -402,7 +402,7 @@ Evidence: `test_h0_triple_decomposition --ignored` (all three legs ≥ 90 dB).
 > Speculative modifications to Rust production code without ground-truth
 > intermediate tensor dumps were halted at the time.
 >
-> **Outcome:** the four Fase 2 production fixes (secondary-activation parser,
+> **Outcome:** the four Phase 2 production fixes (secondary-activation parser,
 > grouped-FiLM scale/shift rows, last-layer residual in cascade, head-seed ring
 > position) closed Case D — production f32 × C++ golden now verifies at
 > **SNR 135.90 dB (V1)** / **135.97 dB (V2)** (table in §4.3 above). Case D is
@@ -454,7 +454,7 @@ When composing child models inside `Sequential`, interaction between missing rat
 
 #### DEC-01b Decision Record — Nested Rate Provenance (Container / pair / condition_dsp)
 
-Extends DEC-01 to nested graphs (F-05/F-13/F-16):
+Extends DEC-01 to nested graphs:
 
 - **Effective declared rate.** `effective_known_rate(node)` returns the node's
   own declared rate when present; otherwise, for `Sequential` it resolves
@@ -491,7 +491,7 @@ container rate are **not** rejected upstream (the first known rate governs).
 
 - **Decision (Option A — adopted):** the Rust loader **keeps the stricter
   rule** and rejects a child-vs-child known-rate conflict inside a
-  rate-less container with `E1309 NAM_JSON_SAMPLE_RATE_MISMATCH`, rather than
+  rate-less container with `E1309 SEQUENTIAL_SAMPLE_RATE_MISMATCH`, rather than
   silently letting the first submodel govern the whole container.
 - **Rationale:** a container selects one submodel at a time; if those submodels
   were trained at genuinely different rates, letting the first rate govern the
@@ -589,7 +589,7 @@ Dynamic single-network channel slicing ([`src/models/slimmable.rs`](../src/model
 
 - Supports adaptive quality scaling via heterogeneous channel slicing per layer array (`allowed_channels: Vec<Vec<usize>>`).
 - **Union of Breakpoints:** `slimmable_breakpoints` computes the sorted union of fractional breakpoints ($i / n$) across all layer arrays.
-- **Monotonic Reduction Invariant:** Channel slicing strictly **reduces** channel width from the full loaded model ("só reduz, nunca amplia"). Scaling back up requires re-slicing from the preserved full-capacity model storage (`clone_wavenet_for_slimmable_storage`).
+- **Monotonic Reduction Invariant:** Channel slicing strictly **reduces** channel width from the full loaded model ("only reduces, never widens"). Scaling back up requires re-slicing from the preserved full-capacity model storage (`clone_wavenet_for_slimmable_storage`).
 - **Parity Scope:** Fully verified. Validated against upstream C++ `render --slim <ratio>` and a single-precision sliced-vs-prefix-masked equivalence oracle (`tests/models/slimmable_2array_parity_test.rs`).
 
 ### 6.6 Sequential (NAMcore v0.6.0)
@@ -668,7 +668,7 @@ upstream rejection outcomes:
 
 ## 7. Known-Broken & Policy Ledger
 
-### 7.1 ✅ Retired KB-A2-MAX (Fase 3, 2026-10-08)
+### 7.1 ✅ Retired KB-A2-MAX (Phase 3, 2026-10-08)
 
 | Item / Model         | Symptom (historical)                                                | Status                                                                    |
 |:-------------------- |:------------------------------------------------------------------- |:------------------------------------------------------------------------- |
@@ -752,7 +752,7 @@ A parent WaveNet conditioned on 3 channels cannot consume a 1-channel condition 
   Err(JsonError::UnsupportedTopology("LSTM condition_dsp is not supported"))
   ```
 
-  This is mapped to diagnostic error code `NamErrorCode::InvalidModelConfig` (`E1215`).
+  This is mapped to diagnostic error code `NamErrorCode::NamJsonUnsupportedTopology` (`E1215`).
 
 - **Memory & Process Safety:** The Rust engine never panics, never crashes, and avoids allocating resources for broken models.
 

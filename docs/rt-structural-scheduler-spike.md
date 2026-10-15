@@ -108,14 +108,14 @@ If a structural candidate was selected in Phase 1:
 
 The scheduler is defined in [`src/common/spsc/swap.rs`](../src/common/spsc/swap.rs):
 
-| Type                | Role                                                                                                                                      |
-|:------------------- |:----------------------------------------------------------------------------------------------------------------------------------------- |
-| **`SwapTunables`**  | Configuration struct (pop caps, structural apply limits, backlog reporting flags). Set once at initialization.                            |
-| **`SwapBudget`**    | Per-callback counter tracking allowed structural swaps. Can be shared across multiple drains within the same audio callback.              |
-| **`GcSink`**        | Safe wrapper around the 3-tier GC cascade (SPSC channel $\to$ parking lot $\to$ overflow buffer). Never drops memory on the audio thread. |
-| **`SwapRing`**      | Trait abstracting the lock-free consumer ring. Includes sequence acknowledgment hooks (`advance_resolved`, `rollback_last_pop`).          |
-| **`RtSwapHandler`** | Trait defining payload behavior: structural classification, coalescing key, generation checking, `install`, and `discard`.                |
-| **`RtSwapDrain`**   | The coordinator struct owning the ring consumer and the single deferred slot. Executes Phases 0–2.                                        |
+| Type                | Role                                                                                                                                                                              |
+|:------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`SwapTunables`**  | Configuration struct (pop caps, structural apply limits, backlog reporting flags). Set once at initialization.                                                                    |
+| **`SwapBudget`**    | Per-callback counter tracking allowed structural swaps (`can_apply`, `consume`, `used`, `applied`, `limit`). Can be shared across multiple drains within the same audio callback. |
+| **`GcSink`**        | Safe wrapper around the 3-tier GC cascade (SPSC channel $\to$ parking lot $\to$ overflow buffer) plus optional parking-lot dirty latch. Never drops memory on the audio thread.   |
+| **`SwapRing`**      | Trait abstracting the lock-free consumer ring (`pop`, `peek`, `is_empty`, `occupied`). Includes sequence acknowledgment hooks (`advance_resolved`, `rollback_last_pop`).          |
+| **`RtSwapHandler`** | Trait defining payload behavior: structural classification, coalescing key, generation checking, `install`, and `discard`.                                                        |
+| **`RtSwapDrain`**   | The coordinator struct owning the ring consumer and the single deferred slot (`drain`, `into_parts`, `ring_occupied`). Executes Phases 0–2.                                       |
 
 ```rust
 // Simplified structure of the scheduler API in common::spsc::swap
@@ -131,11 +131,21 @@ pub struct SwapBudget {
     limit: usize,
 }
 
+impl SwapBudget {
+    pub fn new(swaps_per_callback: usize) -> Self;
+    pub fn can_apply(&self) -> bool;
+    pub const fn used(&self) -> usize;
+    pub fn consume(&mut self);
+    pub fn applied(&self) -> usize;
+    pub fn limit(&self) -> usize;
+}
+
 pub trait SwapRing {
     type Payload;
     fn pop(&mut self) -> Option<Box<Self::Payload>>;
     fn peek(&self) -> Option<&Self::Payload>;
     fn is_empty(&self) -> bool;
+    fn occupied(&self) -> usize;
     fn advance_resolved(&mut self) {}
     fn rollback_last_pop(&mut self) {}
 }
@@ -155,6 +165,20 @@ pub struct RtSwapDrain<R: SwapRing> {
     ring: R,
     deferred: Option<Box<R::Payload>>,
     tunables: SwapTunables,
+}
+
+impl<R: SwapRing> RtSwapDrain<R> {
+    pub fn new(ring: R, tunables: SwapTunables) -> Self;
+    pub fn has_deferred(&self) -> bool;
+    pub fn is_empty(&self) -> bool;
+    pub fn ring_occupied(&self) -> usize;
+    pub fn into_parts(self) -> (R, Option<Box<R::Payload>>);
+    pub fn drain<H: RtSwapHandler<Payload = R::Payload>>(
+        &mut self,
+        handler: &mut H,
+        budget: &mut SwapBudget,
+        gc: &mut GcSink<'_>,
+    );
 }
 ```
 
@@ -218,10 +242,18 @@ The driver is implemented in [`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/ada
 
 - **`CabSimAdapter::process_block`**:
   Processes an arbitrary-sized block of audio in place for a single channel. It splits the block into exact partition chunks, runs the UPOLS convolution, and handles partial sample remainders via internal FIFOs.
+- **`CabSimAdapter::process_in_place`**:
+  Direct in-place processing for buffers bounded by partition size (`samples.len() <= partition_size`), bypassing the remainder FIFO when block size is known to match or sub-divide the partition.
+- **`CabSimAdapter::process_variable`**:
+  Variable-size sub-block processing from input slice to distinct output slice.
 - **`CabSimPair::process_block_stereo`**:
-  Runs two independent `CabSimAdapter` instances for Left and Right channels. Crucially, each channel maintains separate FIFO buffers and frequency-delay-line (FDL) states to prevent stereo crosstalk.
+  Runs two independent `CabSimAdapter` instances for Left and Right channels across arbitrary buffer sizes. Crucially, each channel maintains separate FIFO buffers and frequency-delay-line (FDL) states to prevent stereo crosstalk.
+- **`CabSimPair::process_in_place_stereo`**:
+  Stereo in-place processing for buffers bounded by partition size.
 - **`CabSimAdapter::drain_tail` / `CabSimPair::drain_tail_stereo`**:
   When input audio stops (e.g., noise gate closure or silence), the impulse response naturally decays ("rings out"). The `drain_tail` methods feed zero-input blocks to flush the remaining reverberant energy without requiring manual padding by the host.
+- **Tail Budget Management**:
+  Methods `tail_samples(&self) -> usize`, `rearm_tail(&mut self)`, and `remaining_tail_samples(&self) -> usize` track the exact sample budget required to flush active FDL states.
 
 ```rust
 // Key signatures in dsp::cabsim::adapter
@@ -230,8 +262,23 @@ impl CabSimAdapter {
     /// In-place block processing for arbitrary buffer sizes.
     pub fn process_block(&mut self, input_output: &mut [f32], rt_status: Option<&RtStatusFlags>);
 
+    /// In-place processing capped at partition size.
+    pub fn process_in_place(&mut self, samples: &mut [f32], rt_status: Option<&RtStatusFlags>);
+
+    /// Variable sub-block processing between separate input and output slices.
+    pub fn process_variable(&mut self, input: &[f32], output: &mut [f32], rt_status: Option<&RtStatusFlags>);
+
     /// Flushes decaying impulse response tail during silence.
     pub fn drain_tail(&mut self, output: &mut [f32], rt_status: Option<&RtStatusFlags>);
+
+    /// Total samples required to flush the current IR tail.
+    pub fn tail_samples(&self) -> usize;
+
+    /// Re-arms the ring-out budget after active audio signal.
+    pub fn rearm_tail(&mut self);
+
+    /// Remaining non-silent samples before tail is fully flushed.
+    pub fn remaining_tail_samples(&self) -> usize;
 }
 
 impl CabSimPair {
@@ -242,6 +289,28 @@ impl CabSimPair {
         samples_r: &mut [f32],
         rt_status: Option<&RtStatusFlags>,
     );
+
+    /// Stereo in-place processing capped at partition size.
+    pub fn process_in_place_stereo(
+        &mut self,
+        samples_l: &mut [f32],
+        samples_r: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    );
+
+    /// Flushes decaying impulse response tail on both channels.
+    pub fn drain_tail_stereo(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        rt_status: Option<&RtStatusFlags>,
+    );
+
+    /// Maximum remaining tail budget across both channels.
+    pub fn remaining_tail_samples(&self) -> usize;
+
+    /// Re-arms the tail budget across both channels.
+    pub fn rearm_tail(&mut self);
 }
 ```
 
@@ -279,7 +348,7 @@ For mathematical details and performance curves, refer to [`docs/audio_fidelity_
 
 ## 4. Verification and Invariant Testing
 
-Both components are verified by dedicated test suites:
+Both components are verified by dedicated unit and integration test suites:
 
 - **Structural-Swap Scheduler Verification** ([`src/common/spsc/swap_test.rs`](../src/common/spsc/swap_test.rs)):
   - **Budget adherence**: Verifies that when multiple structural commands arrive, exactly one is executed and the rest are deferred.
@@ -291,6 +360,11 @@ Both components are verified by dedicated test suites:
   - **Blocking invariance**: Verifies that processing audio in arbitrary chunks (e.g., 16, 64, 333 samples) produces output bit-identical to fixed partition processing.
   - **Parity verification**: Output matches both the C++ NAMCore reference and 64-bit float mathematical oracles.
   - **Tail flushing**: Validates smooth decay to true zero without audible discontinuities or contract violation flags.
+- **Integration & RT Hardening Verification**:
+  - **Heap audit**: [`tests/rt_constraints/cabsim_heap_audit.rs`](../tests/rt_constraints/cabsim_heap_audit.rs) validates zero dynamic heap allocations during steady-state convolution.
+  - **C++ Reference Parity**: [`tests/parity/cabsim_cpp_parity.rs`](../tests/parity/cabsim_cpp_parity.rs) verifies bit-level equivalence with C++ `NeuralAmpModelerPlugin` / `AudioDSPTools` across short, medium, and long impulse responses.
+  - **Golden Vectors**: [`tests/models/cabsim_golden.rs`](../tests/models/cabsim_golden.rs) verifies regression immunity against locked golden vectors.
+  - **Stereo Invariance**: [`tests/cabsim_stereo.rs`](../tests/cabsim_stereo.rs) validates channel isolation, zero crosstalk, and multi-rate host quantum support.
 
 ---
 

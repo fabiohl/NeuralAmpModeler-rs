@@ -80,8 +80,8 @@ Standard exact activations and neural stage oversampling operate synergistically
 
 | Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                   |
 |:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:------------------------ |
-| **BossLSTM-1×16**       | **$8.50 \times 10^{-12}$** | $110.7\text{ dB}$ | **$8.90 \times 10^{-13}$** | ✅ Bit-identical interop |
-| **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.68 \times 10^{-13}$** | ✅ Bit-identical interop |
+| **BossLSTM-1×16**       | **$8.51 \times 10^{-12}$** | $110.7\text{ dB}$ | **$9.08 \times 10^{-13}$** | ✅ Bit-identical interop |
+| **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.78 \times 10^{-13}$** | ✅ Bit-identical interop |
 | **Official lstm (H=3)** | **$7.86 \times 10^{-13}$** | $121.0\text{ dB}$ | **$2.71 \times 10^{-12}$** | ✅ Bit-identical interop |
 
 *Measurements taken after 24,000-sample warmup prewarm in canonical live mode ([`docs/quality-contract.json`](quality-contract.json)).*
@@ -142,8 +142,8 @@ Every layer in the DSP pipeline is covered by structural invariance tests valida
 
 | Domain               | Invariant                                         | Verified By                                                                             | Failure Mode Prevented                |
 |:-------------------- |:------------------------------------------------- |:--------------------------------------------------------------------------------------- |:------------------------------------- |
-| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`src/dsp/pipeline/pipeline_block_test.rs`](../src/dsp/pipeline/pipeline_block_test.rs) | Receptive-field phase drift           |
-| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models.rs`](../tests/models.rs)                                                 | Historical state contamination        |
+| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`tests/models/block_invariance_test.rs`](../tests/models/block_invariance_test.rs)     | Receptive-field phase drift           |
+| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models/reset_matrix_test.rs`](../tests/models/reset_matrix_test.rs)             | Historical state contamination        |
 | **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                           | RT audio clicks / priority inversions |
 | **Denormal Armor**   | Zero subnormal execution penalty                  | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                                   | Microcode exception CPU stalls        |
 | **Allocation Guard** | Zero heap allocations on audio callback           | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                                 | OS allocator lock RT deadline breach  |
@@ -272,7 +272,7 @@ The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforc
 
 ## 12. Fidelity Drift Analysis & Contract Bisection
 
-### 12.1 Deriva observada (Observed Fidelity Drift)
+### 12.1 Observed Fidelity Drift
 
 Following the identification of baseline discrepancies in the Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)), a systematic bisection audit was conducted across the commit history between the reference contract date (2026-09-19) and current HEAD (`d059088`). The audit isolates real algorithmic regressions from benign compiler code-generation differences (FMA contraction/reassociation) and upstream dependency updates (NAMCore v0.6.0).
 
@@ -321,7 +321,7 @@ Following the identification of baseline discrepancies in the Quality Dashboard 
    - **Absolute Reference (f64 Oracle):** ESR vs the double-precision f64 oracle dropped from $\sim 1.0 \times 10^{-10}$ to $1.34 \times 10^{-14}$.
    This simultaneous convergence against independent C++ and 64-bit mathematical implementations definitively proves that the shift represents a genuine bug fix in the dynamic A2 inference engine.
 5. **Contract Action & Baseline Renewal:**
-   The baseline in [`docs/quality-contract.json`](quality-contract.json) must be updated to $2.56 \times 10^{-14}$ during the next formal baseline renewal (`--save` by the human operator), preventing the quality gate from masking regressions up to $5.03 \times 10^{-11}$.
+   The baseline in [`docs/quality-contract.json`](quality-contract.json) was formally renewed and committed at $2.56 \times 10^{-14}$ (with $1.34 \times 10^{-14}$ vs f64, $\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$), cementing the tighter envelope and preventing regressions up to the former $5.03 \times 10^{-11}$ floor.
 
 ---
 
