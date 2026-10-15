@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+blank_issues_enabled: false
+contact_links:
+  - name: NeuralAmpModeler-rs Documentation & Architecture
+    url: https://github.com/fabiohl/NeuralAmpModeler-rs/tree/main/docs
+    about: Read architecture documents, quality contracts, perceptual validation maps, and benchmarking guides before reporting.
+  - name: Tonehunt Model Hub
+    url: https://tonehunt.org
+    about: Download and explore pre-trained NAM models created by the community.
+  - name: Upstream NeuralAmpModeler Project
+    url: https://github.com/sdatkinson/neural-amp-modeler
+    about: Reference C++ implementation, Python training tools, and dataset pipelines by Steven Atkinson.

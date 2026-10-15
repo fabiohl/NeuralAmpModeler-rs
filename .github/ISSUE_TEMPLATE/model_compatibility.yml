@@ -22,6 +22,7 @@ body:
         - ".namb v1 (Native Audio Model Binary)"
         - ".namb v2 (Layout-optimized binary format)"
         - "CabSim WAV IR (Impulse Response)"
+        - "Sequential Composite (.nam / chained stages)"
     validations:
       required: true
 
@@ -44,8 +45,9 @@ body:
         - "WaveNet A2 (Full / Lite / Dyn / Cascade)"
         - "LSTM (1x16, 2x24, or other dimensions)"
         - "ConvNet"
-        - "Linear"
-        - "Container"
+        - "Linear / Linear-FFT"
+        - "Sequential (Chained model stages)"
+        - "Container (Slimmable multi-model bundle)"
         - "Unknown / Failed to determine"
     validations:
       required: true

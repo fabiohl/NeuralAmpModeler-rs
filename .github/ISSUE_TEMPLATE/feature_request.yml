@@ -22,13 +22,15 @@ body:
       label: Feature Category
       description: What area of the project does this proposal improve?
       options:
-        - "Neural Model Architecture / Topology"
-        - "SIMD / Microarchitecture Kernel Optimization"
+        - "Neural Model Architecture / Topology (WaveNet, LSTM, ConvNet, Linear, Sequential)"
+        - "SIMD / Microarchitecture Kernel Optimization (AVX2, AVX-512, FMA)"
         - "FastMath Activation Function / Approximation"
         - "CabSim / Resampling DSP Algorithm"
         - "File Format (.nam / .namb) & Loader Evolution"
-        - "Public DSP API / Developer Experience"
-        - "Diagnostics, Telemetry & Quality Gates"
+        - "Real-Time Host Hardening & OS Thread Scheduling (rt-hardening)"
+        - "Public DSP API / Multichannel / Developer Experience"
+        - "Diagnostics, Telemetry (HdrHistogram / TSC) & Quality Gates"
+        - "Other"
     validations:
       required: true
 
@@ -48,9 +50,11 @@ body:
       description: Describe your proposed solution, data structures, and how it preserves RT safety and zero-allocation determinism.
       placeholder: |
         - Proposed API / data structure:
-        - Real-Time Safety & Allocation strategy:
+        - Real-Time Safety & Zero-Allocation strategy (Audio hot-path):
         - Static enum dispatch (`StaticModel`) integration:
-        - SIMD vectorization & memory alignment (`AlignedVec`):
+        - SIMD vectorization & memory alignment (`AlignedVec<f32>`):
+        - Cache isolation & false sharing prevention (`#[repr(align(128))]`):
+        - Multichannel pointer table & buffer bounds contract:
     validations:
       required: true
 
@@ -59,7 +63,7 @@ body:
     attributes:
       label: Numerical Fidelity & Oracle Impact
       description: How does this proposal interact with C++ NAMCore parity and the f64 numerical oracle?
-      placeholder: "Describe whether this introduces new oracles, changes thresholds in `docs/quality-contract.json`, or maintains bit-exact parity..."
+      placeholder: "Describe whether this introduces new oracles, changes thresholds in `docs/quality-contract.json`, affects C++ NAMCore or f64 reference parity, or maintains bit-exact behavior..."
     validations:
       required: false
 

@@ -20,9 +20,11 @@ body:
         - "WaveNet Inference Throughput Regression"
         - "LSTM Inference Throughput Regression"
         - "ConvNet / Linear Inference Throughput Regression"
+        - "Sequential Model Pipeline Latency / Overhead"
         - "CabSim IR Convolver Latency / CPU Spike"
         - "Resampling / Oversampling Overhead"
         - "Heap Allocation on Audio Hot-Path (RT Violation)"
+        - "Real-Time Jitter & CPU Scheduling / Affinity Violation"
         - "Lock Contention / SPSC GC Ring Buffer Bottleneck"
         - "Compiler Codegen / SIMD Vectorization Failure"
         - "Other Performance Anomaly"
@@ -43,20 +45,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: active_simd
-    attributes:
-      label: Active SIMD Backend
-      description: The SIMD instruction set utilized during compilation.
-      options:
-        - "x86-64-v3 (AVX2 + FMA + BMI2 baseline)"
-        - "AVX-512 (AVX512F + AVX512VL + AVX512BW)"
-        - "AVX-512 VNNI BF16 (_mm512_dpbf16_ps)"
-        - "ARM NEON (aarch64)"
-        - "Scalar Ref (Fallbacks)"
-    validations:
-      required: true
-
   - type: textarea
     id: benchmark_data
     attributes:
@@ -65,7 +53,8 @@ body:
       placeholder: |
         - Baseline Throughput / Time: e.g. WaveNet Standard: 12.4 us / 64 samples
         - Measured Throughput / Time: e.g. WaveNet Standard: 28.1 us / 64 samples (2.26x slower)
-        - Regression Gate output: `cargo bench --bench regression_gate`
+        - Regression Gate output: `cargo bench --bench regression_gate` or `utils/tests-performance-regression.sh`
+        - Quality Contract comparison: `utils/quality-dashboard.sh --check docs/quality-contract.json`
         - Cycles per Sample / IPC: ...
       render: shell
     validations:
@@ -79,6 +68,7 @@ body:
       placeholder: |
         - Buffer Size & Sample Rate: 64 samples @ 48000 Hz (1.33 ms deadline)
         - Allocation Audit (`cargo test --features heap-audit`): (Did an unexpected malloc occur in the hot-path?)
+        - Host Hardening (`--features rt-hardening`): (Were CPU affinity, thread priority, PM QoS active?)
     validations:
       required: false
 
@@ -88,8 +78,10 @@ body:
       label: Steps to Reproduce the Benchmark / Regression
       description: Exact commands to reproduce the benchmark or profiling run.
       placeholder: |
-        1. RUSTFLAGS="-C target-cpu=native" cargo bench --bench inference_bench
-        2. Observe regression on benchmark group `wavenet_standard`
+        1. cargo bench --bench regression_gate
+        # or
+        2. utils/tests-performance-regression.sh
+        3. Observe regression on benchmark group `wavenet_standard`
     validations:
       required: true
 

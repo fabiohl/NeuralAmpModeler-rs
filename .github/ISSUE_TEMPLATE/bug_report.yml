@@ -21,15 +21,17 @@ body:
       description: Select the DSP or architecture subsystem where the issue occurs.
       options:
         - "WaveNet Engine (A1 / A2 / Dyn / Cascade)"
-        - "LSTM Engine (Static 1x3..2x24 / Dyn)"
+        - "LSTM Engine (Static 1x3..2x24, 1x40 / Dyn)"
         - "ConvNet Engine"
-        - "Linear / FIR Engine"
+        - "Linear / FIR / FFT Engine"
+        - "Sequential Engine (Chained multi-stage model)"
         - "CabSim IR Convolver (Partitioned FFT / Direct FIR)"
         - "Resampling / Oversampling (Polyphase / IIR / Sinc)"
         - "Noise Gate & Input/Output Pipeline Stages"
+        - "Real-Time Host Hardening & OS Thread Isolation (rt-hardening)"
         - "FastMath & SIMD Kernels (AVX2 / AVX-512 / FMA)"
-        - "Model Loader / Deserializer (.nam JSON / .namb Binary)"
-        - "SPSC Concurrency & Telemetry Ring Buffers"
+        - "Model Loader / Deserializer (.nam JSON / .namb Binary / WAV IR)"
+        - "SPSC Concurrency & Telemetry (HdrHistogram / TSC)"
         - "Diagnostic Bundle & Logging Subsystem"
         - "Other / Core Architecture"
     validations:
@@ -51,11 +53,12 @@ body:
         - "WaveNet Dynamic (Free shape)"
         - "LSTM 1x16 (Standard)"
         - "LSTM 2x24 (High Quality)"
-        - "LSTM Static (Other: 1x3, 1x8, 1x12, 2x8, 2x12, 1x40)"
+        - "LSTM Static (Other: 1x3, 1x8, 1x12, 1x24, 2x8, 2x12, 2x16, 1x40)"
         - "LSTM Dynamic (Arbitrary hidden/layers)"
         - "ConvNet"
-        - "Linear"
-        - "Container (Nested submodels)"
+        - "Linear / Linear-FFT"
+        - "Sequential (Multi-model serial pipeline)"
+        - "Container (Slimmable / Nested submodels)"
         - "N/A — Not Model Specific"
     validations:
       required: true
@@ -70,6 +73,7 @@ body:
         - ".namb v1 (Native Audio Model Binary)"
         - ".namb v2 (Layout-optimized binary format)"
         - "CabSim WAV IR (Impulse Response)"
+        - "Sequential Composite (.nam / chained pipeline)"
         - "Synthetic / Test Signal (Internal)"
         - "N/A"
     validations:
@@ -81,11 +85,11 @@ body:
       label: Environment & Hardware
       description: Provide details about your CPU microarchitecture, OS, and Rust toolchain.
       placeholder: |
-        - NeuralAmpModeler-rs version: 0.8.0 (or commit hash)
-        - Rustc version: rustc 1.98.0 (or output of `rustc --version`)
+        - NeuralAmpModeler-rs version: 1.0.0 (or commit hash)
+        - Rustc version: rustc 1.99.0 (or output of `rustc --version`)
         - Target triple: x86_64-unknown-linux-gnu
         - CPU Model: AMD Ryzen 9 7950X / Intel Core i7-13700K (AVX2, AVX-512)
-        - Active Crate Features: --features "dual-mono,testing"
+        - Active Crate Features: --features "dual-mono,testing,rt-hardening"
         - Host / Embedding Context: Standalone host / CLAP wrapper / Offline renderer / Benchmark CLI
     validations:
       required: true
@@ -96,8 +100,8 @@ body:
       label: DSP & Audio Configuration
       description: Specify audio sampling rate, block size, oversampling mode, and precision.
       placeholder: |
-        - Sample Rate: 48000 Hz (or 44100 / 96000 / 192000 Hz)
-        - Block / Buffer Size: 64 samples (or 32 / 128 / 256 / 512)
+        - Sample Rate: 48000 Hz (or 44100 / 88200 / 96000 / 176400 / 192000 Hz)
+        - Block / Buffer Size: 64 samples (or 16 / 32 / 64 / 128 / 256 / 512 / 1024)
         - Oversampling Mode: Off / 2x / 4x
         - Activation Precision: Standard (Exact) / Fast (Padé approximation)
         - Quality Mode: Live (zero-latency) / Offline (HQ deterministic)
@@ -133,10 +137,12 @@ body:
       description: If this is an audio quality, fidelity, or parity issue, provide measured metrics (SNR, ESR, MSE, MR-STFT, true-peak dBTP, LUFS).
       placeholder: |
         - SNR (Signal-to-Noise Ratio): e.g. 85.2 dB (expected >= 105.0 dB)
-        - ESR (Error-to-Signal Ratio): e.g. 1.2e-9
+        - ESR (Error-to-Signal Ratio vs C++ NAMCore): e.g. 1.2e-9
+        - ESR (Error-to-Signal Ratio vs f64 Oracle): e.g. 4.8e-13
         - MSE (Mean Squared Error): e.g. 4.5e-14
-        - MR-STFT (Multi-Resolution STFT): e.g. 1.2e-4
+        - MR-STFT (Multi-Resolution STFT spectral distance): e.g. 1.2e-4
         - C++ NAMCore Parity Comparison: (Did C++ NAMCore output differ?)
+        - f64 Mathematical Reference Oracle: (Did reference oracle output differ?)
     validations:
       required: false
 

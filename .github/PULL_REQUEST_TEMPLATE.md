@@ -12,12 +12,13 @@ Fixes #
 
 ## Subsystem & Scope
 <!-- Check all that apply -->
-- [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`)
-- [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`)
-- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/gate.rs`)
-- [ ] **Model Loading & Formats** (`src/loader/`, `.nam` JSON parser, `.namb` binary loader)
-- [ ] **Concurrency & Telemetry** (`src/common/spsc/`, `src/common/diagnostics/`)
-- [ ] **Benchmarks & Quality Gates** (`benches/`, `src/testing/`, `docs/quality-contract.json`)
+- [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`, `src/models/sequential.rs`, `src/models/container.rs`)
+- [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`, `src/math/conv/`)
+- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/adaptive.rs`, `src/dsp/oversample.rs`, `src/dsp/gate.rs`)
+- [ ] **Model Loading & Formats** (`src/loader/`, `.nam` JSON parser, `.namb` v1/v2 binary formats, WAV IR loader, dynamic dispatcher)
+- [ ] **Real-Time Host Hardening & OS Thread Isolation** (`src/rt_hardening/`, CPU affinity, PM QoS, `SCHED_FIFO`, `mlockall`, THP disable)
+- [ ] **Concurrency & Telemetry** (`src/common/spsc/`, `src/common/diagnostics/`, `src/common/tsc.rs`, `src/dsp/telemetry.rs` / HdrHistogram)
+- [ ] **Benchmarks & Quality Gates** (`benches/`, `src/testing/`, `tests/`, `docs/quality-contract.json`, `docs/benchmarks.md`)
 - [ ] **Documentation & Examples** (`docs/`, `examples/`, `README.md`)
 
 ---
@@ -30,6 +31,9 @@ Fixes #
 - [ ] **Zero Blocking I/O & File Operations**: No filesystem access, network I/O, or synchronous standard output (`println!`, `eprintln!`) on the audio thread.
 - [ ] **Zero `log::*` Invocations in Audio Hot-Path**: No `log::*` macros are executed inside `process()` or inner sample loops (anomalies/events are signaled via atomic bitmasks `RtStatusFlags`).
 - [ ] **Static Bounds-Check Elimination**: Loops in DSP hot-paths are structured using `.chunks_exact()`, `.chunks_exact_mut()`, and `zip` to guarantee compile-time bounds-check elimination, with no `unwrap()` or `expect()`.
+- [ ] **Multichannel API Contract & Buffer Safety**: Multichannel routing (`NamModel::process_multichannel_in_place`) guarantees zero allocation for up to 16 channels via stack pointer tables; asymmetric buffer slices clamp safely (`output.len().min(input.len())`) with zero panics.
+- [ ] **Cache Isolation & False Sharing Prevention**: Cross-thread shared structures (RT ↔ Main) enforce 128-byte cache line alignment (`#[repr(align(128))]`).
+- [ ] **Memory Ordering Determinism**: RT thread strictly uses `Ordering::Relaxed` for metrics/counters and `Ordering::Acquire`/`Release` for SPSC rings; never `SeqCst` on the audio thread.
 - [ ] **Denormal / Subnormal Protection**: Subnormal float handling is protected via FTZ/DAZ or deterministic dither offset (`-220 dBFS`).
 
 ---
@@ -48,8 +52,9 @@ Fixes #
 <!-- Both the C++ NAMCore Parity oracle and the f64 Numerical Oracle must be satisfied. -->
 
 - [ ] **C++ NAMCore Parity**: Parity tests (`tests/parity/cpp_parity.rs`) pass within calibrated SNR/ESR/MSE/MR-STFT thresholds.
-- [ ] **f64 Numerical Oracle**: Ideal numerical behavior is maintained against the reference implementation without unexpected float drift.
-- [ ] **Quality Contract Compliance**: If quality thresholds are affected, measurement comments are provided and `docs/quality-contract.json` is validated.
+- [ ] **f64 Numerical Oracle**: Ideal numerical behavior is maintained against the reference implementation (`tests/parity/reference_oracle_f64.rs`) without unexpected float drift.
+- [ ] **Block-Invariance & Meta-Coherence**: Block slicing equivalence (`tests/models/block_invariance_test.rs`) and metadata coherence suites (`tests/models/meta_coherence.rs`) pass.
+- [ ] **Quality Contract Compliance**: If quality thresholds are affected, measurement comments are provided and `docs/quality-contract.json` is validated via `utils/quality-dashboard.sh --check docs/quality-contract.json`.
 - [ ] **Parser Fuzzing & Property Tests**: If loaders or deserializers were modified, proptest fuzzing suites (`tests/models/proptest_parsers.rs`) pass.
 
 ---
@@ -62,7 +67,7 @@ utils/lints.sh        # Static analysis, fmt, clippy (-D warnings), doc-tests, S
 utils/tests-quick.sh  # Agile testing, golden vectors, C++ parity gates, parser fuzzing
 ```
 
-- [ ] **`utils/lints.sh` Passed**: 100% clean across all feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`).
+- [ ] **`utils/lints.sh` Passed**: 100% clean across all feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`, `rt-hardening`).
 - [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 
