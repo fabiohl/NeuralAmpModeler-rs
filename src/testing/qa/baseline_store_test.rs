@@ -30,8 +30,11 @@ fn read_marker(path: &Path) -> String {
 }
 
 fn nested_count(root: &Path, baseline_name: &str) -> usize {
+    let top_level = list_top_level_baselines(root, baseline_name);
     let mut nested = Vec::new();
-    walk_collect(root, baseline_name, 0, 3, &mut nested);
+    for series in &top_level {
+        collect_nested_baselines(series, baseline_name, &mut nested);
+    }
     nested.len()
 }
 
@@ -268,6 +271,71 @@ fn series_content_is_preserved_recursively() {
     assert_eq!(
         read_marker(&criterion2.join("RT_DSP").join(name).join("sample.json")),
         r#"{"t": [1, 2]}"#
+    );
+
+    let _ = fs::remove_dir_all(&work);
+}
+
+/// Hierarchical benchmark groups (like `PIPE_Host/Full_Load_64_samp`) persist
+/// and restore cleanly, preserving the full relative path under criterion root.
+#[test]
+fn hierarchical_benchmark_groups_persist_and_restore() {
+    let work = temp_root();
+    let baseline_dir = work.join("store");
+    let criterion = work.join("criterion");
+    let name = "ci-baseline";
+
+    write_marker(
+        &criterion
+            .join("PIPE_Host")
+            .join("Full_Load_64_samp")
+            .join(name)
+            .join("estimates.json"),
+        r#"{"mean": 64.3}"#,
+    );
+    write_marker(
+        &criterion
+            .join("PIPE_Host")
+            .join("LSTM_64_samp")
+            .join(name)
+            .join("estimates.json"),
+        r#"{"mean": 8.0}"#,
+    );
+    write_marker(
+        &criterion
+            .join("PIPE_AbOpt")
+            .join("WaveNet_A1_48k_64_samp")
+            .join(name)
+            .join("estimates.json"),
+        r#"{"mean": 79.2}"#,
+    );
+
+    let persisted = persist_baseline(&baseline_dir, &criterion, name).unwrap();
+    assert_eq!(persisted, 3);
+    assert_eq!(list_top_level_baselines(&baseline_dir, name).len(), 3);
+
+    let criterion2 = work.join("criterion2");
+    let restored = restore_baseline(&baseline_dir, &criterion2, name).unwrap();
+    assert_eq!(restored, 3);
+    assert_eq!(
+        read_marker(
+            &criterion2
+                .join("PIPE_Host")
+                .join("Full_Load_64_samp")
+                .join(name)
+                .join("estimates.json")
+        ),
+        r#"{"mean": 64.3}"#
+    );
+    assert_eq!(
+        read_marker(
+            &criterion2
+                .join("PIPE_AbOpt")
+                .join("WaveNet_A1_48k_64_samp")
+                .join(name)
+                .join("estimates.json")
+        ),
+        r#"{"mean": 79.2}"#
     );
 
     let _ = fs::remove_dir_all(&work);

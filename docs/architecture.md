@@ -236,21 +236,65 @@ scheduler, IRQ delivery and the periodic tick so the audio thread owns it
 exclusively. The kernel's own documentation is the reference:
 `Documentation/admin-guide/kernel-parameters.txt` (`isolcpus=`,
 `nohz_full=`, `rcu_nocbs=`, `irqaffinity=`), `Documentation/timers/no_hz.rst`
-and `Documentation/admin-guide/pm/`. A representative boot line for a core
-pair (dedicated core 8, SMT sibling 9 kept offline) is:
+and `Documentation/admin-guide/pm/`.
+
+##### Recommended Kernel Boot Command Line (`/etc/default/grub`)
+
+A representative production boot line for a core pair (dedicated audio core 8, SMT sibling 9 kept offline) on a 16-thread CPU (e.g. 8 cores / 16 threads) is:
 
 ```text
-isolcpus=managed_irq,domain,8,9 nohz_full=8,9 rcu_nocbs=8,9 \
-irqaffinity=0-7,10-15 nmi_watchdog=0 skew_tick=1
+isolcpus=managed_irq,domain,8,9 nohz_full=8,9 rcu_nocbs=8,9 irqaffinity=0-7,10-15 nmi_watchdog=0 skew_tick=1
 ```
 
-Beyond the boot line, pin the housekeeping set so no IRQ lands on the
-dedicated core (`/proc/irq/*/smp_affinity_list`), keep the SMT sibling
-offline, and prefer PM-QoS (`/dev/cpu_dma_latency`, already used by the
-`rt-hardening` feature) over forcing C-states for latency control. Note that
-`nohz_full` only removes the tick while a single runnable task occupies the
+Parameter breakdown:
+
+- `isolcpus=managed_irq,domain,8,9`: Removes cores 8 and 9 from general Linux scheduler load-balancing domains (`domain`) and prevents managed interrupt request distribution (`managed_irq`) from assigning device IRQs to these cores.
+- `nohz_full=8,9`: Enables full tickless kernel execution on cores 8 and 9. When only one runnable task executes on an isolated core, the periodic timer tick interrupt is suspended, eliminating scheduling jitter.
+- `rcu_nocbs=8,9`: Offloads Read-Copy-Update (RCU) callback invocations from cores 8 and 9 to housekeeping cores, eliminating kernel RCU softirq preemption on the audio core.
+- `irqaffinity=0-7,10-15`: Specifies the default hardware interrupt mask, directing all hardware device IRQs (timers, disk controllers, network, GPUs) to housekeeping cores (0-7, 10-15).
+- `nmi_watchdog=0`: Disables Non-Maskable Interrupt (NMI) watchdog periodic ticks across all cores, avoiding periodic ~1 Hz hardware interruptions.
+- `skew_tick=1`: Skews the timer tick alignment across cores to prevent simultaneous tick handling bursts across shared cache levels.
+
+##### Runtime Host Calibration & Isolation Commands
+
+Beyond the boot line, execute the following runtime configuration before running real-time workloads or microbenchmarks:
+
+```bash
+# 1. Take the SMT sibling thread offline to eliminate hyperthreading contention:
+echo 0 | sudo tee /sys/devices/system/cpu/cpu9/online
+
+# 2. Lock CPU frequency governor to 'performance' (prevents DVFS transition latency):
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# 3. Disable CPU frequency boost/turbo (ensures repeatable clocks without thermal throttling):
+echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost
+
+# 4. Set default IRQ affinity mask (fcff masks cores 8 and 9 on a 16-core topology):
+echo fcff | sudo tee /proc/irq/default_smp_affinity
+for irq in /proc/irq/[0-9]*/smp_affinity_list; do
+    [ -f "$irq" ] && echo 0-7,10-15 | sudo tee "$irq" >/dev/null 2>&1 || true
+done
+
+# 5. Allow PMU counter access for IPC and microbenchmark telemetry without root:
+echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
+
+# 6. Ensure real-time priority and locked memory limits are configured:
+ulimit -r 95
+ulimit -l unlimited
+```
+
+##### Process Invocation Wrapper
+
+To execute workloads or microbenchmarks on the dedicated isolated core with real-time priority:
+
+```bash
+# SCHED_FIFO priority 80 pinned strictly to isolated core 8:
+chrt -f 80 taskset -c 8 <command>
+```
+
+Note that `nohz_full` only removes the tick while a single runnable task occupies the
 core; syscalls issued *from* the isolated core reintroduce noise, and
-firmware SMIs are an independent, kernel-invisible source. Attribute any
+firmware SMIs (System Management Interrupts) are an independent, kernel-invisible source. Attribute any
 residual tail latency with the kernel's own tracers (`rtla osnoise`,
 `rtla timerlat`, and the `hwlat` tracer for SMIs) before attempting to
 optimize application code.

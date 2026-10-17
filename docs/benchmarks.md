@@ -227,26 +227,56 @@ Because the DSP engine operates in a state of extreme micro-architectural optimi
 
 #### Recommended Mitigation Measures
 
-1. **Kernel-Level Core Isolation (`isolcpus` & `nohz_full`):**
-   To shield benchmark cores from kernel scheduling ticks, timers, and non-bound user space threads, boot the Linux kernel with CPU isolation parameters (e.g. for cores 8 and 9):
+1. **Kernel-Level Core Isolation (`isolcpus`, `nohz_full`, `rcu_nocbs`):**
+   To shield benchmark cores from kernel scheduling ticks, timers, interrupts, and non-bound user space threads, configure the Linux kernel boot line (in `/etc/default/grub` via `GRUB_CMDLINE_LINUX_DEFAULT`) with maximum isolation parameters (example for dedicated core 8 and sibling 9 on a 16-thread host):
 
    ```text
-   isolcpus=8,9 nohz_full=8,9
+   isolcpus=managed_irq,domain,8,9 nohz_full=8,9 rcu_nocbs=8,9 irqaffinity=0-7,10-15 nmi_watchdog=0 skew_tick=1
    ```
 
-   Combined with pinning (`NAM_BENCH_CORE=8 taskset -c 8 ...`), this eliminates OS preemption and thread migration.
+   * `isolcpus=managed_irq,domain,8,9`: Excludes cores 8 and 9 from OS load-balancing and managed IRQ affinity.
+   * `nohz_full=8,9`: Suspends the scheduler tick while a single benchmark task runs.
+   * `rcu_nocbs=8,9`: Offloads RCU callbacks to housekeeping cores (0-7, 10-15).
+   * `irqaffinity=0-7,10-15`: Directs all hardware device interrupts to housekeeping cores.
+   * `nmi_watchdog=0` & `skew_tick=1`: Eliminates NMI watchdog timer jitter and offsets tick alignment.
 
-2. **CPU Frequency Scaling (`performance` Governor):**
-   Lock the CPU scaling governor to `performance` across all cores to prevent Dynamic Voltage and Frequency Scaling (DVFS) transition delays:
+2. **Physical Core Exclusivity (Disable SMT Sibling):**
+   In SMT (HyperThreading) topologies, taking the sibling logical thread offline gives the benchmark core exclusive access to L1/L2 caches and execution pipelines:
+
+   ```bash
+   echo 0 | sudo tee /sys/devices/system/cpu/cpu9/online
+   ```
+
+3. **CPU Frequency Scaling & Boost Locking:**
+   Lock the CPU scaling governor to `performance` across all cores and disable boost/turbo to eliminate DVFS transition delays and prevent thermal clock throttling from creating false-positive variance:
 
    ```bash
    echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+   echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost
    ```
 
-3. **Thermal Stabilization & Hardware Cooldown:**
+4. **Hardware IRQ Masking & PMU Paranoid:**
+   Route hardware IRQs away from cores 8 and 9 and enable PMU sampling:
+
+   ```bash
+   echo fcff | sudo tee /proc/irq/default_smp_affinity
+   for irq in /proc/irq/[0-9]*/smp_affinity_list; do
+       [ -f "$irq" ] && echo 0-7,10-15 | sudo tee "$irq" >/dev/null 2>&1 || true
+   done
+   echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
+   ```
+
+5. **Benchmark Execution under SCHED_FIFO Pinning:**
+   Execute the benchmark runner pinned strictly to the isolated core under realtime FIFO scheduling:
+
+   ```bash
+   NAM_BENCH_CORE=8 chrt -f 80 taskset -c 8 utils/tests-performance-regression.sh --check
+   ```
+
+6. **Thermal Stabilization & Hardware Cooldown:**
    Allow the CPU to cool down before executing baseline benchmarks (`NAM_THERMAL_COOLDOWN_S=180` by default). The regression gate sleeps between heavy phases to prevent thermal throttling from skewing Criterion iteration times.
 
-4. **Low Background Load & Host Quiescence:**
+7. **Low Background Load & Host Quiescence:**
    Ensure workstation background load is minimal ($\text{load average} \ll 1.0$), with browsers, container engines, and heavy background services closed.
 
 #### Reference Noise Floor & Run-to-Run Variance (Empirical Baseline Audit)

@@ -564,6 +564,32 @@ fn persist_and_restore_baselines_via_cli() {
             .join("ci-baseline")
             .exists()
     );
+
+    // Fail-closed verification: persisting or restoring when 0 series exist exits with code 1.
+    let empty_criterion = temp_path("empty_criterion");
+    fs::create_dir_all(&empty_criterion).unwrap();
+    let empty_store = temp_path("empty_store");
+    fs::create_dir_all(&empty_store).unwrap();
+
+    let out_persist_empty = run(&[
+        "persist-baseline",
+        "--criterion-root",
+        empty_criterion.to_str().unwrap(),
+        "--baseline-dir",
+        empty_store.to_str().unwrap(),
+    ]);
+    assert_eq!(out_persist_empty.status.code(), Some(1));
+    assert!(stderr(&out_persist_empty).contains("nothing persisted (fail-closed)"));
+
+    let out_restore_empty = run(&[
+        "restore-baseline",
+        "--criterion-root",
+        empty_criterion.to_str().unwrap(),
+        "--baseline-dir",
+        empty_store.to_str().unwrap(),
+    ]);
+    assert_eq!(out_restore_empty.status.code(), Some(1));
+    assert!(stdout(&out_restore_empty).contains("no top-level 'ci-baseline' series found"));
 }
 
 /// `receipt append` writes the byte-compatible `dashboard_phase_receipt`

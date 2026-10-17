@@ -14,7 +14,7 @@
 # markers.
 
 # >>> NAM-LIB-CORE BEGIN >>>
-# sha256: 8f3720bb5abb0c140fc4b4782aa7b048e28f4b4a2b61fedd29b142856e78dcb4
+# sha256: 9047a6327095cd1b279f30eece87652453b7d7175b183805779f33c5324f4313
 # Shared canonical block for the NAM ecosystem QA shell library.
 # ---------------------------------------------------------------------------
 # ANSI style helpers
@@ -387,7 +387,11 @@ run_perf_regression_gate() {
     extract_bench_executable() {
         local json_out="$1"
         local rc=0
-        bench_exe=$(printf '%s\n' "$json_out" | grep -F '"executable":' | tail -1 \
+        bench_exe=$(printf '%s\n' "$json_out" \
+            | grep -F '"reason":"compiler-artifact"' \
+            | grep -F "\"name\":\"${bench_suite}\"" \
+            | grep -F '"executable":' \
+            | tail -1 \
             | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') || rc=$?
         if [ "$rc" -ge 2 ]; then
             die "failed to extract benchmark executable from cargo JSON (rc=$rc)"
@@ -451,10 +455,15 @@ run_perf_regression_gate() {
             die "benchmark execution failed during baseline bootstrap"
         fi
 
-        "$perf_gate" persist-baseline \
+        local persist_out
+        persist_out=$("$perf_gate" persist-baseline \
             --baseline-dir "$baseline_dir" \
             --criterion-root "$criterion_root" \
-            --baseline "$baseline_name"
+            --baseline "$baseline_name")
+        echo "$persist_out"
+        if [[ "$persist_out" =~ "persisted 0 baseline series" ]]; then
+            die "baseline bootstrap failed: 0 series persisted from $criterion_root into $baseline_dir (fail-closed)"
+        fi
         "$perf_gate" probe \
             --out "$fingerprint_file" \
             --bench-core "$bench_core" \
@@ -482,10 +491,15 @@ run_perf_regression_gate() {
         fi
 
         # 2. Restore the persisted Criterion series for the comparison run.
-        "$perf_gate" restore-baseline \
+        local restore_out
+        restore_out=$("$perf_gate" restore-baseline \
             --baseline-dir "$baseline_dir" \
             --criterion-root "$criterion_root" \
-            --baseline "$baseline_name"
+            --baseline "$baseline_name")
+        echo "$restore_out"
+        if [[ "$restore_out" =~ "no top-level" ]]; then
+            die "performance comparison aborted: no top-level '$baseline_name' series found under $baseline_dir"
+        fi
 
         # 3. Pre-build (all cores) then quiesce the pinned core.
         prebuild_benchmark

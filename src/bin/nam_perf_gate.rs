@@ -571,6 +571,9 @@ fn cmd_persist_baseline(args: &[String]) {
     let name = baseline_name(&flags);
 
     match persist_baseline(Path::new(&baseline_dir), Path::new(&criterion_root), &name) {
+        Ok(0) => run_error(format!(
+            "no '{name}' baseline series found under {criterion_root} — nothing persisted (fail-closed)"
+        )),
         Ok(count) => {
             println!("persisted {count} baseline series from {criterion_root} to {baseline_dir}");
             exit(0);
@@ -601,7 +604,7 @@ fn cmd_restore_baseline(args: &[String]) {
     match restore_baseline(Path::new(&baseline_dir), Path::new(&criterion_root), &name) {
         Ok(0) => {
             println!("no top-level '{name}' series found under {baseline_dir}");
-            exit(0);
+            exit(1);
         }
         Ok(count) => {
             println!("restored {count} baseline series into {criterion_root}");
