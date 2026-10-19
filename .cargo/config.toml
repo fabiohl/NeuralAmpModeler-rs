@@ -3,6 +3,10 @@
 
 [build]
 warnings = "deny"
+# Bound parallel codegen so a 16-thread default cannot exhaust RAM on a 16 GiB
+# developer machine (several rustc workers + rust-analyzer/IDE). Override per
+# invocation with CARGO_BUILD_JOBS on larger hosts.
+jobs = 4
 rustflags = [
   # --- Architecture and Optimization Configuration (march / mtune) ---
 

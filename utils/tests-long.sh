@@ -52,6 +52,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "$0")"
+
 STRICT_PRE_RELEASE=0
 SIMULATE=0
 for arg in "$@"; do
@@ -141,6 +144,17 @@ _test_flag() {
 
 # Shared style helpers (RED/GREEN/YELLOW/BLUE/BOLD/NC) + cd to project root.
 source "$(dirname "$0")/_lib.sh"
+
+# ── Memory guard (OOM containment) ──────────────────────────────────────────
+# Phase 0 pre-compiles release test binaries; on a 16 GiB host that peak plus
+# rust-analyzer/IDE can trigger a global OOM. Re-exec inside a transient,
+# memory-capped systemd scope (fail-open when unavailable). For RT measurement
+# fidelity the operator may opt out with NAM_NO_MEM_GUARD=1 (keep swap enabled).
+if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ] \
+   && [ "$SIMULATE" = "0" ]; then
+    export NAM_MEM_GUARD=1
+    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
+fi
 
 # ── Simulate / dry-run pre-registration (T2.1 / F-03) ────────────────────────
 # `--simulate` / `--dry-run` registers the full receipt structure (6 preflights

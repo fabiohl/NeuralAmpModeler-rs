@@ -64,6 +64,32 @@ fn write_change_estimates(crit: &Path, id: &str, point: f64, lower: f64, upper: 
     write_file(&crit.join(id).join("change").join("estimates.json"), &body);
 }
 
+/// Writes one Criterion `new/estimates.json` measurement artifact for `id`.
+fn write_new_estimates(crit: &Path, id: &str, point_ns: f64) {
+    let body = serde_json::json!({
+        "mean": {
+            "confidence_interval": {
+                "confidence_level": 0.95,
+                "lower_bound": point_ns * 0.99,
+                "upper_bound": point_ns * 1.01
+            },
+            "point_estimate": point_ns,
+            "standard_error": point_ns * 0.001
+        },
+        "median": {
+            "confidence_interval": {
+                "confidence_level": 0.95,
+                "lower_bound": point_ns * 0.99,
+                "upper_bound": point_ns * 1.01
+            },
+            "point_estimate": point_ns,
+            "standard_error": point_ns * 0.001
+        }
+    })
+    .to_string();
+    write_file(&crit.join(id).join("new").join("estimates.json"), &body);
+}
+
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_nam_perf_gate")
 }
@@ -400,7 +426,7 @@ fn verdict_alternative_suite_manifest() {
     ];
     args.extend_from_slice(&suite_args);
     let out = run(&args);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(3));
     let text = stdout(&out);
     assert!(text.contains("REGRESSION_BLIND"), "unexpected: {text}");
     assert!(text.contains("DOWN_B"), "blind id must be named: {text}");
@@ -472,7 +498,7 @@ fn verdict_blind_when_comparison_artifact_missing() {
         "--root",
         crit.to_str().unwrap(),
     ]);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(3));
     let text = stdout(&out);
     assert!(text.contains("REGRESSION_BLIND"), "unexpected: {text}");
     assert!(text.contains("RT_B"), "blind id must be named: {text}");
@@ -492,8 +518,184 @@ fn verdict_blind_on_unparseable_log() {
         "--root",
         crit.to_str().unwrap(),
     ]);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(3));
     assert!(stdout(&out).contains("REGRESSION_BLIND"));
+}
+
+/// Baseline instability detection:
+/// Under `--check-stability`, bilateral spread (CI crossing both positive and
+/// negative thresholds) logs a warning and exits 0.
+/// Under `--strict-stability`, baseline instability is fatal and exits 2.
+#[test]
+fn verdict_check_stability_and_strict_stability() {
+    let crit = temp_path("verdict-stability-crit");
+    let log = temp_path("verdict-stability.log");
+    write_file(&log, "Benchmarking RT_A: Warming up for 1.0000 s\n");
+    // Relative mean is -15.59%, CI [-15.74%, -14.84%], which is entirely below -5% (ChangeClass::Improved).
+    write_change_estimates(&crit, "RT_A", -0.1559, -0.1574, -0.1484);
+
+    // Default mode: no stability check, passes with 0.
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("verdict ok"));
+
+    // `--check-stability`: warning emitted, exits 0.
+    let out_warn = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--check-stability",
+    ]);
+    assert_eq!(out_warn.status.code(), Some(0));
+    let text = stdout(&out_warn);
+    assert!(
+        text.contains("UNSTABLE_BASELINE"),
+        "expected UNSTABLE_BASELINE in: {text}"
+    );
+
+    // `--strict-stability`: exits 2 (fail-closed on unstable baseline).
+    let out_strict = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--strict-stability",
+    ]);
+    assert_eq!(out_strict.status.code(), Some(2));
+    let text = stdout(&out_strict);
+    assert!(
+        text.contains("UNSTABLE_BASELINE"),
+        "expected UNSTABLE_BASELINE in: {text}"
+    );
+}
+
+/// Absolute noise floor filtering:
+/// A benchmark with relative change above +5% (e.g. +8%) is flagged as regression
+/// if no noise floor is specified.
+/// When `--abs-noise-floor-ns 2.0` is provided and the absolute delta is <= 2.0 ns,
+/// it is categorized as NOISE_IGNORED and the gate exits 0.
+#[test]
+fn verdict_abs_noise_floor_filters_sub_threshold() {
+    let crit = temp_path("verdict-noise-crit");
+    let log = temp_path("verdict-noise.log");
+    write_file(&log, "Benchmarking RT_Nano: Warming up for 1.0000 s\n");
+    // Relative change point +8%, CI [6%, 10%] -> strictly above +5% noise band.
+    write_change_estimates(&crit, "RT_Nano", 0.080, 0.060, 0.100);
+    // Current runtime is 15 ns. Delta = 15.0 * (0.08 / 1.08) = 1.11 ns.
+    write_new_estimates(&crit, "RT_Nano", 15.0);
+
+    // Without noise floor: exits 1 (REGRESSION_DETECTED).
+    let out = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("REGRESSION_DETECTED"));
+
+    // With `--abs-noise-floor-ns 2.0`: delta (1.11 ns) <= 2.0 ns -> NOISE_IGNORED, exits 0.
+    let out_floor = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--abs-noise-floor-ns",
+        "2.0",
+    ]);
+    assert_eq!(out_floor.status.code(), Some(0));
+    let text = stdout(&out_floor);
+    assert!(
+        text.contains("NOISE_IGNORED"),
+        "expected NOISE_IGNORED in: {text}"
+    );
+    assert!(
+        text.contains("RT_Nano"),
+        "benchmark id must be named: {text}"
+    );
+    assert!(text.contains("verdict ok"), "verdict must be ok: {text}");
+}
+
+/// Two-pass confirmation and structured JSON report:
+/// First run flags regressions into `flagged_regressions.txt`.
+/// Second clean run clears the flake and deletes `flagged_regressions.txt`.
+/// `--json` outputs machine-readable schema 1.1.0.
+#[test]
+fn verdict_confirm_regressions_and_json_report() {
+    let crit = temp_path("verdict-confirm-crit");
+    let log = temp_path("verdict-confirm.log");
+    write_file(&log, "Benchmarking RT_Flaky: Warming up for 1.0000 s\n");
+    write_change_estimates(&crit, "RT_Flaky", 0.100, 0.070, 0.130);
+    write_new_estimates(&crit, "RT_Flaky", 200.0);
+
+    let flagged_file = crit.join("flagged_regressions.txt");
+
+    // Pass 1: regression detected with --confirm-regressions.
+    let out1 = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--confirm-regressions",
+    ]);
+    assert_eq!(out1.status.code(), Some(1));
+    assert!(
+        flagged_file.exists(),
+        "flagged_regressions.txt should be written"
+    );
+    let flagged_content = fs::read_to_string(&flagged_file).unwrap();
+    assert!(flagged_content.contains("RT_Flaky"));
+
+    // Pass 2: flake resolved (estimates now clean).
+    write_change_estimates(&crit, "RT_Flaky", 0.010, 0.001, 0.020);
+    let out2 = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--confirm-regressions",
+    ]);
+    assert_eq!(out2.status.code(), Some(0));
+    assert!(
+        !flagged_file.exists(),
+        "flagged_regressions.txt should be removed on second pass"
+    );
+    let text2 = stdout(&out2);
+    assert!(
+        text2.contains("FLAKE_CLEARED") && text2.contains("RT_Flaky"),
+        "expected FLAKE_CLEARED in: {text2}"
+    );
+
+    // JSON report test:
+    let out_json = run(&[
+        "verdict",
+        "--log",
+        log.to_str().unwrap(),
+        "--root",
+        crit.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(out_json.status.code(), Some(0));
+    let json_text = stdout(&out_json);
+    let val: serde_json::Value = serde_json::from_str(&json_text).expect("must be valid JSON");
+    assert_eq!(val["schema_version"], "1.1.0");
+    assert_eq!(val["verdict"], "PASSED");
+    assert_eq!(val["executed_count"], 1);
+    assert_eq!(val["summary"]["regressions"], 0);
+    assert_eq!(val["summary"]["clean"], 1);
 }
 
 /// `persist-baseline` / `restore-baseline` move top-level series between the

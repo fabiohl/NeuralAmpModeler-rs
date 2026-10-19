@@ -70,7 +70,10 @@ impl SampleFifo {
             return 0;
         }
         let cap = self.capacity();
-        let write = (self.read + self.len) % cap;
+        let mut write = self.read + self.len;
+        if write >= cap {
+            write -= cap;
+        }
         let first = (cap - write).min(n);
         self.buf[write..write + first].copy_from_slice(&src[..first]);
         if first < n {
@@ -96,7 +99,11 @@ impl SampleFifo {
         if first < n {
             dst[first..n].copy_from_slice(&self.buf[..n - first]);
         }
-        self.read = (self.read + n) % cap;
+        let mut next_read = self.read + n;
+        if next_read >= cap {
+            next_read -= cap;
+        }
+        self.read = next_read;
         self.len -= n;
         n
     }
@@ -112,7 +119,11 @@ impl SampleFifo {
         let cap = self.capacity();
         let clamped = n.min(cap - self.len);
         debug_assert_eq!(n, clamped, "unpop: {n} samples cannot be restored");
-        self.read = (self.read + cap - clamped) % cap;
+        self.read = if self.read >= clamped {
+            self.read - clamped
+        } else {
+            self.read + cap - clamped
+        };
         self.len += clamped;
     }
 

@@ -31,6 +31,15 @@ const TSC_SHIFT: u32 = 32;
 ///
 /// Zero means uncalibrated; the hot-path then uses the `Instant` fallback.
 static TSC_MULT: AtomicU64 = AtomicU64::new(0);
+/// Hardware TSC cycle count captured at calibration time.
+///
+/// Published before [`TSC_MULT`] (via Release ordering on `TSC_MULT`) to
+/// anchor continuous monotonic time across the calibration transition.
+static TSC_ANCHOR_TSC: AtomicU64 = AtomicU64::new(0);
+/// Nanoseconds elapsed since [`BOOT_TIME`] captured at calibration time.
+///
+/// Published before [`TSC_MULT`] alongside [`TSC_ANCHOR_TSC`].
+static TSC_ANCHOR_NS: AtomicU64 = AtomicU64::new(0);
 /// Time anchor for rdtsc fallback (monotonic).
 static BOOT_TIME: OnceLock<Instant> = OnceLock::new();
 
@@ -83,18 +92,26 @@ fn mult_for_rate(elapsed_cycles: u64, elapsed_nanos: u64) -> Option<u64> {
 /// Serialized with `_mm_lfence` to prevent out-of-order execution reordering.
 /// Provides sub-nanosecond precision with ~15ns cost, avoiding vDSO syscalls.
 /// If the TSC is not calibrated, falls back to Instant::now().
+///
+/// Continuity guarantee: when calibration completes, `rdtsc_nanos()` transitions
+/// continuously and monotonically (|Δ| < 1 ms, no system uptime discontinuity)
+/// by evaluating cycles elapsed since the calibration anchor point.
 #[inline(always)]
 pub fn rdtsc_nanos() -> u64 {
-    let mult = TSC_MULT.load(Ordering::Relaxed);
+    // Acquire pairs with Release store on TSC_MULT so TSC_ANCHOR_TSC and
+    // TSC_ANCHOR_NS written prior to publication are visible immediately.
+    let mult = TSC_MULT.load(Ordering::Acquire);
 
     if mult != 0 {
+        let anchor_tsc = TSC_ANCHOR_TSC.load(Ordering::Relaxed);
+        let anchor_ns = TSC_ANCHOR_NS.load(Ordering::Relaxed);
         // SAFETY: `_mm_lfence` + `_rdtsc` is available on all x86-64 CPUs; it performs no
         // memory access and has no side effects, so reading it here is sound.
         let cycles = unsafe {
             core::arch::x86_64::_mm_lfence();
             core::arch::x86_64::_rdtsc()
         };
-        cycles_to_nanos(cycles, mult)
+        anchor_ns.wrapping_add(cycles_to_nanos(cycles.wrapping_sub(anchor_tsc), mult))
     } else {
         BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64
     }
@@ -177,6 +194,16 @@ pub fn calibrate_tsc() {
     // widening multiply plus shift. Rejects degenerate windows to avoid
     // freezing the clock at zero.
     if let Some(mult) = mult_for_rate(elapsed_cycles, elapsed_nanos) {
+        // Publish continuity anchor before publishing TSC_MULT:
+        let anchor_ns = BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64;
+        // SAFETY: `_mm_lfence` + `_rdtsc` on unconditional x86-64-v3 baseline;
+        // no memory writes, no side-effects.
+        let anchor_tsc = unsafe {
+            core::arch::x86_64::_mm_lfence();
+            core::arch::x86_64::_rdtsc()
+        };
+        TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
+        TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
         TSC_MULT.store(mult, Ordering::Release);
         let freq_ghz = elapsed_cycles as f64 / elapsed_nanos as f64;
 
@@ -201,10 +228,30 @@ pub fn calibrate_tsc() {
 
 /// Test-only calibration override.
 ///
-/// Stores `mult` as if `calibrate_tsc` had measured the given rate. Unit
-/// tests use this to pin exact conversion rates without sleeping.
+/// Stores `mult` and publishes anchor values as if `calibrate_tsc` had measured
+/// the given rate. Unit tests use this to pin exact conversion rates without sleeping.
 #[cfg(test)]
 fn set_mult_for_test(mult: u64) {
+    if mult != 0 {
+        let anchor_ns = BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64;
+        // SAFETY: `_mm_lfence` + `_rdtsc` on x86-64 test environment.
+        let anchor_tsc = unsafe {
+            core::arch::x86_64::_mm_lfence();
+            core::arch::x86_64::_rdtsc()
+        };
+        TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
+        TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
+    } else {
+        TSC_ANCHOR_TSC.store(0, Ordering::Relaxed);
+        TSC_ANCHOR_NS.store(0, Ordering::Relaxed);
+    }
+    TSC_MULT.store(mult, Ordering::Release);
+}
+
+#[cfg(test)]
+fn set_calibration_for_test(mult: u64, anchor_tsc: u64, anchor_ns: u64) {
+    TSC_ANCHOR_TSC.store(anchor_tsc, Ordering::Relaxed);
+    TSC_ANCHOR_NS.store(anchor_ns, Ordering::Relaxed);
     TSC_MULT.store(mult, Ordering::Release);
 }
 
@@ -284,6 +331,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn rdtsc_nanos_advances_after_test_calibration() {
         // Pins a nominal 2 GHz rate and checks the live counter advances.
         let mult = mult_for_rate(100_000_000, 50_000_000).expect("valid window");
@@ -298,6 +346,84 @@ mod tests {
         // Counter must tick on real hardware (not frozen at zero mapping).
         assert!(last >= first);
         set_mult_for_test(0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rdtsc_nanos_flip_is_continuous_and_monotonic() {
+        set_mult_for_test(0);
+        let before_flip = rdtsc_nanos();
+
+        // Simulate calibration flip
+        let mult = mult_for_rate(100_000_000, 50_000_000).expect("valid window");
+        set_mult_for_test(mult);
+        let after_flip = rdtsc_nanos();
+
+        // Invariant: continuous (|Δ| < 1 ms, no uptime jump) and monotonic
+        assert!(
+            after_flip >= before_flip,
+            "Monotonicity violated across calibration flip: before={before_flip}, after={after_flip}"
+        );
+        let delta_ns = after_flip - before_flip;
+        assert!(
+            delta_ns < 1_000_000,
+            "Discontinuity across calibration flip (|Δ| >= 1ms): delta_ns={delta_ns}"
+        );
+
+        let mut prev = after_flip;
+        for _ in 0..100 {
+            let next = rdtsc_nanos();
+            assert!(next >= prev, "Time went backwards after calibration flip");
+            prev = next;
+        }
+
+        set_mult_for_test(0);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rdtsc_nanos_uses_explicit_anchor() {
+        let mult = mult_for_rate(100_000_000, 50_000_000).expect("valid window");
+        // Anchor at tsc = 1_000_000, ns = 500_000
+        set_calibration_for_test(mult, 1_000_000, 500_000);
+        let now = rdtsc_nanos();
+        assert!(
+            now >= 500_000,
+            "rdtsc_nanos must respect explicit anchor_ns baseline"
+        );
+        set_mult_for_test(0);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn proptest_cycles_to_nanos_monotonic(
+            c1 in 0u64..u64::MAX - 1_000_000,
+            step in 0u64..1_000_000,
+            freq_mhz in 1000u64..6000u64,
+        ) {
+            let mult = mult_for_rate(freq_mhz * 1_000_000, 1_000_000_000).expect("valid rate");
+            let c2 = c1 + step;
+            let ns1 = cycles_to_nanos(c1, mult);
+            let ns2 = cycles_to_nanos(c2, mult);
+            prop_assert!(ns2 >= ns1, "ns2 ({}) < ns1 ({}) for c1={}, c2={}, mult={}", ns2, ns1, c1, c2, mult);
+        }
+
+        #[test]
+        fn proptest_anchor_timeline_monotonic(
+            anchor_tsc in any::<u64>(),
+            anchor_ns in 0u64..u64::MAX / 2,
+            step in 0u64..100_000_000,
+            freq_mhz in 1000u64..6000u64,
+        ) {
+            let mult = mult_for_rate(freq_mhz * 1_000_000, 1_000_000_000).expect("valid rate");
+            let tsc1 = anchor_tsc;
+            let tsc2 = anchor_tsc.wrapping_add(step);
+            let t1 = anchor_ns.wrapping_add(cycles_to_nanos(tsc1.wrapping_sub(anchor_tsc), mult));
+            let t2 = anchor_ns.wrapping_add(cycles_to_nanos(tsc2.wrapping_sub(anchor_tsc), mult));
+            prop_assert!(t2 >= t1, "t2 ({}) < t1 ({}) for step={}", t2, t1, step);
+        }
     }
 
     #[test]

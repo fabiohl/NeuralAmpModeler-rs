@@ -87,6 +87,7 @@ fn regression_when_whole_ci_above_noise_band() {
             lower_bound: 0.061,
             upper_bound: 0.099,
             noise: 0.05,
+            delta_ns: None,
         }]
     );
 }
@@ -185,4 +186,159 @@ fn missing_expected_benchmark_is_reported_in_findings() {
             id: "RT_MISSING".to_string(),
         }]
     );
+}
+
+fn write_new(root: &Path, id: &str, point_estimate_ns: f64) {
+    let path = new_estimates_path(root, id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let body = change_json(
+        point_estimate_ns,
+        point_estimate_ns * 0.99,
+        point_estimate_ns * 1.01,
+    );
+    fs::write(path, body).unwrap();
+}
+
+/// When check_stability is enabled, improvements exceeding the noise band
+/// are flagged as UnstableBaseline.
+#[test]
+fn stability_check_flags_improvements_as_unstable_baseline() {
+    let root = temp_root();
+    // Improved by -15.59% (CI [-15.74%, -14.84%])
+    write_change(&root, "RT_WAVENET", &change_json(-0.1559, -0.1574, -0.1484));
+    write_new(&root, "RT_WAVENET", 12890.0); // 12.89 µs
+
+    // Default options: stability checking is disabled
+    let default_outcome = regression_verdict_with_options(
+        &crit_log(&["RT_WAVENET"]),
+        &root,
+        &VerdictOptions::default(),
+    )
+    .unwrap();
+    assert!(default_outcome.findings.is_empty());
+
+    // With check_stability = true
+    let options = VerdictOptions {
+        check_stability: true,
+        ..VerdictOptions::default()
+    };
+    let outcome =
+        regression_verdict_with_options(&crit_log(&["RT_WAVENET"]), &root, &options).unwrap();
+    assert_eq!(outcome.findings.len(), 1);
+    match &outcome.findings[0] {
+        VerdictFinding::UnstableBaseline {
+            id,
+            point_estimate,
+            lower_bound,
+            upper_bound,
+            delta_ns,
+            ..
+        } => {
+            assert_eq!(id, "RT_WAVENET");
+            assert_eq!(*point_estimate, -0.1559);
+            assert_eq!(*lower_bound, -0.1574);
+            assert_eq!(*upper_bound, -0.1484);
+            assert!(delta_ns.is_some());
+            let d = delta_ns.unwrap();
+            // Expected: 12890 * (-0.1559 / (1 - 0.1559)) ≈ -2380.5 ns
+            assert!(d < -2300.0 && d > -2400.0, "unexpected delta_ns: {d}");
+        }
+        other => panic!("expected UnstableBaseline, got: {other:?}"),
+    }
+}
+
+/// When abs_noise_floor_ns is configured, relative regressions whose absolute
+/// delta is within the floor are classified as NoiseIgnored.
+#[test]
+fn absolute_noise_floor_ignores_subthreshold_microbenchmark_noise() {
+    let root = temp_root();
+    // +10.49% change on a 16.04 ns microbenchmark (delta = +1.52 ns <= 2.0 ns floor)
+    write_change(
+        &root,
+        "Delay_Mono/64_samp_d0",
+        &change_json(0.1049, 0.1041, 0.1058),
+    );
+    write_new(&root, "Delay_Mono/64_samp_d0", 16.04);
+
+    let options = VerdictOptions {
+        abs_noise_floor_ns: Some(2.0),
+        ..VerdictOptions::default()
+    };
+
+    let outcome =
+        regression_verdict_with_options(&crit_log(&["Delay_Mono/64_samp_d0"]), &root, &options)
+            .unwrap();
+    assert_eq!(outcome.findings.len(), 1);
+    match &outcome.findings[0] {
+        VerdictFinding::NoiseIgnored {
+            id,
+            point_estimate,
+            delta_ns,
+            floor_ns,
+            ..
+        } => {
+            assert_eq!(id, "Delay_Mono/64_samp_d0");
+            assert_eq!(*point_estimate, 0.1049);
+            assert!(*delta_ns <= 2.0 && *delta_ns >= 1.5);
+            assert_eq!(*floor_ns, 2.0);
+        }
+        other => panic!("expected NoiseIgnored, got: {other:?}"),
+    }
+}
+
+/// When relative change is a regression and absolute delta exceeds abs_noise_floor_ns,
+/// it is flagged as Regression with delta_ns recorded.
+#[test]
+fn absolute_noise_floor_flags_regression_when_delta_exceeds_floor() {
+    let root = temp_root();
+    // +10% change on a 100 ns benchmark (delta = 9.09 ns > 2.0 ns floor)
+    write_change(&root, "RT_Slow", &change_json(0.10, 0.08, 0.12));
+    write_new(&root, "RT_Slow", 100.0);
+
+    let options = VerdictOptions {
+        abs_noise_floor_ns: Some(2.0),
+        ..VerdictOptions::default()
+    };
+
+    let outcome =
+        regression_verdict_with_options(&crit_log(&["RT_Slow"]), &root, &options).unwrap();
+    assert_eq!(outcome.findings.len(), 1);
+    match &outcome.findings[0] {
+        VerdictFinding::Regression {
+            id,
+            point_estimate,
+            delta_ns,
+            ..
+        } => {
+            assert_eq!(id, "RT_Slow");
+            assert_eq!(*point_estimate, 0.10);
+            assert!(delta_ns.is_some());
+            assert!(delta_ns.unwrap() > 2.0);
+        }
+        other => panic!("expected Regression, got: {other:?}"),
+    }
+}
+
+/// When abs_noise_floor_ns is configured but new/estimates.json is missing,
+/// the gate fails closed by reporting Regression with delta_ns = None.
+#[test]
+fn absolute_noise_floor_without_new_estimates_fails_closed() {
+    let root = temp_root();
+    write_change(&root, "RT_MissingNew", &change_json(0.10, 0.08, 0.12));
+
+    let options = VerdictOptions {
+        abs_noise_floor_ns: Some(2.0),
+        ..VerdictOptions::default()
+    };
+
+    let outcome =
+        regression_verdict_with_options(&crit_log(&["RT_MissingNew"]), &root, &options).unwrap();
+    assert_eq!(outcome.findings.len(), 1);
+    match &outcome.findings[0] {
+        VerdictFinding::Regression { id, delta_ns, .. } => {
+            assert_eq!(id, "RT_MissingNew");
+            assert_eq!(*delta_ns, None);
+        }
+        other => panic!("expected Regression, got: {other:?}"),
+    }
 }

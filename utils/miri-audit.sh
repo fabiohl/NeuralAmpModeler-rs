@@ -51,9 +51,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 PHASE_TOTAL=5
 source "$SCRIPT_DIR/_lib.sh"
+
+# ── Memory guard (OOM containment) ──────────────────────────────────────────
+# Miri interpretation is memory-hungry and runs alongside rust-analyzer/IDE on
+# the same 16 GiB host. Re-exec inside a transient, memory-capped systemd scope
+# (fail-open when unavailable). Opt out with NAM_NO_MEM_GUARD=1.
+if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
+    export NAM_MEM_GUARD=1
+    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
+fi
 
 LOG_DIR="target/logs"
 mkdir -p "$LOG_DIR"

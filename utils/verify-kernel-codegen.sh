@@ -32,7 +32,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 source "$SCRIPT_DIR/_lib.sh"
+
+# ── Memory guard (OOM containment) ──────────────────────────────────────────
+# Builds a release example; contain the compile peak so it cannot trigger a
+# global OOM that kills the IDE. Fail-open when containment is unavailable.
+if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
+    export NAM_MEM_GUARD=1
+    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
+fi
 
 FILTER="$SCRIPT_DIR/dsp-hotpath-filter.py"
 PROFILE="${NAM_KERNEL_CODEGEN_PROFILE:-$SCRIPT_DIR/codegen-profile.json}"

@@ -35,11 +35,24 @@ set -euo pipefail
 
 export LC_ALL=C
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+
+# ── Memory guard (OOM containment) ──────────────────────────────────────────
+# The dashboard runs many release test binaries; contain the compile peak so it
+# cannot trigger a global OOM that kills the IDE. Fail-open when unavailable.
+# This runs BEFORE `INVOCATION_PWD` is captured: the re-exec must not change the
+# directory used to resolve relative --check/--save paths.
+if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
+    export NAM_MEM_GUARD=1
+    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
+fi
+
 # Save original invocation directory for path resolution before sourcing _lib.sh
 INVOCATION_PWD="$(pwd)"
 
 PHASE_TOTAL=0
-source "$(dirname "$0")/_lib.sh"
+source "$SCRIPT_DIR/_lib.sh"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 

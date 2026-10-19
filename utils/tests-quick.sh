@@ -43,6 +43,15 @@ source "$SCRIPT_DIR/_lib.sh"
 # deprioritize: they drive the statistical benchmarks — see _lib.sh.)
 maybe_restart_low_priority "$SCRIPT_PATH" "$@"
 
+# ── Memory guard (OOM containment) ──────────────────────────────────────────
+# Release test builds run alongside rust-analyzer/IDE; on a 16 GiB host that
+# peak can trigger a global OOM. Re-exec inside a transient, memory-capped
+# systemd scope (fail-open when unavailable). Opt out with NAM_NO_MEM_GUARD=1.
+if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
+    export NAM_MEM_GUARD=1
+    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
+fi
+
 cleanup_receipt() {
     local rc=$?
     if [ $rc -ne 0 ] && [ -f "target/logs/quick-receipt.txt" ]; then

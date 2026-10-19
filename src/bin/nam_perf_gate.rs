@@ -54,7 +54,8 @@ use neural_amp_modeler_rs::testing::qa::coverage::{
 use neural_amp_modeler_rs::testing::qa::fingerprint::Fingerprint;
 use neural_amp_modeler_rs::testing::qa::fingerprint::FingerprintError;
 use neural_amp_modeler_rs::testing::qa::verdict::{
-    DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, regression_verdict_with_expected,
+    DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, VerdictOptions,
+    regression_verdict_with_options,
 };
 
 /// Store directory of persisted baselines (gitignored).
@@ -124,6 +125,9 @@ fn print_help() {
     println!("  nam_perf_gate expected-count [--suite <name>] [--manifest <path>]");
     println!("  nam_perf_gate verdict --log <path> [--root <dir>] [--noise <fraction>]");
     println!("                        [--suite <name>] [--manifest <path>]");
+    println!("                        [--check-stability] [--strict-stability]");
+    println!("                        [--abs-noise-floor-ns <nanoseconds>]");
+    println!("                        [--confirm-regressions] [--json]");
     println!("  nam_perf_gate persist-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
     println!("                                 [--baseline <name>]");
     println!("  nam_perf_gate restore-baseline [--baseline-dir <dir>] [--criterion-root <dir>]");
@@ -148,9 +152,9 @@ fn print_help() {
     println!("bench core NAM_BENCH_CORE (empty = unpinned), verdict noise band");
     println!("0.05, receipt target/logs/regression_phase_receipt.jsonl.");
     println!();
-    println!("Exit codes: 0 success, 1 run-time failure (MISSING_BASELINE,");
-    println!("INCOMPARABLE_ENVIRONMENT, BASELINE_COVERAGE_GAP, REGRESSION_DETECTED,");
-    println!("REGRESSION_BLIND, I/O), 2 usage error.");
+    println!("Exit codes: 0 success, 1 run-time failure / regression detected,");
+    println!("2 usage error or unstable baseline (with --strict-stability),");
+    println!("3 blind verdict (missing log or estimates).");
 }
 
 // ── Strict flag parsing (fail-closed: unknown flag ⇒ exit 2) ─────────────────
@@ -163,11 +167,23 @@ impl Flags {
     fn get(&self, name: &str) -> Option<&str> {
         self.map.get(name).map(String::as_str)
     }
+
+    fn get_bool(&self, name: &str) -> bool {
+        self.map.get(name).map(|v| v == "true").unwrap_or(false)
+    }
 }
 
 fn parse_flags(args: &[String], allowed: &[&str]) -> Result<Flags, String> {
+    parse_flags_full(args, allowed, &[])
+}
+
+fn parse_flags_full(
+    args: &[String],
+    allowed_values: &[&str],
+    allowed_bools: &[&str],
+) -> Result<Flags, String> {
     let mut map = HashMap::new();
-    let mut iter = args.iter();
+    let mut iter = args.iter().peekable();
     while let Some(flag) = iter.next() {
         if flag == "-h" || flag == "--help" {
             return Err(HELP_REQUEST.to_string());
@@ -178,15 +194,40 @@ fn parse_flags(args: &[String], allowed: &[&str]) -> Result<Flags, String> {
         if name.is_empty() {
             return Err(format!("{flag}: expected a flag name"));
         }
-        if !allowed.contains(&name) {
+        if allowed_bools.contains(&name) {
+            let explicit_val = match iter.peek() {
+                Some(arg) if *arg == "true" || *arg == "false" => Some((*arg).clone()),
+                _ => None,
+            };
+            if let Some(val) = explicit_val {
+                let _ = iter.next();
+                map.insert(name.to_string(), val);
+                continue;
+            }
+            map.insert(name.to_string(), "true".to_string());
+        } else if allowed_values.contains(&name) {
+            let value = iter
+                .next()
+                .ok_or_else(|| format!("--{name} requires a value"))?;
+            map.insert(name.to_string(), value.clone());
+        } else {
             return Err(format!("unknown flag: --{name}"));
         }
-        let value = iter
-            .next()
-            .ok_or_else(|| format!("--{name} requires a value"))?;
-        map.insert(name.to_string(), value.clone());
     }
     Ok(Flags { map })
+}
+
+fn parse_f64(flags: &Flags, name: &str, context: &str) -> Option<f64> {
+    match flags.get(name) {
+        None => None,
+        Some(v) => match v.trim().parse::<f64>() {
+            Ok(n) if n.is_finite() && n >= 0.0 => Some(n),
+            _ => usage_error(
+                context,
+                &format!("--{name} must be a non-negative number (got '{v}')"),
+            ),
+        },
+    }
 }
 
 fn usage_error(context: &str, message: &str) -> ! {
@@ -447,16 +488,65 @@ fn cmd_expected_count(args: &[String]) {
 
 // ── verdict ──────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize)]
+struct VerdictJsonReport {
+    schema_version: &'static str,
+    executed_count: usize,
+    noise_band_relative: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    abs_noise_floor_ns: Option<f64>,
+    verdict: &'static str,
+    summary: VerdictJsonSummary,
+    findings: Vec<VerdictJsonFinding>,
+}
+
+#[derive(Debug, Serialize)]
+struct VerdictJsonSummary {
+    regressions: usize,
+    unstable_baselines: usize,
+    sub_threshold_noise: usize,
+    clean: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct VerdictJsonFinding {
+    id: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relative_mean: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ci_95: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta_ns: Option<f64>,
+    reason: String,
+}
+
 /// Prints the machine regression verdict over Criterion's persisted
 /// `change/estimates.json` artifacts (R-3/B2).
 ///
-/// Fail-closed: a log with no executed benchmark, or an executed benchmark
-/// without a readable comparison artifact, prints `REGRESSION_BLIND` and exits
-/// 1 — a truncated/empty log or a redacted Criterion wording can never turn
-/// green. A significant machine regression prints `REGRESSION_DETECTED` and
-/// exits 1.
+/// Exit codes (Section 4):
+/// - 0: SUCCESS (no regressions, sub-threshold noise ignored, clean run);
+/// - 1: REGRESSION_DETECTED (at least one machine regression above noise & floor);
+/// - 2: UNSTABLE_BASELINE (mean improvement exceeds stability band under --strict-stability);
+/// - 3: REGRESSION_BLIND (missing/unparseable log or missing Criterion comparison estimates).
 fn cmd_verdict(args: &[String]) {
-    let flags = match parse_flags(args, &["log", "root", "noise", "suite", "manifest"]) {
+    let flags = match parse_flags_full(
+        args,
+        &[
+            "log",
+            "root",
+            "noise",
+            "suite",
+            "manifest",
+            "abs-noise-floor-ns",
+        ],
+        &[
+            "check-stability",
+            "strict-stability",
+            "confirm-regressions",
+            "json",
+        ],
+    ) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             print_help();
@@ -473,6 +563,11 @@ fn cmd_verdict(args: &[String]) {
         .unwrap_or(DEFAULT_CRITERION_ROOT)
         .to_string();
     let noise = parse_noise(&flags, "noise", "verdict");
+    let strict_stability = flags.get_bool("strict-stability");
+    let check_stability = strict_stability || flags.get_bool("check-stability");
+    let abs_noise_floor_ns = parse_f64(&flags, "abs-noise-floor-ns", "verdict");
+    let confirm_regressions = flags.get_bool("confirm-regressions");
+    let json_output = flags.get_bool("json");
 
     // An absent/unreadable log maps to empty text — the same blind gate as
     // the bash `grep` on a missing file (fail-closed, R-3).
@@ -484,7 +579,7 @@ fn cmd_verdict(args: &[String]) {
             Ok(ids) => ids,
             Err(e) => run_error(e),
         };
-        if suite != "regression_gate" {
+        if suite != "regression_gate" && !json_output {
             println!("(alternative scope: {suite})");
         }
         Some(ids)
@@ -492,61 +587,277 @@ fn cmd_verdict(args: &[String]) {
         None
     };
 
-    match regression_verdict_with_expected(
-        &log_text,
-        Path::new(&criterion_root),
+    let options = VerdictOptions {
         noise,
-        expected_ids.as_deref(),
-    ) {
+        expected_ids,
+        check_stability,
+        abs_noise_floor_ns,
+    };
+
+    let outcome_result =
+        regression_verdict_with_options(&log_text, Path::new(&criterion_root), &options);
+
+    let outcome = match outcome_result {
         Err(VerdictBlind) => {
-            println!("REGRESSION_BLIND no executed benchmark could be parsed from {log_path}");
-            println!("The machine regression verdict is blind: nothing passes unverified.");
-            exit(1);
+            if json_output {
+                let report = VerdictJsonReport {
+                    schema_version: "1.1.0",
+                    executed_count: 0,
+                    noise_band_relative: noise,
+                    abs_noise_floor_ns,
+                    verdict: "FAILED",
+                    summary: VerdictJsonSummary {
+                        regressions: 0,
+                        unstable_baselines: 0,
+                        sub_threshold_noise: 0,
+                        clean: 0,
+                    },
+                    findings: vec![VerdictJsonFinding {
+                        id: String::new(),
+                        status: "REGRESSION_BLIND",
+                        relative_mean: None,
+                        ci_95: None,
+                        delta_ns: None,
+                        reason: format!("no executed benchmark could be parsed from {log_path}"),
+                    }],
+                };
+                if let Ok(json) = serde_json::to_string_pretty(&report) {
+                    println!("{json}");
+                }
+            } else {
+                println!("REGRESSION_BLIND no executed benchmark could be parsed from {log_path}");
+                println!("The machine regression verdict is blind: nothing passes unverified.");
+            }
+            exit(3);
         }
-        Ok(outcome) if outcome.findings.is_empty() => {
-            println!(
-                "verdict ok: no machine regression among {} executed benchmark(s) \
-                 (noise band ±{:.2}%)",
-                outcome.executed,
-                noise * 100.0
-            );
-            exit(0);
-        }
-        Ok(outcome) => {
-            for finding in &outcome.findings {
-                match finding {
-                    VerdictFinding::MissingExpectedBenchmark { id } => {
-                        println!(
-                            "REGRESSION_BLIND expected benchmark {id} was not executed in {log_path}"
-                        );
-                    }
-                    VerdictFinding::MissingEstimates { id } => {
-                        println!(
-                            "REGRESSION_BLIND {id} has no readable Criterion comparison \
-                             artifact at {criterion_root}/{id}/change/estimates.json"
-                        );
-                    }
-                    VerdictFinding::Regression {
-                        id,
-                        point_estimate,
-                        lower_bound,
-                        upper_bound,
-                        noise,
-                    } => {
-                        println!(
-                            "REGRESSION_DETECTED {id} relative mean {:+}% \
-                             (CI [{:+}%, {:+}%]) lies entirely above the +{}% noise band",
-                            point_estimate * 100.0,
-                            lower_bound * 100.0,
-                            upper_bound * 100.0,
-                            noise * 100.0
-                        );
-                    }
+        Ok(o) => o,
+    };
+
+    let flagged_file = Path::new(&criterion_root).join("flagged_regressions.txt");
+    let mut flakes_cleared = Vec::new();
+    if confirm_regressions {
+        if flagged_file.exists() {
+            let previously_flagged: std::collections::HashSet<String> =
+                fs::read_to_string(&flagged_file)
+                    .unwrap_or_default()
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect();
+            let _ = fs::remove_file(&flagged_file);
+
+            let current_reg_ids: std::collections::HashSet<String> =
+                outcome.regressions().map(|f| f.id().to_string()).collect();
+            for prev_id in &previously_flagged {
+                if !current_reg_ids.contains(prev_id) {
+                    flakes_cleared.push(prev_id.clone());
                 }
             }
-            exit(1);
+        } else {
+            let reg_ids: Vec<&str> = outcome.regressions().map(|f| f.id()).collect();
+            if !reg_ids.is_empty() {
+                let text = reg_ids.join("\n") + "\n";
+                let _ = fs::write(&flagged_file, text);
+                if !json_output {
+                    println!(
+                        "[CONFIRMATION] Flagged {} regression(s) to {}",
+                        reg_ids.len(),
+                        flagged_file.display()
+                    );
+                }
+            }
         }
     }
+
+    let blind_count = outcome.blind_findings().count();
+    let regression_count = outcome.regressions().count();
+    let unstable_count = outcome.unstable_baselines().count();
+    let noise_ignored_count = outcome.sub_threshold_noise().count();
+
+    let has_failed =
+        blind_count > 0 || regression_count > 0 || (strict_stability && unstable_count > 0);
+    let verdict_str = if has_failed { "FAILED" } else { "PASSED" };
+    let exit_code = if blind_count > 0 {
+        3
+    } else if regression_count > 0 {
+        1
+    } else if strict_stability && unstable_count > 0 {
+        2
+    } else {
+        0
+    };
+
+    if json_output {
+        let json_findings: Vec<VerdictJsonFinding> = outcome
+            .findings
+            .iter()
+            .map(|f| match f {
+                VerdictFinding::MissingExpectedBenchmark { id } => VerdictJsonFinding {
+                    id: id.clone(),
+                    status: "REGRESSION_BLIND",
+                    relative_mean: None,
+                    ci_95: None,
+                    delta_ns: None,
+                    reason: format!("expected benchmark {id} was not executed in {log_path}"),
+                },
+                VerdictFinding::MissingEstimates { id } => VerdictJsonFinding {
+                    id: id.clone(),
+                    status: "REGRESSION_BLIND",
+                    relative_mean: None,
+                    ci_95: None,
+                    delta_ns: None,
+                    reason: format!(
+                        "missing comparison artifact at {criterion_root}/{id}/change/estimates.json"
+                    ),
+                },
+                VerdictFinding::Regression {
+                    id,
+                    point_estimate,
+                    lower_bound,
+                    upper_bound,
+                    delta_ns,
+                    ..
+                } => VerdictJsonFinding {
+                    id: id.clone(),
+                    status: "REGRESSION_DETECTED",
+                    relative_mean: Some(*point_estimate),
+                    ci_95: Some([*lower_bound, *upper_bound]),
+                    delta_ns: *delta_ns,
+                    reason: "Relative mean change lies entirely above noise band".to_string(),
+                },
+                VerdictFinding::UnstableBaseline {
+                    id,
+                    point_estimate,
+                    lower_bound,
+                    upper_bound,
+                    delta_ns,
+                    ..
+                } => VerdictJsonFinding {
+                    id: id.clone(),
+                    status: "UNSTABLE_BASELINE",
+                    relative_mean: Some(*point_estimate),
+                    ci_95: Some([*lower_bound, *upper_bound]),
+                    delta_ns: *delta_ns,
+                    reason: "Mean improvement exceeds bilateral stability band".to_string(),
+                },
+                VerdictFinding::NoiseIgnored {
+                    id,
+                    point_estimate,
+                    lower_bound,
+                    upper_bound,
+                    delta_ns,
+                    floor_ns,
+                } => VerdictJsonFinding {
+                    id: id.clone(),
+                    status: "NOISE_IGNORED",
+                    relative_mean: Some(*point_estimate),
+                    ci_95: Some([*lower_bound, *upper_bound]),
+                    delta_ns: Some(*delta_ns),
+                    reason: format!("Absolute delta within {:.1}ns noise floor", floor_ns),
+                },
+            })
+            .collect();
+
+        let summary = VerdictJsonSummary {
+            regressions: regression_count,
+            unstable_baselines: unstable_count,
+            sub_threshold_noise: noise_ignored_count,
+            clean: outcome
+                .executed
+                .saturating_sub(regression_count + unstable_count + noise_ignored_count),
+        };
+        let report = VerdictJsonReport {
+            schema_version: "1.1.0",
+            executed_count: outcome.executed,
+            noise_band_relative: noise,
+            abs_noise_floor_ns,
+            verdict: verdict_str,
+            summary,
+            findings: json_findings,
+        };
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => run_error(format!("cannot serialize verdict json: {e}")),
+        }
+        exit(exit_code);
+    }
+
+    for id in &flakes_cleared {
+        println!("FLAKE_CLEARED {id} cleared upon re-execution");
+    }
+
+    for finding in &outcome.findings {
+        match finding {
+            VerdictFinding::MissingExpectedBenchmark { id } => {
+                println!("REGRESSION_BLIND expected benchmark {id} was not executed in {log_path}");
+            }
+            VerdictFinding::MissingEstimates { id } => {
+                println!(
+                    "REGRESSION_BLIND {id} has no readable Criterion comparison \
+                     artifact at {criterion_root}/{id}/change/estimates.json"
+                );
+            }
+            VerdictFinding::Regression {
+                id,
+                point_estimate,
+                lower_bound,
+                upper_bound,
+                noise,
+                ..
+            } => {
+                println!(
+                    "REGRESSION_DETECTED {id} relative mean {:+}% \
+                     (CI [{:+}%, {:+}%]) lies entirely above the +{}% noise band",
+                    point_estimate * 100.0,
+                    lower_bound * 100.0,
+                    upper_bound * 100.0,
+                    noise * 100.0
+                );
+            }
+            VerdictFinding::UnstableBaseline {
+                id,
+                point_estimate,
+                lower_bound,
+                upper_bound,
+                noise,
+                ..
+            } => {
+                println!(
+                    "UNSTABLE_BASELINE {id} relative mean {:+}% \
+                     (CI [{:+}%, {:+}%]) exceeds stability threshold (±{:.2}%)",
+                    point_estimate * 100.0,
+                    lower_bound * 100.0,
+                    upper_bound * 100.0,
+                    noise * 100.0
+                );
+            }
+            VerdictFinding::NoiseIgnored {
+                id,
+                point_estimate,
+                delta_ns,
+                floor_ns,
+                ..
+            } => {
+                println!(
+                    "NOISE_IGNORED {id} relative mean {:+}% within absolute noise floor ({:.2} ns <= {:.2} ns)",
+                    point_estimate * 100.0,
+                    delta_ns,
+                    floor_ns
+                );
+            }
+        }
+    }
+
+    if exit_code == 0 {
+        println!(
+            "verdict ok: no machine regression among {} executed benchmark(s) \
+             (noise band ±{:.2}%)",
+            outcome.executed,
+            noise * 100.0
+        );
+    }
+    exit(exit_code);
 }
 
 // ── baseline persistence ─────────────────────────────────────────────────────

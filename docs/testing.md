@@ -616,3 +616,32 @@ bash tests/scripts/test_regression_guard.sh
 ```
 
 For the historical post-mortem and architectural root cause analysis that motivated this harness, see [docs/postmortem-libm-symbol-interposition.md](postmortem-libm-symbol-interposition.md).
+
+---
+
+## 16. Host Memory Guards (OOM Containment)
+
+The reference host has 16 GiB and no swap. Release test compilation
+(`utils/tests-quick.sh`, `utils/tests-long.sh`) and Miri can exhaust RAM
+alongside `rust-analyzer` and the IDE, triggering a **global OOM**; because
+Electron's main process carries `oom_score_adj=300`, the kernel kills the IDE
+instead of the compiler. Guards:
+
+- **Parallelism:** `.cargo/config.toml` sets `[build] jobs = 4` (override with
+  `CARGO_BUILD_JOBS` on larger hosts).
+- **Containment:** `utils/tests-quick.sh`, `utils/tests-long.sh`,
+  `utils/miri-audit.sh`, `utils/quality-dashboard.sh` and
+  `utils/verify-kernel-codegen.sh` re-exec through `utils/mem-guard.sh`, a
+  transient systemd user scope with `MemoryHigh=5G`, `MemoryMax=6G`,
+  `MemorySwapMax=6G` and `oom_score_adj=500` for the build tree. It fails open
+  when the user manager/cgroup delegation is unavailable.
+- **Opt-out:** `NAM_NO_MEM_GUARD=1` skips containment. Use it for
+  RT-certification runs where cgroup reclaim could add jitter, keeping swap
+  enabled.
+- **IDE protection:** Lower the running IDE's (Antigravity / VS Code family)
+  `oom_score_adj` (default `-500`; negative values need `sudo`) so a runaway build is targeted first.
+- **Benchmarks:** `utils/tests-performance-regression.sh` and
+  `utils/remote-simd-gate.sh` are intentionally **not** auto-guarded (a memory
+  cap could distort timings); wrap them manually with `utils/mem-guard.sh` when
+  RAM is tight. `[profile.bench]` already uses thin LTO; `codegen-units = 1` is
+  retained for benchmark fidelity.
