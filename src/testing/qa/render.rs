@@ -18,7 +18,7 @@
 //! - Section order matches the current dashboard: header → quick summary →
 //!   fidelity details → performance → ISA parity → activation precision →
 //!   f64 decomposition → spectral summary → coverage matrix → footer.
-//! - English-only (PO note: unify to international English).
+//! - English-only (unified to international English).
 //! - `NOT_VERIFIED` performance is **never** rendered green.
 //! - ESR / CPU-budget colors follow the qualitative thresholds of the old
 //!   bash render (green < 1e-5, yellow < 1e-1, red ≥ 1e-1; CPU headroom

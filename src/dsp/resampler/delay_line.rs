@@ -56,6 +56,11 @@ pub(crate) struct DelayLine {
 }
 
 impl DelayLine {
+    /// Constructs a new zero-initialized delay line with 64-byte alignment
+    /// and length `2 * TAPS_PER_PHASE`.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode`] if aligned buffer allocation fails.
     pub fn new() -> Result<Self, NamErrorCode> {
         Ok(Self {
             buf: AlignedVec::new(DELAY_LINE_LEN, 0.0f32)?,

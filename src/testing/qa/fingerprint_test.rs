@@ -32,6 +32,8 @@ fn fp() -> Fingerprint {
         frequency_governor: "performance".to_string(),
         git_commit: "abc123".to_string(),
         bench_core: "6".to_string(),
+        git_dirty: None,
+        cargo_lock_sha256: None,
     }
 }
 
@@ -387,4 +389,109 @@ fn compare_against_path_without_baseline_is_missing_baseline() {
         matches!(err, FingerprintError::MissingBaseline),
         "got {err:?}"
     );
+}
+
+/// Legacy baselines without `git_dirty` or `cargo_lock_sha256` deserialize cleanly
+/// with `None` values (backward compatibility invariant).
+#[test]
+fn legacy_fingerprint_deserialization_defaults_optional_fields_to_none() {
+    let legacy_json = r#"{
+  "cpu_model": "AMD Ryzen 9 5900X 12-Core Processor",
+  "cpu_microarchitecture": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
+  "physical_cores": 12,
+  "rustc_version": "rustc 1.88.0 (4f5a3a9 2025-06-10)",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "rustflags": "",
+  "build_profile": "release",
+  "frequency_governor": "performance",
+  "git_commit": "abc123",
+  "bench_core": "6"
+}"#;
+
+    let parsed = Fingerprint::from_json_str(legacy_json).unwrap();
+    assert_eq!(parsed.git_dirty, None);
+    assert_eq!(parsed.cargo_lock_sha256, None);
+    assert_eq!(parsed.cpu_model, "AMD Ryzen 9 5900X 12-Core Processor");
+}
+
+/// Modern fingerprints serialize and round-trip optional audit fields.
+#[test]
+fn modern_fingerprint_serde_roundtrip_with_optional_fields() {
+    let mut f = fp();
+    f.git_dirty = Some(true);
+    f.cargo_lock_sha256 =
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string());
+
+    let json = f.to_json_pretty().unwrap();
+    assert!(
+        json.contains(r#""git_dirty": true"#),
+        "JSON must contain git_dirty: {json}"
+    );
+    assert!(
+        json.contains(r#""cargo_lock_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855""#),
+        "JSON must contain cargo_lock_sha256: {json}"
+    );
+
+    let parsed = Fingerprint::from_json_str(&json).unwrap();
+    assert_eq!(parsed, f);
+}
+
+/// A legacy baseline (without `git_dirty` or `cargo_lock_sha256`) is fully comparable
+/// with a modern current fingerprint (with both fields present) without error.
+#[test]
+fn legacy_baseline_comparison_with_modern_current_is_compatible() {
+    let baseline = fp(); // None for both optional fields
+    let mut current = fp();
+    current.git_dirty = Some(true);
+    current.cargo_lock_sha256 = Some("feedface".to_string());
+
+    assert!(
+        current.compare(&baseline).is_ok(),
+        "comparing modern current against legacy baseline must succeed"
+    );
+}
+
+/// Divergence in `git_dirty` or `cargo_lock_sha256` emits diagnostic warnings to stderr
+/// but does not fail comparison (non-fatal audit fields).
+#[test]
+fn divergent_optional_fields_comparison_emits_warning_without_failing() {
+    let mut baseline = fp();
+    baseline.git_dirty = Some(false);
+    baseline.cargo_lock_sha256 =
+        Some("0000000000000000000000000000000000000000000000000000000000000001".to_string());
+
+    let mut current = fp();
+    current.git_dirty = Some(true);
+    current.cargo_lock_sha256 =
+        Some("0000000000000000000000000000000000000000000000000000000000000002".to_string());
+
+    assert!(
+        current.compare(&baseline).is_ok(),
+        "divergent git_dirty or cargo_lock_sha256 must not fail comparison"
+    );
+}
+
+/// SHA-256 computation of lockfile produces correct hex digest.
+#[test]
+fn compute_cargo_lock_sha256_at_matches_known_digest() {
+    let path = temp_path();
+    std::fs::write(&path, b"NeuralAmpModeler-rs test lockfile\n").unwrap();
+
+    let digest = compute_cargo_lock_sha256_at(&path);
+    assert!(digest.is_some());
+    // sha256("NeuralAmpModeler-rs test lockfile\n")
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"NeuralAmpModeler-rs test lockfile\n");
+    let expected: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(digest.unwrap(), expected);
+
+    let nonexistent = temp_path().join("does_not_exist.lock");
+    assert_eq!(compute_cargo_lock_sha256_at(&nonexistent), None);
+
+    let _ = std::fs::remove_file(&path);
 }

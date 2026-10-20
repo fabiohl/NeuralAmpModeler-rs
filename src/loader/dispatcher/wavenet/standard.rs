@@ -216,6 +216,7 @@ pub(crate) fn build_wavenet_array<
 // Topology instantiation (Standard)
 // =============================================================================
 
+/// Instantiates a const-generic Standard WaveNet model (`WaveNetModel<16, 3, 8>`).
 pub(crate) fn build_wavenet_standard(
     data: &NamModelData,
 ) -> anyhow::Result<WaveNetModel<16, 3, 8>> {

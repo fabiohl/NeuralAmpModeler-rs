@@ -50,6 +50,7 @@ use std::sync::atomic::AtomicU8;
 mod alloc;
 
 thread_local! {
+    /// Thread-local injection hook for unit tests to simulate allocation failures.
     pub(crate) static SIMULATE_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 

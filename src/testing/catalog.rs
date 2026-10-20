@@ -1226,11 +1226,12 @@ impl CatalogStatus {
             ));
         }
         lines.push("-".repeat(100));
-        lines.push(
-            "Run './tests/fixtures/golden_gen_build.sh' to regenerate missing V2 \
-             golden vectors (C++ toolchain + NeuralAmpModelerCore required)."
-                .to_string(),
-        );
+        if !self.missing_required.is_empty() {
+            lines.push(format!(
+                "Run './tests/fixtures/golden_gen_build.sh' to regenerate missing {version} \
+                 golden vectors (C++ toolchain + NeuralAmpModelerCore required)."
+            ));
+        }
         lines.join("\n")
     }
 }

@@ -242,7 +242,7 @@ Audited against `NAM/wavenet/model.h`, `NAM/wavenet/model.cpp`, and correspondin
 
 - Models: [`src/models/wavenet/`](../src/models/wavenet/)
 - Dispatchers: [`src/loader/dispatcher/wavenet/`](../src/loader/dispatcher/wavenet/)
-- Topology: [`src/loader/nam_json/topology/wavenet.rs`](../src/loader/nam_json/topology/wavenet.rs)
+- Topology: [`src/loader/nam_json/topology/wavenet/`](../src/loader/nam_json/topology/wavenet/)
 
 ### 3.1 Architecture Overview: Const-Generic Monomorphization
 
@@ -279,7 +279,7 @@ This shortcut produces mathematical equivalence to iterative settling while elim
 
 ### 3.4 Fail-Closed Rejection of A2 Features in A1
 
-The A1 path rejects configurations declaring A2 features at topology parsing time (`src/loader/nam_json/topology/wavenet.rs`):
+The A1 path rejects configurations declaring A2 features at topology parsing time (`src/loader/nam_json/topology/wavenet/guardrail.rs` and `mod.rs`):
 
 - `gated: true` or `gating_mode` $\in \{\text{"gated"}, \text{"blended"}\}$
 - `head1x1` active

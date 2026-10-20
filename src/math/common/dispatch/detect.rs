@@ -82,7 +82,7 @@ pub fn effective_instruction_set() -> InstructionSet {
 /// Error returned when a test ISA override cannot be installed because the
 /// host CPU (or the active feature set) lacks the required capability set.
 ///
-/// Produced by [`set_test_isa_override`] and the fallible test guards
+/// Produced by `set_test_isa_override` and the fallible test guards
 /// (`testing::isa_guard::ForceAvx512Guard::try_new`,
 /// `testing::isa_guard::IsaGuard::try_set`). Safe Rust must never force
 /// dispatch towards instructions the host cannot execute (F-ROB-03).

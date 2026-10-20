@@ -38,6 +38,7 @@ mod static_model;
 // =============================================================================
 
 mod sealed {
+    /// Private sealed supertrait preventing downstream implementations of [`NamModel`](super::NamModel).
     pub trait Sealed {}
 }
 

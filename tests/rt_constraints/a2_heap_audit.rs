@@ -149,7 +149,6 @@ mod audit_tests {
     /// head1x1, skip_last_residual=false) on the production model graph to certify
     /// zero heap allocations on the hot-path after prewarm.
     #[test]
-    #[ignore]
     fn test_a2_dyn_max_heap_audit() {
         let path = crate::common::model_path("wavenet_a2_max.nam");
         if !path.exists() {

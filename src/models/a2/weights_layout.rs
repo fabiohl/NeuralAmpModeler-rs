@@ -7,10 +7,10 @@
 //! (`set_weights`) and dynamic-model construction. All functions operate
 //! at full f32 precision — quantization happens downstream.
 
-// ── FiLM slot keys ──────────────────────────────────────────────────────
-// Shared between production (`set_weights`) and the f64 oracle
-// (`reference_oracle.rs`). Keep in sync with the NAM JSON spec.
-
+/// Mapping of A2 FiLM slot names to their sequential slot indices.
+///
+/// Shared between production (`set_weights`) and the f64 oracle
+/// (`reference_oracle.rs`). Kept strictly in sync with the NAM JSON specification.
 pub(crate) const FILM_KEYS: &[(&str, usize)] = &[
     ("conv_pre_film", 0),
     ("conv_post_film", 1),
@@ -22,6 +22,10 @@ pub(crate) const FILM_KEYS: &[(&str, usize)] = &[
     ("head1x1_post_film", 7),
 ];
 
+/// Calculates the expected number of weights for an A2 FiLM modulation layer.
+///
+/// Accounts for grouped convolutions and conditional embedding scaling
+/// (doubling the output dimension when `shift` is enabled).
 pub(crate) fn film_weight_count(
     groups: u32,
     cond_size: usize,
@@ -54,6 +58,10 @@ pub(crate) fn film_weight_count_generic(
     channels * mult * cond_size / g
 }
 
+/// Calculates the expected number of biases for an A2 FiLM modulation layer.
+///
+/// Returns `channels * 2` when scaling both scale and shift parameters,
+/// or `channels` when scaling scale parameters only.
 pub(crate) fn film_bias_count(channels: usize, shift: bool) -> usize {
     if shift { channels * 2 } else { channels }
 }

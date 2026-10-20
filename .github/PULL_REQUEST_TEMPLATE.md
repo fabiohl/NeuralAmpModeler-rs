@@ -82,7 +82,7 @@ NAM_NO_LOW_PRIORITY=1 NAM_QUICK_STRICT=1 utils/tests-quick.sh
 bash tests/scripts/test_regression_guard.sh
 ```
 
-- [ ] **`utils/lints.sh` Passed**: 100% clean across all 9 gates and 7 feature permutations (`--all-features`, `--no-default-features`, `dual-mono`, `heap-audit`, `testing`, `fft-radix4-planner`, `avx512`, `rt-hardening`).
+- [ ] **`utils/lints.sh` Passed**: 100% clean across all 9 gates and feature permutations (`--all-features`, pure core `--lib --no-default-features`, `--no-default-features`, `fft-radix4-planner`, `dual-mono`, `testing`, `heap-audit`, `rt-hardening`).
 - [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions. (Receipt written to `target/logs/quick-receipt.txt`).
 - [ ] **`tests/scripts/test_regression_guard.sh` Passed**: Shell-core drift and benchmark regression guard scenarios verified.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:

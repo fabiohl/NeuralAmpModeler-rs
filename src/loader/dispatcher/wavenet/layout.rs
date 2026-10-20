@@ -10,6 +10,8 @@ use crate::math::common::AlignedVec;
 // Unified weight reading for static WaveNet models
 // =============================================================================
 
+/// Reads and transposes 1D convolution weights for a typed WaveNet layer,
+/// handling SIMD interleave width conversions as required.
 pub(crate) fn read_conv1d_weights_typed<T: ConvWeightsOutput>(
     cursor: &mut WeightCursor<'_>,
     in_size: usize,
@@ -75,6 +77,8 @@ pub(crate) fn read_conv1d_weights_typed<T: ConvWeightsOutput>(
     )
 }
 
+/// Reads and transposes dense layer weights (e.g., input mixin or 1x1 layer)
+/// from the model weight cursor, converting from row-major to column-major layout.
 pub(crate) fn read_dense_weights_typed<T: DenseWeightsOutput>(
     cursor: &mut WeightCursor<'_>,
     in_size: usize,
@@ -101,6 +105,7 @@ pub(crate) fn read_dense_weights_typed<T: DenseWeightsOutput>(
     T::from_parts(f32_weights, bias, do_bias, in_size, out_size)
 }
 
+/// Reads dense head weights from the model weight cursor.
 pub(crate) fn read_dense_head_weights_typed<T: DenseWeightsOutput>(
     cursor: &mut WeightCursor<'_>,
     in_size: usize,

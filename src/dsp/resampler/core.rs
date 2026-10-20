@@ -71,6 +71,14 @@ pub(crate) struct ResamplerCore {
 }
 
 impl ResamplerCore {
+    /// Constructs a new polyphase resampler core with the given rate conversion ratio
+    /// and pre-calculated polyphase filter bank.
+    ///
+    /// The fixed-point phase increment (`phase_step`) is calculated in 24.40 fixed-point
+    /// format, providing sub-nanosecond phase precision without floating-point accumulation drift.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode`] if the delay lines cannot be allocated.
     pub fn new(from_rate: u32, to_rate: u32, bank: PolyphaseBank) -> Result<Self, NamErrorCode> {
         let group_delay = bank.group_delay;
 

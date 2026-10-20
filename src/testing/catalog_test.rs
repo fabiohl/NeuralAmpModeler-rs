@@ -503,3 +503,54 @@ fn test_anti_drift_engine_models_match_architecture_families() {
         );
     }
 }
+
+#[test]
+fn test_catalog_status_receipt_regeneration_warning_suppression() {
+    let clean_status = CatalogStatus {
+        entries_checked: 10,
+        fixtures_checked: 20,
+        present: 20,
+        missing_required: Vec::new(),
+        missing_optional: vec!["tests/fixtures/opt.nam".to_string()],
+        known_gaps: vec!["gap1"],
+        known_gap_files: 1,
+    };
+
+    let receipt_v2 = clean_status.receipt();
+    assert!(receipt_v2.contains("All V2 RequiredLocal fixtures present ✓"));
+    assert!(
+        !receipt_v2.contains("golden_gen_build.sh"),
+        "Clean receipt should NOT recommend golden_gen_build.sh when missing_required is empty"
+    );
+
+    let receipt_v1 = clean_status.receipt_v1();
+    assert!(receipt_v1.contains("All V1 RequiredLocal fixtures present ✓"));
+    assert!(
+        !receipt_v1.contains("golden_gen_build.sh"),
+        "Clean V1 receipt should NOT recommend golden_gen_build.sh when missing_required is empty"
+    );
+
+    let dirty_status = CatalogStatus {
+        entries_checked: 10,
+        fixtures_checked: 20,
+        present: 19,
+        missing_required: vec!["tests/fixtures/req.nam".to_string()],
+        missing_optional: Vec::new(),
+        known_gaps: Vec::new(),
+        known_gap_files: 0,
+    };
+
+    let receipt_dirty_v2 = dirty_status.receipt();
+    assert!(receipt_dirty_v2.contains("Required V2 fixtures absent (1 file(s))"));
+    assert!(
+        receipt_dirty_v2.contains("golden_gen_build.sh"),
+        "Dirty receipt MUST recommend golden_gen_build.sh when missing_required is non-empty"
+    );
+
+    let receipt_dirty_v1 = dirty_status.receipt_v1();
+    assert!(receipt_dirty_v1.contains("Required V1 fixtures absent (1 file(s))"));
+    assert!(
+        receipt_dirty_v1.contains("golden_gen_build.sh"),
+        "Dirty V1 receipt MUST recommend golden_gen_build.sh when missing_required is non-empty"
+    );
+}

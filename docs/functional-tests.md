@@ -230,6 +230,8 @@ bash tests/scripts/test_regression_guard.sh
   - **Scenario 2b:** Verifies `nam_quality verify` with `docs/quality-contract.json` against `tests/fixtures/qa/report_gate_not_verified.jsonl`, asserting `FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED` (`exit 1`), proving PERF-006 domain separation.
 - **Scenario 3 (Stale log truncation):** Writes a unique dummy marker to `target/logs/regression-check.log` and asserts truncation upon starting `check_regression()`.
 - **Scenario 4 (Baseline store sanitization):** Synthesizes nested baselines (`RT_Dummy/ci-baseline/ci-baseline/...`) and asserts `nam_perf_gate restore-baseline` strips nesting and preserves a single flat baseline layer.
+- **Scenario 5 (CPU Core Pinning & Mock Sysfs Tests):** Validates deterministic CPU core selection logic via mock sysfs trees (`/sys/devices/system/cpu/isolated`, `online`, `offline`), explicit `NAM_BENCH_CORE` overrides, and error paths.
+- **Scenario 6 (Benchmark Binary Selection & Fail-Fast Smoke Test):** Exercises binary resolution prioritizing `nam_benches` while supporting legacy `nam_benchmarks` fallback, fail-fast invocation of `--list`, and execution error propagation.
 
 ---
 
@@ -296,8 +298,6 @@ When investigating suspected thread/process hangs or regressions under high cont
 > [!NOTE]
 > **Compilation Profile Segregation:**
 > To eliminate build cache thrashing across phases with incompatible Cargo feature sets, `utils/tests-long.sh` automatically segregates `CARGO_TARGET_DIR` per profile (e.g. `target/profile_default`, `target/profile_heap_audit`, and `target/profile_loom`). Independent logs in `target/logs/` are preserved across runs.
-
-### 4.4 Known Benign Signals (False-Alarm Catalog)
 
 Signals that routinely appear in runner logs but are **expected**; they must not be escalated as defects or regressions. Each row cites the artifact that emits it (paths under `target/logs/` are runtime artifacts, not versioned files).
 

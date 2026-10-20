@@ -34,6 +34,7 @@ pub(crate) fn build_container(
     build_container_inner(data, 0, prewarm)
 }
 
+/// Recursive helper for building a container model while enforcing `MAX_CONTAINER_DEPTH`.
 pub(crate) fn build_container_inner(
     data: &NamModelData,
     depth: usize,

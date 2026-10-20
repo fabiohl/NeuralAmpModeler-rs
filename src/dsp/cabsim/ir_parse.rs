@@ -24,9 +24,11 @@ const WAVE_ID: [u8; 4] = *b"WAVE";
 const FMT_ID: [u8; 4] = *b"fmt ";
 const DATA_ID: [u8; 4] = *b"data";
 
-// WAV format tags.
+/// Standard uncompressed integer PCM format code (`0x0001`).
 pub(crate) const WAV_FORMAT_PCM: u16 = 1;
+/// IEEE 754 32-bit floating-point audio format code (`0x0003`).
 pub(crate) const WAV_FORMAT_IEEE_FLOAT: u16 = 3;
+/// WaveFormatExtensible header indicator (`0xFFFE`).
 pub(crate) const WAV_FORMAT_EXTENSIBLE: u16 = 65534; // 0xFFFE
 
 /// Minimum IR sample rate to guard against catastrophic upsampling and OOM (4 kHz).

@@ -28,7 +28,7 @@ echo -e "${BLUE}${BOLD}    Regression Guard Shell Test Suite                    
 echo -e "${BLUE}${BOLD}===============================================================${NC}"
 
 START_TIME=$(date +%s%N)
-TOTAL_SCENARIOS=5
+TOTAL_SCENARIOS=6
 
 # ── Scenario 1: Absence of baseline in .performance-baselines/ ───────────────
 echo -e "\n${BLUE}[1/${TOTAL_SCENARIOS}] Testing Scenario 1: Absence of baseline in .performance-baselines/${NC}"
@@ -227,6 +227,66 @@ echo -e "  ${GREEN}✓ Scenario 4 passed: sanitize + replace-copy keep a single 
 echo -e "\n${BLUE}[5/${TOTAL_SCENARIOS}] Testing Scenario 5: pick_bench_core sysfs mock tests${NC}"
 "$PROJECT_DIR/utils/test-pick-bench-core.sh"
 echo -e "  ${GREEN}✓ Scenario 5 passed: pick_bench_core mock sysfs unit tests confirmed.${NC}"
+
+# ── Scenario 6: Benchmark Binary Selection & Fail-Fast Smoke Test ─────────────
+echo -e "\n${BLUE}[6/${TOTAL_SCENARIOS}] Testing Scenario 6: Benchmark binary selection & fail-fast validation${NC}"
+
+# 6a: Test extract_bench_executable against synthetic JSON containing [[bin]] emitted after [[bench]].
+eval "$(sed -n '/^extract_bench_executable()/,/^}/p' "$PROJECT_DIR/utils/tests-performance-regression.sh")"
+
+SYNTHETIC_JSON='{"reason":"compiler-artifact","package_id":"NeuralAmpModeler-rs 0.3.0","target":{"kind":["bench"],"name":"regression_gate"},"executable":"/target/release/deps/regression_gate-mock"}
+{"reason":"compiler-artifact","package_id":"NeuralAmpModeler-rs 0.3.0","target":{"kind":["bin"],"name":"nam_golden_catalog"},"executable":"/target/release/nam_golden_catalog"}'
+
+BENCH_EXE=""
+extract_bench_executable "$SYNTHETIC_JSON" "regression_gate"
+if [ "$BENCH_EXE" != "/target/release/deps/regression_gate-mock" ]; then
+    echo -e "  ${RED}❌ Scenario 6a failed: expected '/target/release/deps/regression_gate-mock', got '${BENCH_EXE}'${NC}"
+    exit 1
+fi
+echo -e "  ${GREEN}✓ Scenario 6a passed: benchmark binary selected deterministically over trailing bin artifact.${NC}"
+
+# 6b: Test intruder binary injection (mock with invalid flags and /bin/true).
+# Assert: fail-closed rapidly (< 3s) without invoking thermal cooldown.
+MOCK_DIR="$TMP_DIR/scenario6_mock"
+mkdir -p "$MOCK_DIR/bin"
+ln -sf /bin/true "$MOCK_DIR/bin/regression_gate-intruder"
+
+CARGO_PATH=$(command -v cargo)
+cat << EOF > "$MOCK_DIR/bin/cargo"
+#!/bin/bash
+if [[ "\$*" == *"bench"* ]]; then
+    echo "{\"reason\":\"compiler-artifact\",\"target\":{\"kind\":[\"bench\"],\"name\":\"regression_gate\"},\"executable\":\"$MOCK_DIR/bin/regression_gate-intruder\"}"
+    exit 0
+fi
+exec "$CARGO_PATH" "\$@"
+EOF
+chmod +x "$MOCK_DIR/bin/cargo"
+
+S6_START=$(date +%s%N)
+set +e
+SCENARIO6_OUT=$(PATH="$MOCK_DIR/bin:$PATH" "$PROJECT_DIR/utils/tests-performance-regression.sh" --bootstrap-baseline 2>&1)
+SCENARIO6_EXIT=$?
+set -e
+S6_END=$(date +%s%N)
+S6_ELAPSED_MS=$(( (S6_END - S6_START) / 1000000 ))
+
+if [ "$SCENARIO6_EXIT" -ne 1 ]; then
+    echo -e "  ${RED}❌ Scenario 6b failed: expected exit 1 on intruder binary, got ${SCENARIO6_EXIT}${NC}"
+    echo "$SCENARIO6_OUT"
+    exit 1
+fi
+
+if ! echo "$SCENARIO6_OUT" | grep -q "not a recognized Criterion harness"; then
+    echo -e "  ${RED}❌ Scenario 6b failed: expected 'not a recognized Criterion harness' warning in output${NC}"
+    echo "$SCENARIO6_OUT"
+    exit 1
+fi
+
+if [ "$S6_ELAPSED_MS" -gt 3000 ]; then
+    echo -e "  ${RED}❌ Scenario 6b failed: fail-fast took ${S6_ELAPSED_MS}ms (exceeded 3000ms limit; cooldown likely triggered)${NC}"
+    exit 1
+fi
+echo -e "  ${GREEN}✓ Scenario 6b passed: intruder binary rejected fail-closed in ${S6_ELAPSED_MS}ms (< 3s).${NC}"
 
 END_TIME=$(date +%s%N)
 ELAPSED_MS=$(awk -v start="$START_TIME" -v end="$END_TIME" 'BEGIN { printf "%.0f", (end - start) / 1000000 }')

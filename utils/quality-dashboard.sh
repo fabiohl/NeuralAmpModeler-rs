@@ -456,12 +456,13 @@ run_quick_parity() {
 # tests-performance-regression.sh (human-triggered).
 BENCH_PERF_NOT_VERIFIED=0
 BENCH_NOT_VERIFIED_REASON=""
+BENCH_REGRESSION_PASSED=0
 
 run_benchmarks() {
     local start_t end_t
     start_t=$(date +%s%N)
 
-    local reg_script="$PROJECT_DIR/utils/tests-performance-regression.sh"
+    local reg_script="${NAM_REGRESSION_SCRIPT:-$PROJECT_DIR/utils/tests-performance-regression.sh}"
     local bench_log="$LOGDIR/regression_gate.log"
     : > "$bench_log"
 
@@ -500,6 +501,7 @@ run_benchmarks() {
             || perf_status="FAIL"
         case "$perf_status" in
             PASS)
+                BENCH_REGRESSION_PASSED=1
                 dashboard_phase_receipt "regression_gate" "PASS" 0 10 10 ""
                 echo -e "  ${GREEN}ok${NC} regression_gate passed — no performance regression"
                 ;;
@@ -543,11 +545,25 @@ run_benchmarks() {
         if [ "$reg_exit" -eq 0 ] && [ "$receipt_status" = "PASS" ] && [ -n "$RUN_ID" ] && [ "$receipt_run_id" = "$RUN_ID" ] && [ -f "$criterion_log" ]; then
             cp "$criterion_log" "$bench_log"
         else
-            : > "$bench_log"
+            # Ensure bench_log retains failure diagnostics and is never 0 bytes (F3)
+            {
+                echo "=== regression_gate failure diagnostic ==="
+                echo "perf_status: $perf_status"
+                echo "reg_exit: $reg_exit"
+                echo "receipt_status: ${receipt_status:-unknown}"
+                echo "receipt_reason: ${receipt_reason:-unknown}"
+                echo "receipt_run_id: ${receipt_run_id:-unknown}"
+                echo "expected_run_id: ${RUN_ID:-unknown}"
+                if [ -s "$criterion_log" ]; then
+                    echo "=== target/logs/regression-check.log ==="
+                    cat "$criterion_log"
+                fi
+            } >> "$bench_log"
         fi
     else
         echo -e "  ${YELLOW}⚠ regression script not found at $reg_script — skipping${NC}"
         dashboard_phase_receipt "regression_gate" "SKIP_CAPABILITY" 0 0 10 "regression_script_missing"
+        echo "regression script not found at $reg_script" > "$bench_log"
     fi
 
     end_t=$(date +%s%N)
@@ -962,7 +978,66 @@ run_quality_ingest() {
     if [ -f "$NAM_METRICS_JSONL" ]; then
         ingest_args+=(--metrics "$NAM_METRICS_JSONL")
     fi
-    if [ -d "$PROJECT_DIR/target/criterion" ]; then
+
+    # Check Criterion artifacts integrity for the regression gate.
+    # If Criterion estimates are missing due to benchmark phase failure,
+    # record performance as NOT_VERIFIED in the receipt and omit --criterion-dir
+    # so nam_quality ingest produces report.jsonl cleanly without crashing (F3).
+    local criterion_available=1
+    if [ ! -d "$PROJECT_DIR/target/criterion" ]; then
+        criterion_available=0
+    else
+        local required_benches=()
+        if [ -n "$CHECK_FILE" ] && [ -f "$CHECK_FILE" ] && command -v jq >/dev/null 2>&1; then
+            mapfile -t required_benches < <(jq -r '.performance[].id // empty' "$CHECK_FILE" 2>/dev/null)
+        fi
+        if [ "${#required_benches[@]}" -eq 0 ]; then
+            required_benches=(
+                "RT_WaveNet_Std_CH16"
+                "RT_WaveNet_Feather_CH8"
+                "RT_WaveNet_Lite_CH12"
+                "RT_WaveNet_Nano_CH4"
+                "RT_A2_Full_CH8"
+                "RT_A2_Lite_CH3"
+                "RT_LSTM_1x16"
+                "RT_LSTM_2x8"
+                "RT_Linear_Direct_RF4"
+                "RT_Linear_Fft_RF2048"
+                "RT_ConvNet"
+                "RT_WaveNet_Dyn_Free"
+                "RT_LSTM_Dyn_1x7"
+                "RT_A2_Dyn_Gated_CH8"
+                "RT_A2_Dyn_Blended_CH3"
+                "RT_A2_Max_CH4"
+                "RT_DSP_Resampler_44k1_to_48k"
+                "RT_DSP_Resampler_96k_to_48k"
+                "RT_DSP_CabSim_IR_Medium"
+                "RT_DSP_Pipeline_Base_NoOS"
+                "RT_DSP_Pipeline_HQ_4xOS"
+                "RT_DSP_Pipeline_AdaptiveOn"
+            )
+        fi
+        local b
+        for b in "${required_benches[@]}"; do
+            if [ ! -f "$PROJECT_DIR/target/criterion/$b/new/estimates.json" ]; then
+                criterion_available=0
+                break
+            fi
+        done
+    fi
+
+    if [ "$MODE" = "standard" ] || [ "$MODE" = "full" ] || [ "$MODE" = "bench" ]; then
+        if [ "$criterion_available" -eq 0 ] || [ "${BENCH_REGRESSION_PASSED:-0}" -ne 1 ]; then
+            local last_reg_status
+            last_reg_status=$(grep '"phase_id":"regression_gate"' "$DASHBOARD_PHASE_RECEIPT" 2>/dev/null | tail -1 | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "")
+            if [ "$last_reg_status" != "PASS" ] || [ "$criterion_available" -eq 0 ]; then
+                echo -e "  ${YELLOW}⚠ Criterion estimates artifact missing due to benchmark phase failure — recording performance as NOT_VERIFIED${NC}"
+                dashboard_phase_receipt "regression_gate" "NOT_VERIFIED" 0 0 10 "Criterion estimates artifact missing due to benchmark phase failure"
+            fi
+        fi
+    fi
+
+    if [ "$criterion_available" -eq 1 ] && { [ "${BENCH_REGRESSION_PASSED:-0}" -eq 1 ] || [ "$MODE" = "fidelity" ]; }; then
         ingest_args+=(--criterion-dir "$PROJECT_DIR/target/criterion")
         if [ -f "$PROJECT_DIR/target/bench_constants.env" ]; then
             ingest_args+=(--bench-constants-env "$PROJECT_DIR/target/bench_constants.env")

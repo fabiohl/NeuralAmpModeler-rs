@@ -56,6 +56,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
 
+command -v jq >/dev/null 2>&1 || die "Dependência obrigatória 'jq' não encontrada no PATH do sistema."
+
 trap 'echo -e "\n${RED}${BOLD}❌ Unexpected error: Command \"$BASH_COMMAND\" failed at line $LINENO with status $?. Aborting.${NC}"; exit 1' ERR
 
 # `--help` is a first-class mode so the performance gate behavior and options
@@ -128,21 +130,28 @@ export NAM_RUN_ID
 # ── Pre-build & Direct Benchmark Execution Machinery ────────────────────────
 BENCH_EXE=""
 
-# extract_bench_executable <cargo_json_output>
-# Extracts the benchmark executable path from `cargo bench --no-run
+# extract_bench_executable <cargo_json_output> <bench_name>
+# Extracts the benchmark executable path from `cargo bench --bench <bench_name> --features testing --no-run
 # --message-format=json` output into the global BENCH_EXE. Explicit error
 # contract independent of the caller's errexit context:
 #   rc 0 — extraction ran; BENCH_EXE may still be empty when cargo emitted no
 #          "executable" line (callers apply the deps-directory fallback)
-#   rc 2 — the extraction pipeline itself failed (grep/sed tool error);
+#   rc 2 — the extraction pipeline itself failed (jq tool error);
 #          callers must fail closed instead of silently proceeding
 extract_bench_executable() {
     local json_out="$1"
+    local bench_name="$2"
     local rc=0
-    BENCH_EXE=$(printf '%s\n' "$json_out" | grep -F '"executable":' | tail -1 \
-        | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') || rc=$?
+
+    BENCH_EXE=$(printf '%s\n' "$json_out" | jq -r --arg n "$bench_name" '
+        select(.reason == "compiler-artifact"
+               and .target.name == $n
+               and (.target.kind | index("bench"))
+               and .executable != null)
+        | .executable' | tail -1) || rc=$?
+
     if [ "$rc" -ge 2 ]; then
-        echo -e "${RED}${BOLD}❌ Failed to extract benchmark executable from cargo JSON (rc=$rc).${NC}" >&2
+        echo -e "${RED}${BOLD}❌ Failed to parse cargo JSON with jq (rc=$rc).${NC}" >&2
         return 2
     fi
     return 0
@@ -167,13 +176,29 @@ prebuild_benchmark() {
     # rc==1 (no "executable" line) leaves BENCH_EXE empty for the fallback
     # below; rc>=2 is a tool error and fails closed in BOTH call contexts
     # (plain statement under errexit and `if !` with errexit suspended).
-    if ! extract_bench_executable "$json_out"; then
+    if ! extract_bench_executable "$json_out" "$bench_name"; then
         return 2
     fi
     if [ -z "$BENCH_EXE" ] || [ ! -x "$BENCH_EXE" ]; then
-        BENCH_EXE=$(ls -t "target/release/deps/${bench_name}-"* 2>/dev/null | head -1 || true)
+        BENCH_EXE=$(find target/release/deps -maxdepth 1 -type f -perm -u+x -name "${bench_name}-*" ! -name '*.*' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)
+    fi
+    if [ -n "$BENCH_EXE" ]; then
+        case "$(basename "$BENCH_EXE")" in
+            "${bench_name}-"*) ;;
+            *)
+                warn "Executable '$(basename "$BENCH_EXE")' does not match benchmark '${bench_name}-*'"
+                BENCH_EXE=""
+                ;;
+        esac
     fi
     if [ -n "$BENCH_EXE" ] && [ -x "$BENCH_EXE" ]; then
+        # Smoke test: Criterion accepts --list or --bench --list. Non-Criterion binaries exit with code != 0.
+        local list_out
+        if ! list_out=$("$BENCH_EXE" --bench --list 2>/dev/null) || [ -z "$list_out" ]; then
+            echo -e "${RED}${BOLD}❌ Validated executable '$BENCH_EXE' is not a recognized Criterion harness.${NC}" >&2
+            BENCH_EXE=""
+            return 3
+        fi
         echo -e "  ${GREEN}✓${NC} Benchmark executable ready: ${CYAN}$(basename "$BENCH_EXE")${NC}" >&2
     else
         warn "Could not isolate standalone benchmark binary — fallback to cargo bench"
@@ -216,7 +241,9 @@ bootstrap_baseline() {
     echo -e "  ${YELLOW}⚠ Automated/CI/agent-driven execution is prohibited.${NC}\n"
 
     # Stage 1: Pre-build benchmark binary across all cores prior to cooldown
-    prebuild_benchmark "$BENCH_SUITE"
+    if ! prebuild_benchmark "$BENCH_SUITE"; then
+        die "Pre-compilation or validation of benchmark '${BENCH_SUITE}' failed before cooldown"
+    fi
 
     # Stage 2: Thermal Cooldown (quiescent period)
     apply_thermal_cooldown
@@ -332,11 +359,12 @@ check_regression() {
     # Stage 3: Pure benchmark execution (immediate, zero compilation)
     mkdir -p target/logs
     LOG_FILE="target/logs/regression-check.log"
+    echo "# [NAM_REGRESSION_GATE] bench_exe=${BENCH_EXE} baseline=${BASELINE_NAME} run_id=${NAM_RUN_ID} date=$(date -u +%FT%TZ)" > "$LOG_FILE"
 
     local bench_start bench_end bench_dur_ms bench_dur_str
     bench_start=$(date +%s%N)
     set +e
-    run_benchmark_binary "$BENCH_SUITE" --baseline "$BASELINE_NAME" 2>&1 | tee "$LOG_FILE"
+    run_benchmark_binary "$BENCH_SUITE" --baseline "$BASELINE_NAME" 2>&1 | tee -a "$LOG_FILE"
     BENCH_STATUS=$?
     bench_end=$(date +%s%N)
     bench_dur_ms=$(( (bench_end - bench_start) / 1000000 ))

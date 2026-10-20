@@ -31,6 +31,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::env::EnvProbe;
 
@@ -52,10 +53,29 @@ pub const FIELD_BUILD_PROFILE: &str = "build_profile";
 pub const FIELD_FREQUENCY_GOVERNOR: &str = "frequency_governor";
 /// Reason field of the bench core comparison (`bench_core`).
 pub const FIELD_BENCH_CORE: &str = "bench_core";
+/// Audit field for git working directory dirty state (`git_dirty`).
+pub const FIELD_GIT_DIRTY: &str = "git_dirty";
+/// Audit field for Cargo.lock digest (`cargo_lock_sha256`).
+pub const FIELD_CARGO_LOCK_SHA256: &str = "cargo_lock_sha256";
 
 /// Cargo profile the perf gate always benchmarks (the bash hardcodes
 /// `build_profile="release"`; `cargo bench` is release-only).
 pub const DEFAULT_BUILD_PROFILE: &str = "release";
+
+/// Computes the SHA-256 digest of `Cargo.lock` in the current working directory,
+/// if present. Returns `None` if the file does not exist or cannot be read.
+pub fn compute_cargo_lock_sha256() -> Option<String> {
+    compute_cargo_lock_sha256_at(Path::new("Cargo.lock"))
+}
+
+/// Computes the SHA-256 digest of a lockfile at `path`.
+pub fn compute_cargo_lock_sha256_at(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let digest = hasher.finalize();
+    Some(digest.iter().map(|b| format!("{b:02x}")).collect())
+}
 
 /// Persisted environment fingerprint of a bootstrapped performance baseline.
 ///
@@ -84,6 +104,12 @@ pub struct Fingerprint {
     pub git_commit: String,
     /// Bench core pinning (`NAM_BENCH_CORE`; empty when unpinned).
     pub bench_core: String,
+    /// Whether git working directory had uncommitted changes at probe time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
+    /// SHA-256 digest of `Cargo.lock` if present at probe time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo_lock_sha256: Option<String>,
 }
 
 /// Typed failure of fingerprint I/O and comparison.
@@ -130,6 +156,8 @@ impl Fingerprint {
             frequency_governor: probe.frequency_governor.clone(),
             git_commit: probe.git_commit.clone(),
             bench_core: bench_core.to_string(),
+            git_dirty: Some(probe.git_dirty),
+            cargo_lock_sha256: compute_cargo_lock_sha256(),
         }
     }
 
@@ -269,6 +297,16 @@ impl Fingerprint {
                 baseline: baseline.physical_cores.to_string(),
                 current: self.physical_cores.to_string(),
             });
+        }
+        if let (Some(b), Some(c)) = (baseline.git_dirty, self.git_dirty)
+            && b != c
+        {
+            eprintln!("WARN: baseline git dirty state differs (baseline={b}, current={c})");
+        }
+        if let (Some(b), Some(c)) = (&baseline.cargo_lock_sha256, &self.cargo_lock_sha256)
+            && b != c
+        {
+            eprintln!("WARN: baseline Cargo.lock SHA-256 differs (baseline={b}, current={c})");
         }
         Ok(())
     }

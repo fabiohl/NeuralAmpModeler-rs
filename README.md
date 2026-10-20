@@ -11,6 +11,8 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 Engineered for seamless embedding into audio plugins, standalone real-time hosts, offline renderers, and embedded audio pipelines, it guarantees **strict zero heap allocations**, **zero mutex locks**, and **zero blocking system calls** on the real-time audio thread.
 
+Built entirely from scratch, it leverages modern Rust to deliver clean, idiomatic, and relentlessly engineered code. It achieves full feature parity with the reference C++ NAMCore—including its most obscure capabilities, unlocking a playground of untapped innovations well beyond standard .nam A1 and A2 models.
+
 The crate is host-agnostic, standalone, and general-purpose: public APIs remain decoupled from specific plugin wrappers or audio servers, allowing downstream applications to integrate the engine cleanly into any audio processing graph.
 
 ---
@@ -294,6 +296,9 @@ The `./utils/` suite automates formatting, static analysis, parity verification,
 | [`utils/check-model.sh`](utils/check-model.sh)                                   | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
 | [`utils/simd-probe.sh`](utils/simd-probe.sh)                                     | **SIMD Diagnostic Probe:** Inspects CPU features, OS vector context, and runs deterministic inference smoke tests.                    |
 | [`utils/tests-long.sh`](utils/tests-long.sh)                                     | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
+| [`utils/mem-guard.sh`](utils/mem-guard.sh)                                       | **OOM Containment Guard:** Wraps heavy builds and tests in systemd transient scopes to protect system stability.                      |
+| [`utils/miri-audit.sh`](utils/miri-audit.sh)                                     | **Memory Safety & Aliasing Audit:** Validates unsafe blocks, SPSC ring buffers, and delay lines under Miri.                           |
+| [`utils/verify-kernel-codegen.sh`](utils/verify-kernel-codegen.sh)               | **Kernel Codegen Inspector:** Disassembles and verifies compiler auto-vectorization across DSP compute kernels.                       |
 | [`utils/setup-third-party.sh`](utils/setup-third-party.sh)                       | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
 | [`utils/mod-update.sh`](utils/mod-update.sh)                                     | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
 
@@ -313,20 +318,22 @@ Standard verification workflow:
 
 Comprehensive architectural specifications and engineering guides are available in the [`docs/`](docs/) directory:
 
-| Document                                                             | Topic                                                                          |
-|:-------------------------------------------------------------------- |:------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](docs/architecture.md)                       | Engine architecture, SIMD kernels, memory layout, and DSP pipelines            |
-| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)           | Audio fidelity decisions, frequency response, and quality modes (Live vs HQ)   |
-| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md) | Activation approximations (Padé/minimax), polynomial error bounds, and SNR     |
-| [`docs/namb-spec.md`](docs/namb-spec.md)                             | Binary `.namb` v2 container specification, metadata schema, and memory layout  |
-| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                   | Bit/float-exact parity verification against canonical C++ NeuralAmpModelerCore |
-| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)     | Perceptual audio metrics: ESR, MR-STFT, Spectral Convergence, and LUFS         |
-| [`docs/benchmarks.md`](docs/benchmarks.md)                           | Criterion benchmarks, throughput profiles, and performance regression gates    |
-| [`docs/testing.md`](docs/testing.md)                                 | Test suite organization, oracle hierarchy, and verification policies           |
-| [`docs/fixtures.md`](docs/fixtures.md)                               | Golden vector formats, stress signal generation, and fixture discovery         |
-| [`docs/functional-tests.md`](docs/functional-tests.md)               | Functional test matrix, execution protocols, and certification checklists      |
-| [`docs/research-references.md`](docs/research-references.md)         | Scientific literature, DSP bibliography, and neural audio modeling research    |
-| [`docs/quality-contract.json`](docs/quality-contract.json)           | Regression baseline thresholds: audio fidelity and benchmark SLA envelopes     |
+| Document                                                                                       | Topic                                                                          |
+|:---------------------------------------------------------------------------------------------- |:------------------------------------------------------------------------------ |
+| [`docs/architecture.md`](docs/architecture.md)                                                 | Engine architecture, SIMD kernels, memory layout, and DSP pipelines            |
+| [`docs/audio_fidelity_map.md`](docs/audio_fidelity_map.md)                                     | Audio fidelity decisions, frequency response, and quality modes (Live vs HQ)   |
+| [`docs/fastmath-approximations.md`](docs/fastmath-approximations.md)                           | Activation approximations (Padé/minimax), polynomial error bounds, and SNR     |
+| [`docs/namb-spec.md`](docs/namb-spec.md)                                                       | Binary `.namb` v2 container specification, metadata schema, and memory layout  |
+| [`docs/cpp_parity_map.md`](docs/cpp_parity_map.md)                                             | Bit/float-exact parity verification against canonical C++ NeuralAmpModelerCore |
+| [`docs/perceptual_validation.md`](docs/perceptual_validation.md)                               | Perceptual audio metrics: ESR, MR-STFT, Spectral Convergence, and LUFS         |
+| [`docs/benchmarks.md`](docs/benchmarks.md)                                                     | Criterion benchmarks, throughput profiles, and performance regression gates    |
+| [`docs/testing.md`](docs/testing.md)                                                           | Test suite organization, oracle hierarchy, and verification policies           |
+| [`docs/fixtures.md`](docs/fixtures.md)                                                         | Golden vector formats, stress signal generation, and fixture discovery         |
+| [`docs/functional-tests.md`](docs/functional-tests.md)                                         | Functional test matrix, execution protocols, and certification checklists      |
+| [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP bibliography, and neural audio modeling research    |
+| [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Symbol collision postmortem: compiler-rt `__expf` vs dynamic `libm.so`         |
+| [`docs/rt-structural-scheduler-spike.md`](docs/rt-structural-scheduler-spike.md)               | Research spike: lock-free scheduler topology and real-time execution bounds    |
+| [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Regression baseline thresholds: audio fidelity and benchmark SLA envelopes     |
 
 ---
 

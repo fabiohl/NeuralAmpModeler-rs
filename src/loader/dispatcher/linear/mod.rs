@@ -11,6 +11,10 @@ use crate::models::linear::LinearModel;
 use anyhow::Context;
 use log::info;
 
+/// Builds a linear model (`LinearModel`) from parsed model data.
+///
+/// Validates input/output channel configurations, receptive field constraints,
+/// and unpacks weights and optional bias vectors into a boxed [`StaticModel`].
 pub(crate) fn build_linear(data: &NamModelData) -> anyhow::Result<Box<StaticModel>> {
     let topo = crate::loader::nam_json::get_linear_topology(data)
         .context("Linear topology not detectable (check receptive_field and bias)")?;
