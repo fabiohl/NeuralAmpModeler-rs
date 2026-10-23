@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
 name: CI
 
 on:
   push:
-    branches: [main, arm64-port]
+    branches: [main, dev, 'dev-*']
   pull_request:
   workflow_dispatch:
 
@@ -14,15 +17,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# Every job is gated on the same condition: only run in the rread fork, and
-# only for events triggered by rread (pushes, PRs opened by rread, manual
-# dispatch). Activity by anyone else, or this file landing in another repo,
-# skips all jobs.
-
 jobs:
   # x86_64 is the reference platform: full lints + the quick QA suite.
   x86_64-linux:
-    if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -30,17 +27,22 @@ jobs:
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy (all features)
-        run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
-      - name: Clippy (default features)
+      - name: Check (default features / pure x86-64-v3)
+        run: cargo check --all-targets --features testing
+      - name: Clippy (default features / pure x86-64-v3)
         run: cargo clippy --all-targets --features testing
+      - name: Check (all features including AVX-512)
+        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
+      - name: Clippy (all features including AVX-512)
+        run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
+      - name: Check (full features without AVX-512)
+        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,rt-hardening
       - name: Quick QA suite
         # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
         run: ./utils/tests-quick.sh --allow-gaps
 
   # aarch64 targets (NEON backend): lints + the quick QA suite.
   aarch64:
-    if: github.repository == 'rread/NeuralAmpModeler-rs' && github.actor == 'rread'
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +59,8 @@ jobs:
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --all-targets --features testing
       - name: Clippy
         run: cargo clippy --all-targets --features testing
       # macOS ships bash 3.2; the QA scripts need bash >= 4. NAM_NO_LOW_PRIORITY
