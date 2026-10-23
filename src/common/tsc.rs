@@ -152,7 +152,10 @@ pub fn rdtsc_nanos() -> u64 {
     if mult != 0 {
         let anchor_tsc = TSC_ANCHOR_TSC.load(Ordering::Relaxed);
         let anchor_ns = TSC_ANCHOR_NS.load(Ordering::Relaxed);
-        anchor_ns.wrapping_add(cycles_to_nanos(read_counter().wrapping_sub(anchor_tsc), mult))
+        anchor_ns.wrapping_add(cycles_to_nanos(
+            read_counter().wrapping_sub(anchor_tsc),
+            mult,
+        ))
     } else {
         BOOT_TIME.get_or_init(Instant::now).elapsed().as_nanos() as u64
     }
