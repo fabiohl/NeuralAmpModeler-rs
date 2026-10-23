@@ -216,6 +216,7 @@ fi
 # CPU core pinning for performance-sensitive phases (RT Deadline, RT Jitter).
 # Dynamic resolution via pick_bench_core (NAM_BENCH_CORE -> first isolated online CPU -> nproc/2).
 BENCH_CORE="$(pick_bench_core)"
+NUM_CORES="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
 HAS_TASKSET=0
 if command -v taskset >/dev/null 2>&1; then
     HAS_TASKSET=1
