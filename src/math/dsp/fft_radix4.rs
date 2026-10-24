@@ -195,8 +195,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
                 // `bit_reverse` holds a permutation of `0..self.n`, so both `i`
                 // and `j` index in bounds.
                 unsafe {
-                    std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
-                    std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
+                    let (re, im) = (re.as_mut_ptr(), im.as_mut_ptr());
+                    std::ptr::swap(re.add(i), re.add(j));
+                    std::ptr::swap(im.add(i), im.add(j));
                 }
             }
         }
@@ -227,8 +228,9 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
                 // `bit_reverse` holds a permutation of `0..self.n`, so both `i`
                 // and `j` index in bounds.
                 unsafe {
-                    std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
-                    std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
+                    let (re, im) = (re.as_mut_ptr(), im.as_mut_ptr());
+                    std::ptr::swap(re.add(i), re.add(j));
+                    std::ptr::swap(im.add(i), im.add(j));
                 }
             }
         }

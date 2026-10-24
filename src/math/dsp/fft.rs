@@ -265,8 +265,9 @@ impl<T: FftFloat> FftPlanner<T> {
                 // (`process_unchecked` precondition), so both swaps are
                 // in bounds.
                 unsafe {
-                    std::ptr::swap(re.get_unchecked_mut(i), re.get_unchecked_mut(j));
-                    std::ptr::swap(im.get_unchecked_mut(i), im.get_unchecked_mut(j));
+                    let (re, im) = (re.as_mut_ptr(), im.as_mut_ptr());
+                    std::ptr::swap(re.add(i), re.add(j));
+                    std::ptr::swap(im.add(i), im.add(j));
                 }
             }
         }
