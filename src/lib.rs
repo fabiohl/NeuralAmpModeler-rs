@@ -32,9 +32,10 @@
 //!   callbacks with zero heap drops, locks, or blocking syscalls, audited via a
 //!   counting allocator. Parameter and model hot-swaps travel through lock-free
 //!   SPSC channels backed by a three-tier garbage-collection cascade.
-//! * **`x86-64-v3` SIMD baseline** — mandatory AVX2/FMA/BMI2 vectorization with
-//!   hand-written SIMD kernels, tap-major memory layouts, and compile-time
-//!   monomorphized dispatch with no vtables or indirect calls.
+//! * **Deterministic SIMD baselines** — mandatory AVX2/FMA/BMI2 vectorization on
+//!   `x86_64` (`x86-64-v3`) and native NEON on `aarch64` (macOS Apple Silicon
+//!   and Linux), with hand-written SIMD kernels, tap-major memory layouts,
+//!   and compile-time monomorphized dispatch with no vtables or indirect calls.
 //! * **Dual-oracle numerical parity** — validated against canonical C++ NAMCore
 //!   and a double-precision `f64` oracle; per-model baselines are pinned in
 //!   [`docs/quality-contract.json`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/quality-contract.json).
@@ -121,9 +122,9 @@
 //! ## Platform support
 //!
 //! The crate targets **`x86_64` with the `x86-64-v3` baseline** (AVX2, FMA,
-//! BMI2, and the rest of the v3 feature set) and refuses to compile otherwise
-//! via `compile_error!`. Other architectures (for example macOS on Apple
-//! silicon/aarch64) are unsupported by design. When building documentation
+//! BMI2, and the rest of the v3 feature set) and **`aarch64` with native NEON**
+//! (macOS Apple Silicon and aarch64 Linux). Unsupported architectures are
+//! rejected at compile time via `compile_error!`. When building documentation
 //! locally without the full feature set, prefer `cargo doc --lib`.
 //!
 //! ## Further documentation

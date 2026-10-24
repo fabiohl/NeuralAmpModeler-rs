@@ -573,7 +573,7 @@ High-frequency latency monitoring in the audio callback requires zero locks, zer
 
 ## 7. SIMD Multiversioning ROI & Dispatch Policy
 
-The minimum target architecture for NeuralAmpModeler-rs is **`x86-64-v3`** (AVX2, FMA, BMI2). Code generation unconditionally relies on AVX2 instructions throughout all processing modules.
+The baseline target architecture for NeuralAmpModeler-rs is **`x86-64-v3`** (AVX2, FMA, BMI2) on x86_64, and **NEON** on aarch64. Code generation unconditionally relies on these SIMD instruction sets throughout all processing modules.
 
 ### The 3-Tier Return on Investment (ROI) Rule
 

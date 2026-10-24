@@ -80,7 +80,7 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 
    - Non-DSP off-RT routines (JSON parsing, `.namb` CRC32 validation, IR file decoding) are bounded by file I/O and memory bandwidth. They remain in standard, idiomatic safe Rust.
 
-3. **aarch64 (NEON) Backend:**
+6. **aarch64 (NEON) Backend:**
 
    - Kernels import intrinsics from `crate::arch::simd` ([`src/arch/`](../src/arch/mod.rs)): a re-export of `core::arch::x86_64` on x86_64, and on aarch64 a NEON implementation of the same AVX2/FMA/F16C surface ([`src/arch/aarch64/`](../src/arch/aarch64/mod.rs)). The AVX2-shaped kernels therefore compile unchanged on both architectures.
    - `__m256` is a pair of `float32x4_t`; every 256-bit operation becomes two 128-bit NEON operations with the same per-lane order. FMA maps to `vfma`/`vfms` (single rounding), and `max`/`min` reproduce the x86 operand-selection rule for NaN and signed zero, so arithmetic results match the AVX2 path: golden-catalog SNR against the C++ reference is identical on x86_64 and aarch64.

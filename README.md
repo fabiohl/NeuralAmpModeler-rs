@@ -20,7 +20,7 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 ## ⚡ Key Architectural Highlights
 
 * **Pure Rust & Strict Zero-Allocation Real-Time Safety:** Engineered for deterministic audio callbacks under sub-millisecond deadlines. Guarantees zero heap drops, zero locks, and zero blocking syscalls on the audio thread (audited via `CountingAllocator`). Parameter changes and model hot-swaps communicate via lock-free SPSC channels, backed by a 3-tier garbage-collection cascade (*SPSC queue → 16-slot parking lot → overwrite ring*) ensuring safe off-RT resource deallocation without glitches or xruns.
-* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Enforces `x86-64-v3` (AVX2/FMA/BMI2) baseline vectorization. Wide use of hand written SIMD code. The `dispatch_simd!` engine performs static compile-time monomorphization with zero vtables or indirect function pointer calls. Compute kernels employ tap-major memory layouts and instruction-level parallelism (`sum0..sum3`) unrolling. AVX2 represents the optimal production sweet spot for NAM channel geometries ($C \le 16$); an experimental AVX-512 backend is available for research and cross-ISA validation via the opt-in `avx512` feature.
+* **Extremely Fast SIMD Inference & Zero-Vtable Dispatch:** Enforces deterministic SIMD baselines per architecture: `x86-64-v3` (AVX2/FMA/BMI2) on `x86_64` and native NEON on `aarch64` (macOS Apple Silicon and Linux). Wide use of hand-written SIMD code. The `dispatch_simd!` engine performs static compile-time monomorphization with zero vtables or indirect function pointer calls. Compute kernels employ tap-major memory layouts and instruction-level parallelism (`sum0..sum3`) unrolling. AVX2/NEON represents the optimal production sweet spot for NAM channel geometries ($C \le 16$); an experimental AVX-512 backend is available on x86_64 for research and cross-ISA validation via the opt-in `avx512` feature.
 * **Dual-Oracle Numerical Parity:** Formally validated against two co-equal reference oracles: canonical C++ NAMCore (verifying behavioral parity across supported architectures — WaveNet A1/A2, LSTM, ConvNet, Linear, and Sequential) and double-precision f64 reference (measuring numerical ideality). Governed by `docs/quality-contract.json` (52 model baselines), typical WaveNet models achieve ESR $< 2.31 \times 10^{-14}$ (SNR $> 136\text{ dB}$, MR-STFT $< 6.5 \times 10^{-6}$), while ConvNet achieves ESR $< 9.33 \times 10^{-16}$ (SNR $> 150\text{ dB}$). Measured model parity is distinguished from pipeline-level extensions (polyphase resampling, half-band oversampling, adaptive crossfading).
 * **Const-Generic Optimization & Dynamic Topologies:** Provides 24 distinct model variants (16 static const-generic profiles + zero-allocation dynamic fallbacks). Channel counts ($CH=16, 12, 8, 4, 3$), kernel sizes, and receptive fields are known at compile time for canonical configurations, enabling aggressive LLVM loop unrolling and register allocation. Non-standard topologies automatically route to dynamic zero-alloc fallbacks (`WaveNetModelDyn`, `LstmModelDyn`, `WaveNetA2Dyn`).
 * **Complete Native DSP Stack (Zero External Audio Crates):** Includes a native Minimum-Phase Polyphase FIR Sinc Resampler (256 phases × 64 taps, Kaiser $\beta=12$, $>105\text{ dB}$ stopband attenuation, zero pre-ringing, $0.7\text{–}1.3\text{ µs}$ execution), Uniform-Partitioned Overlap-Save (UPOLS) FFT cabinet IR convolution ($1.3\text{ µs}$ for 512-sample IRs), and multi-stage Half-Band FIR Anti-Aliasing Oversampling (2×/4×, $>100\text{ dB}$ stopband).
@@ -35,7 +35,7 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 |:-------------------------------- |:------------------------------------------------------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Inference Topologies**         | WaveNet (A1/A2), LSTM (1- & 2-layer, multi-I/O), ConvNet, Linear FIR/FFT, Sequential | Broad NAM ecosystem coverage with native Rust execution speed (unsupported topologies rejected fail-closed; see `docs/cpp_parity_map.md` §7)               |
 | **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                        | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                                                                |
-| **SIMD Acceleration**            | Mandatory `x86-64-v3` (AVX2/FMA) baseline; static `dispatch_simd!` dispatch          | WaveNet Standard ≈ 41.8 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                                                                    |
+| **SIMD Acceleration**            | Mandatory baseline (`x86-64-v3` on x86_64, NEON on aarch64); static `dispatch_simd!` dispatch | WaveNet Standard ≈ 41.8 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                                                                    |
 | **Const-Generic Profiles**       | 24 model variants (16 static const-generic profiles + dynamic fallbacks)             | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$)                                               |
 | **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$         | Near bit-exact accuracy on covered models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR; see `docs/quality-contract.json` for per-model baselines) |
 | **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)   | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                                          |
@@ -75,17 +75,32 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ### Supported Platforms
 
-NeuralAmpModeler-rs supports **`x86_64` with the `x86-64-v3` instruction set** only. The crate enforces this at compile time:
+NeuralAmpModeler-rs officially supports:
 
-* Non-`x86_64` targets (for example macOS on Apple silicon / `aarch64`) are rejected by design via `compile_error!` — there is no scalar fallback.
-* `x86_64` CPUs lacking any `x86-64-v3` feature fail the build with a clear, actionable message.
+1. **`x86_64` (Linux)** with the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`).
+2. **`aarch64` (macOS Apple Silicon, Linux)** with native **NEON** vectorization.
+
+The crate enforces these architectural baselines at compile time:
+
+* Unsupported architectures (targets other than `x86_64` or `aarch64`) are rejected by design via `compile_error!` — there is no scalar fallback.
+* `x86_64` targets lacking any `x86-64-v3` feature fail the build with a clear, actionable message.
+* `aarch64` targets lacking NEON fail the build with a compile-time assertion.
 * When building documentation locally, use `cargo doc --lib` (the `simd_probe` binary is incompatible with the `cfg(doc)` build).
 
-### Installation of System Build Dependencies (Debian / Ubuntu / Pop!_OS)
+### Installation of System Build Dependencies
+
+**Debian / Ubuntu / Pop!_OS (Linux):**
 
 ```bash
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
 ```
+
+**macOS (Homebrew):**
+
+```bash
+brew install cmake
+```
+*(Note: To execute the `./utils/` QA scripts on macOS, install bash 4+: `brew install bash`)*
 
 ### SIMD Baseline per Architecture
 
