@@ -64,13 +64,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --features testing
       # macOS ships bash 3.2; the QA scripts need bash >= 4. NAM_NO_LOW_PRIORITY
-      # skips the `nice` re-exec, which would go back through /bin/bash.
+      # and NAM_NO_MEM_GUARD skip the `nice` and systemd mem-guard re-execs,
+      # which would go back through /bin/bash.
       - name: Install bash (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install bash
           echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
           echo "NAM_NO_LOW_PRIORITY=1" >> "$GITHUB_ENV"
+          echo "NAM_NO_MEM_GUARD=1" >> "$GITHUB_ENV"
       - name: Quick QA suite
         # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
         run: ${QA_BASH:-bash} ./utils/tests-quick.sh --allow-gaps
