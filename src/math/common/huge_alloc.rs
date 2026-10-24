@@ -53,10 +53,17 @@ pub enum HugePageStatus {
 /// Below this threshold, standard `alloc` is used directly (no syscall overhead).
 pub const HUGE_PAGE_THRESHOLD: usize = 1 << 20; // 1 MiB
 
-/// Page size for transparent huge pages (4 KB standard pages, kernel promotes to 2 MB).
-const PAGE_4K: usize = 4096;
+/// Base page size of the running kernel: 4 KiB on x86_64, 16 KiB on Apple
+/// Silicon, 4/16/64 KiB on aarch64 Linux depending on the kernel build.
+fn system_page_size() -> usize {
+    // SAFETY: `sysconf` is a side-effect-free POSIX configuration query.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page > 0 { page as usize } else { 4096 }
+}
 
-/// Huge page size (2 MB on x86-64). Must divide evenly into the allocation size.
+/// Explicit huge page size requested (2 MiB: the PMD size with 4 KiB pages, a
+/// contiguous-PTE hugetlb size on 64 KiB-page arm64). Must divide evenly into
+/// the allocation size.
 pub const HUGE_PAGE_2M: usize = 2 * 1024 * 1024;
 
 /// Rounds `size` up to the next multiple of `alignment`.
@@ -125,17 +132,22 @@ pub(crate) fn allocate_huge_pages(
     }
 
     // Strategy 2: anonymous mmap + madvise(MADV_HUGEPAGE) + MADV_COLLAPSE for synchronous THP.
-    let thp_size = align_up(size_bytes, PAGE_4K).ok_or(NamErrorCode::OutOfMemory)?;
+    let thp_size = align_up(size_bytes, system_page_size()).ok_or(NamErrorCode::OutOfMemory)?;
     // SAFETY: try_mmap_huge with validated size.
     let ptr = unsafe { try_mmap_huge(ptr::null_mut(), thp_size, -1, 0, false) };
 
     if ptr != libc::MAP_FAILED {
         // Hint the kernel to promote these pages to huge pages.
         // SAFETY: ptr and thp_size are valid from the successful mmap above.
+        #[cfg(target_os = "linux")]
         let _madvise_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_HUGEPAGE) };
         // Synchronous collapse (Linux 6.1+). Mandatory: no kernel-version fallback checks.
         // SAFETY: ptr and thp_size are valid from the successful mmap above.
+        #[cfg(target_os = "linux")]
         let collapse_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_COLLAPSE) };
+        // No transparent huge pages outside Linux.
+        #[cfg(not(target_os = "linux"))]
+        let collapse_rc = -1;
         let status = if collapse_rc == 0 {
             HugePageStatus::Transparent
         } else {
@@ -189,6 +201,25 @@ pub unsafe fn deallocate_huge(ptr: *mut u8, info: AllocInfo, size_bytes: usize) 
         } => {
             // SAFETY: ptr and mmap_size match the original mmap.
             unsafe { libc::munmap(ptr as *mut libc::c_void, mmap_size) };
+        }
+    }
+}
+
+/// Sets the calling thread's `errno`, so callers that report failures with
+/// `std::io::Error::last_os_error()` see the intended cause.
+///
+/// # Safety
+/// Writes through the libc thread-local errno pointer, which is always valid.
+pub(crate) unsafe fn set_errno(code: libc::c_int) {
+    // SAFETY: the libc errno accessor returns a valid pointer to this thread's errno.
+    unsafe {
+        #[cfg(target_os = "linux")]
+        {
+            *libc::__errno_location() = code;
+        }
+        #[cfg(target_vendor = "apple")]
+        {
+            *libc::__error() = code;
         }
     }
 }
@@ -248,14 +279,112 @@ pub(crate) unsafe fn create_backing_fd(
     Ok(fd)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Sequence number for macOS shared-memory object names (`/nam.<pid>.<seq>`).
+#[cfg(target_vendor = "apple")]
+static SHM_NAME_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// macOS equivalent of the anonymous `memfd`: a POSIX shared-memory object
+/// that is unlinked immediately, so the returned descriptor is its only
+/// reference. Huge pages are not available; `use_huge` is ignored. The object
+/// is truncated to `size` bytes.
+#[cfg(target_vendor = "apple")]
+pub(crate) unsafe fn create_backing_fd(
+    size: usize,
+    _use_huge: bool,
+) -> std::io::Result<std::os::raw::c_int> {
+    // SAFETY: forwards the caller's contract; the global counter is the
+    // production name sequence.
+    unsafe { create_backing_fd_with_seq(size, &SHM_NAME_SEQ) }
+}
+
+/// [`create_backing_fd`] with an explicit name-sequence counter, so tests can
+/// drive the name collision path deterministically.
+#[cfg(target_vendor = "apple")]
+unsafe fn create_backing_fd_with_seq(
+    size: usize,
+    seq: &std::sync::atomic::AtomicU64,
+) -> std::io::Result<std::os::raw::c_int> {
+    use std::sync::atomic::Ordering;
+
+    /// Appends the decimal digits of `n` at `buf[pos..]`, returning the new end.
+    fn push_decimal(buf: &mut [u8], mut pos: usize, mut n: u64) -> usize {
+        let mut digits = [0u8; 20];
+        let mut count = 0;
+        loop {
+            digits[count] = b'0' + (n % 10) as u8;
+            count += 1;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        while count > 0 {
+            count -= 1;
+            buf[pos] = digits[count];
+            pos += 1;
+        }
+        pos
+    }
+
+    // An object left behind by a process killed between shm_open and
+    // shm_unlink can collide with a reused pid; on EEXIST try the next name.
+    const MAX_NAME_ATTEMPTS: usize = 64;
+    let mut attempt = 0;
+    let (fd, name_buf) = loop {
+        // "/nam.<pid>.<seq>" NUL-terminated on the stack, no allocation. macOS
+        // limits shm names to 31 bytes (PSHMNAMLEN): 5 + 10 (u32 pid) + 1 + 9
+        // (seq mod 1e9) = 25 bytes, plus the zero terminator already in `name`.
+        let mut name = [0u8; 32];
+        name[..5].copy_from_slice(b"/nam.");
+        let mut end = push_decimal(&mut name, 5, u64::from(std::process::id()));
+        name[end] = b'.';
+        end = push_decimal(
+            &mut name,
+            end + 1,
+            seq.fetch_add(1, Ordering::Relaxed) % 1_000_000_000,
+        );
+        debug_assert!(end < name.len());
+        // SAFETY: `name` is a valid NUL-terminated C string; O_EXCL guarantees a fresh object.
+        let fd = unsafe {
+            libc::shm_open(
+                name.as_ptr().cast::<libc::c_char>(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd != -1 {
+            break (fd, name);
+        }
+        let err = std::io::Error::last_os_error();
+        attempt += 1;
+        if err.raw_os_error() != Some(libc::EEXIST) || attempt == MAX_NAME_ATTEMPTS {
+            return Err(err);
+        }
+    };
+    // SAFETY: `name_buf` is valid; unlinking leaves the open descriptor as the only reference.
+    unsafe { libc::shm_unlink(name_buf.as_ptr().cast::<libc::c_char>()) };
+    // SAFETY: fd is a valid descriptor from the successful shm_open above.
+    let ok = unsafe {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) != -1
+            && libc::ftruncate(fd, size as libc::off_t) != -1
+    };
+    if !ok {
+        let err = std::io::Error::last_os_error();
+        // SAFETY: fd is valid and no longer needed after the failure.
+        unsafe { libc::close(fd) };
+        return Err(err);
+    }
+    Ok(fd)
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
 pub(crate) unsafe fn create_backing_fd(
     _size: usize,
     _use_huge: bool,
 ) -> std::io::Result<std::os::raw::c_int> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "create_backing_fd is only supported on Linux",
+        "create_backing_fd is only supported on Linux and macOS",
     ))
 }
 
@@ -275,15 +404,28 @@ pub(crate) unsafe fn try_mmap_huge(
     offset: libc::off_t,
     use_huge: bool,
 ) -> *mut libc::c_void {
-    let mut flags = if fd == -1 {
+    let base_flags = if fd == -1 {
         libc::MAP_PRIVATE | libc::MAP_ANONYMOUS
     } else {
         libc::MAP_SHARED
     };
 
-    if use_huge {
-        flags |= libc::MAP_HUGETLB | libc::MAP_HUGE_2MB;
-    }
+    #[cfg(target_os = "linux")]
+    let flags = if use_huge {
+        base_flags | libc::MAP_HUGETLB | libc::MAP_HUGE_2MB
+    } else {
+        base_flags
+    };
+    // Explicit huge pages are Linux-only; report failure (ENOTSUP, so
+    // `last_os_error()` names the real cause) and let callers fall back.
+    #[cfg(not(target_os = "linux"))]
+    let flags = if use_huge {
+        // SAFETY: writes this thread's errno through the libc accessor.
+        unsafe { set_errno(libc::ENOTSUP) };
+        return libc::MAP_FAILED;
+    } else {
+        base_flags
+    };
 
     // SAFETY: caller guarantees addr/len/fd/offset are valid for the requested mapping.
     unsafe {
@@ -513,3 +655,7 @@ unsafe impl<T: Copy + Send> Send for HugePageVec<T> {}
 // allocation is exclusively owned and accessed through Deref/DerefMut which enforce Rust's
 // aliasing rules.
 unsafe impl<T: Copy + Sync> Sync for HugePageVec<T> {}
+
+#[cfg(all(test, target_vendor = "apple"))]
+#[path = "huge_alloc_test.rs"]
+mod tests;

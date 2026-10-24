@@ -4,8 +4,8 @@
 use super::common::{WaveNetLayerState, WavenetProcessContext};
 use super::dense::DenseLayer;
 use super::layer::WaveNetLayer;
+use crate::arch::simd::{_MM_HINT_T0, _mm_prefetch};
 use crate::math::common::{AlignedVec, SimdMath};
-use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
 
 /// Grouped Multi-Layer WaveNet Unit.
 #[derive(Clone)]

@@ -30,8 +30,8 @@
 //   - _nr2: double Newton-Raphson on rcp → saturates f32 mantissa (24 bits)
 //   - _div: hardware division → IEEE 754 full precision oracle
 
+use crate::arch::simd::*;
 use crate::math::constants::*;
-use core::arch::x86_64::*;
 
 /// Padé \[5,4\] rational tanh with single Newton-Raphson (AVX2).
 ///
@@ -42,7 +42,8 @@ use core::arch::x86_64::*;
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -82,7 +83,8 @@ pub unsafe fn simd_tanh_pade_nr1_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -138,7 +140,11 @@ pub unsafe fn simd_tanh_pade_nr1_dual_avx2(x1: __m256, x2: __m256) -> (__m256, _
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl,avx512dq")]
+#[cfg_attr(
+    target_arch = "x86_64",
+    target_feature(enable = "avx512f,avx512vl,avx512dq")
+)]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr1_avx512(x: __m512) -> __m512 {
     let clamp_lo = _mm512_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm512_set1_ps(PADE_TANH_CLAMP);
@@ -178,7 +184,8 @@ pub unsafe fn simd_tanh_pade_nr1_avx512(x: __m512) -> __m512 {
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr2_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm256_set1_ps(PADE_TANH_CLAMP);
@@ -225,7 +232,11 @@ pub unsafe fn simd_tanh_pade_nr2_avx2(x: __m256) -> __m256 {
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
-#[target_feature(enable = "avx512f,avx512vl,avx512dq")]
+#[cfg_attr(
+    target_arch = "x86_64",
+    target_feature(enable = "avx512f,avx512vl,avx512dq")
+)]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_tanh_pade_nr2_avx512(x: __m512) -> __m512 {
     let clamp_lo = _mm512_set1_ps(-PADE_TANH_CLAMP);
     let clamp_hi = _mm512_set1_ps(PADE_TANH_CLAMP);

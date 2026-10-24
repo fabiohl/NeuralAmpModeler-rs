@@ -6,13 +6,14 @@
 use crate::activation_simd_avx2;
 #[cfg(feature = "avx512")]
 use crate::activation_simd_avx512;
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Applies LeakyHardTanh (branchless blend) to a slice using AVX2+FMA.
 ///
 /// # Safety
 /// Requires AVX2 and FMA support.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn leaky_hard_tanh_slice_avx2(
     data: &mut [f32],
     min_val: f32,
@@ -77,7 +78,11 @@ pub unsafe fn leaky_hard_tanh_slice_avx2(
 /// Requires AVX-512F, AVX-512VL, and FMA support.
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
-#[target_feature(enable = "avx512f,avx512vl,fma")]
+#[cfg_attr(
+    target_arch = "x86_64",
+    target_feature(enable = "avx512f,avx512vl,fma")
+)]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn leaky_hard_tanh_slice_avx512(
     data: &mut [f32],
     min_val: f32,

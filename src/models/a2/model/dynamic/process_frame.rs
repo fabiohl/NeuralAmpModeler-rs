@@ -8,7 +8,7 @@ use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::{BlendingActivationConfig, GatingActivationConfig};
 use crate::models::a2::layer::A2Layer;
 
-use core::arch::x86_64::{
+use crate::arch::simd::{
     _mm256_add_ps, _mm256_fmadd_ps, _mm256_loadu_ps, _mm256_set1_ps, _mm256_setzero_ps,
     _mm256_storeu_ps,
 };

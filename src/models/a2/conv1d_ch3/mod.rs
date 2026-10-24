@@ -106,7 +106,8 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     ///   `_mm_storeu_ps(out_frame.as_mut_ptr(), acc)` writes all 4 lanes.
     /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
-    #[target_feature(enable = "avx")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn process_single_ch3_k6(
         &self,
         layer_buffer: &[f32],
@@ -114,7 +115,7 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
         frame_idx: usize,
         mixin: Option<&[f32]>,
     ) {
-        use core::arch::x86_64::*;
+        use crate::arch::simd::*;
         let in_ch = self.in_ch;
         let d = self.dilation as isize;
         let k_limit = self.kernel as isize; // 6
@@ -182,7 +183,8 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
     ///   `_mm_storeu_ps(out_frame.as_mut_ptr(), acc)` writes all 4 lanes.
     /// - `mixin` may be `None` or any length (`load_mixin_4` length-guards every lane).
     #[cfg(test)]
-    #[target_feature(enable = "avx")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn process_single_ch3_k15(
         &self,
         layer_buffer: &[f32],
@@ -190,7 +192,7 @@ impl crate::models::wavenet::conv1d_dyn::Conv1dDyn {
         frame_idx: usize,
         mixin: Option<&[f32]>,
     ) {
-        use core::arch::x86_64::*;
+        use crate::arch::simd::*;
         let in_ch = self.in_ch;
         let d = self.dilation as isize;
         let k_limit = self.kernel as isize; // 15

@@ -6,6 +6,9 @@
 //! Validates at compile-time and run-time that the active crate build enforces the full
 //! psABI x86-64-v3 instruction set baseline: `avx`, `avx2`, `bmi1`, `bmi2`,
 //! `f16c`, `fma`, `lzcnt`, `movbe`.
+//!
+//! x86_64-only: aarch64 builds have no x86-64-v3 baseline to check.
+#![cfg(target_arch = "x86_64")]
 
 const _: () = {
     assert!(

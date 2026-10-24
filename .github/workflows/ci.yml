@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev, 'dev-*']
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch/PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # x86_64 is the reference platform: full lints + the quick QA suite.
+  x86_64-linux:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Check (default features / pure x86-64-v3)
+        run: cargo check --all-targets --features testing
+      - name: Clippy (default features / pure x86-64-v3)
+        run: cargo clippy --all-targets --features testing
+      - name: Check (all features including AVX-512)
+        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
+      - name: Clippy (all features including AVX-512)
+        run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
+      - name: Check (full features without AVX-512)
+        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,rt-hardening
+      - name: Quick QA suite
+        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
+        run: ./utils/tests-quick.sh --allow-gaps
+
+  # aarch64 targets (NEON backend): lints + the quick QA suite.
+  aarch64:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+          - name: linux-arm64
+            os: ubuntu-26.04-arm
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --all-targets --features testing
+      - name: Clippy
+        run: cargo clippy --all-targets --features testing
+      # macOS ships bash 3.2; the QA scripts need bash >= 4. NAM_NO_LOW_PRIORITY
+      # and NAM_NO_MEM_GUARD skip the `nice` and systemd mem-guard re-execs,
+      # which would go back through /bin/bash.
+      - name: Install bash (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
+          echo "NAM_NO_LOW_PRIORITY=1" >> "$GITHUB_ENV"
+          echo "NAM_NO_MEM_GUARD=1" >> "$GITHUB_ENV"
+      - name: Quick QA suite
+        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
+        run: ${QA_BASH:-bash} ./utils/tests-quick.sh --allow-gaps

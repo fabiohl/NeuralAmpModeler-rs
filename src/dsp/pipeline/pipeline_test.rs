@@ -225,6 +225,7 @@ mod tests {
     /// first, runs a full `capture_dsp_pipeline` call, then asserts the bits
     /// are active again — proving the entry point configures the per-thread
     /// MXCSR register, not just the helper function in isolation.
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn pipeline_entry_reasserts_ftz_daz() {
         const DAZ_FTZ_MASK: u32 = 0x8040;
@@ -258,6 +259,40 @@ mod tests {
             DAZ_FTZ_MASK,
             "pipeline entry must reassert FTZ+DAZ: MXCSR=0x{:08X}",
             after
+        );
+    }
+
+    /// aarch64 counterpart: the pipeline entry must set FPCR.FZ (bit 24),
+    /// which flushes denormal inputs and outputs (DAZ + FTZ).
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn pipeline_entry_reasserts_ftz_daz() {
+        const FZ: u64 = 1 << 24;
+
+        // SAFETY: FPCR access is unprivileged and only affects this test thread.
+        let original = unsafe {
+            let fpcr: u64;
+            core::arch::asm!("mrs {0}, fpcr", out(reg) fpcr);
+            core::arch::asm!("msr fpcr, {0}", in(reg) fpcr & !FZ);
+            fpcr
+        };
+
+        let input_l = vec![0.01f32; 64];
+        let input_r = vec![0.01f32; 64];
+        let _ = run_pipeline_test(48000, 48000, &input_l, &input_r, false);
+
+        // SAFETY: as above; the original FPCR is restored.
+        let after = unsafe {
+            let fpcr: u64;
+            core::arch::asm!("mrs {0}, fpcr", out(reg) fpcr);
+            core::arch::asm!("msr fpcr, {0}", in(reg) original);
+            fpcr
+        };
+
+        assert_eq!(
+            after & FZ,
+            FZ,
+            "pipeline entry must set FPCR.FZ: 0x{after:08X}"
         );
     }
 

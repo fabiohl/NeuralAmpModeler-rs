@@ -3,10 +3,10 @@
 
 use super::A2Conv1dCh8;
 use super::MAX_KERNEL_FRAMES;
+use crate::arch::simd::*;
 use crate::math::common::SimdMath;
 use crate::models::a2::film::FilmBlock;
 use crate::models::a2::params::A2_LEAKY_SLOPE;
-use core::arch::x86_64::*;
 
 /// T=8 frame-tiled tap-major dilated conv for CH=8, AVX2+FMA.
 ///
@@ -24,7 +24,8 @@ use core::arch::x86_64::*;
 /// - `weights` must have at least `kernel * 64` valid f32 elements.
 /// - `layer_buffer` must be large enough for all frame lookbacks.
 /// - `z_out` must have at least `num_frames * 8` elements.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn conv1d_ch8_t8_avx2(
     weights: &[f32],
     bias: &[f32],
@@ -51,52 +52,67 @@ pub unsafe fn conv1d_ch8_t8_avx2(
     let n_tiled = (num_frames / T) * T;
 
     for f in (0..n_tiled).step_by(T) {
-        let mut a0 = bias_v;
-        let mut a1 = bias_v;
-        let mut a2 = bias_v;
-        let mut a3 = bias_v;
-        let mut a4 = bias_v;
-        let mut a5 = bias_v;
-        let mut a6 = bias_v;
-        let mut a7 = bias_v;
-
         let frame0 = (frame_start + f) as isize;
+        // aarch64: a NEON-native tile (vector history loads, lane FMAs)
+        // instead of the AVX2 shape, whose 64 scalar history loads per tap
+        // and register spills dominate on NEON. Same FMA order: bit-exact.
+        #[cfg(target_arch = "aarch64")]
+        neon::ch8_tile(
+            w_ptr,
+            bias.as_ptr(),
+            buf,
+            frame0,
+            d,
+            kernel,
+            z_out.as_mut_ptr().add(f * ch),
+        );
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let mut a0 = bias_v;
+            let mut a1 = bias_v;
+            let mut a2 = bias_v;
+            let mut a3 = bias_v;
+            let mut a4 = bias_v;
+            let mut a5 = bias_v;
+            let mut a6 = bias_v;
+            let mut a7 = bias_v;
 
-        for k in 0..kernel {
-            let wk_base = (k * 64) as isize;
-            let taps_back = k_i - 1 - k as isize;
-            // Defensive clamp: mirrors the pattern from crate::models::wavenet::conv1d (F-01/R-2).
-            let tap0 = (frame0 - d * taps_back).max(0);
-            let hb = buf.offset(tap0 * ch as isize);
-            for cp in 0..ch {
-                let wcol = _mm256_loadu_ps(w_ptr.offset(wk_base + (cp * 8) as isize));
-                let h0 = *hb.add(cp);
-                let h1 = *hb.add(ch + cp);
-                let h2 = *hb.add(2 * ch + cp);
-                let h3 = *hb.add(3 * ch + cp);
-                let h4 = *hb.add(4 * ch + cp);
-                let h5 = *hb.add(5 * ch + cp);
-                let h6 = *hb.add(6 * ch + cp);
-                let h7 = *hb.add(7 * ch + cp);
-                a0 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h0), a0);
-                a1 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h1), a1);
-                a2 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h2), a2);
-                a3 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h3), a3);
-                a4 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h4), a4);
-                a5 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h5), a5);
-                a6 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h6), a6);
-                a7 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h7), a7);
+            for k in 0..kernel {
+                let wk_base = (k * 64) as isize;
+                let taps_back = k_i - 1 - k as isize;
+                // Defensive clamp: mirrors the pattern from crate::models::wavenet::conv1d (F-01/R-2).
+                let tap0 = (frame0 - d * taps_back).max(0);
+                let hb = buf.offset(tap0 * ch as isize);
+                for cp in 0..ch {
+                    let wcol = _mm256_loadu_ps(w_ptr.offset(wk_base + (cp * 8) as isize));
+                    let h0 = *hb.add(cp);
+                    let h1 = *hb.add(ch + cp);
+                    let h2 = *hb.add(2 * ch + cp);
+                    let h3 = *hb.add(3 * ch + cp);
+                    let h4 = *hb.add(4 * ch + cp);
+                    let h5 = *hb.add(5 * ch + cp);
+                    let h6 = *hb.add(6 * ch + cp);
+                    let h7 = *hb.add(7 * ch + cp);
+                    a0 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h0), a0);
+                    a1 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h1), a1);
+                    a2 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h2), a2);
+                    a3 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h3), a3);
+                    a4 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h4), a4);
+                    a5 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h5), a5);
+                    a6 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h6), a6);
+                    a7 = _mm256_fmadd_ps(wcol, _mm256_set1_ps(h7), a7);
+                }
             }
-        }
 
-        _mm256_storeu_ps(z_out.as_mut_ptr().add(f * ch), a0);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 1) * ch), a1);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 2) * ch), a2);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 3) * ch), a3);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 4) * ch), a4);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 5) * ch), a5);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 6) * ch), a6);
-        _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 7) * ch), a7);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add(f * ch), a0);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 1) * ch), a1);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 2) * ch), a2);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 3) * ch), a3);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 4) * ch), a4);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 5) * ch), a5);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 6) * ch), a6);
+            _mm256_storeu_ps(z_out.as_mut_ptr().add((f + 7) * ch), a7);
+        }
     }
 
     for f in n_tiled..num_frames {
@@ -140,7 +156,8 @@ pub unsafe fn conv1d_ch8_t8_avx2(
     clippy::too_many_arguments,
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch8_block(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -373,7 +390,8 @@ pub unsafe fn layer_forward_ch8_block(
     clippy::too_many_arguments,
     reason = "A2 CH=8 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch8_block_no_film(
     conv: &A2Conv1dCh8,
     mixin_w: &[f32],
@@ -477,7 +495,8 @@ pub unsafe fn layer_forward_ch8_block_no_film(
 /// # Safety
 /// `z_conv` must hold `num_frames * 8` conv outputs; remaining buffers follow
 /// the `no_film` tail contract (same capacities as the caller-verified inputs).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn layer_forward_ch8_postconv_no_film(
     z_conv: &[f32],
     mixin_w: &[f32],
@@ -799,6 +818,74 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
             let l1x1_v_modulated = _mm256_loadu_ps(l1x1_scratch.as_ptr());
             let lv = _mm256_loadu_ps(lin.add(off));
             _mm256_storeu_ps(lin.add(off), _mm256_add_ps(lv, l1x1_v_modulated));
+        }
+    }
+}
+
+/// NEON kernel for the CH=8 tiled conv (aarch64).
+#[cfg(target_arch = "aarch64")]
+mod neon {
+    use std::arch::aarch64::{float32x4_t, vfmaq_laneq_f32, vld1q_f32, vst1q_f32};
+
+    /// One 8-frame tile of [`conv1d_ch8_t8_avx2`](super::conv1d_ch8_t8_avx2).
+    ///
+    /// Keeps the AVX2 kernel's 16 independent accumulator chains (8 frames x
+    /// 2 output halves), which the FMA pipes need to stay busy, but loads
+    /// the history as vectors (each frame's input channels 0-3, then 4-7)
+    /// and applies it with lane FMAs, instead of 64 scalar loads per tap.
+    /// 16 accumulators + 8 history + 2 weight registers: no spills. The
+    /// accumulation order (taps, then input channels) matches the AVX2
+    /// kernel, so results are bit-identical.
+    ///
+    /// # Safety
+    /// As for `conv1d_ch8_t8_avx2` for the tile starting at `frame0`:
+    /// `weights` holds `kernel * 64` values, `bias` 8, the history for
+    /// every tap of frames `frame0..frame0 + 8` is readable from `buf`, and
+    /// `out` has room for 64 values.
+    #[target_feature(enable = "neon")]
+    pub(super) unsafe fn ch8_tile(
+        weights: *const f32,
+        bias: *const f32,
+        buf: *const f32,
+        frame0: isize,
+        dilation: isize,
+        kernel: usize,
+        out: *mut f32,
+    ) {
+        let b = [vld1q_f32(bias), vld1q_f32(bias.add(4))];
+        let mut acc: [[float32x4_t; 2]; 8] = [b; 8];
+        let k_i = kernel as isize;
+        for k in 0..kernel {
+            let taps_back = k_i - 1 - k as isize;
+            // Defensive clamp, as in the AVX2 kernel.
+            let tap0 = (frame0 - dilation * taps_back).max(0);
+            let hb = buf.offset(tap0 * 8);
+            let wk = weights.add(k * 64);
+            // Input channel `cp` is lane `lane` of `h[frame]`.
+            macro_rules! input_channel {
+                ($h:ident, $cp:literal, $lane:literal) => {{
+                    let w0 = vld1q_f32(wk.add($cp * 8));
+                    let w1 = vld1q_f32(wk.add($cp * 8 + 4));
+                    for j in 0..8 {
+                        acc[j][0] = vfmaq_laneq_f32::<$lane>(acc[j][0], w0, $h[j]);
+                        acc[j][1] = vfmaq_laneq_f32::<$lane>(acc[j][1], w1, $h[j]);
+                    }
+                }};
+            }
+            let low: [float32x4_t; 8] = core::array::from_fn(|j| vld1q_f32(hb.add(j * 8)));
+            input_channel!(low, 0, 0);
+            input_channel!(low, 1, 1);
+            input_channel!(low, 2, 2);
+            input_channel!(low, 3, 3);
+            let high: [float32x4_t; 8] = core::array::from_fn(|j| vld1q_f32(hb.add(j * 8 + 4)));
+            input_channel!(high, 4, 0);
+            input_channel!(high, 5, 1);
+            input_channel!(high, 6, 2);
+            input_channel!(high, 7, 3);
+        }
+        for (j, a) in acc.iter().enumerate() {
+            vst1q_f32(out.add(j * 8), a[0]);
+            vst1q_f32(out.add(j * 8 + 4), a[1]);
         }
     }
 }

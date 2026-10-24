@@ -167,7 +167,8 @@ fn test_prelu_cycle() {
 
 #[test]
 fn test_hard_tanh_avx2_parity() {
-    #[target_feature(enable = "avx2")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn scalar_ref(data: &mut [f32]) {
         for x in data.iter_mut() {
             *x = x.clamp(-1.0, 1.0);
@@ -217,7 +218,8 @@ fn test_hard_tanh_avx2_large_slice() {
 
 #[test]
 fn test_hard_swish_avx2_parity() {
-    #[target_feature(enable = "avx2")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn scalar_ref(data: &mut [f32]) {
         for x in data.iter_mut() {
             let t = *x + 3.0;
@@ -274,7 +276,8 @@ fn test_leaky_hard_tanh_avx2_parity() {
     let min_slope = 0.15_f32;
     let max_slope = 0.25_f32;
 
-    #[target_feature(enable = "avx2")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     unsafe fn scalar_ref(
         data: &mut [f32],
         min_val: f32,
@@ -355,7 +358,8 @@ fn test_leaky_hard_tanh_avx2_large_slice() {
 
 #[test]
 fn test_fast_tanh_avx2_parity() {
-    #[target_feature(enable = "avx2")]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
     #[expect(
         clippy::excessive_precision,
         reason = "High-precision constants required for bit-exact numerical validation against reference"

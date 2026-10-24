@@ -31,6 +31,9 @@ impl SimdMathConfig {
             Self {
                 instruction_set: isa,
                 name: match isa {
+                    InstructionSet::Avx2 if cfg!(target_arch = "aarch64") => {
+                        "NEON (AVX2-compatible layer, overridden)"
+                    }
                     InstructionSet::Avx2 => "AVX2 (overridden)",
                     #[cfg(feature = "avx512")]
                     InstructionSet::Avx512 => "AVX-512 (overridden)",

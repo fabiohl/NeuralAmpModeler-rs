@@ -359,7 +359,7 @@ The test suite enforces a strict boundary between **single-architecture determin
 
 1. **Declared Skips (`SKIP_CAPABILITY`):**
 
-   - The engine targets `x86-64-v3` (AVX2, FMA, BMI2) as its strict compile-time baseline. On host machines without AVX-512 hardware or when compiling without `--features avx512`, AVX-512 execution paths cannot physically run.
+   - The engine targets `x86-64-v3` (AVX2, FMA, BMI2) on x86_64 and NEON on aarch64 as its strict compile-time baselines. On host machines without AVX-512 hardware or when compiling without `--features avx512`, AVX-512 execution paths cannot physically run.
 
    - Tests in [tests/parity/isa_parity.rs](../tests/parity/isa_parity.rs) detect missing hardware capabilities or disabled Cargo features via `skip_if_unsupported!` and emit machine-parseable markers:
 

@@ -32,9 +32,10 @@
 //!   callbacks with zero heap drops, locks, or blocking syscalls, audited via a
 //!   counting allocator. Parameter and model hot-swaps travel through lock-free
 //!   SPSC channels backed by a three-tier garbage-collection cascade.
-//! * **`x86-64-v3` SIMD baseline** — mandatory AVX2/FMA/BMI2 vectorization with
-//!   hand-written SIMD kernels, tap-major memory layouts, and compile-time
-//!   monomorphized dispatch with no vtables or indirect calls.
+//! * **Deterministic SIMD baselines** — mandatory AVX2/FMA/BMI2 vectorization on
+//!   `x86_64` (`x86-64-v3`) and native NEON on `aarch64` (macOS Apple Silicon
+//!   and Linux), with hand-written SIMD kernels, tap-major memory layouts,
+//!   and compile-time monomorphized dispatch with no vtables or indirect calls.
 //! * **Dual-oracle numerical parity** — validated against canonical C++ NAMCore
 //!   and a double-precision `f64` oracle; per-model baselines are pinned in
 //!   [`docs/quality-contract.json`](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/quality-contract.json).
@@ -121,9 +122,9 @@
 //! ## Platform support
 //!
 //! The crate targets **`x86_64` with the `x86-64-v3` baseline** (AVX2, FMA,
-//! BMI2, and the rest of the v3 feature set) and refuses to compile otherwise
-//! via `compile_error!`. Other architectures (for example macOS on Apple
-//! silicon/aarch64) are unsupported by design. When building documentation
+//! BMI2, and the rest of the v3 feature set) and **`aarch64` with native NEON**
+//! (macOS Apple Silicon and aarch64 Linux). Unsupported architectures are
+//! rejected at compile time via `compile_error!`. When building documentation
 //! locally without the full feature set, prefer `cargo doc --lib`.
 //!
 //! ## Further documentation
@@ -133,27 +134,45 @@
 //! * [Benchmarks and regression envelopes](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/benchmarks.md)
 //! * [Testing and verification policies](https://github.com/fabiohl/NeuralAmpModeler-rs/blob/main/docs/testing.md)
 
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("NeuralAmpModeler-rs requires x86_64 architecture");
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("NeuralAmpModeler-rs requires the x86_64 or aarch64 architecture");
 
-#[cfg(not(any(
-    doc,
-    all(
-        target_feature = "avx",
-        target_feature = "avx2",
-        target_feature = "bmi1",
-        target_feature = "bmi2",
-        target_feature = "f16c",
-        target_feature = "fma",
-        target_feature = "lzcnt",
-        target_feature = "movbe"
-    )
-)))]
+#[cfg(all(target_arch = "aarch64", not(any(doc, target_feature = "neon"))))]
+compile_error!("NeuralAmpModeler-rs requires NEON on aarch64");
+
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(
+        doc,
+        all(
+            target_feature = "avx",
+            target_feature = "avx2",
+            target_feature = "bmi1",
+            target_feature = "bmi2",
+            target_feature = "f16c",
+            target_feature = "fma",
+            target_feature = "lzcnt",
+            target_feature = "movbe"
+        )
+    ))
+))]
 compile_error!(
     "NeuralAmpModeler-rs requires full x86-64-v3 target support \
      (avx, avx2, bmi1, bmi2, f16c, fma, lzcnt, movbe). \
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
+
+#[cfg(all(feature = "avx512", not(target_arch = "x86_64")))]
+compile_error!("the `avx512` feature is only available on x86_64");
+
+/// Architecture-neutral SIMD intrinsic surface (x86_64 native, aarch64 NEON).
+/// Public (hidden) under `testing` so integration tests and benches can build
+/// `__m256` values for the crate's SIMD functions on either architecture.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod arch;
+#[cfg(not(feature = "testing"))]
+mod arch;
 
 /// Host-agnostic infrastructure: diagnostics, SPSC protocol, alloc audit, panic hooks.
 pub mod common;
@@ -289,7 +308,8 @@ pub mod testing;
 // Redirects math symbols to the stable GLIBC_2.2.5 version.
 // Since external dependencies use these symbols, we declare global wrappers
 // that intercept calls and jump (jmp) via PLT to the compatible versions.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+// x86_64 only: the trampolines are x86 `jmp`s to the x86_64 base symbol version.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 core::arch::global_asm!(
     ".global log10f",
     ".hidden log10f",

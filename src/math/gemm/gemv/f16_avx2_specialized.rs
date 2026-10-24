@@ -7,7 +7,7 @@
 //! fix the UB of loading/storing YMM registers from/to partial slices
 //! (bias/out_frame with < 8 elements).
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

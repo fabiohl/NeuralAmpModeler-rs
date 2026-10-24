@@ -64,7 +64,44 @@ fn test_dot_product_avx512() {
     }
 }
 
+/// Verifies that `set_daz_ftz` sets FPCR.FZ (bit 24) on aarch64.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn test_set_daz_ftz() {
+    // SAFETY: FPCR access is unprivileged and thread-local; the original value
+    // is restored before returning.
+    unsafe {
+        let before: u64;
+        core::arch::asm!("mrs {0}, fpcr", out(reg) before);
+        core::arch::asm!("msr fpcr, {0}", in(reg) before & !(1u64 << 24));
+
+        set_daz_ftz();
+
+        let after: u64;
+        core::arch::asm!("mrs {0}, fpcr", out(reg) after);
+        core::arch::asm!("msr fpcr, {0}", in(reg) before);
+        assert!(
+            after & (1 << 24) != 0,
+            "set_daz_ftz() did not set FPCR.FZ: 0x{after:08X}"
+        );
+    }
+    // Denormal results flush to zero only while FZ is set; restore happened above,
+    // so exercise the flag explicitly in a scoped block.
+    let tiny = std::hint::black_box(1.0e-38f32);
+    // SAFETY: as above; FPCR is restored before the block ends.
+    let flushed = unsafe {
+        let before: u64;
+        core::arch::asm!("mrs {0}, fpcr", out(reg) before);
+        set_daz_ftz();
+        let r = std::hint::black_box(tiny * std::hint::black_box(0.01f32));
+        core::arch::asm!("msr fpcr, {0}", in(reg) before);
+        r
+    };
+    assert_eq!(flushed, 0.0, "denormal product was not flushed with FZ set");
+}
+
 /// Verifies that `set_daz_ftz` correctly sets the DAZ (6) and FTZ (15) bits in MXCSR.
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn test_set_daz_ftz() {
     // Checks if the processor is configured to ignore 'ghostly'
@@ -271,7 +308,7 @@ fn test_store_bf16_avx2() {
     let mut dest = [0u16; 8];
     // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
     unsafe {
-        let v = core::arch::x86_64::_mm256_loadu_ps(vals.as_ptr());
+        let v = crate::arch::simd::_mm256_loadu_ps(vals.as_ptr());
         Avx2Math::store_bf16(dest.as_mut_ptr(), v);
     }
     for i in 0..8 {

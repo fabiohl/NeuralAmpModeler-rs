@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Computes the maximum absolute difference between two blocks via AVX2,
 /// returning (max_diff, has_non_finite).
@@ -10,7 +10,8 @@ use core::arch::x86_64::*;
 /// # Safety
 /// The slices `a` and `b` must have the same length.
 #[inline]
-#[target_feature(enable = "avx2")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
     let len = core::cmp::min(a.len(), b.len());
     if len == 0 {
@@ -25,7 +26,7 @@ pub unsafe fn compute_max_diff_avx2(a: &[f32], b: &[f32]) -> (f32, bool) {
     // (guarded by `len = min(a.len(), b.len())` and the loop bound `i + 8 <= len`).
     // `_mm256_loadu_ps` performs unaligned 32-byte loads, so 32-byte alignment is not required.
     // `a` and `b` are immutable borrows ensuring no aliasing violations.
-    // AVX2 feature support is guaranteed by `#[target_feature(enable = "avx2")]` and caller contract.
+    // AVX2 feature support is guaranteed by `#[target_feature]` (AVX2 on x86_64, NEON on aarch64) and caller contract.
     // `_mm_store_ss` writes into valid local variable address `&mut max_diff`.
     unsafe {
         let mut max_v = _mm256_setzero_ps();

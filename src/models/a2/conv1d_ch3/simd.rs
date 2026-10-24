@@ -6,10 +6,10 @@
 //! These functions use f32 native weights and AVX2 batching for the post-conv stage.
 
 use super::A2Conv1dCh3;
+use crate::arch::simd::*;
 use crate::models::a2::film::FilmBlock;
 use crate::models::a2::params::A2_LEAKY_SLOPE;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
-use core::arch::x86_64::*;
 
 /// Maximum frames per kernel invocation.
 /// Guaranteed by `process()` internal chunking.
@@ -29,7 +29,8 @@ const MAX_KERNEL_FRAMES: usize = WAVENET_MAX_NUM_FRAMES;
 /// - `weights` must have at least `kernel * 16` f32 elements.
 /// - `layer_buffer` positions for all 6 taps must be valid.
 /// - `out_frame` must have at least 4 elements (3 valid + 1 scratch).
-#[target_feature(enable = "fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn conv1d_ch3_k6_f32(
     weights: &[f32],
     bias: &[f32],
@@ -102,7 +103,8 @@ unsafe fn conv1d_ch3_k6_f32(
 /// 15 taps × 3 input channels = 45 `_mm_fmadd_ps` instructions.
 /// Split across 3 independent accumulators (interleaved by tap index)
 /// to break the FMA dependency chain. Each accumulator handles 15 FMAs.
-#[target_feature(enable = "fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn conv1d_ch3_k15_f32(
     weights: &[f32],
     bias: &[f32],
@@ -260,7 +262,8 @@ pub unsafe fn conv1d_ch3_f32_dispatch(
     clippy::too_many_arguments,
     reason = "A2 CH=3 SIMD convolution kernel requiring many shape/stride parameters for optimized audio processing"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch3_block(
     conv: &A2Conv1dCh3,
     mixin_w: &[f32], // [3] f32 mixin weights
@@ -650,7 +653,8 @@ pub unsafe fn layer_forward_ch3_block(
 /// # Safety
 /// Same contract as [`layer_forward_ch3_block`]: caller-verified buffer
 /// capacities and linear ring history with lookback + block frames.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn layer_forward_ch3_block_no_film(
     conv: &A2Conv1dCh3,
     mixin_w: &[f32],

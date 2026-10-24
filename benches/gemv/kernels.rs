@@ -4,11 +4,12 @@
 // Specialized GEMV kernels (AVX2, fully-unrolled by dimension).
 // These are bench prototypes, not yet canonized in the library.
 
-use core::arch::x86_64::*;
+use neural_amp_modeler_rs::arch::simd::*;
 use neural_amp_modeler_rs::math::common::half::f16_bits_to_f32_f16c;
 
 /// Specialized fused GEMV for: 1 input × 4 outputs.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_1x4(
     in_frame: &[f32],
     weights: &[u16],
@@ -36,7 +37,8 @@ pub(super) unsafe fn gemv_specialized_1x4(
 }
 
 /// Specialized fused GEMV for: 4 inputs × 4 outputs.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_4x4(
     in_frame: &[f32],
     weights: &[u16],
@@ -79,7 +81,8 @@ pub(super) unsafe fn gemv_specialized_4x4(
 }
 
 /// Specialized fused GEMV for: 4 inputs × 6 outputs.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_4x6(
     in_frame: &[f32],
     weights: &[u16],
@@ -144,7 +147,8 @@ pub(super) unsafe fn gemv_specialized_4x6(
 }
 
 /// Specialized fused GEMV for: 8 inputs × 4 outputs.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_8x4(
     in_frame: &[f32],
     weights: &[u16],
@@ -203,7 +207,8 @@ pub(super) unsafe fn gemv_specialized_8x4(
 }
 
 /// Specialized fused GEMV for: 8 inputs × 6 outputs.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_8x6(
     in_frame: &[f32],
     weights: &[u16],
@@ -254,7 +259,8 @@ pub(super) unsafe fn gemv_specialized_8x6(
 ///
 /// This matches the inner block size of the generic kernel (8 SIMD accumulators × step 8),
 /// but without the outer loop overhead.
-#[target_feature(enable = "avx2,fma,f16c")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma,f16c"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(super) unsafe fn gemv_specialized_8x8(
     in_frame: &[f32],
     weights: &[u16],

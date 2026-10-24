@@ -25,9 +25,9 @@
 //! - `NAM/wavenet/a2_fast.cpp:262-275` (weight loading order)
 //! - `NAM/wavenet/a2_fast.cpp:716-745` (`_head_forward`)
 
+use crate::arch::simd::*;
 use crate::math::common::AlignedVec;
 use crate::math::common::hsum_avx2;
-use core::arch::x86_64::*;
 
 /// Head convolution for the A2 WaveNet architecture.
 ///
@@ -219,7 +219,8 @@ impl A2HeadConv {
     clippy::too_many_arguments,
     reason = "FFI design or complex DSP kernel signature required by construction"
 )]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn head_process_ch8_avx2(
     head_w: &[f32],
     head_b: f32,
@@ -308,7 +309,8 @@ pub unsafe fn head_process_ch8_avx2(
     clippy::too_many_arguments,
     reason = "FFI design or complex DSP kernel signature required by construction"
 )]
-#[target_feature(enable = "fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn head_process_ch3_sse(
     head_w: &[f32],
     head_b: f32,

@@ -32,7 +32,7 @@
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Configuration for a FiLM layer or operation.
 ///

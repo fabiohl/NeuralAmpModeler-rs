@@ -18,8 +18,8 @@
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use super::high_fidelity_avx512::*;
+use crate::arch::simd::*;
 use crate::math::constants::*;
-use core::arch::x86_64::*;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal — polynomial SIMD exp kernel (degree-6 Taylor, range reduction)
@@ -32,7 +32,8 @@ use core::arch::x86_64::*;
 /// The caller must guarantee AVX2 and FMA support.  Input clamped to
 /// [-20, 20] to prevent overflow (`k ∈ [-29, 29]`, poses no int32 overflow).
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn simd_exp_poly_avx2(x: __m256) -> __m256 {
     let log2e = _mm256_set1_ps(POLY_LOG2_E);
     let ln2 = _mm256_set1_ps(POLY_LN2);
@@ -75,7 +76,8 @@ unsafe fn simd_exp_poly_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// The caller must guarantee AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
     let clamp_lo = _mm256_set1_ps(-POLY_ACTIVATION_CLAMP);
     let clamp_hi = _mm256_set1_ps(POLY_ACTIVATION_CLAMP);
@@ -85,7 +87,7 @@ pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
     let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
     let neg_x = _mm256_sub_ps(zero, x);
     // SAFETY: `simd_exp_poly_avx2` requires AVX2+FMA, guaranteed by this `unsafe
-    // fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let exp_neg_x = unsafe { simd_exp_poly_avx2(neg_x) };
     let den = _mm256_add_ps(one, exp_neg_x);
     let sig = _mm256_div_ps(one, den);
@@ -101,7 +103,8 @@ pub unsafe fn simd_sigmoid_poly_avx2(x: __m256) -> __m256 {
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn sigmoid_poly_slice_avx2(slice: &mut [f32]) {
     let mut i = 0;
     let len = slice.len();

@@ -359,7 +359,12 @@ run_dashboard_phase() {
 ensure_third_party() {
     local mode="${1:-soft}"
 
-    if [ -d "$NAM_CORE_DIR" ] && [ -e "$NAM_CORE_DIR/.git" ]; then
+    # Ready only when the checkout AND its submodules are populated: a setup
+    # run interrupted after the clone (e.g. a transient GitLab error while
+    # fetching Dependencies/eigen) must be retried, not treated as ready.
+    if [ -d "$NAM_CORE_DIR" ] && [ -e "$NAM_CORE_DIR/.git" ] \
+        && [ -n "$(ls -A "$NAM_CORE_DIR/Dependencies/eigen" 2>/dev/null || true)" ] \
+        && [ -n "$(ls -A "$NAM_CORE_DIR/Dependencies/AudioDSPTools" 2>/dev/null || true)" ]; then
         return 0
     fi
 

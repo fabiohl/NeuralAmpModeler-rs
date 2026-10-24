@@ -15,7 +15,7 @@ use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx2;
 use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx512;
 use proptest::prelude::*;
 
-use core::arch::x86_64::{_mm256_loadu_ps, _mm256_storeu_ps};
+use neural_amp_modeler_rs::arch::simd::{_mm256_loadu_ps, _mm256_storeu_ps};
 
 prop_compose! {
     /// Strategy: Generates an array of 8 floats within a wide spectral range.

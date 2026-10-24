@@ -43,8 +43,7 @@ pub mod panic_hook;
 pub mod params;
 /// Lock-free single-producer single-consumer protocol for real-time context sharing.
 pub mod spsc;
-#[cfg(target_arch = "x86_64")]
-/// Time Stamp Counter: x86_64 monotonic nanosecond clock via RDTSC instruction.
+/// Cycle-counter clock: RDTSC on x86_64, the generic timer (`CNTVCT_EL0`) on aarch64.
 pub mod tsc;
 
 // These submodules are exposed via their qualified module paths (common::diagnostics, common::spsc, etc.).

@@ -263,11 +263,18 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_grows() {
     let orig_sizes: Vec<usize> = model.layer_ring_sizes.clone();
     model.set_max_buffer_size(256).unwrap();
     assert!(model.max_buffer_size == 256);
-    let any_grew = orig_sizes
+    // Every ring must hold its lookback plus the new block (+1). Ring sizes are
+    // rounded up to whole pages (4 KiB on x86_64 Linux, 16 KiB on Apple
+    // Silicon), so a ring may already have had room and not grow; none may shrink.
+    for (i, (&orig, &ring)) in orig_sizes
         .iter()
         .zip(model.layer_ring_sizes.iter())
-        .any(|(a, b)| b > a);
-    assert!(any_grew, "at least one ring should grow");
+        .enumerate()
+    {
+        let needed = model.layer_lookbacks[i] + (256 + 1) * model.channels;
+        assert!(ring >= needed, "layer {i}: ring {ring} < required {needed}");
+        assert!(ring >= orig, "layer {i}: ring shrank from {orig} to {ring}");
+    }
 }
 
 #[test]

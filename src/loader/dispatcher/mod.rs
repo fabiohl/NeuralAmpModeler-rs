@@ -8,7 +8,6 @@
 //! ensuring the resulting `Box<StaticModel>` is ready for injection into the
 //! DSP thread via SPSC without any allocation on the RT path.
 
-use crate::common::diagnostics::NamErrorCode;
 use crate::loader::nam_json::NamModelData;
 use crate::models::StaticModel;
 use anyhow::bail;
@@ -42,7 +41,9 @@ pub(crate) fn build_model_with_prewarm(
                 "CPU incompatible: x86-64-v3 baseline required (AVX2 + FMA). \
                  Execution aborted cleanly to prevent SIGILL."
             );
-            return Err(anyhow::anyhow!(NamErrorCode::UnsupportedCpuArchitecture));
+            return Err(anyhow::anyhow!(
+                crate::common::diagnostics::NamErrorCode::UnsupportedCpuArchitecture
+            ));
         }
     }
 

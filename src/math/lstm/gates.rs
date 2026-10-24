@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //! Fused kernels for LSTM gates (AVX2 and AVX-512).
 
+use crate::arch::simd::*;
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
 use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
@@ -16,7 +17,6 @@ use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx512;
 use crate::math::activations::tanh::simd_tanh_avx2;
 #[cfg(feature = "avx512")]
 use crate::math::activations::tanh::simd_tanh_avx512;
-use core::arch::x86_64::*;
 
 /// Fused kernel for LSTM gates (AVX2) — Standard (exact-grade) accuracy path.
 /// Uses polynomial exp-based tanh/sigmoid approximations with Kahan
@@ -25,7 +25,8 @@ use core::arch::x86_64::*;
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2_hf(
     gf: __m256,
     gi: __m256,
@@ -34,7 +35,7 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
     cs: __m256,
     cs_err: __m256,
 ) -> (__m256, __m256, __m256) {
-    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
+    // SAFETY: this `unsafe fn` is `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and
     // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_poly_avx2`.
     let sig_f = unsafe { simd_sigmoid_poly_avx2(gf) };
     // SAFETY: `simd_sigmoid_poly_avx2` needs the same AVX2+FMA support
@@ -58,7 +59,7 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
     };
 
     // SAFETY: `simd_tanh_poly_avx2` and `_mm256_mul_ps` require AVX2+FMA, guaranteed
-    // by this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // by this `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let hidden = unsafe { _mm256_mul_ps(sig_o, simd_tanh_poly_avx2(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
@@ -71,7 +72,8 @@ pub unsafe fn fused_lstm_gates_avx2_hf(
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2_std(
     gf: __m256,
     gi: __m256,
@@ -80,7 +82,7 @@ pub unsafe fn fused_lstm_gates_avx2_std(
     cs: __m256,
     cs_err: __m256,
 ) -> (__m256, __m256, __m256) {
-    // SAFETY: this `unsafe fn` is `#[target_feature(enable = "avx2,fma")]` and
+    // SAFETY: this `unsafe fn` is `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and
     // callers guarantee AVX2+FMA, which also covers `simd_sigmoid_dual_avx2`.
     let (sig_f, sig_i) = unsafe { simd_sigmoid_dual_avx2(gf, gi) };
     // SAFETY: `simd_sigmoid_avx2` needs the same AVX2+FMA support guaranteed by
@@ -101,7 +103,7 @@ pub unsafe fn fused_lstm_gates_avx2_std(
     };
 
     // SAFETY: `simd_tanh_avx2` and `_mm256_mul_ps` require AVX2+FMA, guaranteed
-    // by this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller contract.
+    // by this `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
     let hidden = unsafe { _mm256_mul_ps(sig_o, simd_tanh_avx2(new_cs)) };
 
     (new_cs, new_cs_err, hidden)
@@ -113,7 +115,8 @@ pub unsafe fn fused_lstm_gates_avx2_std(
 /// # Safety
 /// Requires AVX2 and FMA support.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_avx2(
     gf: __m256,
     gi: __m256,
@@ -124,7 +127,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 ) -> (__m256, __m256, __m256) {
     if activation_precision() == ActivationPrecision::Standard {
         // SAFETY: `fused_lstm_gates_avx2_hf` requires AVX2+FMA, guaranteed by
-        // this `unsafe fn`'s `#[target_feature(enable = "avx2,fma")]` and caller
+        // this `unsafe fn`'s `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller
         // contract.
         unsafe { fused_lstm_gates_avx2_hf(gf, gi, gg, go, cs, cs_err) }
     } else {
@@ -270,7 +273,8 @@ pub unsafe fn fused_lstm_gates_avx512(
 /// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
 /// Output buffers must not alias `gates`.
 #[inline]
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_lstm_gates_dyn_avx2(
     gates: &mut [f32],
     cell_state: &mut [f32],
@@ -332,7 +336,8 @@ pub unsafe fn fused_lstm_gates_dyn_avx2(
 ///
 /// Replacement for the previous scalar tail — the `Standard` and `Fast` paths
 /// share the same buffer-and-dispatch structure.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn fused_lstm_gates_dyn_tail(
     gates: &mut [f32],
     cell_state: &mut [f32],
@@ -350,7 +355,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
         // SAFETY: Pointer offsets `j + 8 <= hidden_size` ensure all raw pointer reads
         // and writes stay within `gates` (stride >= 4 * hidden_size) and state buffers.
         // `_mm256_loadu_ps` and `_mm256_storeu_ps` handle unaligned 32-byte transfers.
-        // AVX2+FMA are guaranteed by `#[target_feature(enable = "avx2,fma")]` and caller contract.
+        // AVX2+FMA are guaranteed by `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
         unsafe {
             let gi = _mm256_loadu_ps(gp.add(j));
             let gf = _mm256_loadu_ps(gp.add(j + hidden_size));
@@ -401,7 +406,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 
         // SAFETY: `temp_*` and `out_*` are stack buffers of 8 elements;
         // `_mm256_loadu_ps` and `_mm256_storeu_ps` access exactly 8 floats.
-        // AVX2+FMA are guaranteed by `#[target_feature(enable = "avx2,fma")]` and caller contract.
+        // AVX2+FMA are guaranteed by `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64) and caller contract.
         unsafe {
             let gf_v = _mm256_loadu_ps(temp_gf.as_ptr());
             let gi_v = _mm256_loadu_ps(temp_gi.as_ptr());

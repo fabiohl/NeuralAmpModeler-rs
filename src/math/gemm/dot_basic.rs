@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //! Dot Product kernels — AVX2 and AVX-512.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Computes the Dot Product in a blazing-fast manner using hardware acceleration (AVX2).
 ///
@@ -15,7 +15,8 @@ use core::arch::x86_64::*;
 /// The caller must ensure that the CPU supports AVX2 and FMA target features.
 // KEEP IN SYNC WITH: `src/models/a2/film.rs::dot_product_avx2`
 // (Note: `film.rs` maintains a specialized 2-accumulator 16-unrolled inlined version for small condition vectors)
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = core::cmp::min(a.len(), b.len());
     let mut i = 0;

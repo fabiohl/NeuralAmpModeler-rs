@@ -14,7 +14,7 @@ use super::A2GroupedConv1d;
 use crate::math::common::{prefetch_strategy_2stage, prefetch_strategy_simple};
 use crate::models::wavenet::common::MAX_KERNEL;
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 #[inline(always)]
 pub(crate) unsafe fn load_mixin_4(
@@ -61,7 +61,8 @@ pub(crate) unsafe fn load_mixin_4(
 ///
 /// # Safety
 /// Only call when `groups == in_ch == out_ch`.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(crate) unsafe fn process_single_frame_depthwise_avx2(
     conv: &A2GroupedConv1d,
     layer_buffer: &[f32],
@@ -235,7 +236,8 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
 /// - `mixin` must be `None` or hold at least `conv.out_ch` elements
 ///   (release-asserted).
 /// - The CPU must support AVX2+FMA (runtime dispatch by the caller).
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn grouped_conv1d_single_frame_simd(
     conv: &A2GroupedConv1d,
     layer_buffer: &[f32],

@@ -3,8 +3,8 @@
 
 use super::f16_avx2_fused as fused;
 use super::f16_avx2_overwrite as overwrite;
+use crate::arch::simd::*;
 use crate::gemv_kernel;
-use core::arch::x86_64::*;
 
 // ── AVX2 ──────────────────────────────────────────────────────────────────────
 
@@ -17,7 +17,8 @@ use core::arch::x86_64::*;
 ///
 /// Uses 8 independent accumulators to break the FMA pipeline dependency chain,
 /// allowing the processor to execute up to 8 FMAs in parallel.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemv_avx2(
     in_frame: &[f32],
     weights: &[f32],
@@ -94,7 +95,8 @@ pub unsafe fn fused_add_gemv_avx2(
 /// Performs a linear projection (Y = Bias + W * Z), replacing the previous content.
 ///
 /// Uses 8 independent accumulators to break the FMA pipeline dependency chain.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn gemv_overwrite_avx2(
     in_frame: &[f32],
     weights: &[f32],

@@ -16,8 +16,8 @@
 //! strictly‑serial FMA chain of the scalar reference. No dequantization or
 //! precision conversion is involved.
 
+use crate::arch::simd::*;
 use crate::dot4x_simd4;
-use core::arch::x86_64::*;
 
 /// 4‑lane interleaved dot product (`weights: &[[f32; 4]]`, `state: &[f32]`) with
 /// AVX2/FMA.
@@ -35,7 +35,8 @@ use core::arch::x86_64::*;
 /// # Safety
 /// Caller must ensure `weights.len() >= state.len()` and that the memory regions
 /// are valid for unaligned load. Both slices must be accessible for reading.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_f32_avx2(weights: &[[f32; 4]], state: &[f32]) -> [f32; 4] {
     let len = state.len().min(weights.len());
     debug_assert!(weights.len() >= len);
@@ -109,7 +110,8 @@ pub unsafe fn dot_product_4x_f32_avx2(weights: &[[f32; 4]], state: &[f32]) -> [f
 /// # Safety
 /// Caller must ensure `weights.len() >= state_f0.len()` and
 /// `weights.len() >= state_f1.len()`.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_f32_dual_avx2(
     weights: &[[f32; 4]],
     state_f0: &[f32],
@@ -198,7 +200,8 @@ pub unsafe fn dot_product_4x_f32_dual_avx2(
 /// # Safety
 /// Caller must ensure `weights.len() >= state.len()` and that the memory
 /// regions are valid for unaligned load.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_f32_accumulate_avx2(
     weights: &[[f32; 4]],
     state: &[f32],
@@ -268,7 +271,8 @@ pub unsafe fn dot_product_4x_f32_accumulate_avx2(
 /// # Safety
 /// Caller must ensure `weights.len() >= state_f0.len()` and
 /// `weights.len() >= state_f1.len()`.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_4x_f32_dual_accumulate_avx2(
     weights: &[[f32; 4]],
     state_f0: &[f32],

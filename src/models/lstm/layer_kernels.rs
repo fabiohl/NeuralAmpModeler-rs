@@ -3,7 +3,7 @@
 
 //! LSTM layer kernel dispatch — SIMD processing paths and scalar fallback.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 use super::layer::LstmLayer;
 use crate::math::activations::ActivationPrecision;
@@ -18,7 +18,7 @@ macro_rules! define_lstm_process {
         $fn_name:ident,
         $fn_hf:ident,
         $fn_std:ident,
-        $target_meta:meta,
+        [$($target_meta:meta),+ $(,)?],
         $gemv_4gate:path,
         $step:expr,
         $load:ident,
@@ -37,7 +37,7 @@ macro_rules! define_lstm_process {
         // SIMD lane loop: the precision is resolved once per sample and the
         // call is forwarded to the specialized `_hf` / `_std` fused-gate
         // variants, keeping the inner loop free of TLS reads and branches.
-        #[$target_meta]
+        $(#[$target_meta])+
         pub unsafe fn $fn_name(&mut self, input: &[f32]) {
             if activation_precision() == ActivationPrecision::Standard {
                 // SAFETY: `$fn_hf` is an `unsafe fn` compiled under `$target_meta`
@@ -53,7 +53,7 @@ macro_rules! define_lstm_process {
 
         define_lstm_process_impl!(
             $fn_hf,
-            $target_meta,
+            [$($target_meta),+],
             $gemv_4gate,
             $step,
             $load,
@@ -62,7 +62,7 @@ macro_rules! define_lstm_process {
         );
         define_lstm_process_impl!(
             $fn_std,
-            $target_meta,
+            [$($target_meta),+],
             $gemv_4gate,
             $step,
             $load,
@@ -78,14 +78,14 @@ macro_rules! define_lstm_process {
 macro_rules! define_lstm_process_impl {
     (
         $fn_name:ident,
-        $target_meta:meta,
+        [$($target_meta:meta),+ $(,)?],
         $gemv_4gate:path,
         $step:expr,
         $load:ident,
         $store:ident,
         $fused_gates:path,
     ) => {
-        #[$target_meta]
+        $(#[$target_meta])+
         unsafe fn $fn_name(&mut self, input: &[f32]) {
             // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
             // `$target_meta`; callers guarantee the SIMD features and
@@ -217,7 +217,13 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         process_sample_avx2,
         process_sample_avx2_hf,
         process_sample_avx2_std,
-        target_feature(enable = "avx2,fma,f16c"),
+        [
+            cfg_attr(
+                target_arch = "x86_64",
+                target_feature(enable = "avx2,fma,f16c")
+            ),
+            cfg_attr(target_arch = "aarch64", target_feature(enable = "neon")),
+        ],
         crate::math::gemm::gemv_4gate_avx2,
         8,
         _mm256_loadu_ps,
@@ -234,7 +240,7 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
         process_sample_avx512,
         process_sample_avx512_hf,
         process_sample_avx512_std,
-        target_feature(enable = "avx512f,avx512vl"),
+        [target_feature(enable = "avx512f,avx512vl")],
         crate::math::gemm::gemv_4gate_avx512vl,
         16,
         _mm512_loadu_ps,

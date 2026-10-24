@@ -3,7 +3,7 @@
 
 //! Basic mathematical operations and low-level SIMD utilities.
 
-use core::arch::x86_64::*;
+use crate::arch::simd::*;
 
 /// Converts a vector of f32 numbers (normal) to bf16 (compact) via AVX-512.
 /// The bf16 format takes up half the space but maintains the range of f32 numbers,
@@ -109,7 +109,7 @@ pub unsafe fn adaptive_prefetch_2stage_f32(
 pub fn prefetch_t0<T>(base: *const T, offset: usize) {
     // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
     unsafe {
-        core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
+        crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T0 }>(
             base.wrapping_add(offset).cast(),
         );
     }
@@ -123,7 +123,7 @@ pub fn prefetch_t0<T>(base: *const T, offset: usize) {
 pub fn prefetch_t1<T>(base: *const T, offset: usize) {
     // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
     unsafe {
-        core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T1 }>(
+        crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T1 }>(
             base.wrapping_add(offset).cast(),
         );
     }
@@ -198,6 +198,7 @@ pub fn prefetch_strategy_2stage(
 ///   scheduled later on the same thread.
 /// - Preconditions: zero. SSE2 is guaranteed by the x86-64 baseline (the crate
 ///   targets x86-64-v3), so no runtime feature check is ever needed.
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn set_daz_ftz() {
     // SAFETY: MXCSR manipulation via stmxcsr/ldmxcsr is always safe on x86-64
     // (SSE2 is guaranteed by the x86-64-v3 target). The asm! block uses a properly
@@ -207,5 +208,29 @@ pub unsafe fn set_daz_ftz() {
         core::arch::asm!("stmxcsr [{0}]", in(reg) &mut mxcsr);
         mxcsr |= 0x8040;
         core::arch::asm!("ldmxcsr [{0}]", in(reg) &mxcsr);
+    }
+}
+
+/// Sets FPCR.FZ (bit 24) for the calling thread (aarch64: `mrs`/`msr fpcr`).
+/// FZ flushes both denormal inputs and outputs of single- and
+/// double-precision arithmetic, the equivalent of x86 DAZ + FTZ.
+///
+/// # Safety
+///
+/// Same contract as the x86_64 version: no process memory is touched, the
+/// change is confined to the calling thread, the call is idempotent, and it
+/// deliberately changes the thread's floating-point environment (denormals
+/// flush to zero), which is why it stays `unsafe`. NEON/FP is part of the
+/// aarch64 baseline, so there are no runtime preconditions.
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn set_daz_ftz() {
+    // SAFETY: reading and writing FPCR is unprivileged on aarch64 and only
+    // affects the calling thread's floating-point control state; bit 24 (FZ)
+    // is a valid control bit.
+    unsafe {
+        let mut fpcr: u64;
+        core::arch::asm!("mrs {0}, fpcr", out(reg) fpcr, options(nomem, nostack, preserves_flags));
+        fpcr |= 1 << 24;
+        core::arch::asm!("msr fpcr, {0}", in(reg) fpcr, options(nomem, nostack, preserves_flags));
     }
 }

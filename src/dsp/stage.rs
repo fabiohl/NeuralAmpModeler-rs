@@ -8,10 +8,10 @@
 
 use super::oversample::HB_DELAY;
 use super::oversample::HB_TAPS;
+use crate::arch::simd::*;
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 use crate::math::common::hsum_avx2;
-use core::arch::x86_64::*;
 
 const HB_ODD_COUNT: usize = HB_TAPS / 2;
 

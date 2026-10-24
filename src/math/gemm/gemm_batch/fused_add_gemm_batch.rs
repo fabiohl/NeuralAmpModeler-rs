@@ -12,10 +12,10 @@
 //! Processes multiple audio frames simultaneously for efficient weight reuse.
 
 use super::super::gemv::fused_add_gemv_avx2;
+use crate::arch::simd::*;
 use crate::gemm_batch_frame_loop_avx2;
 use crate::gemm_batch_inner_dual_avx2;
 use crate::gemm_batch_outc_loop_avx2;
-use core::arch::x86_64::*;
 
 /// Processes multiple audio frames in batch using the fused technique: Y = X_res + Bias + W * Z.
 ///
@@ -37,7 +37,8 @@ use core::arch::x86_64::*;
 /// - If `do_bias` is true, `bias.len()` must be >= `out_len`.
 ///
 /// All slices must be valid and accessible for reading/writing.
-#[target_feature(enable = "avx2,fma")]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn fused_add_gemm_batch_avx2(
     in_frames: &[f32],
     weights: &[f32],

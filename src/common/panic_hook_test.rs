@@ -79,19 +79,70 @@ fn test_format_panic_report_none_snapshot_is_minimal() {
     assert!(report.contains("features=<snapshot not initialized>"));
 }
 
+use std::sync::{Mutex, OnceLock};
+
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct EnvVarGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    key: &'static str,
+    saved: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let lock = env_lock();
+        let saved = std::env::var_os(key);
+        // SAFETY: test-scoped env mutation serialized by ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+        Self {
+            _lock: lock,
+            key,
+            saved,
+        }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let lock = env_lock();
+        let saved = std::env::var_os(key);
+        // SAFETY: test-scoped env mutation serialized by ENV_LOCK.
+        unsafe { std::env::remove_var(key) };
+        Self {
+            _lock: lock,
+            key,
+            saved,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(ref val) = self.saved {
+            // SAFETY: restoring ambient pre-test env under ENV_LOCK.
+            unsafe { std::env::set_var(self.key, val) };
+        } else {
+            // SAFETY: restoring ambient pre-test env under ENV_LOCK.
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
+}
+
 #[test]
 fn test_crash_directory_env_override() {
     let custom_path = std::path::PathBuf::from("/tmp/nam_test_custom_crash_dir");
 
-    // Override with custom path
-    // SAFETY: isolated unit test thread; setting NAM_CRASH_DIR for this process.
-    unsafe {
-        std::env::set_var("NAM_CRASH_DIR", &custom_path);
-    }
+    let _guard = EnvVarGuard::set("NAM_CRASH_DIR", &custom_path);
     assert_eq!(crash_directory(), Some(custom_path.clone()));
 
     // When empty, falls back to CARGO_TARGET_TMPDIR or target/test_crashes under test harness
-    // SAFETY: isolated unit test thread; setting NAM_CRASH_DIR for this process.
+    // SAFETY: isolated test env mutation under EnvVarGuard mutex.
     unsafe {
         std::env::set_var("NAM_CRASH_DIR", "");
     }
@@ -102,22 +153,13 @@ fn test_crash_directory_env_override() {
         "fallback must resolve to test harness directory, got: {:?}",
         fallback
     );
-
-    // Clean up
-    // SAFETY: isolated unit test thread; removing NAM_CRASH_DIR for this process.
-    unsafe {
-        std::env::remove_var("NAM_CRASH_DIR");
-    }
 }
 
 #[test]
 fn test_crash_directory_contract_avoids_user_cache() {
     // Under testing/cfg(test), if NAM_CRASH_DIR is unset or empty,
     // the directory MUST NOT start with $HOME/.cache
-    // SAFETY: isolated unit test thread; clearing NAM_CRASH_DIR for this process.
-    unsafe {
-        std::env::remove_var("NAM_CRASH_DIR");
-    }
+    let _guard = EnvVarGuard::remove("NAM_CRASH_DIR");
     let dir = crash_directory().expect("crash directory must be available in test harness");
     let dir_str = dir.to_string_lossy();
     if let Some(home) = std::env::var_os("HOME") {
