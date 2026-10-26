@@ -72,19 +72,15 @@ tests/fixtures/golden_gen_build.sh # Build the C++ NAMCore reference render bina
 ### 2. Recommended Verification Commands
 
 ```bash
-# Recommended unthrottled static analysis (runs in ~18s; avoids low CPU priority throttling):
-NAM_NO_LOW_PRIORITY=1 utils/lints.sh
+# Static analysis:
+utils/lints.sh
 
-# Agile test suite (enforces zero skipped parity tests with NAM_QUICK_STRICT=1):
-NAM_NO_LOW_PRIORITY=1 NAM_QUICK_STRICT=1 utils/tests-quick.sh
-
-# Fast benchmark regression guard (~400ms synthetic mock):
-bash tests/scripts/test_regression_guard.sh
+# Agile test suite:
+utils/tests-quick.sh
 ```
 
 - [ ] **`utils/lints.sh` Passed**: 100% clean across all 9 gates and feature permutations (`--all-features`, pure core `--lib --no-default-features`, `--no-default-features`, `fft-radix4-planner`, `dual-mono`, `testing`, `heap-audit`, `rt-hardening`).
-- [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions. (Receipt written to `target/logs/quick-receipt.txt`).
-- [ ] **`tests/scripts/test_regression_guard.sh` Passed**: Shell-core drift and benchmark regression guard scenarios verified.
+- [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 
   ```text

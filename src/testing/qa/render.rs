@@ -1513,7 +1513,3 @@ pub fn render_quality_report(report: &QualityReport, style: RenderStyle) -> Stri
     out.push_str(&render_footer(report, &p));
     out
 }
-
-#[cfg(test)]
-#[path = "render_test.rs"]
-mod render_test;

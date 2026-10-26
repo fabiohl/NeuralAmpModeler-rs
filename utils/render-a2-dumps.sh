@@ -1,43 +1,23 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#
-# render-a2-dumps.sh — Reproduces the KB-A2-MAX (wavenet_a2_max.nam) C++ tensor
-# dumps into tests/fixtures/dumps_a2_max/ (manifest.json kept alongside).
-#
-# Upstream NAMCore is a vendored (gitignored) mirror; the instrumentation lives
-# in this repository as utils/namcore-a2-dumps.patch, applied and compiled in
-# only for this run (CMake option NAM_A2_DUMPS=ON). Even when compiled in, the
-# capture is inert unless NAM_A2_DUMP_DIR is set.
-#
-# Philosophy: offline I/O, compile-gated (default OFF), never active in the
-# shared build dir build/namcore_render/.
-#
-# Usage:
-#   ./utils/render-a2-dumps.sh
-#
-# Prerequisites:
-#   - third-party/NeuralAmpModelerCore at the pinned NAM_CORE_COMMIT
-#     (utils/setup-third-party.sh)
-#   - cmake + C++20 compiler
-#   - python3 (manifest generation + golden comparison)
-#   - tests/fixtures/stress_signal.wav present (golden input, 2048 frames @ 48 kHz)
-#   - tests/fixtures/golden_wavenet_a2_max.bin present (reproduction check)
-
+# render-a2-dumps.sh — Reproduces the KB-A2-MAX tensor dumps. Classe D.
+# Uso: utils/render-a2-dumps.sh
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_ROOT="$PWD"
 VENDOR="$PROJECT_ROOT/third-party/NeuralAmpModelerCore"
 PATCH="$PROJECT_ROOT/utils/namcore-a2-dumps.patch"
-BUILD_DIR="${NAM_A2_DUMPS_BUILD_DIR:-$PROJECT_ROOT/build/namcore_a2_dumps}"
+BUILD_DIR="$PROJECT_ROOT/build/namcore_a2_dumps"
 OUT_DIR="$PROJECT_ROOT/tests/fixtures/dumps_a2_max"
 MODEL="$PROJECT_ROOT/tests/fixtures/models/wavenet_a2_max.nam"
 INPUT="$PROJECT_ROOT/tests/fixtures/stress_signal.wav"
 GOLDEN="$PROJECT_ROOT/tests/fixtures/golden_wavenet_a2_max.bin"
 TMP_RENDER="${TMPDIR:-/tmp}/nam-a2-dumps-render.wav"
 LOGS_DIR="$BUILD_DIR/logs"
-
-die() { echo "ERROR: $*" >&2; exit 1; }
 
 [ -d "$VENDOR" ] || die "third-party/NeuralAmpModelerCore missing — run utils/setup-third-party.sh first"
 [ -f "$PATCH" ] || die "utils/namcore-a2-dumps.patch missing"
@@ -59,27 +39,16 @@ fi
 
 # --- Build the dump-enabled render binary -----------------------------------
 mkdir -p "$BUILD_DIR" "$LOGS_DIR"
-BUILD_TYPE="${NAM_RENDER_BUILD_TYPE:-Release}"
-CXX_COMPILER="${CXX:-}"
-if [ -z "$CXX_COMPILER" ]; then
-  if command -v g++ >/dev/null; then CXX_COMPILER=g++; else CXX_COMPILER=clang++; fi
-fi
-FLAGS="-w -fno-fast-math -ffp-contract=off"
-
-cmake -S "$VENDOR" -B "$BUILD_DIR" \
-  -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-  -DCMAKE_CXX_COMPILER="$CXX_COMPILER" \
-  -DCMAKE_CXX_STANDARD=20 \
-  -DCMAKE_CXX_FLAGS="$FLAGS" \
-  -DNAM_ENABLE_A2_FAST=ON \
-  -DNAM_A2_DUMPS=ON \
-  > "$LOGS_DIR/cmake-configure.log" 2>&1 || { tail -20 "$LOGS_DIR/cmake-configure.log" >&2; die "cmake configure failed"; }
-cmake --build "$BUILD_DIR" --target render -j"$(nproc 2>/dev/null || echo 2)" \
-  > "$LOGS_DIR/cmake-build.log" 2>&1 || { tail -20 "$LOGS_DIR/cmake-build.log" >&2; die "cmake build failed"; }
-
-RENDER_BIN="$BUILD_DIR/tools/render"
-[ -x "$RENDER_BIN" ] || RENDER_BIN="$BUILD_DIR/Release/render"
-[ -x "$RENDER_BIN" ] || die "render binary not found after build"
+cmake -S "$VENDOR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_STANDARD=20 -DNAM_ENABLE_A2_FAST=ON -DNAM_A2_DUMPS=ON \
+  > "$LOGS_DIR/cmake-configure.log" 2>&1 || die "cmake configure failed"
+cmake --build "$BUILD_DIR" --target render -j"${NAM_RENDER_JOBS:-$(nproc)}" \
+  > "$LOGS_DIR/cmake-build.log" 2>&1 || die "cmake build failed"
+RENDER_BIN=""
+for cand in tools/render Release/render Debug/render; do
+  [ -x "$BUILD_DIR/$cand" ] && RENDER_BIN="$BUILD_DIR/$cand" && break
+done
+[ -n "$RENDER_BIN" ] && [ -x "$RENDER_BIN" ] || die "render binary not found after build"
 
 # --- Capture the dumps -------------------------------------------------------
 mkdir -p "$OUT_DIR"

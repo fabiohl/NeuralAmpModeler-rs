@@ -29,9 +29,12 @@ pub mod perceptual;
 pub mod qa;
 pub mod receipt;
 pub mod reference_oracle;
+pub mod skip;
 pub mod spectral;
 pub mod stress;
 pub mod wav;
+
+pub use skip::report_skip;
 
 #[cfg(feature = "avx512")]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]

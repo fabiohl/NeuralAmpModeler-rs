@@ -150,6 +150,7 @@ fn assert_reset_is_fresh(path: &Path, label: &str) -> Result<bool, ()> {
 /// explicit exclusions (LSTM resets under DEC-03; absent non-distributable
 /// community fixtures), and the exercised count is asserted exactly.
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn reset_clears_history_for_all_catalog_families() {
     let mut ran_required = 0usize;
     let mut present_distributed = 0usize;

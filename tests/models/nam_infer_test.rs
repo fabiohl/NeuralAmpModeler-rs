@@ -266,6 +266,7 @@ fn test_wavenet_model_json_parsing() {
 /// tanh activations). Validates finiteness, per-sample magnitude (≤ 10× input peak),
 /// and RMS ≤ 10.0. In debug, uses reduced blocks (512) for CI speed.
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_wavenet_computational_stability() {
     let mut model = build_synthetic_wavenet_standard();
 
@@ -650,6 +651,7 @@ fn test_lstm_stability_2x8() {
 /// of WaveNet (convolution buffers) and LSTM (cell/hidden states), which without
 /// DAZ/FTZ converge to denormals and cause microcode penalty in the FPU.
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_denormal_stability_silence() {
     #[cfg(debug_assertions)]
     const SILENCE_BLOCKS: usize = 256;

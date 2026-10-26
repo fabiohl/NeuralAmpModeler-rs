@@ -26,7 +26,7 @@ proptest! {
         .. ProptestConfig::with_cases(5_000)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_nam_json_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
         let json_str = String::from_utf8_lossy(&bytes);
         // The goal here is only to ensure absence of panics (memory safety).
@@ -76,7 +76,7 @@ proptest! {
         .. ProptestConfig::with_cases(5_000)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_nam_json_near_valid(json_str in near_valid_json_strategy()) {
         let _ = parse_nam_json(&json_str);
     }
@@ -90,7 +90,7 @@ proptest! {
         .. ProptestConfig::with_cases(5_000)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_nam_json_truncated(cut_idx in 0usize..400_000) {
         // Uses a real fixture as the base for truncation
         let fixture_path = neural_amp_modeler_rs::testing::fixtures::model_path("EVH-5150-Lite.nam");
@@ -162,7 +162,7 @@ proptest! {
         .. ProptestConfig::with_cases(5_000)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_nam_json_weight_overflow(json_str in weight_overflow_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             // Just ensure accessing topology doesn't crash
@@ -179,7 +179,7 @@ proptest! {
         .. ProptestConfig::with_cases(5_000)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..8192)) {
         let _ = parse_namb(&bytes);
     }
@@ -228,7 +228,7 @@ proptest! {
 
     // Tests rejection of files with invalid 'Magic Bytes'.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_bad_magic(mut namb in valid_namb_strategy(), bad_magic in any::<u32>()) {
         prop_assume!(bad_magic != 0x4E414D42);
         let bad_bytes = bad_magic.to_le_bytes();
@@ -239,7 +239,7 @@ proptest! {
 
     // Tests integrity via CRC. Flipping 1 bit should cause a parsing error.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_bad_crc(mut namb in valid_namb_strategy(), bit_flip in 0..32usize) {
         let byte_idx = 24 + (bit_flip / 8);
         let bit_idx = bit_flip % 8;
@@ -249,7 +249,7 @@ proptest! {
 
     // Tests resilience to prematurely truncated files.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_truncated(namb in valid_namb_strategy(), truncate_idx in any::<usize>()) {
         let idx = std::cmp::min(truncate_idx, namb.len().saturating_sub(1));
         let truncated = &namb[0..idx];
@@ -258,7 +258,7 @@ proptest! {
 
     // Tests out-of-bounds offset attacks (Oversized Offset).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_oversized_offset(mut namb in valid_namb_strategy(), offset_add in 1..10000u32) {
         let new_offset = namb.len() as u32 + offset_add;
         namb[12..16].copy_from_slice(&new_offset.to_le_bytes());
@@ -532,7 +532,7 @@ proptest! {
     })]
 
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_model_data_serialization_roundtrip(data in arbitrary_nam_model_data()) {
         let json_str =
             serde_json::to_string(&data).expect("Failed to serialize NamModelData to JSON");
@@ -629,7 +629,7 @@ proptest! {
     /// body, even when the header is syntactically correct.
     /// — Triggered exclusively via `utils/tests-long.sh`.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_namb_arbitrary_valid_header(bytes in arbitrary_namb_bytes_strategy()) {
         let _ = parse_namb(&bytes);
     }
@@ -1602,7 +1602,7 @@ proptest! {
     /// Adversarial dimensions: ensures topology detection rejects
     /// models with dimensions exceeding safe bounds (never abort/panic).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_wavenet_dims(json_str in adversarial_wavenet_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let result = get_wavenet_topology(&parsed);
@@ -1647,7 +1647,7 @@ proptest! {
 
     /// Adversarial ConvNet dimensions.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_convnet_dims(json_str in adversarial_convnet_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let topo = neural_amp_modeler_rs::loader::nam_json::get_convnet_topology(&parsed);
@@ -1661,7 +1661,7 @@ proptest! {
 
     /// Adversarial Linear receptive_field.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_linear_dims(json_str in adversarial_linear_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let topo = neural_amp_modeler_rs::loader::nam_json::get_linear_topology(&parsed);
@@ -1675,7 +1675,7 @@ proptest! {
     /// models with hidden_size, num_layers, channels, layers count, missing
     /// fields, or weight mismatches exceeding safe bounds (never abort/panic).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_lstm_dims(json_str in adversarial_lstm_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let result = get_lstm_topology(&parsed);
@@ -1702,7 +1702,7 @@ proptest! {
     /// handles WaveNet models with adversarial channel, bottleneck, kernel,
     /// dilation, multi-array, and gating dimensions (never abort/panic).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_a2_dynamic_dims(json_str in adversarial_a2_dynamic_json_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let result = is_a2_shape(&parsed);
@@ -1726,7 +1726,7 @@ proptest! {
     /// recursion depth, topology overflow, version, and structural
     /// properties are rejected or handled without panic/abort.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_container_dims(json_str in adversarial_container_json_strategy()) {
         let result = parse_nam_json(&json_str);
         match result {
@@ -1746,7 +1746,7 @@ proptest! {
     /// MAX_TOTAL_STATE_FRAMES are Rejected, while others may be Free or Rejected
     /// but never cause panic or incorrect acceptance.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_state_budget(json_str in adversarial_state_budget_strategy()) {
         if let Ok(parsed) = parse_nam_json(&json_str) {
             let result = get_wavenet_topology(&parsed);
@@ -1976,7 +1976,7 @@ proptest! {
     /// condition_size, groups and channels must be rejected gracefully through
     /// the public safe API (`Err`), never panic/abort (F-05).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_fuzz_adversarial_a2_loader_defenses(
         (json_str, expect_reject) in adversarial_a2_condition_groups_strategy()
     ) {
@@ -2047,7 +2047,7 @@ proptest! {
         .. ProptestConfig::with_cases(500)
     })]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de parsers"]
     fn prop_hostile_metadata_never_corrupts_gain(json in hostile_metadata_json_strategy()) {
         use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
         use neural_amp_modeler_rs::SystemSnapshot;

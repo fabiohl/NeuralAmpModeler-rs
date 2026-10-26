@@ -163,12 +163,12 @@ body:
       description: |
         Paste relevant diagnostic output, backtrace (`RUST_BACKTRACE=1`), or logs.
         Recommended diagnostics:
-        - `utils/simd-probe.sh` (CPU SIMD flags, OS state, active dispatch backend)
+        - `cargo run --quiet --bin simd_probe` (CPU SIMD flags, OS state, active dispatch backend)
         - `utils/check-model.sh <path/to/model.nam>` (model topology, metadata, and tensor shapes)
         - `DiagnosticBundle::render()` or `RUST_LOG=trace` trace output
       placeholder: |
         # Recommended diagnostic commands:
-        # utils/simd-probe.sh
+        # cargo run --quiet --bin simd_probe
         # utils/check-model.sh path/to/model.nam
         # RUST_BACKTRACE=1 cargo test --lib <module>
       render: shell

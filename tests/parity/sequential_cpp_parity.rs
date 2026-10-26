@@ -308,10 +308,10 @@ fn run_sequential_mono_parity(
     );
 
     if !cpp_render_available() {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: {label} (render tool unavailable)");
-        }
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\" ({label})");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("sequential_cpp_parity::{label}"),
+            "render_tool_unavailable",
+        );
         return;
     }
 
@@ -521,6 +521,7 @@ fn run_sequential_mono_parity(
 // =============================================================================
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_linear2_multi_sr_cpp_parity() {
     // All-unknown rate chain (DEC-01): accepted by the C++ render at every
     // WAV input rate; windowed at the f32 kernel noise floor.
@@ -543,6 +544,7 @@ fn test_sequential_linear2_multi_sr_cpp_parity() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_linear_chain_48k_cpp_parity() {
     // Committed 48k-declared two-Linear chain (NC-3.1 reference fixture).
     //
@@ -561,6 +563,7 @@ fn test_sequential_linear_chain_48k_cpp_parity() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_nested_48k_cpp_parity() {
     // Recursive composition: root[Linear, Sequential[Linear]] — validates the
     // C++ `get_dsp` recursion and the Rust chain-of-chain equivalence.
@@ -584,6 +587,7 @@ fn test_sequential_nested_48k_cpp_parity() {
 // =============================================================================
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_multichannel_interior_48k_cpp_parity() {
     // Exterior is mono (1 in → 1 out); the interior crosses a 2-channel 1→2
     // boundary and recombines 2→1: both engines' interior channel-pointer
@@ -609,6 +613,7 @@ fn test_sequential_multichannel_interior_48k_cpp_parity() {
 // =============================================================================
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_linear_wavenet_multi_sr_cpp_parity() {
     // The WaveNet child contributes 1 + ΣRF stabilization frames (count
     // arithmetic in the module header); the chain warm replays it exactly.
@@ -634,6 +639,7 @@ fn test_sequential_linear_wavenet_multi_sr_cpp_parity() {
 // =============================================================================
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_double_lstm_single_prewarm_cpp_parity() {
     // Declared 48 kHz chain (SR48kOnly live scope): the transient identity
     // pins the C++ Reset semantics — child flags disabled, ONE chain-wide
@@ -656,16 +662,17 @@ fn test_sequential_double_lstm_single_prewarm_cpp_parity() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_sequential_double_lstm_cross_rate_rejection() {
     // DEC-02 mirror (NC-5.3 pattern): the declared-rate chain leaves the C++
     // render exit 1 for a non-48k input WAV, while the Rust engine accepts
     // the reconfiguration and runs clean at the operational rate (48k wired
     // behavior recorded in docs/cpp_parity_map.md §6.6 and NC-5.3).
     if !cpp_render_available() {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: double-LSTM cross-rate probe");
-        }
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            "sequential_cpp_parity::test_sequential_double_lstm_cross_rate_rejection",
+            "render_tool_unavailable",
+        );
         return;
     }
     assert!(

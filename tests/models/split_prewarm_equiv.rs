@@ -171,6 +171,7 @@ fn split_equiv_lstm_block64_steps() {
 }
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_lstm_single_layer() {
     assert_equiv("BossLSTM-1x16.nam", &[512, 1, 30000]);
 }
@@ -178,6 +179,7 @@ fn split_equiv_lstm_single_layer() {
 // ── WaveNet static (one-shot backfill unit) ──────────────────────────────────
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_wavenet_standard() {
     // One-shot unit: any positive first step converges.
     assert_equiv("BossWN-standard.nam", &[1]);
@@ -186,6 +188,7 @@ fn split_equiv_wavenet_standard() {
 }
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_wavenet_lite_feather_nano() {
     for name in ["BossWN-lite.nam", "BossWN-feather.nam", "BossWN-nano.nam"] {
         assert_equiv(name, &[64]);
@@ -203,22 +206,26 @@ fn split_equiv_wavenet_free_geometry() {
 // ── A2 static / dynamic ──────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_a2_container_per_sample() {
     assert_equiv("a2_example.nam", &[1]);
 }
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_a2_container_block64() {
     let chunks = vec![64usize; 256];
     assert_equiv("a2_example.nam", &chunks);
 }
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_a2_container_uneven() {
     assert_equiv("a2_example.nam", &[100, 7, 4096, 13]);
 }
 
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_a2_dynamic_odd_chunks() {
     for name in ["a2_dynamic_gated_ch8.nam", "a2_dynamic_blended_ch3.nam"] {
         assert_equiv(name, &[3, 1000, 17]);
@@ -233,6 +240,7 @@ fn split_equiv_a2_dynamic_odd_chunks() {
 /// (`condition_dsp` present), whose condition path carries FIR/recurrent
 /// memory that a fresh-build split test cannot expose.
 #[test]
+#[ignore = "long: equivalência split/prewarm de múltiplos chunks"]
 fn split_equiv_a2_max_after_dirty_state() {
     let name = "wavenet_a2_max.nam";
     if !fixture_exists(name) {

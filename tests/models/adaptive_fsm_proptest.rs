@@ -147,7 +147,7 @@ proptest! {
     /// Runs adversarial proptest with randomized mode, budget, block size,
     /// sample rate, and latency sequences.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM adaptativa"]
     fn test_adaptive_fsm_adversarial_sequences(
         mode in adaptive_config_strategy(),
         budget in budget_strategy(),
@@ -176,7 +176,7 @@ proptest! {
     /// Sweeps exact threshold boundaries: latency values exactly at the
     /// degradation and recovery thresholds.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM adaptativa"]
     fn test_adaptive_fsm_boundary_values(
         mode in adaptive_config_strategy(),
         budget in budget_strategy(),
@@ -235,7 +235,7 @@ proptest! {
     /// Simulates rapid jitter: alternates between overload and recovery
     /// to challenge consecutive-count logic and crossfade.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM adaptativa"]
     fn test_adaptive_fsm_jitter(
         mode in adaptive_config_strategy(),
         budget in budget_strategy(),

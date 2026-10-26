@@ -244,7 +244,7 @@ const LSTM_MODELS: &[(&str, &str)] = &[
 /// 1. **ASR** (Aliasing Suppression Ratio) — shows anti-aliasing benefit.
 /// 2. **ESR/MR-STFT** — shows timbre change vs Off baseline.
 #[test]
-#[ignore = "requires .nam model files; run with --ignored --nocapture"]
+#[ignore = "long: caracterização de oversampling (requer arquivos .nam)"]
 fn characterize_lstm_oversampling() {
     eprintln!("\n╔══════════════════════════════════════════════════════════════════╗");
     eprintln!("║  LSTM Oversampling Characterization                              ║");

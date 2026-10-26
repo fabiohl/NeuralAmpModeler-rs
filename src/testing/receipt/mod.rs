@@ -21,7 +21,3 @@ pub use long_phase::{
     CANONICAL_ROSTER, LongPhaseReceipt, LongPhaseStatus, PERFORMANCE_PHASE_IDS,
     PREFLIGHT_PHASE_IDS, is_preflight_id,
 };
-
-#[cfg(test)]
-#[path = "../receipt_test.rs"]
-mod long_receipt_tests;

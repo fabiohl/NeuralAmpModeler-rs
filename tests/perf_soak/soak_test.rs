@@ -79,7 +79,7 @@ impl SimplePcg {
 /// // parity. The interaction with noise-gate/true-bypass belongs to the gate
 /// // layer (src/dsp/gate.rs), not the model.
 #[test]
-#[ignore] // Run manually via --ignored
+#[ignore = "long: teste de soak"]
 fn test_wavenet_silence_soak() {
     let mut model = build_soak_wavenet();
     let input = vec![0.0f32; 64];
@@ -254,7 +254,7 @@ fn test_wavenet_silence_decomposition() {
 /// for detecting numerical overflows in deep layers that only occur
 /// under high signal energy.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_wavenet_noise_soak() {
     let mut model = build_soak_wavenet();
     let mut input = vec![0.0f32; 64];
@@ -306,7 +306,7 @@ fn test_wavenet_noise_soak() {
 /// LSTMs have recurrent states (cell state) that can accumulate residual errors.
 /// This test monitors internal state sanity over millions of iterations.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_lstm_silence_soak() {
     let mut model = LstmModel2::<16, 17, 32, 64>::new();
     let input = vec![0.0f32; 64];
@@ -350,7 +350,7 @@ fn test_lstm_silence_soak() {
 /// gates. This test ensures that the "Forget/Input/Output" logic
 /// does not cause infinite drift under signal stress conditions.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_lstm_noise_soak() {
     let mut model = LstmModel2::<16, 17, 32, 64>::new();
     let mut pcg = SimplePcg::new(1337);
@@ -427,7 +427,7 @@ fn test_lstm_noise_soak() {
 /// - `processed_out` deviates from `(processed_in * out_sr / in_sr).round()` by at most
 ///   the documented sinc filter group delay (≤ TAPS_PER_PHASE samples per stage).
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_resampler_drift_soak() {
     test_resampler_drift_soak_scenario(22050, 48000, "Upsampling");
     test_resampler_drift_soak_scenario(96000, 48000, "Downsampling");
@@ -586,7 +586,7 @@ fn test_resampler_drift_soak_scenario(in_sr: u32, out_sr: u32, label: &str) {
 /// accesses that cross the buffer boundary. This test verifies that mirroring
 /// remains consistent after billions of writes.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn test_mirror_buf_long_run() {
     let mut buf = MirroredBuffer::<f32>::new(1024 * 1024).expect("Failed to create MirroredBuffer"); // 1M elements
@@ -635,7 +635,7 @@ fn test_mirror_buf_long_run() {
 /// multiplier never leaves the [0, 1] range and that the FSM does not lock up
 /// in invalid states after millions of transitions.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_gate_fsm_endurance() {
     let mut gate = DynamicHysteresis::new();
     let params = GateParams::default();
@@ -706,7 +706,7 @@ fn build_soak_a2<const CH: usize>(weight_val: f32) -> WaveNetA2<CH> {
 
 /// Soak Test: A2-Full silence processing — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_full_silence_soak() {
     let mut model = build_soak_a2::<8>(0.01);
     model.prewarm();
@@ -746,7 +746,7 @@ fn test_a2_full_silence_soak() {
 
 /// Soak Test: A2-Lite silence processing — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_lite_silence_soak() {
     let mut model = build_soak_a2::<3>(0.01);
     model.prewarm();
@@ -786,7 +786,7 @@ fn test_a2_lite_silence_soak() {
 
 /// Soak Test: A2-Full white noise processing — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_full_noise_soak() {
     let mut model = build_soak_a2::<8>(0.01);
     model.prewarm();
@@ -835,7 +835,7 @@ fn test_a2_full_noise_soak() {
 
 /// Soak Test: A2-Lite white noise processing — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_lite_noise_soak() {
     let mut model = build_soak_a2::<3>(0.01);
     model.prewarm();
@@ -896,7 +896,7 @@ fn test_a2_lite_noise_soak() {
 /// Runs with both Conservative and Aggressive modes under randomized
 /// latency patterns.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_adaptive_fsm_endurance() {
     const NUM_CYCLES: usize = 2_000_000;
     const SAMPLE_RATE: u32 = 48000;
@@ -1040,7 +1040,7 @@ fn test_adaptive_fsm_endurance() {
 /// to stress the full hysteresis FSM, crossfade logic, and flag consistency under
 /// a known deterministic pattern. Each cycle produces 4 transitions.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_adaptive_fsm_transition_cycles() {
     const CYCLES: usize = 50_000;
     const SAMPLE_RATE: u32 = 48000;
@@ -1671,7 +1671,7 @@ fn esr_to_db(esr: f64) -> f64 {
 /// Does NOT alter the production engine — all measurement is via a
 /// self-contained scalar reference engine in this test file.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_wavenet_drift_decomposition() {
     const NF: usize = 64;
     let mut input = vec![0.0f32; NF];
@@ -1931,28 +1931,28 @@ fn run_model_soak_signal(
 /// ConvNet operates on the full buffer (not sub-blocks). The output buffer
 /// must be `block_size × out_channels`.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_convnet_soak() {
     run_model_soak("convnet_test.nam", "ConvNet", 10_000_000, 64, true);
 }
 
 /// Soak Test: WaveNetModelDyn endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_wavenet_dyn_soak() {
     run_model_soak("wavenet_dyn_free.nam", "WaveNetDyn", 10_000_000, 64, false);
 }
 
 /// Soak Test: LstmModelDyn endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_lstm_dyn_soak() {
     run_model_soak("lstm_dyn_test.nam", "LstmDyn", 10_000_000, 64, false);
 }
 
 /// Soak Test: WaveNetA2Dyn (Gated) endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_dyn_gated_soak() {
     run_model_soak(
         "a2_dynamic_gated_ch8.nam",
@@ -1965,7 +1965,7 @@ fn test_a2_dyn_gated_soak() {
 
 /// Soak Test: WaveNetA2Dyn (Blended) endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_dyn_blended_soak() {
     run_model_soak(
         "a2_dynamic_blended_ch3.nam",
@@ -1978,7 +1978,7 @@ fn test_a2_dyn_blended_soak() {
 
 /// Soak Test: WaveNetA2Dyn (A2-Max) silence endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_max_silence_soak() {
     run_model_soak_signal(
         "wavenet_a2_max.nam",
@@ -1992,7 +1992,7 @@ fn test_a2_max_silence_soak() {
 
 /// Soak Test: WaveNetA2Dyn (A2-Max) noise endurance — 10M frames.
 #[test]
-#[ignore]
+#[ignore = "long: teste de soak"]
 fn test_a2_max_noise_soak() {
     run_model_soak_signal(
         "wavenet_a2_max.nam",

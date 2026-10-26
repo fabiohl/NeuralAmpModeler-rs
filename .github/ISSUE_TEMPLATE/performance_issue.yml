@@ -80,10 +80,10 @@ body:
       description: Exact commands used to reproduce the benchmark, including isolation and governor parameters.
       placeholder: |
         # Recommended isolated reproduction commands:
-        1. utils/simd-probe.sh                                                 # Probe CPU SIMD flags & governor
-        2. NAM_NO_LOW_PRIORITY=1 taskset -c <isolated-core> cargo bench --bench regression_gate
+        1. cargo run --quiet --bin simd_probe                                  # Probe CPU SIMD flags & governor
+        2. taskset -c <isolated-core> cargo bench --bench regression_gate
         # Or using the performance regression wall (with thermal cooldown):
-        3. NAM_NO_LOW_PRIORITY=1 NAM_THERMAL_COOLDOWN_S=60 utils/tests-performance-regression.sh
+        3. NAM_THERMAL_COOLDOWN_S=60 utils/tests-performance-regression.sh
         # Quality contract baseline validation:
         4. utils/quality-dashboard.sh --check docs/quality-contract.json
         5. Observe regression on benchmark group `wavenet_standard`

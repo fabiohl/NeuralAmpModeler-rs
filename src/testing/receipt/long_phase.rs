@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 /// Preflight phases use `Passed` / `Failed` only (an abort is never
 /// SIMULATED).
 /// `CompletedWithGaps` is only used by the suite-level `overall` line.
-/// `Simulated` is only used by `--simulate` / `--dry-run` pre-registration
-/// (no test executed; strict-pre-release always rejects it).
+/// `Simulated` is only used by simulated pre-registration
+/// (no test executed; strict mode always rejects it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LongPhaseStatus {
@@ -31,7 +31,7 @@ pub enum LongPhaseStatus {
     SkipCapability,
     /// Phase was never executed.
     NotRun,
-    /// Phase pre-registered without execution (`--simulate` / `--dry-run`).
+    /// Phase pre-registered without execution (simulation).
     Simulated,
     /// Suite verdict: audit completed, but with declared gaps.
     CompletedWithGaps,
@@ -209,12 +209,12 @@ pub const PREFLIGHT_PHASE_IDS: [&str; 6] = [
     "preflight-simd-probe",
 ];
 
-/// Canonical 14-phase roster of the long audit suite.
+/// Canonical 15-phase roster of the long audit suite.
 ///
 /// In strict mode (`--strict`), every canonical phase must be present
 /// in the receipt without duplicates or unknown IDs, with 'overall' as the
 /// final entry, and with timed phases (`phase1`..`phase7`) executing > 0 tests.
-pub const CANONICAL_ROSTER: [&str; 14] = [
+pub const CANONICAL_ROSTER: [&str; 15] = [
     "preflight-render",
     "preflight-catalog",
     "preflight-package",
@@ -228,6 +228,7 @@ pub const CANONICAL_ROSTER: [&str; 14] = [
     "phase5",
     "phase6",
     "phase7",
+    "phase8",
     "overall",
 ];
 
@@ -239,7 +240,6 @@ pub fn is_preflight_id(phase_id: &str) -> bool {
 /// Phase ids of the long suite's performance-class phases (the bash
 /// `PHASE_CLASS` table, moved to the receipt in S5 so the human summary
 /// derives `FIDELITY` without reclassifying logs): RT Deadline = `phase5`,
-/// RT Jitter = `phase6`. The phase matrix itself is an invariant of
-/// `utils/tests-long.sh` (soak → defense → proptests → heap → deadline →
-/// jitter → loom).
-pub const PERFORMANCE_PHASE_IDS: [&str; 2] = ["phase5", "phase6"];
+/// RT Jitter = `phase6`, Perf Gate = `phase8`. The phase matrix itself is an invariant of
+/// `utils/tests-long.sh`.
+pub const PERFORMANCE_PHASE_IDS: [&str; 3] = ["phase5", "phase6", "phase8"];

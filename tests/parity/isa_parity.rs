@@ -514,6 +514,7 @@ const A2_ESR_BUDGET: f64 = 1e-3;
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_wavenet_standard_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -525,6 +526,7 @@ fn isa_self_consistency_wavenet_standard_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_wavenet_feather_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -536,6 +538,7 @@ fn isa_self_consistency_wavenet_feather_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_wavenet_nano_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -547,6 +550,7 @@ fn isa_self_consistency_wavenet_nano_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_lstm_1x16_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -558,6 +562,7 @@ fn isa_self_consistency_lstm_1x16_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_lstm_2x8_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -569,6 +574,7 @@ fn isa_self_consistency_lstm_2x8_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_a2_full_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -580,6 +586,7 @@ fn isa_self_consistency_a2_full_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_self_consistency_a2_lite_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_self_consistency(
@@ -596,7 +603,7 @@ fn isa_self_consistency_a2_lite_avx2() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_standard_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "WN-Std/AVX-512");
@@ -611,7 +618,7 @@ fn isa_parity_wavenet_standard_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_feather_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "WN-Feather/AVX-512");
@@ -626,7 +633,7 @@ fn isa_parity_wavenet_feather_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_nano_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "WN-Nano/AVX-512");
@@ -641,7 +648,7 @@ fn isa_parity_wavenet_nano_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_lstm_1x16_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "LSTM-1x16/AVX-512");
@@ -656,7 +663,7 @@ fn isa_parity_lstm_1x16_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_lstm_2x8_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "LSTM-2x8/AVX-512");
@@ -671,7 +678,7 @@ fn isa_parity_lstm_2x8_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_a2_full_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "A2-Full/AVX-512");
@@ -686,7 +693,7 @@ fn isa_parity_a2_full_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_a2_lite_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "A2-Lite/AVX-512");
@@ -705,7 +712,7 @@ fn isa_parity_a2_lite_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Legacy evaluation-only: requires AVX-512 VNNI+BF16 hardware"]
+#[ignore = "long: paridade ISA legada (requer AVX-512 VNNI+BF16)"]
 #[expect(deprecated)]
 fn isa_parity_wavenet_standard_avx2_vs_vnnibf16() {
     let _lock = ISA_LOCK.lock().unwrap();
@@ -723,7 +730,7 @@ fn isa_parity_wavenet_standard_avx2_vs_vnnibf16() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Legacy evaluation-only: requires AVX-512 VNNI+BF16 hardware"]
+#[ignore = "long: paridade ISA legada (requer AVX-512 VNNI+BF16)"]
 #[expect(deprecated)]
 fn isa_parity_wavenet_nano_avx2_vs_vnnibf16() {
     let _lock = ISA_LOCK.lock().unwrap();
@@ -747,6 +754,7 @@ fn isa_parity_wavenet_nano_avx2_vs_vnnibf16() {
 // deterministic across repeated runs with the same ISA.
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_hf_self_consistency_wavenet_standard_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_hf_self_consistency(
@@ -758,6 +766,7 @@ fn isa_hf_self_consistency_wavenet_standard_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_hf_self_consistency_lstm_1x16_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_hf_self_consistency(
@@ -769,6 +778,7 @@ fn isa_hf_self_consistency_lstm_1x16_avx2() {
 }
 
 #[test]
+#[ignore = "long: paridade ISA (auto-consistência AVX2/HF)"]
 fn isa_hf_self_consistency_lstm_2x8_avx2() {
     let _lock = ISA_LOCK.lock().unwrap();
     assert_isa_hf_self_consistency(
@@ -798,7 +808,7 @@ const WN_HF_ESR_BUDGET: f64 = 1e-3;
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_lstm_1x16_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "LSTM-1x16/AVX-512 HF");
@@ -813,7 +823,7 @@ fn isa_parity_hf_lstm_1x16_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_lstm_2x8_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "LSTM-2x8/AVX-512 HF");
@@ -828,7 +838,7 @@ fn isa_parity_hf_lstm_2x8_avx2_vs_avx512() {
 
 #[cfg(feature = "avx512")]
 #[test]
-#[ignore = "Requires AVX-512 hardware"]
+#[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_wavenet_standard_avx2_vs_avx512() {
     let _lock = ISA_LOCK.lock().unwrap();
     skip_if_unsupported!(InstructionSet::Avx512, "WN-Std/AVX-512 HF");

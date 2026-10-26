@@ -299,6 +299,7 @@ mod tests {
     /// Streaming pipeline contract (F-PERF-002): `capture_dsp_pipeline_streaming` must return exactly `n_samples`
     /// across fractional sample rates without any real-time heap allocations.
     #[test]
+    #[ignore = "long: teste pesado (> 2.0s em debug)"]
     fn streaming_pipeline_strict_cardinality_and_zero_alloc() {
         use crate::dsp::resampling::StreamingResampleBuffer;
 

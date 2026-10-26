@@ -33,7 +33,7 @@ use std::process::exit;
 use std::str::FromStr;
 
 use neural_amp_modeler_rs::testing::receipt::{
-    LongAuditReceipt, LongPhaseReceipt, LongPhaseStatus, PREFLIGHT_PHASE_IDS,
+    CANONICAL_ROSTER, LongAuditReceipt, LongPhaseReceipt, LongPhaseStatus, PREFLIGHT_PHASE_IDS,
     count_tests_executed_from_log, detect_gap_markers, is_preflight_id, now_iso8601,
 };
 
@@ -71,8 +71,8 @@ fn print_help() {
     println!("                        [--gaps <a,b,...>] [--out <file>]");
     println!("                        [--oracle-sha256 <hex>] [--fixture-sha256 <hex>]");
     println!("                        [--artifact-sha256 <hex>]");
-    println!("  nam_long_receipt summary [--out <file>]");
-    println!("  nam_long_receipt validate [--out <file>] [--strict]");
+    println!("  nam_long_receipt summary [--out <file>] [--only <a,b,...>]");
+    println!("  nam_long_receipt validate [--out <file>] [--strict] [--only <a,b,...>]");
     println!("  nam_long_receipt count-log --log <path>");
     println!();
     println!(
@@ -231,6 +231,12 @@ fn cmd_summary(args: &[String]) {
         .get("out")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OUT.to_string());
+    let only_list: Option<Vec<String>> = flags.get("only").map(|s| {
+        s.split(',')
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect()
+    });
 
     let mut audit = match LongAuditReceipt::parse_jsonl_file(Path::new(&out)) {
         Ok(a) => a,
@@ -243,7 +249,7 @@ fn cmd_summary(args: &[String]) {
         eprintln!("summary: no phase entries in {out} — nothing to summarize");
         exit(1);
     }
-    audit.push_summary();
+    audit.push_summary_with_only(only_list.as_deref());
     let overall = audit
         .phases
         .last()
@@ -262,7 +268,7 @@ fn cmd_summary(args: &[String]) {
     // S5: the human summary — WARNING/ERROR alarms + verdict lines, echoed
     // verbatim by utils/tests-long.sh (which maps `OVERALL:` to its exit
     // code). The forensic data stays in the JSONL.
-    for line in audit.human_summary_lines() {
+    for line in audit.human_summary_lines_with_only(None, only_list.as_deref()) {
         println!("{line}");
     }
     exit(0);
@@ -281,6 +287,12 @@ fn cmd_validate(args: &[String]) {
         .cloned()
         .unwrap_or_else(|| DEFAULT_OUT.to_string());
     let strict = flags.contains_key("strict");
+    let only_list: Option<Vec<String>> = flags.get("only").map(|s| {
+        s.split(',')
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect()
+    });
 
     if !Path::new(&out).exists() {
         eprintln!("validate: receipt file not found: {out}");
@@ -298,7 +310,7 @@ fn cmd_validate(args: &[String]) {
     // duplicate-free, timed phases must have run real tests, and the declared
     // `overall` verdict must match the verdict derived from the phase/gap
     // evidence (a forged/injected OVERALL line is rejected here).
-    if let Err(e) = audit.semantic_verdict() {
+    if let Err(e) = audit.semantic_verdict_with_only(&CANONICAL_ROSTER, only_list.as_deref()) {
         eprintln!("validate: {e}");
         exit(1);
     }
@@ -325,7 +337,7 @@ fn cmd_validate(args: &[String]) {
     if strict {
         // Fail-closed strict-pre-release — any declared gap (or failure)
         // rejects the receipt with a non-zero exit code.
-        match audit.strict_verdict() {
+        match audit.campaign_strict_verdict_with_only(&CANONICAL_ROSTER, only_list.as_deref()) {
             Ok(()) => {
                 println!("STRICT: PASSED (no gaps, no failures)");
                 exit(0);

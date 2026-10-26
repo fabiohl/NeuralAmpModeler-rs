@@ -219,7 +219,7 @@ b4ed110bd69e6beb07776935f34c47d9cccee23f3b3e484545000fdd9f7b5cf0 f64_anchors/wav
 # If a generator hash differs from the committed SHA, its fixtures may be
 # stale — re-generate with: ./tests/fixtures/golden_gen_build.sh
 # =============================================================================
-1aee232c23d1d6fbbaf08042a57e43ed01b752bed77566fe022124206d3f09a9 tests/fixtures/golden_gen_build.sh
+16cf843ae331791cb2df9d87e4fbfa2d27df5ebe11bc471c13e59ba9f0f39f4f tests/fixtures/golden_gen_build.sh
 eddd9a12759bfe37336ffc173dd3ef85aa684d5f9ad73955c8da8d12a8ea333a tests/fixtures/render_ir.cpp
 af7ce84416cda7e1f53aeeca4f47605dad961cc17e3c5221424b2fb585025dc5 tests/fixtures/generate_a2_fixtures.py
 21692b8837ec3e802125cc5c315033a8a0b596b7876bdb624a4c3ebfc1f38943 tests/fixtures/generate_namcore_v060_fixtures.py

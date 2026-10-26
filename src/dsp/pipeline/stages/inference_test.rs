@@ -122,6 +122,7 @@ const TEST_HOST_RATES: &[u32] = &[44_100, 48_000, 96_000, 192_000];
 const IRREGULAR_BLOCKS: &[usize] = &[1, 7, 31, 63, 64, 65, 127, 256];
 
 #[test]
+#[ignore = "long: teste pesado (> 2.0s em debug)"]
 fn test_run_inference_streaming_irregular_blocks() {
     for &host in TEST_HOST_RATES {
         for &n in IRREGULAR_BLOCKS {
@@ -131,6 +132,7 @@ fn test_run_inference_streaming_irregular_blocks() {
 }
 
 #[test]
+#[ignore = "long: teste pesado (> 2.0s em debug)"]
 fn test_run_inference_streaming_max_block() {
     check_streaming_inference(44_100, 48_000, 8192, 8);
     check_streaming_inference(96_000, 48_000, 8192, 8);
@@ -138,6 +140,7 @@ fn test_run_inference_streaming_max_block() {
 }
 
 #[test]
+#[ignore = "long: teste pesado (> 2.0s em debug)"]
 fn test_run_inference_streaming_oversized_block_subchunked() {
     // Host block larger than the adapter's max_block must be processed in
     // sub-blocks without dropping input or fabricating output.

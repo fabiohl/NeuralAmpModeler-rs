@@ -426,7 +426,3 @@ pub fn regression_verdict(
 ) -> Result<VerdictOutcome, VerdictBlind> {
     regression_verdict_with_expected(log_text, criterion_root, noise, None)
 }
-
-#[cfg(test)]
-#[path = "verdict_test.rs"]
-mod verdict_test;

@@ -1,292 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#
-# Quick QA Suite — first-line cargo-test gate.
-#
-# Bash is the trigger + receipt printer. Cargo/Rust owns test selection,
-# skip policy, and numeric gates. See docs/testing.md.
-#
-#   utils/lints.sh        static (not duplicated)
-#   utils/tests-quick.sh  this script (~few minutes; hardware-dependent)
-#   utils/tests-long.sh   ignored / soak / full matrix (nightly)
-#
-# Axis A: non-ignored = quick; #[ignore] = long.
-# Axis B: structural = debug; float oracles = --release.
-#
-# Exit 1 on any failed test. Missing optional oracles are WARN (exit 0)
-# unless NAM_QUICK_STRICT=1, which promotes those gaps to FAIL.
-
+# tests-quick.sh — Execução da disciplina rápida de testes. Classe A.
+# Uso: utils/tests-quick.sh
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { echo "Uso: utils/tests-quick.sh"; exit 0; }
+trap 'echo "RESULT: FAIL ($((SECONDS - T0))s) fails=${PHASE_NAME:-step} gaps=${GAPS[*]:-none}"' ERR
+rm -f "$LOG_DIR/skips.jsonl"
 
-ALLOW_GAPS="${NAM_ALLOW_GAPS:-0}"
-for arg in "$@"; do
-    case "$arg" in
-        --allow-gaps)
-            ALLOW_GAPS=1
-            ;;
-        --help|-h)
-            echo "Usage: $0 [--allow-gaps]"
-            exit 0
-            ;;
-    esac
-done
-
-PHASE_TOTAL=3
-source "$SCRIPT_DIR/_lib.sh"
-
-# Shared helper in _lib.sh; skips itself when already restarted or disabled.
-# (quality-dashboard.sh / tests-performance-regression.sh intentionally do NOT
-# deprioritize: they drive the statistical benchmarks — see _lib.sh.)
-maybe_restart_low_priority "$SCRIPT_PATH" "$@"
-
-# ── Memory guard (OOM containment) ──────────────────────────────────────────
-# Release test builds run alongside rust-analyzer/IDE; on a 16 GiB host that
-# peak can trigger a global OOM. Re-exec inside a transient, memory-capped
-# systemd scope (fail-open when unavailable). Opt out with NAM_NO_MEM_GUARD=1.
-if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
-    export NAM_MEM_GUARD=1
-    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
-fi
-
-cleanup_receipt() {
-    local rc=$?
-    if [ $rc -ne 0 ] && [ -f "target/logs/quick-receipt.txt" ]; then
-        if ! grep -q "^OVERALL:" target/logs/quick-receipt.txt 2>/dev/null; then
-            if [ "${MISSING_FIXTURES:-0}" = "1" ] && [ "${ALLOW_GAPS:-0}" != "1" ]; then
-                emit "OVERALL: FAILED reason=missing_fixtures"
-            else
-                emit "OVERALL: FAILED reason=early_exit exit_code=$rc"
-            fi
-        fi
-    fi
-}
-trap cleanup_receipt EXIT
-
-trap 'echo -e "\n${RED}${BOLD}FAIL: unexpected error: \"$BASH_COMMAND\" at line $LINENO status $?.${NC}"; exit 1' ERR
-
-mkdir -p target/logs target/test_crashes
-export NAM_CRASH_DIR="${PROJECT_DIR}/target/test_crashes"
-rm -f target/logs/quick-phase1.log \
-      target/logs/quick-phase2.log \
-      target/logs/quick-phase3.log \
-      target/logs/quick-receipt.txt
-
-emit() {
-    printf '%s\n' "$1" | tee -a target/logs/quick-receipt.txt
-}
-
-echo -e "${BLUE}${BOLD}NeuralAmpModeler-rs Quick QA${NC}"
-emit "SUITE: tests-quick"
-emit "STRICT: ${NAM_QUICK_STRICT:-0}"
-SUITE_START=$(date +%s%N)
-
-# ── Phase 1: Structural (debug) ─────────────────────────────────────────────
-# --lib plus every integration entry that holds non-ignored structural tests.
-# Measurement-oracle modules are skipped here (Axis B: they run --release).
-phase "Structural: unit + deterministic integration (debug)"
-P1_START=$(date +%s%N)
-
-{
-    # Axis-B: lstm_activation_precision SNR oracles are release-only (Phase 2).
-    # Substring skip covers both `..._gain` and `..._gain_stress_v2`; the
-    # module's structural checks still run in this phase.
-    # cabsim_stereo carries the IR-multirate gates (its stereo
-    # fidelity and heap-audit tests are feature-gated and run when the caller
-    # enables `dual-mono`/`heap-audit`).
-    cargo test --features testing --lib \
-        --test models --test perf_soak --test parity --test dsp_core \
-        --test cabsim_stereo \
-        --test target_features_compliance_test --test libm_export_guard \
-        --test freshness_guard --test isa_contract --test pipeline_capture_test --test state_compat -- \
-        --skip golden_vectors:: --skip linear_fft_test:: \
-        --skip spectral_fidelity:: --skip reference_oracle_f64:: \
-        --skip cpp_parity:: --skip isa_parity:: \
-        --skip sequential_cpp_parity:: \
-        --skip rt_deadline:: --skip rt_jitter:: \
-        --skip lstm_activation_precision::test_lstm_activation_precision_gain
-} 2>&1 | tee target/logs/quick-phase1.log
-
-assert_ran_tests target/logs/quick-phase1.log 1
-P1_DUR_MS=$(( ($(date +%s%N) - P1_START) / 1000000 ))
-P1_DUR_STR=$(format_duration_ms "$P1_DUR_MS")
-ok "Phase 1 (structural) passed (${P1_DUR_STR})"
-emit "PHASE1: PASS log=target/logs/quick-phase1.log"
-
-# ── Phase 2: Measurement oracles (release) ──────────────────────────────────
-phase "Measurement oracles (release — production float gate)"
-P2_START=$(date +%s%N)
-
-GOLDEN_RAN=0
-CPP_PARITY_RAN=0
-SEQ_PARITY_RAN=0
-MISSING_FIXTURES=0
-declare -a GAPS=()
-
-if [ "${NAM_BYPASS_FRESHNESS:-0}" = "1" ]; then
-    echo -e "  ${YELLOW}${BOLD}⚠ NAM_BYPASS_FRESHNESS=1 — freshness gate bypassed (recorded as gap).${NC}"
-    GAPS+=("freshness:bypassed_by_env")
+PHASE_NAME=freshness; phase freshness
+log_fresh="$LOG_DIR/quick-freshness.log"; rc_fresh=0
+cargo run --quiet --locked --features testing --bin nam_freshness -- artifacts-hard > "$log_fresh" 2>&1 || rc_fresh=$?
+if [ "$rc_fresh" -eq 0 ]; then
+  if grep -q "GENERATOR CHANGED" "$log_fresh"; then gap "generator-drift"; fi
+  echo "PHASE: freshness PASS log=$log_fresh"
 else
-    if ! check_freshness artifacts-hard; then
-        emit "PHASE2: FAIL reason=freshness"
-        echo -e "${RED}FIDELITY: FAIL${NC}"
-        echo -e "${BLUE}PERFORMANCE: N/A${NC}"
-        emit "OVERALL: FAILED reason=freshness"
-        exit 1
-    fi
+  FAILS+=("freshness"); echo "PHASE: freshness FAIL rc=$rc_fresh log=$log_fresh"; exit 1
 fi
 
-_cargo_meas() {
-    local -a tests=($1)
-    shift
-    local -a libtest_args=("$@")
-    local -A eps=()
-    local -a filters=()
-    local t ep
-    for t in "${tests[@]}"; do
-        case "$t" in
-            reference_oracle_f64|isa_parity|cpp_parity) ep="parity" ;;
-            *) ep="models" ;;
-        esac
-        eps[$ep]=1
-        filters+=("${t}::")
-    done
-    local -a flags=()
-    for ep in "${!eps[@]}"; do
-        flags+=(--test "$ep")
-    done
-    cargo test --features testing --release "${flags[@]}" -- "${filters[@]}" "${libtest_args[@]}"
-}
-
-if [ -f "tests/fixtures/golden_wavenet_standard.bin" ] \
-    && [ -f "tests/fixtures/golden_wavenet_standard_v2_48000.bin" ]; then
-    GOLDEN_RAN=1
-    echo -e "  ${BLUE}→ f64 + spectral + linear_fft + golden v1 + isa_parity + lstm_activation_precision${NC}"
-    _cargo_meas "reference_oracle_f64 spectral_fidelity linear_fft_test golden_vectors isa_parity lstm_activation_precision" \
-        --test-threads=1 --nocapture \
-        2>&1 | tee target/logs/quick-phase2.log
+PHASE_NAME=tests; phase tests
+log_tests="$LOG_DIR/quick-tests.log"; rc_tests=0
+cargo test --locked --features testing --no-fail-fast > "$log_tests" 2>&1 || rc_tests=$?
+grep -E 'FAILED|panicked at' "$log_tests" || true
+awk '/test result: / { p+=$4; f+=$6; i+=$8 } END { printf "Tests summary: %d passed, %d failed, %d ignored\n", p, f, i }' "$log_tests"
+if [ "$rc_tests" -eq 0 ] && ran_tests "$log_tests"; then
+  echo "PHASE: tests PASS log=$log_tests"
 else
-    MISSING_FIXTURES=1
-    GAPS+=("golden_vectors+isa_parity:missing_fixtures")
-    echo -e "${YELLOW}${BOLD}WARN: golden v1/v2 fixtures missing — golden_vectors + isa_parity SKIPPED${NC}"
-    echo -e "${YELLOW}  DIAGNOSTIC: run tests/fixtures/golden_gen_build.sh${NC}"
-    echo -e "  ${BLUE}→ f64 + spectral + linear_fft + lstm_activation_precision (no golden deps)${NC}"
-    _cargo_meas "reference_oracle_f64 spectral_fidelity linear_fft_test lstm_activation_precision" \
-        --nocapture \
-        2>&1 | tee target/logs/quick-phase2.log
+  FAILS+=("tests"); echo "PHASE: tests FAIL rc=$rc_tests log=$log_tests"; exit 1
 fi
 
-assert_ran_tests target/logs/quick-phase2.log 1
-
-ensure_third_party soft || { warn "third-party setup failed — cpp_parity will be skipped"; }
-SKIP_CPP=0
-if RENDER_BIN="$(ensure_namcore_render)"; then
-    :
-else
-    RC_RENDER=$?
-    case "$RC_RENDER" in
-        1) GAPS+=("cpp_parity:no_cxx") ;;
-        2) GAPS+=("cpp_parity:no_cmake") ;;
-        3) GAPS+=("cpp_parity:no_namcore") ;;
-        4|5|6) GAPS+=("cpp_parity:cmake_failed") ;;
-        *) GAPS+=("cpp_parity:cmake_failed") ;;
-    esac
-    SKIP_CPP=1
-    echo -e "${YELLOW}${BOLD}WARN: C++ render binary unavailable (ensure_namcore_render exit $RC_RENDER) — cpp_parity SKIPPED${NC}"
-    echo -e "${YELLOW}  DIAGNOSTIC: target/logs/cmake-configure.log target/logs/cmake-build.log${NC}"
-fi
-if [ "$SKIP_CPP" -eq 0 ]; then
-    echo -e "  ${BLUE}→ cpp_parity quick_parity (render: $RENDER_BIN)${NC}"
-    cargo test --features testing --release --test parity -- \
-        quick_parity --nocapture \
-        2>&1 | tee -a target/logs/quick-phase2.log
-    CPP_PARITY_RAN=1
-    assert_ran_tests target/logs/quick-phase2.log 1
-
-    # NC-3.4: Sequential live cross-validation (C++ render ↔ Rust ↔ f64
-    # composition oracle). Same render binary, same phase — the chain module
-    # is measurement-oracle work and runs --release only (Axis B).
-    echo -e "  ${BLUE}→ sequential_cpp_parity test_sequential (render: $RENDER_BIN)${NC}"
-    cargo test --features testing --release --test parity -- \
-        test_sequential --nocapture \
-        2>&1 | tee -a target/logs/quick-phase2.log
-    SEQ_PARITY_RAN=1
-    assert_ran_tests target/logs/quick-phase2.log 1
+if [ -s "$LOG_DIR/skips.jsonl" ]; then
+  gap "cpp-oracle-absent:$(wc -l < "$LOG_DIR/skips.jsonl" | tr -d ' ')"
 fi
 
-P2_DUR_MS=$(( ($(date +%s%N) - P2_START) / 1000000 ))
-P2_DUR_STR=$(format_duration_ms "$P2_DUR_MS")
-ok "Phase 2 (measurement oracles) passed (${P2_DUR_STR})"
-emit "PHASE2: PASS golden=${GOLDEN_RAN} cpp_parity=${CPP_PARITY_RAN} seq_parity=${SEQ_PARITY_RAN} log=target/logs/quick-phase2.log"
-
-# ── Phase 3: Parser fuzz (release, capped, --ignored) ───────────────────────
-# No --nocapture: libtest captures proptest output for passing cases (each
-# rejected malformed input used to paint a ~30-line support block on stderr,
-# inflating this log past 800 KB). The `assert_ran_tests` gate below still
-# proves the cases ran via the libtest summary lines.
-phase "Agile parser fuzzing (release, PROPTEST_CASES=${NAM_QUICK_PROPTEST_CASES:-1000})"
-P3_START=$(date +%s%N)
-PROPTEST_CASES="${NAM_QUICK_PROPTEST_CASES:-1000}" \
-    _cargo_meas "proptest_parsers" --ignored \
-    2>&1 | tee target/logs/quick-phase3.log
-assert_ran_tests target/logs/quick-phase3.log 1
-P3_DUR_MS=$(( ($(date +%s%N) - P3_START) / 1000000 ))
-P3_DUR_STR=$(format_duration_ms "$P3_DUR_MS")
-ok "Phase 3 (parser fuzzing) passed (${P3_DUR_STR})"
-emit "PHASE3: PASS log=target/logs/quick-phase3.log"
-
-# ── Receipt ─────────────────────────────────────────────────────────────────
-SUITE_DUR_MS=$(( ($(date +%s%N) - SUITE_START) / 1000000 ))
-SUITE_DUR_STR=$(format_duration_ms "$SUITE_DUR_MS")
-
-if [ ${#GAPS[@]} -gt 0 ]; then
-    for g in "${GAPS[@]}"; do
-        emit "GAP: $g"
-        echo -e "${YELLOW}${BOLD}WARN GAP: $g${NC}"
-    done
-    echo -e "${YELLOW}FIDELITY: INCOMPLETE${NC}"
-    echo -e "${BLUE}PERFORMANCE: N/A${NC}"
-    echo -e "\n${YELLOW}${BOLD}================================================================================${NC}"
-    echo -e "  ${BOLD}Artifacts saved (${SUITE_DUR_STR}):${NC}"
-    echo -e "    - Phase 1 (structural): ${P1_DUR_STR:-N/A}"
-    echo -e "    - Phase 2 (oracles):    ${P2_DUR_STR:-N/A}"
-    echo -e "    - Phase 3 (fuzzing):    ${P3_DUR_STR:-N/A}"
-    echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
-    echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
-    echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
-    echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
-    echo -e "${YELLOW}${BOLD}================================================================================${NC}\n"
-    if [ "$MISSING_FIXTURES" -eq 1 ] && [ "$ALLOW_GAPS" -ne 1 ]; then
-        echo -e "${RED}${BOLD}FAIL: golden fixtures missing (use --allow-gaps or NAM_ALLOW_GAPS=1 to permit gaps)${NC}"
-        emit "OVERALL: FAILED reason=missing_fixtures"
-        exit 1
-    fi
-    if [ "${NAM_QUICK_STRICT:-0}" = "1" ]; then
-        echo -e "${RED}${BOLD}FAIL: NAM_QUICK_STRICT=1 treats gaps as failure${NC}"
-        emit "OVERALL: FAIL reason=strict_gaps"
-        exit 1
-    fi
-    emit "OVERALL: COMPLETED_WITH_GAPS"
-    echo -e "${YELLOW}${BOLD}OVERALL: COMPLETED_WITH_GAPS${NC}"
-    exit 0
-fi
-
-echo -e "${GREEN}FIDELITY: OK${NC}"
-echo -e "${BLUE}PERFORMANCE: N/A${NC}"
-emit "OVERALL: PASSED"
-
-echo -e "\n${GREEN}${BOLD}================================================================================${NC}"
-echo -e "${GREEN}${BOLD}✓ Quick QA Suite completed successfully in ${SUITE_DUR_STR}!${NC}"
-echo -e "  - Phase 1 (structural): ${P1_DUR_STR}"
-echo -e "  - Phase 2 (oracles):    ${P2_DUR_STR}"
-echo -e "  - Phase 3 (fuzzing):    ${P3_DUR_STR}"
-echo -e "  ${BOLD}Artifacts saved:${NC}"
-echo -e "    - Receipt:     ${CYAN}target/logs/quick-receipt.txt${NC}"
-echo -e "    - Phase 1 log: ${CYAN}target/logs/quick-phase1.log${NC}"
-echo -e "    - Phase 2 log: ${CYAN}target/logs/quick-phase2.log${NC}"
-echo -e "    - Phase 3 log: ${CYAN}target/logs/quick-phase3.log${NC}"
-echo -e "${GREEN}${BOLD}================================================================================${NC}\n"
-
+finish

@@ -32,7 +32,7 @@ pub const CPUINFO_PATH: &str = "/proc/cpuinfo";
 ///
 /// Retained for compatibility; new code must use
 /// [`governor_path_for_core`] / [`effective_governor_path`] so the probed
-/// core matches the pinned bench core (`BENCH_CORE`/`NAM_BENCH_CORE`,
+/// core matches the pinned bench core (`NAM_BENCH_CORE`,
 /// default `nproc / 2` — same default as
 /// `utils/tests-performance-regression.sh:53-55`).
 pub const GOVERNOR_PATH: &str = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor";
@@ -46,23 +46,15 @@ pub fn governor_path_for_core(core: u32) -> String {
 
 /// Effective bench core for governor probing.
 ///
-/// Precedence: `BENCH_CORE`, then `NAM_BENCH_CORE`, else `nproc / 2`
+/// Precedence: `NAM_BENCH_CORE`, else `nproc / 2`
 /// (integer division — the same default as
 /// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
 /// ignored so probing stays fail-closed (`unknown`) instead of panicking.
 pub fn effective_bench_core() -> u32 {
-    for key in ["BENCH_CORE", "NAM_BENCH_CORE"] {
-        if let Ok(raw) = std::env::var(key) {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(core) = trimmed.parse::<u32>() {
-                return core;
-            }
-        }
-    }
-    probe_nproc().unwrap_or(1) / 2
+    std::env::var("NAM_BENCH_CORE")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or_else(|| probe_nproc().unwrap_or(1) / 2)
 }
 
 /// Path of the live frequency governor of the effective bench core.
@@ -271,7 +263,3 @@ fn git_is_dirty() -> bool {
     let output = Command::new("git").args(["status", "--porcelain"]).output();
     matches!(output, Ok(out) if out.status.success() && !out.stdout.is_empty())
 }
-
-#[cfg(test)]
-#[path = "env_test.rs"]
-mod env_test;

@@ -133,7 +133,7 @@ fn test_overflow_concurrent_push_drain() {
 /// 1 drainer calling `drain_gc_channels()`.  All three tiers are stressed
 /// because small channel capacity forces fallback to the overflow buffer.
 #[test]
-#[ignore]
+#[ignore = "long: soak / estresse de concorrência"]
 fn test_gc_cascade_concurrent_drain() {
     use rtrb::RingBuffer;
 
@@ -245,7 +245,7 @@ fn test_gc_cascade_concurrent_drain() {
 /// while the "audio thread" concurrently processes blocks and drains
 /// payloads.  Exercises the `cold_load_model` data race window.
 #[test]
-#[ignore]
+#[ignore = "long: soak / estresse de concorrência"]
 fn test_model_hot_swap_during_process() {
     use neural_amp_modeler_rs::models::NamModel;
     use rtrb;
@@ -262,9 +262,9 @@ fn test_model_hot_swap_during_process() {
         .collect();
 
     if models.len() < 2 {
-        eprintln!(
-            "SKIP: need at least 2 model fixtures, found {}",
-            models.len()
+        neural_amp_modeler_rs::testing::report_skip(
+            "concurrency_stress::test_concurrency_stress",
+            "insufficient_fixtures_less_than_2",
         );
         return;
     }
@@ -386,7 +386,7 @@ fn test_model_hot_swap_during_process() {
 /// runs convolution concurrently.  Covers the race between
 /// `cold_load_cabsim` (replaces `conv_engine`) and `process()`.
 #[test]
-#[ignore]
+#[ignore = "long: soak / estresse de concorrência"]
 fn test_cabsim_swap_during_process() {
     use rtrb;
     use rtrb::RingBuffer;
@@ -584,7 +584,7 @@ fn test_param_smoothing_concurrent_updates() {
 /// This test runs hundreds of thousands of push/drain cycles and asserts
 /// zero `RT_STATUS_GC_CORRUPTED` flags.
 #[test]
-#[ignore]
+#[ignore = "long: soak / estresse de concorrência"]
 fn test_t6_3_torn_read_prevention() {
     const BUFFER_SLOTS: usize = 16; // tiny → maximum overwrite pressure
     const PUSHES_PER_THREAD: usize = 50_000;
@@ -674,6 +674,7 @@ fn test_t6_3_torn_read_prevention() {
 /// Verifies that reading a shared atomic while multiple smoothers tick
 /// independently is correct and never produces invalid values.
 #[test]
+#[ignore = "long: soak / estresse de concorrência"]
 fn test_multi_reader_param_smoothing() {
     let shared_gain = Arc::new(AtomicU32::new(1.0f32.to_bits()));
     let done = Arc::new(AtomicBool::new(false));

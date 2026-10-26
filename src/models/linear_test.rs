@@ -773,6 +773,7 @@ fn make_synthetic_test_weights(receptive_field: usize) -> Vec<f32> {
 }
 
 #[test]
+#[ignore = "long: teste pesado (> 2.0s em debug)"]
 fn test_multichannel_channel_mappings() {
     for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
         for (in_ch, out_ch) in [(1, 1), (2, 2), (1, 3), (3, 1)] {

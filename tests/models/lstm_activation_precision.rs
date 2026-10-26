@@ -317,6 +317,7 @@ fn test_lstm_activation_precision_gain() {
 /// oracle — runs exclusively under `--release`; filtered from Phase 1 via
 /// `--skip` (substring skip of `test_lstm_activation_precision_gain`).
 #[test]
+#[ignore = "long: precisão de ativação em ponto fixo/Gain"]
 fn test_lstm_activation_precision_gain_stress_v2() {
     eprintln!();
     eprintln!("══════════════════════════════════════════════════════════════════");

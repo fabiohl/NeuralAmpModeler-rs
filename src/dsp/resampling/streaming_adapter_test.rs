@@ -83,6 +83,7 @@ const TEST_RATES: &[u32] = &[44_100, 48_000, 96_000, 192_000];
 const IRREGULAR_BLOCKS: &[usize] = &[1, 7, 31, 63, 64, 65, 127, 256];
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_process_irregular_blocks_all_rates() {
     for &host in TEST_RATES {
         for &model in TEST_RATES {
@@ -94,6 +95,7 @@ fn test_process_irregular_blocks_all_rates() {
 }
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_process_max_block_worst_case() {
     for &host in TEST_RATES {
         for &model in TEST_RATES {
@@ -123,6 +125,7 @@ fn test_process_bypass_exact() {
 }
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_process_irregular_sequence() {
     // Deterministic pseudo-random sequence of irregular block sizes (LCG).
     let mut lcg: u64 = 0x1234_5678_9abc_def0;
@@ -217,6 +220,7 @@ fn test_lower_level_api_cardinality() {
 }
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_reset_restores_initial_state() {
     let host = 44_100u32;
     let model = 48_000u32;
@@ -479,6 +483,7 @@ fn test_process_over_max_block_is_safe_and_detectable() {
 }
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_waveform_alignment_after_latency() {
     // The adapter must deliver the raw resampler round-trip signal (`ro`)
     // contiguously starting at position `latency`, with the first `latency`

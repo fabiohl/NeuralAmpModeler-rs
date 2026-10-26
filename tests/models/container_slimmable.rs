@@ -400,6 +400,7 @@ fn test_slimmable_wavenet_set_slimmable_size_rebuild_from_pending_and_process() 
 /// produces finite output (no NaN/Inf) and that the container does not panic
 /// or produce degenerate output after repeated switches.
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_container_switch_rt_safety() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
@@ -474,6 +475,7 @@ fn test_container_switch_rt_safety() {
 /// Also compares max relative sample step around the switch with and without
 /// crossfade to verify the crossfade reduces discontinuity.
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_container_crossfade_continuity() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");

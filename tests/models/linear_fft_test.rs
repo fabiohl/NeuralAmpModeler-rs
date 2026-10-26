@@ -195,6 +195,7 @@ fn test_fft_golden_rf4096_multi_freq() {
 }
 
 #[test]
+#[ignore = "long: FFT golden rf8192 sine"]
 fn test_fft_golden_rf8192_sine() {
     let input = generate_sine_440hz(16384);
     let rng = &mut SimplePcg::new(31337);
@@ -392,6 +393,7 @@ fn test_fft_fixture_rf4096_loader_pipeline() {
 }
 
 #[test]
+#[ignore = "long: FFT golden rf8192 sine"]
 fn test_fft_fixture_rf8192_loader_pipeline() {
     let input = generate_sine_440hz(16384);
     verify_nam_file_against_oracle(
@@ -518,14 +520,17 @@ fn run_fft_golden_bin_test(model_filename: &str, golden_filename: &str, label: &
     let golden_path = fixtures_dir.join(golden_filename);
 
     if !nam_path.exists() {
-        eprintln!("SKIP: Model {model_filename} not found. Skipping golden bin test '{label}'.");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("linear_fft_test::{label}"),
+            &format!("model_not_found:{model_filename}"),
+        );
         return;
     }
 
     if !golden_path.exists() {
-        eprintln!(
-            "SKIP: Golden file {golden_filename} not found at {golden_path:?}.\n\
-             Run './tests/fixtures/golden_gen_build.sh' to generate Linear FFT golden vectors."
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("linear_fft_test::{label}"),
+            &format!("golden_not_found:{golden_filename}"),
         );
         return;
     }

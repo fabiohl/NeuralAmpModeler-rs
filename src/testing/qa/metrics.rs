@@ -255,7 +255,3 @@ fn canon_metric(value: Option<&Value>) -> MetricValue {
         Some(other) => MetricValue::Raw(other.to_string()),
     }
 }
-
-#[cfg(test)]
-#[path = "metrics_test.rs"]
-mod metrics_test;

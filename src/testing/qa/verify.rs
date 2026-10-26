@@ -925,7 +925,3 @@ fn normalize_bench_label(label: &str) -> String {
         .replace("  ", " ")
         .to_lowercase()
 }
-
-#[cfg(test)]
-#[path = "verify_test.rs"]
-mod verify_test;

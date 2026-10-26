@@ -280,6 +280,7 @@ fn measure_spectral_baseline(model_filename: &str, sr: u32) -> BaselineEntry {
 /// Representative SKUs for spectral fidelity baselines.
 ///
 /// Covers all major architectures at 48 kHz (native model rate).
+#[cfg(feature = "on-demand")]
 const REPRESENTATIVE_SKUS: &[(&str, &str)] = &[
     // WaveNet A1 community
     ("BossWN-standard.nam", "WaveNet-standard"),
@@ -459,7 +460,8 @@ fn asr_aggregate_across_pitches() {
 // (fixture mutation). Not a CI/nightly gate; tests-long Phase 2
 // explicitly `--skip generate_spectral_fidelity_baseline`.
 #[test]
-#[ignore = "generates baseline fixture — run manually when models change"]
+#[cfg(feature = "on-demand")]
+#[ignore = "on-demand: regenera baseline de fidelidade espectral"]
 fn generate_spectral_fidelity_baseline() {
     let sr = 48000;
     let mut models = BTreeMap::new();
@@ -650,7 +652,7 @@ mod model_baselines {
     macro_rules! baseline_test {
         ($test_name:ident, $filename:literal, $label:literal) => {
             #[test]
-            #[ignore = "requires .nam model files; run with --ignored"]
+            #[ignore = "long: fidelidade espectral (requer arquivos .nam)"]
             fn $test_name() {
                 validate_model_against_baseline($filename, $label, 48000);
             }

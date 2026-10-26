@@ -34,7 +34,10 @@ fn test_end_to_end_spsc_pipeline() {
     let path = model_path("BossWN-standard.nam");
 
     if !path.exists() {
-        eprintln!("SKIP: BossWN-standard.nam not found at {path:?}. Skipping E2E pipeline.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "spsc_pipeline::test_end_to_end_spsc_pipeline",
+            "fixture_not_found:BossWN-standard.nam",
+        );
         return;
     }
 
@@ -241,8 +244,9 @@ fn test_rapid_hot_swap_spsc() {
     for (filename, label) in &models_to_load {
         let p = model_path(filename);
         if !p.exists() {
-            eprintln!(
-                "SKIP: {filename} not found at {p:?}. Skipping hot-swap SPSC test ({label})."
+            neural_amp_modeler_rs::testing::report_skip(
+                &format!("spsc_pipeline::test_hotswap_stress_loop::{label}"),
+                &format!("fixture_not_found:{filename}"),
             );
             return;
         }

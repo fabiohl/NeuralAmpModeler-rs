@@ -18,8 +18,7 @@
 #                             model archive (never cloned; never committed)
 #
 # Pins and clone URLs: variables.env (NAM_CORE_*, NAM_PLUGIN_*).
-# Overrides: NAM_THIRD_PARTY_DIR, NAM_CORE_DIR, NAM_PLUGIN_DIR, NAM_VARIABLES_ENV,
-#            NAM_COMMUNITY_MODELS_SRC (absolute path to link as community_models).
+# Overrides: NAM_COMMUNITY_MODELS_SRC (absolute path to link as community_models).
 
 set -euo pipefail
 
@@ -34,9 +33,10 @@ if ! command -v git >/dev/null 2>&1; then
     die "git binary is required but not found in PATH."
 fi
 
+VARIABLES_ENV="${VARIABLES_ENV:-$PROJECT_DIR/variables.env}"
 if [ ! -f "$VARIABLES_ENV" ]; then
     echo -e "${RED}${BOLD}❌ variables.env not found at $VARIABLES_ENV.${NC}"
-    echo -e "${YELLOW}Expected at the NeuralAmpModeler-rs repository root (override via NAM_VARIABLES_ENV).${NC}"
+    echo -e "${YELLOW}Expected at the NeuralAmpModeler-rs repository root.${NC}"
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -65,7 +65,7 @@ sync_git_pin() {
         ok "$name synced ($tag @ $commit)."
     elif [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
         echo -e "${RED}${BOLD}❌ $dir exists but is not a git checkout.${NC}"
-        echo -e "${YELLOW}Remove it and re-run, or point NAM_CORE_DIR / NAM_PLUGIN_DIR elsewhere.${NC}"
+        echo -e "${YELLOW}Remove it and re-run.${NC}"
         exit 1
     else
         echo -e "  Cloning $name for the first time..."
@@ -82,29 +82,31 @@ sync_git_pin() {
     fi
 }
 
+PLUGIN_DIR="$THIRD_PARTY_DIR/NeuralAmpModelerPlugin"
+
 # 1. NeuralAmpModelerCore
 phase "Syncing NeuralAmpModelerCore mirror..."
-sync_git_pin "NeuralAmpModelerCore" "$NAM_CORE_DIR" \
+sync_git_pin "NeuralAmpModelerCore" "$CORE_DIR" \
     "$NAM_CORE_REPO" "$NAM_CORE_TAG" "$NAM_CORE_COMMIT"
 
 for sub in eigen AudioDSPTools; do
-    sub_path="$NAM_CORE_DIR/Dependencies/$sub"
+    sub_path="$CORE_DIR/Dependencies/$sub"
     if [ ! -d "$sub_path" ] || [ -z "$(ls -A "$sub_path" 2>/dev/null || true)" ]; then
         echo "  Initializing submodule $sub for NeuralAmpModelerCore..."
-        (cd "$NAM_CORE_DIR" && git submodule update --init "Dependencies/$sub")
+        (cd "$CORE_DIR" && git submodule update --init "Dependencies/$sub")
     fi
 done
 ok "NeuralAmpModelerCore submodules ready."
 
 # 2. NeuralAmpModelerPlugin
 phase "Syncing NeuralAmpModelerPlugin mirror..."
-sync_git_pin "NeuralAmpModelerPlugin" "$NAM_PLUGIN_DIR" \
+sync_git_pin "NeuralAmpModelerPlugin" "$PLUGIN_DIR" \
     "$NAM_PLUGIN_REPO" "$NAM_PLUGIN_TAG" "$NAM_PLUGIN_COMMIT"
 
-sub_plugin_path="$NAM_PLUGIN_DIR/AudioDSPTools"
+sub_plugin_path="$PLUGIN_DIR/AudioDSPTools"
 if [ ! -d "$sub_plugin_path" ] || [ ! -d "$sub_plugin_path/Dependencies/eigen/Eigen" ]; then
     echo -e "  Initializing submodule AudioDSPTools for NeuralAmpModelerPlugin..."
-    (cd "$NAM_PLUGIN_DIR" && git submodule update --init --recursive AudioDSPTools)
+    (cd "$PLUGIN_DIR" && git submodule update --init --recursive AudioDSPTools)
     ok "NeuralAmpModelerPlugin submodules ready."
 else
     ok "NeuralAmpModelerPlugin submodules already present."

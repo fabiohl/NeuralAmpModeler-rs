@@ -171,8 +171,9 @@ fn test_conv1d_ch12_scalar_vs_simd() {
 // tests/fixtures/models/BossWN-lite.nam (obsolete synthetic, not a
 // nightly/CI gate). Run manually:
 //   cargo test --lib --features testing profile_wavenet_lite_kernels -- --ignored --nocapture
+#[cfg(feature = "on-demand")]
 #[test]
-#[ignore]
+#[ignore = "on-demand: WaveNet Lite CH=12 kernel telemetry profiler"]
 fn profile_wavenet_lite_kernels() {
     use crate::loader::dispatcher::build_model;
     use crate::loader::nam_json::parse_nam_json;

@@ -233,7 +233,7 @@ fn test_linear_golden_known_weights() {
 }
 
 #[test]
-#[ignore = "heavy: long receptive field golden test"]
+#[ignore = "long: paridade golden linear (RF longo)"]
 fn test_linear_golden_long() {
     let mut rng = SimplePcg::new(31337);
     let weights = synth_weights_fir(128, &mut rng);
@@ -243,7 +243,7 @@ fn test_linear_golden_long() {
 }
 
 #[test]
-#[ignore = "heavy: very long receptive field golden test"]
+#[ignore = "long: paridade golden linear (RF muito longo)"]
 fn test_linear_golden_stress() {
     let mut rng = SimplePcg::new(999983);
     let weights = synth_weights_fir(512, &mut rng);

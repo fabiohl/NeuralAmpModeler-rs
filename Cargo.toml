@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -161,6 +161,8 @@ avx512 = []
 # Declared without `libc` forwarding: `libc` is already a mandatory engine
 # dependency (mirror/huge-page alloc, TSC, scheduler introspection).
 rt-hardening = []
+# Developer-only diagnostics, baseline fixture generators, and profiling harnesses. Never enabled by CI or test scripts.
+on-demand = []
 
 [[bin]]
 name = "gen_stress"

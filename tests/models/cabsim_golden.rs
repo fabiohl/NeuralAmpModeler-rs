@@ -151,7 +151,7 @@ fn test_cabsim_golden_medium() {
 }
 
 #[test]
-#[ignore = "heavy: long IR golden parity test"]
+#[ignore = "long: paridade golden cabsim (IR longo)"]
 fn test_cabsim_golden_long() {
     let mut rng = SimplePcg::new(31337);
     let ir = synth_ir_deterministic(8192, 200.0, 2.0, 48000, &mut rng);
@@ -161,7 +161,7 @@ fn test_cabsim_golden_long() {
 }
 
 #[test]
-#[ignore = "heavy: very long IR + large signal golden test"]
+#[ignore = "long: paridade golden cabsim (IR longo + sinal grande)"]
 fn test_cabsim_golden_stress() {
     let mut rng = SimplePcg::new(999983);
     let ir = synth_ir_deterministic(32768, 150.0, 1.5, 48000, &mut rng);

@@ -136,6 +136,7 @@ fn test_esr_activation_contribution() {
 // =============================================================================
 
 #[test]
+#[ignore = "long: precisão de ativação em ponto fixo/Gain"]
 fn test_activation_contribution_summary_table() {
     let sample_rate = 48000u32;
     let input_f32 = generate_stress_signal_v2_default(sample_rate);

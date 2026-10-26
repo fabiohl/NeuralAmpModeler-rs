@@ -619,8 +619,9 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "on-demand")]
     #[test]
-    #[ignore = "Empirical micro-benchmark for T-P4.2.3: fallback Instant vs calibrated RDTSC"]
+    #[ignore = "on-demand: micro-benchmark fallback Instant vs calibrated RDTSC"]
     fn bench_rdtsc_overhead() {
         // Measured: Uncalibrated (Instant fallback with HPET clocksource) = 1134.66 ns/call
         //           Calibrated RDTSC (mult/shift) = 17.16 ns/call (~40-50 cycles at 2.5 GHz)

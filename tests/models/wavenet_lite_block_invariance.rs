@@ -193,6 +193,7 @@ fn build_tiny_lite_wavenet() -> WaveNetModel<12, 3, 6> {
 }
 
 #[test]
+#[ignore = "long: invariância de tamanho de bloco em todo o catálogo"]
 // MirroredBuffer::new_aligned guarantees size_elements % channels == 0,
 // so the ring-buffer wrap period aligns exactly with the mirror period.
 // Hardened to assert! < 1e-7 (synthetic model gives MSE~1e-20 post-fix).

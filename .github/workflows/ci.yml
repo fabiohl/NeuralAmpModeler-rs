@@ -9,6 +9,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # A newer push to the same branch/PR cancels the run in progress.
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,30 +21,40 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # x86_64 is the reference platform: full lints + the quick QA suite.
+  # x86_64 is the reference platform: canonical lints + quick QA suite disciplines.
   x86_64-linux:
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
-      - name: Check (default features / pure x86-64-v3)
-        run: cargo check --all-targets --features testing
-      - name: Clippy (default features / pure x86-64-v3)
-        run: cargo clippy --all-targets --features testing
-      - name: Check (all features including AVX-512)
-        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
-      - name: Clippy (all features including AVX-512)
-        run: cargo clippy --all-targets --features testing,heap-audit,fft-radix4-planner,avx512,rt-hardening
-      - name: Check (full features without AVX-512)
-        run: cargo check --all-targets --features testing,heap-audit,fft-radix4-planner,rt-hardening
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Lints (fmt, check, clippy, policies, budget)
+        run: ./utils/lints.sh
       - name: Quick QA suite
-        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
-        run: ./utils/tests-quick.sh --allow-gaps
+        run: ./utils/tests-quick.sh
+      - name: Publish step summary
+        if: always()
+        run: |
+          echo "### Run Summary: x86_64-linux" >> $GITHUB_STEP_SUMMARY
+          if [ -d target/logs ]; then
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            grep -hE '^(RESULT:|PHASE:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-x86_64-linux
+          path: target/logs/**
+          retention-days: 14
 
-  # aarch64 targets (NEON backend): lints + the quick QA suite.
+  # aarch64 targets (NEON backend): clippy + quick QA suite.
   aarch64:
     strategy:
       fail-fast: false
@@ -49,30 +62,66 @@ jobs:
         include:
           - name: macos-arm64
             os: macos-latest
+            timeout: 40
           - name: linux-arm64
             os: ubuntu-26.04-arm
+            timeout: 30
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
-      - name: Check
-        run: cargo check --all-targets --features testing
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Clippy
-        run: cargo clippy --all-targets --features testing
-      # macOS ships bash 3.2; the QA scripts need bash >= 4. NAM_NO_LOW_PRIORITY
-      # and NAM_NO_MEM_GUARD skip the `nice` and systemd mem-guard re-execs,
-      # which would go back through /bin/bash.
+        run: cargo clippy --locked --all-targets --features testing -- -D warnings
+      # macOS ships bash 3.2; the QA scripts need bash >= 4.
       - name: Install bash (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install bash
-          echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
-          echo "NAM_NO_LOW_PRIORITY=1" >> "$GITHUB_ENV"
-          echo "NAM_NO_MEM_GUARD=1" >> "$GITHUB_ENV"
+          if ! bash -c '(( BASH_VERSINFO[0] >= 4 ))' 2>/dev/null; then
+            brew install bash
+            echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
+          fi
       - name: Quick QA suite
-        # Gaps (e.g. no C++ NAMCore render binary on the runner) warn instead of failing.
-        run: ${QA_BASH:-bash} ./utils/tests-quick.sh --allow-gaps
+        run: ${QA_BASH:-bash} ./utils/tests-quick.sh
+      - name: Publish step summary
+        if: always()
+        run: |
+          echo "### Run Summary: ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
+          if [ -d target/logs ]; then
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            grep -hE '^(RESULT:|PHASE:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.name }}
+          path: target/logs/**
+          retention-days: 14
+
+  # MSRV job: validates compilation with rust-version from Cargo.toml (1.99.0).
+  msrv:
+    name: msrv (1.99.0)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.99.0 --no-self-update --profile minimal && rustup default 1.99.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Cargo check (MSRV)
+        run: cargo check --locked --all-targets --features testing
+      - name: Publish step summary
+        if: always()
+        run: |
+          echo "### Run Summary: msrv (1.99.0)" >> $GITHUB_STEP_SUMMARY
+          echo "MSRV cargo check passed successfully." >> $GITHUB_STEP_SUMMARY

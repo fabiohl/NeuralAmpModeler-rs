@@ -411,6 +411,7 @@ graph TD
 | **`fft-radix4-planner`** | No      | Exposes Radix-4 DIT FFT execution planning benchmark routines.                                                                                                                         |
 | **`avx512`**             | No      | Compiles research/benchmarking AVX-512 upward dispatch kernels (omitted from default binaries).                                                                                        |
 | **`rt-hardening`**       | No      | Enables Linux real-time process hardening (`mlockall`, `SCHED_FIFO`, core pinning, PM-QoS).                                                                                            |
+| **`on-demand`**          | No      | Developer-only fixture generation and profiling harnesses (never enabled by CI or QA runners).                                                                                          |
 
 ---
 

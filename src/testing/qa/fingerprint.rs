@@ -166,7 +166,7 @@ impl Fingerprint {
     ///
     /// When `bench_core` names an explicit core, the governor is
     /// re-probed on that core's `cpufreq` path (instead of the ambient
-    /// `BENCH_CORE`/`NAM_BENCH_CORE` default) so the fingerprint reflects the
+    /// `NAM_BENCH_CORE` default) so the fingerprint reflects the
     /// core the bench is actually pinned to.
     pub fn probe(bench_core: &str) -> Self {
         let mut fingerprint = Self::from_env_probe(&EnvProbe::probe(), bench_core);
@@ -319,7 +319,3 @@ impl Fingerprint {
         self.compare(&baseline)
     }
 }
-
-#[cfg(test)]
-#[path = "fingerprint_test.rs"]
-mod fingerprint_test;

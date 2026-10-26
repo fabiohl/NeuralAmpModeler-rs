@@ -83,6 +83,26 @@ fn is_zero_test_pass(p: &LongPhaseReceipt) -> bool {
     p.phase_id.starts_with("phase") && p.status == LongPhaseStatus::Passed && p.tests_executed == 0
 }
 
+/// Returns true if a phase is selected by the optional `--only` list.
+/// If `only` is None or empty, all phases are selected.
+/// Comparison is case-insensitive and normalizes underscores to hyphens.
+fn is_phase_selected_by_only(phase_id: &str, name: &str, only: Option<&[String]>) -> bool {
+    match only {
+        None => true,
+        Some(list) => {
+            if list.is_empty() {
+                return true;
+            }
+            list.iter().any(|item| {
+                let item_norm = item.to_lowercase().replace('_', "-");
+                let pid_norm = phase_id.to_lowercase().replace('_', "-");
+                let pname_norm = name.to_lowercase().replace('_', "-");
+                item_norm == pid_norm || item_norm == pname_norm
+            })
+        }
+    }
+}
+
 impl LongAuditReceipt {
     /// Parses a JSONL stream; every non-empty line must be valid JSON with the
     /// `LongPhaseReceipt` schema (fail-closed validation). Preflight lines
@@ -152,7 +172,7 @@ impl LongAuditReceipt {
         self.phase_entries().map(|p| p.duration_ms).sum()
     }
 
-    /// `true` when the receipt was produced by `--simulate` / `--dry-run`:
+    /// `true` when the receipt was produced by simulated dry-run:
     /// it carries at least one phase entry and every entry is `SIMULATED`
     /// (no test was executed). Used to suppress every green (`OK`/`PASS`)
     /// verdict line — a simulated receipt must never *look* like a passing
@@ -173,7 +193,7 @@ impl LongAuditReceipt {
     /// Verdict semantics mirror the runner's final summary:
     /// - any `FAILED` phase or preflight ⇒ `FAILED`;
     /// - otherwise an all-`SIMULATED` receipt ⇒ `SIMULATED` (the
-    ///   `--simulate` / `--dry-run` pre-registration where no test ran);
+    ///   simulated pre-registration where no test ran);
     /// - otherwise any **declared gap** ⇒ `COMPLETED_WITH_GAPS`. A declared
     ///   gap is a gap status (SKIPPED / INCONCLUSIVE / SKIP_CAPABILITY /
     ///   NOT_RUN), a `PASSED` phase whose `gaps` list is non-empty, or a
@@ -189,11 +209,25 @@ impl LongAuditReceipt {
     /// the derived `overall FAILED` — a trace that survives the abort because
     /// `utils/tests-long.sh` emits it before exiting. `gaps` lists every
     /// declared-gap entry as `phase_id:STATUS`.
-    pub fn summary_receipt(&self) -> LongPhaseReceipt {
+    /// Derived suite-level `overall` receipt line, optionally evaluated against
+    /// an `--only` phase selection filter.
+    pub fn summary_receipt_with_only(&self, only: Option<&[String]>) -> LongPhaseReceipt {
         let has_declared_gap = |p: &LongPhaseReceipt| {
-            p.status.is_gap()
-                || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
-                || is_zero_test_pass(p)
+            let selected = is_phase_selected_by_only(&p.phase_id, &p.name, only);
+            if selected {
+                p.status.is_gap()
+                    || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+                    || is_zero_test_pass(p)
+            } else {
+                // When outside --only, SKIPPED is the expected status, not a gap.
+                if p.status == LongPhaseStatus::Skipped {
+                    false
+                } else {
+                    p.status.is_gap()
+                        || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+                        || is_zero_test_pass(p)
+                }
+            }
         };
 
         let status = if self
@@ -250,11 +284,21 @@ impl LongAuditReceipt {
         }
     }
 
+    /// Derived suite-level `overall` receipt line without filtering.
+    pub fn summary_receipt(&self) -> LongPhaseReceipt {
+        self.summary_receipt_with_only(None)
+    }
+
+    /// Appends the suite-level `overall` line, optionally evaluating against `--only`.
+    pub fn push_summary_with_only(&mut self, only: Option<&[String]>) {
+        self.phases.retain(|p| p.phase_id != "overall");
+        let summary = self.summary_receipt_with_only(only);
+        self.phases.push(summary);
+    }
+
     /// Appends the suite-level `overall` line, replacing any previous one.
     pub fn push_summary(&mut self) {
-        self.phases.retain(|p| p.phase_id != "overall");
-        let summary = self.summary_receipt();
-        self.phases.push(summary);
+        self.push_summary_with_only(None);
     }
 
     /// Timed phases (`phase<N>`) that report `PASSED` with zero executed tests
@@ -291,7 +335,13 @@ impl LongAuditReceipt {
     /// The roster is a parameter so downstream producers (a plugin host, a
     /// standalone host) can reuse the exact schema and semantics with their own
     /// phase matrix without the engine hardcoding a consumer.
-    pub fn semantic_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
+    /// Fail-closed **semantic** verification against a caller-supplied canonical
+    /// roster and optional `--only` phase selection filter.
+    pub fn semantic_verdict_with_only(
+        &self,
+        roster: &[&str],
+        only: Option<&[String]>,
+    ) -> Result<(), String> {
         if self.phases.is_empty() {
             return Err("audit strictly invalid: empty receipt".to_string());
         }
@@ -303,6 +353,25 @@ impl LongAuditReceipt {
                 "audit strictly invalid: terminal phase must be 'overall', found '{}'",
                 last.phase_id
             ));
+        }
+
+        // Validate only items if provided
+        if let Some(list) = only {
+            for item in list {
+                let item_norm = item.to_lowercase().replace('_', "-");
+                let found = roster.iter().any(|r| {
+                    let r_norm = r.to_lowercase().replace('_', "-");
+                    r_norm == item_norm
+                }) || self.phases.iter().any(|p| {
+                    let p_norm = p.name.to_lowercase().replace('_', "-");
+                    p_norm == item_norm
+                });
+                if !found {
+                    return Err(format!(
+                        "audit strictly invalid: unknown phase '{item}' in --only (not in canonical roster)"
+                    ));
+                }
+            }
         }
 
         // 2. Canonical membership + duplicate detection
@@ -331,22 +400,33 @@ impl LongAuditReceipt {
             }
         }
 
-        // 4. A phase that claims PASSED must have executed > 0 tests (a
-        //    zero-test pass is a mandatory-subphase gate violation). Phases that
-        //    declare a gap status may legitimately have zero executed tests.
+        // 4. Subphase checks:
+        // For phases selected by --only:
+        //   - If claiming PASSED, must have executed > 0 tests (timed phases).
+        // For phases outside --only:
+        //   - MUST have status SKIPPED!
         for p in self.phase_entries() {
-            if is_zero_test_pass(p) {
+            let selected = is_phase_selected_by_only(&p.phase_id, &p.name, only);
+            if selected {
+                if is_zero_test_pass(p) {
+                    return Err(format!(
+                        "audit strictly invalid: timed phase '{}' PASSED with 0 executed tests",
+                        p.phase_id
+                    ));
+                }
+            } else if p.status != LongPhaseStatus::Skipped {
                 return Err(format!(
-                    "audit strictly invalid: timed phase '{}' PASSED with 0 executed tests",
-                    p.phase_id
+                    "audit strictly invalid: phase '{}' outside --only was expected to have status SKIPPED, found {}",
+                    p.phase_id,
+                    p.status.as_str()
                 ));
             }
         }
 
         // 5. Declared terminal verdict must equal the verdict derived from the
-        //    phase/gap evidence — a receipt must never certify a verdict it does
-        //    not back (forged/injected OVERALL line).
-        let derived = self.summary_receipt().status;
+        //    phase/gap evidence (with --only applied) — a receipt must never certify a
+        //    verdict it does not back (forged/injected OVERALL line).
+        let derived = self.summary_receipt_with_only(only).status;
         if last.status != derived {
             return Err(format!(
                 "audit strictly invalid: declared OVERALL={} disagrees with derived verdict {}",
@@ -358,26 +438,25 @@ impl LongAuditReceipt {
         Ok(())
     }
 
+    /// Fail-closed semantic verification against a caller-supplied canonical roster.
+    pub fn semantic_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
+        self.semantic_verdict_with_only(roster, None)
+    }
+
     /// Fail-closed semantic verification against the engine's canonical
-    /// 14-phase roster ([`CANONICAL_ROSTER`]).
+    /// 15-phase roster ([`CANONICAL_ROSTER`]).
     pub fn semantic_verdict(&self) -> Result<(), String> {
         self.semantic_verdict_with_roster(&CANONICAL_ROSTER)
     }
 
-    /// Fail-closed strict campaign verdict: enforces the canonical 14-phase roster,
-    /// presence of terminal 'overall' record, no duplicate or unknown phases,
-    /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
-    pub fn campaign_strict_verdict(&self) -> Result<(), String> {
-        self.campaign_strict_verdict_with_roster(&CANONICAL_ROSTER)
-    }
-
-    /// Roster-parameterized strict campaign verdict. Consumers (a plugin host, a
-    /// standalone host) reuse the exact schema and semantics with their own
-    /// phase matrix: semantic structural verification against `roster`, then a
-    /// clean `OVERALL: PASSED` requirement (no gaps, no failures, no simulation).
-    pub fn campaign_strict_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
+    /// Roster-parameterized strict campaign verdict with optional `--only` filter.
+    pub fn campaign_strict_verdict_with_only(
+        &self,
+        roster: &[&str],
+        only: Option<&[String]>,
+    ) -> Result<(), String> {
         // Structural + declared-vs-derived consistency first (fail-closed).
-        self.semantic_verdict_with_roster(roster)?;
+        self.semantic_verdict_with_only(roster, only)?;
 
         let last = self.phases.last().unwrap();
 
@@ -390,7 +469,7 @@ impl LongAuditReceipt {
         }
 
         // Evaluate summary verdict & gaps
-        let summary = self.summary_receipt();
+        let summary = self.summary_receipt_with_only(only);
         match summary.status {
             LongPhaseStatus::Passed => Ok(()),
             LongPhaseStatus::Failed => Err("audit FAILED: one or more phases failed".to_string()),
@@ -403,6 +482,21 @@ impl LongAuditReceipt {
                 summary.gaps.len()
             )),
         }
+    }
+
+    /// Roster-parameterized strict campaign verdict. Consumers (a plugin host, a
+    /// standalone host) reuse the exact schema and semantics with their own
+    /// phase matrix: semantic structural verification against `roster`, then a
+    /// clean `OVERALL: PASSED` requirement (no gaps, no failures, no simulation).
+    pub fn campaign_strict_verdict_with_roster(&self, roster: &[&str]) -> Result<(), String> {
+        self.campaign_strict_verdict_with_only(roster, None)
+    }
+
+    /// Fail-closed strict campaign verdict: enforces the canonical 15-phase roster,
+    /// presence of terminal 'overall' record, no duplicate or unknown phases,
+    /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
+    pub fn campaign_strict_verdict(&self) -> Result<(), String> {
+        self.campaign_strict_verdict_with_roster(&CANONICAL_ROSTER)
     }
 
     /// Fail-closed strict-pre-release verdict: enforces canonical campaign roster
@@ -423,8 +517,8 @@ impl LongAuditReceipt {
     /// `FAIL` — that is what the `OVERALL: COMPLETED_WITH_GAPS` verdict is
     /// for (the pre-S5 `ANY_FIDELITY_FAILED` semantics).
     ///
-    /// A fidelity-class phase that was never executed (`SIMULATED`, from
-    /// `--simulate` / `--dry-run`) reports `NOT_RUN` instead of the vacuous
+    /// A fidelity-class phase that was never executed (`SIMULATED`)
+    /// reports `NOT_RUN` instead of the vacuous
     /// `OK`: a green verdict requires tests that actually ran (F-07). An
     /// all-`SIMULATED` receipt reports `NOT_RUN` unconditionally, even when
     /// it carries no fidelity-class entry.
@@ -622,14 +716,20 @@ impl LongAuditReceipt {
     }
 
     /// Human one-line summary printed by `nam_long_receipt summary` (S5),
-    /// with an optional custom regression receipt file path for testing.
-    pub fn human_summary_lines_with_regression_path(&self, reg_path: Option<&Path>) -> Vec<String> {
+    /// with an optional custom regression receipt file path and optional `--only` filter.
+    pub fn human_summary_lines_with_only(
+        &self,
+        reg_path: Option<&Path>,
+        only: Option<&[String]>,
+    ) -> Vec<String> {
         let mut lines = Vec::new();
         for p in self.phase_entries() {
+            let selected = is_phase_selected_by_only(&p.phase_id, &p.name, only);
             if p.status == LongPhaseStatus::Failed {
                 lines.push(format!("ERROR: {} {} — FAILED", p.phase_id, p.name));
-            } else if p.status.is_gap()
-                || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty())
+            } else if selected
+                && (p.status.is_gap()
+                    || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty()))
             {
                 let gap_suffix = if p.gaps.is_empty() {
                     String::new()
@@ -645,18 +745,19 @@ impl LongAuditReceipt {
                 ));
             }
         }
-        let overall = self.summary_receipt();
-        let perf_verdict = if self.is_simulated_only() {
-            "NOT_RUN"
-        } else if let Some(p) = reg_path {
-            Self::perf_regression_verdict_at(
-                p,
-                Some(Duration::from_secs(24 * 3600)),
-                std::env::var("NAM_RUN_ID").ok().as_deref(),
-            )
-        } else {
-            self.perf_regression_verdict()
-        };
+        let overall = self.summary_receipt_with_only(only);
+        let perf_verdict =
+            if self.is_simulated_only() || !is_phase_selected_by_only("phase8", "perf", only) {
+                "NOT_RUN"
+            } else if let Some(p) = reg_path {
+                Self::perf_regression_verdict_at(
+                    p,
+                    Some(Duration::from_secs(24 * 3600)),
+                    std::env::var("NAM_RUN_ID").ok().as_deref(),
+                )
+            } else {
+                self.perf_regression_verdict()
+            };
 
         if perf_verdict == "FAIL" {
             lines.push("ERROR: perf_regression — FAILED".to_string());
@@ -669,12 +770,30 @@ impl LongAuditReceipt {
             overall.status
         };
 
+        let rt_deadline_verdict = if is_phase_selected_by_only("phase5", "rt-deadline", only) {
+            self.rt_deadline_verdict()
+        } else {
+            "NOT_RUN"
+        };
+
+        let rt_jitter_verdict = if is_phase_selected_by_only("phase6", "rt-jitter", only) {
+            self.rt_jitter_verdict()
+        } else {
+            "NOT_RUN"
+        };
+
         lines.push(format!("OVERALL: {}", overall_status.as_str()));
         lines.push(format!("FIDELITY: {}", self.fidelity_verdict()));
-        lines.push(format!("RT_DEADLINE: {}", self.rt_deadline_verdict()));
-        lines.push(format!("RT_JITTER: {}", self.rt_jitter_verdict()));
+        lines.push(format!("RT_DEADLINE: {}", rt_deadline_verdict));
+        lines.push(format!("RT_JITTER: {}", rt_jitter_verdict));
         lines.push(format!("PERF_REGRESSION: {}", perf_verdict));
         lines
+    }
+
+    /// Human one-line summary printed by `nam_long_receipt summary` (S5),
+    /// with an optional custom regression receipt file path for testing.
+    pub fn human_summary_lines_with_regression_path(&self, reg_path: Option<&Path>) -> Vec<String> {
+        self.human_summary_lines_with_only(reg_path, None)
     }
 
     /// Human one-line summary printed by `nam_long_receipt summary` (S5).
@@ -689,6 +808,6 @@ impl LongAuditReceipt {
     /// `OVERALL: SIMULATED` and `NOT_RUN` on every verdict line — no `OK` /
     /// `PASS` is ever printed for a run that executed nothing (F-07).
     pub fn human_summary_lines(&self) -> Vec<String> {
-        self.human_summary_lines_with_regression_path(None)
+        self.human_summary_lines_with_only(None, None)
     }
 }

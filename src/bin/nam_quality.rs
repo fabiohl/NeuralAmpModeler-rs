@@ -41,18 +41,19 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::exit;
+use std::process::{Command, exit};
 
 use serde::Serialize;
 use serde_json::Value;
 
 use neural_amp_modeler_rs::testing::qa::QualityContract;
 use neural_amp_modeler_rs::testing::qa::classify::{
-    classify_fresh_regression, classify_regression_outcome,
+    RegressionOutcome, classify_fresh_regression, classify_regression_outcome,
 };
 use neural_amp_modeler_rs::testing::qa::criterion::{
     DEFAULT_DSP_MICRO_BATCH, extract_criterion_latencies, parse_bench_constants_env,
 };
+use neural_amp_modeler_rs::testing::qa::env::EnvProbe;
 use neural_amp_modeler_rs::testing::qa::ids;
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
@@ -93,6 +94,7 @@ fn main() {
             print_help();
             exit(0);
         }
+        "dashboard" => cmd_dashboard(&args[1..]),
         "ingest" => cmd_ingest(&args[1..]),
         "verify" => cmd_verify(&args[1..]),
         "render" => cmd_render(&args[1..]),
@@ -114,6 +116,10 @@ fn print_help() {
     println!("docs/quality-contract.json; reports are JSONL. No ASCII loader, no jq.");
     println!();
     println!("Usage:");
+    println!("  nam_quality dashboard [--check <contract>] [--save] [--contract <path>]");
+    println!("                          [--fidelity-only] [--bench-core <core>]");
+    println!("                          [--run-id <id>] [--log-dir <dir>] [--criterion-dir <dir>]");
+    println!("                          [--ansi | --plain]");
     println!("  nam_quality ingest [--receipt <path>] [--metrics <path>] [--latency <path>]");
     println!("                          [--criterion-dir <path>] [--bench-constants-env <path>]");
     println!("                          [--contract <path>] [--out <path>]");
@@ -220,6 +226,613 @@ fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
     }
 }
 
+// ── dashboard ────────────────────────────────────────────────────────────────
+
+fn cmd_dashboard(args: &[String]) {
+    let flags = match parse_flags(
+        args,
+        &[
+            "check",
+            "save",
+            "contract",
+            "fidelity-only",
+            "bench-core",
+            "run-id",
+            "log-dir",
+            "receipt",
+            "metrics",
+            "criterion-dir",
+            "ansi",
+            "plain",
+        ],
+        &["save", "fidelity-only", "ansi", "plain"],
+    ) {
+        Ok(f) => f,
+        Err(e) if e == HELP_REQUEST => {
+            print_dashboard_help();
+            exit(0);
+        }
+        Err(e) => usage_error("dashboard", &e),
+    };
+
+    let contract_path = flags
+        .get("check")
+        .or_else(|| flags.get("contract"))
+        .unwrap_or("docs/quality-contract.json");
+    let log_dir_str = flags.get("log-dir").unwrap_or("target/logs");
+    let log_dir = PathBuf::from(log_dir_str);
+    if let Err(e) = fs::create_dir_all(&log_dir) {
+        run_error(format!("cannot create log dir {}: {e}", log_dir.display()));
+    }
+    let receipt_path = flags.get("receipt").map(PathBuf::from).unwrap_or_else(|| {
+        let p = log_dir.join("dashboard_phase_receipt.jsonl");
+        let _ = fs::remove_file(&p);
+        p
+    });
+    let metrics_path = flags.get("metrics").map(PathBuf::from).unwrap_or_else(|| {
+        let p = log_dir.join("fidelity_metrics.jsonl");
+        let _ = fs::remove_file(&p);
+        p
+    });
+    let report_path = log_dir.join("quality_report.jsonl");
+    let _ = fs::remove_file(&report_path);
+
+    let run_id = flags
+        .get("run-id")
+        .map(String::from)
+        .or_else(|| env::var("NAM_RUN_ID").ok())
+        .unwrap_or_else(|| {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{ts}-{}", std::process::id())
+        });
+
+    let receipt_path_str = receipt_path.to_string_lossy().to_string();
+    let metrics_path_str = metrics_path.to_string_lossy().to_string();
+    let report_path_str = report_path.to_string_lossy().to_string();
+
+    let existing_receipt_lines = read_jsonl_lines(&receipt_path_str).unwrap_or_default();
+    let mut existing_phases: HashMap<String, String> = HashMap::new();
+    for line in &existing_receipt_lines {
+        if let Ok(v) = serde_json::from_str::<Value>(line)
+            && let (Some(pid), Some(st)) = (
+                v.get("phase_id").and_then(Value::as_str),
+                v.get("status").and_then(Value::as_str),
+            )
+        {
+            existing_phases.insert(pid.to_string(), st.to_string());
+        }
+    }
+
+    // ── Phase 0: freshness & third-party integrity ──
+    if !existing_phases.contains_key("freshness") {
+        let freshness_log = log_dir.join("freshness.log");
+        run_dashboard_phase(
+            "freshness",
+            &[(
+                &[
+                    "cargo",
+                    "run",
+                    "--quiet",
+                    "--locked",
+                    "--features",
+                    "testing",
+                    "--bin",
+                    "nam_freshness",
+                    "--",
+                    "artifacts-hard",
+                ],
+                &[],
+            )],
+            &freshness_log,
+            &receipt_path_str,
+            &run_id,
+            1,
+            1,
+        );
+    }
+    if !existing_phases.contains_key("third_party") {
+        let tp_exists = Path::new("third-party/NeuralAmpModelerCore").is_dir();
+        let rec = PhaseReceiptRecord {
+            phase_id: "third_party",
+            status: if tp_exists { "PASS" } else { "SKIP_CAPABILITY" },
+            exit_code: 0,
+            observed_records: if tp_exists { 1 } else { 0 },
+            expected_records: 1,
+            reason: if tp_exists { "" } else { "third_party_absent" },
+            run_id: &run_id,
+        };
+        let _ = append_line(&receipt_path_str, &serde_json::to_string(&rec).unwrap());
+    }
+
+    // ── Phase 1: golden_vectors ──
+    if !existing_phases.contains_key("golden_vectors") {
+        let gv_log = log_dir.join("golden_vectors.log");
+        run_dashboard_phase(
+            "golden_vectors",
+            &[(
+                &[
+                    "cargo",
+                    "test",
+                    "--release",
+                    "--features",
+                    "testing",
+                    "--test",
+                    "models",
+                    "golden_vectors",
+                    "--",
+                    "--test-threads=1",
+                    "--nocapture",
+                ],
+                &[("NAM_METRICS_JSONL", &metrics_path_str)],
+            )],
+            &gv_log,
+            &receipt_path_str,
+            &run_id,
+            50,
+            1,
+        );
+    }
+
+    // ── Phase 2: reference_oracle_f64 ──
+    if !existing_phases.contains_key("reference_oracle_f64") {
+        let f64_log = log_dir.join("reference_oracle_f64.log");
+        run_dashboard_phase(
+            "reference_oracle_f64",
+            &[(
+                &[
+                    "cargo",
+                    "test",
+                    "--release",
+                    "--features",
+                    "testing",
+                    "--test",
+                    "parity",
+                    "reference_oracle_f64",
+                    "--",
+                    "--test-threads=1",
+                    "--nocapture",
+                ],
+                &[("NAM_METRICS_JSONL", &metrics_path_str)],
+            )],
+            &f64_log,
+            &receipt_path_str,
+            &run_id,
+            10,
+            10,
+        );
+    }
+
+    // ── Phase 3: isa_self_consistency ──
+    if !existing_phases.contains_key("isa_self_consistency") {
+        let isa_log = log_dir.join("isa_self_consistency.log");
+        run_dashboard_phase(
+            "isa_self_consistency",
+            &[(
+                &[
+                    "cargo",
+                    "test",
+                    "--release",
+                    "--features",
+                    "testing",
+                    "--test",
+                    "parity",
+                    "isa_parity",
+                    "--",
+                    "--test-threads=1",
+                    "--nocapture",
+                ],
+                &[],
+            )],
+            &isa_log,
+            &receipt_path_str,
+            &run_id,
+            5,
+            5,
+        );
+        let cross_rec = PhaseReceiptRecord {
+            phase_id: "isa_parity_cross_isa",
+            status: "SKIP_CAPABILITY",
+            exit_code: 0,
+            observed_records: 0,
+            expected_records: 0,
+            reason: "cross_isa_requires_remote_or_long_suite",
+            run_id: &run_id,
+        };
+        let _ = append_line(
+            &receipt_path_str,
+            &serde_json::to_string(&cross_rec).unwrap(),
+        );
+    }
+
+    // ── Phase 4: spectral_fidelity ──
+    if !existing_phases.contains_key("spectral_fidelity") {
+        let spec_log = log_dir.join("spectral_fidelity.log");
+        run_dashboard_phase(
+            "spectral_fidelity",
+            &[
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "models",
+                        "spectral_fidelity",
+                        "--",
+                        "--nocapture",
+                    ],
+                    &[],
+                ),
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "models",
+                        "spectral_fidelity::model_baselines::baseline_",
+                        "--",
+                        "--ignored",
+                        "--nocapture",
+                    ],
+                    &[],
+                ),
+            ],
+            &spec_log,
+            &receipt_path_str,
+            &run_id,
+            5,
+            5,
+        );
+    }
+
+    // ── Phase 5: lstm_activation_precision ──
+    if !existing_phases.contains_key("lstm_activation_precision") {
+        let lstm_log = log_dir.join("lstm_activation_precision.log");
+        run_dashboard_phase(
+            "lstm_activation_precision",
+            &[(
+                &[
+                    "cargo",
+                    "test",
+                    "--release",
+                    "--features",
+                    "testing",
+                    "--test",
+                    "models",
+                    "lstm_activation_precision",
+                    "--",
+                    "--nocapture",
+                ],
+                &[("NAM_METRICS_JSONL", &metrics_path_str)],
+            )],
+            &lstm_log,
+            &receipt_path_str,
+            &run_id,
+            5,
+            1,
+        );
+    }
+
+    // ── Phase 6: quick_parity ──
+    if !existing_phases.contains_key("quick_parity") {
+        let tp_exists = Path::new("third-party/NeuralAmpModelerCore").is_dir();
+        if !tp_exists {
+            let qp_rec = PhaseReceiptRecord {
+                phase_id: "quick_parity",
+                status: "SKIP_OPTIONAL_FIXTURE",
+                exit_code: 0,
+                observed_records: 0,
+                expected_records: 0,
+                reason: "third_party_absent",
+                run_id: &run_id,
+            };
+            let _ = append_line(&receipt_path_str, &serde_json::to_string(&qp_rec).unwrap());
+        } else {
+            let qp_log = log_dir.join("quick_parity.log");
+            run_dashboard_phase(
+                "quick_parity",
+                &[(
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "parity",
+                        "quick_parity",
+                        "--",
+                        "--include-ignored",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                )],
+                &qp_log,
+                &receipt_path_str,
+                &run_id,
+                50,
+                1,
+            );
+        }
+    }
+
+    // ── Build metadata ──
+    let receipt_content = fs::read_to_string(&receipt_path).unwrap_or_default();
+    if !receipt_content.contains("\"kind\":\"build_metadata\"") {
+        let probe = EnvProbe::probe();
+        let meta = serde_json::json!({
+            "kind": "build_metadata",
+            "cargo_profile": "release",
+            "target_triple": probe.host_triple,
+            "rustflags": probe.rustflags,
+            "rustc_version": probe.rustc_version,
+            "git_commit": probe.git_commit,
+            "git_dirty_state": probe.git_dirty,
+            "run_id": run_id,
+            "effective_isa": probe.effective_isa,
+        });
+        let _ = append_line(&receipt_path_str, &meta.to_string());
+    }
+
+    // ── Phase 7: regression_gate ──
+    let fidelity_only = flags.get("fidelity-only").is_some();
+    let mut perf_passed = false;
+    if !fidelity_only && !existing_phases.contains_key("regression_gate") {
+        println!("-> Running regression_gate (nam_perf_gate run --check)...");
+        let reg_receipt_file = log_dir.join("regression_phase_receipt.jsonl");
+        let reg_log_file = log_dir.join("regression_gate.log");
+        let mut cmd = Command::new("cargo");
+        cmd.args([
+            "run",
+            "--quiet",
+            "--locked",
+            "--features",
+            "testing",
+            "--bin",
+            "nam_perf_gate",
+            "--",
+            "run",
+            "--check",
+            "--receipt",
+            &reg_receipt_file.to_string_lossy(),
+            "--log",
+            &reg_log_file.to_string_lossy(),
+            "--run-id",
+            &run_id,
+        ]);
+        if let Some(core) = flags.get("bench-core") {
+            cmd.args(["--bench-core", core]);
+        }
+        let output = cmd.output();
+        let reg_exit = output
+            .as_ref()
+            .map(|o| o.status.code().unwrap_or(1))
+            .unwrap_or(1);
+
+        let mut rec_status = "FAIL".to_string();
+        let mut rec_reason = "missing_receipt".to_string();
+        let mut run_id_match = false;
+
+        if let Ok(lines) = read_jsonl_lines(&reg_receipt_file.to_string_lossy()) {
+            for line in lines.iter().rev() {
+                if let Ok(v) = serde_json::from_str::<Value>(line)
+                    && v.get("phase_id").and_then(Value::as_str) == Some("regression_check")
+                {
+                    if let Some(s) = v.get("status").and_then(Value::as_str) {
+                        rec_status = s.to_string();
+                    }
+                    if let Some(r) = v.get("reason").and_then(Value::as_str) {
+                        rec_reason = r.to_string();
+                    }
+                    if let Some(rid) = v.get("run_id").and_then(Value::as_str) {
+                        run_id_match = rid == run_id;
+                    }
+                    break;
+                }
+            }
+        }
+
+        let outcome = classify_fresh_regression(reg_exit, &rec_status, &rec_reason, run_id_match);
+        perf_passed = outcome == RegressionOutcome::Pass;
+        let (final_status, final_reason, observed) = match outcome {
+            RegressionOutcome::Pass => ("PASS", "", 10),
+            RegressionOutcome::NotVerified => ("NOT_VERIFIED", rec_reason.as_str(), 0),
+            RegressionOutcome::Fail => (
+                "FAIL",
+                if rec_reason.is_empty() {
+                    "Performance regression check failed"
+                } else {
+                    rec_reason.as_str()
+                },
+                0,
+            ),
+        };
+
+        let record = PhaseReceiptRecord {
+            phase_id: "regression_gate",
+            status: final_status,
+            exit_code: if perf_passed { 0 } else { reg_exit as u32 },
+            observed_records: observed,
+            expected_records: 10,
+            reason: final_reason,
+            run_id: &run_id,
+        };
+        let _ = append_line(&receipt_path_str, &serde_json::to_string(&record).unwrap());
+        println!(
+            "   {} regression_gate ({final_status})",
+            if perf_passed { "ok" } else { "NOT_OK" }
+        );
+    } else if existing_phases.get("regression_gate").map(String::as_str) == Some("PASS") {
+        perf_passed = true;
+    }
+
+    // ── Ingest report ──
+    let criterion_available = {
+        let mut ok = Path::new("target/criterion").is_dir();
+        if ok {
+            for bench in ids::RT_BENCH_TABLE {
+                let est = Path::new("target/criterion")
+                    .join(bench.bench_label)
+                    .join("new")
+                    .join("estimates.json");
+                if !est.is_file() {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        ok
+    };
+
+    let criterion_dir = if criterion_available && (perf_passed || fidelity_only) {
+        flags.get("criterion-dir").or(Some("target/criterion"))
+    } else {
+        None
+    };
+
+    if let Err(e) = run_ingest(
+        &receipt_path_str,
+        if metrics_path.is_file() {
+            Some(&metrics_path_str)
+        } else {
+            None
+        },
+        None,
+        criterion_dir,
+        None,
+        Some(contract_path),
+        Some(&report_path_str),
+    ) {
+        run_error(format!("failed to ingest quality report: {e}"));
+    }
+
+    // ── Render ──
+    let style = match (flags.get("ansi").is_some(), flags.get("plain").is_some()) {
+        (true, true) => RenderStyle::Ansi,
+        (_, true) => RenderStyle::Plain,
+        _ => RenderStyle::Ansi,
+    };
+    if let Ok(parsed_report) = parse_quality_report_file(&report_path_str) {
+        print!("{}", render_quality_report(&parsed_report, style));
+    }
+
+    // ── Check / Save ──
+    if flags.get("save").is_some() {
+        execute_save(contract_path, &receipt_path_str);
+    }
+
+    if flags.get("check").is_some() {
+        let exit_code = execute_verify(contract_path, &report_path_str, fidelity_only);
+        exit(exit_code);
+    }
+
+    let receipt_lines = read_jsonl_lines(&receipt_path_str).unwrap_or_default();
+    let mut had_failure = false;
+    for line in receipt_lines {
+        if let Ok(v) = serde_json::from_str::<Value>(&line)
+            && v.get("status").and_then(Value::as_str) == Some("FAIL")
+        {
+            had_failure = true;
+            break;
+        }
+    }
+    exit(if had_failure { 1 } else { 0 });
+}
+
+fn print_dashboard_help() {
+    println!("Usage: nam_quality dashboard [--check <contract>] [--save]");
+    println!("                               [--contract <path>] [--fidelity-only]");
+    println!("                               [--bench-core <core>] [--run-id <id>]");
+    println!("                               [--log-dir <dir>] [--criterion-dir <dir>]");
+    println!("                               [--ansi | --plain]");
+    println!();
+    println!("Self-contained quality dashboard orchestrator: executes missing fidelity");
+    println!("phases, invokes the performance regression check, ingests the verified");
+    println!("report, renders the human-facing table, and verifies or saves the contract.");
+}
+
+type CommandStep<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
+fn run_command_sequence(commands: &[CommandStep<'_>], log_path: &Path) -> (u32, u32) {
+    let mut all_output = Vec::new();
+    let mut final_exit = 0;
+    for (args, envs) in commands {
+        let mut cmd = Command::new(args[0]);
+        cmd.args(&args[1..]);
+        for (k, v) in *envs {
+            cmd.env(k, v);
+        }
+        match cmd.output() {
+            Ok(output) => {
+                all_output.extend_from_slice(&output.stdout);
+                all_output.extend_from_slice(&output.stderr);
+                let code = output.status.code().unwrap_or(1) as u32;
+                if code != 0 {
+                    final_exit = code;
+                    break;
+                }
+            }
+            Err(e) => {
+                let msg = format!("failed to spawn {}: {e}\n", args[0]);
+                all_output.extend_from_slice(msg.as_bytes());
+                final_exit = 127;
+                break;
+            }
+        }
+    }
+    let _ = fs::write(log_path, &all_output);
+    let observed = all_output
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count() as u32;
+    (final_exit, observed)
+}
+
+fn run_dashboard_phase(
+    phase_id: &str,
+    commands: &[CommandStep<'_>],
+    log_path: &Path,
+    receipt_path: &str,
+    run_id: &str,
+    min_observed: u32,
+    expected_records: u32,
+) -> bool {
+    println!("-> Running {phase_id}...");
+    let (exit_code, observed) = run_command_sequence(commands, log_path);
+    let (status, reason) = if exit_code != 0 {
+        ("FAIL", "test command failed")
+    } else if observed < min_observed && min_observed > 0 {
+        ("FAIL", "insufficient records in log")
+    } else {
+        ("PASS", "")
+    };
+
+    let rec = PhaseReceiptRecord {
+        phase_id,
+        status,
+        exit_code,
+        observed_records: observed,
+        expected_records,
+        reason,
+        run_id,
+    };
+    let _ = append_line(receipt_path, &serde_json::to_string(&rec).unwrap());
+    println!(
+        "   {} {phase_id} (exit={exit_code}, {observed} lines)",
+        if status == "PASS" { "ok" } else { "FAIL" }
+    );
+    status == "PASS"
+}
+
 // ── ingest ───────────────────────────────────────────────────────────────────
 
 /// Merges dashboard artifacts into one verify report (JSONL), fail-closed on
@@ -252,19 +865,44 @@ fn cmd_ingest(args: &[String]) {
     };
     let out = flags.get("out");
 
-    let receipt_lines = match read_jsonl_lines(receipt) {
-        Ok(lines) => lines,
-        Err(e) => run_error(format!("cannot read phase receipt {receipt}: {e}")),
+    let rendered = match run_ingest(
+        receipt,
+        flags.get("metrics"),
+        flags.get("latency"),
+        flags.get("criterion-dir"),
+        flags.get("bench-constants-env"),
+        flags.get("contract"),
+        out,
+    ) {
+        Ok(r) => r,
+        Err(e) => run_error(e),
     };
+    if out.is_none() {
+        print!("{rendered}");
+        eprintln!("ingest: report written to stdout");
+    }
+    exit(0);
+}
+
+fn run_ingest(
+    receipt: &str,
+    metrics_path: Option<&str>,
+    latency_path: Option<&str>,
+    criterion_dir: Option<&str>,
+    bench_constants_env: Option<&str>,
+    contract_path: Option<&str>,
+    out: Option<&str>,
+) -> Result<String, String> {
+    let receipt_lines = read_jsonl_lines(receipt)
+        .map_err(|e| format!("cannot read phase receipt {receipt}: {e}"))?;
     let mut phases = Vec::new();
     for (i, line) in receipt_lines.iter().enumerate() {
-        let value: Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(source) => run_error(format!(
+        let value: Value = serde_json::from_str(line).map_err(|source| {
+            format!(
                 "malformed phase receipt line {} in {receipt}: {source}",
                 i + 1
-            )),
-        };
+            )
+        })?;
         // Lines carrying `phase_id` must have a string `status`; provenance
         // records (`kind: build_metadata`) have no `phase_id` and pass
         // through — the verify parser skips them.
@@ -272,7 +910,7 @@ fn cmd_ingest(args: &[String]) {
             && (value.get("phase_id").and_then(Value::as_str).is_none()
                 || value.get("status").and_then(Value::as_str).is_none())
         {
-            run_error(format!(
+            return Err(format!(
                 "phase receipt line {} in {receipt} must have string `phase_id` and `status`",
                 i + 1
             ));
@@ -280,57 +918,72 @@ fn cmd_ingest(args: &[String]) {
         phases.push(line.to_string());
     }
 
-    let metrics = read_optional_stream("metrics", &flags);
+    let metrics = match metrics_path {
+        Some(path) => {
+            let lines = read_jsonl_lines(path)
+                .map_err(|e| format!("cannot read metrics JSONL {path}: {e}"))?;
+            for (i, line) in lines.iter().enumerate() {
+                if let Err(source) = serde_json::from_str::<Value>(line) {
+                    return Err(format!(
+                        "malformed metrics JSONL line {} in {path}: {source}",
+                        i + 1
+                    ));
+                }
+            }
+            lines
+        }
+        None => Vec::new(),
+    };
 
     // Latency stream resolution:
     // If `--criterion-dir` is provided, ingest directly from Criterion's `estimates.json`.
     // Otherwise fallback to reading `--latency` stream.
-    let latency: Vec<String> = if let Some(criterion_dir) = flags.get("criterion-dir") {
-        let micro_batch = match flags.get("bench-constants-env") {
+    let latency: Vec<String> = if let Some(criterion_dir) = criterion_dir {
+        let micro_batch = match bench_constants_env {
             Some(env_path) => {
-                let content = match fs::read_to_string(env_path) {
-                    Ok(c) => c,
-                    Err(e) => run_error(format!("cannot read bench constants env {env_path}: {e}")),
-                };
+                let content = fs::read_to_string(env_path)
+                    .map_err(|e| format!("cannot read bench constants env {env_path}: {e}"))?;
                 parse_bench_constants_env(&content).unwrap_or(DEFAULT_DSP_MICRO_BATCH)
             }
             None => DEFAULT_DSP_MICRO_BATCH,
         };
 
-        let contract = match flags.get("contract") {
+        let contract = match contract_path {
             Some(cpath) => {
-                let content = match fs::read_to_string(cpath) {
-                    Ok(c) => c,
-                    Err(e) => run_error(format!("cannot read quality contract {cpath}: {e}")),
-                };
-                let c: QualityContract = match serde_json::from_str(&content) {
-                    Ok(parsed) => parsed,
-                    Err(e) => run_error(format!("malformed quality contract JSON {cpath}: {e}")),
-                };
+                let content = fs::read_to_string(cpath)
+                    .map_err(|e| format!("cannot read quality contract {cpath}: {e}"))?;
+                let c: QualityContract = serde_json::from_str(&content)
+                    .map_err(|e| format!("malformed quality contract JSON {cpath}: {e}"))?;
                 Some(c)
             }
             None => None,
         };
 
-        let entries = match extract_criterion_latencies(
-            Path::new(criterion_dir),
-            micro_batch,
-            contract.as_ref(),
-        ) {
-            Ok(ent) => ent,
-            Err(e) => run_error(format!("failed to extract Criterion latencies: {e}")),
-        };
+        let entries =
+            extract_criterion_latencies(Path::new(criterion_dir), micro_batch, contract.as_ref())
+                .map_err(|e| format!("failed to extract Criterion latencies: {e}"))?;
 
         entries
             .into_iter()
             .map(|e| {
-                serde_json::to_string(&e).unwrap_or_else(|err| {
-                    run_error(format!("cannot serialize latency entry: {err}"))
-                })
+                serde_json::to_string(&e)
+                    .map_err(|err| format!("cannot serialize latency entry: {err}"))
             })
-            .collect()
+            .collect::<Result<Vec<String>, String>>()?
+    } else if let Some(lat_path) = latency_path {
+        let lines = read_jsonl_lines(lat_path)
+            .map_err(|e| format!("cannot read latency JSONL {lat_path}: {e}"))?;
+        for (i, line) in lines.iter().enumerate() {
+            if let Err(source) = serde_json::from_str::<Value>(line) {
+                return Err(format!(
+                    "malformed latency JSONL line {} in {lat_path}: {source}",
+                    i + 1
+                ));
+            }
+        }
+        lines
     } else {
-        read_optional_stream("latency", &flags)
+        Vec::new()
     };
 
     // Join the f64-oracle table (`kind: f64_table`) onto the fidelity
@@ -346,29 +999,18 @@ fn cmd_ingest(args: &[String]) {
         rendered.push('\n');
     }
 
-    match out {
-        Some(path) => {
-            if let Err(e) = write_new_file(path, &rendered) {
-                run_error(format!("cannot write report to {path}: {e}"));
-            }
-            eprintln!(
-                "ingest: report written to {path} ({} phase record(s), {} metric record(s), {} latency record(s))",
-                phases.len(),
-                metrics.len(),
-                latency.len()
-            );
-        }
-        None => {
-            print!("{rendered}");
-            eprintln!(
-                "ingest: report written to stdout ({} phase record(s), {} metric record(s), {} latency record(s))",
-                phases.len(),
-                metrics.len(),
-                latency.len()
-            );
-        }
+    if let Some(path) = out {
+        write_new_file(path, &rendered)
+            .map_err(|e| format!("cannot write report to {path}: {e}"))?;
+        eprintln!(
+            "ingest: report written to {path} ({} phase record(s), {} metric record(s), {} latency record(s))",
+            phases.len(),
+            metrics.len(),
+            latency.len()
+        );
     }
-    exit(0);
+
+    Ok(rendered)
 }
 
 /// Joins the `f64_table` oracle ESR onto the fidelity records it measures.
@@ -478,27 +1120,6 @@ fn print_ingest_help() {
     println!("Fail-closed: any malformed line in a given input aborts with exit 1.");
 }
 
-/// Reads one optional ingest stream. Absent flag ⇒ empty stream; present
-/// flag with unreadable or malformed content ⇒ exit 1.
-fn read_optional_stream(name: &str, flags: &Flags) -> Vec<String> {
-    let Some(path) = flags.get(name) else {
-        return Vec::new();
-    };
-    let lines = match read_jsonl_lines(path) {
-        Ok(lines) => lines,
-        Err(e) => run_error(format!("cannot read {name} JSONL {path}: {e}")),
-    };
-    for (i, line) in lines.iter().enumerate() {
-        if let Err(source) = serde_json::from_str::<Value>(line) {
-            run_error(format!(
-                "malformed {name} JSONL line {} in {path}: {source}",
-                i + 1
-            ));
-        }
-    }
-    lines
-}
-
 fn read_jsonl_lines(path: &str) -> io::Result<Vec<String>> {
     let content = fs::read_to_string(path)?;
     Ok(content
@@ -533,7 +1154,11 @@ fn cmd_verify(args: &[String]) {
         Err(e) => usage_error("verify", &e),
     };
     let fidelity_only = flags.get("fidelity-only").is_some();
+    let exit_code = execute_verify(contract_path, report_path, fidelity_only);
+    exit(exit_code);
+}
 
+fn execute_verify(contract_path: &str, report_path: &str, fidelity_only: bool) -> i32 {
     let contract = match fs::read_to_string(contract_path)
         .map_err(|e| format!("cannot read contract {contract_path}: {e}"))
         .and_then(|s| QualityContract::from_json_str(&s).map_err(|e| e.to_string()))
@@ -551,12 +1176,11 @@ fn cmd_verify(args: &[String]) {
         "{}",
         render_outcome(&contract, &report, &outcome, fidelity_only)
     );
-    let exit_code = if fidelity_only {
+    if fidelity_only {
         outcome.fidelity_exit_code()
     } else {
         outcome.exit_code()
-    };
-    exit(exit_code);
+    }
 }
 
 fn print_verify_help() {
@@ -1035,6 +1659,11 @@ fn cmd_save(args: &[String]) {
         Err(e) => usage_error("save", &e),
     };
 
+    execute_save(contract_path, receipt_path);
+    exit(0);
+}
+
+fn execute_save(contract_path: &str, receipt_path: &str) {
     // Validate the contract payload before touching anything (fail-closed:
     // a corrupt contract must never be promoted).
     let contract = match fs::read_to_string(contract_path)
@@ -1081,7 +1710,6 @@ fn cmd_save(args: &[String]) {
         run_error(format!("contract save failed: {e}"));
     }
     eprintln!("contract saved: {contract_path} (atomic, fidelity phases verified)");
-    exit(0);
 }
 
 fn print_save_help() {

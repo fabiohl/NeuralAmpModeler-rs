@@ -501,6 +501,7 @@ fn test_oracle_lstm() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2() {
     let esr = run_oracle_esr_paired("wavenet_a2_lite.nam", "A2");
     assert!(
@@ -516,6 +517,7 @@ fn test_oracle_a2() {
 // is diagnostic (cold-start run_decomposition prints per-component ΔESR).
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_wavenet() {
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
 
@@ -728,6 +730,7 @@ fn run_decomposition_paired(
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_boss_lstm_1x16() {
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
 
@@ -805,6 +808,7 @@ fn test_decomposition_boss_lstm_1x16() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_boss_lstm_2x8() {
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
 
@@ -882,6 +886,7 @@ fn test_decomposition_boss_lstm_2x8() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_a2() {
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
 
@@ -1039,6 +1044,7 @@ fn test_combined_simulation_lstm() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_combined_simulation_a2() {
     run_combined_paired_test("wavenet_a2_lite.nam", "A2");
 }
@@ -1057,6 +1063,7 @@ fn test_oracle_convnet() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_convnet() {
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
 
@@ -1140,6 +1147,7 @@ fn test_decomposition_convnet() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_combined_simulation_convnet() {
     run_combined_paired_test("convnet_test.nam", "ConvNet");
 }
@@ -1176,6 +1184,7 @@ fn test_oracle_vs_python_anchor_convnet() {
 // ── FiLM A2 oracle tests ────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2_film_lite() {
     let esr = run_oracle_esr_paired("wavenet_a2_film_lite.nam", "A2-FiLM-Lite");
     assert!(
@@ -1187,6 +1196,7 @@ fn test_oracle_a2_film_lite() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2_film_full() {
     let esr = run_oracle_esr_paired("wavenet_a2_film_full.nam", "A2-FiLM-Full");
     assert!(
@@ -1198,6 +1208,7 @@ fn test_oracle_a2_film_full() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2_film_input_mixin_pre() {
     let esr = run_oracle_esr_paired(
         "wavenet_a2_film_input_mixin_pre.nam",
@@ -1212,6 +1223,7 @@ fn test_oracle_a2_film_input_mixin_pre() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_combined_simulation_a2_film() {
     run_combined_paired_test("wavenet_a2_film_lite.nam", "A2-FiLM-Lite");
     run_combined_paired_test("wavenet_a2_film_full.nam", "A2-FiLM-Full");
@@ -1257,6 +1269,7 @@ fn test_oracle_vs_python_anchor_a2_generic() {
 
 // Measured: ESR = 1.66e-14 (-137.8 dB), SNR = 137.8 dB, limit = 1e-11
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2_generic() {
     let esr = run_oracle_esr_paired("wavenet_a2_max.nam", "A2-Generic");
     assert!(
@@ -1269,6 +1282,7 @@ fn test_oracle_a2_generic() {
 
 // Measured: paired ESR = 1.66e-14, combined ΔESR = 1.59e-7
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_decomposition_a2_generic() {
     let path = models_dir().join("wavenet_a2_max.nam");
     let md = load_and_parse(&path);
@@ -1296,6 +1310,7 @@ fn test_decomposition_a2_generic() {
 
 // Measured: ΔESR(combined vs oracle) = 1.53e-7 (-68.2 dB), ESR(combined vs production) = 1.53e-7 (-68.1 dB)
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_combined_simulation_a2_generic() {
     run_combined_paired_test("wavenet_a2_max.nam", "A2-Generic");
 }
@@ -1321,6 +1336,7 @@ fn test_combined_simulation_a2_generic() {
 /// updated with grouped projection support but requires further reconciliation
 /// for exact parity. The standalone test provides the primary oracle gate.
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_a2_max_standalone() {
     let path = models_dir().join("wavenet_a2_max.nam");
     let md = load_and_parse(&path);
@@ -1461,6 +1477,7 @@ fn test_oracle_warmup_paired_lstm() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_oracle_warmup_paired_a2() {
     // Measured: esr_full=4.60e-7, esr_warmed=4.26e-7 (ratio 0.93) → INCONCLUSIVE.
     run_warmup_paired_test("wavenet_a2_lite.nam", "A2", 0.126);
@@ -1523,6 +1540,7 @@ fn f64_oracle_fixture_table_matches_summary_models() {
 }
 
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_summary_table() {
     for &(filename, family) in SUMMARY_MODELS {
         println!("\n=== ESR(f32 vs f64 oracle) Summary (prewarm-paired: 24k + 256) ===");
@@ -1597,7 +1615,7 @@ fn print_blockwise_esr_table(esr_blocks: &[f64], block_size: usize, sample_rate:
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: diagnóstico de drift recorrente LSTM"]
 fn t33_diagnostic_recurrent_drift_lstm_1x16() {
     use neural_amp_modeler_rs::testing::perceptual::compute_esr;
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;
@@ -1744,7 +1762,7 @@ fn run_paired_drift_diagnostic(
 // ── Paired prewarm LSTM 1x16 diagnostic ──────────────────────────────
 
 #[test]
-#[ignore]
+#[ignore = "long: diagnóstico de drift recorrente LSTM"]
 fn t33b_diagnostic_recurrent_drift_lstm_1x16_paired() {
     let _guard = PrecisionGuard::new(ActivationPrecision::Standard);
 
@@ -1792,7 +1810,7 @@ fn t33b_diagnostic_recurrent_drift_lstm_1x16_paired() {
 // ── Paired prewarm LSTM 2x8 diagnostic ──────────────────────────────
 
 #[test]
-#[ignore]
+#[ignore = "long: diagnóstico de drift recorrente LSTM"]
 fn t33c_diagnostic_recurrent_drift_lstm_2x8_paired() {
     let _guard = PrecisionGuard::new(ActivationPrecision::Standard);
 
@@ -1917,6 +1935,7 @@ fn run_prod_with_activation(
 /// analytic reference used by the other paired-prewarm tests. No external
 /// musical/real DI fixture exists in `tests/fixtures/`.
 #[test]
+#[ignore = "long: oráculo f64 (paridade matemática)"]
 fn test_s4_lstm_pade_activation_cost() {
     use neural_amp_modeler_rs::testing::perceptual::compute_mr_stft;
     use neural_amp_modeler_rs::testing::stress::generate_stress_signal_v2_default;

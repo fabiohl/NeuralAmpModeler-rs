@@ -188,8 +188,17 @@ fn main() {
                     p.display()
                 );
             }
-            for drift in &outcome.toolchain_drift {
-                println!("  {}⚠ TOOLCHAIN DRIFT:{} {}", s.yellow, s.reset, drift);
+            if !outcome.toolchain_drift.is_empty() {
+                let components = outcome
+                    .toolchain_drift
+                    .iter()
+                    .filter_map(|d| d.split_whitespace().next())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!(
+                    "  {}⚠ TOOLCHAIN DRIFT:{} ({components}) — host environment differs from manifest (informational)",
+                    s.yellow, s.reset
+                );
             }
 
             if outcome.is_ok() {

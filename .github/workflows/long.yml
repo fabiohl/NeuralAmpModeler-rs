@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: Long QA Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      phases:
+        description: 'Comma-separated phase IDs to execute'
+        type: string
+        default: 'preflight-render,preflight-catalog,preflight-freshness,phase1,phase2,phase3,phase4,phase7'
+      strict:
+        description: 'Strict mode (treat gaps as failures)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# A newer run cancels any previous manual run on the same ref.
+concurrency:
+  group: long-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  long-qa:
+    name: long-qa (x86_64-linux)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Setup third-party (C++ oracle)
+        run: ./utils/setup-third-party.sh
+      - name: Long QA Suite
+        run: |
+          STRICT_FLAG=""
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            STRICT_FLAG="--strict"
+          fi
+          ./utils/tests-long.sh $STRICT_FLAG --only "${{ inputs.phases }}"
+      - name: Publish step summary
+        if: always()
+        run: |
+          echo "### Long QA Suite Run Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -d target/logs ]; then
+            echo '```text' >> $GITHUB_STEP_SUMMARY
+            grep -hE '^(RESULT:|PHASE:|OVERALL:|FIDELITY:|RT_DEADLINE:|RT_JITTER:|PERF_REGRESSION:|WARNING:|ERROR:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      - name: Upload logs and receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-logs-receipts
+          path: |
+            target/logs/**
+            target/long/**/*.jsonl
+          retention-days: 14

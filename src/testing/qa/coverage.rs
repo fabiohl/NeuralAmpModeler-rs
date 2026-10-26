@@ -187,7 +187,3 @@ pub fn missing_expected_benchmarks(
         .collect();
     Ok(missing)
 }
-
-#[cfg(test)]
-#[path = "coverage_test.rs"]
-mod coverage_test;

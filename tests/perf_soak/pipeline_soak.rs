@@ -72,7 +72,10 @@ mod tests {
     ) {
         let path = model_path(model_file);
         if !path.exists() {
-            eprintln!("SKIP: {} not found at {:?}", model_file, path);
+            neural_amp_modeler_rs::testing::report_skip(
+                &format!("pipeline_soak::{label}"),
+                &format!("fixture_not_found:{model_file}"),
+            );
             return;
         }
 
@@ -331,21 +334,21 @@ mod tests {
 
     /// Integration Soak Test for the integrated DSP pipeline (A1 Nano).
     #[test]
-    #[ignore]
+    #[ignore = "long: soak / estresse de pipeline"]
     fn test_pipeline_soak_integrated() {
         run_pipeline_soak_core("BossWN-nano.nam", 10_000_000, 2.5, "A1-Nano");
     }
 
     /// Integration Soak Test for A2-Full (CH=8) through the full DSP pipeline.
     #[test]
-    #[ignore]
+    #[ignore = "long: soak / estresse de pipeline"]
     fn test_pipeline_soak_a2_full() {
         run_pipeline_soak_core("wavenet_a2_full.nam", 2_000_000, 10.0, "A2-Full");
     }
 
     /// Integration Soak Test for A2-Lite (CH=3) through the full DSP pipeline.
     #[test]
-    #[ignore]
+    #[ignore = "long: soak / estresse de pipeline"]
     fn test_pipeline_soak_a2_lite() {
         run_pipeline_soak_core("wavenet_a2_lite.nam", 5_000_000, 5.0, "A2-Lite");
     }
@@ -359,6 +362,7 @@ mod tests {
     /// Concurrency coverage is provided by this deterministic stress test and
     /// the existing Loom model-checking phase, both on the stable toolchain.
     #[test]
+    #[ignore = "long: soak / estresse de concorrência"]
     fn test_dsp_bridge_skip_on_overflow() {
         use std::sync::atomic::Ordering;
         use std::sync::{Arc, Barrier};

@@ -155,12 +155,7 @@ fn ensure_render_compiled() -> bool {
     let _guard = BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     fn skip_or_abort(msg: &str) -> bool {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: {msg}");
-        }
-        // Typed machine-parseable marker (the detailed message follows
-        // as free-form diagnostic text).
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip("cpp_parity", "render_tool_unavailable");
         eprintln!("{msg}");
         false
     }
@@ -777,12 +772,14 @@ fn run_v2_multi_sr(
 // v2 tests (5-second stress signal, 48 kHz) — comprehensive.
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_lstm_1x16() {
     let outcome = run_v1("BossLSTM-1x16.nam", "lstm_1x16", "Quick LSTM 1×16", true);
     require_completed(outcome, "quick_parity_lstm_1x16");
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_wavenet_ch16() {
     let outcome = run_v1(
         "BossWN-standard.nam",
@@ -794,6 +791,7 @@ fn quick_parity_wavenet_ch16() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_a2_full() {
     let outcome = run_v1(
         "wavenet_a2_full.nam",
@@ -805,6 +803,7 @@ fn quick_parity_a2_full() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_convnet() {
     let outcome = run_v1("convnet_test.nam", "convnet_test", "Quick ConvNet", true);
     require_completed(outcome, "quick_parity_convnet");
@@ -814,6 +813,7 @@ fn quick_parity_convnet() {
 /// Promoted from `#[ignore]` to ensure v2 format
 /// coverage in the pre-commit quick suite.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_wavenet_standard_v2_48k() {
     let outcome = run_render_comparison(
         "BossWN-standard.nam",
@@ -829,6 +829,7 @@ fn quick_parity_wavenet_standard_v2_48k() {
 
 /// Quick v2 parity: A2 Full with 5-second stress signal at 48 kHz.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_a2_full_v2_48k() {
     let outcome = run_render_comparison(
         "wavenet_a2_full.nam",
@@ -845,6 +846,7 @@ fn quick_parity_a2_full_v2_48k() {
 /// Quick v2 parity: SlimmableContainer A2 Example with 5-second stress signal at 48 kHz.
 /// Promoted to v2 alongside the 48k_only scope change.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_a2_example_slimmable_v2_48k() {
     let outcome = run_render_comparison(
         "a2_example.nam",
@@ -860,6 +862,7 @@ fn quick_parity_a2_example_slimmable_v2_48k() {
 
 /// Quick parity: LSTM 1×10 (uncatalogued synthetic topology).
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_lstm_1x10() {
     let outcome = run_v1("lstm_1x10.nam", "lstm_1x10", "Quick LSTM 1×10", true);
     require_completed(outcome, "quick_parity_lstm_1x10");
@@ -867,6 +870,7 @@ fn quick_parity_lstm_1x10() {
 
 /// Quick parity: LSTM 2×24 (uncatalogued synthetic topology).
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_lstm_2x24() {
     let outcome = run_v1("lstm_2x24.nam", "lstm_2x24", "Quick LSTM 2×24", true);
     require_completed(outcome, "quick_parity_lstm_2x24");
@@ -874,6 +878,7 @@ fn quick_parity_lstm_2x24() {
 
 /// Quick parity: LSTM 3×8 (3-layer synthetic topology).
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_lstm_3x8() {
     let outcome = run_v1("lstm_3x8.nam", "lstm_3x8", "Quick LSTM 3×8", true);
     require_completed(outcome, "quick_parity_lstm_3x8");
@@ -881,6 +886,7 @@ fn quick_parity_lstm_3x8() {
 
 /// Quick parity: ConvNet No BatchNorm.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_convnet_nobn() {
     let outcome = run_v1(
         "convnet_nobn.nam",
@@ -893,6 +899,7 @@ fn quick_parity_convnet_nobn() {
 
 /// Quick parity: ConvNet ReLU.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_convnet_relu() {
     let outcome = run_v1(
         "convnet_relu.nam",
@@ -905,6 +912,7 @@ fn quick_parity_convnet_relu() {
 
 /// Quick parity: ConvNet SiLU.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_convnet_silu() {
     let outcome = run_v1(
         "convnet_silu.nam",
@@ -917,6 +925,7 @@ fn quick_parity_convnet_silu() {
 
 /// Quick parity: Linear No Bias.
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn quick_parity_linear_nobias() {
     let outcome = run_v1(
         "linear_nobias.nam",
@@ -928,13 +937,13 @@ fn quick_parity_linear_nobias() {
 }
 
 // =============================================================================
-// Tests — #[ignore] (require C++ toolchain)
+// Tests — #[ignore = "long: paridade C++ (spawn NAMCore)"] (require C++ toolchain)
 // =============================================================================
 
 // --- v1 (legacy, fast CI) ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_standard() {
     let outcome = run_v1(
         "BossWN-standard.nam",
@@ -946,7 +955,7 @@ fn live_cross_validation_wavenet_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_feather() {
     let outcome = run_v1(
         "BossWN-feather.nam",
@@ -958,14 +967,14 @@ fn live_cross_validation_wavenet_feather() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_nano() {
     let outcome = run_v1("BossWN-nano.nam", "wavenet_nano", "Live WaveNet Nano", true);
     assert_eq!(outcome, ParityOutcome::Completed, "BossWN-nano.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_lite() {
     let outcome = run_v1(
         "EVH-5150-Lite.nam",
@@ -983,7 +992,7 @@ fn live_cross_validation_wavenet_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a1_standard() {
     let outcome = run_v1(
         "wavenet_a1_standard.nam",
@@ -995,14 +1004,14 @@ fn live_cross_validation_wavenet_a1_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_official() {
     let outcome = run_v1("lstm.nam", "lstm_official", "Live LSTM Official", true);
     assert_eq!(outcome, ParityOutcome::Completed, "lstm.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_full() {
     let outcome = run_v1(
         "wavenet_a2_full.nam",
@@ -1014,7 +1023,7 @@ fn live_cross_validation_wavenet_a2_full() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_lite() {
     let outcome = run_v1(
         "wavenet_a2_lite.nam",
@@ -1026,7 +1035,7 @@ fn live_cross_validation_wavenet_a2_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_convnet() {
     let outcome = run_v1(
         "convnet_test.nam",
@@ -1040,28 +1049,28 @@ fn live_cross_validation_convnet() {
 // ── Synthetic and exotic topologies (v1) ──────────────────────────────
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_1x10() {
     let outcome = run_v1("lstm_1x10.nam", "lstm_1x10", "Live LSTM 1×10", true);
     assert_eq!(outcome, ParityOutcome::Completed, "lstm_1x10.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_2x24() {
     let outcome = run_v1("lstm_2x24.nam", "lstm_2x24", "Live LSTM 2×24", true);
     assert_eq!(outcome, ParityOutcome::Completed, "lstm_2x24.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_3x8() {
     let outcome = run_v1("lstm_3x8.nam", "lstm_3x8", "Live LSTM 3×8", true);
     assert_eq!(outcome, ParityOutcome::Completed, "lstm_3x8.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_convnet_nobn() {
     let outcome = run_v1(
         "convnet_nobn.nam",
@@ -1073,7 +1082,7 @@ fn live_cross_validation_convnet_nobn() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_convnet_relu() {
     let outcome = run_v1(
         "convnet_relu.nam",
@@ -1085,7 +1094,7 @@ fn live_cross_validation_convnet_relu() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_convnet_silu() {
     let outcome = run_v1(
         "convnet_silu.nam",
@@ -1097,7 +1106,7 @@ fn live_cross_validation_convnet_silu() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_linear_nobias() {
     let outcome = run_v1(
         "linear_nobias.nam",
@@ -1109,7 +1118,7 @@ fn live_cross_validation_linear_nobias() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_condition_dsp() {
     let outcome = run_v1(
         "wavenet_condition_dsp.nam",
@@ -1125,7 +1134,7 @@ fn live_cross_validation_wavenet_condition_dsp() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_condition_lstm() {
     let outcome = run_v1(
         "wavenet_condition_lstm.nam",
@@ -1146,7 +1155,7 @@ fn live_cross_validation_wavenet_condition_lstm() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_a2_example_slimmable() {
     let outcome = run_v1(
         "a2_example.nam",
@@ -1160,7 +1169,7 @@ fn live_cross_validation_a2_example_slimmable() {
 // --- v2 (multi-SR, comprehensive) ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_standard() {
     run_v2_multi_sr(
         "BossWN-standard.nam",
@@ -1171,7 +1180,7 @@ fn live_cross_validation_v2_wavenet_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_feather() {
     run_v2_multi_sr(
         "BossWN-feather.nam",
@@ -1182,7 +1191,7 @@ fn live_cross_validation_v2_wavenet_feather() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_nano() {
     run_v2_multi_sr(
         "BossWN-nano.nam",
@@ -1193,7 +1202,7 @@ fn live_cross_validation_v2_wavenet_nano() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_lite() {
     run_v2_multi_sr(
         "EVH-5150-Lite.nam",
@@ -1204,7 +1213,7 @@ fn live_cross_validation_v2_wavenet_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a1_standard() {
     run_v2_multi_sr(
         "wavenet_a1_standard.nam",
@@ -1215,13 +1224,13 @@ fn live_cross_validation_v2_wavenet_a1_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_lstm_official() {
     run_v2_multi_sr("lstm.nam", "lstm_official", "Live LSTM Official (v2)", true);
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_full() {
     run_v2_multi_sr(
         "wavenet_a2_full.nam",
@@ -1232,7 +1241,7 @@ fn live_cross_validation_v2_wavenet_a2_full() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_app_evh() {
     run_v2_multi_sr(
         "APP-EVH-Stealth100-Dialled-xSTD.nam",
@@ -1243,7 +1252,7 @@ fn live_cross_validation_v2_app_evh() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_boss_bd2() {
     run_v2_multi_sr(
         "Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
@@ -1254,7 +1263,7 @@ fn live_cross_validation_v2_boss_bd2() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_slammin_marshall() {
     run_v2_multi_sr(
         "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
@@ -1265,7 +1274,7 @@ fn live_cross_validation_v2_slammin_marshall() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_lite() {
     run_v2_multi_sr(
         "wavenet_a2_lite.nam",
@@ -1276,7 +1285,7 @@ fn live_cross_validation_v2_wavenet_a2_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_a2_example_slimmable() {
     run_v2_multi_sr(
         "a2_example.nam",
@@ -1287,7 +1296,7 @@ fn live_cross_validation_v2_a2_example_slimmable() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_condition_dsp() {
     run_v2_multi_sr(
         "wavenet_condition_dsp.nam",
@@ -1304,7 +1313,7 @@ fn live_cross_validation_v2_wavenet_condition_dsp() {
 /// `SkippedRateRejected` without requiring Completed SRs and without
 /// `catch_unwind` (which polluted logs while still reporting ok).
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_condition_lstm() {
     let model_filename = "wavenet_condition_lstm.nam";
     let label_base = "Live WaveNet Condition DSP LSTM (v2)";
@@ -1384,7 +1393,7 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
 // metrics (SNR ≈ 92 dB, ESR ≈ 7e-13) are well within gates — the output is
 // valid, not defective. Gate remains off with this typed justification.
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_lstm_1x10() {
     run_v2_multi_sr("lstm_1x10.nam", "lstm_1x10", "Live LSTM 1×10 (v2)", false);
 }
@@ -1395,19 +1404,19 @@ fn live_cross_validation_v2_lstm_1x10() {
 // long stress sequence — a known architecture characteristic, not a defect.
 // SNR (≈80 dB) and ESR (≈1e-11) remain within gates across all SRs.
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_lstm_2x24() {
     run_v2_multi_sr("lstm_2x24.nam", "lstm_2x24", "Live LSTM 2×24 (v2)", false);
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_lstm_3x8() {
     run_v2_multi_sr("lstm_3x8.nam", "lstm_3x8", "Live LSTM 3×8 (v2)", true);
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_convnet_nobn() {
     run_v2_multi_sr(
         "convnet_nobn.nam",
@@ -1423,7 +1432,7 @@ fn live_cross_validation_v2_convnet_nobn() {
 // ESR ≈ 1e-14) — the low LUFS is a legitimate architecture characteristic,
 // not a defect. Gate remains off with this typed justification.
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_convnet_relu() {
     run_v2_multi_sr(
         "convnet_relu.nam",
@@ -1434,7 +1443,7 @@ fn live_cross_validation_v2_convnet_relu() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_convnet_silu() {
     run_v2_multi_sr(
         "convnet_silu.nam",
@@ -1445,7 +1454,7 @@ fn live_cross_validation_v2_convnet_silu() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_linear_nobias() {
     run_v2_multi_sr(
         "linear_nobias.nam",
@@ -1458,7 +1467,7 @@ fn live_cross_validation_v2_linear_nobias() {
 // ── Dynamic Models (WaveNetDyn & LstmModelDyn) ────────────────────────
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_dyn() {
     let outcome = run_v1(
         "wavenet_dyn_free.nam",
@@ -1470,7 +1479,7 @@ fn live_cross_validation_wavenet_dyn() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_dyn() {
     let outcome = run_v1(
         "lstm_dyn_test.nam",
@@ -1482,7 +1491,7 @@ fn live_cross_validation_lstm_dyn() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_dyn() {
     run_v2_multi_sr(
         "wavenet_dyn_free.nam",
@@ -1493,7 +1502,7 @@ fn live_cross_validation_v2_wavenet_dyn() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_lstm_dyn() {
     run_v2_multi_sr(
         "lstm_dyn_test.nam",
@@ -1511,7 +1520,7 @@ fn live_cross_validation_v2_lstm_dyn() {
 // back to the generic path — see Finding 7.6.2).
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_a2_dynamic_gated() {
     let outcome = run_v1(
         "a2_dynamic_gated_ch8.nam",
@@ -1527,7 +1536,7 @@ fn live_cross_validation_a2_dynamic_gated() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_a2_dynamic_blended() {
     let outcome = run_v1(
         "a2_dynamic_blended_ch3.nam",
@@ -1543,7 +1552,7 @@ fn live_cross_validation_a2_dynamic_blended() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_film_lite() {
     let outcome = run_v1(
         "wavenet_a2_film_lite.nam",
@@ -1559,7 +1568,7 @@ fn live_cross_validation_wavenet_a2_film_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_film_full() {
     let outcome = run_v1(
         "wavenet_a2_film_full.nam",
@@ -1575,7 +1584,7 @@ fn live_cross_validation_wavenet_a2_film_full() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_film_input_mixin_pre() {
     let outcome = run_v1(
         "wavenet_a2_film_input_mixin_pre.nam",
@@ -1591,7 +1600,7 @@ fn live_cross_validation_wavenet_a2_film_input_mixin_pre() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_film_chaos_stress() {
     let outcome = run_v1(
         "wavenet_a2_film_chaos_stress.nam",
@@ -1608,7 +1617,7 @@ fn live_cross_validation_wavenet_a2_film_chaos_stress() {
 
 // wavenet_a2_max — parity verified (Fase 3, 2026-10-08): prod×C++ SNR 135.90 dB (V1).
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_a2_max() {
     run_v1(
         "wavenet_a2_max.nam",
@@ -1621,7 +1630,7 @@ fn live_cross_validation_wavenet_a2_max() {
 // --- v2 A2 Dynamic Models ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_a2_dynamic_gated() {
     run_v2_multi_sr(
         "a2_dynamic_gated_ch8.nam",
@@ -1632,7 +1641,7 @@ fn live_cross_validation_v2_a2_dynamic_gated() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_a2_dynamic_blended() {
     run_v2_multi_sr(
         "a2_dynamic_blended_ch3.nam",
@@ -1643,7 +1652,7 @@ fn live_cross_validation_v2_a2_dynamic_blended() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_film_lite() {
     run_v2_multi_sr(
         "wavenet_a2_film_lite.nam",
@@ -1654,7 +1663,7 @@ fn live_cross_validation_v2_wavenet_a2_film_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_film_full() {
     run_v2_multi_sr(
         "wavenet_a2_film_full.nam",
@@ -1665,7 +1674,7 @@ fn live_cross_validation_v2_wavenet_a2_film_full() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_film_input_mixin_pre() {
     run_v2_multi_sr(
         "wavenet_a2_film_input_mixin_pre.nam",
@@ -1676,7 +1685,7 @@ fn live_cross_validation_v2_wavenet_a2_film_input_mixin_pre() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
     run_v2_multi_sr(
         "wavenet_a2_film_chaos_stress.nam",
@@ -1688,7 +1697,7 @@ fn live_cross_validation_v2_wavenet_a2_film_chaos_stress() {
 
 // wavenet_a2_max v2 — parity verified (Fase 3, 2026-10-08): prod×C++ SNR 135.97 dB (V2)
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_wavenet_a2_max() {
     run_v2_multi_sr(
         "wavenet_a2_max.nam",
@@ -1701,14 +1710,14 @@ fn live_cross_validation_v2_wavenet_a2_max() {
 // --- Linear ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_linear() {
     let outcome = run_v1("linear_test.nam", "linear_test", "Live Linear RF=4", true);
     assert_eq!(outcome, ParityOutcome::Completed, "linear_test.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_linear() {
     run_v2_multi_sr(
         "linear_test.nam",
@@ -1739,7 +1748,7 @@ fn live_cross_validation_v2_linear() {
 // --- v1 (standard-rate) HF tests, ignored ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_hf_lstm_1x16() {
     let outcome = run_v1(
         "BossLSTM-1x16.nam",
@@ -1751,14 +1760,14 @@ fn live_cross_validation_hf_lstm_1x16() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_hf_lstm_2x8() {
     let outcome = run_v1("BossLSTM-2x8.nam", "lstm_2x8", "Live LSTM 2×8 (HF)", true);
     assert_eq!(outcome, ParityOutcome::Completed, "BossLSTM-2x8.nam");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_hf_wavenet_standard() {
     let outcome = run_v1(
         "BossWN-standard.nam",
@@ -1772,7 +1781,7 @@ fn live_cross_validation_hf_wavenet_standard() {
 // --- v2 (multi-SR) HF tests, ignored ---
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_hf_lstm_1x16() {
     run_v2_multi_sr(
         "BossLSTM-1x16.nam",
@@ -1783,7 +1792,7 @@ fn live_cross_validation_v2_hf_lstm_1x16() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_hf_lstm_2x8() {
     run_v2_multi_sr(
         "BossLSTM-2x8.nam",
@@ -1794,7 +1803,7 @@ fn live_cross_validation_v2_hf_lstm_2x8() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_v2_hf_wavenet_standard() {
     run_v2_multi_sr(
         "BossWN-standard.nam",
@@ -1805,7 +1814,7 @@ fn live_cross_validation_v2_hf_wavenet_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_nondist_models() {
     let nondist_path = match neural_amp_modeler_rs::testing::fixtures::nondist_models_dir() {
         Some(p) => p,
@@ -1915,7 +1924,10 @@ fn ensure_render_multichannel_compiled() -> bool {
         .join("CMakeFiles/NeuralAmpModelerCore.dir");
     let obj_files = collect_objs(&obj_dir);
     if obj_files.is_empty() {
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"namcore_objs_not_found\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            "cpp_parity::ensure_render_multichannel_compiled",
+            "namcore_objs_not_found",
+        );
         return false;
     }
 
@@ -2002,10 +2014,10 @@ fn read_multichannel_bin(path: &std::path::Path) -> std::io::Result<(usize, usiz
 
 fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
     if !ensure_render_multichannel_compiled() {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render_multichannel tool unavailable");
-        }
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_multichannel_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("cpp_parity::run_linear_multichannel_parity::{label}"),
+            "render_multichannel_tool_unavailable",
+        );
         return;
     }
 
@@ -2433,10 +2445,10 @@ fn make_test_wav_bytes(
 
 fn run_wav_ir_mono_parity(taps: &[f32], sample_rate: u32, label: &str) {
     if !ensure_render_compiled() {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render tool unavailable");
-        }
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("cpp_parity::run_wav_ir_mono_parity::{label}"),
+            "render_tool_unavailable",
+        );
         return;
     }
 
@@ -2555,10 +2567,10 @@ fn run_wav_ir_mono_parity(taps: &[f32], sample_rate: u32, label: &str) {
 
 fn run_wav_ir_stereo_parity(ch0_taps: &[f32], ch1_taps: &[f32], sample_rate: u32, label: &str) {
     if !ensure_render_multichannel_compiled() {
-        if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
-            panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting: render_multichannel tool unavailable");
-        }
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_multichannel_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("cpp_parity::run_wav_ir_stereo_parity::{label}"),
+            "render_multichannel_tool_unavailable",
+        );
         return;
     }
 

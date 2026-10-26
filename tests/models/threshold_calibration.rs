@@ -426,8 +426,6 @@ fn test_structural_tests_contain_no_bin_references() {
         "threshold_calibration.rs",
         "parity_primitives.rs",
         "lstm_activation_precision.rs",
-        "meta_coherence.rs",
-        "quality_cli_test.rs",
     ];
     const STRUCTURAL_DIRS: &[&str] = &["models", "perf_soak", "parity", "dsp_core"];
 

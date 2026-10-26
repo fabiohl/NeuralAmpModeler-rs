@@ -31,21 +31,21 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ## 🥊 Feature Showcase
 
-| Feature / Attribute              | Technical Implementation                                                             | Benefit & Impact                                                                                                                                           |
-|:-------------------------------- |:------------------------------------------------------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Inference Topologies**         | WaveNet (A1/A2), LSTM (1- & 2-layer, multi-I/O), ConvNet, Linear FIR/FFT, Sequential | Broad NAM ecosystem coverage with native Rust execution speed (unsupported topologies rejected fail-closed; see `docs/cpp_parity_map.md` §7)               |
-| **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                        | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                                                                |
+| Feature / Attribute              | Technical Implementation                                                                      | Benefit & Impact                                                                                                                                           |
+|:-------------------------------- |:--------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Inference Topologies**         | WaveNet (A1/A2), LSTM (1- & 2-layer, multi-I/O), ConvNet, Linear FIR/FFT, Sequential          | Broad NAM ecosystem coverage with native Rust execution speed (unsupported topologies rejected fail-closed; see `docs/cpp_parity_map.md` §7)               |
+| **RT Safety Determinism**        | Zero heap drop, zero mutex locks, 3-tier lock-free GC cascade                                 | Guaranteed real-time audio stability without dropouts/xruns under sub-millisecond deadlines                                                                |
 | **SIMD Acceleration**            | Mandatory baseline (`x86-64-v3` on x86_64, NEON on aarch64); static `dispatch_simd!` dispatch | WaveNet Standard ≈ 41.8 µs / LSTM 1×16 ≈ 6.8 µs per 64-sample block (AMD Ryzen 7 5700U)                                                                    |
-| **Const-Generic Profiles**       | 24 model variants (16 static const-generic profiles + dynamic fallbacks)             | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$)                                               |
-| **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$         | Near bit-exact accuracy on covered models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR; see `docs/quality-contract.json` for per-model baselines) |
-| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)   | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                                          |
-| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)           | Ultra-low-overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                                                                  |
-| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`Off`, `2x`, `4x`, >100 dB stopband)                | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                                                                             |
-| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)      | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                                                                   |
-| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                 | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                                       |
-| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32     | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                                |
-| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware FTZ/DAZ (MXCSR / FPCR.FZ)            | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)                            |
-| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks  | Enterprise-grade software stability and strict regression protection                                                                                       |
+| **Const-Generic Profiles**       | 24 model variants (16 static const-generic profiles + dynamic fallbacks)                      | Compile-time LLVM loop unrolling and register allocation for canonical channel counts ($CH=16, 12, 8, 4, 3$)                                               |
+| **Numerical Parity**             | Dual-oracle validation: canonical C++ NAMCore $f32$ + double-precision $f64$                  | Near bit-exact accuracy on covered models ($2.31 \times 10^{-14}$ to $9.33 \times 10^{-16}$ ESR; see `docs/quality-contract.json` for per-model baselines) |
+| **Native Polyphase Resampler**   | 256 phases × 64 taps Kaiser sinc resampler (minimum-phase cepstrum, 0 pre-ringing)            | Pristine multi-rate conversion (>105 dB stopband, < 0.05 dB ripple) in 0.7–1.3 µs                                                                          |
+| **Cabinet IR Convolution**       | Uniform-Partitioned Overlap-Save (UPOLS) FFT convolution engine (.wav IRs)                    | Ultra-low-overhead speaker cabinet simulation (1.3 µs for 512-sample IRs)                                                                                  |
+| **Oversampling & Anti-Aliasing** | Half-band polyphase FIR filters (`Off`, `2x`, `4x`, >100 dB stopband)                         | Attenuates non-linear high-frequency foldover/aliasing in high-gain amp models                                                                             |
+| **Activation Math Modes**        | `Standard` (exact precision Taylor minimax) vs `Fast` (Padé polynomial minimax)               | User-selectable trade-off between floating-point precision (+89.5 dB SNR) and CPU cycles                                                                   |
+| **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                          | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                                       |
+| **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32              | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                                |
+| **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware FTZ/DAZ (MXCSR / FPCR.FZ)                     | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)                            |
+| **Comprehensive QA Suite**       | 2,000+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks           | Enterprise-grade software stability and strict regression protection                                                                                       |
 
 ---
 
@@ -65,11 +65,11 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ## 🛠️ System Prerequisites & Build Requirements
 
-| Dependency           | Minimum Requirement                           | Purpose                               |
-|:-------------------- |:--------------------------------------------- |:------------------------------------- |
-| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels |
-| **Rust Toolchain**   | $\ge 1.99.0$ (Edition 2024)                   | Public MSRV promise                   |
-| **Build Tools**      | `build-essential`, `pkg-config`, `cmake`      | Host build tools & C++ parity oracles |
+| Dependency           | Minimum Requirement                                                | Purpose                               |
+|:-------------------- |:------------------------------------------------------------------ |:------------------------------------- |
+| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels           |
+| **Rust Toolchain**   | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                   |
+| **Build Tools**      | `build-essential`, `pkg-config`, `cmake`                           | Host build tools & C++ parity oracles |
 
 > **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
 
@@ -100,14 +100,15 @@ sudo apt update && sudo apt install -y build-essential pkg-config cmake
 ```bash
 brew install cmake
 ```
+
 *(Note: To execute the `./utils/` QA scripts on macOS, install bash 4+: `brew install bash`)*
 
 ### SIMD Baseline per Architecture
 
-| Architecture | Baseline | Platforms validated |
-|:------------ |:-------- |:------------------- |
-| `x86_64`  | `x86-64-v3` (AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) | Linux |
-| `aarch64` | NEON (part of every aarch64 target) | macOS (Apple Silicon), Linux |
+| Architecture | Baseline                                            | Platforms validated          |
+|:------------ |:--------------------------------------------------- |:---------------------------- |
+| `x86_64`     | `x86-64-v3` (AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) | Linux                        |
+| `aarch64`    | NEON (part of every aarch64 target)                 | macOS (Apple Silicon), Linux |
 
 Build-time assertions enforce the baseline for the target architecture. The optional `avx512` feature is x86_64-only.
 
@@ -133,10 +134,10 @@ RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo build --release
 
 No flags are needed: NEON is part of every aarch64 target (`aarch64-apple-darwin` already defaults to `-Ctarget-cpu=apple-m1`). The AVX2-shaped kernels run unchanged through a NEON implementation of the AVX2/FMA/F16C intrinsic surface (`src/arch/aarch64/`): each 256-bit operation is two 128-bit NEON operations with the same per-lane order and single-rounding FMA, so results match the x86_64 path (identical SNR against the C++ reference across the golden catalog). Platform notes:
 
-- **Denormals:** FPCR.FZ replaces MXCSR DAZ/FTZ.
-- **Cycle clock:** `common::tsc` reads the generic timer (`CNTVCT_EL0`), calibrated exactly from `CNTFRQ_EL0`.
-- **Page size:** delay rings are rounded to the kernel page size (16 KiB on macOS; 4/16/64 KiB on aarch64 Linux depending on the kernel).
-- **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages and `rt-hardening` are Linux-only. The QA scripts need bash ≥ 4 (`brew install bash`) and `NAM_NO_LOW_PRIORITY=1`, e.g. `NAM_NO_LOW_PRIORITY=1 /opt/homebrew/bin/bash utils/tests-quick.sh`.
+* **Denormals:** FPCR.FZ replaces MXCSR DAZ/FTZ.
+* **Cycle clock:** `common::tsc` reads the generic timer (`CNTVCT_EL0`), calibrated exactly from `CNTFRQ_EL0`.
+* **Page size:** delay rings are rounded to the kernel page size (16 KiB on macOS; 4/16/64 KiB on aarch64 Linux depending on the kernel).
+* **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages and `rt-hardening` are Linux-only. The QA scripts need bash ≥ 4 (`brew install bash`), e.g. `/opt/homebrew/bin/bash utils/tests-quick.sh`.
 
 #### Pre-Flight Hardware Verification (`simd_probe`)
 
@@ -158,14 +159,14 @@ Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "1.0"
+NeuralAmpModeler-rs = "1.1"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "1.0", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
@@ -326,9 +327,7 @@ The `./utils/` suite automates formatting, static analysis, parity verification,
 | [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)                       | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
 | [`utils/tests-performance-regression.sh`](utils/tests-performance-regression.sh) | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
 | [`utils/check-model.sh`](utils/check-model.sh)                                   | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
-| [`utils/simd-probe.sh`](utils/simd-probe.sh)                                     | **SIMD Diagnostic Probe:** Inspects CPU features, OS vector context, and runs deterministic inference smoke tests.                    |
 | [`utils/tests-long.sh`](utils/tests-long.sh)                                     | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
-| [`utils/mem-guard.sh`](utils/mem-guard.sh)                                       | **OOM Containment Guard:** Wraps heavy builds and tests in systemd transient scopes to protect system stability.                      |
 | [`utils/miri-audit.sh`](utils/miri-audit.sh)                                     | **Memory Safety & Aliasing Audit:** Validates unsafe blocks, SPSC ring buffers, and delay lines under Miri.                           |
 | [`utils/verify-kernel-codegen.sh`](utils/verify-kernel-codegen.sh)               | **Kernel Codegen Inspector:** Disassembles and verifies compiler auto-vectorization across DSP compute kernels.                       |
 | [`utils/setup-third-party.sh`](utils/setup-third-party.sh)                       | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |

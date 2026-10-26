@@ -180,6 +180,7 @@ fn test_auto_consistency_wavenet_a2_lite() {
 }
 
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_auto_consistency_wavenet_a2_container() {
     if !model_exists("wavenet_a2_container.nam") {
         return;
@@ -191,6 +192,7 @@ fn test_auto_consistency_wavenet_a2_container() {
 }
 
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_auto_consistency_a2_example_slimmable() {
     if !model_exists("a2_example.nam") {
         return;

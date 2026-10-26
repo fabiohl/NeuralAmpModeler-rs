@@ -297,7 +297,7 @@ mod tests {
         })]
 
         #[test]
-        #[ignore = "proptest 10k casos; roda no tests-long (gate_envelope_continuity_proptest)"]
+        #[ignore = "long: proptest de envelope do gate (10k casos)"]
         fn gate_envelope_continuity_on_reversal(
             fade_frames in 4usize..256,
             n_samples in 1usize..256,

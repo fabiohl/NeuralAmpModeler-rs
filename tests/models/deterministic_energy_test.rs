@@ -23,6 +23,7 @@ fn resolve_fixture_path(path_str: &str) -> Option<PathBuf> {
 }
 
 #[test]
+#[ignore = "long: varredura e estabilidade sobre múltiplos modelos"]
 fn test_deterministic_signal_injection_and_energy_evaluation() {
     let input_signal = generate_stress_signal_v1();
     assert_eq!(input_signal.len(), 2048);

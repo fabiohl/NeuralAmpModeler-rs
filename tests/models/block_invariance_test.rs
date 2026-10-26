@@ -26,6 +26,7 @@ fn resolve_fixture_path(path_str: &str) -> Option<PathBuf> {
 }
 
 #[test]
+#[ignore = "long: invariância de tamanho de bloco em todo o catálogo"]
 fn test_block_size_invariance_across_supported_catalog() {
     let input_signal = generate_stress_signal_v1();
     assert_eq!(input_signal.len(), 2048);
@@ -109,6 +110,7 @@ const A2_FIXTURES: &[&str] = &[
 /// - **invariance**: the output matches the single-block run bit-for-bit,
 ///   independent of how the audio is partitioned.
 #[test]
+#[ignore = "long: invariância de tamanho de bloco em todo o catálogo"]
 fn test_a2_block_invariance_full_write_and_partitioning() {
     const N: usize = 512;
     let input_signal = generate_stress_signal_v1();

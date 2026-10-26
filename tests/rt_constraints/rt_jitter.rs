@@ -333,7 +333,7 @@ fn run_jitter_characterization(
 // ── Jitter characterization — baseline (no stress) ─────────────────────────
 
 #[test]
-#[ignore]
+#[ignore = "long: RT jitter characterization"]
 fn test_jitter_characterization_baseline_wavenet_standard() {
     let preflight = rt_helpers::rt_preflight_jitter();
     rt_helpers::print_preflight(&preflight);

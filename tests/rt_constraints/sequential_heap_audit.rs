@@ -105,7 +105,7 @@ mod audit_tests {
     /// an analogous first-touch casing on the interior plane memory), then a
     /// sustained mixed-block audit window with the tracking guard active.
     #[test]
-    #[ignore]
+    #[ignore = "long: heap audit da cadeia sequencial"]
     fn test_sequential_process_heap_audit_after_warmup() {
         let mut chain = two_stage_mono_chain();
         chain.reset(48000, 64).expect("chain reset at 64 frames");
@@ -145,7 +145,7 @@ mod audit_tests {
     /// arrays — the exact invocation form the RT host uses for multichannel
     /// chains — over boundary planes sized by each stage's output channels.
     #[test]
-    #[ignore]
+    #[ignore = "long: heap audit da cadeia sequencial"]
     fn test_sequential_process_raw_multichannel_heap_audit() {
         let stages = vec![
             linear_stage(1, 2, &[0.75, -0.125]),
@@ -200,7 +200,7 @@ mod audit_tests {
     /// zero-feed chain pass between audio callbacks on the RT thread — it
     /// must drain strictly over preallocated planes with zero heap traffic.
     #[test]
-    #[ignore]
+    #[ignore = "long: heap audit da cadeia sequencial"]
     fn test_sequential_prewarm_step_split_heap_audit() {
         // LSTM child (24000-sample budget at 48 kHz) + FIR tail: the chain
         // budget is non-zero and the feed exercises the recurrent stage.

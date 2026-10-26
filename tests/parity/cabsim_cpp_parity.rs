@@ -177,7 +177,7 @@ fn compare_golden_cpp(scenario: &CppScenario) {
 // ── Tests ──
 
 #[test]
-#[ignore = "cross-validation: requires C++ golden binaries (generate via golden_gen_build.sh [5b])"]
+#[ignore = "long: validação cruzada C++ de cabsim (requer golden binaries)"]
 fn cross_validate_cabsim_cpp_short() {
     compare_golden_cpp(&CppScenario {
         label: "short",
@@ -192,7 +192,7 @@ fn cross_validate_cabsim_cpp_short() {
 }
 
 #[test]
-#[ignore = "cross-validation: requires C++ golden binaries (generate via golden_gen_build.sh [5b])"]
+#[ignore = "long: validação cruzada C++ de cabsim (requer golden binaries)"]
 fn cross_validate_cabsim_cpp_medium() {
     compare_golden_cpp(&CppScenario {
         label: "medium",
@@ -207,7 +207,7 @@ fn cross_validate_cabsim_cpp_medium() {
 }
 
 #[test]
-#[ignore = "cross-validation: requires C++ golden binaries (generate via golden_gen_build.sh [5b])"]
+#[ignore = "long: validação cruzada C++ de cabsim (requer golden binaries)"]
 fn cross_validate_cabsim_cpp_long() {
     compare_golden_cpp(&CppScenario {
         label: "long",

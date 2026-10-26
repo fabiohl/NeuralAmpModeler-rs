@@ -49,7 +49,7 @@ proptest! {
     })]
 
     #[test]
-    #[ignore]
+    #[ignore = "long: paridade escalar vs SIMD LSTM"]
     fn test_lstm_scalar_vs_simd_parity((inputs, weights, bias, head_weights, head_bias) in lstm_parity_strategy()) {
         let scale = f32::MAX / 4.0;
 
@@ -112,7 +112,7 @@ proptest! {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "long: paridade escalar vs SIMD LSTM"]
     fn test_lstm_1x40_scalar_simd_parity((inputs, weights, bias, head_weights, head_bias) in lstm_1x40_parity_strategy()) {
         let mut model_simd = LstmModel1::<40, 41, 160>::new();
         let mut model_scalar = LstmModel1::<40, 41, 160>::new();
@@ -172,7 +172,7 @@ proptest! {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "long: paridade escalar vs SIMD LSTM"]
     fn test_lstm_2x24_scalar_simd_parity((inputs, w1, w2, b1, b2, head_weights, head_bias) in lstm_2x24_parity_strategy()) {
         use neural_amp_modeler_rs::models::lstm::LstmModel2;
 

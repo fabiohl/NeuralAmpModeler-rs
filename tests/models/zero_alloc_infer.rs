@@ -392,7 +392,9 @@ fn test_zero_alloc_container_transition() {
 fn test_parallel_allocation_tracking_isolation() {
     use std::thread;
 
-    let num_threads = 8;
+    let num_threads = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let mut handles = Vec::new();
 
     for i in 0..num_threads {

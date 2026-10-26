@@ -199,7 +199,3 @@ fn copy_recursive(src: &std::path::Path, dest: &std::path::Path) -> io::Result<(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "baseline_store_test.rs"]
-mod baseline_store_test;

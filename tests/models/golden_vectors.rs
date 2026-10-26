@@ -865,6 +865,7 @@ fn test_golden_vectors_container_a2_lite() {
 /// Loads `wavenet_a2_container.nam` from file, runs it first for Lite submodel (slim=0.25),
 /// then for Full submodel (slim=0.75), verifying both outputs match C++ standalones.
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_golden_vectors_wavenet_a2_container() {
     let container_path = model_path("wavenet_a2_container.nam");
     if !container_path.exists() {
@@ -1245,7 +1246,8 @@ fn test_a2_max_weight_budget_818_1052() {
 /// ```
 // on-demand: A2-Max FiLM slot budget diagnostic (TR2b.3/H6); not a nightly gate
 #[test]
-#[ignore = "TR2b.3 (H6): FiLM budget check — not a CI gate; run manually"]
+#[cfg(feature = "on-demand")]
+#[ignore = "on-demand: FiLM budget check"]
 fn test_a2_max_film_slot_budget() {
     use neural_amp_modeler_rs::models::StaticModel;
 
@@ -2219,7 +2221,7 @@ fn test_loader_gap_slimmable_container() {
 // Run `./tests/fixtures/golden_gen_build.sh` to regenerate.
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_standard() {
     run_v2_golden_test(
         "BossWN-standard.nam",
@@ -2232,7 +2234,7 @@ fn test_golden_vectors_v2_wavenet_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_feather() {
     run_v2_golden_test(
         "BossWN-feather.nam",
@@ -2245,7 +2247,7 @@ fn test_golden_vectors_v2_wavenet_feather() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_nano() {
     run_v2_golden_test(
         "BossWN-nano.nam",
@@ -2258,7 +2260,7 @@ fn test_golden_vectors_v2_wavenet_nano() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_lite() {
     run_v2_golden_test(
         "EVH-5150-Lite.nam",
@@ -2271,7 +2273,7 @@ fn test_golden_vectors_v2_wavenet_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_1x16() {
     run_v2_golden_test(
         "BossLSTM-1x16.nam",
@@ -2284,7 +2286,7 @@ fn test_golden_vectors_v2_lstm_1x16() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_app_evh() {
     run_v2_golden_test(
         "APP-EVH-Stealth100-Dialled-xSTD.nam",
@@ -2297,7 +2299,7 @@ fn test_golden_vectors_v2_app_evh() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_boss_bd2() {
     run_v2_golden_test(
         "Boss BD-2 H2O Mod T-12_00 G-12_00.nam",
@@ -2310,7 +2312,7 @@ fn test_golden_vectors_v2_boss_bd2() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_slammin_marshall() {
     run_v2_golden_test(
         "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam",
@@ -2323,7 +2325,7 @@ fn test_golden_vectors_v2_slammin_marshall() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_2x8() {
     run_v2_golden_test(
         "BossLSTM-2x8.nam",
@@ -2336,7 +2338,7 @@ fn test_golden_vectors_v2_lstm_2x8() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_a1_standard() {
     run_v2_golden_test(
         "wavenet_a1_standard.nam",
@@ -2349,7 +2351,7 @@ fn test_golden_vectors_v2_wavenet_a1_standard() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_official() {
     run_v2_golden_test(
         "wavenet_official.nam",
@@ -2362,7 +2364,7 @@ fn test_golden_vectors_v2_wavenet_official() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_official() {
     run_v2_golden_test(
         "lstm.nam",
@@ -2375,7 +2377,7 @@ fn test_golden_vectors_v2_lstm_official() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_a2_full() {
     run_v2_golden_test(
         "wavenet_a2_full.nam",
@@ -2388,7 +2390,7 @@ fn test_golden_vectors_v2_wavenet_a2_full() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_a2_lite() {
     run_v2_golden_test(
         "wavenet_a2_lite.nam",
@@ -2401,7 +2403,7 @@ fn test_golden_vectors_v2_wavenet_a2_lite() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_condition_dsp() {
     run_v2_golden_test(
         "wavenet_condition_dsp.nam",
@@ -2414,7 +2416,7 @@ fn test_golden_vectors_v2_wavenet_condition_dsp() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_wavenet_condition_lstm() {
     run_v2_golden_test(
         "wavenet_condition_lstm.nam",
@@ -2431,7 +2433,7 @@ fn test_golden_vectors_v2_wavenet_condition_lstm() {
 // remain the primary interop gates (check_lufs_gate=false).
 /// Golden Vectors LSTM 1×10 (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_1x10() {
     run_v2_golden_test(
         "lstm_1x10.nam",
@@ -2448,7 +2450,7 @@ fn test_golden_vectors_v2_lstm_1x10() {
 // defect; SNR/ESR stay near bit-exact vs C++ (check_lufs_gate=false).
 /// Golden Vectors LSTM 2×24 (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_2x24() {
     run_v2_golden_test(
         "lstm_2x24.nam",
@@ -2462,7 +2464,7 @@ fn test_golden_vectors_v2_lstm_2x24() {
 
 /// Golden Vectors LSTM 3×8 (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_lstm_3x8() {
     run_v2_golden_test(
         "lstm_3x8.nam",
@@ -2476,7 +2478,7 @@ fn test_golden_vectors_v2_lstm_3x8() {
 
 /// Golden Vectors ConvNet No BatchNorm (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_convnet_nobn() {
     run_v2_golden_test(
         "convnet_nobn.nam",
@@ -2493,7 +2495,7 @@ fn test_golden_vectors_v2_convnet_nobn() {
 // C++ reference is valid; ESR/SNR are primary gates (check_lufs_gate=false).
 /// Golden Vectors ConvNet ReLU (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_convnet_relu() {
     run_v2_golden_test(
         "convnet_relu.nam",
@@ -2507,7 +2509,7 @@ fn test_golden_vectors_v2_convnet_relu() {
 
 /// Golden Vectors ConvNet SiLU (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_convnet_silu() {
     run_v2_golden_test(
         "convnet_silu.nam",
@@ -2521,7 +2523,7 @@ fn test_golden_vectors_v2_convnet_silu() {
 
 /// Golden Vectors Linear No Bias (v2 multi-SR, 48 kHz only).
 #[test]
-#[ignore]
+#[ignore = "long: validação de vetores golden v2 (multi-SR)"]
 fn test_golden_vectors_v2_linear_nobias() {
     run_v2_golden_test(
         "linear_nobias.nam",
@@ -2676,6 +2678,7 @@ fn test_poly_regression_gate_wavenet_a2_full() {
 /// Run `./tests/fixtures/golden_gen_build.sh` to regenerate all golden vectors,
 /// including the A2 dynamic/FiLM fixtures from generate_a2_fixtures.py.
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_golden_vectors_a2_dynamic_gated_ch8() {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/golden_a2_dynamic_gated_ch8.bin");
@@ -2784,6 +2787,7 @@ fn test_golden_vectors_a2_dynamic_blended_ch3() {
 /// dynamic `StaticModel` from `wavenet_a2_film_lite.nam`, and compares
 /// via ESR/SNR/MSE fusion report.
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_golden_vectors_wavenet_a2_film_lite() {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/golden_wavenet_a2_film_lite.bin");
@@ -2846,6 +2850,7 @@ fn test_golden_vectors_wavenet_a2_film_lite() {
 /// dynamic `StaticModel` from `wavenet_a2_film_full.nam`, and compares
 /// via ESR/SNR/MSE fusion report.
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_golden_vectors_wavenet_a2_film_full() {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/golden_wavenet_a2_film_full.bin");
@@ -2903,6 +2908,7 @@ fn test_golden_vectors_wavenet_a2_film_full() {
 /// Validates the `WaveNetA2Dyn` engine with FiLM modulation under chaos/stress
 /// conditions against the C++ generic WaveNet reference.
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_golden_vectors_wavenet_a2_film_chaos_stress() {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/golden_wavenet_a2_film_chaos_stress.bin");
@@ -3331,6 +3337,7 @@ fn test_measure_a2_max_snr_vs_golden() {
 }
 
 #[test]
+#[ignore = "long: vetores golden (processamento completo de áudio)"]
 fn test_measure_a2_max_v2_snr_vs_golden() {
     measure_a2_max_snr_vs_golden("golden_wavenet_a2_max_v2_48000.bin");
 }
@@ -3420,7 +3427,8 @@ fn measure_a2_max_snr_vs_golden(golden_filename: &str) {
 /// - Case A gate: all three legs ≥ 90 dB (T2.1.1 acceptance).
 // on-demand: KB-A2-MAX H0 triple-decomposition harness (TR2b.1); not a nightly gate
 #[test]
-#[ignore = "TR2b.1 (H0): diagnostic harness — not a CI gate; run manually"]
+#[cfg(feature = "on-demand")]
+#[ignore = "on-demand: KB-A2-MAX H0 triple-decomposition harness"]
 fn test_h0_triple_decomposition() {
     use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;
     use neural_amp_modeler_rs::testing::reference_oracle::{
@@ -3655,7 +3663,8 @@ fn test_h0_triple_decomposition() {
 /// ```
 // on-demand: KB-A2-MAX condition_dsp contract harness (TR2b.2/H5+H7); not a nightly gate
 #[test]
-#[ignore = "TR2b.2 (H5+H7): diagnostic harness — not a CI gate; run manually"]
+#[cfg(feature = "on-demand")]
+#[ignore = "on-demand: KB-A2-MAX condition_dsp contract harness"]
 fn test_tr2b2_condition_dsp_contract() {
     use neural_amp_modeler_rs::models::StaticModel;
     use neural_amp_modeler_rs::testing::diagnostics::DiagnosticConfig;

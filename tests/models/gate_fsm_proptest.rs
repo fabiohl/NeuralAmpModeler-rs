@@ -186,7 +186,7 @@ proptest! {
 
     /// Runs adversarial proptest with randomized parameters, blocks, and input sequences.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM do gate"]
     fn test_gate_fsm_adversarial_sequences(
         (params, th_open, th_close) in gate_params_strategy(),
         block_size in block_size_strategy(),
@@ -200,7 +200,7 @@ proptest! {
 
     /// Specifically sweeps threshold boundaries: energy values exactly equal to th_open or th_close.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM do gate"]
     fn test_gate_fsm_boundary_values(
         (params, th_open, th_close) in gate_params_strategy(),
         block_size in block_size_strategy(),
@@ -228,7 +228,7 @@ proptest! {
     /// Simulates rapid jitter in/out (alternating above and below thresholds)
     /// to challenge the hold and fade counters.
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de FSM do gate"]
     fn test_gate_fsm_jitter(
         (params, th_open, th_close) in gate_params_strategy(),
         block_size in block_size_strategy(),

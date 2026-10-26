@@ -70,7 +70,7 @@ fi
 # ── Configuration ────────────────────────────────────────────────────────────
 
 DEFAULT_CORE="$(pick_bench_core)"
-BENCH_CORE="${NAM_BENCH_CORE:-}"
+bench_core="${NAM_BENCH_CORE:-}"
 BASELINE_NAME="${NAM_BASELINE_NAME:-ci-baseline}"
 BENCH_SUITE="${NAM_BENCH_SUITE:-regression_gate}"
 BENCH_MANIFEST="${NAM_BENCH_MANIFEST:-}"
@@ -94,19 +94,19 @@ CRITERION_BASELINE_TARGET="target/criterion"
 # If NAM_BENCH_CORE is not explicitly pinned, check mode adopts the core recorded in
 # the baseline fingerprint (if available and currently online) to prevent false
 # INCOMPARABLE_ENVIRONMENT rejections caused by core-count topology differences.
-if [ -z "$BENCH_CORE" ]; then
+if [ -z "$bench_core" ]; then
     if [ "$MODE" = "--check" ] && [ -f "$FINGERPRINT_FILE" ]; then
         BASELINE_CORE=$(sed -n 's/^[[:space:]]*"bench_core":[[:space:]]*"\?\([0-9]\+\)"\?.*/\1/p' "$FINGERPRINT_FILE" 2>/dev/null || true)
         if [ -n "$BASELINE_CORE" ] && taskset -c "$BASELINE_CORE" true >/dev/null 2>&1; then
-            BENCH_CORE="$BASELINE_CORE"
+            bench_core="$BASELINE_CORE"
         fi
     fi
-    BENCH_CORE="${BENCH_CORE:-$DEFAULT_CORE}"
+    bench_core="${bench_core:-$DEFAULT_CORE}"
 fi
 
 TASKSET=()
 if command -v taskset >/dev/null 2>&1; then
-    TASKSET=(taskset -c "${BENCH_CORE}")
+    TASKSET=(taskset -c "${bench_core}")
 else
     warn "taskset not found — running without core pinning."
 fi
@@ -115,7 +115,7 @@ NAM_PERF_GATE=$(ensure_qa_bin nam_perf_gate testing)
 export NAM_PERF_GATE
 
 echo -e "${BLUE}${BOLD}  Performance Regression Gate${NC}" >&2
-echo -e "  Core: ${YELLOW}${BENCH_CORE}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}" >&2
+echo -e "  Core: ${YELLOW}${bench_core}${NC}  Baseline: ${YELLOW}${BASELINE_NAME}${NC}" >&2
 echo -e "${BLUE}${BOLD}  Estimated time: ± 2.0 minutes${NC}" >&2
 
 REGRESSION_RECEIPT_DIR="$PROJECT_DIR/target/logs"
@@ -162,7 +162,7 @@ prebuild_benchmark() {
     echo -e "  ${BLUE}Pre-compiling benchmark '${bench_name}' prior to cooldown (all cores)...${NC}" >&2
     BENCH_EXE=""
     # Pre-compile without CPU affinity so all cores participate in compilation,
-    # leaving BENCH_CORE cool and quiescent before running the RT benchmark.
+    # leaving benchmark core cool and quiescent before running the RT benchmark.
     local json_out
     set +e
     json_out=$(cargo bench --bench "$bench_name" --features testing --no-run --message-format=json 2>/dev/null)
@@ -221,15 +221,14 @@ run_benchmark_binary() {
 # ── Thermal Cooldown ─────────────────────────────────────────────────────────
 
 apply_thermal_cooldown() {
-    local cooldown="${NAM_THERMAL_COOLDOWN_S:-180}"
+    local cooldown="${NAM_THERMAL_COOLDOWN_S:-0}"
     if [[ "$cooldown" =~ ^[0-9]+$ ]] && [ "$cooldown" -gt 0 ]; then
         echo -e "\n${BLUE}${BOLD}[INFO] Thermal cooldown: sleeping ${cooldown}s before microbenchmarks...${NC}" >&2
         sleep "$cooldown"
     elif [ "$cooldown" = "0" ]; then
         echo -e "\n${BLUE}${BOLD}[INFO] Thermal cooldown: bypassed (NAM_THERMAL_COOLDOWN_S=0)${NC}" >&2
     else
-        echo -e "\n${YELLOW}${BOLD}[WARN] Invalid NAM_THERMAL_COOLDOWN_S='${cooldown}', defaulting to 180s${NC}" >&2
-        sleep 180
+        echo -e "\n${YELLOW}${BOLD}[WARN] Invalid NAM_THERMAL_COOLDOWN_S='${cooldown}', defaulting to 0s${NC}" >&2
     fi
 }
 
@@ -270,7 +269,7 @@ bootstrap_baseline() {
 
     "$NAM_PERF_GATE" probe \
         --out "$FINGERPRINT_FILE" \
-        --bench-core "$BENCH_CORE" \
+        --bench-core "$bench_core" \
         --baseline-dir "$BASELINE_DIR" > /dev/null
 
     "$NAM_PERF_GATE" receipt append \
@@ -305,7 +304,7 @@ check_regression() {
     set +e
     "$NAM_PERF_GATE" compare \
         --baseline "$FINGERPRINT_FILE" \
-        --bench-core "$BENCH_CORE" \
+        --bench-core "$bench_core" \
         --baseline-dir "$BASELINE_DIR" > "$LOG_FILE.fingerprint" 2>&1
     FINGERPRINT_STATUS=$?
     set -e

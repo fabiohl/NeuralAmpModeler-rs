@@ -121,6 +121,7 @@ resolve_nam_model() {
 }
 
 # Load pinned versions from single source of truth (variables.env).
+VARIABLES_ENV="${NAM_VARIABLES_ENV:-${VARIABLES_ENV:-$PROJECT_ROOT/variables.env}}"
 if [ ! -f "$VARIABLES_ENV" ]; then
     echo "ERROR: variables.env not found at $VARIABLES_ENV."
     echo "Expected at NeuralAmpModeler-rs root (override via NAM_VARIABLES_ENV)."
@@ -761,7 +762,7 @@ GENERATOR_FILES=(
     "src/bin/gen_stress.rs"
     "src/bin/wav_to_golden.rs"
     # Model inspection/hashing tools
-    "utils/check-model.py"
+    "utils/check-model.sh"
 )
 
 for gen_file in "${GENERATOR_FILES[@]}"; do

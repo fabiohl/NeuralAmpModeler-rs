@@ -56,6 +56,7 @@ fn namb_header_len_matches_struct_size() {
 }
 
 #[test]
+#[ignore = "long: parse e verificação de todos os fixtures NAM"]
 fn peek_matches_full_parse_for_all_nam_fixtures() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models");
     let mut checked = 0usize;

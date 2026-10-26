@@ -138,6 +138,7 @@ fn process_fragmented(rs: &mut NamResampler, signal: &[f32], in_sr: u32, out_sr:
 // ── Test ───────────────────────────────────────────────────────────────────
 
 #[test]
+#[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_resampler_block_invariance() {
     let signal = generate_signal(SIGNAL_LEN, 12345);
 

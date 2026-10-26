@@ -225,21 +225,25 @@ fn run_deadline_test(filename: &str, label: &str) {
 // ── WaveNet SKUs ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_wavenet_standard() {
     run_deadline_test("BossWN-standard.nam", "WaveNet-Standard");
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_wavenet_feather() {
     run_deadline_test("BossWN-feather.nam", "WaveNet-Feather");
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_wavenet_lite() {
     run_deadline_test("BossWN-lite.nam", "WaveNet-Lite");
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_wavenet_nano() {
     run_deadline_test("BossWN-nano.nam", "WaveNet-Nano");
 }
@@ -247,11 +251,13 @@ fn test_rt_deadline_wavenet_nano() {
 // ── A2 SKUs ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_a2_full() {
     run_deadline_test("wavenet_a2_full.nam", "A2-Full");
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_a2_lite() {
     run_deadline_test("wavenet_a2_lite.nam", "A2-Lite");
 }
@@ -259,11 +265,13 @@ fn test_rt_deadline_a2_lite() {
 // ── LSTM SKUs ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_lstm_1x16() {
     run_deadline_test("BossLSTM-1x16.nam", "LSTM-1x16");
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_lstm_2x8() {
     run_deadline_test("BossLSTM-2x8.nam", "LSTM-2x8");
 }
@@ -276,6 +284,7 @@ fn test_rt_deadline_linear() {
 }
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_convnet() {
     run_deadline_test("convnet_test.nam", "ConvNet");
 }
@@ -283,6 +292,7 @@ fn test_rt_deadline_convnet() {
 // ── Container / Adaptive States ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_adaptive_states() {
     let path = model_path("wavenet_a2_container.nam");
     if !path.exists() {
@@ -323,6 +333,7 @@ fn test_rt_deadline_adaptive_states() {
 // ── WaveNet Dynamic (free-geometry fallback path) ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_wavenet_dynamic() {
     run_deadline_test("wavenet_dyn_free.nam", "WaveNet-Dynamic");
 }
@@ -337,12 +348,13 @@ fn test_rt_deadline_lstm_dynamic() {
 // ── A2 Dynamic ──
 
 #[test]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_a2_dynamic() {
     run_deadline_test("a2_dynamic_gated_ch8.nam", "A2-Dynamic-Gated");
 }
 
 #[test]
-#[ignore]
+#[ignore = "long: RT deadline / restrições de tempo real"]
 fn test_rt_deadline_a2_max() {
     run_deadline_test("wavenet_a2_max.nam", "A2-Max");
 }

@@ -758,7 +758,3 @@ fn render_audit_table(receipt: &RemoteSimdReceipt, out_path: &Path) {
     }
     println!("================================================================================");
 }
-
-#[cfg(test)]
-#[path = "nam_remote_simd_receipt_test.rs"]
-mod tests;

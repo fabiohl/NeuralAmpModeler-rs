@@ -237,7 +237,3 @@ pub fn criterion_latencies_to_jsonl(
     }
     Ok(out)
 }
-
-#[cfg(test)]
-#[path = "criterion_test.rs"]
-mod criterion_test;

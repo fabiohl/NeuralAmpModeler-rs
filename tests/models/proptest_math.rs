@@ -94,7 +94,7 @@ proptest! {
         /// approximation does not exhibit instabilities or gross errors that would
         /// affect gating gain (where sigmoid is common).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de math SIMD"]
     fn prop_simd_sigmoid_avx2_rmse(input in avx2_input_array()) {
             // Load 8 floats (256-bit YMM register)
             let vector = unsafe { _mm256_loadu_ps(input.as_ptr()) };
@@ -130,7 +130,7 @@ proptest! {
         /// Validates the AVX2 dot product with f32 weights.
         /// Compares against a scalar `f64` implementation (Ground Truth).
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de math SIMD"]
     fn prop_dot_product_avx2_vs_scalar((vec_a, vec_b) in vec_pair_strategy()) {
         let simd_result = unsafe { dot_product_avx2(&vec_a, &vec_b) };
 
@@ -156,7 +156,7 @@ proptest! {
         /// Validates the AVX-512 dot product (when available in hardware).
     #[cfg(feature = "avx512")]
     #[test]
-    #[ignore]
+    #[ignore = "long: proptest de math SIMD"]
     fn prop_dot_product_avx512_vs_scalar((vec_a, vec_b) in vec_pair_strategy()) {
             // Mandatory runtime check to prevent SIGILL on older CPUs
         if std::is_x86_feature_detected!("avx512f") {

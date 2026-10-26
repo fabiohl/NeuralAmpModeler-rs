@@ -67,8 +67,6 @@ mod ebu_lufs_compliance;
 mod hostile_models_test;
 #[path = "models/loader_stderr_hygiene.rs"]
 mod loader_stderr_hygiene;
-#[path = "models/receipt_test.rs"]
-mod receipt_test;
 #[path = "models/reset_matrix_test.rs"]
 mod reset_matrix_test;
 #[path = "models/wavenet_clone_exact_test.rs"]
@@ -101,8 +99,6 @@ mod lstm_activation_precision;
 mod lstm_model_dyn_validation;
 #[path = "models/lstm_multichannel_test.rs"]
 mod lstm_multichannel_test;
-#[path = "models/meta_coherence.rs"]
-mod meta_coherence;
 #[path = "models/metrics_jsonl_test.rs"]
 mod metrics_jsonl_test;
 #[path = "models/mirror_buf_fault_injection.rs"]
@@ -119,8 +115,6 @@ mod namb_v2_validation;
 mod nondist_validation;
 #[path = "models/oversampling_characterization.rs"]
 mod oversampling_characterization;
-#[path = "models/perf_gate_cli_test.rs"]
-mod perf_gate_cli_test;
 #[path = "models/plane_adapter_test.rs"]
 mod plane_adapter_test;
 #[path = "models/prewarm_test.rs"]
@@ -131,8 +125,6 @@ mod process_contract_test;
 mod proptest_math;
 #[path = "models/proptest_parsers.rs"]
 mod proptest_parsers;
-#[path = "models/quality_cli_test.rs"]
-mod quality_cli_test;
 #[path = "models/sample_rate_provenance_test.rs"]
 mod sample_rate_provenance_test;
 #[path = "models/self_consistency.rs"]

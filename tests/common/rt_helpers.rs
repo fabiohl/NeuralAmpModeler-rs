@@ -81,7 +81,7 @@ pub fn governor_path_for_core(core: u32) -> String {
 ///
 /// Precedence: the pinned core observed from the process affinity mask when
 /// it resolves to exactly one core (the `taskset -c <core>` case — the most
-/// precise signal), then `BENCH_CORE`/`NAM_BENCH_CORE`, then `nproc / 2`
+/// precise signal), then `NAM_BENCH_CORE`, then `nproc / 2`
 /// (integer division — the same default as
 /// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
 /// ignored; on machines without `cpufreq` the read below fails closed to
@@ -89,7 +89,7 @@ pub fn governor_path_for_core(core: u32) -> String {
 fn effective_bench_core() -> u32 {
     // Most precise signal first: when the process is pinned to exactly one
     // core (`taskset -c <core>`, the RT-gate invocation shape), probe that
-    // core — `BENCH_CORE` may be unset in that path (tests-long.sh only
+    // core — `NAM_BENCH_CORE` may be unset in that path (tests-long.sh only
     // exports `NAM_BENCH_CORE` when the operator sets it explicitly).
     #[cfg(target_os = "linux")]
     {
@@ -98,16 +98,11 @@ fn effective_bench_core() -> u32 {
             return core as u32;
         }
     }
-    for key in ["BENCH_CORE", "NAM_BENCH_CORE"] {
-        if let Ok(raw) = std::env::var(key) {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(core) = trimmed.parse::<u32>() {
-                return core;
-            }
-        }
+    if let Some(core) = std::env::var("NAM_BENCH_CORE")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+    {
+        return core;
     }
     std::thread::available_parallelism()
         .map(|n| (n.get() / 2) as u32)

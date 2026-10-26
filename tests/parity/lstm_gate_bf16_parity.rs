@@ -37,7 +37,7 @@ proptest! {
     })]
 
     #[test]
-    #[ignore]
+    #[ignore = "long: paridade BF16 LSTM gate (requer AVX-512 BF16)"]
     fn test_gemv_4gate_bf16_simd_vs_scalar(
         (in_frame, w0, w1, w2, w3, bias, out_len, do_bias)
         in gemv_4gate_strategy()

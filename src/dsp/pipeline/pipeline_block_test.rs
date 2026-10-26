@@ -207,6 +207,7 @@ mod block_tests {
     /// TEST: Zero-Allocation Stress for edge cases.
     /// Validates that 1-sample blocks and max-size blocks do not allocate on the hot-path under stress.
     #[test]
+    #[ignore = "long: estresse zero-alloc de blocos irregulares"]
     fn test_zero_alloc_stress_edge_cases() {
         // 1. Scenario: n_frames = 1 (1000 consecutive invocations)
         run_block_size_test_with_iterations(Some("BossWN-nano.nam"), 1, 1000);
@@ -219,6 +220,7 @@ mod block_tests {
     /// all samples even when upsampling (e.g., 44100→48000) would exceed intermediate
     /// buffer capacity in a single pass.
     #[test]
+    #[ignore = "long: estresse zero-alloc de blocos irregulares"]
     fn test_ratio_aware_resampling_max_block() {
         let model_name = "BossWN-nano.nam";
         let block_size = MAX_BRIDGE_BUF; // 8192 samples — max host quantum
@@ -244,6 +246,7 @@ mod block_tests {
     /// TEST: Zero-allocation stress test for ratio-aware resampling.
     /// Processes 100 iterations of max-size blocks with resampling active.
     #[test]
+    #[ignore = "long: estresse zero-alloc de blocos irregulares"]
     fn test_ratio_aware_zero_alloc_stress() {
         let model_name = "BossWN-nano.nam";
         let block_size = MAX_BRIDGE_BUF; // 8192 samples
@@ -404,7 +407,7 @@ mod block_tests {
             .. ProptestConfig::with_cases(2_000)
         })]
         #[test]
-        #[ignore]
+        #[ignore = "long: proptest de tamanhos aleatórios de bloco"]
         fn test_random_block_sizes_proptest(size in 1..8192usize) {
             run_block_size_test(Some("BossWN-nano.nam"), size);
         }

@@ -226,7 +226,10 @@ fn test_container_prewarm_propagation() {
     let full_nam_path = model_path("wavenet_a2_full.nam");
     let lite_nam_path = model_path("wavenet_a2_lite.nam");
     if !full_nam_path.exists() || !lite_nam_path.exists() {
-        eprintln!("SKIP: A2 model files not found. Container prewarm propagation test impossible.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_container_prewarm_propagation",
+            "fixture_not_found:wavenet_a2",
+        );
         return;
     }
 
@@ -270,7 +273,10 @@ fn test_container_prewarm_propagation() {
 fn test_container_load_skip_propagation() {
     let path = model_path("slimmable_container.nam");
     if !path.exists() {
-        eprintln!("SKIP: slimmable_container.nam not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_container_load_skip_propagation",
+            "fixture_not_found:slimmable_container.nam",
+        );
         return;
     }
 
@@ -280,11 +286,17 @@ fn test_container_load_skip_propagation() {
         false,
         LoadOptions::new().with_prewarm(Some(false)),
     ) else {
-        eprintln!("SKIP: container build failed (unsupported activation in submodel).");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_container_load_skip_propagation",
+            "container_build_failed:unsupported_activation",
+        );
         return;
     };
     let Some(model) = pair.model_l.as_ref() else {
-        eprintln!("SKIP: container build failed (unsupported activation in submodel).");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_container_load_skip_propagation",
+            "container_build_failed:model_l_none",
+        );
         return;
     };
 
@@ -314,7 +326,10 @@ fn test_container_load_skip_propagation() {
 fn container_load_skip_initial_prewarm() {
     let path = model_path("lstm.nam");
     if !path.exists() {
-        eprintln!("SKIP: lstm.nam not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::container_load_skip_initial_prewarm",
+            "fixture_not_found:lstm.nam",
+        );
         return;
     }
     let lstm_json = std::fs::read_to_string(&path).expect("read lstm.nam");
@@ -385,9 +400,9 @@ fn test_lstm_prewarm_samples_scales_with_sample_rate() {
         ("dynamic H=7", lstm_dyn_path),
     ] {
         if !model_path.exists() {
-            eprintln!(
-                "SKIP: {} model file not found for prewarm_samples test.",
-                model_name
+            neural_amp_modeler_rs::testing::report_skip(
+                &format!("prewarm_test::test_lstm_prewarm_samples_scaling::{model_name}"),
+                "fixture_not_found:lstm",
             );
             continue;
         }
@@ -420,7 +435,10 @@ fn test_lstm_prewarm_samples_scales_with_sample_rate() {
 fn test_lstm_prewarm_samples_minimum() {
     let path = model_path("lstm.nam");
     if !path.exists() {
-        eprintln!("SKIP: lstm.nam not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_lstm_prewarm_samples_minimum",
+            "fixture_not_found:lstm.nam",
+        );
         return;
     }
 
@@ -449,7 +467,10 @@ fn test_lstm_prewarm_samples_minimum() {
 fn test_lstm_reset_deterministic_after_prewarm() {
     let path = model_path("lstm.nam");
     if !path.exists() {
-        eprintln!("SKIP: lstm.nam not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_lstm_reset_deterministic_after_prewarm",
+            "fixture_not_found:lstm.nam",
+        );
         return;
     }
 
@@ -528,7 +549,10 @@ fn test_lstm_reset_deterministic_after_prewarm() {
 fn test_lstm_reset_differs_prewarm_vs_noprewarm() {
     let path = model_path("lstm.nam");
     if !path.exists() {
-        eprintln!("SKIP: lstm.nam not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_lstm_reset_differs_prewarm_vs_noprewarm",
+            "fixture_not_found:lstm.nam",
+        );
         return;
     }
 
@@ -592,7 +616,10 @@ fn test_lstm_reset_differs_prewarm_vs_noprewarm() {
 fn test_wavenet_static_prewarm_samples_matches_rf() {
     let path = model_path("BossWN-standard.nam");
     if !path.exists() {
-        eprintln!("SKIP: BossWN-standard.nam fixture not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_wavenet_static_prewarm_samples_matches_rf",
+            "fixture_not_found:BossWN-standard.nam",
+        );
         return;
     }
 
@@ -631,7 +658,10 @@ fn test_wavenet_static_prewarm_samples_matches_rf() {
 fn test_wavenet_dyn_prewarm_samples_at_least_array_rf() {
     let path = model_path("wavenet_condition_dsp.nam");
     if !path.exists() {
-        eprintln!("SKIP: wavenet_condition_dsp.nam fixture not found.");
+        neural_amp_modeler_rs::testing::report_skip(
+            "prewarm_test::test_wavenet_dyn_prewarm_samples_at_least_array_rf",
+            "fixture_not_found:wavenet_condition_dsp.nam",
+        );
         return;
     }
 

@@ -401,7 +401,7 @@ mod proptest_tests {
     /// Proptest: random (num_layers, hidden_size, weights, input) —
         /// ensures scalar vs SIMD parity across arbitrary dynamic topologies.
         #[test]
-        #[ignore]
+        #[ignore = "long: proptest de modelo dinâmico LSTM"]
         fn test_model_dyn_proptest_scalar_simd_parity(
             num_layers in 1usize..=5usize,
             hidden_size in 2usize..=32usize,

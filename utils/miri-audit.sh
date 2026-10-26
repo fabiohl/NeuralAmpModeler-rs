@@ -1,69 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#
-# =============================================================================
-# Out-of-band Miri Concurrency & Aliasing Audit — NeuralAmpModeler-rs
-# =============================================================================
-#
-# GOVERNANCE & POLICY NOTICE
-#   In accordance with the project quality policy (docs/testing.md §13),
-#   all CI and standard release verification gates (lints.sh, tests-quick.sh,
-#   tests-long.sh) use strictly the stable Rust toolchain.
-#
-#   This script is an OPTIONAL, out-of-tree, opt-in periodic audit for unsafe
-#   invariants, data races and Stacked Borrows / Tree Borrows aliasing soundness
-#   investigated under the Miri MIR interpreter. It is intentionally NOT wired
-#   into lints.sh / tests-quick.sh / tests-long.sh and requires an isolated
-#   nightly toolchain.
-#
-# RELATION TO LOOM
-#   Miri complements `loom` (utils/tests-long.sh phase 6) and does NOT replace
-#   it: loom proves the absence of data races by exhaustively exploring the
-#   atomic interleavings, whereas Miri proves pointer provenance and aliasing
-#   validity (UB detection) for the concrete executions it interprets.
-#
-# TARGET MATRIX (each target must execute a real minimum number of tests; a
-# declared target with zero executed tests is a hard failure — never a silent
-# pass):
-#   - common::spsc              SPSC ring, GC cascade/overflow, status flags
-#   - dsp::pipeline::bridge     DspBridge double-buffer lock-free protocol
-#   - dsp::mirror_buf           MirroredBuffer state machine (FFI alloc excluded)
-#   - dsp::smoother             One-pole smoother primitives
-#   - dsp::utils::delay_line    DelayLine ring arithmetic
-#
-# FLAGS
-#   -Zmiri-disable-isolation : allows host clock / pseudo-sleeps in timing paths.
-#   -Zmiri-ignore-leaks      : the GC overflow tests deliberately leak displaced
-#                              items (the GcOverflowBuffer controlled-leak
-#                              contract) and the corrupted-slot tests leak
-#                              on purpose; without this flag Miri reports those
-#                              intentional leaks as errors and drowns the
-#                              provenance/aliasing signal we are auditing.
-#
-# EXIT CODES
-#   0  all targets green
-#   1  audit failure (UB, unsupported operation, or an empty/under-covered target)
-#   2  typed GAP (nightly toolchain or miri component unavailable) — fail-closed,
-#      never a silent success
-# =============================================================================
-
+# miri-audit.sh — Out-of-band Miri concurrency and UB audit. Classe D.
+# Uso: utils/miri-audit.sh
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
-
-PHASE_TOTAL=5
-source "$SCRIPT_DIR/_lib.sh"
-
-# ── Memory guard (OOM containment) ──────────────────────────────────────────
-# Miri interpretation is memory-hungry and runs alongside rust-analyzer/IDE on
-# the same 16 GiB host. Re-exec inside a transient, memory-capped systemd scope
-# (fail-open when unavailable). Opt out with NAM_NO_MEM_GUARD=1.
-if [ "${NAM_MEM_GUARD:-0}" != "1" ] && [ "${NAM_NO_MEM_GUARD:-0}" != "1" ]; then
-    export NAM_MEM_GUARD=1
-    exec "$SCRIPT_DIR/mem-guard.sh" "$SCRIPT_PATH" "$@"
-fi
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 
 LOG_DIR="target/logs"
 mkdir -p "$LOG_DIR"
@@ -75,26 +18,7 @@ echo -e "${BLUE}${BOLD}   NeuralAmpModeler-rs Miri Concurrency & UB Audit     ${
 echo -e "${BLUE}${BOLD}=======================================================${NC}"
 
 # ── Toolchain preflight (fail-closed GAP) ────────────────────────────────────
-if ! command -v rustup >/dev/null 2>&1; then
-    echo -e "${YELLOW}GAP: rustup not found — Miri audit cannot run.${NC}"
-    echo -e "  This is a typed gap: install a nightly toolchain with the miri component."
-    exit 2
-fi
-
-if ! rustup toolchain list 2>/dev/null | grep -q "nightly"; then
-    echo -e "${YELLOW}GAP: no nightly toolchain installed — Miri audit cannot run.${NC}"
-    echo -e "  Install via:"
-    echo -e "    ${BOLD}rustup toolchain install nightly --profile minimal${NC}"
-    echo -e "    ${BOLD}rustup component add miri --toolchain nightly${NC}"
-    exit 2
-fi
-
-if ! cargo +nightly miri --version >/dev/null 2>&1; then
-    echo -e "${YELLOW}GAP: miri component missing on nightly — Miri audit cannot run.${NC}"
-    echo -e "  Install via:"
-    echo -e "    ${BOLD}rustup component add miri --toolchain nightly${NC}"
-    exit 2
-fi
+require_nightly miri
 
 echo -e "${GREEN}Miri environment detected:${NC}"
 cargo +nightly miri --version | tee -a "$MIRI_LOG"

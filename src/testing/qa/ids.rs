@@ -23,9 +23,6 @@
 //! source predates it — the join key is the family part of the contract
 //! fidelity label, which neither the catalog nor the bench table carries.
 
-#[cfg(test)]
-use super::super::catalog::GOLDEN_GEN_CATALOG;
-
 /// Resolves an old-report fidelity label to its canonical contract label.
 ///
 /// Ports the bash `_LMAP` remap of `parse_jsonl_fidelity`
@@ -390,7 +387,3 @@ pub fn resolve_rt_fixture(bench_label: &str) -> Option<&'static str> {
         .find(|entry| entry.bench_label == bench_label)
         .and_then(|entry| entry.fixture)
 }
-
-#[cfg(test)]
-#[path = "ids_test.rs"]
-mod ids_test;

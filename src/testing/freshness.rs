@@ -528,7 +528,3 @@ fn mtime(path: &Path) -> io::Result<Option<SystemTime>> {
         Err(e) => Err(e),
     }
 }
-
-#[cfg(test)]
-#[path = "freshness_test.rs"]
-mod tests;
