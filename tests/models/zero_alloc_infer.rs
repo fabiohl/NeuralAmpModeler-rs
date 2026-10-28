@@ -392,9 +392,10 @@ fn test_zero_alloc_container_transition() {
 fn test_parallel_allocation_tracking_isolation() {
     use std::thread;
 
+    // Explicit cap: this is a concurrency-isolation test, not a topology probe.
     let num_threads = thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+        .map(|n| n.get().min(8))
+        .unwrap_or(2);
     let mut handles = Vec::new();
 
     for i in 0..num_threads {

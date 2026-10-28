@@ -8,10 +8,10 @@
 //!
 //! ```sh
 //! # Save a baseline (first run, or after verified optimization):
-//! taskset -c 0 cargo bench --bench regression_gate -- --save-baseline ci-baseline
+//! taskset -c <isolated-cpu> cargo bench --bench regression_gate -- --save-baseline ci-baseline
 //!
 //! # CI run: compare against saved baseline, fail on regression:
-//! taskset -c 0 cargo bench --bench regression_gate -- --baseline ci-baseline
+//! taskset -c <isolated-cpu> cargo bench --bench regression_gate -- --baseline ci-baseline
 //! ```
 //!
 //! ## Bench layout

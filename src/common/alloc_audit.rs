@@ -361,7 +361,10 @@ mod tests {
 
         fresh_state();
 
-        let num_threads = 8;
+        // Explicit cap: this is a concurrency-isolation test, not a topology probe.
+        let num_threads = thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(2);
         let mut handles = Vec::new();
 
         for i in 0..num_threads {

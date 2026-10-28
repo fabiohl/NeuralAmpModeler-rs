@@ -77,36 +77,13 @@ pub fn governor_path_for_core(core: u32) -> String {
     format!("/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
 }
 
-/// Effective bench core for governor probing.
-///
-/// Precedence: the pinned core observed from the process affinity mask when
-/// it resolves to exactly one core (the `taskset -c <core>` case — the most
-/// precise signal), then `NAM_BENCH_CORE`, then `nproc / 2`
-/// (integer division — the same default as
-/// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
-/// ignored; on machines without `cpufreq` the read below fails closed to
-/// `unknown` (never a hard error where a graceful skip existed before).
-fn effective_bench_core() -> u32 {
-    // Most precise signal first: when the process is pinned to exactly one
-    // core (`taskset -c <core>`, the RT-gate invocation shape), probe that
-    // core — `NAM_BENCH_CORE` may be unset in that path (tests-long.sh only
-    // exports `NAM_BENCH_CORE` when the operator sets it explicitly).
-    #[cfg(target_os = "linux")]
-    {
-        let (single_pinned, pinned) = check_cpu_affinity(true);
-        if single_pinned && let Some(core) = pinned {
-            return core as u32;
-        }
-    }
-    if let Some(core) = std::env::var("NAM_BENCH_CORE")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u32>().ok())
-    {
-        return core;
-    }
-    std::thread::available_parallelism()
-        .map(|n| (n.get() / 2) as u32)
-        .unwrap_or(0)
+/// Effective bench core for governor probing: delegates to the single owner of
+/// the precedence (`pick_core::resolve_bench_core`), `None` (GAP) when unresolved.
+fn effective_bench_core() -> Option<u32> {
+    neural_amp_modeler_rs::testing::qa::pick_core::resolve_bench_core(
+        std::env::var("NAM_BENCH_CORE").ok().as_deref(),
+        None,
+    )
 }
 
 fn read_governor() -> Result<String, io::Error> {
@@ -114,8 +91,9 @@ fn read_governor() -> Result<String, io::Error> {
     // bench is actually pinned to — instead of a fixed `cpu0`. On hybrid
     // (P-core/E-core) systems `cpu0` may report `performance` while the
     // pinned core does not.
-    let path = governor_path_for_core(effective_bench_core());
-    let text = fs::read_to_string(path)?;
+    let core = effective_bench_core()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no bench core resolved (GAP)"))?;
+    let text = fs::read_to_string(governor_path_for_core(core))?;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         Err(io::Error::new(io::ErrorKind::InvalidData, "empty governor"))

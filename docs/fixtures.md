@@ -280,7 +280,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 
 ### QA & Gate Acceptance Fixtures (`tests/fixtures/qa/`)
 
-- **`report_gate_not_verified.jsonl`:** Committed synthetic QA report fixture used by [`tests/scripts/test_regression_guard.sh`](../tests/scripts/test_regression_guard.sh) (Scenario 2b). Freezes the acceptance scenario where all functional fidelity phases pass while the performance benchmark phase is `NOT_VERIFIED`. Used to test `nam_quality verify` fail-closed verification and prove PERF-006 domain separation (`FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED`, exit code 1).
+- **`report_gate_not_verified.jsonl`:** Committed synthetic QA report fixture used by `tests/scripts/test_regression_guard.sh` (removido) (Scenario 2b). Freezes the acceptance scenario where all functional fidelity phases pass while the performance benchmark phase is `NOT_VERIFIED`. Used to test `nam_quality verify` fail-closed verification and prove PERF-006 domain separation (`FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED`, exit code 1).
 
 ---
 

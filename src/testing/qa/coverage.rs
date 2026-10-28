@@ -3,7 +3,7 @@
 
 //! Baseline coverage cross-check — literal port of
 //! `executed_bench_ids` / `missing_baseline_coverage`
-//! (`tests-performance-regression.sh:229-249`).
+//! (o script de performance legado (removido)).
 //!
 //! The Rust only classifies the Criterion log: every `Benchmarking <id>:`
 //! line yields the id up to the first `:` (the same mental
@@ -61,7 +61,7 @@ fn is_word(id: &str) -> bool {
 /// Cross-checks baseline coverage of an executed Criterion log (F-24).
 ///
 /// Literal port of `missing_baseline_coverage`
-/// (`tests-performance-regression.sh:234-249`):
+/// (o script de performance legado (removido)):
 /// - no parseable id ⇒ [`Err(BaselineCoverageGap)`](BaselineCoverageGap)
 ///   (the bash `[ -z "$ids" ]` blind gate — an absent/unparseable log fails
 ///   closed);

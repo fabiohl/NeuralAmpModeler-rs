@@ -444,7 +444,7 @@ impl LongAuditReceipt {
     }
 
     /// Fail-closed semantic verification against the engine's canonical
-    /// 15-phase roster ([`CANONICAL_ROSTER`]).
+    /// 14-phase roster ([`CANONICAL_ROSTER`]).
     pub fn semantic_verdict(&self) -> Result<(), String> {
         self.semantic_verdict_with_roster(&CANONICAL_ROSTER)
     }
@@ -492,7 +492,7 @@ impl LongAuditReceipt {
         self.campaign_strict_verdict_with_only(roster, None)
     }
 
-    /// Fail-closed strict campaign verdict: enforces the canonical 15-phase roster,
+    /// Fail-closed strict campaign verdict: enforces the canonical 14-phase roster,
     /// presence of terminal 'overall' record, no duplicate or unknown phases,
     /// tests_executed > 0 for timed phases (`phase1`..`phase7`), and zero gaps/failures.
     pub fn campaign_strict_verdict(&self) -> Result<(), String> {

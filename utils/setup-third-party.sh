@@ -1,6 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# setup-third-party.sh — clona os espelhos C++ fixados. Classe D.
+# Uso: utils/setup-third-party.sh [flags canônicas]
+# Orçamento: 141
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 #
 # Populate NeuralAmpModeler-rs/third-party/ with external artifacts needed for
 # full local development and parity/golden pipelines.
@@ -21,13 +25,8 @@
 # Overrides: NAM_COMMUNITY_MODELS_SRC (absolute path to link as community_models).
 
 set -euo pipefail
-
-PHASE_TOTAL=3
-source "$(dirname "$0")/_lib.sh"
-
-echo -e "${BLUE}${BOLD}================================================================${NC}"
-echo -e "${BLUE}${BOLD}   NeuralAmpModeler-rs — third-party environment setup          ${NC}"
-echo -e "${BLUE}${BOLD}================================================================${NC}"
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 
 if ! command -v git >/dev/null 2>&1; then
     die "git binary is required but not found in PATH."
@@ -35,9 +34,7 @@ fi
 
 VARIABLES_ENV="${VARIABLES_ENV:-$PROJECT_DIR/variables.env}"
 if [ ! -f "$VARIABLES_ENV" ]; then
-    echo -e "${RED}${BOLD}❌ variables.env not found at $VARIABLES_ENV.${NC}"
-    echo -e "${YELLOW}Expected at the NeuralAmpModeler-rs repository root.${NC}"
-    exit 1
+    die "variables.env not found at $VARIABLES_ENV (expected at the NeuralAmpModeler-rs repository root)."
 fi
 # shellcheck source=/dev/null
 source "$VARIABLES_ENV"
@@ -45,11 +42,7 @@ source "$VARIABLES_ENV"
 mkdir -p "$THIRD_PARTY_DIR"
 
 sync_git_pin() {
-    local name="$1"
-    local dir="$2"
-    local repo="$3"
-    local tag="$4"
-    local commit="$5"
+    local name="$1" dir="$2" repo="$3" tag="$4" commit="$5"
 
     if [ -e "$dir/.git" ]; then
         echo -e "  Found $name at $dir — updating to pin..."
@@ -64,9 +57,7 @@ sync_git_pin() {
         )
         ok "$name synced ($tag @ $commit)."
     elif [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
-        echo -e "${RED}${BOLD}❌ $dir exists but is not a git checkout.${NC}"
-        echo -e "${YELLOW}Remove it and re-run.${NC}"
-        exit 1
+        die "$dir exists but is not a git checkout; remove it and re-run."
     else
         echo -e "  Cloning $name for the first time..."
         rm -rf "$dir"
@@ -130,12 +121,9 @@ elif [ -n "${NAM_COMMUNITY_MODELS_SRC:-}" ]; then
     ok "Linked community_models → $NAM_COMMUNITY_MODELS_SRC"
 else
     warn "community_models not configured (optional)."
-    echo -e "  ${YELLOW}  For local non-distributable test models, create a symlink:${NC}"
-    echo -e "  ${YELLOW}    ln -s /path/to/your/nam_models $COMMUNITY_LINK${NC}"
-    echo -e "  ${YELLOW}  Or re-run with NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models${NC}"
+    echo "  For local non-distributable test models, create a symlink:"
+    echo "    ln -s /path/to/your/nam_models $COMMUNITY_LINK"
+    echo "  Or re-run with NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models"
 fi
 
-echo -e "${GREEN}${BOLD}================================================================${NC}"
-echo -e "${GREEN}${BOLD}  third-party environment ready under:${NC}"
-echo -e "${GREEN}${BOLD}    $THIRD_PARTY_DIR${NC}"
-echo -e "${GREEN}${BOLD}================================================================${NC}"
+ok "third-party environment ready under: $THIRD_PARTY_DIR"

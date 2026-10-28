@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+
+name: QA summary
+description: Publish the canonical PHASE/RESULT summary and failing-phase details.
+
+inputs:
+  title:
+    description: Heading for this job's summary
+    required: true
+  note:
+    description: Optional one-line note appended to the heading
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Publish summary
+      shell: bash
+      env:
+        TITLE: ${{ inputs.title }}
+        NOTE: ${{ inputs.note }}
+      run: |
+        echo "### $TITLE" >> "$GITHUB_STEP_SUMMARY"
+        if [ -n "$NOTE" ]; then
+          echo "$NOTE" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ -f target/logs/summary.txt ]; then
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat target/logs/summary.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo 'No canonical summary (target/logs/summary.txt missing).' >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ -f target/logs/summary.txt ]; then
+          fails=$(grep -E '^PHASE: .* FAIL( |$)' target/logs/summary.txt || true)
+          if [ -n "$fails" ]; then
+            printf '%s\n' "$fails" | while IFS= read -r line; do
+              log=$(printf '%s\n' "$line" | sed -n 's/.* log=\([^ ]*\).*/\1/p')
+              [ -f "$log" ] || continue
+              {
+                echo "<details><summary>Failure: $(basename "$log")</summary>"
+                echo ''
+                echo '```text'
+                tail -n 40 "$log"
+                echo '```'
+                echo '</details>'
+              } >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+        fi

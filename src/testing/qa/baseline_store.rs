@@ -4,7 +4,7 @@
 //! Performance-baseline persistence — literal port of
 //! `list_top_level_baselines` / `sanitize_nested_baselines` /
 //! `replace_copy_dir` / `persist_baseline` / `restore_baseline`
-//! (`tests-performance-regression.sh:219-318`).
+//! (o script de performance legado (removido)).
 //!
 //! Criterion's `target/criterion/` is a **transient** working area: the
 //! persisted store (`.performance-baselines/`, gitignored) holds only the

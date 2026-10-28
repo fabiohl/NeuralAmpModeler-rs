@@ -299,7 +299,7 @@ To execute workloads or microbenchmarks on the dedicated isolated core with real
 
 ```bash
 # SCHED_FIFO priority 80 pinned strictly to isolated core 8:
-chrt -f 80 taskset -c 8 <command>
+chrt -f 80 taskset -c <isolated-cpu> <command>
 ```
 
 Note that `nohz_full` only removes the tick while a single runnable task occupies the

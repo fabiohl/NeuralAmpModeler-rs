@@ -1,6 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# repro_oversample_hang.sh — reprodução de hang sob cgroup e timeout. Classe D.
+# Uso: utils/debug/repro_oversample_hang.sh [flags canônicas]
+# Orçamento: 190
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 #
 # repro_oversample_hang.sh — General-purpose safety wrapper for reproducing
 # a suspected indefinite hang. Originally built to investigate and fix a
@@ -77,12 +81,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
-
 usage() {
     echo "Usage: $0 <timeout_seconds> <label> -- <cargo full command...>" >&2
     echo "Example: $0 15 varA-stable-debug -- cargo test --lib -- <test_name> --ignored --nocapture --test-threads=1" >&2
@@ -100,18 +98,18 @@ shift 2
 if [ "$1" = "--" ]; then
     shift
 else
-    echo -e "${RED}${BOLD}Error: expected '--' before the cargo command.${NC}" >&2
+    echo "Error: expected '--' before the cargo command." >&2
     usage
 fi
 
 if [ "$#" -eq 0 ]; then
-    echo -e "${RED}${BOLD}Error: no cargo command provided after '--'.${NC}" >&2
+    echo "Error: no cargo command provided after '--'." >&2
     usage
 fi
 
 case "$TIMEOUT_S" in
     ''|*[!0-9]*)
-        echo -e "${RED}${BOLD}Error: <timeout_seconds> must be a positive integer (received: '${TIMEOUT_S}').${NC}" >&2
+        echo "Error: <timeout_seconds> must be a positive integer (received: '${TIMEOUT_S}')." >&2
         usage
         ;;
 esac
@@ -122,13 +120,13 @@ esac
 # write/overwrite arbitrary files reachable by the current user.
 case "$LABEL" in
     ''|*[!A-Za-z0-9_-]*)
-        echo -e "${RED}${BOLD}Error: <label> must contain only [A-Za-z0-9_-] (received: '${LABEL}').${NC}" >&2
+        echo "Error: <label> must contain only [A-Za-z0-9_-] (received: '${LABEL}')." >&2
         usage
         ;;
 esac
 
 if ! command -v systemd-run >/dev/null 2>&1; then
-    echo -e "${RED}${BOLD}Error: systemd-run not found (systemd user scope execution is unavailable in this environment).${NC}" >&2
+    echo "Error: systemd-run not found (systemd user scope execution is unavailable in this environment)." >&2
     exit 2
 fi
 
@@ -159,12 +157,12 @@ echo "$STATUS" >"$EXIT_FILE"
 # reproduced live with an earlier revision of this script.
 LEFTOVER_PROC="$(pgrep -af 'target/(debug|release)/deps/' 2>/dev/null | grep -v "$$" || true)"
 if [ -n "$LEFTOVER_PROC" ]; then
-    echo -e "${RED}${BOLD}!!! WARNING: residual process(es) detected after script completion — kill manually: !!!${NC}" | tee -a "$LOG"
+    echo "!!! WARNING: residual process(es) detected after script completion — kill manually: !!!" | tee -a "$LOG"
     echo "$LEFTOVER_PROC" | tee -a "$LOG"
 fi
 
 if [ "$STATUS" -ge 128 ]; then
-    echo -e "${RED}${BOLD}!!! HANG/RESOURCE-KILL detected (exit ${STATUS}) !!!${NC}" | tee -a "$LOG"
+    echo "!!! HANG/RESOURCE-KILL detected (exit ${STATUS}) !!!" | tee -a "$LOG"
 elif [ "$STATUS" -eq 0 ]; then
     # Post-hoc consistency check: an exit 0 whose log ends mid-line exactly
     # like libtest's "test <name> ... " in-progress marker (no trailing
@@ -172,12 +170,12 @@ elif [ "$STATUS" -eq 0 ]; then
     # log) is almost certainly a false negative, not a real pass — flag it
     # loudly instead of trusting the exit code blindly.
     if ! grep -q "^test result:" "$LOG"; then
-        echo -e "${RED}${BOLD}!!! SUSPICIOUS: exit 0 but no 'test result:' line in log — likely false negative. Treat as INCONCLUSIVE, not success. !!!${NC}" | tee -a "$LOG"
+        echo "!!! SUSPICIOUS: exit 0 but no 'test result:' line in log — likely false negative. Treat as INCONCLUSIVE, not success. !!!" | tee -a "$LOG"
     else
-        echo -e "${GREEN}${BOLD}--- Command completed normally (exit 0) ---${NC}" | tee -a "$LOG"
+        echo "--- Command completed normally (exit 0) ---" | tee -a "$LOG"
     fi
 else
-    echo -e "${YELLOW}${BOLD}--- Command finished with exit ${STATUS} (not a hang/OOM) ---${NC}" | tee -a "$LOG"
+    echo "--- Command finished with exit ${STATUS} (not a hang/OOM) ---" | tee -a "$LOG"
 fi
 
 echo "--- dmesg tail ---" | tee -a "$LOG"

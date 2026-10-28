@@ -5,7 +5,7 @@
 //! for QA receipts and fingerprints.
 //!
 //! Ports the duplicated heuristics of `quality-dashboard.sh:103-130` and
-//! `tests-performance-regression.sh:42-77` into one `EnvProbe`: cpuinfo
+//! o script de performance legado (removido) into one `EnvProbe`: cpuinfo
 //! (`model name`, `flags` → canonical ISA string, `cpu cores`), toolchain
 //! (`rustc --version`, host triple, `RUSTFLAGS`), frequency governor and git
 //! state (`rev-parse HEAD`, dirty). S3 reuses this type for the fingerprint.
@@ -16,6 +16,8 @@
 
 use std::fs;
 use std::process::Command;
+
+use super::pick_core;
 
 /// Canonical ISA string — AVX-512 class.
 pub const ISA_AVX512: &str = "AVX-512";
@@ -28,15 +30,6 @@ pub const ISA_X86_64_BASE: &str = "x86-64 (base)";
 
 /// Path of the live CPU information file.
 pub const CPUINFO_PATH: &str = "/proc/cpuinfo";
-/// Path of the live frequency governor of CPU 0 (legacy).
-///
-/// Retained for compatibility; new code must use
-/// [`governor_path_for_core`] / [`effective_governor_path`] so the probed
-/// core matches the pinned bench core (`NAM_BENCH_CORE`,
-/// default `nproc / 2` — same default as
-/// `utils/tests-performance-regression.sh:53-55`).
-pub const GOVERNOR_PATH: &str = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor";
-
 /// Builds the `scaling_governor` path for an explicit CPU core.
 ///
 /// Pure constructor (no I/O) — unit-tested with a mocked core id.
@@ -44,22 +37,17 @@ pub fn governor_path_for_core(core: u32) -> String {
     format!("/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
 }
 
-/// Effective bench core for governor probing.
-///
-/// Precedence: `NAM_BENCH_CORE`, else `nproc / 2`
-/// (integer division — the same default as
-/// `utils/tests-performance-regression.sh:53-55`). Unparseable values are
-/// ignored so probing stays fail-closed (`unknown`) instead of panicking.
-pub fn effective_bench_core() -> u32 {
-    std::env::var("NAM_BENCH_CORE")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .unwrap_or_else(|| probe_nproc().unwrap_or(1) / 2)
+/// Effective bench core for governor probing: the single owner of the
+/// precedence (`pick_core::resolve_bench_core`): `NAM_BENCH_CORE` → first
+/// online isolated CPU → first permitted CPU. `None` (GAP) keeps the probe
+/// fail-closed (`unknown`).
+pub fn effective_bench_core() -> Option<u32> {
+    pick_core::resolve_bench_core(std::env::var("NAM_BENCH_CORE").ok().as_deref(), None)
 }
 
 /// Path of the live frequency governor of the effective bench core.
-pub fn effective_governor_path() -> String {
-    governor_path_for_core(effective_bench_core())
+pub fn effective_governor_path() -> Option<String> {
+    effective_bench_core().map(governor_path_for_core)
 }
 
 /// `scaling_governor` of the effective bench core (`None` when unreadable —
@@ -67,19 +55,19 @@ pub fn effective_governor_path() -> String {
 /// `INCOMPARABLE_ENVIRONMENT` semantics on VMs/CI without per-core
 /// `cpufreq`).
 pub fn read_effective_governor() -> Option<String> {
-    read_trimmed(&effective_governor_path())
+    read_trimmed(&effective_governor_path()?)
 }
 
 /// Governor path for an explicit bench-core string (e.g. the
 /// `Fingerprint::probe` argument): a parseable value wins, otherwise the
 /// effective bench core. Never falls back to `cpu0` — a missing per-core
 /// path stays fail-closed (`unknown`).
-pub fn governor_path_for_bench_core_arg(bench_core: &str) -> String {
+pub fn governor_path_for_bench_core_arg(bench_core: &str) -> Option<String> {
     let trimmed = bench_core.trim();
     if !trimmed.is_empty()
         && let Ok(core) = trimmed.parse::<u32>()
     {
-        return governor_path_for_core(core);
+        return Some(governor_path_for_core(core));
     }
     effective_governor_path()
 }
@@ -123,7 +111,7 @@ pub fn parse_cpuinfo(text: &str) -> CpuInfo {
 /// Classifies a cpuinfo `flags` line into the one canonical ISA string.
 ///
 /// Literal port of `detect_isa` (`quality-dashboard.sh:103-123`, mirrored at
-/// `tests-performance-regression.sh:46-65`): `avx512f` wins; the full v3 set
+/// o script de performance legado (removido)): `avx512f` wins; the full v3 set
 /// (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`|`abm`, `movbe`)
 /// yields the v3 label; any bare `avx2` yields the incomplete label; else
 /// base. Matching is whole-word, like `grep -w`.
@@ -185,7 +173,9 @@ impl EnvProbe {
     pub fn probe_from_cpuinfo(cpuinfo_text: &str) -> Self {
         let cpu = parse_cpuinfo(cpuinfo_text);
         let physical_cores = if cpu.physical_cores == 0 {
-            probe_nproc().unwrap_or(1)
+            std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(1)
         } else {
             cpu.physical_cores
         };
@@ -238,12 +228,6 @@ fn rustc_host_triple() -> Option<String> {
             line.strip_prefix("host: ")
                 .map(|value| value.trim().to_string())
         })
-}
-
-/// Number of processors as reported by `nproc`.
-fn probe_nproc() -> Option<u32> {
-    let count = first_line_of_command(&["nproc"])?;
-    count.parse::<u32>().ok().filter(|n| *n > 0)
 }
 
 /// Contents of a small status file, trimmed; `None` when unreadable/empty.

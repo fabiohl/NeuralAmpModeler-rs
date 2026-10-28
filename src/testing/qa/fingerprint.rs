@@ -3,7 +3,7 @@
 
 //! Performance-baseline environment fingerprint — serde JSON
 //! replacing the bash heredoc + `sed` pair of
-//! `tests-performance-regression.sh::generate_fingerprint` /
+//! o script de performance legado (removido) /
 //! `compare_fingerprint` (`:81-215`).
 //!
 //! One `Fingerprint` records the environment of a bootstrapped performance
@@ -80,7 +80,7 @@ pub fn compute_cargo_lock_sha256_at(path: &Path) -> Option<String> {
 /// Persisted environment fingerprint of a bootstrapped performance baseline.
 ///
 /// Field names and JSON keys are byte-compatible with the bash heredoc of
-/// `generate_fingerprint` (`tests-performance-regression.sh:97-110`).
+/// `generate_fingerprint` (o script de performance legado (removido)).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fingerprint {
@@ -170,11 +170,12 @@ impl Fingerprint {
     /// core the bench is actually pinned to.
     pub fn probe(bench_core: &str) -> Self {
         let mut fingerprint = Self::from_env_probe(&EnvProbe::probe(), bench_core);
-        match std::fs::read_to_string(super::env::governor_path_for_bench_core_arg(bench_core)) {
-            Ok(text) if !text.trim().is_empty() => {
+        let governor = super::env::governor_path_for_bench_core_arg(bench_core)
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        match governor {
+            Some(text) if !text.trim().is_empty() => {
                 fingerprint.frequency_governor = text.trim().to_string();
             }
-            Ok(_) if bench_core.trim().is_empty() => {}
             _ if !bench_core.trim().is_empty() => {
                 // Explicit bench core without a readable per-core path stays
                 // fail-closed (`unknown`, never the ambient cpu0 value).
@@ -218,7 +219,7 @@ impl Fingerprint {
 
     /// Compares this (current) environment against a stored baseline, field
     /// by field, mirroring `compare_fingerprint`
-    /// (`tests-performance-regression.sh:115-215`).
+    /// (o script de performance legado (removido)).
     ///
     /// `Ok(())` means the environments are comparable. The first mismatch
     /// wins, in the bash comparison order, with the typed reason carrying the

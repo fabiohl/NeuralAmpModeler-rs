@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] — 1.1.0
+
+### Changed
+
+- **QA packaging surface:** the maintainer-only QA binaries (`gen_stress`,
+  `wav_to_golden`, `nam_golden_catalog`, `nam_freshness`, `nam_long_receipt`,
+  `nam_quality`, `nam_remote_simd_receipt`, and the removed `capability_receipt`)
+  are no longer shipped in the published crate. The `testing` library modules
+  remain available because downstream suites use them as a dev-dependency, and
+  the externally documented `nam_perf_gate` and `simd_probe` binaries stay in the
+  package. The `include` list is now complete (`/src/arch/` was missing and made
+  every verified tarball fail to compile); this ships in 1.1.0.
+
 ## [1.0.1] - 2026-10-19
 
 ### API Compatibility

@@ -46,14 +46,14 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
    # Expected output: performance
    ```
 
-   The test harness probes the governor of the effective benchmark core (resolved via `pick_bench_core`: explicit `NAM_BENCH_CORE`, online isolated core from `/sys/devices/system/cpu/isolated`, or fallback `nproc / 2`).
+   The test harness probes the governor of the effective benchmark core (resolved via `nam_perf_gate pick-core`: explicit `NAM_BENCH_CORE`, online isolated core from `/sys/devices/system/cpu/isolated`; when neither resolves, `pick-core` returns `GAP` and no core is pinned).
 
 2. **System Load & Thermal Stability:**
    Close resource-intensive background processes, IDE indexers, browsers, and background compilers to prevent scheduling interference.
 
-3. **CPU Affinity (`taskset`):**
+3. **CPU Affinity (`NAM_BENCH_CORE`):**
 
-   - For timing-sensitive phases, [`tests-long.sh`](../utils/tests-long.sh) and [`tests-performance-regression.sh`](../utils/tests-performance-regression.sh) pin execution to a dedicated core via `taskset -c $NAM_BENCH_CORE`.
+   - For timing-sensitive phases, [`tests-long.sh`](../utils/tests-long.sh) and `nam_perf_gate run` pin execution to the core resolved by the `NAM_BENCH_CORE` precedence (see `benchmarks.md` §4).
 
 4. **Upstream Vendor Mirrors:**
    Ensure `third-party/NeuralAmpModelerCore/` is populated and matches the commit pinned in [`variables.env`](../variables.env):
@@ -164,7 +164,7 @@ fn verify_model_invariance(model_path: &Path) -> anyhow::Result<()> {
 
 > [!IMPORTANT]
 > **Operator Delegation Policy:**
-> Automated execution of `utils/tests-long.sh`, `utils/tests-performance-regression.sh --bootstrap-baseline`, and `utils/quality-dashboard.sh --save` is restricted to human operators. These scripts must run on calibrated, isolated machines.
+> Automated execution of `utils/tests-long.sh`, `nam_perf_gate run --bootstrap-baseline`, and `utils/quality-dashboard.sh --save` is restricted to human operators. These scripts must run on calibrated, isolated machines.
 
 ### 4.1 Agile Quick Suite (`utils/tests-quick.sh`)
 
@@ -174,18 +174,17 @@ The quick suite is the primary automated gate for local development (~16–46s m
 # Standard local verification (skips missing optional vendor fixtures gracefully)
 ./utils/tests-quick.sh
 
-# Strict release-gate mode (promotes any missing fixture to a hard failure)
-NAM_QUICK_STRICT=1 ./utils/tests-quick.sh
+# Lacunas do oráculo C++ ficam em target/logs/skips.jsonl (GAP); o modo estrito é do long:
+# ./utils/tests-long.sh --strict
 ```
 
-- **Phase 1 (Structural & Logic, Debug):** Unit tests, DSP math logic, parsers, FSM transitions, and SPSC channels.
-- **Phase 2 (Measurement Oracles & Parity, Release):** Evaluates production float codegen across `golden_vectors`, `reference_oracle_f64`, `spectral_fidelity`, `linear_fft_test`, and C++ parity (`quick_parity`).
-- **Phase 3 (Parser Fuzzing, Release `--ignored`):** Capped `proptest` sweeps on `.nam` and `.namb` format inputs.
+- **Freshness (`nam_freshness artifacts-hard`):** Verifies golden-artifact freshness and integrity; a `GENERATOR CHANGED` line becomes a `generator-drift` gap and a nonzero exit fails the run.
+- **Tests (`cargo test --locked --features testing --no-fail-fast`, Debug):** Runs every non-ignored test target, including structural/logic/parser/FSM checks, non-ignored numerical and parity checks, and the `libm_export_guard` symbol gate. Ignored tests are not invoked.
 
 **Expected Outcome:**
 
-- Local runs: `FIDELITY: OK` or `FIDELITY: INCOMPLETE` (with documented `GAP:` entries if vendor mirrors are absent) and `OVERALL: PASSED` (exit status 0).
-- Release certification: Must run with `NAM_QUICK_STRICT=1` and yield `FIDELITY: OK` with `OVERALL: PASSED` (zero gaps, exit status 0).
+- Local runs: `RESULT: PASS` or `RESULT: PASS_WITH_GAPS` with exit status 0 (a `cpp-oracle-absent:<n>` gap is derived from `target/logs/skips.jsonl`); a failed phase yields `RESULT: FAIL` and exit status 1.
+- The quick suite emits no receipt. Release certification requires `utils/tests-long.sh --strict` with zero gaps and exit status 0 (the quick suite has no strict flag).
 
 ---
 
@@ -201,9 +200,9 @@ The long audit suite provides exhaustive pre-release validation (~8–12 minutes
 ./utils/tests-long.sh --strict
 ```
 
-- **Preflight Gates:** `preflight-render`, `preflight-catalog`, `preflight-package`, `preflight-freshness`, `preflight-meta`, and diagnostic `preflight-simd-probe`.
+- **Preflight Gates:** `preflight-render`, `preflight-catalog`, `preflight-package`, `preflight-freshness`, and diagnostic `preflight-simd-probe`.
 
-- **7-Phase Battery:** (1) Soak & Concurrency, (2) Defense Scripts & Linking Guards, (3) Full Live Parity & Proptests, (4) Heap Audit, (5) RT Deadline Gate, (6) RT Jitter Telemetry, (7) Loom Model Checking.
+- **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log`.
 
 - **Receipt Validation:**
 
@@ -219,27 +218,27 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 
 | File Path                                        | Generating Component / Phase           | Diagnostic Contents                                                                                                                          |
 |:------------------------------------------------ |:-------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`target/logs/quick-receipt.txt`**              | `tests-quick.sh` (Final)               | Summary receipt with `FIDELITY:`, `GAP:`, and `OVERALL:` status.                                                                             |
-| **`target/logs/quick-phase1.log`**               | `tests-quick.sh` (Phase 1)             | Structural unit tests, DSP logic, and channel checks (Debug profile).                                                                        |
-| **`target/logs/quick-phase2.log`**               | `tests-quick.sh` (Phase 2)             | Float measurement oracles, golden vectors, and C++ `quick_parity` (Release profile).                                                         |
-| **`target/logs/quick-phase3.log`**               | `tests-quick.sh` (Phase 3)             | Capped proptest parser fuzzing logs.                                                                                                         |
+| **`target/logs/quick-freshness.log`**            | `tests-quick.sh` (freshness)           | `nam_freshness artifacts-hard` output and generator-drift diagnostics.                                                                       |
+| **`target/logs/quick-tests.log`**                | `tests-quick.sh` (tests)               | Full non-ignored `cargo test --features testing` output (Debug profile).                                                                     |
+| **`target/logs/skips.jsonl`**                    | `tests-quick.sh` / test harness        | Structured skip records (e.g. missing optional C++ oracle) aggregated into `cpp-oracle-absent:<n>` gaps.                                    |
 | **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)                | Machine-readable structured audit receipt (per-phase JSON entries).                                                                          |
-| **`target/logs/catalog_preflight.log`**          | `tests-long.sh` (Preflight 2)          | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.                                                         |
-| **`target/logs/meta_coherence.log`**             | `tests-long.sh` (Preflight 4)          | Catalog definition to test registration cross-validation.                                                                                    |
-| **`target/logs/simd_probe.log`**                 | `tests-long.sh` (Preflight diagnostic) | CPU feature bits, OS AVX-512 state, Cargo feature status, and dispatched backend.                                                            |
-| **`target/logs/package-list.err`**               | `tests-long.sh` (Preflight 3)          | Diagnostics from `cargo package --list` crate packaging validations.                                                                         |
+| **`target/logs/long-preflight-render.log`**      | `tests-long.sh` (`preflight-render`)   | C++ reference render build/validation diagnostics.                                                                                           |
+| **`target/logs/long-preflight-catalog.log`**     | `tests-long.sh` (`preflight-catalog`)  | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.                                                         |
+| **`target/logs/long-preflight-package.log`**     | `tests-long.sh` (`preflight-package`)  | Diagnostics from `cargo package --list` crate packaging validations.                                                                         |
+| **`target/logs/long-preflight-freshness.log`**   | `tests-long.sh` (`preflight-freshness`)| `nam_freshness` hard-fail freshness verification output.                                                                                     |
+| **`target/logs/long-preflight-simd-probe.log`**  | `tests-long.sh` (`preflight-simd-probe`)| CPU feature bits, OS AVX-512 state, Cargo feature status, and dispatched backend.                                                           |
 | **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`       | CMake configuration output when compiling C++ `render` CLI.                                                                                  |
 | **`target/logs/cmake-build.log`**                | `utils/ensure_namcore_render.sh`       | Compilation logs for the C++ reference render binary.                                                                                        |
-| **`target/logs/phase1-soak.log`**                | `tests-long.sh` (Phase 1)              | Numerical soak logs, SPSC queue sweeps, and endurance metrics.                                                                               |
-| **`target/logs/phase2-defense-scripts.log`**     | `tests-long.sh` (Phase 2)              | Structural invariant checks, QA defenses (`qa_defense.rs`), and symbol export guards (`libm_export_guard.rs`).                               |
-| **`target/logs/phase3-proptests-parity.log`**    | `tests-long.sh` (Phase 3)              | Full C++ parity comparisons, multi-SR goldens, and 100k-case proptests.                                                                      |
-| **`target/logs/subphase-isa-parity.log`**        | `tests-long.sh` (Phase 3 Subphase)     | Cross-ISA determinism validation logs (`isa_parity`).                                                                                        |
-| **`target/logs/phase4-heap-audit.log`**          | `tests-long.sh` (Phase 4)              | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                                                      |
-| **`target/logs/phase5-rt-deadline.log`**         | `tests-long.sh` (Phase 5)              | Latency histograms and deadline statistics ($p99 < 1.33\text{ ms}$). High-resolution linear bins (0.5 µs resolution via `LatencyHistogram`). |
-| **`target/logs/phase6-rt-jitter.log`**           | `tests-long.sh` (Phase 6)              | Real-time jitter telemetry and thread contention profiles.                                                                                   |
-| **`target/logs/phase7-loom.log`**                | `tests-long.sh` (Phase 7)              | Loom model-checking state-space exploration logs.                                                                                            |
-| **`target/logs/regression_phase_receipt.jsonl`** | `tests-performance-regression.sh` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary.                                            |
-| **`target/logs/regression-check.log`**           | `tests-performance-regression.sh`      | Detailed Criterion output and statistical confidence interval results during regression checks (truncated on invocation start).              |
+| **`target/logs/long-catch-all.log`**             | `tests-long.sh` (`catch-all`)          | Full release suite including ignored tests: parity, multi-SR goldens, proptests, defense/invariants, and the libm export guard.              |
+| **`target/logs/long-soak.log`**                  | `tests-long.sh` (`soak`)               | Numerical soak logs, SPSC queue sweeps, and endurance metrics.                                                                               |
+| **`target/logs/long-isa-codegen.log`**           | `tests-long.sh` (`isa-codegen`)        | `simd_probe` output and `isa_contract` checks.                                                                                               |
+| **`target/logs/long-heap-audit.log`**            | `tests-long.sh` (`heap-audit`)         | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                                                      |
+| **`target/logs/long-rt-deadline.log`**           | `tests-long.sh` (`rt-deadline`)        | Latency histograms and deadline statistics ($p99 < 1.33\text{ ms}$). High-resolution linear bins (0.5 µs resolution via `LatencyHistogram`). |
+| **`target/logs/long-rt-jitter.log`**             | `tests-long.sh` (`rt-jitter`)          | Real-time jitter telemetry and thread contention profiles.                                                                                   |
+| **`target/logs/long-loom.log`**                  | `tests-long.sh` (`loom`)               | Loom model-checking state-space exploration logs.                                                                                            |
+| **`target/logs/long-perf.log`**                  | `tests-long.sh` (`perf`)               | `nam_perf_gate run --check docs/quality-contract.json` output.                                                                               |
+| **`target/logs/regression_phase_receipt.jsonl`** | `nam_quality` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary.                                            |
+| **`target/logs/regression-check.log`**           | `nam_perf_gate run --check`            | Detailed Criterion output and statistical confidence interval results during regression checks (truncated on invocation start).              |
 | **`target/logs/remote-simd-receipt.jsonl`**      | `utils/remote-simd-gate.sh`            | Structured multi-ISA verification receipt emitted from remote or emulated AVX-512 runs.                                                      |
 | **`target/logs/remote-simd-parity.log`**         | `utils/remote-simd-gate.sh`            | Detailed parity output comparing AVX2 and AVX-512 execution streams.                                                                         |
 | **`target/logs/dashboard/`**                     | `utils/quality-dashboard.sh`           | Structured JSON outputs for individual model fidelity and latency benchmarks.                                                                |
@@ -274,22 +273,22 @@ When investigating suspected thread/process hangs or regressions under high cont
 
 > [!NOTE]
 > **Compilation Profile Segregation:**
-> To eliminate build cache thrashing across phases with incompatible Cargo feature sets, `utils/tests-long.sh` automatically segregates `CARGO_TARGET_DIR` per profile (e.g. `target/long/default`, `target/long/heap_audit`, and `target/long/loom`). Independent logs in `target/logs/` are preserved across runs.
+> To eliminate build cache thrashing across phases with incompatible Cargo feature sets, `utils/tests-long.sh` automatically segregates `CARGO_TARGET_DIR` per profile (`target/long/release`, `target/long/heap-audit`, and `target/long/loom`). Independent logs in `target/logs/` are preserved across runs.
 
 Signals that routinely appear in runner logs but are **expected**; they must not be escalated as defects or regressions. Each row cites the artifact that emits it (paths under `target/logs/` are runtime artifacts, not versioned files).
 
 | Signal (log excerpt)                                                                         | Emitting artifact                                                                                                      | Why it is benign                                                                                                                                                                                                  | Correct action                                                                                                   |
 |:-------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------- |
-| `isa_parity_cross_isa: SKIP_CAPABILITY`; `remote-simd-receipt.jsonl` skips                   | `target/logs/subphase-isa-parity.log`, `target/logs/remote-simd-receipt.jsonl`, `target/logs/long-audit-receipt.jsonl` | The local CPU lacks AVX-512; cross-ISA parity is a **separate** remote/emulated gate, not a local-coverage gap.                                                                                                   | Confirm `utils/remote-simd-gate.sh` ran separately; do not read the local skip as a failure.                     |
-| `avx512_opt_in_not_run` (receipt gap)                                                        | `target/logs/simd_probe.log`, `target/logs/long-audit-receipt.jsonl`                                                   | AVX-512 is an opt-in Cargo feature (`--features avx512`); the default runner never compiles it.                                                                                                                   | Expected on a default run; only a scheduled `--features avx512` run covers it.                                   |
-| `[RECEIPT] status=CHARACTERIZED label=…-saturate-N … violations=137/16384`                   | `target/logs/phase6-rt-jitter.log`                                                                                     | Saturation stress is a **CHARACTERIZATION** ("environmental characterization, NOT a deadline gate"); `status=CHARACTERIZED` means the harness completed, not that jitter passed (S5-T2 relabeled the old `PASS`). | Read the `violations=` counter; never treat the receipt token as a deadline assertion.                           |
-| `… has been running for over 60 seconds`                                                     | `target/logs/quick-phase1.log`, `target/logs/phase1-soak.log`                                                          | Long debug-profile tests (soak, block-invariance, deterministic-energy); the default test runner prints this after 60 s.                                                                                          | Informational only; not a hang — wait for completion.                                                            |
+| `isa_parity_cross_isa: SKIP_CAPABILITY`; `remote-simd-receipt.jsonl` skips                   | `target/logs/long-catch-all.log`, `target/logs/remote-simd-receipt.jsonl`, `target/logs/long-audit-receipt.jsonl` | The local CPU lacks AVX-512; cross-ISA parity is a **separate** remote/emulated gate, not a local-coverage gap.                                                                                                   | Confirm `utils/remote-simd-gate.sh` ran separately; do not read the local skip as a failure.                     |
+| `avx512_opt_in_not_run` (receipt gap)                                                        | `target/logs/long-preflight-simd-probe.log`, `target/logs/long-audit-receipt.jsonl`                                    | AVX-512 is an opt-in Cargo feature (`--features avx512`); the default runner never compiles it.                                                                                                                   | Expected on a default run; only a scheduled `--features avx512` run covers it.                                   |
+| `[RECEIPT] status=CHARACTERIZED label=…-saturate-N … violations=137/16384`                   | `target/logs/long-rt-jitter.log`                                                                                       | Saturation stress is a **CHARACTERIZATION** ("environmental characterization, NOT a deadline gate"); `status=CHARACTERIZED` means the harness completed, not that jitter passed (S5-T2 relabeled the old `PASS`). | Read the `violations=` counter; never treat the receipt token as a deadline assertion.                           |
+| `… has been running for over 60 seconds`                                                     | `target/logs/quick-tests.log`, `target/logs/long-catch-all.log`, `target/logs/long-soak.log`                           | Long-running tests (soak, block-invariance, deterministic-energy); the default test runner prints this after 60 s.                                                                                                | Informational only; not a hang — wait for completion.                                                            |
 | `Found N outliers among 100 measurements (x%)`                                               | `target/logs/regression-check.log`                                                                                     | Criterion reports high-severity sampling outliers; the regression verdict uses the median delta and p-value, not the outlier banner.                                                                              | Read Δ median and p; ignore the outlier count.                                                                   |
-| `[BOOTSTRAP] ⚠ This operation must be performed by a human operator.`                        | `utils/tests-performance-regression.sh --bootstrap-baseline` output (`target/logs/regression-check.log`)               | Baseline bootstrap is operator-only by governance (§5.2); AI runs are forbidden from it.                                                                                                                          | Do not run `--bootstrap-baseline`; report and wait for the operator.                                             |
+| `[BOOTSTRAP] ⚠ This operation must be performed by a human operator.`                        | `nam_perf_gate run --bootstrap-baseline` output (`target/logs/regression-check.log`)               | Baseline bootstrap is operator-only by governance (§5.2); AI runs are forbidden from it.                                                                                                                          | Do not run `--bootstrap-baseline`; report and wait for the operator.                                             |
 | `RT_WaveNet_Lite_CH12` `+8.56%` (`p=0.04`) — `Change within noise threshold.`                | `target/logs/regression-check.log`                                                                                     | Sub-5 % variance band under ambient/thermal noise (F-10/F-12); the effective `noise_threshold` classifies it as non-significant.                                                                                  | Re-measure on an isolated pinned core before treating as a regression; never bootstrap a baseline to silence it. |
-| `[JIT_PINS] pinned=false` / `pinned=false` in phase6 receipts; P50 ≈ 98 µs vs phase5 ≈ 45 µs | `target/logs/phase6-rt-jitter.log`                                                                                     | Jitter runs in the generic multi-core environment unless the operator pins with `taskset -c $NAM_BENCH_CORE`; the delta is environmental, never a regression.                                                     | Re-run phase6 under `taskset -c $NAM_BENCH_CORE` for a phase5-comparable P50; read `pinned=` before comparing.   |
-| `[AVISO] --check pós---bootstrap valida só repetibilidade`                                   | `bootstrap-repo.sh` output                                                                                             | `--check` immediately after `--bootstrap-baseline` in the same session proves self-consistency only (F-12); the REGRESSION GATE verdict needs a baseline from another session/commit (`noise_threshold=0.05`).    | Do not read the paired green as absence of regression.                                                           |
-| `known_gap:condition_lstm_rejected_by_both`                                                  | `target/logs/phase3-proptests-parity.log`                                                                              | The WaveNet model whose `condition_dsp` is an LSTM is refused by **both** oracles by design (Rust fail-closed policy; C++ `condition_size` mismatch) — see [`cpp_parity_map.md`](cpp_parity_map.md) §7.5.         | A declared gap, not a pass and not a defect; keep it declared in receipts.                                       |
+| `[JIT_PINS] pinned=false` / `pinned=false` in rt-jitter receipts; P50 ≈ 98 µs vs rt-deadline ≈ 45 µs | `target/logs/long-rt-jitter.log`                                                                                 | Jitter runs in the generic multi-core environment unless the operator sets `NAM_BENCH_CORE` to an isolated CPU; the delta is environmental, never a regression.                                                     | Re-run `rt-jitter` with `NAM_BENCH_CORE` set to the isolated CPU for an `rt-deadline`-comparable P50; read `pinned=` before comparing.   |
+| `[AVISO] --check pós---bootstrap valida só repetibilidade`                                   | `nam_perf_gate run --check` output                                                                                             | `--check` immediately after `--bootstrap-baseline` in the same session proves self-consistency only (F-12); the REGRESSION GATE verdict needs a baseline from another session/commit (`noise_threshold=0.05`).    | Do not read the paired green as absence of regression.                                                           |
+| `known_gap:condition_lstm_rejected_by_both`                                                  | `target/logs/long-catch-all.log`                                                                                       | The WaveNet model whose `condition_dsp` is an LSTM is refused by **both** oracles by design (Rust fail-closed policy; C++ `condition_size` mismatch) — see [`cpp_parity_map.md`](cpp_parity_map.md) §7.5.         | A declared gap, not a pass and not a defect; keep it declared in receipts.                                       |
 
 ---
 
@@ -304,7 +303,7 @@ A build is certified for release only when **all five mandatory receipts** are p
 | 1   | `lints.log`             | `utils/lints.sh`                                                | `--all-targets --all-features` (script)  | Exit 0; zero compiler/clippy/rustdoc warnings; SPDX and anti-pattern checks green; AVX-512 compile-time segregation confirmed.                    |
 | 2   | `quick-strict.log`      | `utils/tests-quick.sh`                                          | Canonical execution                      | Exit 0; `FIDELITY: OK`; `OVERALL: PASSED`; zero `GAP:` entries.                                                                                   |
 | 3   | `long-strict.log`       | `utils/tests-long.sh --strict`                                  | `--strict`                               | Exit 0; `OVERALL: PASSED`; `gaps: []`; receipt validated via `nam_long_receipt validate --strict`.                                                |
-| 4   | `perf-check.log`        | `utils/tests-performance-regression.sh --check`                 | Pre-approved baseline (see §5.2)         | Exit 0; machine regression verdict green (`nam_perf_gate verdict` over Criterion `change/estimates.json`) against a pre-approved baseline commit. |
+| 4   | `perf-check.log`        | `nam_perf_gate run --check`                 | Pre-approved baseline (see §5.2)         | Exit 0; machine regression verdict green (`nam_perf_gate verdict` over Criterion `change/estimates.json`) against a pre-approved baseline commit. |
 | 5   | `quality-contract.json` | `utils/quality-dashboard.sh --check docs/quality-contract.json` | `docs/quality-contract.json` (committed) | Exit 0; all audio fidelity envelopes (ESR/SNR/MR-STFT) and f64-oracle checks satisfied; `regression_gate` is not `NOT_VERIFIED`.                  |
 
 > [!IMPORTANT]
@@ -312,7 +311,7 @@ A build is certified for release only when **all five mandatory receipts** are p
 
 ### 5.2 Baseline Bootstrap Governance
 
-`utils/tests-performance-regression.sh --bootstrap-baseline` and `utils/quality-dashboard.sh --save` are **independent ceremonies** executed exclusively by a human operator:
+`nam_perf_gate run --bootstrap-baseline` and `utils/quality-dashboard.sh --save` are **independent ceremonies** executed exclusively by a human operator:
 
 - **Distinct Producer Commit:** The performance baseline must be generated and approved on an earlier reference commit. Bootstrapping a baseline on the same commit being certified only demonstrates self-consistency, not the absence of regressions.
 - **Controlled Hardware:** Baselines must be generated on isolated machines with the CPU governor set to `performance` and background contention eliminated.
@@ -324,7 +323,7 @@ A build is certified for release only when **all five mandatory receipts** are p
 - [ ] **Receipt 1 (`lints.log`):** `utils/lints.sh` passes with zero warnings.
 - [ ] **Receipt 2 (`quick-strict.log`):** `utils/tests-quick.sh` passes with `FIDELITY: OK`, `OVERALL: PASSED`, and zero gaps.
 - [ ] **Receipt 3 (`long-strict.log`):** `utils/tests-long.sh --strict` passes with `OVERALL: PASSED` and `gaps: []`.
-- [ ] **Receipt 4 (`perf-check.log`):** `utils/tests-performance-regression.sh --check` passes against an approved baseline from a distinct reference commit.
+- [ ] **Receipt 4 (`perf-check.log`):** `nam_perf_gate run --check` passes against an approved baseline from a distinct reference commit.
 - [ ] **Receipt 5 (`quality-contract.json`):** `utils/quality-dashboard.sh --check docs/quality-contract.json` validates all fidelity and latency envelopes.
 - [ ] SHA-256 digests and run identifiers are archived in the release record.
 

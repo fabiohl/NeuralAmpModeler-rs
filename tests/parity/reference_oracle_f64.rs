@@ -458,7 +458,7 @@ fn run_oracle_esr_paired(model_filename: &str, label: &str) -> f64 {
     let oracle_last = &oracle[24_000..];
 
     let esr = compute_esr_f64(oracle_last, &prod_last_f64);
-    let verbose = std::env::var("NAM_ORACLE_VERBOSE").is_ok();
+    let verbose = std::env::var("NAM_ORACLE_VERBOSE").as_deref() == Ok("1");
     if verbose {
         println!(
             "PROD FIRST 10: {:?}",

@@ -401,9 +401,8 @@ fn test_oracle_gates_below_placebo_threshold() {
 ///   filtered via `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
 ///   and measured under `--release` (Phase 2), so the `.bin` references below
 ///   are never executed by Phase 1.
-/// - `meta_coherence`: catalog/contract coherence meta-tests — the
-///   `golden_vectors` token appears only as a fixture file-path string, never
-///   as an oracle call.
+/// - Catalog/contract coherence meta-tests: the `golden_vectors` token appears
+///   only as a fixture file-path string, never as an oracle call.
 /// - `quality_cli_test`: process-level `nam_quality` CLI contract tests —
 ///   `golden_vectors` appears only as a canonical phase-id string in report/
 ///   receipt fixtures, never as a module call or `.bin` load.

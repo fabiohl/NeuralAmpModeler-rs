@@ -19,6 +19,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NAM_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # x86_64 is the reference platform: canonical lints + quick QA suite disciplines.
@@ -39,13 +40,9 @@ jobs:
         run: ./utils/tests-quick.sh
       - name: Publish step summary
         if: always()
-        run: |
-          echo "### Run Summary: x86_64-linux" >> $GITHUB_STEP_SUMMARY
-          if [ -d target/logs ]; then
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            grep -hE '^(RESULT:|PHASE:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+        uses: ./.github/actions/qa-summary
+        with:
+          title: x86_64-linux
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,13 +88,9 @@ jobs:
         run: ${QA_BASH:-bash} ./utils/tests-quick.sh
       - name: Publish step summary
         if: always()
-        run: |
-          echo "### Run Summary: ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
-          if [ -d target/logs ]; then
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            grep -hE '^(RESULT:|PHASE:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+        uses: ./.github/actions/qa-summary
+        with:
+          title: ${{ matrix.name }}
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -122,6 +115,7 @@ jobs:
         run: cargo check --locked --all-targets --features testing
       - name: Publish step summary
         if: always()
-        run: |
-          echo "### Run Summary: msrv (1.99.0)" >> $GITHUB_STEP_SUMMARY
-          echo "MSRV cargo check passed successfully." >> $GITHUB_STEP_SUMMARY
+        uses: ./.github/actions/qa-summary
+        with:
+          title: msrv (1.99.0)
+          note: ${{ job.status == 'success' && 'MSRV cargo check passed successfully.' || 'MSRV cargo check failed.' }}

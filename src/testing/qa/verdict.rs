@@ -4,7 +4,7 @@
 //! Machine regression verdict over Criterion's persisted comparison JSON
 //! (B2 / R-3) — the replacement for the bash
 //! `grep -qiE 'has regressed' "$LOG_FILE"` text-marker detector of
-//! `tests-performance-regression.sh:197`.
+//! o script de performance legado (removido).
 //!
 //! When `cargo bench -- --baseline <name>` compares against a restored
 //! series, Criterion persists the bootstrapped relative change of every

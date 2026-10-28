@@ -25,6 +25,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NAM_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   long-qa:
@@ -50,13 +51,9 @@ jobs:
           ./utils/tests-long.sh $STRICT_FLAG --only "${{ inputs.phases }}"
       - name: Publish step summary
         if: always()
-        run: |
-          echo "### Long QA Suite Run Summary" >> $GITHUB_STEP_SUMMARY
-          if [ -d target/logs ]; then
-            echo '```text' >> $GITHUB_STEP_SUMMARY
-            grep -hE '^(RESULT:|PHASE:|OVERALL:|FIDELITY:|RT_DEADLINE:|RT_JITTER:|PERF_REGRESSION:|WARNING:|ERROR:)' target/logs/*.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+        uses: ./.github/actions/qa-summary
+        with:
+          title: Long QA Suite
       - name: Upload logs and receipts
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,4 +62,5 @@ jobs:
           path: |
             target/logs/**
             target/long/**/*.jsonl
+          if-no-files-found: ignore
           retention-days: 14

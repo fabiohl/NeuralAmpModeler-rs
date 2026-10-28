@@ -325,11 +325,10 @@ The `./utils/` suite automates formatting, static analysis, parity verification,
 | [`utils/lints.sh`](utils/lints.sh)                                               | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
 | [`utils/tests-quick.sh`](utils/tests-quick.sh)                                   | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
 | [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)                       | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
-| [`utils/tests-performance-regression.sh`](utils/tests-performance-regression.sh) | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
+| [`nam_perf_gate`](src/bin/nam_perf_gate.rs) | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
 | [`utils/check-model.sh`](utils/check-model.sh)                                   | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
 | [`utils/tests-long.sh`](utils/tests-long.sh)                                     | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
 | [`utils/miri-audit.sh`](utils/miri-audit.sh)                                     | **Memory Safety & Aliasing Audit:** Validates unsafe blocks, SPSC ring buffers, and delay lines under Miri.                           |
-| [`utils/verify-kernel-codegen.sh`](utils/verify-kernel-codegen.sh)               | **Kernel Codegen Inspector:** Disassembles and verifies compiler auto-vectorization across DSP compute kernels.                       |
 | [`utils/setup-third-party.sh`](utils/setup-third-party.sh)                       | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
 | [`utils/mod-update.sh`](utils/mod-update.sh)                                     | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
 

@@ -1,6 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# ensure_namcore_render.sh — compila o renderizador C++ de referência. Classe D.
+# Uso: utils/ensure_namcore_render.sh [flags canônicas]
+# Orçamento: 27
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 #
 # ensure_namcore_render.sh — CLI wrapper for the single, unified C++ render
 # build. All build logic lives in _lib.sh::ensure_namcore_render; this

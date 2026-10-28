@@ -8,7 +8,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 NeuralAmpModeler-rs uses **Criterion.rs** as its official statistical performance benchmarking suite. In a real-time digital signal processing (DSP) engine, execution latency and timing determinism must be measured with statistical rigor to isolate algorithmic throughput from operating system noise, scheduling jitter, and dynamic frequency scaling.
 
 > [!NOTE]
-> **Document Scope.** This document is the authoritative reference for performance benchmarking in NeuralAmpModeler-rs: how to run and interpret benchmarks, the performance regression gate ([`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh)), contract performance baselines ([`docs/quality-contract.json`](quality-contract.json)), and micro-architectural invariants.
+> **Document Scope.** This document is the authoritative reference for performance benchmarking in NeuralAmpModeler-rs: how to run and interpret benchmarks, the performance regression gate (`nam_perf_gate run --check`), contract performance baselines ([`docs/quality-contract.json`](quality-contract.json)), and micro-architectural invariants.
 > Functional correctness, mathematical oracle hierarchies, and test suites are documented separately in [`testing.md`](testing.md).
 
 ---
@@ -119,36 +119,34 @@ Below is the committed reference baseline measured on release builds under an is
 
 ## 4. Regression Gate — Automated Performance Defense
 
-[`utils/tests-performance-regression.sh`](../utils/tests-performance-regression.sh) is the canonical benchmark-based performance defense tool. It compares current timings against a persisted statistical baseline and fails closed if latency degrades beyond the allowed threshold.
+The `nam_perf_gate run` binary (`src/bin/nam_perf_gate.rs`) is the canonical benchmark-based performance defense tool. It compares current timings against a persisted statistical baseline and fails closed if latency degrades beyond the allowed threshold.
 
 ### Core Mechanisms
 
-1. **CPU Core Pinning:** Pins benchmark execution to a dedicated core via `taskset -c <core>`. The core is resolved automatically via `pick_bench_core` using the 3-step precedence: (1) `NAM_BENCH_CORE` if explicitly set; (2) first online isolated CPU from `/sys/devices/system/cpu/isolated` (preferring core 8 when 8-9 are isolated, with cpu9 offline intentional); (3) fallback `nproc / 2` (integer division). This prevents OS scheduler migrations and cache thrashing.
+1. **CPU Core Pinning:** The benchmark core is resolved by `nam_perf_gate pick-core` with one precedence: (1) explicit `NAM_BENCH_CORE`; (2) first online isolated CPU from `/sys/devices/system/cpu/isolated`; (3) first permitted CPU; (4) no pin, reported as `GAP`. No core is preferred by number and no shell script pins affinity. This prevents OS scheduler migrations and cache thrashing.
 2. **Controlled Statistical Rigor:** Executes the `regression_gate` suite with `sample_size=100, measurement_time=5s, warm_up_time=1s, noise_threshold=0.05`. Enforces `InstructionSet::Avx2` via `ForceAvx2Guard` so that AVX-512 hosts evaluate the exact `x86-64-v3` baseline.
 3. **Machine Verdict (`nam_perf_gate verdict`):** Evaluates Criterion's `target/criterion/<id>/change/estimates.json`. If the bootstrapped mean-change confidence interval lies entirely above the `+5%` noise band, the script exits with `REGRESSION_DETECTED`. If comparison artifacts are missing or unreadable, it fails closed with `REGRESSION_BLIND`.
 4. **Baseline Storage & Fingerprinting:** Authoritative baselines reside in `.performance-baselines/` (gitignored). A machine fingerprint file (`baseline-fingerprint.json`) captures the CPU model, ISA extension flags, compiler version, target triple, governor, pinned core, producing git commit, and audit fields (`git_dirty`, `cargo_lock_sha256`). Managed by [`src/testing/qa/baseline_store.rs`](../src/testing/qa/baseline_store.rs) (`nam_perf_gate restore-baseline`) with recursive sanitization and replace-copy.
 5. **Sub-Microsecond Batching:** Ultra-fast DSP routines (`RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium`) process batches of **64 blocks** per Criterion sample to maintain timer resolution above the noise floor. Reported values are divided by 64 to represent per-block latency.
 
-### Script Modes & Environment Variables
+### Modes & Environment Variables
 
 | Mode                | Command                                                      | Behavior                                                                                                                  |
 |:------------------- |:------------------------------------------------------------ |:------------------------------------------------------------------------------------------------------------------------- |
-| **Check** (default) | `utils/tests-performance-regression.sh --check`              | Read-only. Compares against `.performance-baselines/`. Exits non-zero if a regression is detected or baseline is missing. |
-| **Bootstrap**       | `utils/tests-performance-regression.sh --bootstrap-baseline` | Re-generates `.performance-baselines/` and writes `baseline-fingerprint.json`. **Human-only operation.**                  |
+| **Check** (default) | `nam_perf_gate run --check`              | Read-only. Compares against `.performance-baselines/`. Exits non-zero if a regression is detected or baseline is missing. |
+| **Bootstrap**       | `nam_perf_gate run --bootstrap-baseline` | Re-generates `.performance-baselines/` and writes `baseline-fingerprint.json`. **Human-only operation.**                  |
 
 | Variable                 | Default                                     | Purpose                                                             |
 |:------------------------ |:------------------------------------------- |:------------------------------------------------------------------- |
-| `NAM_BENCH_CORE`         | `pick_bench_core` (isolated or `nproc / 2`) | Dedicated CPU core to pin benchmarks via `taskset`.                 |
+| `NAM_BENCH_CORE`         | `auto` (precedence above)                   | Explicit benchmark core; overrides the isolated-CPU choice.         |
 | `NAM_BASELINE_NAME`      | `ci-baseline`                               | Name of the Criterion baseline series.                              |
-| `NAM_BENCH_SUITE`        | `regression_gate`                           | Benchmark binary to drive (e.g. `spsc_swap_bench`).                 |
-| `NAM_BENCH_MANIFEST`     | *(empty)*                                   | Expected-ID manifest for a non-`regression_gate` suite (see below). |
-| `NAM_THERMAL_COOLDOWN_S` | `180`                                       | Cooldown period before benchmarking to stabilize clock frequencies. |
+| `NAM_THERMAL_COOLDOWN_S` | `0`                                         | Integer seconds of thermal settling before measuring (≥ 0).        |
 
 ### Downstream Adoption (External Suites)
 
 `nam_perf_gate` is the only component that interprets performance-governance JSON:
 fingerprint, coverage, machine verdict, baseline persistence and receipts are all
-serde — the shell wrapper only orchestrates `taskset`/`cargo bench`. A different
+serde — the gate binary only orchestrates `cargo bench`. A different
 repository (a host, a plugin, any Criterion suite) reuses the **same binary** and
 never duplicates the logic, and the crate is not coupled to any consumer name.
 
@@ -199,26 +197,6 @@ never duplicates the logic, and the crate is not coupled to any consumer name.
    | `REGRESSION_BLIND`         | Missing comparison artifact or unexecuted expected id.         |
 
    Usage errors (unknown subcommand/flag, malformed argument) are exit `2`.
-
-### Regression Guard Automated Suite (`tests/scripts/test_regression_guard.sh`)
-
-The integrity and fail-closed defense mechanisms of the performance regression wall and baseline storage engine are continuously validated by [`tests/scripts/test_regression_guard.sh`](../tests/scripts/test_regression_guard.sh):
-
-```bash
-# Execute performance regression guard suite:
-bash tests/scripts/test_regression_guard.sh
-```
-
-The suite exercises six critical failure modes:
-
-1. **Scenario 1 — Missing Baseline Gate:** Moves `.performance-baselines/` aside and runs `utils/tests-performance-regression.sh --check`. Asserts that the runner fails closed (`exit 1`) and emits `MISSING_BASELINE`.
-2. **Scenario 2 — Contract Format Rejection & Domain Separation:**
-   * **2a:** Rejects legacy ASCII `.txt` contracts (`docs/quality-contract.txt`) with `ERROR` and `exit 2`.
-   * **2b:** Uses the frozen report fixture `tests/fixtures/qa/report_gate_not_verified.jsonl` with `nam_quality verify` to assert that when benchmark regression data is `NOT_VERIFIED`, the system reports `FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED` (`exit 1`), proving PERF-006 domain separation.
-3. **Scenario 3 — Stale Log Truncation:** Asserts that `target/logs/regression-check.log` is truncated immediately at the start of `check_regression()`, preventing historical entries from masquerading as current results.
-4. **Scenario 4 — Baseline Store Sanitization & Replace-Copy:** Synthesizes deeply nested baseline directories (`RT_Dummy/ci-baseline/ci-baseline/...`) and exercises `nam_perf_gate restore-baseline` ([`src/testing/qa/baseline_store.rs`](../src/testing/qa/baseline_store.rs)). Verifies that nested paths are sanitized and replace-copied into a single flat baseline layer without recursive nesting.
-5. **Scenario 5 — CPU Core Pinning & Topology Mocking:** Validates `pick_bench_core` discovery and fallback branches under simulated sysfs environments.
-6. **Scenario 6 — Benchmark Binary Selection & Fail-Fast Smoke Test:** Validates deterministic extraction of `[[bench]]` binaries across trailing compiler artifact JSON lines (6a) and ensures intruder binaries fail closed rapidly (< 3s) without invoking cooldown loops (6b).
 
 ### Environmental Noise, False Alarms & Hardware Isolation
 
@@ -272,18 +250,18 @@ Because the DSP engine operates in a state of extreme micro-architectural optimi
    Execute the benchmark runner pinned strictly to the isolated core under realtime FIFO scheduling:
 
    ```bash
-   NAM_BENCH_CORE=8 chrt -f 80 taskset -c 8 utils/tests-performance-regression.sh --check
+   NAM_BENCH_CORE=<isolated-cpu> chrt -f 80 nam_perf_gate run --check
    ```
 
 6. **Thermal Stabilization & Hardware Cooldown:**
-   Allow the CPU to cool down before executing baseline benchmarks (`NAM_THERMAL_COOLDOWN_S=180` by default). The regression gate sleeps between heavy phases to prevent thermal throttling from skewing Criterion iteration times.
+   Allow the CPU to cool down before executing baseline benchmarks (`NAM_THERMAL_COOLDOWN_S`, default `0`). When `NAM_THERMAL_COOLDOWN_S` is set, the gate waits that many seconds before measuring, to prevent thermal throttling from skewing Criterion iteration times.
 
 7. **Low Background Load & Host Quiescence:**
    Ensure workstation background load is minimal ($\text{load average} \ll 1.0$), with browsers, container engines, and heavy background services closed.
 
 #### Reference Noise Floor & Run-to-Run Variance (Empirical Baseline Audit)
 
-During the empirical contract bisection audit, consecutive back-to-back executions of the canonical `regression_gate` under core pinning (`taskset -c 8`) and thermal cooldown (`NAM_THERMAL_COOLDOWN_S=180`) established the empirical reference noise floor:
+During the empirical contract bisection audit, consecutive back-to-back executions of the canonical `regression_gate` under core pinning (`NAM_BENCH_CORE`) and thermal cooldown (`NAM_THERMAL_COOLDOWN_S=180`) established the empirical reference noise floor:
 
 | Benchmark Target               | Run 1 Median | Run 2 Median | Observed Variance (Δ) | Typical Latency Scale            |
 |:------------------------------ |:------------:|:------------:|:---------------------:|:--------------------------------:|
@@ -317,10 +295,10 @@ When an intentional algorithmic optimization or architectural change legitimatel
 
 ```bash
 # 1. Regenerate the local Criterion baseline
-utils/tests-performance-regression.sh --bootstrap-baseline
+nam_perf_gate run --bootstrap-baseline
 
 # 2. Verify that standalone check passes cleanly
-utils/tests-performance-regression.sh --check
+nam_perf_gate run --check
 
 # 3. Update the committed quality contract (requires all tests & gates to PASS)
 utils/quality-dashboard.sh --save docs/quality-contract.json
@@ -336,7 +314,7 @@ utils/quality-dashboard.sh --check docs/quality-contract.json
 > not "no regression". Reserve the "REGRESSION GATE" verdict for a `--check`
 > against a baseline produced in another session/commit. Effective noise band:
 > `noise_threshold = 0.05` (whole 95% CI above +5% is a machine regression;
-> see `src/testing/qa/verdict.rs`). `bootstrap-repo.sh` prints this warning
+> see `src/testing/qa/verdict.rs`). `nam_perf_gate run` prints this warning
 > whenever it runs the bootstrap→check pair.
 
 **Flaky dashboard `--check` after a green standalone gate:**
@@ -348,7 +326,7 @@ The quality dashboard runs several minutes of functional fidelity checks prior t
 
 The **Quality Contract** ([`quality-contract.json`](quality-contract.json)) integrates fidelity and performance into a single machine-readable specification:
 
-* **Regression Gate (`utils/tests-performance-regression.sh`):** Strict relative statistical wall evaluating whether mean latency regressed above the $+5\%$ noise band.
+* **Regression Gate (`nam_perf_gate run --check`):** Strict relative statistical wall evaluating whether mean latency regressed above the $+5\%$ noise band.
 * **Dashboard Check (`utils/quality-dashboard.sh --check`):** Broad integration check applying a conservative **10% margin** on median latency:
 
 $$\text{measured\_latency} > \text{contract\_latency} \times 1.10 \implies \text{VIOLATION}$$
@@ -473,9 +451,9 @@ $$\text{step} = \text{dilation} \times \text{in\_ch} \le 16\text{ floats (64 byt
 * **Execution:**
 
   ```bash
-  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --save-baseline cal-01
+  taskset -c <isolated-cpu> cargo bench --bench conv1d_hotpath_bench -- --save-baseline cal-01
   # (apply code modifications)
-  taskset -c 8 cargo bench --bench conv1d_hotpath_bench -- --baseline cal-01
+  taskset -c <isolated-cpu> cargo bench --bench conv1d_hotpath_bench -- --baseline cal-01
   ```
 
 * **Decision Rules:**

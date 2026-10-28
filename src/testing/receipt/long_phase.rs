@@ -196,30 +196,27 @@ impl LongPhaseReceipt {
 
 /// Canonical preflight step identifiers emitted by `utils/tests-long.sh`
 /// ahead of Phase 1 (preflight isolation gate): render binary, fixture/V1/V2 catalog,
-/// package exclusion, freshness, catalog↔test coherence, SIMD capability
-/// probe. An abort in any of them exits the suite before a single timed
+/// package exclusion, freshness, SIMD capability probe. An abort in any of them exits the suite before a single timed
 /// phase, so each step must still leave a machine-readable `preflight-*` line
 /// (plus the `overall` verdict).
-pub const PREFLIGHT_PHASE_IDS: [&str; 6] = [
+pub const PREFLIGHT_PHASE_IDS: [&str; 5] = [
     "preflight-render",
     "preflight-catalog",
     "preflight-package",
     "preflight-freshness",
-    "preflight-meta",
     "preflight-simd-probe",
 ];
 
-/// Canonical 15-phase roster of the long audit suite.
+/// Canonical 14-phase roster of the long audit suite (preflights, timed phases, overall).
 ///
 /// In strict mode (`--strict`), every canonical phase must be present
 /// in the receipt without duplicates or unknown IDs, with 'overall' as the
 /// final entry, and with timed phases (`phase1`..`phase7`) executing > 0 tests.
-pub const CANONICAL_ROSTER: [&str; 15] = [
+pub const CANONICAL_ROSTER: [&str; 14] = [
     "preflight-render",
     "preflight-catalog",
     "preflight-package",
     "preflight-freshness",
-    "preflight-meta",
     "preflight-simd-probe",
     "phase1",
     "phase2",

@@ -17,9 +17,9 @@
 //! threshold calibrated on the current toolchain/CPU.
 //!
 //! ```sh
-//! taskset -c 4 cargo bench --bench conv1d_hotpath_bench -- --save-baseline prefetch-a
+//! taskset -c <isolated-cpu> cargo bench --bench conv1d_hotpath_bench -- --save-baseline prefetch-a
 //! # ...toggle the dilation guard in prefetch_strategy_simple...
-//! taskset -c 4 cargo bench --bench conv1d_hotpath_bench -- --baseline prefetch-a
+//! taskset -c <isolated-cpu> cargo bench --bench conv1d_hotpath_bench -- --baseline prefetch-a
 //! ```
 //!
 //! ## `ch12_lane_route` — padded 16-lane vs 8+4 split (WaveNet Lite)

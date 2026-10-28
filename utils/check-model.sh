@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# check-model.sh — inspeção de modelos .nam/.namb. Classe D.
+# Uso: utils/check-model.sh [flags canônicas]
+# Orçamento: 169
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 #
 # check-model.sh — NAM Model Inspector
 #

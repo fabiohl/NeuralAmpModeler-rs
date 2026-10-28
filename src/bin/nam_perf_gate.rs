@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 //! Performance-gate binary (R-03 / R-09 / F-24) — the Rust engine
-//! behind `utils/tests-performance-regression.sh`.
+//! behind the removed performance-gate script.
 //!
 //! All performance-governance JSON lives here and in the `qa` modules
 //! (`fingerprint`, `coverage`, `baseline_store`, `classify`); the shell

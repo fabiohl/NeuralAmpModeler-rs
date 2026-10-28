@@ -3,6 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # miri-audit.sh — Out-of-band Miri concurrency and UB audit. Classe D.
 # Uso: utils/miri-audit.sh
+# Orçamento: 100
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,14 +14,13 @@ mkdir -p "$LOG_DIR"
 MIRI_LOG="$LOG_DIR/miri-audit.log"
 : > "$MIRI_LOG"
 
-echo -e "${BLUE}${BOLD}=======================================================${NC}"
-echo -e "${BLUE}${BOLD}   NeuralAmpModeler-rs Miri Concurrency & UB Audit     ${NC}"
-echo -e "${BLUE}${BOLD}=======================================================${NC}"
+echo "NeuralAmpModeler-rs Miri Concurrency & UB Audit"
+echo ""
 
 # ── Toolchain preflight (fail-closed GAP) ────────────────────────────────────
 require_nightly miri
 
-echo -e "${GREEN}Miri environment detected:${NC}"
+echo "Miri environment detected:"
 cargo +nightly miri --version | tee -a "$MIRI_LOG"
 echo ""
 
@@ -67,4 +67,4 @@ run_target "dsp::utils::delay_line" "dsp::utils::delay_line"    16
 
 echo ""
 ok "Miri concurrency and aliasing audit completed successfully (all targets green)."
-echo -e "  Full log: ${MIRI_LOG}"
+echo "  Full log: ${MIRI_LOG}"

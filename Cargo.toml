@@ -17,7 +17,9 @@ categories = ["multimedia::audio", "multimedia"]
 include = [
     "/benches/",
     "/examples/",
-    "/src/bin/",
+    "/src/bin/nam_perf_gate.rs",
+    "/src/bin/simd_probe.rs",
+    "/src/arch/",
     "/src/common/",
     "/src/dsp/",
     "/src/loader/",
@@ -167,11 +169,6 @@ on-demand = []
 [[bin]]
 name = "gen_stress"
 path = "src/bin/gen_stress.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "capability_receipt"
-path = "src/bin/capability_receipt.rs"
 required-features = ["testing"]
 
 [[bin]]

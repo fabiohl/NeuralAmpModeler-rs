@@ -490,8 +490,8 @@ pub fn namcore_render_bin() -> Option<PathBuf> {
 }
 
 /// Returns the NAMcore `render` binary, or skips a C++ parity test with a typed
-/// status — **promoting the skip to a hard failure under `NAM_QUICK_STRICT=1`**
-/// (`a evidência falta = falha`).
+/// status — **promoting the skip to a hard failure under `NAM_REQUIRE_CPP_ORACLE=1`**
+/// (`a evidência falta = falha`; ativado por `utils/tests-long.sh --strict`).
 ///
 /// Usage:
 /// ```ignore
@@ -501,15 +501,16 @@ pub fn require_render_or_skip(context: &str) -> Option<PathBuf> {
     match namcore_render_bin() {
         Some(bin) => Some(bin),
         None => {
-            if std::env::var("NAM_QUICK_STRICT").as_deref() == Ok("1") {
+            if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
                 panic!(
                     "[STRICT] {context}: namcore_render binary unavailable — missing C++ \
-                     parity evidence is a failure under NAM_QUICK_STRICT=1"
+                     parity evidence is a failure under NAM_REQUIRE_CPP_ORACLE=1 \
+                     (utils/tests-long.sh --strict)"
                 );
             }
             eprintln!(
                 "[STATUS] NOT_VERIFIED: {context}: namcore_render binary not found, \
-                 skipping C++ parity (set NAM_QUICK_STRICT=1 to make this fatal)"
+                 skipping C++ parity (run utils/tests-long.sh --strict to make this fatal)"
             );
             None
         }

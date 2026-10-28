@@ -3,6 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # remote-simd-gate.sh — remote AVX-512 parity and benchmarking tool. Classe D.
 # Uso: utils/remote-simd-gate.sh [flags canônicas]
+# Orçamento: 80
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,7 +29,7 @@ if [ "$USE_SDE" -eq 1 ] || [[ "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER:-}
   echo "Hardware: Intel SDE Emulation"
 else
   PROBE_OUT=$(cargo run --quiet --bin simd_probe 2>&1 || true)
-  if ! echo "$PROBE_OUT" | grep -qE "avx512f:\s*YES"; then
+  if ! grep -qE "avx512f:\s*YES" <<<"$PROBE_OUT"; then
     echo "AVX-512 features not detected on host CPU"
     exit 2
   fi

@@ -229,8 +229,16 @@ fn parse_u32(flags: &Flags, name: &str, context: &str) -> u32 {
 // ── dashboard ────────────────────────────────────────────────────────────────
 
 fn cmd_dashboard(args: &[String]) {
+    // `--check` without a value means the canonical contract, so the shell
+    // wrapper stays a pure `exec` (constitution §4.1).
+    let mut args = args.to_vec();
+    if let Some(i) = args.iter().position(|a| a == "--check")
+        && args.get(i + 1).is_none_or(|v| v.starts_with("--"))
+    {
+        args.insert(i + 1, "docs/quality-contract.json".to_string());
+    }
     let flags = match parse_flags(
-        args,
+        &args,
         &[
             "check",
             "save",
