@@ -336,6 +336,91 @@ bench_avx512!(
     |x| neural_amp_modeler_rs::math::activations::simd_tanh_avx512(x)
 );
 
+/// Block sizes that expose the 1–3-frame tail ("latency cliff") plus the
+/// 64/128/256 regression guards.
+const FUSED_RESIDUAL_BLOCK_SIZES: &[usize] = &[1, 2, 3, 5, 7, 63, 64, 65, 128, 256];
+
+/// Fused residual const-generic batch GEMM — Nano CH=4, Feather CH=8 and
+/// Standard CH=16 production shapes.
+fn bench_fused_residual_const<const IN: usize, const OUT: usize>(c: &mut Criterion, label: &str) {
+    use neural_amp_modeler_rs::math::gemm::gemm_batch::fused_gemm_residual_batch_f32_const;
+    for &frames in FUSED_RESIDUAL_BLOCK_SIZES {
+        let in_frames: Vec<f32> = (0..frames * IN).map(|i| (i as f32 * 0.07).sin()).collect();
+        let weights: Vec<f32> = (0..IN * OUT).map(|i| (i as f32 * 0.13).cos()).collect();
+        let bias: Vec<f32> = (0..OUT).map(|i| i as f32 * 0.01).collect();
+        let residual: Vec<f32> = (0..frames * OUT).map(|i| i as f32 * 0.02).collect();
+        let mut out = vec![0.0f32; frames * OUT];
+        c.bench_function(&format!("FusedResidual_{label}_{frames}frames"), |b| {
+            b.iter(|| {
+                // SAFETY: every buffer matches the declared IN×OUT batch dimensions.
+                unsafe {
+                    fused_gemm_residual_batch_f32_const::<IN, OUT>(
+                        &in_frames, &weights, &bias, &residual, &mut out, frames, true,
+                    );
+                }
+            });
+        });
+    }
+}
+
+fn bench_fused_residual_4x4(c: &mut Criterion) {
+    bench_fused_residual_const::<4, 4>(c, "4x4");
+}
+
+fn bench_fused_residual_8x8(c: &mut Criterion) {
+    bench_fused_residual_const::<8, 8>(c, "8x8");
+}
+
+fn bench_fused_residual_16x16(c: &mut Criterion) {
+    bench_fused_residual_const::<16, 16>(c, "16x16");
+}
+
+/// Fused residual 12x12 batch GEMM — CH=12 production shape.
+fn bench_fused_residual_12x12(c: &mut Criterion) {
+    use neural_amp_modeler_rs::math::gemm::gemm_batch::fused_gemm_residual_batch_f32_12x12;
+    for &frames in FUSED_RESIDUAL_BLOCK_SIZES {
+        let in_frames: Vec<f32> = (0..frames * 12).map(|i| (i as f32 * 0.07).sin()).collect();
+        let weights: Vec<f32> = (0..144).map(|i| (i as f32 * 0.13).cos()).collect();
+        let bias: Vec<f32> = (0..12).map(|i| i as f32 * 0.01).collect();
+        let residual: Vec<f32> = (0..frames * 12).map(|i| i as f32 * 0.02).collect();
+        let mut out = vec![0.0f32; frames * 12];
+        c.bench_function(&format!("FusedResidual_12x12_{frames}frames"), |b| {
+            b.iter(|| {
+                // SAFETY: every buffer matches the declared 12x12 batch dimensions.
+                unsafe {
+                    fused_gemm_residual_batch_f32_12x12(
+                        &in_frames, &weights, &bias, &residual, &mut out, frames, true,
+                    );
+                }
+            });
+        });
+    }
+}
+
+/// Gated activation CH=4/CH=12 — the paired-frame remainder path.
+fn bench_gated_activation_pairing(c: &mut Criterion) {
+    use neural_amp_modeler_rs::math::wavenet::accumulate::gated_activation_and_accumulate_block_avx2;
+    for &ch in &[4usize, 12] {
+        let frames = 64;
+        let head: Vec<f32> = (0..frames * ch).map(|i| (i as f32 * 0.03).sin()).collect();
+        let block: Vec<f32> = (0..frames * 2 * ch)
+            .map(|i| (i as f32 * 0.05).cos())
+            .collect();
+        let mut head_mut = head.clone();
+        let mut block_mut = block.clone();
+        c.bench_function(&format!("GatedActivation_CH{ch}_64frames"), |b| {
+            b.iter(|| {
+                head_mut.copy_from_slice(&head);
+                block_mut.copy_from_slice(&block);
+                // SAFETY: buffers hold `frames * ch` and `frames * 2 * ch` elements.
+                unsafe {
+                    gated_activation_and_accumulate_block_avx2(&mut head_mut, &mut block_mut, ch);
+                }
+            });
+        });
+    }
+}
+
 criterion_group! {
     name = math_benches;
     config = criterion::Criterion::default().sample_size(50).noise_threshold(0.05);
@@ -352,6 +437,11 @@ criterion_group! {
     bench_dot_product_avx2_64,
     bench_dot_product_f32_native_kahan4_64,
     bench_dot_product_f32_native_kahan4_128,
+    bench_fused_residual_4x4,
+    bench_fused_residual_8x8,
+    bench_fused_residual_16x16,
+    bench_fused_residual_12x12,
+    bench_gated_activation_pairing,
     bench_tanh_avx512_256elem,
     bench_sigmoid_avx512_256elem,
     bench_tanh_pade_nr1_avx512_256elem,

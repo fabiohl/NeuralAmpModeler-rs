@@ -14,7 +14,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — 1.1.0
 
+### Added
+
+- **`NeonMath` alias:** `pub type NeonMath = Avx2Math` on aarch64. Additive; no existing name changes.
+- **aarch64/NEON backend:** native NEON implementation of the AVX2/FMA/F16C
+  intrinsic surface in `src/arch/`, with the same per-lane operation order and
+  single-rounding FMA as the x86_64 path, so golden-catalog parity against the
+  C++ reference is identical on both architectures.
+- **macOS (Apple Silicon) support:** unlinked POSIX shared-memory mirror buffer
+  (`shm_open` + `shm_unlink`), `FPCR.FZ` denormal control, generic-timer cycle
+  counter (`CNTVCT_EL0`), and page-size-aware delay rings. Intel
+  (`x86_64-apple-darwin`) macOS is not supported or validated.
+- **`avx512` feature is x86_64-only:** the opt-in research backend now emits a
+  `compile_error!` on other architectures instead of failing deep in the module
+  tree.
+- **macOS real-time hardening (`rt-hardening`, `target_os = "macos"`):**
+  `src/rt_hardening/macos.rs` and `timebase.rs` add interactive QoS, time
+  constraint policy, memory locking, `FPCR.FZ`, and an RAII Audio Workgroup
+  guard. The design is recorded in [`docs/rt-macos-adr.md`](docs/rt-macos-adr.md)
+  (Accepted). The Linux module and its API are unchanged. No jitter gain is
+  claimed until measured on Apple hardware.
+
 ### Changed
+
+- **f32 GEMV tail and `out_len == 1`:** the partial output-channel tail no
+  longer uses masked AVX2 loads/stores (or their NEON predicate emulation).
+  It accumulates four 128-bit lanes plus scalar lanes while keeping the exact
+  per-lane 8-accumulator summation order. The single-output path uses two
+  4-frame tiles per 8-frame block, removing the register spill from the
+  8-frame transpose without changing the block partition or the trailing
+  per-frame fallback. Measured x86-64 improvements are recorded in
+  `docs/benchmarks.md` §10.1.
+- **x86-64-v3 guard:** the runtime AVX2/FMA check in the model dispatcher is
+  removed (dead code behind the `compile_error!` in `src/lib.rs`). A pre-v3 host
+  fails with SIGILL, as documented. `E5001` (`UNSUPPORTED_CPU_ARCHITECTURE`) is
+  reserved and discontinued; its number is not reused. `simd_probe` prints the
+  build-time guarantee instead of a runtime compliance verdict.
+- **docs.rs targets:** `x86_64-unknown-linux-gnu` (landing), `aarch64-apple-darwin`
+  and `aarch64-unknown-linux-gnu`. The `avx512` modules compile only for x86_64
+  through the `nam_avx512` cfg emitted by `build.rs`, so aarch64 documentation
+  builds with `all-features` no longer fail. `utils/docsrs-check.sh` checks both
+  the host and `aarch64-unknown-linux-gnu`.
+- **Consumer onboarding:** the x86-64-v3 build-script error names the dependency
+  case and points to the application's `.cargo/config.toml` and the README.
+- **Packaging preflight:** `tests-long.sh` `preflight-package` runs
+  `cargo package --locked` (verify) and a `consumer_smoke` check: a consumer
+  outside the repository must fail on x86_64 without the baseline flag, and
+  compile with it and on both aarch64 targets.
+- **QA binaries isolated:** `gen_stress`, `wav_to_golden`, `nam_golden_catalog`,
+  `nam_freshness`, `nam_long_receipt`, `nam_quality` and `nam_remote_simd_receipt`
+  moved to the `nam-qa` workspace member (`tools/qa`, `publish = false`). The
+  published manifest now declares only `nam_perf_gate` and `simd_probe`. Repo
+  tooling calls them with `-p nam-qa`.
+- **libm guard scope:** documented that the version script protects only this
+  crate's own link targets; downstream binaries need their own.
+- **A2 grouped and depthwise convolution:** depthwise weights are repacked into a
+  tap-major SoA tail, removing the gather from the x86 depthwise kernel; aarch64
+  gets explicit NEON kernels. Output bits are unchanged (`to_bits` tests against
+  the previous layout). aarch64 speed is not yet measured.
+- **Nano and gated residual paths:** the `fused_residual_batch` 4x4 case uses a
+  four-accumulator SSE block; gated CH=4/12 pairs two frames per YMM and removes
+  the `vmaskmovps` path on x86. Measured in `docs/benchmarks.md` §10.3.
+- **Low-latency frame tails:** 2–3 frame pair tiles for the 4x4, 8x8 and 12x12
+  residual kernels on x86 (bit-identical per frame). Measured in
+  `docs/benchmarks.md` §10.4.
+- **aarch64 prefetch:** `_mm_prefetch` is a documented no-op on aarch64, so no
+  `prfm` instructions are emitted there. x86 prefetch policy is unchanged.
+- **NEON reductions and tanh clamp:** `hsum` uses the same reduction tree as x86,
+  and the tanh clamp uses `fmin`/`fmax` with the x86 NaN ordering. Pending
+  hardware measurement.
+- **LSTM and DspBridge:** LSTM activation precision is hoisted per block and a
+  redundant prefetch is removed; the DspBridge reader and writer are padded to
+  separate 128-byte lines. The Apple Silicon effect is not measured.
+- **Numerical policy documented:** `NamModel::process` documents the FTZ/DAZ
+  requirement with a compiling doc-test, and the scalar tanh tail flushes
+  subnormals with the same policy.
+- **Build script:** `target/bench_constants.env` is written only by the primary
+  in-repo build, never inside a dependency checkout.
+- **Performance claims:** the measured gains are x86-64 only. No aarch64 gain is
+  declared until hardware receipts exist.
 
 - **QA packaging surface:** the maintainer-only QA binaries (`gen_stress`,
   `wav_to_golden`, `nam_golden_catalog`, `nam_freshness`, `nam_long_receipt`,
@@ -88,5 +166,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 3-tier lock-free SPSC parameter and model hot-swap mechanism with off-RT garbage collection cascade.
   - Diagnostic error reporting catalogue (`NamErrorCode` E1xxx–E5xxx).
 
+[Unreleased]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v1.0.1...HEAD
 [1.0.1]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/releases/tag/v1.0.0

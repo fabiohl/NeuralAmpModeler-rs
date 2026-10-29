@@ -36,7 +36,7 @@ pub mod wav;
 
 pub use skip::report_skip;
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use isa_guard::ForceAvx512Guard;
 pub use isa_guard::{ForceAvx2Guard, IsaGuard};

@@ -270,7 +270,7 @@ pub fn compute_energy_stereo_avx2(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// `avx512f` target feature (via its own `#[target_feature]` attribute or
 /// inlining) is an unsafe operation and requires an `unsafe` block; the caller
 /// must guarantee the CPU supports AVX-512F.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f")]
 pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
@@ -354,7 +354,7 @@ pub fn compute_energy_stereo_avx512(l: &[f32], r: &[f32]) -> (f32, bool) {
 /// `avx512f` target feature (via its own `#[target_feature]` attribute or
 /// inlining) is an unsafe operation and requires an `unsafe` block; the caller
 /// must guarantee the CPU supports AVX-512F.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f")]
 pub fn compute_energy_avx512(data: &[f32]) -> (f32, bool) {

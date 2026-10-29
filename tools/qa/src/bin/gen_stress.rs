@@ -7,8 +7,8 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --release --bin gen_stress -- --version v2 --sample-rate 48000 --output stress_signal.wav
-//! cargo run --release --bin gen_stress -- --version v1 --output stress_signal_v1.wav
+//! cargo run -p nam-qa --release --bin gen_stress -- --version v2 --sample-rate 48000 --output stress_signal.wav
+//! cargo run -p nam-qa --release --bin gen_stress -- --version v1 --output stress_signal_v1.wav
 //! ```
 
 use std::path::PathBuf;

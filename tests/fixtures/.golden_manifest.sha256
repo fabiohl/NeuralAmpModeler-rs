@@ -219,7 +219,7 @@ b4ed110bd69e6beb07776935f34c47d9cccee23f3b3e484545000fdd9f7b5cf0 f64_anchors/wav
 # If a generator hash differs from the committed SHA, its fixtures may be
 # stale — re-generate with: ./tests/fixtures/golden_gen_build.sh
 # =============================================================================
-16cf843ae331791cb2df9d87e4fbfa2d27df5ebe11bc471c13e59ba9f0f39f4f tests/fixtures/golden_gen_build.sh
+528ae168a1401f76717472f7c946f370d027513cfbd4882ed3bb24b9e98c59f4 tests/fixtures/golden_gen_build.sh
 eddd9a12759bfe37336ffc173dd3ef85aa684d5f9ad73955c8da8d12a8ea333a tests/fixtures/render_ir.cpp
 af7ce84416cda7e1f53aeeca4f47605dad961cc17e3c5221424b2fb585025dc5 tests/fixtures/generate_a2_fixtures.py
 21692b8837ec3e802125cc5c315033a8a0b596b7876bdb624a4c3ebfc1f38943 tests/fixtures/generate_namcore_v060_fixtures.py
@@ -228,8 +228,8 @@ e5c7a96fbad9ce68f41a4f0deb060b85aa7fc944586fa16504281b569f000e95 tests/fixtures/
 3bff0cf2f561fd4dbaa008aa426a810e0daa5e4e102b21f410000a2837ebdeae tests/fixtures/generate_resampler_reference.py
 188bf29fa1397f9fb6383e9db0b2c1a276d5b59f7039a44cbfb30b3f94836ea7 tests/fixtures/scripts/gen_mrstft_golden.py
 7ceb96acd350982e93c8e51673e753ab04a34add7c6f522870461924f4f1d3f0 tests/fixtures/scripts/validate_oracle_f64.py
-1b3249ce3a72f732352ed43d8ff5127ba2ed71b417ed8c4966d62eed0ce73a08 src/bin/gen_stress.rs
-6296f64622fa3c4ab72e185128655dc02a3fde8f530c1e90f5e0ef8f7da58a90 src/bin/wav_to_golden.rs
+efb9f2c4cb5e7b077622143abb1cab8e8b3c3b4c18fe37d10ca385bd8e34b43b tools/qa/src/bin/gen_stress.rs
+aa4634f154b343323407fb66f651d54fe8ef0dc6cc57100fb4c33f4a2e6cb25d tools/qa/src/bin/wav_to_golden.rs
 
 # =============================================================================
 # MODEL-REGISTRY — every .nam model in the CATALOG (reverse-check reference)

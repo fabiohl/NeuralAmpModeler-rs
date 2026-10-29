@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
-        run: rustup update --no-self-update stable && rustc --version
+        run: rustup update --no-self-update stable && rustup target add aarch64-unknown-linux-gnu && rustc --version
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -75,7 +75,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Clippy
-        run: cargo clippy --locked --all-targets --features testing -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features testing -- -D warnings
       # macOS ships bash 3.2; the QA scripts need bash >= 4.
       - name: Install bash (macOS)
         if: runner.os == 'macOS'
@@ -118,4 +118,73 @@ jobs:
         uses: ./.github/actions/qa-summary
         with:
           title: msrv (1.99.0)
+
+  # Dedicated C++ reference parity job (zero cpp-oracle-absent gaps).
+  cpp-parity:
+    name: cpp-parity (x86_64-linux)
+    needs: x86_64-linux
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Setup third-party (C++ oracle)
+        run: ./utils/setup-third-party.sh
+      - name: Build C++ NAMCore render binary
+        run: ./utils/ensure_namcore_render.sh
+      - name: Quick QA suite (require C++ oracle)
+        env:
+          NAM_REQUIRE_CPP_ORACLE: '1'
+        run: ./utils/tests-quick.sh
+      - name: Publish step summary
+        if: always()
+        uses: ./.github/actions/qa-summary
+        with:
+          title: cpp-parity (x86_64-linux)
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-cpp-parity
+          path: target/logs/**
+          retention-days: 14
+
+  # External consumer contract smoke test (x86_64 and aarch64).
+  consumer-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: consumer-smoke-x86_64
+            os: ubuntu-26.04
+          - name: consumer-smoke-arm64
+            os: ubuntu-26.04-arm
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update Rust toolchain and targets
+        run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Consumer smoke test
+        run: ./utils/consumer-smoke.sh
+      - name: Publish step summary
+        if: always()
+        uses: ./.github/actions/qa-summary
+        with:
+          title: ${{ matrix.name }}
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.name }}
+          path: target/logs/**
+          retention-days: 14
           note: ${{ job.status == 'success' && 'MSRV cargo check passed successfully.' || 'MSRV cargo check failed.' }}

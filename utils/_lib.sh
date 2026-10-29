@@ -36,7 +36,8 @@ run_phase() {
 }
 
 ran_tests() {
-  local log="$1" clean n_run n_start n_res n_fail n_pass
+  local - log="$1" clean n_run n_start n_res n_fail n_pass
+  set +x
   clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" 2>/dev/null || true)
   n_run=$(grep -c -E '^\s*(Running|Doc-tests)\b' <<<"$clean" || true)
   n_start=$(grep -c -E '^\s*running [0-9]+ tests?' <<<"$clean" || true)
@@ -119,10 +120,16 @@ ensure_namcore_render() {
   local mc_cpp="$PROJECT_DIR/tests/fixtures/render_multichannel.cpp"
   if [ -f "$mc_cpp" ]; then
     local objs
-    objs=$(find "$build_dir/CMakeFiles/NeuralAmpModelerCore.dir" -name "*.o" 2>/dev/null || true)
-    [ -n "$objs" ] && "$cxx" -std=c++20 -O3 -I "$CORE_DIR" -I "$CORE_DIR/Dependencies/eigen" \
-      -I "$CORE_DIR/Dependencies/AudioDSPTools" -I "$CORE_DIR/Dependencies/nlohmann" \
-      "$mc_cpp" $objs -o "$build_dir/render_multichannel" > "$logs_dir/compile-mc.log" 2>&1 || true
+    objs=$(find "$build_dir/tools/CMakeFiles/render.dir" -name "*.o" ! -name "render.cpp.o" 2>/dev/null || true)
+    if [ -n "$objs" ]; then
+      "$cxx" -std=c++20 -O3 -I "$CORE_DIR" -I "$CORE_DIR/Dependencies/eigen" \
+        -I "$CORE_DIR/Dependencies/AudioDSPTools" -I "$CORE_DIR/Dependencies/nlohmann" \
+        "$mc_cpp" $objs -o "$build_dir/render_multichannel" > "$logs_dir/compile-mc.log" 2>&1 || {
+        warn "render_multichannel compilation failed (see $logs_dir/compile-mc.log)"
+      }
+    else
+      warn "NAMCore object files not found in $build_dir/tools/CMakeFiles/render.dir"
+    fi
   fi
   echo "$bin"
 }
@@ -130,7 +137,7 @@ ensure_namcore_render() {
 ensure_qa_bin() {
   local bin_name="$1" features="${2:-testing}"
   local build_out
-  build_out=$(cd "$PROJECT_DIR" && cargo build --locked ${features:+--features "$features"} --bin "$bin_name" --message-format=json-render-diagnostics 2>&1) || {
+  build_out=$(cd "$PROJECT_DIR" && cargo build --locked --workspace ${features:+--features "$features"} --bin "$bin_name" --message-format=json-render-diagnostics 2>&1) || {
     echo "ERROR: cargo build failed for QA binary $bin_name" >&2; return 1
   }
   local exe

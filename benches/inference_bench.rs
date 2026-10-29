@@ -95,6 +95,7 @@ criterion_group!(
     misc::bench_wavenet_a2_max_film_grouped_process,
     wavenet::bench_wavenet_comparison,
     a2::bench_a2_comparison,
+    a2::bench_a2_grouped_conv,
     misc::bench_nondist_models,
     misc::bench_convnet_model_process,
     a2_dyn_stage::bench_a2dyn_stages,

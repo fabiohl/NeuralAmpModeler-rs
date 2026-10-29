@@ -29,13 +29,21 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
     let hi = _mm256_extractf128_ps(v, 1);
     let lo = _mm256_castps256_ps128(v);
     let s128 = _mm_add_ps(lo, hi);
-    let shuf = _mm_movehdup_ps(s128);
-    let sums = _mm_add_ps(s128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let r = _mm_add_ss(sums, shuf2);
-    let mut out = 0.0f32;
-    _mm_store_ss(&mut out, r);
-    out
+    #[cfg(target_arch = "aarch64")]
+    {
+        let pairs = _mm_hadd_ps(s128, s128);
+        _mm_cvtss_f32(_mm_hadd_ps(pairs, pairs))
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let shuf = _mm_movehdup_ps(s128);
+        let sums = _mm_add_ps(s128, shuf);
+        let shuf2 = _mm_movehl_ps(sums, sums);
+        let r = _mm_add_ss(sums, shuf2);
+        let mut out = 0.0f32;
+        _mm_store_ss(&mut out, r);
+        out
+    }
 }
 
 /// Horizontal sum of an AVX-512 (512-bit) register to scalar f32.
@@ -45,7 +53,7 @@ pub unsafe fn hsum_avx2(v: __m256) -> f32 {
 /// # Safety
 /// The caller must guarantee AVX-512F is available (enforced by the
 /// `#[target_feature]` attribute). No pointers are dereferenced.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f")]
@@ -88,7 +96,7 @@ pub unsafe fn horizontal_sum_avx2(ptr: *const f32, len: usize) -> f32 {
 /// `ptr` must be non-null, aligned to `align_of::<f32>()`, and valid for `len`
 /// consecutive reads of initialized `f32` values. The caller must guarantee
 /// AVX-512F is available (`#[target_feature]`).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f")]
 pub unsafe fn horizontal_sum_avx512(ptr: *const f32, len: usize) -> f32 {

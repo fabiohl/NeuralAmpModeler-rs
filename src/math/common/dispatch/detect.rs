@@ -37,15 +37,15 @@ pub(crate) static TEST_ISA_OVERRIDE: AtomicU8 = AtomicU8::new(u8::MAX);
 
 /// Encodes an `InstructionSet` enum into the corresponding test override raw byte.
 #[inline]
-#[cfg_attr(feature = "avx512", expect(deprecated))]
+#[cfg_attr(nam_avx512, expect(deprecated))]
 pub const fn encode_isa_override(isa: InstructionSet) -> u8 {
     match isa {
         InstructionSet::Avx2 => 0,
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         InstructionSet::Avx512 => 1,
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         InstructionSet::Avx512VnniBf16 => 2,
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         _ => 0,
     }
 }
@@ -54,13 +54,13 @@ pub const fn encode_isa_override(isa: InstructionSet) -> u8 {
 ///
 /// Returns `None` if the byte does not correspond to a valid ISA enum variant.
 #[inline]
-#[cfg_attr(feature = "avx512", expect(deprecated))]
+#[cfg_attr(nam_avx512, expect(deprecated))]
 pub const fn decode_isa_override(raw: u8) -> Option<InstructionSet> {
     match raw {
         0 => Some(InstructionSet::Avx2),
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         1 => Some(InstructionSet::Avx512),
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         2 => Some(InstructionSet::Avx512VnniBf16),
         _ => None,
     }
@@ -119,7 +119,7 @@ pub const fn avx512_capability_complete(f: bool, vl: bool, bw: bool, dq: bool) -
 /// # Production Usage Notice
 ///
 /// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub fn has_full_avx512() -> bool {
     avx512_capability_complete(
@@ -138,7 +138,7 @@ pub fn has_full_avx512() -> bool {
 /// # Production Usage Notice
 ///
 /// **AVX-512 is discouraged in production.** See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub fn missing_avx512_features() -> Vec<&'static str> {
     let mut missing = Vec::with_capacity(4);
@@ -177,7 +177,7 @@ pub fn missing_avx512_features() -> Vec<&'static str> {
 pub fn set_test_isa_override(isa: InstructionSet) -> Result<u8, IsaOverrideError> {
     match isa {
         InstructionSet::Avx2 => {}
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         InstructionSet::Avx512 => {
             if !has_full_avx512() {
                 return Err(IsaOverrideError::UnsupportedIsa {
@@ -186,7 +186,7 @@ pub fn set_test_isa_override(isa: InstructionSet) -> Result<u8, IsaOverrideError
                 });
             }
         }
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         InstructionSet::Avx512VnniBf16 => {
             let mut missing = missing_avx512_features();
             if !is_x86_feature_detected!("avx512bf16") {
@@ -202,7 +202,7 @@ pub fn set_test_isa_override(isa: InstructionSet) -> Result<u8, IsaOverrideError
                 });
             }
         }
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16 => {
             return Err(IsaOverrideError::UnsupportedIsa {
                 isa,
@@ -239,7 +239,7 @@ pub fn clear_test_isa_override() -> u8 {
 /// doubleword/quadword instructions that a partial subset cannot execute.
 /// Production runtime detection never emits `InstructionSet::Avx512VnniBf16`.
 fn detect_best_simd() -> SimdMathConfig {
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if has_full_avx512() {
         return config_table!(InstructionSet::Avx512, "AVX-512", true);
     }
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_effective_instruction_set_default_avx2() {
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         {
             assert_eq!(
                 effective_instruction_set(),
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_override_ignored_without_avx512_feature() {
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         {
             let prev = TEST_ISA_OVERRIDE.swap(1, Ordering::SeqCst);
             assert_eq!(
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     fn test_decode_isa_override_with_avx512_feature() {
         assert_eq!(decode_isa_override(0), Some(InstructionSet::Avx2));
         assert_eq!(decode_isa_override(1), Some(InstructionSet::Avx512));
@@ -341,7 +341,7 @@ mod tests {
         assert!(avx512_capability_complete(true, true, true, true));
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     fn detect_falls_back_to_avx2_without_full_capability() {
         // Deterministic per-host: with the avx512 feature on, runtime
@@ -363,7 +363,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     fn missing_features_reports_only_absent_flags() {
         if has_full_avx512() {
@@ -407,7 +407,7 @@ mod tests {
         TEST_ISA_OVERRIDE.store(prev, Ordering::SeqCst);
     }
 
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     #[test]
     #[serial]
     fn override_rejects_avx512_without_feature() {
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     #[serial]
     fn override_avx512_requires_full_capability() {
@@ -461,7 +461,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     #[serial]
     fn override_vnni_requires_bf16_and_vnni_on_top_of_full_avx512() {

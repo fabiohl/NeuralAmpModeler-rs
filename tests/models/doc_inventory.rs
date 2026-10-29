@@ -129,6 +129,21 @@ fn extract_src_path_refs(text: &str) -> HashSet<String> {
     let mut i = 0;
     while i + 4 <= clean.len() {
         if &clean.as_bytes()[i..i + 4] == b"src/" {
+            let bytes = clean.as_bytes();
+            let mut start = i;
+            while start > 0
+                && (bytes[start - 1].is_ascii_alphanumeric()
+                    || matches!(bytes[start - 1], b'_' | b'-' | b'.' | b'/'))
+            {
+                start -= 1;
+            }
+            let mut repo_prefix = &clean[start..i];
+            while let Some(rest) = repo_prefix.strip_prefix("../") {
+                repo_prefix = rest;
+            }
+            if repo_prefix.starts_with('/') || repo_prefix.contains("..") {
+                repo_prefix = "";
+            }
             let rest = &clean[i + 4..];
             let end = rest
                 .find(|c: char| {
@@ -157,7 +172,7 @@ fn extract_src_path_refs(text: &str) -> HashSet<String> {
                 && !candidate.contains('}')
                 && !candidate.contains('*')
             {
-                refs.insert(format!("src/{candidate}"));
+                refs.insert(format!("{repo_prefix}src/{candidate}"));
             }
             i += 4;
         } else {

@@ -6,16 +6,16 @@ use crate::arch::simd::*;
 use crate::math::activations::ActivationPrecision;
 use crate::math::activations::activation_precision;
 use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::activations::sigmoid::high_fidelity::simd_sigmoid_poly_avx512;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::activations::sigmoid::simd_sigmoid_avx512;
 use crate::math::activations::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_dual_avx2};
 use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::activations::tanh::high_fidelity::simd_tanh_poly_avx512;
 use crate::math::activations::tanh::simd_tanh_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::activations::tanh::simd_tanh_avx512;
 
 /// Fused kernel for LSTM gates (AVX2) — Standard (exact-grade) accuracy path.
@@ -143,7 +143,7 @@ pub unsafe fn fused_lstm_gates_avx2(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
@@ -193,7 +193,7 @@ pub unsafe fn fused_lstm_gates_avx512_hf(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
@@ -241,7 +241,7 @@ pub unsafe fn fused_lstm_gates_avx512_std(
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]
@@ -449,7 +449,7 @@ unsafe fn fused_lstm_gates_dyn_tail(
 /// Requires AVX-512F and AVX-512VL support. `gates` must have length at least `4 * hidden_size`.
 /// `cell_state`, `cell_error`, and `hidden_state` must have length at least `hidden_size`.
 /// Output buffers must not alias `gates`.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[target_feature(enable = "avx512f,avx512vl")]

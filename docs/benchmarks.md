@@ -684,3 +684,474 @@ Profile-Guided Optimization (PGO) and Post-Link Optimization (such as LLVM BOLT)
    * Binary post-optimization (BOLT reordering and `__bolt_hugify`) operates strictly on final linked ELF binaries or shared libraries, never on intermediate `.rlib` static libraries.
 3. **No Distribution of Pre-Compiled Profiles:**
    Upstream does not distribute canned `.profdata` profiles because LLVM profile formats are tightly coupled to specific compiler revisions, CFG hash matching is fragile across dependency updates, and training on a single topology biases PGO branch weights, causing latency spikes when switching models.
+
+---
+
+## 10. x86-64 Baseline Snapshot (measured 2026-10-28)
+
+Measured on **AMD Ryzen 7 5700U with Radeon Graphics** (`notebook`, 16 threads, kernel 7.0.0-42-generic, rustc 1.99.1) using the `bench` profile (`lto = "thin"`, `codegen-units = 1`). Frequency boost and governor were pinned to `performance` for the duration of the run and restored afterwards; CPUs 8-9 were already kernel-isolated before the session. The Criterion baseline is stored as `base-2026-10-28` under `target/criterion` (not committed).
+
+- **Median**: Criterion `median.point_estimate`, ns per iteration.
+- **IQR**: Q3-Q1 of the per-iteration samples in `sample.json`, ns.
+- This snapshot is the comparison reference for S04-S09 on this same host. Every value is measured; none is estimated.
+- It says nothing about aarch64: no ARM gain may be claimed from it (G-HW is still required).
+
+Benches run: `gemv_bench`, `dot_4x_bench`, `conv1d_hotpath_bench`, `dsp_bridge_bench`, `spsc_swap_bench`, `inference_bench` (which pulls in `inference/wavenet_bench`, `a2_bench`, `isa_compare_bench`, `lstm_bench`, `misc_bench`, `a2_dyn_stage_bench`) and `regression_gate`. Total: 234 entries.
+
+| Bench (group/id) | Median (ns) | IQR (ns) |
+| --- | ---: | ---: |
+| `A2Dyn_CondDsp_CH4_64samp_48kHz` | 414,232.6 | 18,754.4 |
+| `A2Dyn_FiLM_Dense_CH3_64samp_48kHz` | 628,136.5 | 20,348.1 |
+| `A2Dyn_FiLM_Dense_CH8_64samp_48kHz` | 800,569.6 | 45,487.8 |
+| `A2Dyn_FiLM_Grouped_A2Max_64samp_48kHz` | 341,020.5 | 14,244.3 |
+| `A2Dyn_FiLM_Grouped_CH4_64samp_48kHz` | 1,155,445.8 | 26,823.7 |
+| `A2Dyn_Gated_64samp_48kHz` | 360,232.5 | 2,529.1 |
+| `A2Dyn_Stage_Combined_B8_CH8` | 495.4 | 11.7 |
+| `A2Dyn_Stage_Conv_B16_CH16_K3` | 547.9 | 2.6 |
+| `A2Dyn_Stage_Conv_B8_CH8_K3` | 82.5 | 3.4 |
+| `A2Dyn_Stage_FiLM_C4_C8_G1` | 42.8 | 0.3 |
+| `A2Dyn_Stage_FiLM_C4_C8_G2` | 64.0 | 0.3 |
+| `A2Dyn_Stage_FiLM_C4_C8_G4` | 50.8 | 0.2 |
+| `A2Dyn_Stage_FiLM_C4_C8_G8` | 49.5 | 0.1 |
+| `A2Dyn_Stage_Full_64samp` | 361,349.9 | 7,298.7 |
+| `A2Dyn_Stage_Gating_B8` | 16.7 | 2.1 |
+| `A2Dyn_Stage_Head1x1_B16_A16` | 376.2 | 14.4 |
+| `A2Dyn_Stage_Head1x1_B8_A8` | 146.7 | 5.5 |
+| `A2Dyn_Stage_L1x1_B16_CH16` | 362.6 | 15.3 |
+| `A2Dyn_Stage_L1x1_B8_CH8` | 145.3 | 5.7 |
+| `A2Dyn_Stage_MixinGEMV_B16_C1` | 66.9 | 0.7 |
+| `A2Dyn_Stage_MixinGEMV_B8_C1` | 58.3 | 1.3 |
+| `A2Dyn_Stage_MixinGEMV_B8_C3` | 70.8 | 2.3 |
+| `A2Full_CH8_128samp_48kHz` | 91,676.7 | 1,750.2 |
+| `A2Full_CH8_256samp_48kHz` | 182,906.3 | 3,222.8 |
+| `A2Full_CH8_32samp_48kHz` | 24,250.8 | 1,607.4 |
+| `A2Full_CH8_512samp_48kHz` | 369,441.8 | 11,031.0 |
+| `A2Full_CH8_64samp_48kHz` | 44,460.8 | 1,501.5 |
+| `A2Lite_CH3_128samp_48kHz` | 66,074.9 | 775.9 |
+| `A2Lite_CH3_256samp_48kHz` | 134,385.6 | 3,186.0 |
+| `A2Lite_CH3_32samp_48kHz` | 17,904.8 | 1,081.0 |
+| `A2Lite_CH3_512samp_48kHz` | 269,434.8 | 5,440.4 |
+| `A2Lite_CH3_64samp_48kHz` | 33,609.8 | 2,135.8 |
+| `A2_Comparison/Dynamic_CH4_gated` | 389,956.0 | 30,262.3 |
+| `A2_Comparison/Full_CH8` | 45,059.1 | 763.1 |
+| `A2_Comparison/Lite_CH3` | 35,274.4 | 2,278.2 |
+| `Container_Crossfade_64samp` | 34,845.1 | 622.1 |
+| `ConvNet_Model_64samp_48kHz` | 22,809.2 | 486.4 |
+| `Gc_Cascade_Tier1_Spsc` | 360.1 | 75.7 |
+| `Gc_Cascade_Tier2_ParkingLot` | 627.1 | 27.2 |
+| `Gc_Cascade_Tier3_Overflow` | 2,723.9 | 307.8 |
+| `Gc_Drain_Housekeeping_AllTiers` | 2,392.1 | 347.6 |
+| `ISA_Compare_A2Full_CH8_1samp_48kHz/AVX2` | 7,521.0 | 490.5 |
+| `ISA_Compare_A2Full_CH8_64samp_48kHz/AVX2` | 46,643.9 | 2,655.1 |
+| `ISA_Compare_A2Full_CH8_8samp_48kHz/AVX2` | 8,505.3 | 199.1 |
+| `ISA_Compare_A2Lite_CH3_1samp_48kHz/AVX2` | 3,722.1 | 394.6 |
+| `ISA_Compare_A2Lite_CH3_64samp_48kHz/AVX2` | 33,287.5 | 1,328.7 |
+| `ISA_Compare_A2Lite_CH3_8samp_48kHz/AVX2` | 6,645.9 | 63.3 |
+| `ISA_Compare_LSTM_1x16_1samp_48kHz/AVX2` | 259.6 | 1.5 |
+| `ISA_Compare_LSTM_1x16_64samp_48kHz/AVX2` | 16,073.6 | 111.9 |
+| `ISA_Compare_LSTM_1x16_8samp_48kHz/AVX2` | 2,009.2 | 10.7 |
+| `ISA_Compare_LSTM_2x16_1samp_48kHz/AVX2` | 553.3 | 1.6 |
+| `ISA_Compare_LSTM_2x16_64samp_48kHz/AVX2` | 34,647.4 | 99.6 |
+| `ISA_Compare_LSTM_2x16_8samp_48kHz/AVX2` | 4,340.5 | 31.2 |
+| `ISA_Compare_WaveNet_Std_CH16_1samp_48kHz/AVX2` | 3,650.4 | 28.4 |
+| `ISA_Compare_WaveNet_Std_CH16_64samp_48kHz/AVX2` | 100,336.2 | 2,520.2 |
+| `ISA_Compare_WaveNet_Std_CH16_8samp_48kHz/AVX2` | 14,426.4 | 69.7 |
+| `LSTM_1x40_64samp_48kHz` | 52,727.8 | 787.2 |
+| `LSTM_1x40_Comparison/SIMD_Fused_T3` | 52,745.9 | 631.8 |
+| `LSTM_1x40_Comparison/Scalar_Baseline` | 456,522.0 | 9,665.2 |
+| `LSTM_1x8_Comparison/SIMD_Fused_T3` | 8,918.9 | 181.5 |
+| `LSTM_1x8_Comparison/Scalar_Baseline` | 13,363.5 | 123.6 |
+| `LSTM_2x16_128samp_48kHz` | 69,377.2 | 292.3 |
+| `LSTM_2x16_256samp_48kHz` | 139,093.9 | 641.5 |
+| `LSTM_2x16_32samp_48kHz` | 17,379.4 | 66.6 |
+| `LSTM_2x16_512samp_48kHz` | 281,890.7 | 3,714.8 |
+| `LSTM_2x16_64samp_48kHz` | 36,112.1 | 774.4 |
+| `LSTM_2x16_Comparison/SIMD_Fused_T3` | 34,719.9 | 698.7 |
+| `LSTM_2x16_Comparison/Scalar_Baseline` | 138,830.6 | 2,305.9 |
+| `LSTM_2x24_64samp_48kHz` | 56,933.5 | 278.5 |
+| `LSTM_2x24_Comparison/SIMD_Fused_T3` | 57,490.1 | 1,046.1 |
+| `LSTM_2x24_Comparison/Scalar_Baseline` | 386,191.0 | 9,494.8 |
+| `LSTM_Dynamic_1x7_64samp_48kHz` | 20,073.2 | 722.3 |
+| `LinearModel_RF256_64samp_SIMD` | 3,793.8 | 36.4 |
+| `Prewarm_A2Full_CH8_2048samp` | 5,132,984.8 | 107,949.6 |
+| `Prewarm_A2Lite_CH3_2048samp` | 3,793,433.8 | 188,313.3 |
+| `Prewarm_LSTM_2x16_2048samp` | 1,139,815.3 | 35,530.9 |
+| `Prewarm_WaveNet_Standard_2048samp` | 412,808.4 | 10,474.4 |
+| `RT_A2_Dyn_Blended_CH3` | 324,135.1 | 1,090.2 |
+| `RT_A2_Dyn_Gated_CH8` | 424,639.5 | 1,934.0 |
+| `RT_A2_Full_CH8` | 45,822.0 | 1,633.6 |
+| `RT_A2_Lite_CH3` | 34,732.8 | 595.7 |
+| `RT_A2_Max_CH4` | 353,765.7 | 10,044.3 |
+| `RT_ConvNet` | 22,332.6 | 203.0 |
+| `RT_DSP_CabSim_IR_Medium` | 201,539.7 | 6,152.6 |
+| `RT_DSP_Pipeline_AdaptiveOn` | 156,073.9 | 1,847.5 |
+| `RT_DSP_Pipeline_Base_NoOS` | 100,772.7 | 6,099.6 |
+| `RT_DSP_Pipeline_HQ_4xOS` | 408,234.7 | 22,174.6 |
+| `RT_DSP_Resampler_44k1_to_48k` | 203,748.3 | 3,328.7 |
+| `RT_DSP_Resampler_96k_to_48k` | 102,344.3 | 1,879.7 |
+| `RT_LSTM_1x16` | 16,391.3 | 318.8 |
+| `RT_LSTM_2x8` | 17,778.0 | 120.2 |
+| `RT_LSTM_Dyn_1x7` | 19,781.6 | 99.6 |
+| `RT_Linear_Direct_RF4` | 355.5 | 12.0 |
+| `RT_Linear_Fft_RF2048` | 11,642.8 | 899.6 |
+| `RT_WaveNet_Dyn_Free` | 50,745.8 | 320.8 |
+| `RT_WaveNet_Feather_CH8` | 47,493.6 | 324.0 |
+| `RT_WaveNet_Lite_CH12` | 134,201.7 | 753.7 |
+| `RT_WaveNet_Nano_CH4` | 43,994.3 | 487.4 |
+| `RT_WaveNet_Std_CH16` | 102,289.1 | 4,121.2 |
+| `Swap_Drain_Budget_Exceeded_Deferred` | 832.6 | 270.3 |
+| `Swap_Drain_HighContention_Coalescing` | 1,490.9 | 357.5 |
+| `Swap_Drain_LowContention_Single` | 617.4 | 277.0 |
+| `Swap_Drain_Quiescent` | 6.9 | 0.0 |
+| `WaveNet_Comparison/Dynamic_CH5_fallback` | 87,918.8 | 861.4 |
+| `WaveNet_Comparison/Standard_CH16_cataloged` | 99,881.7 | 4,392.0 |
+| `WaveNet_Dynamic_CH5_64samp_48kHz` | 85,400.5 | 3,378.4 |
+| `WaveNet_P10_1` | 3,689.6 | 152.4 |
+| `WaveNet_P10_16` | 26,226.2 | 1,278.9 |
+| `WaveNet_P10_64` | 97,888.0 | 564.8 |
+| `WaveNet_Standard_CH16_128samp_48kHz` | 204,462.0 | 4,172.1 |
+| `WaveNet_Standard_CH16_256samp_48kHz` | 393,029.0 | 3,071.1 |
+| `WaveNet_Standard_CH16_32samp_48kHz` | 50,145.5 | 603.0 |
+| `WaveNet_Standard_CH16_512samp_48kHz` | 799,478.1 | 17,391.5 |
+| `WaveNet_Standard_CH16_64samp_48kHz` | 102,906.4 | 854.7 |
+| `ch12_lane_route/lane16_padded` | 50.9 | 0.7 |
+| `ch12_lane_route/lane8_plus_4` | 49.0 | 0.8 |
+| `conv1d_dyn_dual_vs_single/dual_frame_ch16` | 6,237.1 | 615.5 |
+| `conv1d_dyn_dual_vs_single/dual_frame_ch4` | 2,995.7 | 150.2 |
+| `conv1d_dyn_dual_vs_single/dual_frame_ch8` | 3,675.9 | 207.2 |
+| `conv1d_dyn_dual_vs_single/single_frame_ch16` | 7,346.4 | 108.2 |
+| `conv1d_dyn_dual_vs_single/single_frame_ch4` | 3,262.3 | 7.7 |
+| `conv1d_dyn_dual_vs_single/single_frame_ch8` | 4,236.8 | 74.1 |
+| `dot_16x_f32/scalar_1024` | 2,868.2 | 55.3 |
+| `dot_16x_f32/scalar_16` | 19.6 | 0.6 |
+| `dot_16x_f32/scalar_256` | 683.9 | 0.6 |
+| `dot_16x_f32/scalar_4096` | 11,607.7 | 16.4 |
+| `dot_16x_f32/scalar_64` | 137.4 | 0.5 |
+| `dot_4x_dual_frame_avx512/avx2_1024` | 1,654.4 | 42.5 |
+| `dot_4x_dual_frame_avx512/avx2_16` | 39.0 | 0.5 |
+| `dot_4x_dual_frame_avx512/avx2_256` | 413.8 | 0.8 |
+| `dot_4x_dual_frame_avx512/avx2_4096` | 6,448.4 | 75.7 |
+| `dot_4x_dual_frame_avx512/avx2_64` | 117.2 | 2.8 |
+| `dot_4x_dual_frame_avx512/fallback_1024` | 11,295.5 | 31.8 |
+| `dot_4x_dual_frame_avx512/fallback_16` | 191.6 | 11.1 |
+| `dot_4x_dual_frame_avx512/fallback_256` | 3,033.5 | 55.9 |
+| `dot_4x_dual_frame_avx512/fallback_4096` | 45,557.7 | 142.2 |
+| `dot_4x_dual_frame_avx512/fallback_64` | 745.2 | 14.2 |
+| `dot_4x_f32/avx2_1024` | 711.6 | 13.0 |
+| `dot_4x_f32/avx2_16` | 9.4 | 0.2 |
+| `dot_4x_f32/avx2_256` | 164.0 | 0.8 |
+| `dot_4x_f32/avx2_4` | 4.1 | 0.1 |
+| `dot_4x_f32/avx2_4096` | 2,905.7 | 19.7 |
+| `dot_4x_f32/avx2_64` | 37.4 | 0.7 |
+| `dot_4x_f32/avx2_8` | 5.4 | 0.1 |
+| `dot_4x_f32/scalar_1024` | 2,816.5 | 2.1 |
+| `dot_4x_f32/scalar_16` | 10.7 | 0.3 |
+| `dot_4x_f32/scalar_256` | 637.9 | 2.2 |
+| `dot_4x_f32/scalar_4` | 6.1 | 0.1 |
+| `dot_4x_f32/scalar_4096` | 11,550.8 | 18.5 |
+| `dot_4x_f32/scalar_64` | 92.5 | 0.6 |
+| `dot_4x_f32/scalar_8` | 4.8 | 0.3 |
+| `dot_4x_interleaved_avx512/avx2_1024` | 913.6 | 33.7 |
+| `dot_4x_interleaved_avx512/avx2_16` | 25.0 | 1.1 |
+| `dot_4x_interleaved_avx512/avx2_256` | 230.3 | 6.0 |
+| `dot_4x_interleaved_avx512/avx2_4096` | 3,523.5 | 5.5 |
+| `dot_4x_interleaved_avx512/avx2_64` | 65.4 | 0.3 |
+| `dot_4x_interleaved_avx512/fallback_1024` | 10,476.1 | 117.1 |
+| `dot_4x_interleaved_avx512/fallback_16` | 181.6 | 6.6 |
+| `dot_4x_interleaved_avx512/fallback_256` | 2,811.9 | 155.6 |
+| `dot_4x_interleaved_avx512/fallback_4096` | 43,246.5 | 2,079.2 |
+| `dot_4x_interleaved_avx512/fallback_64` | 693.0 | 10.0 |
+| `dot_8x_f32/avx2_1024` | 844.8 | 4.8 |
+| `dot_8x_f32/avx2_16` | 11.9 | 0.5 |
+| `dot_8x_f32/avx2_256` | 192.6 | 2.3 |
+| `dot_8x_f32/avx2_4096` | 3,468.2 | 125.3 |
+| `dot_8x_f32/avx2_64` | 48.3 | 1.1 |
+| `dot_8x_f32/scalar_1024` | 2,813.3 | 20.8 |
+| `dot_8x_f32/scalar_16` | 12.1 | 0.2 |
+| `dot_8x_f32/scalar_256` | 639.9 | 5.7 |
+| `dot_8x_f32/scalar_4096` | 11,569.3 | 31.0 |
+| `dot_8x_f32/scalar_64` | 91.9 | 0.1 |
+| `dsp_bridge_drain_dropped` | 10.4 | 0.0 |
+| `dsp_bridge_read/read_block/128` | 37.7 | 0.2 |
+| `dsp_bridge_read/read_block/256` | 53.0 | 2.4 |
+| `dsp_bridge_read/read_block/64` | 24.3 | 0.2 |
+| `dsp_bridge_write/write_block/128` | 39.1 | 0.5 |
+| `dsp_bridge_write/write_block/256` | 51.8 | 1.3 |
+| `dsp_bridge_write/write_block/64` | 26.8 | 0.9 |
+| `gemv_1x4/generic_avx2` | 27.6 | 1.1 |
+| `gemv_1x4/scalar_fallback` | 39.4 | 3.2 |
+| `gemv_1x4/specialized_avx2` | 18.9 | 0.4 |
+| `gemv_4gate_17x16/avx2` | 123.1 | 2.7 |
+| `gemv_4gate_17x16/scalar_fallback` | 779.6 | 28.1 |
+| `gemv_4gate_33x32/avx2` | 362.5 | 6.6 |
+| `gemv_4gate_33x32/scalar_fallback` | 2,670.8 | 44.3 |
+| `gemv_4gate_49x48/avx2` | 902.7 | 68.2 |
+| `gemv_4gate_49x48/scalar_fallback` | 5,767.6 | 121.6 |
+| `gemv_4gate_65x64/avx2` | 2,648.9 | 282.9 |
+| `gemv_4gate_65x64/scalar_fallback` | 10,342.2 | 26.7 |
+| `gemv_4x4/generic_avx2` | 29.8 | 0.5 |
+| `gemv_4x4/scalar_fallback` | 44.3 | 0.6 |
+| `gemv_4x4/specialized_avx2` | 25.5 | 0.5 |
+| `gemv_4x6/generic_avx2` | 41.2 | 0.5 |
+| `gemv_4x6/scalar_fallback` | 52.7 | 1.7 |
+| `gemv_4x6/specialized_avx2` | 30.4 | 1.8 |
+| `gemv_8x4/generic_avx2` | 32.7 | 0.1 |
+| `gemv_8x4/scalar_fallback` | 52.7 | 0.5 |
+| `gemv_8x4/specialized_avx2` | 27.9 | 0.2 |
+| `gemv_8x6/generic_avx2` | 50.2 | 0.2 |
+| `gemv_8x6/scalar_fallback` | 66.9 | 4.3 |
+| `gemv_8x6/specialized_avx2` | 51.9 | 0.1 |
+| `gemv_8x8/generic_avx2` | 33.8 | 0.9 |
+| `gemv_8x8/scalar_fallback` | 81.2 | 0.9 |
+| `gemv_8x8/specialized_avx2` | 29.7 | 0.4 |
+| `prefetch_guard/dil16_12x12` | 3,519.8 | 458.6 |
+| `prefetch_guard/dil16_16x16` | 3,665.2 | 47.0 |
+| `prefetch_guard/dil16_4x4` | 255.9 | 3.3 |
+| `prefetch_guard/dil16_8x8` | 398.7 | 8.0 |
+| `prefetch_guard/dil1_12x12` | 3,480.3 | 410.9 |
+| `prefetch_guard/dil1_16x16` | 3,777.8 | 45.4 |
+| `prefetch_guard/dil1_4x4` | 278.1 | 10.0 |
+| `prefetch_guard/dil1_8x8` | 434.0 | 2.8 |
+| `prefetch_guard/dil2_12x12` | 3,492.4 | 438.1 |
+| `prefetch_guard/dil2_16x16` | 3,703.2 | 139.9 |
+| `prefetch_guard/dil2_4x4` | 285.8 | 7.4 |
+| `prefetch_guard/dil2_8x8` | 432.3 | 2.0 |
+| `prefetch_guard/dil32_12x12` | 3,484.8 | 443.6 |
+| `prefetch_guard/dil32_16x16` | 3,650.3 | 42.4 |
+| `prefetch_guard/dil32_4x4` | 255.6 | 4.8 |
+| `prefetch_guard/dil32_8x8` | 402.5 | 12.7 |
+| `prefetch_guard/dil4_12x12` | 3,523.6 | 493.2 |
+| `prefetch_guard/dil4_16x16` | 3,686.6 | 51.6 |
+| `prefetch_guard/dil4_4x4` | 287.2 | 14.6 |
+| `prefetch_guard/dil4_8x8` | 396.2 | 2.6 |
+| `prefetch_guard/dil8_12x12` | 3,511.8 | 393.0 |
+| `prefetch_guard/dil8_16x16` | 3,666.7 | 46.7 |
+| `prefetch_guard/dil8_4x4` | 250.1 | 6.3 |
+| `prefetch_guard/dil8_8x8` | 402.1 | 9.7 |
+| `raw_dual_vs_2x_single/raw_2x_single_ch16` | 133.9 | 3.0 |
+| `raw_dual_vs_2x_single/raw_2x_single_ch4` | 20.2 | 0.3 |
+| `raw_dual_vs_2x_single/raw_2x_single_ch8` | 35.0 | 0.6 |
+| `raw_dual_vs_2x_single/raw_dual_ch16` | 119.5 | 2.5 |
+| `raw_dual_vs_2x_single/raw_dual_ch4` | 24.2 | 0.1 |
+| `raw_dual_vs_2x_single/raw_dual_ch8` | 34.7 | 1.2 |
+
+### 10.1 S04 — GEMV tail and `out_len == 1` (measured 2026-10-28)
+
+A/B measurement of the S04 kernels on the same host and session as §10. Both
+runs used the `bench` profile; the CPU governor was already `performance` and
+no other build ran concurrently. The "before" column is HEAD `759c775`; the
+"after" column is the S04 working tree. `gemv_out*_in64_batch64` and the two
+`head_gemv_*` cases were added to `benches/head_gemv_bench.rs` for this
+comparison.
+
+- **Median**: Criterion `median.point_estimate`.
+- **IQR**: Q3-Q1 of the per-iteration samples.
+- Positive percentages are regressions; negative percentages are improvements.
+- This is x86-64 evidence only. No aarch64 gain is claimed here (`G-HW` still
+  required).
+
+| Bench (group/id) | Before median (ns) | Before IQR | After median (ns) | After IQR | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `head_gemv_12x6_masked` | 60.0 | 2.2 | 58.9 | 0.4 | -1.8% |
+| `head_gemv_12x8_clean` | 53.6 | 1.0 | 33.2 | 0.8 | -38.2% |
+| `gemv_out1_in64_batch64` | 890.7 | 24.5 | 757.0 | 5.1 | -15.0% |
+| `gemv_out4_in64_batch64` | 5,017.8 | 143.3 | 3,020.8 | 54.3 | -39.8% |
+| `gemv_out12_in64_batch64` | 7,897.9 | 266.2 | 6,889.4 | 236.4 | -12.8% |
+
+The `12x8` case improves because its four leftover input channels no longer
+round-trip through a scalar stack buffer; `out4`/`out12` stop paying the masked
+tail, and `out1` drops the 8-frame transpose spill. The `12x6` case only loses
+the mask in its six-lane tail, so its gain is within noise.
+
+## 11. Reference Assembly Artifacts
+
+Generated with `cargo rustc --release --lib -- --emit asm` (host x86-64, default `x86-64-v3` codegen) and the same command with `--target aarch64-apple-darwin`. Stored under `target/asm-ref-2026-10-28/` (not committed) and used as the code-generation baseline for kernel tasks.
+
+| Artifact | Bytes | SHA-256 (prefix) |
+| --- | ---: | --- |
+| `x86_64`: `neural_amp_modeler_rs-27d2fafe2a6cc27a.s` | 13,480,106 | `bf31b40e1627e154` |
+| `aarch64-apple-darwin`: `neural_amp_modeler_rs-3454001845511304.s` | 11,121,353 | `f70efec3695a6f6a` |
+
+### 10.2 S05 — Grouped/depthwise conv tap-major repack (measured 2026-10-28)
+
+A/B measurement on the same host and session as §10.1, with both binaries
+pinned to one core (`taskset -c 2`) and the governor at `performance`. The
+"before" column is HEAD `2685bb9`; the "after" column is the S05 working tree.
+The benchmark is the end-to-end `A2Dyn_FiLM_Grouped_A2Max_64samp_48kHz` case,
+which exercises the real A2-Max `groups_input=3` layer (channels=3,
+bottleneck=6, total grouped blocks=3) plus the rest of the model.
+
+- **Median**: Criterion `median.point_estimate`.
+- **IQR**: Q3-Q1 of the per-iteration samples.
+- Positive percentages are regressions; negative percentages are improvements.
+- One earlier baseline sample on the same host was discarded because unrelated
+  host load shifted it to 412 µs; the table uses adjacent stable runs.
+
+| Bench (group/id) | Before median (µs) | Before IQR | After median (µs) | After IQR | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `A2Dyn_FiLM_Grouped_A2Max_64samp_48kHz` | 337.23 | 2.35 | 338.97 | 2.63 | +0.52% |
+
+The delta is inside the IQR: the general grouped path keeps the historical
+interleaved-4 kernel and field layout, so the only production change exercised
+here is the depthwise SoA tail. x86 assembly for
+`process_single_frame_depthwise_avx2` contains **zero** `vgatherdps`/gather
+instructions after the repack. This is x86-64 evidence only; no aarch64 gain is
+claimed until `G-HW` (Apple M-series and Graviton receipts) closes.
+
+### 10.3 S06 — Nano residual 4x4 and gated CH=4/12 (measured 2026-10-28)
+
+A/B measurement on the same host and session, with the same Criterion settings
+(`--warm-up-time 1 --measurement-time 3 --sample-size 20`) and no concurrent
+builds. The "before" column is HEAD `7ed947f` measured from a clean
+`git worktree` that received only the new `criteria` cases in
+`benches/math_bench.rs`; the "after" column is the S06 working tree. Both
+binaries use the `bench` profile.
+
+- **Median**: Criterion `median.point_estimate`.
+- **CI**: the displayed Criterion confidence interval (low, mid, high).
+- Positive percentages are regressions; negative percentages are improvements.
+- This is x86-64 evidence only. No aarch64 gain is claimed here; T06.3's
+  `prfm` removal still needs `G-HW` on Apple M-series / Graviton.
+
+| Bench (group/id) | Before median | After median | Δ |
+| --- | ---: | ---: | ---: |
+| `FusedResidual_4x4_1frames` | 8.0815 ns | 7.7766 ns | −3.8% |
+| `FusedResidual_4x4_64frames` | 374.40 ns | 141.26 ns | −62.3% |
+| `GatedActivation_CH4_64frames` | 4.6443 µs | 912.11 ns | −80.4% |
+| `GatedActivation_CH12_64frames` | 6.8062 µs | 2.2989 µs | −66.2% |
+
+`FusedResidual_4x4` is the Nano CH=4 production shape; the 64-frame case moves
+from the scalar tail to the four-accumulator SSE block. `GatedActivation_CH4`
+was dominated by a masked 8-wide kernel that used only four lanes per frame;
+pairing two frames in one YMM plus zero-filled generic remainders removes the
+`vmaskmovps` path entirely (asm: **0** `vmaskmovps` in both gated kernels).
+The CH=12 case keeps its 8-wide body and pairs only the 4-channel remainder.
+
+### 10.4 S08 — Low-latency residual tails (measured 2026-10-28)
+
+A/B measurement with both binaries built from the same tree state and run
+alternately (`HEAD` ↔ `S08`) on one isolated core (`taskset -c 8`), governor
+`performance`, two rounds per id with reversed order, Criterion
+`--warm-up-time 1 --measurement-time 4 --sample-size 50`. The "before" binary
+is HEAD with only the new `FusedResidual_*` criteria cases from
+`benches/math_bench.rs`; the "after" binary adds the S08 kernels. Reported
+values are the mean of the two round medians (`median.point_estimate`).
+
+- Positive percentages are regressions; negative percentages are improvements.
+- The fused residual benches live in `benches/math_bench.rs`; the paths named
+  in the sprint note (`benches/gemv_bench.rs`, `benches/gemv/kernels.rs`,
+  `benches/conv1d_hotpath_bench.rs`) have no `num_frames` dimension and were
+  not applicable (same path correction already recorded as C4 for S06).
+- The 4x4 pair tile is extracted into an inlined raw-pointer helper (`fused_gemm_residual_pair_const`), and the single-frame tail macro (`gemm_batch_frame_loop_pair_avx2!`) is emitted once using raw pointer arithmetic after the entry bounds assertions, eliminating redundant per-frame slice bounds checks (`slice_index_fail`) when `f` merges after the conditional pair block. The 12x12 pair tile (`fused_gemm_residual_pair_12x12`) uses a 6-register raw-pointer signature and is dispatched inside the main loop when `f + 2 == num_frames`, allowing LLVM to compile the call as a tail jump (`jmp`) and preserving leaf red-zone stack allocation (`subq $200, %rsp`).
+- Both kernels are bit-identical to the previous code per frame (4x4: checked
+  against the scalar reference for 1,2,3,4,5,7,63,65 with/without bias; 12x12:
+  every frame of a 1..7 batch checked bitwise against a 1-frame call).
+
+| Bench (group/id) | Before median (ns) | After median (ns) | Δ |
+| --- | ---: | ---: | ---: |
+| `FusedResidual_4x4_1frames` | 3.393 | 2.792 | −17.71% |
+| `FusedResidual_4x4_2frames` | 5.281 | 3.834 | −27.40% |
+| `FusedResidual_4x4_3frames` | 6.749 | 5.352 | −20.70% |
+| `FusedResidual_4x4_5frames` | 7.569 | 7.009 | −7.40% |
+| `FusedResidual_4x4_7frames` | 10.534 | 10.399 | −1.28% |
+| `FusedResidual_4x4_63frames` | 66.229 | 66.634 | +0.61% |
+| `FusedResidual_4x4_64frames` | 65.357 | 64.114 | −1.90% |
+| `FusedResidual_4x4_65frames` | 67.023 | 69.290 | +3.38% |
+| `FusedResidual_4x4_128frames` | 131.457 | 131.945 | +0.37% |
+| `FusedResidual_4x4_256frames` | 263.816 | 261.216 | −0.99% |
+| `FusedResidual_12x12_1frames` | 13.347 | 9.960 | −25.38% |
+| `FusedResidual_12x12_2frames` | 21.104 | 13.527 | −35.90% |
+| `FusedResidual_12x12_3frames` | 22.062 | 19.896 | −9.82% |
+| `FusedResidual_12x12_5frames` | 32.171 | 29.337 | −8.81% |
+| `FusedResidual_12x12_7frames` | 45.428 | 45.789 | +0.79% |
+| `FusedResidual_12x12_63frames` | 286.458 | 286.318 | −0.05% |
+| `FusedResidual_12x12_64frames` | 263.090 | 263.890 | +0.30% |
+| `FusedResidual_12x12_65frames` | 301.722 | 296.479 | −1.74% |
+| `FusedResidual_12x12_128frames` | 560.432 | 557.187 | −0.58% |
+| `FusedResidual_12x12_256frames` | 1121.662 | 1132.317 | +0.95% |
+
+The 64/128/256 regression guards for 4x4 and 12x12 stay inside ±2.5% across
+repeated builds (64-frame ids were re-measured between −1.9% and +0.6% across
+three interleaved A/B rounds on an isolated core). Both the 1-frame and 5-frame
+cases and the 2–3-frame tail improve across `4x4` and `12x12`, with zero regressions
+on any block size.
+
+The pair tail is gated by `IN <= 8` inside the const kernel. For `<16,16>`
+(Standard CH=16) the macro const-folds to the original batch + single-frame
+tail; its release asm is identical to HEAD in the same probe (538 lines, 140
+stack vector references), so the 16x16 bench ids are regression guards only and
+their timings are not used as evidence. For `<8,8>` (Feather) the pair path has
+no new stack vector references (10 vs 10) and measures: 2 frames 8.169→6.495 ns
+(−20.5%), 3 frames 10.117→8.527 ns (−15.7%), 7 frames 19.177→17.227 ns (−10.2%),
+64/128/256 +1.2%/+1.1%/−0.3%. Bench ids `FusedResidual_8x8_*` and
+`FusedResidual_16x16_*` were added with the same block-size list.
+
+No vector spills remain in any active pair path: the 4x4 pair body and the
+outlined 12x12 helper have zero `vmov*ps …(%rsp)` accesses, and the 8x8 pair
+adds none relative to HEAD. This is x86-64 evidence only; no aarch64 gain is
+claimed until `G-HW` closes.
+
+## 12. Periodic Assembly Verification (G-A, Manual)
+
+This procedure verifies the code generated for the hot kernels. It does not rewrite
+them. Inspection is performed by a human reviewer: no script and no automated `grep`
+gate decides pass/fail. Run it after any
+change to a kernel under `src/math/`, `src/models/` or `src/arch/`, and before
+declaring a kernel sprint closed.
+
+### 12.1 Procedure
+
+Run from the repository root, one build at a time:
+
+1. x86-64 (inherits `-Ctarget-cpu=x86-64-v3` from `.cargo/config.toml`):
+   `cargo rustc --locked --release --lib -- --emit asm`
+   The output is `target/release/deps/neural_amp_modeler_rs-<hash>.s`; the hash changes with the build, so take the newest file.
+2. aarch64 Apple (cross-check only, no link):
+   `cargo rustc --locked --release --lib --target aarch64-apple-darwin -- --emit asm`
+   The output is `target/aarch64-apple-darwin/release/deps/neural_amp_modeler_rs-<hash>.s`.
+3. Copy both files to `target/asm-ref-<YYYY-MM-DD>/` to keep the record. Do not commit them.
+4. Locate each kernel label with `rg -n '<name>:$' <file>`. Mangled v0 names end with the function identifier, for example `42gated_activation_and_accumulate_block_avx2:`. Read the body up to the next `.cfi_endproc`.
+   Kernels: `process_single_frame_depthwise_avx2` (`src/models/a2/grouped_conv1d/simd`), `gated_activation_and_accumulate_block_avx2` and `gated_activation_and_overwrite_block_avx2` (`src/math/wavenet/accumulate/avx2`), `fused_gemm_residual_batch_f32_avx2`, `fused_gemm_residual_batch_f32_12x12` and `fused_gemm_residual_pair_12x12` (`src/math/gemm/gemm_batch/fused_residual_batch/avx2.rs`).
+5. Check each body against this list:
+   - `callq` (x86) or `bl` (aarch64) into `cmp`, `blend` or `set1` helpers: must be absent (inlined).
+   - Calls into `core::panicking` or `slice_index_fail`: allowed only on cold assertion or bounds-failure paths.
+   - `memcpy`, `memset` or `memmove` calls: none inside a per-frame loop. A block-level call must be listed as a finding.
+   - `vgatherd*` and `vmaskmov*` (x86): zero.
+   - `prfm` (aarch64): zero.
+   - `vmov*ps … (%rsp)` (x86): stack vector references. Count them and classify each as a zero-filled tail buffer or as a loop-carried spill. A spill inside an accumulator loop is a finding.
+   - `vzeroupper` must precede any call out of AVX code.
+   - `fdiv` (aarch64) and `vdivps` (x86): informational only; activation functions use them.
+6. Record the per-body counts, the classification of every finding, and the file hashes.
+
+### 12.2 Execution Record
+
+- Source: HEAD `0aaeea0`, clean working tree.
+- x86-64: `neural_amp_modeler_rs-27d2fafe2a6cc27a.s` (13,538,888 bytes).
+- aarch64 Apple: `neural_amp_modeler_rs-9737d608b78a4fdf.s` (11,115,020 bytes).
+- Files were copied to `target/asm-ref-2026-10-28/` (not committed). The older `aarch64-apple-darwin` reference in that directory predates the NEON and macOS hardening updates and is not the comparison baseline.
+
+| Body (x86-64)                                  | Lines | Calls                                          | Gather / maskmov | `vmov*ps (%rsp)` refs |
+| ---------------------------------------------- | ----: | ---------------------------------------------- | ---------------- | --------------------: |
+| `process_single_frame_depthwise_avx2`          |   586 | `memset` ×1 (block-level, zero fill); `panic_fmt` ×3 (asserts) | 0 / 0 | 4 |
+| `gated_activation_and_overwrite_block_avx2`    |   712 | `panic_const_div_by_zero` ×1 (cold)            | 0 / 0            |                     4 |
+| `gated_activation_and_accumulate_block_avx2`   |   730 | `panic_const_div_by_zero` ×1 (cold)            | 0 / 0            |                    10 |
+| `fused_gemm_residual_batch_f32_avx2`           |   657 | `memcpy` ×1 (block-level, no-residual seed); `slice_index_fail` ×3 (cold) | 0 / 0 | 0 |
+| `fused_gemm_residual_batch_f32_12x12`          |   317 | `fused_gemm_residual_pair_12x12` ×1            | 0 / 0            |                    26 |
+| `fused_gemm_residual_pair_12x12` (outlined)    |   124 | none                                           | 0 / 0            |                     0 |
+
+| Body (aarch64 Apple)                           | Lines | Calls                                          | `prfm` | `fdiv` |
+| ---------------------------------------------- | ----: | ---------------------------------------------- | -----: | -----: |
+| `process_single_frame_depthwise_avx2`          |   324 | cold panic/bounds calls ×3                     |      0 |      0 |
+| `gated_activation_and_overwrite_block_avx2`    |  1258 | `panic_const_div_by_zero` ×1 (cold)            |      0 |     26 |
+| `gated_activation_and_accumulate_block_avx2`   |  1295 | `panic_const_div_by_zero` ×1 (cold)            |      0 |     26 |
+| `fused_gemm_residual_batch_f32_avx2`           |   593 | `slice_index_fail` ×3 (cold)                   |      0 |      0 |
+| `fused_gemm_residual_batch_f32_12x12`          |   378 | none                                           |      0 |      0 |
+
+Findings from this run:
+
+- **F-1 (x86, block-level libc call):** `fused_gemm_residual_batch_f32_avx2` calls `memcpy` on the no-residual seed path. The call sits outside the per-frame loop, is preceded by `vzeroupper`, and runs once per block. Replacing it with a fixed-size vector write requires a dedicated benchmark and bit-exactness proof.
+- **F-2 (x86, block-level libc call):** `process_single_frame_depthwise_avx2` calls `memset` on a zero-fill branch.
+- **F-3 (x86, unclassified stack refs):** `fused_gemm_residual_batch_f32_12x12` has 26 `vmov*ps (%rsp)` references in its own body; the outlined pair helper has none.
+- **F-4 (x86, unclassified stack refs):** the gated kernels show 4 and 10 stack vector references (zero-filled tail buffers).
+- **Confirmed:** zero `vgatherd*` and zero `vmaskmov*` in every x86 body; zero `prfm` in every aarch64 body; no call into `cmp`, `blend` or `set1` helpers in any kernel body. The file-wide `bcmp`/`memcmp` calls (x86: 130 total, aarch64: 166 total) belong to other functions, not to these kernels.
+- No aarch64 performance claim follows from this inspection until hardware benchmark receipts on Apple Silicon and Graviton are recorded.

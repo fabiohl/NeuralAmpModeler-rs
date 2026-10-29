@@ -238,7 +238,9 @@ pub enum NamErrorCode {
     // E5xxx — System / Hardware
     /// Memory allocation failed (OOM) — layout overflow or allocator exhaustion.
     OutOfMemory,
-    /// Host CPU lacks required x86-64-v3 feature set (AVX2/FMA).
+    /// Reserved, discontinued: no runtime check emits this code. x86-64-v3 is a
+    /// compile-time guarantee (`src/lib.rs`); a pre-v3 host fails with SIGILL.
+    /// Kept so the `Exxxx` catalog stays in sync; the number is not reused.
     UnsupportedCpuArchitecture,
 }
 

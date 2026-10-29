@@ -7,10 +7,10 @@
 //! for tracking sample-rate conversion in a single direction.
 
 use crate::common::diagnostics::NamErrorCode;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::Avx512Math;
 use crate::math::common::{Avx2Math, SimdMath};
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::{InstructionSet, effective_instruction_set};
 
 use super::super::sinc_kernel::{NUM_PHASES, PolyphaseBank};
@@ -294,7 +294,7 @@ impl ResamplerCore {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) -> ResamplerProgress {
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         {
             #[expect(deprecated)]
             match effective_instruction_set() {
@@ -304,7 +304,7 @@ impl ResamplerCore {
                 InstructionSet::Avx2 => self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r),
             }
         }
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         {
             self.process_internal::<Avx2Math>(in_l, in_r, out_l, out_r)
         }
@@ -318,7 +318,7 @@ impl ResamplerCore {
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) -> ResamplerProgress {
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         {
             #[expect(deprecated)]
             match effective_instruction_set() {
@@ -328,7 +328,7 @@ impl ResamplerCore {
                 InstructionSet::Avx2 => self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r),
             }
         }
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         {
             self.process_internal_mono::<Avx2Math>(in_l, out_l, out_r)
         }

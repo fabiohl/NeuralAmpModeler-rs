@@ -34,7 +34,7 @@ MATRIX=(
 phase_check() {
   for args in "${MATRIX[@]}"; do
     # shellcheck disable=SC2086
-    cargo check --locked --all-targets $args
+    cargo check --locked --workspace --all-targets $args
   done
 }
 run_step check phase_check
@@ -42,10 +42,18 @@ run_step check phase_check
 phase_clippy() {
   for args in "${MATRIX[@]}"; do
     # shellcheck disable=SC2086
-    cargo clippy --locked --all-targets $args -- -D warnings
+    cargo clippy --locked --workspace --all-targets $args -- -D warnings
   done
 }
 run_step clippy phase_clippy
+
+phase_clippy_aarch64() {
+  rustup target list --installed | grep -qx aarch64-unknown-linux-gnu || {
+    echo "ERROR: target aarch64-unknown-linux-gnu missing (run: rustup target add aarch64-unknown-linux-gnu)" >&2; exit 1;
+  }
+  cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
+}
+run_step clippy-aarch64 phase_clippy_aarch64
 
 phase_doc() { RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features; }
 run_step doc phase_doc

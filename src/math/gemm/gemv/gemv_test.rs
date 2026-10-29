@@ -165,7 +165,7 @@ fn test_gemv_no_bias_f32_avx2_batch_vs_fallback() {
 // ── AVX-512 with_bias ───────────────────────────────────────────────────────
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_gemv_with_bias_f32_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -205,7 +205,7 @@ fn test_gemv_with_bias_f32_avx512_vs_fallback() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_gemv_with_bias_f32_avx512_batch_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -248,7 +248,7 @@ fn test_gemv_with_bias_f32_avx512_batch_vs_fallback() {
 // ── AVX-512 no_bias ─────────────────────────────────────────────────────────
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_gemv_no_bias_f32_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -287,7 +287,7 @@ fn test_gemv_no_bias_f32_avx512_vs_fallback() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_gemv_no_bias_f32_avx512_batch_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -654,6 +654,160 @@ fn test_f32_specialized_large_values() {
                     out_fb[c],
                     diff / max_val,
                 );
+            }
+        }
+    }
+}
+
+// ── Bit-exactness against the pre-S04 arithmetic order ──────────────────────
+
+fn legacy_dot_lane(
+    in_frames: &[f32],
+    weights: &[f32],
+    bias: Option<f32>,
+    in_len: usize,
+    out_len: usize,
+    n: usize,
+    oc: usize,
+    lane: usize,
+    full_block: bool,
+) -> f32 {
+    let mut acc = [0.0f32; 8];
+    acc[0] = bias.unwrap_or(0.0);
+    let mut ic = 0;
+    while ic + 8 <= in_len {
+        for (k, a) in acc.iter_mut().enumerate() {
+            *a = f32::mul_add(
+                in_frames[n * in_len + ic + k],
+                weights[(ic + k) * out_len + oc + lane],
+                *a,
+            );
+        }
+        ic += 8;
+    }
+    let mut a01 = acc[0] + acc[1];
+    let a23 = acc[2] + acc[3];
+    let mut a45 = acc[4] + acc[5];
+    let a67 = acc[6] + acc[7];
+    a01 += a23;
+    a45 += a67;
+    let mut sum = a01 + a45;
+    if full_block {
+        let mut tail = 0.0f32;
+        while ic < in_len {
+            tail = f32::mul_add(
+                in_frames[n * in_len + ic],
+                weights[ic * out_len + oc + lane],
+                tail,
+            );
+            ic += 1;
+        }
+        sum += tail;
+    } else {
+        while ic < in_len {
+            sum = f32::mul_add(
+                in_frames[n * in_len + ic],
+                weights[ic * out_len + oc + lane],
+                sum,
+            );
+            ic += 1;
+        }
+    }
+    sum
+}
+
+fn legacy_out1_fallback(
+    in_frames: &[f32],
+    weights: &[f32],
+    bias: f32,
+    in_len: usize,
+    n: usize,
+) -> f32 {
+    let mut lanes = [0.0f32; 8];
+    let mut ic = 0;
+    while ic + 8 <= in_len {
+        for (k, a) in lanes.iter_mut().enumerate() {
+            *a = f32::mul_add(in_frames[n * in_len + ic + k], weights[ic + k], *a);
+        }
+        ic += 8;
+    }
+    for (k, a) in lanes.iter_mut().enumerate().take(in_len - ic) {
+        *a = f32::mul_add(in_frames[n * in_len + ic + k], weights[ic + k], *a);
+    }
+    let sum = lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
+    sum + bias
+}
+
+fn assert_bit_exact_gemv(out_len: usize, in_len: usize, num_frames: usize, with_bias: bool) {
+    let (in_frames, weights, bias) = make_gemv_data(in_len * num_frames, out_len);
+    let mut out = vec![0.0f32; out_len * num_frames];
+    // SAFETY: all buffers satisfy the documented GEMV contracts.
+    unsafe {
+        if with_bias {
+            gemv_with_bias_f32_avx2(&in_frames, &weights, &bias, &mut out, num_frames);
+        } else {
+            gemv_no_bias_f32_avx2(&in_frames, &weights, &mut out, num_frames);
+        }
+    }
+    for n in 0..num_frames {
+        for oc in 0..out_len {
+            let expected = if in_len == 1 {
+                if with_bias {
+                    f32::mul_add(in_frames[n], weights[oc], bias[oc])
+                } else {
+                    in_frames[n] * weights[oc]
+                }
+            } else if out_len == 1 {
+                if in_len > 4 && n < (num_frames / 8) * 8 {
+                    legacy_dot_lane(
+                        &in_frames,
+                        &weights,
+                        with_bias.then(|| bias[0]),
+                        in_len,
+                        out_len,
+                        n,
+                        0,
+                        0,
+                        false,
+                    )
+                } else {
+                    legacy_out1_fallback(
+                        &in_frames,
+                        &weights,
+                        if with_bias { bias[0] } else { 0.0 },
+                        in_len,
+                        n,
+                    )
+                }
+            } else {
+                legacy_dot_lane(
+                    &in_frames,
+                    &weights,
+                    with_bias.then(|| bias[oc]),
+                    in_len,
+                    out_len,
+                    n,
+                    oc,
+                    0,
+                    (oc & !7) + 8 <= out_len,
+                )
+            };
+            assert_eq!(
+                out[n * out_len + oc].to_bits(),
+                expected.to_bits(),
+                "out_len={out_len} in_len={in_len} frames={num_frames} bias={with_bias} n={n} oc={oc}: bit mismatch"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_gemv_tail_bit_exact_vs_previous_arithmetic() {
+    for &out_len in &[1usize, 4, 12, 13] {
+        for &in_len in &[1usize, 5, 12, 13] {
+            for &num_frames in &[1usize, 4, 8, 9] {
+                assert_bit_exact_gemv(out_len, in_len, num_frames, true);
+                assert_bit_exact_gemv(out_len, in_len, num_frames, false);
             }
         }
     }

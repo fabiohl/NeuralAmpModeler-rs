@@ -7,6 +7,10 @@ use std::sync::atomic::Ordering;
 
 /// Static SIMD configuration — descriptive data only, no v-table.
 ///
+/// On aarch64 the `Avx2` instruction set is the NEON layer behind `NeonMath` (an alias of
+/// `Avx2Math`) and is reported as `NEON (AVX2-compatible layer)`; there is no separate
+/// NEON variant in `InstructionSet`.
+///
 /// All dispatch is handled via the `dispatch_simd!` macro, which matches
 /// on `instruction_set` and monomorphizes calls via the `SimdMath` trait
 /// (e.g. `<Avx2Math>::apply_gain(...)`). Function pointers have been removed;
@@ -24,7 +28,7 @@ pub struct SimdMathConfig {
 impl SimdMathConfig {
     /// Returns the active global SIMD configuration, respecting any
     /// `TEST_ISA_OVERRIDE` that may be set by integration tests.
-    #[cfg_attr(feature = "avx512", expect(deprecated))]
+    #[cfg_attr(nam_avx512, expect(deprecated))]
     pub fn current() -> Self {
         let raw = TEST_ISA_OVERRIDE.load(Ordering::Relaxed);
         if let Some(isa) = decode_isa_override(raw) {
@@ -35,16 +39,16 @@ impl SimdMathConfig {
                         "NEON (AVX2-compatible layer, overridden)"
                     }
                     InstructionSet::Avx2 => "AVX2 (overridden)",
-                    #[cfg(feature = "avx512")]
+                    #[cfg(nam_avx512)]
                     InstructionSet::Avx512 => "AVX-512 (overridden)",
-                    #[cfg(feature = "avx512")]
+                    #[cfg(nam_avx512)]
                     InstructionSet::Avx512VnniBf16 => "AVX-512 VNNI+BF16 (overridden)",
-                    #[cfg(not(feature = "avx512"))]
+                    #[cfg(not(nam_avx512))]
                     _ => "AVX2 (overridden)",
                 },
-                #[cfg(feature = "avx512")]
+                #[cfg(nam_avx512)]
                 is_avx512: matches!(isa, InstructionSet::Avx512 | InstructionSet::Avx512VnniBf16),
-                #[cfg(not(feature = "avx512"))]
+                #[cfg(not(nam_avx512))]
                 is_avx512: false,
             }
         } else {

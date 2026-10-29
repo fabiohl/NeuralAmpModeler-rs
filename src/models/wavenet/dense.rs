@@ -70,8 +70,9 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         // SAFETY: the const-generic GEMM kernels are only reached for their matching `IN`/`OUT`
         // shapes with buffers validated by this wrapper's caller contract, and
         // `M::fused_gemm_residual_batch_f32` requires lane counts satisfied by `input`/`output`
-        // sized `num_frames` frames of `IN`/`OUT` (caller-guaranteed); `M` is dispatched by
-        // runtime CPUID feature checks matching its `#[target_feature]` backend.
+        // sized `num_frames` frames of `IN`/`OUT` (caller-guaranteed); `M` is selected by
+        // `effective_instruction_set()` and matches its `#[target_feature]` backend (x86-64-v3
+        // is a compile-time guarantee, so no runtime AVX2 rejection exists).
         unsafe {
             // Slots for which we have specialised const-generic kernels
             // (endereçamento imediato — no leaq chains). Built from the shared

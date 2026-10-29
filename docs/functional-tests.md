@@ -207,7 +207,7 @@ The long audit suite provides exhaustive pre-release validation (~8–12 minutes
 - **Receipt Validation:**
 
   ```bash
-  cargo run --locked --features testing --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl
+  cargo run --locked -p nam-qa --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl
   ```
 
 ---
@@ -224,7 +224,7 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 | **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)                | Machine-readable structured audit receipt (per-phase JSON entries).                                                                          |
 | **`target/logs/long-preflight-render.log`**      | `tests-long.sh` (`preflight-render`)   | C++ reference render build/validation diagnostics.                                                                                           |
 | **`target/logs/long-preflight-catalog.log`**     | `tests-long.sh` (`preflight-catalog`)  | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.                                                         |
-| **`target/logs/long-preflight-package.log`**     | `tests-long.sh` (`preflight-package`)  | Diagnostics from `cargo package --list` crate packaging validations.                                                                         |
+| **`target/logs/long-preflight-package.log`**     | `tests-long.sh` (`preflight-package`)  | Output of `cargo package --locked` (packaging and verify build).                                                                         |
 | **`target/logs/long-preflight-freshness.log`**   | `tests-long.sh` (`preflight-freshness`)| `nam_freshness` hard-fail freshness verification output.                                                                                     |
 | **`target/logs/long-preflight-simd-probe.log`**  | `tests-long.sh` (`preflight-simd-probe`)| CPU feature bits, OS AVX-512 state, Cargo feature status, and dispatched backend.                                                           |
 | **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`       | CMake configuration output when compiling C++ `render` CLI.                                                                                  |
@@ -281,14 +281,51 @@ Signals that routinely appear in runner logs but are **expected**; they must not
 |:-------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:---------------------------------------------------------------------------------------------------------------- |
 | `isa_parity_cross_isa: SKIP_CAPABILITY`; `remote-simd-receipt.jsonl` skips                   | `target/logs/long-catch-all.log`, `target/logs/remote-simd-receipt.jsonl`, `target/logs/long-audit-receipt.jsonl` | The local CPU lacks AVX-512; cross-ISA parity is a **separate** remote/emulated gate, not a local-coverage gap.                                                                                                   | Confirm `utils/remote-simd-gate.sh` ran separately; do not read the local skip as a failure.                     |
 | `avx512_opt_in_not_run` (receipt gap)                                                        | `target/logs/long-preflight-simd-probe.log`, `target/logs/long-audit-receipt.jsonl`                                    | AVX-512 is an opt-in Cargo feature (`--features avx512`); the default runner never compiles it.                                                                                                                   | Expected on a default run; only a scheduled `--features avx512` run covers it.                                   |
-| `[RECEIPT] status=CHARACTERIZED label=…-saturate-N … violations=137/16384`                   | `target/logs/long-rt-jitter.log`                                                                                       | Saturation stress is a **CHARACTERIZATION** ("environmental characterization, NOT a deadline gate"); `status=CHARACTERIZED` means the harness completed, not that jitter passed (S5-T2 relabeled the old `PASS`). | Read the `violations=` counter; never treat the receipt token as a deadline assertion.                           |
+| `[RECEIPT] status=CHARACTERIZED label=…-saturate-N … violations=… cs_invol=…`                   | `target/logs/long-rt-jitter.log`                                                                                       | Saturation stress is a **CHARACTERIZATION** ("environmental characterization, NOT a deadline gate"); `status=CHARACTERIZED` means the harness completed, not that jitter passed. Under unpinned saturation (`pinned=false`), thread preemption by the Linux scheduler causes high `cs_invol` and tail latency spikes (~2.8–3.2 ms); under pinned saturation (`pinned=true`, `NAM_BENCH_CORE=N`), `exact_max` stays ~195 µs with 0 violations. | Read `violations=` and `cs_invol`; never treat the receipt token as a deadline assertion under unpinned execution. |
 | `… has been running for over 60 seconds`                                                     | `target/logs/quick-tests.log`, `target/logs/long-catch-all.log`, `target/logs/long-soak.log`                           | Long-running tests (soak, block-invariance, deterministic-energy); the default test runner prints this after 60 s.                                                                                                | Informational only; not a hang — wait for completion.                                                            |
 | `Found N outliers among 100 measurements (x%)`                                               | `target/logs/regression-check.log`                                                                                     | Criterion reports high-severity sampling outliers; the regression verdict uses the median delta and p-value, not the outlier banner.                                                                              | Read Δ median and p; ignore the outlier count.                                                                   |
 | `[BOOTSTRAP] ⚠ This operation must be performed by a human operator.`                        | `nam_perf_gate run --bootstrap-baseline` output (`target/logs/regression-check.log`)               | Baseline bootstrap is operator-only by governance (§5.2); AI runs are forbidden from it.                                                                                                                          | Do not run `--bootstrap-baseline`; report and wait for the operator.                                             |
 | `RT_WaveNet_Lite_CH12` `+8.56%` (`p=0.04`) — `Change within noise threshold.`                | `target/logs/regression-check.log`                                                                                     | Sub-5 % variance band under ambient/thermal noise (F-10/F-12); the effective `noise_threshold` classifies it as non-significant.                                                                                  | Re-measure on an isolated pinned core before treating as a regression; never bootstrap a baseline to silence it. |
-| `[JIT_PINS] pinned=false` / `pinned=false` in rt-jitter receipts; P50 ≈ 98 µs vs rt-deadline ≈ 45 µs | `target/logs/long-rt-jitter.log`                                                                                 | Jitter runs in the generic multi-core environment unless the operator sets `NAM_BENCH_CORE` to an isolated CPU; the delta is environmental, never a regression.                                                     | Re-run `rt-jitter` with `NAM_BENCH_CORE` set to the isolated CPU for an `rt-deadline`-comparable P50; read `pinned=` before comparing.   |
+| `[JIT_PINS] pinned=false` / `pinned=false` in rt-jitter receipts; P50 ≈ 98 µs vs rt-deadline ≈ 45 µs | `target/logs/long-rt-jitter.log`                                                                                 | Jitter runs in the generic multi-core environment unless `NAM_BENCH_CORE` is exported to an isolated CPU; under unpinned saturation, Linux CFS preemption generates high involuntary context switches (`cs_invol > 0`), which is purely environmental and never an engine regression. | Ensure `NAM_BENCH_CORE` is set or run via `tests-long.sh` for pinned isolation where the DSP thread runs on the bench core and workers on the remaining cores.   |
 | `[AVISO] --check pós---bootstrap valida só repetibilidade`                                   | `nam_perf_gate run --check` output                                                                                             | `--check` immediately after `--bootstrap-baseline` in the same session proves self-consistency only (F-12); the REGRESSION GATE verdict needs a baseline from another session/commit (`noise_threshold=0.05`).    | Do not read the paired green as absence of regression.                                                           |
 | `known_gap:condition_lstm_rejected_by_both`                                                  | `target/logs/long-catch-all.log`                                                                                       | The WaveNet model whose `condition_dsp` is an LSTM is refused by **both** oracles by design (Rust fail-closed policy; C++ `condition_size` mismatch) — see [`cpp_parity_map.md`](cpp_parity_map.md) §7.5.         | A declared gap, not a pass and not a defect; keep it declared in receipts.                                       |
+
+---
+
+### 4.6 Remote SIMD Gate & ISA Parity Protocol (`utils/remote-simd-gate.sh`)
+
+The AVX-512 backend (`src/dsp/simd/avx512/`) provides opt-in mathematical acceleration (`--features avx512`). Because production execution defaults to single-precision `f32` on the AVX2 (`x86-64-v3`) architecture, AVX-512 is maintained as an opt-in research path. Cross-ISA parity ensures mathematical equivalence between AVX-512 kernels and the AVX2 golden reference.
+
+#### 1. Execution Modes and Topology Invariants
+
+- **Native AVX-512 Hardware:**
+  On machines equipped with native AVX-512 hardware (AMD Zen 4/5, Intel Xeon / Sapphire Rapids), invoking `utils/remote-simd-gate.sh` executes the full suite:
+  ```bash
+  utils/remote-simd-gate.sh [--out target/logs/remote-simd-receipt.jsonl]
+  ```
+  1. `preflight`: Verifies CPU capability via `simd_probe` (`avx512f` and `avx512vl`).
+  2. `parity`: Compiles with `--features avx512` and executes `isa_parity` across all neural topologies with forced ISA overrides, asserting mathematical output parity against AVX2.
+  3. `bench`: Executes Criterion comparison benchmarks (`isa_compare`) and evaluates whether SKUs achieve the contractual $\ge 12\%$ ROI threshold ($p < 0.05$) via `nam_remote_simd_receipt`.
+
+- **Intel SDE Emulation Mode:**
+  On development machines lacking AVX-512 hardware, the full cross-ISA mathematical parity matrix can be validated under the Intel Software Development Emulator:
+  ```bash
+  utils/remote-simd-gate.sh --sde
+  ```
+  This automatically configures the runner (`sde64 -spr --`), executes the complete mathematical parity verification, and skips Criterion benchmarks to eliminate emulation timing artifacts.
+
+- **Probe & Telemetry Mode (`--check-only`):**
+  Used during automated preflight or developer sanity checks:
+  ```bash
+  utils/remote-simd-gate.sh --check-only
+  ```
+  If AVX-512 is absent and SDE is not configured, the script deterministically emits `PHASE: preflight GAP avx512-not-detected` and exits with code 0 (`RESULT: PASS_WITH_GAPS`), ensuring zero false negatives on standard `x86-64-v3` workstations.
+
+#### 2. Fixture Catalog Classification & Hygiene
+
+To maintain strict hygiene across public checkouts, the fixture catalog (`src/testing/catalog.rs`) partitions models and goldens:
+- **`RequiredLocal`:** Standard models committed to repository git history (`tests/fixtures/models/*.nam`). Their absence hard-fails the preflight gate.
+- **`OptionalExternal`:** Proprietary community models (`EVH-5150-Lite.nam`, `APP-EVH-Stealth100-Dialled-xSTD.nam`, `Boss BD-2 H2O Mod T-12_00 G-12_00.nam`, `SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam`). When absent in clean developer clones, `catalog_preflight` gracefully classifies them as `MISSING-OPTIONAL` / `SKIP-CAPABILITY`, allowing `catalog_preflight` to pass cleanly with exit code 0 (`PASS`).
 
 ---
 

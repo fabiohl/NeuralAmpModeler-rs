@@ -180,7 +180,7 @@ fn test_tanh_sigmoid_dual_poly_avx2() {
 // AVX-512 sweeps (T-HF1.3) — gated on hardware availability
 // ══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_tanh_poly_avx512_sweep() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
@@ -246,7 +246,7 @@ fn test_tanh_poly_avx512_sweep() {
     eprintln!("[T-HF1.3] tanh_poly AVX-512 sweep max error: {max_error:.4e} (limit 1e-6)");
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_tanh_sigmoid_dual_poly_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
@@ -519,7 +519,7 @@ fn test_tanh_poly_nr2_vs_div_avx2() {
 // TC3 — NR precision evaluation sweeps (AVX-512)
 // ══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_tanh_poly_nr1_vs_f32_tanh_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
@@ -582,7 +582,7 @@ fn test_tanh_poly_nr1_vs_f32_tanh_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_tanh_poly_nr2_vs_f32_tanh_avx512() {
     if !is_x86_feature_detected!("avx512f") || !is_x86_feature_detected!("avx512vl") {
@@ -645,7 +645,7 @@ fn test_tanh_poly_nr2_vs_f32_tanh_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: consistência matemática (oráculo f64)"]
 fn test_tanh_poly_nr1_vs_div_avx512() {
@@ -703,7 +703,7 @@ fn test_tanh_poly_nr1_vs_div_avx512() {
     eprintln!("[TC3] tanh_poly NR1 vs div_ps AVX-512 max delta: {max_delta:.4e}");
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: consistência matemática (oráculo f64)"]
 fn test_tanh_poly_nr2_vs_div_avx512() {

@@ -41,3 +41,9 @@ rustflags = [
   # Improves load speed by discarding listed libraries that are not actually used.
   "-Clink-arg=-Wl,--as-needed",
 ]
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+  # Remove unreachable code and metadata from the final Mach-O image.
+  "-Clink-arg=-Wl,-dead_strip",
+]

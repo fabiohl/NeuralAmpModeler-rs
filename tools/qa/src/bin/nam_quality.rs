@@ -237,6 +237,14 @@ fn cmd_dashboard(args: &[String]) {
     {
         args.insert(i + 1, "docs/quality-contract.json".to_string());
     }
+    if let Some(i) = args.iter().position(|a| a == "--save")
+        && let Some(next) = args.get(i + 1)
+        && !next.starts_with("--")
+    {
+        let contract = args.remove(i + 1);
+        args.push("--contract".to_string());
+        args.push(contract);
+    }
     let flags = match parse_flags(
         &args,
         &[
@@ -325,8 +333,8 @@ fn cmd_dashboard(args: &[String]) {
                     "run",
                     "--quiet",
                     "--locked",
-                    "--features",
-                    "testing",
+                    "-p",
+                    "nam-qa",
                     "--bin",
                     "nam_freshness",
                     "--",
@@ -371,6 +379,7 @@ fn cmd_dashboard(args: &[String]) {
                     "models",
                     "golden_vectors",
                     "--",
+                    "--include-ignored",
                     "--test-threads=1",
                     "--nocapture",
                 ],
@@ -389,22 +398,41 @@ fn cmd_dashboard(args: &[String]) {
         let f64_log = log_dir.join("reference_oracle_f64.log");
         run_dashboard_phase(
             "reference_oracle_f64",
-            &[(
-                &[
-                    "cargo",
-                    "test",
-                    "--release",
-                    "--features",
-                    "testing",
-                    "--test",
-                    "parity",
-                    "reference_oracle_f64",
-                    "--",
-                    "--test-threads=1",
-                    "--nocapture",
-                ],
-                &[("NAM_METRICS_JSONL", &metrics_path_str)],
-            )],
+            &[
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "parity",
+                        "reference_oracle_f64",
+                        "--",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                ),
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "parity",
+                        "--",
+                        "--include-ignored",
+                        "--exact",
+                        "reference_oracle_f64::test_summary_table",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                ),
+            ],
             &f64_log,
             &receipt_path_str,
             &run_id,
@@ -707,6 +735,14 @@ fn cmd_dashboard(args: &[String]) {
         None
     };
 
+    // The build script exports the canonical micro-bench batch size here; feed
+    // it to ingest so latency normalization never depends on a hard-coded copy.
+    let bench_constants_env = if Path::new("target/bench_constants.env").is_file() {
+        Some("target/bench_constants.env")
+    } else {
+        None
+    };
+
     if let Err(e) = run_ingest(
         &receipt_path_str,
         if metrics_path.is_file() {
@@ -716,7 +752,7 @@ fn cmd_dashboard(args: &[String]) {
         },
         None,
         criterion_dir,
-        None,
+        bench_constants_env,
         Some(contract_path),
         Some(&report_path_str),
     ) {

@@ -34,20 +34,7 @@ pub(crate) fn build_model_with_prewarm(
     data: &NamModelData,
     prewarm: bool,
 ) -> anyhow::Result<Box<StaticModel>> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if !std::is_x86_feature_detected!("avx2") || !std::is_x86_feature_detected!("fma") {
-            log::error!(
-                "CPU incompatible: x86-64-v3 baseline required (AVX2 + FMA). \
-                 Execution aborted cleanly to prevent SIGILL."
-            );
-            return Err(anyhow::anyhow!(
-                crate::common::diagnostics::NamErrorCode::UnsupportedCpuArchitecture
-            ));
-        }
-    }
-
-    #[cfg(all(target_arch = "x86_64", feature = "avx512"))]
+    #[cfg(nam_avx512)]
     {
         // Force SIMD_MATH LazyLock initialization off-RT during model building
         // to prevent first-touch CPU feature detection in audio callback (R-03).

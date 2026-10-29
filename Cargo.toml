@@ -39,6 +39,11 @@ include = [
     "/.cargo/hide-libm-shadow.map",
 ]
 
+[workspace]
+# QA binaries live in tools/qa (publish = false) so the published manifest carries only product bins.
+members = ["tools/qa"]
+resolver = "3"
+
 [lib]
 name = "neural_amp_modeler_rs"
 crate-type = ["rlib"]
@@ -46,9 +51,9 @@ crate-type = ["rlib"]
 [dependencies]
 # Typed errors for the NAMB/loader surface.
 thiserror = "2.0"
-# POSIX calls: mirror/huge-page allocation, TSC clock, scheduler introspection,
-# and the opt-in `rt-hardening` module (`set_cpu_affinity`, `mlockall`,
-# `sched_setscheduler`, THP `prctl`, `/dev/cpu_dma_latency`).
+# POSIX/Mach calls: mirror/huge-page allocation, TSC clock, scheduler
+# introspection, and the opt-in `rt-hardening` module (Linux affinity/scheduler
+# and macOS QoS/time-constraint/memory-locking primitives).
 libc = "0.2.191"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
 rtrb = "0.4.0"
@@ -158,52 +163,19 @@ heap-audit = []
 fft-radix4-planner = []
 # Research and re-measurement only: enables AVX-512 kernels and instruction dispatch (not used in default/production).
 avx512 = []
-# Opt-in real-time host hardening (THP disable, mlockall, SCHED_FIFO, DAZ/FTZ,
-# IRQ-aware CPU affinity, /dev/cpu_dma_latency). Linux-only, never default.
-# Declared without `libc` forwarding: `libc` is already a mandatory engine
-# dependency (mirror/huge-page alloc, TSC, scheduler introspection).
+# Opt-in real-time host hardening (Linux: THP disable, mlockall, SCHED_FIFO,
+# DAZ/FTZ, IRQ-aware CPU affinity, /dev/cpu_dma_latency; macOS: interactive
+# QoS, Mach time constraint, mlockall, Audio Workgroups, DAZ/FTZ).
+# Never default. Declared without `libc` forwarding: `libc` is already a
+# mandatory engine dependency (mirror/huge-page alloc, TSC, scheduler
+# introspection, Mach helpers).
 rt-hardening = []
-# Developer-only diagnostics, baseline fixture generators, and profiling harnesses. Never enabled by CI or test scripts.
+# Internal-only developer diagnostics, baseline fixture generators, and profiling harnesses. Never enabled by CI or test scripts.
 on-demand = []
-
-[[bin]]
-name = "gen_stress"
-path = "src/bin/gen_stress.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "wav_to_golden"
-path = "src/bin/wav_to_golden.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "nam_golden_catalog"
-path = "src/bin/nam_golden_catalog.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "nam_freshness"
-path = "src/bin/nam_freshness.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "nam_long_receipt"
-path = "src/bin/nam_long_receipt.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "nam_quality"
-path = "src/bin/nam_quality.rs"
-required-features = ["testing"]
 
 [[bin]]
 name = "nam_perf_gate"
 path = "src/bin/nam_perf_gate.rs"
-required-features = ["testing"]
-
-[[bin]]
-name = "nam_remote_simd_receipt"
-path = "src/bin/nam_remote_simd_receipt.rs"
 required-features = ["testing"]
 
 [[bin]]
@@ -246,7 +218,7 @@ path = "examples/synthetic_model.rs"
 required-features = []
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(nam_avx512)'] }
 raw_borrows_via_references = "warn"
 
 [lints.clippy]
@@ -279,9 +251,10 @@ split-debuginfo = "unpacked"
 [package.metadata.docs.rs]
 # docs.rs builds with the nightly toolchain, where `--cfg docsrs` enables
 # `#![feature(doc_cfg)]` and the `doc(cfg(...))` feature seals. `all-features`
-# keeps every additive feature documented (a new feature cannot silently drop
-# out of the published docs); the target is fixed because the crate is
-# `x86_64` + `x86-64-v3` only.
+# keeps every additive feature documented. The `avx512` feature is x86_64-only:
+# build.rs emits the `nam_avx512` cfg only for x86_64 targets, so the aarch64
+# targets document the same surface without the AVX-512 modules. x86_64 is the
+# landing target; the aarch64 targets are documented alongside it.
 all-features = true
-targets = ["x86_64-unknown-linux-gnu"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "aarch64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]

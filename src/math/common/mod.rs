@@ -27,7 +27,7 @@ pub use huge_alloc::HugePageVec;
 /// AVX-512 kernel implementations: activations, DSP/VNNI-BF16, reductions, BF16.
 ///
 /// **Notice:** AVX-512 is discouraged in production. See `docs/audio_fidelity_map.md` and `docs/architecture.md`.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub mod avx512;
 /// Unit tests for the common math infrastructure.
@@ -49,7 +49,13 @@ pub mod utility;
 pub use aligned::Aligned64;
 pub use aligned::AlignedVec;
 pub use avx2_impl::Avx2Math;
-#[cfg(feature = "avx512")]
+/// aarch64 name for the 256-bit kernel family. `Avx2Math` runs on aarch64 through the NEON
+/// layer (each 256-bit operation is two 128-bit NEON operations, same per-lane order), so this
+/// alias is additive and carries no separate implementation.
+#[cfg(target_arch = "aarch64")]
+#[cfg_attr(docsrs, doc(cfg(target_arch = "aarch64")))]
+pub type NeonMath = Avx2Math;
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[expect(deprecated)]
 pub use avx512::{Avx512Math, Avx512VnniBf16Math};
@@ -61,7 +67,7 @@ pub use dispatch::{
 #[cfg(any(test, feature = "testing"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use dispatch::{clear_test_isa_override, set_test_isa_override};
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use dispatch::{has_full_avx512, missing_avx512_features};
 /// Kahan compensated summation types and accumulator.
@@ -99,7 +105,7 @@ pub use utility::*;
 /// Checks `TEST_ISA_OVERRIDE` via [`effective_instruction_set()`] before consulting
 /// `SIMD_MATH.instruction_set`. This allows integration tests (such as `tests/parity/isa_parity.rs`)
 /// to deterministically force an ISA path in serial execution.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[macro_export]
 macro_rules! dispatch_simd {
     // Mode 2: Dispatch to specific methods of an object (e.g.: lstm.rs)
@@ -159,7 +165,7 @@ macro_rules! dispatch_simd {
 /// In this default configuration (`feature = "avx512"` disabled), all invocations
 /// directly resolve to [`Avx2Math`] with zero branching, zero function pointers,
 /// and no compilation of AVX-512 symbols.
-#[cfg(not(feature = "avx512"))]
+#[cfg(not(nam_avx512))]
 #[macro_export]
 macro_rules! dispatch_simd {
     // Mode 2: Dispatch to specific methods of an object (e.g.: lstm.rs)

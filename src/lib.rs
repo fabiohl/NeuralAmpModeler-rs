@@ -51,14 +51,23 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "1.0"
+//! NeuralAmpModeler-rs = "1.1"
+//! ```
+//!
+//! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
+//! Cargo does not propagate target flags to dependencies, so add this to your
+//! `.cargo/config.toml` (aarch64/NEON needs no flags):
+//!
+//! ```toml
+//! [target.'cfg(target_arch = "x86_64")']
+//! rustflags = ["-Ctarget-cpu=x86-64-v3"]
 //! ```
 //!
 //! For test harnesses, audio generators, and perceptual fidelity tooling:
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "1.0", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
 //! ```
 //!
 //! ```no_run
@@ -103,7 +112,7 @@
 //! | `heap-audit` | Disabled | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants. |
 //! | `testing` | Disabled | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles. |
 //! | `fft-radix4-planner` | Disabled | Radix-4 DIT FFT execution planning routines and benchmarks. |
-//! | `rt-hardening` | Disabled | Opt-in Linux real-time host hardening (THP, `mlockall`, `SCHED_FIFO`, MXCSR DAZ/FTZ, CPU affinity). |
+//! | `rt-hardening` | Disabled | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity; macOS: QoS, time constraint, `mlockall`, Audio Workgroups; DAZ/FTZ). |
 //! | `avx512` | Disabled | Experimental AVX-512 kernels and dispatch for research and cross-ISA validation. |
 //!
 //! ## Module map
@@ -117,7 +126,7 @@
 //! | [`common`] | Telemetry, diagnostics, panic hooks, and lock-free SPSC channels. |
 //! | [`prelude`] | Convenience re-exports for the common inference and DSP pipeline. |
 //! | `testing` | Off-RT test utilities and perceptual metrics (feature `testing`). |
-//! | `rt_hardening` | Linux real-time host hardening (feature `rt-hardening`). |
+//! | `rt_hardening` | Real-time host hardening (feature `rt-hardening`, Linux and macOS). |
 //!
 //! ## Platform support
 //!
@@ -162,7 +171,7 @@ compile_error!(
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
 
-#[cfg(all(feature = "avx512", not(target_arch = "x86_64")))]
+#[cfg(all(feature = "avx512", not(target_arch = "x86_64"), not(docsrs)))]
 compile_error!("the `avx512` feature is only available on x86_64");
 
 /// Architecture-neutral SIMD intrinsic surface (x86_64 native, aarch64 NEON).
@@ -202,8 +211,11 @@ pub use loader::LoadError;
 pub mod math;
 /// Neural network architectures (WaveNet A1/A2, LSTM, ConvNet, Linear) and runtime dispatch.
 pub mod models;
-/// Opt-in real-time host hardening (Linux-only, never default).
-#[cfg(all(feature = "rt-hardening", target_os = "linux"))]
+/// Opt-in real-time host hardening (Linux and macOS, never default).
+#[cfg(all(
+    feature = "rt-hardening",
+    any(target_os = "linux", target_os = "macos")
+))]
 #[cfg_attr(docsrs, doc(cfg(feature = "rt-hardening")))]
 pub mod rt_hardening;
 

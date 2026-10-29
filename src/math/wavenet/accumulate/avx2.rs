@@ -11,6 +11,7 @@ use crate::wavenet_simd_avx2;
 /// Lets remainder paths (`rem < 8`) run the full 256-bit vector kernels without
 /// scalar fallback, heap allocation, or libm calls. Stack-resident only; the
 /// mask lives in a register after load.
+#[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 unsafe fn avx2_tail_mask(rem: usize) -> __m256i {
@@ -147,14 +148,181 @@ pub unsafe fn tanh_and_accumulate_block_avx2(head_input: &mut [f32], block: &mut
     }
 }
 
-/// Masked tail for gated activation + accumulate: polynomial dual kernel, f32 sum.
-///
-/// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel and f32 add as
-/// the vector loop under an AVX2 mask, so the remainder lanes activate and
-/// accumulate identically to full vectors.
+/// Full 8-wide channel vectors of one frame: activation + accumulate/overwrite.
+#[inline]
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
-unsafe fn gated_activation_and_accumulate_block_avx2_tail(
+unsafe fn gated_full_vectors<const OVERWRITE: bool>(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    ch: usize,
+    f: usize,
+    vec_ch: usize,
+) {
+    let block_offset = f * 2 * ch;
+    let head_offset = f * ch;
+    let mut c = 0;
+    // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`; the loop
+    // guard keeps every 8-lane load/store inside `..vec_ch <= ch`.
+    unsafe {
+        wavenet_simd_avx2!(c, vec_ch, {
+            let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
+            let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
+            let (tanh_z1, sig_z2) =
+                crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+            let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+            _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
+            if OVERWRITE {
+                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
+            } else {
+                let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
+                _mm256_storeu_ps(
+                    head_input.as_mut_ptr().add(head_offset + c),
+                    _mm256_add_ps(vh, activated),
+                );
+            }
+        });
+    }
+}
+
+/// Remainder of 4 channels for one frame, zero-extended into a full YMM.
+///
+/// The disabled lanes are zero, exactly like the previous masked tail, so the
+/// low four lanes keep the same arithmetic and bit patterns.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gated_rem4_single<const OVERWRITE: bool>(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    ch: usize,
+    f: usize,
+) {
+    let start_c = ch - 4;
+    let block_offset = f * 2 * ch;
+    let head_offset = f * ch;
+    // SAFETY: caller guarantees `ch >= 4` and `block.len() >= 2 * ch * num_frames`;
+    // all four-lane accesses stay inside the frame's channel window.
+    unsafe {
+        let z1 = _mm256_insertf128_ps(
+            _mm256_setzero_ps(),
+            _mm_loadu_ps(block.as_ptr().add(block_offset + start_c)),
+            0,
+        );
+        let z2 = _mm256_insertf128_ps(
+            _mm256_setzero_ps(),
+            _mm_loadu_ps(block.as_ptr().add(block_offset + ch + start_c)),
+            0,
+        );
+        let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+        let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+        let low = _mm256_castps256_ps128(activated);
+        _mm_storeu_ps(block.as_mut_ptr().add(block_offset + start_c), low);
+        if OVERWRITE {
+            _mm_storeu_ps(head_input.as_mut_ptr().add(head_offset + start_c), low);
+        } else {
+            let vh = _mm_loadu_ps(head_input.as_ptr().add(head_offset + start_c));
+            _mm_storeu_ps(
+                head_input.as_mut_ptr().add(head_offset + start_c),
+                _mm_add_ps(vh, low),
+            );
+        }
+    }
+}
+
+/// Remainder of 4 channels for two consecutive frames packed into one YMM.
+///
+/// Lanes 0..3 activate frame `f`, lanes 4..7 activate frame `f+1`; the
+/// activation kernel is lane-local, so each lane computes the same value as
+/// the former per-frame masked tail.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gated_rem4_pair<const OVERWRITE: bool>(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    ch: usize,
+    f: usize,
+) {
+    let start_c = ch - 4;
+    let block0 = f * 2 * ch;
+    let block1 = (f + 1) * 2 * ch;
+    let head0 = f * ch + start_c;
+    let head1 = (f + 1) * ch + start_c;
+    // SAFETY: caller guarantees `f + 1 < num_frames`, `ch >= 4` and
+    // `block.len() >= 2 * ch * num_frames`; each four-lane load stays inside
+    // its frame and the head offsets are one frame apart.
+    unsafe {
+        let z1 = _mm256_insertf128_ps(
+            _mm256_insertf128_ps(
+                _mm256_setzero_ps(),
+                _mm_loadu_ps(block.as_ptr().add(block0 + start_c)),
+                0,
+            ),
+            _mm_loadu_ps(block.as_ptr().add(block1 + start_c)),
+            1,
+        );
+        let z2 = _mm256_insertf128_ps(
+            _mm256_insertf128_ps(
+                _mm256_setzero_ps(),
+                _mm_loadu_ps(block.as_ptr().add(block0 + ch + start_c)),
+                0,
+            ),
+            _mm_loadu_ps(block.as_ptr().add(block1 + ch + start_c)),
+            1,
+        );
+        let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
+        let activated = _mm256_mul_ps(tanh_z1, sig_z2);
+        let low = _mm256_castps256_ps128(activated);
+        let high = _mm256_extractf128_ps(activated, 1);
+
+        _mm_storeu_ps(block.as_mut_ptr().add(block0 + start_c), low);
+        _mm_storeu_ps(block.as_mut_ptr().add(block1 + start_c), high);
+
+        if OVERWRITE {
+            _mm_storeu_ps(head_input.as_mut_ptr().add(head0), low);
+            _mm_storeu_ps(head_input.as_mut_ptr().add(head1), high);
+        } else {
+            let h0 = _mm_loadu_ps(head_input.as_ptr().add(head0));
+            let h1 = _mm_loadu_ps(head_input.as_ptr().add(head1));
+            _mm_storeu_ps(head_input.as_mut_ptr().add(head0), _mm_add_ps(h0, low));
+            _mm_storeu_ps(head_input.as_mut_ptr().add(head1), _mm_add_ps(h1, high));
+        }
+    }
+}
+
+/// Copies `rem` (1..=7) `f32` with a compile-time-sized move in each arm.
+///
+/// A runtime-length `copy_nonoverlapping` is lowered to an out-of-line
+/// `memcpy`; the fixed arms keep these small tail moves in registers/stack.
+#[inline]
+unsafe fn copy_f32_rem(src: *const f32, dst: *mut f32, rem: usize) {
+    // SAFETY: the caller guarantees `rem <= 7` and that both pointers are
+    // valid for `rem` reads/writes.
+    unsafe {
+        match rem {
+            1 => core::ptr::copy_nonoverlapping(src, dst, 1),
+            2 => core::ptr::copy_nonoverlapping(src, dst, 2),
+            3 => core::ptr::copy_nonoverlapping(src, dst, 3),
+            4 => core::ptr::copy_nonoverlapping(src, dst, 4),
+            5 => core::ptr::copy_nonoverlapping(src, dst, 5),
+            6 => core::ptr::copy_nonoverlapping(src, dst, 6),
+            7 => core::ptr::copy_nonoverlapping(src, dst, 7),
+            _ => {}
+        }
+    }
+}
+
+/// Generic remainder (`rem != 4`): the unused lanes are zero-filled on the stack
+/// and activated in one full YMM, then only `rem` lanes are written back.
+///
+/// Zero-filling is exactly what `maskload` did to the disabled lanes, so the
+/// low-lane arithmetic is unchanged. It also removes `vmaskmovps` from the
+/// gated path entirely (the emulated gather is expensive on aarch64).
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gated_rem_generic<const OVERWRITE: bool>(
     head_input: &mut [f32],
     block: &mut [f32],
     ch: usize,
@@ -164,29 +332,89 @@ unsafe fn gated_activation_and_accumulate_block_avx2_tail(
     let block_offset = f * 2 * ch;
     let head_offset = f * ch;
     let rem = ch - start_c;
-    if rem == 0 {
-        return;
-    }
-    // SAFETY: caller guarantees `ch >= 1`, `block.len() >= 2 * ch * num_frames`,
-    // and `start_c <= ch`; the mask enables only the low `rem` lanes, so masked
-    // loads/stores touch exactly the remainder channels.
+    let mut z1_buf = [0.0f32; 8];
+    let mut z2_buf = [0.0f32; 8];
+    let mut out = [0.0f32; 8];
+    // SAFETY: caller guarantees `ch >= 1`, `block.len() >= 2 * ch * num_frames`
+    // and `start_c <= ch`, so `rem <= 7` and every copy stays inside its frame.
     unsafe {
-        let mask = avx2_tail_mask(rem);
-        let z1 = _mm256_maskload_ps(block.as_ptr().add(block_offset + start_c), mask);
-        let z2 = _mm256_maskload_ps(block.as_ptr().add(block_offset + ch + start_c), mask);
+        copy_f32_rem(
+            block.as_ptr().add(block_offset + start_c),
+            z1_buf.as_mut_ptr(),
+            rem,
+        );
+        copy_f32_rem(
+            block.as_ptr().add(block_offset + ch + start_c),
+            z2_buf.as_mut_ptr(),
+            rem,
+        );
+        let z1 = _mm256_loadu_ps(z1_buf.as_ptr());
+        let z2 = _mm256_loadu_ps(z2_buf.as_ptr());
         let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
         let activated = _mm256_mul_ps(tanh_z1, sig_z2);
-        _mm256_maskstore_ps(
+        _mm256_storeu_ps(out.as_mut_ptr(), activated);
+        copy_f32_rem(
+            out.as_ptr(),
             block.as_mut_ptr().add(block_offset + start_c),
-            mask,
-            activated,
+            rem,
         );
-        let vh = _mm256_maskload_ps(head_input.as_ptr().add(head_offset + start_c), mask);
-        _mm256_maskstore_ps(
-            head_input.as_mut_ptr().add(head_offset + start_c),
-            mask,
-            _mm256_add_ps(vh, activated),
-        );
+        if OVERWRITE {
+            copy_f32_rem(
+                out.as_ptr(),
+                head_input.as_mut_ptr().add(head_offset + start_c),
+                rem,
+            );
+        } else {
+            for lane in 0..rem {
+                let dst = head_input.get_unchecked_mut(head_offset + start_c + lane);
+                *dst += *out.get_unchecked(lane);
+            }
+        }
+    }
+}
+
+/// Shared gated-activation traversal for accumulate (`OVERWRITE = false`) and
+/// overwrite (`OVERWRITE = true`).
+///
+/// `CH = 4` and the `CH = 12` remainder run two frames per YMM: one full
+/// activation instead of two masked ones. Other remainders zero-fill the
+/// unused lanes on the stack, which keeps the lane arithmetic and removes
+/// `vmaskmovps` from this path.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gated_activation_block<const OVERWRITE: bool>(
+    head_input: &mut [f32],
+    block: &mut [f32],
+    ch: usize,
+) {
+    let num_frames = head_input.len() / ch;
+    let vec_ch = ch & !7;
+    let rem = ch - vec_ch;
+    let mut f = 0;
+    // SAFETY: every helper keeps its loads/stores inside the frame window
+    // `2 * ch` of `block` and `ch` of `head_input`; `f < num_frames` throughout.
+    unsafe {
+        if rem == 4 {
+            while f + 2 <= num_frames {
+                gated_full_vectors::<OVERWRITE>(head_input, block, ch, f, vec_ch);
+                gated_full_vectors::<OVERWRITE>(head_input, block, ch, f + 1, vec_ch);
+                gated_rem4_pair::<OVERWRITE>(head_input, block, ch, f);
+                f += 2;
+            }
+            if f < num_frames {
+                gated_full_vectors::<OVERWRITE>(head_input, block, ch, f, vec_ch);
+                gated_rem4_single::<OVERWRITE>(head_input, block, ch, f);
+            }
+        } else {
+            while f < num_frames {
+                gated_full_vectors::<OVERWRITE>(head_input, block, ch, f, vec_ch);
+                if rem != 0 {
+                    gated_rem_generic::<OVERWRITE>(head_input, block, ch, f, vec_ch);
+                }
+                f += 1;
+            }
+        }
     }
 }
 
@@ -206,36 +434,9 @@ pub unsafe fn gated_activation_and_accumulate_block_avx2(
     block: &mut [f32],
     ch: usize,
 ) {
-    let num_frames = head_input.len() / ch;
-    for f in 0..num_frames {
-        let block_offset = f * 2 * ch;
-        let head_offset = f * ch;
-        let mut c = 0;
-        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards keep loads/stores in bounds.
-        unsafe {
-            wavenet_simd_avx2!(c, ch, {
-                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
-
-                let (tanh_z1, sig_z2) =
-                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-                let activated = _mm256_mul_ps(tanh_z1, sig_z2);
-
-                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
-
-                let vh = _mm256_loadu_ps(head_input.as_ptr().add(head_offset + c));
-                _mm256_storeu_ps(
-                    head_input.as_mut_ptr().add(head_offset + c),
-                    _mm256_add_ps(vh, activated),
-                );
-            });
-        }
-        if c < ch {
-            // SAFETY: same channel geometry as the vector loop above; masked tail touches only the remainder channels.
-            unsafe {
-                gated_activation_and_accumulate_block_avx2_tail(head_input, block, ch, f, c);
-            }
-        }
+    // SAFETY: the helper enforces the same channel geometry documented above.
+    unsafe {
+        gated_activation_block::<false>(head_input, block, ch);
     }
 }
 
@@ -618,48 +819,6 @@ pub unsafe fn relu_and_accumulate_with_seed_avx2(
     }
 }
 
-/// Masked tail for gated activation + overwrite: polynomial dual kernel.
-///
-/// Runs the same `simd_tanh_sigmoid_dual_poly_avx2` dual kernel as the vector
-/// loop under an AVX2 mask, so the remainder lanes activate identically to
-/// full vectors.
-#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
-#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
-unsafe fn gated_activation_and_overwrite_block_avx2_tail(
-    head_input: &mut [f32],
-    block: &mut [f32],
-    ch: usize,
-    f: usize,
-    start_c: usize,
-) {
-    let block_offset = f * 2 * ch;
-    let head_offset = f * ch;
-    let rem = ch - start_c;
-    if rem == 0 {
-        return;
-    }
-    // SAFETY: caller guarantees `ch >= 1`, `block.len() >= 2 * ch * num_frames`,
-    // and `start_c <= ch`; the mask enables only the low `rem` lanes, so masked
-    // loads/stores touch exactly the remainder channels.
-    unsafe {
-        let mask = avx2_tail_mask(rem);
-        let z1 = _mm256_maskload_ps(block.as_ptr().add(block_offset + start_c), mask);
-        let z2 = _mm256_maskload_ps(block.as_ptr().add(block_offset + ch + start_c), mask);
-        let (tanh_z1, sig_z2) = crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-        let activated = _mm256_mul_ps(tanh_z1, sig_z2);
-        _mm256_maskstore_ps(
-            block.as_mut_ptr().add(block_offset + start_c),
-            mask,
-            activated,
-        );
-        _mm256_maskstore_ps(
-            head_input.as_mut_ptr().add(head_offset + start_c),
-            mask,
-            activated,
-        );
-    }
-}
-
 /// Applies gated activation (tanh * sigmoid) in-place on block and overwrites head_input using AVX2.
 ///
 /// # Safety
@@ -676,30 +835,8 @@ pub unsafe fn gated_activation_and_overwrite_block_avx2(
     block: &mut [f32],
     ch: usize,
 ) {
-    let num_frames = head_input.len() / ch;
-    for f in 0..num_frames {
-        let block_offset = f * 2 * ch;
-        let head_offset = f * ch;
-        let mut c = 0;
-        // SAFETY: `ch >= 1` and `block.len() >= 2 * ch * num_frames`, loop guards keep loads/stores in bounds.
-        unsafe {
-            wavenet_simd_avx2!(c, ch, {
-                let z1 = _mm256_loadu_ps(block.as_ptr().add(block_offset + c));
-                let z2 = _mm256_loadu_ps(block.as_ptr().add(block_offset + ch + c));
-
-                let (tanh_z1, sig_z2) =
-                    crate::math::activations::simd_tanh_sigmoid_dual_poly_avx2(z1, z2);
-                let activated = _mm256_mul_ps(tanh_z1, sig_z2);
-
-                _mm256_storeu_ps(block.as_mut_ptr().add(block_offset + c), activated);
-                _mm256_storeu_ps(head_input.as_mut_ptr().add(head_offset + c), activated);
-            });
-        }
-        if c < ch {
-            // SAFETY: same channel geometry as the vector loop above; masked tail touches only the remainder channels.
-            unsafe {
-                gated_activation_and_overwrite_block_avx2_tail(head_input, block, ch, f, c);
-            }
-        }
+    // SAFETY: the helper enforces the same channel geometry documented above.
+    unsafe {
+        gated_activation_block::<true>(head_input, block, ch);
     }
 }

@@ -75,7 +75,7 @@ pub fn apply_output_stage(
     adaptive: &mut AdaptiveCompute,
     sample_rate: u32,
 ) {
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         use crate::math::common::Avx512Math;
         use crate::math::common::{Avx2Math, InstructionSet, effective_instruction_set};
@@ -115,7 +115,7 @@ pub fn apply_output_stage(
             }
         }
     }
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         use crate::math::common::Avx2Math;
         // SAFETY: inner invariants upheld by caller.

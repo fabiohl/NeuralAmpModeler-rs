@@ -9,11 +9,15 @@ on:
       phases:
         description: 'Comma-separated phase IDs to execute'
         type: string
-        default: 'preflight-render,preflight-catalog,preflight-freshness,phase1,phase2,phase3,phase4,phase7'
+        default: 'preflight-render,preflight-catalog,preflight-package,preflight-freshness,phase1,phase2,phase3,phase4,phase7'
       strict:
         description: 'Strict mode (treat gaps as failures)'
         type: boolean
         default: true
+      dashboard:
+        description: 'Run quality-dashboard --check against docs/quality-contract.json'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,7 +40,7 @@ jobs:
       - uses: actions/checkout@v7
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
-        run: rustup update --no-self-update stable && rustc --version
+        run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin && rustc --version
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -49,11 +53,14 @@ jobs:
             STRICT_FLAG="--strict"
           fi
           ./utils/tests-long.sh $STRICT_FLAG --only "${{ inputs.phases }}"
+      - name: Quality Dashboard (--check)
+        if: inputs.dashboard == true
+        run: ./utils/quality-dashboard.sh --check docs/quality-contract.json
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
         with:
-          title: Long QA Suite
+          title: Long QA Suite (${{ github.ref_name }} @ ${{ github.sha }})
       - name: Upload logs and receipts
         if: always()
         uses: actions/upload-artifact@v4

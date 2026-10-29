@@ -15,10 +15,35 @@
 //! Coefficients in `crate::math::constants` (`PADE_TANH_*`).
 
 use crate::activation_simd_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::activation_simd_avx512;
 use crate::arch::simd::*;
+use crate::math::common::ops::flush_subnormal;
 use crate::math::constants::*;
+
+/// Clamps each lane of `x` to `[lo, hi]` with x86 `maxps(lo, minps(hi, x))`
+/// operand order: a NaN lane of `x` propagates to the result.
+///
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn clamp_ps(x: __m256, lo: __m256, hi: __m256) -> __m256 {
+    _mm256_max_ps(lo, _mm256_min_ps(hi, x))
+}
+
+/// NEON form of [`clamp_ps`]: `fmin`/`fmax` per 128-bit half. `FMIN`/`FMAX`
+/// propagate NaN like the x86 `minps`/`maxps` pair above, and agree with it on
+/// every finite lane including signed zero, so the result is the same.
+///
+#[cfg(target_arch = "aarch64")]
+#[inline]
+#[target_feature(enable = "neon")]
+fn clamp_ps(x: __m256, lo: __m256, hi: __m256) -> __m256 {
+    __m256(
+        core::arch::aarch64::vmaxq_f32(lo.0, core::arch::aarch64::vminq_f32(hi.0, x.0)),
+        core::arch::aarch64::vmaxq_f32(lo.1, core::arch::aarch64::vminq_f32(hi.1, x.1)),
+    )
+}
 
 /// Padé \[5,4\] rational approximant for `tanh(x)` with hardware division (AVX2).
 ///
@@ -37,7 +62,7 @@ pub unsafe fn simd_tanh_avx2(x: __m256) -> __m256 {
     let one = _mm256_set1_ps(1.0);
     let neg_one = _mm256_set1_ps(-1.0);
 
-    let x = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x));
+    let x = clamp_ps(x, clamp_lo, clamp_hi);
 
     let x_sq = _mm256_mul_ps(x, x);
 
@@ -58,7 +83,7 @@ pub unsafe fn simd_tanh_avx2(x: __m256) -> __m256 {
     let den = _mm256_fmadd_ps(den, x_sq, den_a);
 
     let result = _mm256_div_ps(num, den);
-    _mm256_max_ps(neg_one, _mm256_min_ps(one, result))
+    clamp_ps(result, neg_one, one)
 }
 
 /// Padé \[5,4\] rational approximant for `tanh(x)` — dual 16-float path (AVX2).
@@ -77,8 +102,8 @@ pub unsafe fn simd_tanh_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let one = _mm256_set1_ps(1.0);
     let neg_one = _mm256_set1_ps(-1.0);
 
-    let x1 = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x1));
-    let x2 = _mm256_max_ps(clamp_lo, _mm256_min_ps(clamp_hi, x2));
+    let x1 = clamp_ps(x1, clamp_lo, clamp_hi);
+    let x2 = clamp_ps(x2, clamp_lo, clamp_hi);
 
     let sq1 = _mm256_mul_ps(x1, x1);
     let sq2 = _mm256_mul_ps(x2, x2);
@@ -105,17 +130,14 @@ pub unsafe fn simd_tanh_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
     let res1 = _mm256_div_ps(num1, den1);
     let res2 = _mm256_div_ps(num2, den2);
 
-    (
-        _mm256_max_ps(neg_one, _mm256_min_ps(one, res1)),
-        _mm256_max_ps(neg_one, _mm256_min_ps(one, res2)),
-    )
+    (clamp_ps(res1, neg_one, one), clamp_ps(res2, neg_one, one))
 }
 
 /// Padé \[5,4\] rational tanh — single 16-float path (AVX-512).
 ///
 /// # Safety
 /// The caller must guarantee AVX-512F, AVX-512VL, and AVX-512DQ support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[cfg_attr(
@@ -185,10 +207,12 @@ pub unsafe fn tanh_slice_avx2(slice: &mut [f32]) {
     }
 
     for item in slice.iter_mut().skip(i) {
-        *item = scalar_pade_tanh(*item);
-        if item.abs() < f32::MIN_POSITIVE {
-            *item = 0.0;
-        }
+        let x = *item;
+        *item = flush_subnormal(if x.abs() < f32::MIN_POSITIVE {
+            x
+        } else {
+            scalar_pade_tanh(x)
+        });
     }
 }
 
@@ -196,7 +220,7 @@ pub unsafe fn tanh_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, and AVX-512DQ support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[inline]
 #[cfg_attr(
@@ -220,10 +244,12 @@ pub unsafe fn tanh_slice_avx512(slice: &mut [f32]) {
     }
 
     for item in slice.iter_mut().skip(i) {
-        *item = scalar_pade_tanh(*item);
-        if item.abs() < f32::MIN_POSITIVE {
-            *item = 0.0;
-        }
+        let x = *item;
+        *item = flush_subnormal(if x.abs() < f32::MIN_POSITIVE {
+            x
+        } else {
+            scalar_pade_tanh(x)
+        });
     }
 }
 

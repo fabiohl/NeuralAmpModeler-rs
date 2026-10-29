@@ -2,12 +2,12 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::half::f32_to_f16_bits;
 use crate::math::common::scalar_ref;
 
 /// Generates test data: weights `[[u16; 4]]` and state `[f32]`.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn make_data(len: usize) -> (Vec<[u16; 4]>, Vec<f32>) {
     let weights: Vec<[u16; 4]> = (0..len)
         .map(|i| {
@@ -26,7 +26,7 @@ fn make_data(len: usize) -> (Vec<[u16; 4]>, Vec<f32>) {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -57,7 +57,7 @@ fn test_dot_4x_interleaved_avx512_vs_fallback() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_dual_frame_avx512_vs_fallback() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -105,7 +105,7 @@ fn test_dot_4x_interleaved_dual_frame_avx512_vs_fallback() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -134,7 +134,7 @@ fn test_dot_4x_interleaved_avx512_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_dual_frame_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -180,7 +180,7 @@ fn test_dot_4x_interleaved_dual_frame_avx512_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_avx512_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -209,7 +209,7 @@ fn test_dot_4x_interleaved_avx512_vs_avx2() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_interleaved_dual_frame_avx512_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -435,7 +435,7 @@ fn test_dot_4x_f32_dual_avx2_stress() {
 // ── F32-native dot_4x AVX-512 tests (f32 weights, no quantization) ─────────
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -463,7 +463,7 @@ fn test_dot_4x_f32_avx512_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -494,7 +494,7 @@ fn test_dot_4x_f32_avx512_vs_avx2() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -520,7 +520,7 @@ fn test_dot_4x_f32_avx512_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -558,7 +558,7 @@ fn test_dot_4x_f32_dual_avx512_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -602,7 +602,7 @@ fn test_dot_4x_f32_dual_avx512_vs_avx2() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512_single_vs_dual_invariance() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -641,7 +641,7 @@ fn test_dot_4x_f32_dual_avx512_single_vs_dual_invariance() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -843,7 +843,7 @@ fn test_dot_4x_f32_dual_accumulate_avx2_stress() {
 // ── AVX-512 accumulate kernel tests (f32) ─────────────────────────────────
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_accumulate_avx512_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -878,7 +878,7 @@ fn test_dot_4x_f32_accumulate_avx512_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_accumulate_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -911,7 +911,7 @@ fn test_dot_4x_f32_accumulate_avx512_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_accumulate_avx512_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -965,7 +965,7 @@ fn test_dot_4x_f32_dual_accumulate_avx512_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_accumulate_avx512_stress() {
     if !std::is_x86_feature_detected!("avx512f") {
         return;
@@ -1019,7 +1019,7 @@ fn test_dot_4x_f32_dual_accumulate_avx512_stress() {
 // ── AVX-512 VL256 (256-bit EVEX) kernel tests (f32) ───────────────────────────
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512vl_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1050,7 +1050,7 @@ fn test_dot_4x_f32_avx512vl_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512vl_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1081,7 +1081,7 @@ fn test_dot_4x_f32_avx512vl_vs_avx2() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_avx512vl_stress() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1110,7 +1110,7 @@ fn test_dot_4x_f32_avx512vl_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512vl_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1154,7 +1154,7 @@ fn test_dot_4x_f32_dual_avx512vl_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512vl_vs_avx2() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1198,7 +1198,7 @@ fn test_dot_4x_f32_dual_avx512vl_vs_avx2() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512vl_single_vs_dual_invariance() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1243,7 +1243,7 @@ fn test_dot_4x_f32_dual_avx512vl_single_vs_dual_invariance() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_avx512vl_stress() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1285,7 +1285,7 @@ fn test_dot_4x_f32_dual_avx512vl_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_accumulate_avx512vl_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1320,7 +1320,7 @@ fn test_dot_4x_f32_accumulate_avx512vl_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_accumulate_avx512vl_stress() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1353,7 +1353,7 @@ fn test_dot_4x_f32_accumulate_avx512vl_stress() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_accumulate_avx512vl_vs_scalar() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;
@@ -1407,7 +1407,7 @@ fn test_dot_4x_f32_dual_accumulate_avx512vl_vs_scalar() {
 }
 
 #[test]
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn test_dot_4x_f32_dual_accumulate_avx512vl_stress() {
     if !std::is_x86_feature_detected!("avx512f") || !std::is_x86_feature_detected!("avx512vl") {
         return;

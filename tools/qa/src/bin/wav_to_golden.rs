@@ -8,7 +8,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --release --bin wav_to_golden -- --input rendered.wav --reference stress.wav --output golden.bin
+//! cargo run -p nam-qa --release --bin wav_to_golden -- --input rendered.wav --reference stress.wav --output golden.bin
 //! ```
 
 use std::path::PathBuf;

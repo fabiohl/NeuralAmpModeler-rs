@@ -45,7 +45,7 @@ pub fn apply_input_stage(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         use crate::math::common::{
             Avx2Math, Avx512Math, InstructionSet, effective_instruction_set,
@@ -64,7 +64,7 @@ pub fn apply_input_stage(
             }
         }
     }
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         use crate::math::common::Avx2Math;
         // SAFETY: inner invariants upheld by caller.
@@ -82,7 +82,7 @@ pub fn apply_input_stage_mono(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         use crate::math::common::{
             Avx2Math, Avx512Math, InstructionSet, effective_instruction_set,
@@ -99,7 +99,7 @@ pub fn apply_input_stage_mono(
             }
         }
     }
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         use crate::math::common::Avx2Math;
         // SAFETY: inner invariants upheld by caller.

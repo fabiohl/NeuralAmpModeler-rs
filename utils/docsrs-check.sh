@@ -36,10 +36,17 @@ read -r -a docsrs_feature_args <<< "$docsrs_feature_scope"
 export DOCS_RS=1
 export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }--cfg docsrs -D warnings"
 
-if cargo +nightly doc --locked --lib --no-deps "${docsrs_feature_args[@]}"; then
-  echo "OK: rustdoc (nightly, docsrs cfg, derived feature scope) emitted zero warnings."
-else
-  rc=$?
-  echo "FAIL: rustdoc emitted warnings/errors (exit ${rc})." >&2
-  exit 1
-fi
+for docsrs_target in "" aarch64-unknown-linux-gnu; do
+  docsrs_target_args=()
+  if [ -n "$docsrs_target" ]; then
+    rustup +nightly target list --installed | grep -qx "$docsrs_target" || {
+      echo "GAP: nightly target $docsrs_target not installed (rustup +nightly target add $docsrs_target)" >&2; exit 2;
+    }
+    docsrs_target_args=(--target "$docsrs_target")
+  fi
+  if ! cargo +nightly doc --locked --lib --no-deps "${docsrs_target_args[@]}" "${docsrs_feature_args[@]}"; then
+    echo "FAIL: rustdoc emitted warnings/errors on target ${docsrs_target:-host}." >&2
+    exit 1
+  fi
+done
+echo "OK: rustdoc (nightly, docsrs cfg, derived feature scope) emitted zero warnings on x86_64 and aarch64."

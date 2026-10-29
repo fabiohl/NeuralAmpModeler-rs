@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NeuralAmpModeler-rs
 
-![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64%20%7C%20aarch64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/crate/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3%20%7C%20NEON-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/fabiohl/badge.svg)](https://hub.xerj.org/contributors/fabiohl)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64%20%7C%20aarch64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3%20%7C%20NEON-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/fabiohl/badge.svg)](https://hub.xerj.org/contributors/fabiohl)
 
 **NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
@@ -65,13 +65,16 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ## 🛠️ System Prerequisites & Build Requirements
 
-| Dependency           | Minimum Requirement                                                | Purpose                               |
-|:-------------------- |:------------------------------------------------------------------ |:------------------------------------- |
-| **CPU Architecture** | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels           |
-| **Rust Toolchain**   | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                   |
-| **Build Tools**      | `build-essential`, `pkg-config`, `cmake`                           | Host build tools & C++ parity oracles |
+| Dependency                        | Minimum Requirement                                                | Purpose                                                    |
+|:--------------------------------- |:------------------------------------------------------------------ |:---------------------------------------------------------- |
+| **CPU Architecture**              | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels                                |
+| **Rust Toolchain**                | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                                        |
+| **Linker (consumers)**            | A C toolchain for the target (e.g. `gcc`/`clang`)                  | Linking the crate; no CMake needed                         |
+| **Build Tools (contributors)**    | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4            | C++ parity oracles, fixtures and the `./utils/` QA scripts |
 
 > **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
+
+> **Consumers and libm:** the libm symbol-interposition guard (`.cargo/hide-libm-shadow.map`) applies only to this crate's own link targets. A downstream binary is not covered and must add an equivalent linker version script if it links a same-named libm shadow. See [the postmortem](docs/postmortem-libm-symbol-interposition.md).
 
 ### Supported Platforms
 
@@ -80,6 +83,9 @@ NeuralAmpModeler-rs officially supports:
 1. **`x86_64` (Linux)** with the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`).
 2. **`aarch64` (macOS Apple Silicon, Linux)** with native **NEON** vectorization.
 
+`x86_64-apple-darwin` (Intel Macs) is **not supported and not validated**: macOS
+support is Apple Silicon (`aarch64-apple-darwin`) only.
+
 The crate enforces these architectural baselines at compile time:
 
 * Unsupported architectures (targets other than `x86_64` or `aarch64`) are rejected by design via `compile_error!` — there is no scalar fallback.
@@ -87,12 +93,17 @@ The crate enforces these architectural baselines at compile time:
 * `aarch64` targets lacking NEON fail the build with a compile-time assertion.
 * When building documentation locally, use `cargo doc --lib` (the `simd_probe` binary is incompatible with the `cfg(doc)` build).
 
-### Installation of System Build Dependencies
+### Installation of Build Dependencies (Contributors)
+
+Crate consumers need only a working linker for the target; the packages below
+build the C++ parity oracles and the `./utils/` QA tooling used in this
+repository.
 
 **Debian / Ubuntu / Pop!_OS (Linux):**
 
 ```bash
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
+rustup target add aarch64-unknown-linux-gnu
 ```
 
 **macOS (Homebrew):**
@@ -137,17 +148,19 @@ No flags are needed: NEON is part of every aarch64 target (`aarch64-apple-darwin
 * **Denormals:** FPCR.FZ replaces MXCSR DAZ/FTZ.
 * **Cycle clock:** `common::tsc` reads the generic timer (`CNTVCT_EL0`), calibrated exactly from `CNTFRQ_EL0`.
 * **Page size:** delay rings are rounded to the kernel page size (16 KiB on macOS; 4/16/64 KiB on aarch64 Linux depending on the kernel).
-* **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages and `rt-hardening` are Linux-only. The QA scripts need bash ≥ 4 (`brew install bash`), e.g. `/opt/homebrew/bin/bash utils/tests-quick.sh`.
+* **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages are Linux-only, while `rt-hardening` on macOS provides interactive QoS, `THREAD_TIME_CONSTRAINT_POLICY`, per-buffer `mlock_region` and optional Audio Workgroups (see [`docs/rt-macos-adr.md`](docs/rt-macos-adr.md)). The QA scripts need bash ≥ 4 (`brew install bash`), e.g. `/opt/homebrew/bin/bash utils/tests-quick.sh`.
 
-#### Pre-Flight Hardware Verification (`simd_probe`)
+#### Post-Install Verification (`simd_probe`)
 
-Verify your host CPU and toolchain compatibility directly using the built-in diagnostic probe:
+**x86-64-v3 is mandatory.** A host without AVX2/FMA cannot run this crate: the binary raises SIGILL, because there is no runtime rejection path. The check is compile-time (`src/lib.rs`), not a probe you have to pass before use.
+
+`simd_probe` is a post-install diagnostic. It reports CPU feature flags, OS vector context support (`OSXSAVE`), the active SIMD backend, and runs a synthetic inference smoke test with a deterministic checksum:
 
 ```bash
 cargo run --bin simd_probe
 ```
 
-The probe validates CPU feature flags, operating system vector context support (`OSXSAVE`), reports the active monomorphized SIMD backend, and executes a synthetic inference smoke test with deterministic checksum verification.
+It prints informational flags only; it does not issue a runtime compliance verdict.
 
 ---
 
@@ -170,6 +183,24 @@ NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
+
+### Recommended Consumer Profile
+
+The crate ships optimized release profiles, but Cargo does not propagate them to
+dependents. To get the same code generation in a host application, use at least:
+
+```toml
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# Keep `panic = "unwind"` when the host catches panics, or `"abort"` for a
+# smaller binary. Small tail/mask helpers are annotated `#[inline]` for
+# cross-crate inlining; `lto = "thin"` lets the compiler act on them.
+panic = "unwind"
+```
+
+`lto = "fat"` is optional for a final distribution build; it increases link
+time and is not required for correctness.
 
 ### Model Files
 
@@ -261,7 +292,7 @@ NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities,
 | `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                  | Diagnostics             |
 | `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.        | Tooling / QA            |
 | `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                        | Tooling / Benchmarks    |
-| `rt-hardening`       | Disabled    | Opt-in Linux real-time system hardening (THP disable, `mlockall`, `SCHED_FIFO`, MXCSR DAZ/FTZ, CPU affinity). Linux-only.       | Production (Linux RT)   |
+| `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity, PM-QoS; macOS: QoS, time constraint, `mlockall`, Audio Workgroups; DAZ/FTZ). | Production (Linux/macOS RT) |
 | `avx512`             | Disabled    | Experimental AVX-512 kernels and instruction dispatch for research and cross-ISA validation.                                    | Research / Experimental |
 
 > **Note on `avx512`:** Production builds target the `x86-64-v3` (AVX2 + FMA) baseline. Benchmarks demonstrate that AVX2 delivers lower latency and higher throughput across canonical NAM channel geometries ($C \le 16$). The opt-in `avx512` feature is maintained for research, hardware benchmarking, and architectural exploration. See [`docs/architecture.md`](docs/architecture.md) and [`docs/benchmarks.md`](docs/benchmarks.md).

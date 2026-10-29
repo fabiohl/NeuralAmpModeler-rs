@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::activations::simd_tanh_avx512;
 use crate::math::activations::{simd_tanh_avx2, simd_tanh_dual_avx2};
 
@@ -100,7 +100,7 @@ fn test_pade_nr2_vs_nr1_precision_avx2() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: consistência matemática (oráculo f64)"]
 fn test_pade_nr1_vs_div_precision_avx512() {

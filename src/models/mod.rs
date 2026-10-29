@@ -116,6 +116,24 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// `max_buffer_size` frames are processed); debug builds trap the
     /// violation with a symmetric `debug_assert!` in every engine.
     ///
+    /// # Denormal Policy
+    /// `process` assumes the caller has enabled Flush-To-Zero (FTZ) and
+    /// Denormals-Are-Zero (DAZ) semantics on the audio thread. Hosts that drive
+    /// a model directly, without [`capture_dsp_pipeline`](crate::dsp::pipeline),
+    /// must enable the policy once during thread setup:
+    ///
+    /// ```
+    /// // SAFETY: only the calling thread's FP control register is changed;
+    /// // the engine's DSP pipeline expects exactly this policy.
+    /// unsafe {
+    ///     neural_amp_modeler_rs::math::common::set_daz_ftz();
+    /// }
+    /// ```
+    ///
+    /// On x86_64 this sets MXCSR DAZ+FTZ; on aarch64 it sets `FPCR.FZ`. The
+    /// crate's SIMD kernels and scalar tails assume this policy, so skipping it
+    /// can make denormal arithmetic orders of magnitude slower.
+    ///
     /// # Real-Time Safety
     /// This method MUST NOT allocate on the heap, acquire locks, or perform blocking I/O.
     ///

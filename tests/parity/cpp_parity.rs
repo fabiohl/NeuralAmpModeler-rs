@@ -1892,6 +1892,9 @@ fn render_multichannel_bin() -> PathBuf {
 }
 
 fn ensure_render_multichannel_compiled() -> bool {
+    use std::sync::Mutex;
+    static MC_BUILD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = MC_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if !ensure_render_compiled() {
         return false;
     }
@@ -1911,7 +1914,9 @@ fn ensure_render_multichannel_compiled() -> bool {
                 let p = entry.path();
                 if p.is_dir() {
                     res.extend(collect_objs(&p));
-                } else if p.extension().and_then(|e| e.to_str()) == Some("o") {
+                } else if p.extension().and_then(|e| e.to_str()) == Some("o")
+                    && p.file_name().and_then(|n| n.to_str()) != Some("render.cpp.o")
+                {
                     res.push(p);
                 }
             }
@@ -1921,7 +1926,7 @@ fn ensure_render_multichannel_compiled() -> bool {
 
     let obj_dir = project_root
         .join(BUILD_DIR)
-        .join("CMakeFiles/NeuralAmpModelerCore.dir");
+        .join("tools/CMakeFiles/render.dir");
     let obj_files = collect_objs(&obj_dir);
     if obj_files.is_empty() {
         neural_amp_modeler_rs::testing::report_skip(

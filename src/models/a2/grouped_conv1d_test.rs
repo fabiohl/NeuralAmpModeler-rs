@@ -1108,3 +1108,258 @@ fn new_accepts_kernel_at_max_kernel() {
     .expect("kernel == MAX_KERNEL must construct with a consistent weight stream");
     assert_eq!(conv.kernel, kernel);
 }
+
+// =============================================================================
+// T05.1 — Frozen bit-exact goldens (recorded before the SoA repack)
+// =============================================================================
+
+fn run_frozen_case(
+    in_ch: usize,
+    out_ch: usize,
+    kernel: usize,
+    dilation: usize,
+    groups: usize,
+    seed: u32,
+    frame_idx: usize,
+    do_bias: bool,
+) -> Vec<u32> {
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, seed);
+    let conv = A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        do_bias,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .expect("frozen golden case must construct");
+
+    let layer_buffer = make_layer_buffer(frame_idx + 32, in_ch, seed ^ 0x5a5a_5a5a);
+    let mut out = vec![0.0f32; out_ch];
+    // SAFETY: `layer_buffer` covers the full lookback of `frame_idx`, `out`
+    // has `out_ch` elements, and both outlive the call.
+    unsafe {
+        grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut out, frame_idx, None);
+    }
+    out.into_iter().map(f32::to_bits).collect()
+}
+
+#[test]
+fn test_grouped_conv1d_frozen_golden_bits() {
+    // Configurations absent from the pre-T05.1 matrix: out_per_group % 4 != 0,
+    // in_per_group > 4, kernel == 1, depthwise remainder `ch % 8 != 0`, and
+    // depthwise multi-vector `ch > 8` with an odd kernel.
+    let general_odd = run_frozen_case(6, 9, 4, 3, 3, 2026, 300, true);
+    let general_k1 = run_frozen_case(10, 6, 1, 1, 2, 2028, 64, false);
+    let depthwise_tail = run_frozen_case(6, 6, 2, 1, 6, 2027, 64, true);
+    let depthwise_wide = run_frozen_case(16, 16, 5, 2, 16, 2029, 64, true);
+
+    // Measured on the pre-SoA SIMD kernel (2026-10-28). These bit patterns are
+    // the byte-for-byte contract the tap-major repack must reproduce.
+    assert_eq!(
+        general_odd,
+        vec![
+            3204644338, 3207609294, 1042346023, 1046741304, 1051990957, 1038983794, 3193255661,
+            3196502571, 1017089004
+        ]
+    );
+    assert_eq!(
+        general_k1,
+        vec![
+            3198560733, 1045108557, 1046439687, 3158382694, 3190153347, 3192983711
+        ]
+    );
+    assert_eq!(
+        depthwise_tail,
+        vec![
+            1017000571, 3165386787, 3160250785, 3192770068, 1034789874, 3180270534
+        ]
+    );
+    assert_eq!(
+        depthwise_wide,
+        vec![
+            3199588362, 1042091507, 1055593546, 3200365944, 1050952083, 3205512766, 1049894644,
+            3181343879, 3180673444, 3181944322, 3159922061, 3190867284, 1045042188, 1035457602,
+            3189191373, 1030845720
+        ]
+    );
+}
+
+// =============================================================================
+// T05.2/T05.3 — Bit-exact production dispatch after the tap-major repack
+// =============================================================================
+
+fn old_general_tree(
+    conv: &A2GroupedConv1d,
+    layer_buffer: &[f32],
+    frame_idx: usize,
+    mixin: Option<&[f32]>,
+) -> Vec<f32> {
+    let in_pg = conv.in_per_group;
+    let out_pg = conv.out_per_group;
+    let nb = conv.num_blocks_per_group;
+    let k_count = conv.kernel;
+    let mut out = vec![0.0f32; conv.out_ch];
+
+    for g in 0..conv.groups {
+        for b in 0..nb {
+            let out_c = g * out_pg + b * 4;
+            let mut acc = [0.0f32; 4];
+            for (lane, slot) in acc.iter_mut().enumerate() {
+                let idx = out_c + lane;
+                if idx < conv.out_ch {
+                    *slot = if conv.do_bias { conv.bias[idx] } else { 0.0 };
+                    if let Some(m) = mixin {
+                        *slot += m[idx];
+                    }
+                }
+            }
+
+            for k in 0..k_count {
+                let taps_back = k_count - 1 - k;
+                let col = frame_idx - conv.dilation * taps_back;
+                for ic in 0..in_pg {
+                    let h = layer_buffer[col * conv.in_ch + g * in_pg + ic];
+                    let w_base = g * (nb * k_count * in_pg * 4)
+                        + b * (k_count * in_pg * 4)
+                        + k * (in_pg * 4)
+                        + ic * 4;
+                    for (lane, slot) in acc.iter_mut().enumerate() {
+                        *slot = conv.weights[w_base + lane].mul_add(h, *slot);
+                    }
+                }
+            }
+
+            for (lane, &val) in acc.iter().enumerate() {
+                if out_c + lane < conv.out_ch {
+                    out[out_c + lane] = val;
+                }
+            }
+        }
+    }
+    out
+}
+
+fn old_depthwise_tree(
+    conv: &A2GroupedConv1d,
+    layer_buffer: &[f32],
+    frame_idx: usize,
+    mixin: Option<&[f32]>,
+) -> Vec<f32> {
+    let mut out = vec![0.0f32; conv.out_ch];
+    for c in 0..conv.out_ch {
+        let mut even = 0.0f32;
+        let mut odd = 0.0f32;
+        let mut k = 0;
+        while k + 1 < conv.kernel {
+            let tap0 = frame_idx - conv.dilation * (conv.kernel - 1 - k);
+            let tap1 = frame_idx - conv.dilation * (conv.kernel - 1 - (k + 1));
+            let w0 = conv.weights[c * (conv.kernel * 4) + k * 4];
+            let w1 = conv.weights[c * (conv.kernel * 4) + (k + 1) * 4];
+            even = w0.mul_add(layer_buffer[tap0 * conv.in_ch + c], even);
+            odd = w1.mul_add(layer_buffer[tap1 * conv.in_ch + c], odd);
+            k += 2;
+        }
+        if k < conv.kernel {
+            let tap = frame_idx - conv.dilation * (conv.kernel - 1 - k);
+            let w = conv.weights[c * (conv.kernel * 4) + k * 4];
+            even = w.mul_add(layer_buffer[tap * conv.in_ch + c], even);
+        }
+        let mut acc = even + odd;
+        if conv.do_bias {
+            acc += conv.bias[c];
+        }
+        if let Some(m) = mixin {
+            acc += m[c];
+        }
+        out[c] = acc;
+    }
+    out
+}
+
+fn assert_bits_eq(label: &str, actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len(), "{label}: length mismatch");
+    for (c, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            e.to_bits(),
+            "{label}: channel {c} not bit-exact (actual={a}, expected={e})"
+        );
+    }
+}
+
+fn build_conv(
+    in_ch: usize,
+    out_ch: usize,
+    kernel: usize,
+    dilation: usize,
+    groups: usize,
+    seed: u32,
+    do_bias: bool,
+) -> A2GroupedConv1d {
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, seed);
+    A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        do_bias,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .expect("bit-exact test conv must construct")
+}
+
+#[test]
+fn test_grouped_conv1d_bit_exact_vs_legacy_tree_general() {
+    let conv = build_conv(6, 9, 4, 3, 3, 2026, true);
+    let frame_idx = 300;
+    let layer_buffer = make_layer_buffer(frame_idx + 32, conv.in_ch, 77);
+    let mixin: Vec<f32> = (0..conv.out_ch).map(|c| c as f32 * 0.125 - 0.5).collect();
+
+    let mut actual = vec![0.0f32; conv.out_ch];
+    // SAFETY: `layer_buffer` covers the full lookback of `frame_idx`, `actual`
+    // has `out_ch` elements and `mixin` has `out_ch` elements.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut actual, frame_idx, Some(&mixin));
+    }
+    let expected = old_general_tree(&conv, &layer_buffer, frame_idx, Some(&mixin));
+    assert_bits_eq("general groups=3", &actual, &expected);
+}
+
+#[test]
+fn test_grouped_conv1d_bit_exact_vs_legacy_tree_depthwise_tail() {
+    let conv = build_conv(6, 6, 2, 1, 6, 2027, true);
+    let frame_idx = 64;
+    let layer_buffer = make_layer_buffer(frame_idx + 32, conv.in_ch, 78);
+    let mixin: Vec<f32> = (0..conv.out_ch)
+        .map(|c| 0.25 - c as f32 * 0.03125)
+        .collect();
+
+    let mut actual = vec![0.0f32; conv.out_ch];
+    // SAFETY: as above; this shape exercises the `ch % 8` scalar tail.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut actual, frame_idx, Some(&mixin));
+    }
+    let expected = old_depthwise_tree(&conv, &layer_buffer, frame_idx, Some(&mixin));
+    assert_bits_eq("depthwise ch=6", &actual, &expected);
+}
+
+#[test]
+fn test_grouped_conv1d_bit_exact_vs_legacy_tree_depthwise_wide() {
+    let conv = build_conv(16, 16, 5, 2, 16, 2029, true);
+    let frame_idx = 64;
+    let layer_buffer = make_layer_buffer(frame_idx + 32, conv.in_ch, 79);
+
+    let mut actual = vec![0.0f32; conv.out_ch];
+    // SAFETY: as above; this shape exercises two full 8-lane vectors and the
+    // odd-kernel final tap.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut actual, frame_idx, None);
+    }
+    let expected = old_depthwise_tree(&conv, &layer_buffer, frame_idx, None);
+    assert_bits_eq("depthwise ch=16", &actual, &expected);
+}

@@ -4,12 +4,14 @@
 //! 2-layer LSTM model with pipelining and SIMD dispatch.
 
 use super::layer::LstmLayer;
+use crate::math::activations::{ActivationPrecision, activation_precision};
 
 macro_rules! define_lstm2_process_pipelined {
     (
         $fn_name:ident,
         [$($target_meta:meta),+ $(,)?],
-        $layer_proc:ident,
+        $layer_hf:ident,
+        $layer_std:ident,
     ) => {
         $(#[$target_meta])+
         unsafe fn $fn_name(&mut self, input: &[f32], output: &mut [f32]) {
@@ -18,18 +20,31 @@ macro_rules! define_lstm2_process_pipelined {
             // preconditions (the dispatch path guarantees the SIMD features).
             // Callers pass `input`/`output` of equal length (clamped in
             // `process`), so every `input[i]`/`output[i-1]`/`output[len-1]`
-            // index is in bounds; `$layer_proc` is an `unsafe fn` requiring the
-            // same features.
+            // index is in bounds; `$layer_hf`/`$layer_std` are `unsafe fn`s
+            // requiring the same features.
             unsafe {
+                // Resolve the thread-local activation precision once per block:
+                // reading it inside the per-sample loop costs a TLS access (and
+                // potentially `__tls_get_addr`) on every audio sample.
+                let is_hf = activation_precision() == ActivationPrecision::Standard;
                 let len = input.len();
                 if len >= 1 {
-                    self.layer1.$layer_proc(&[input[0]]);
+                    if is_hf {
+                        self.layer1.$layer_hf(&[input[0]]);
+                    } else {
+                        self.layer1.$layer_std(&[input[0]]);
+                    }
                     let mut prev_h1 = [0.0; H];
                     prev_h1.copy_from_slice(self.layer1.get_hidden_state());
 
                     for i in 1..len {
-                        self.layer1.$layer_proc(&[input[i]]);
-                        self.layer2.$layer_proc(&prev_h1);
+                        if is_hf {
+                            self.layer1.$layer_hf(&[input[i]]);
+                            self.layer2.$layer_hf(&prev_h1);
+                        } else {
+                            self.layer1.$layer_std(&[input[i]]);
+                            self.layer2.$layer_std(&prev_h1);
+                        }
                         let h_f32 = self.layer2.get_hidden_state();
                         output[i - 1] =
                             $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
@@ -39,7 +54,11 @@ macro_rules! define_lstm2_process_pipelined {
                         prev_h1.copy_from_slice(self.layer1.get_hidden_state());
                     }
 
-                    self.layer2.$layer_proc(&prev_h1);
+                    if is_hf {
+                        self.layer2.$layer_hf(&prev_h1);
+                    } else {
+                        self.layer2.$layer_std(&prev_h1);
+                    }
                     let h_f32 = self.layer2.get_hidden_state();
                     output[len - 1] =
                         $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
@@ -98,14 +117,16 @@ impl<const H: usize, const H1_IH: usize, const H2_IH: usize, const H_H4: usize>
             ),
             cfg_attr(target_arch = "aarch64", target_feature(enable = "neon")),
         ],
-        process_sample_avx2,
+        process_sample_avx2_hf,
+        process_sample_avx2_std,
     );
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     define_lstm2_process_pipelined!(
         process_avx512,
         [target_feature(enable = "avx512f,avx512vl")],
-        process_sample_avx512,
+        process_sample_avx512_hf,
+        process_sample_avx512_std,
     );
     /// Processes an audio block through the model (SIMD dispatch).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {

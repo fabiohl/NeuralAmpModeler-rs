@@ -10,7 +10,7 @@
 //!
 //! # Usage
 //! ```sh
-//! cargo run --features testing --bin nam_remote_simd_receipt -- [--criterion-dir <DIR>] [--out <FILE>] [--json | --table] [--check]
+//! cargo run -p nam-qa --bin nam_remote_simd_receipt -- [--criterion-dir <DIR>] [--out <FILE>] [--json | --table] [--check]
 //! ```
 //!
 //! # Exit Codes

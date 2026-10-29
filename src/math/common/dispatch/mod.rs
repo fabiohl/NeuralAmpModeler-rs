@@ -19,7 +19,7 @@ pub use detect::{
 #[cfg(any(test, feature = "testing"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use detect::{clear_test_isa_override, set_test_isa_override};
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use detect::{has_full_avx512, missing_avx512_features};
 pub use instruction_set::InstructionSet;

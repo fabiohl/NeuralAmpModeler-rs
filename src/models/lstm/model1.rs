@@ -4,12 +4,14 @@
 //! 1-layer LSTM model with SIMD dispatch.
 
 use super::layer::LstmLayer;
+use crate::math::activations::{ActivationPrecision, activation_precision};
 
 macro_rules! define_lstm1_process {
     (
         $fn_name:ident,
         [$($target_meta:meta),+ $(,)?],
-        $layer_proc:ident,
+        $layer_hf:ident,
+        $layer_std:ident,
     ) => {
         $(#[$target_meta])+
         unsafe fn $fn_name(&mut self, input: &[f32], output: &mut [f32]) {
@@ -18,10 +20,19 @@ macro_rules! define_lstm1_process {
             // preconditions (the dispatch path guarantees the SIMD features).
             // Callers pass `input`/`output` of equal length (clamped in
             // `process`), so `output[i]` is in bounds for `i < input.len()`;
-            // `$layer_proc` is an `unsafe fn` requiring the same features.
+            // `$layer_hf`/`$layer_std` are `unsafe fn`s requiring the same
+            // features.
             unsafe {
+                // Resolve the thread-local activation precision once per block:
+                // reading it inside the per-sample loop costs a TLS access (and
+                // potentially `__tls_get_addr`) on every audio sample.
+                let is_hf = activation_precision() == ActivationPrecision::Standard;
                 for (i, &val) in input.iter().enumerate() {
-                    self.layer.$layer_proc(&[val]);
+                    if is_hf {
+                        self.layer.$layer_hf(&[val]);
+                    } else {
+                        self.layer.$layer_std(&[val]);
+                    }
                     let h_f32 = self.layer.get_hidden_state();
                     output[i] = $crate::math::common::scalar_ref::dot_product_f32_native_kahan4(
                         h_f32,
@@ -74,14 +85,16 @@ impl<const H: usize, const H1_IH: usize, const H_H4: usize> LstmModel1<H, H1_IH,
             ),
             cfg_attr(target_arch = "aarch64", target_feature(enable = "neon")),
         ],
-        process_sample_avx2,
+        process_sample_avx2_hf,
+        process_sample_avx2_std,
     );
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     define_lstm1_process!(
         process_avx512,
         [target_feature(enable = "avx512f,avx512vl")],
-        process_sample_avx512,
+        process_sample_avx512_hf,
+        process_sample_avx512_std,
     );
     /// Processes an audio block through the model (SIMD dispatch).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {

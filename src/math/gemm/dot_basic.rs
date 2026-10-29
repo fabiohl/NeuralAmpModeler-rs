@@ -101,7 +101,7 @@ pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// # Safety
 ///
 /// The caller must ensure that the CPU supports AVX-512F and AVX-512VL.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
@@ -139,7 +139,7 @@ pub unsafe fn dot_product_avx512(a: &[f32], b: &[f32]) -> f32 {
 /// # Safety
 ///
 /// The caller must ensure that the CPU supports AVX-512BF16 and AVX-512VL.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512bf16,avx512vl")]
 pub unsafe fn dot_product_bf16_avx512(a: &[u16], b: &[u16]) -> f32 {

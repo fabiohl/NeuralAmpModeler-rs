@@ -251,6 +251,12 @@ pub fn _mm_add_ps(a: __m128, b: __m128) -> __m128 {
 
 #[inline]
 #[target_feature(enable = "neon")]
+pub fn _mm_mul_ps(a: __m128, b: __m128) -> __m128 {
+    mul4(a, b)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 pub fn _mm_fmadd_ps(a: __m128, b: __m128, c: __m128) -> __m128 {
     fmadd4(a, b, c)
 }
@@ -508,22 +514,19 @@ pub fn _mm256_shuffle_ps(a: __m256, b: __m256, imm8: i32) -> __m256 {
 /// One 128-bit half chosen by a 4-bit `permute2f128` control nibble.
 #[inline]
 #[target_feature(enable = "neon")]
-fn select_half(a: __m256, b: __m256, control: i32) -> float32x4_t {
-    if control & 0x8 != 0 {
-        return _mm_setzero_ps();
-    }
-    match control & 0x3 {
-        0 => a.0,
-        1 => a.1,
-        2 => b.0,
-        _ => b.1,
-    }
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
 pub fn _mm256_permute2f128_ps(a: __m256, b: __m256, imm8: i32) -> __m256 {
-    __m256(select_half(a, b, imm8), select_half(a, b, imm8 >> 4))
+    let select = |control: i32| {
+        if control & 0x8 != 0 {
+            return _mm_setzero_ps();
+        }
+        match control & 0x3 {
+            0 => a.0,
+            1 => a.1,
+            2 => b.0,
+            _ => b.1,
+        }
+    };
+    __m256(select(imm8), select(imm8 >> 4))
 }
 
 #[inline]

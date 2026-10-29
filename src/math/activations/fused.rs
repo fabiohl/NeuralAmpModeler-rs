@@ -5,14 +5,14 @@
 //!
 //! Sigmoid now uses a direct degree-17 minimax polynomial independent of tanh.
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use super::relu::simd_relu_avx512;
 use super::relu::{simd_relu_avx2, simd_relu_dual_avx2};
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use super::sigmoid::simd_sigmoid_avx512;
 use super::sigmoid::{simd_sigmoid_avx2, simd_sigmoid_dual_avx2};
 use crate::activation_simd_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::activation_simd_avx512;
 use crate::arch::simd::*;
 
@@ -50,7 +50,7 @@ pub unsafe fn simd_fused_sigmoid_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m2
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_fused_sigmoid_relu_avx512(x: __m512) -> __m512 {
@@ -108,7 +108,7 @@ pub unsafe fn fused_sigmoid_relu_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn fused_sigmoid_relu_slice_avx512(slice: &mut [f32]) {

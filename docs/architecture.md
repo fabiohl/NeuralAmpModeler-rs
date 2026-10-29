@@ -13,6 +13,8 @@ NeuralAmpModeler-rs is a host-agnostic, low-latency DSP core engineered in idiom
 
 The engine operates as an independent, standalone library. Downstream applications may integrate and exercise it, but they do not dictate its internal architecture. Public APIs, diagnostics, RT policies, and error codes express reusable engine concepts rather than the lifecycle, naming conventions, or transport protocols of any specific host, audio backend, or plugin format. Consumer-specific lifecycle adaptations belong downstream.
 
+During compilation, [`build.rs`](../build.rs) writes generated DSP tables (minimum-phase sinc resampler, half-band oversampler, Farina sweep) exclusively into Cargo's isolated `$OUT_DIR`. The auxiliary shell fragment `target/bench_constants.env` (consumed only by in-repository QA tooling) is gated by `is_primary_build()`, which checks `CARGO_PRIMARY_PACKAGE` and—because Cargo 1.99.1 does not forward `CARGO_PRIMARY_PACKAGE` to build scripts—falls back to checking whether `OUT_DIR` is rooted under `<manifest_dir>/target`. An external consumer building in its own target directory never writes into the dependency checkout; the only residual edge case is a consumer that explicitly points `CARGO_TARGET_DIR` inside `<manifest_dir>/target`.
+
 ---
 
 ## 1. Inference Engine Architecture
@@ -63,7 +65,7 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 2. **SIMD Dispatch & AVX-512 Policy:**
 
    - Vector operations are abstracted behind the [`SimdMath`](../src/math/common/traits/mod.rs) trait and instantiated via the static `dispatch_simd!` macro.
-   - **Production Backend:** `Avx2Math` is the sole production math backend (on aarch64 it runs through the NEON layer, reported as `NEON (AVX2-compatible layer)`). In standard x86_64 release builds, CPUs lacking `x86-64-v3` support are rejected off-RT during model construction with `E5001 UNSUPPORTED_CPU_ARCHITECTURE`. No scalar fallback branches exist on the audio hot path.
+   - **Production Backend:** `Avx2Math` is the sole production math backend (on aarch64 it runs through the NEON layer, reported as `NEON (AVX2-compatible layer)`). The `x86-64-v3` baseline is a compile-time contract enforced by `compile_error!` in `src/lib.rs`; there is no runtime AVX2/FMA check. A host lacking AVX2/FMA running a v3 binary terminates with SIGILL. `E5001` is reserved and discontinued (see the error catalog). No scalar fallback branches exist on the audio hot path.
    - **AVX-512 Gating & L1i Cache Defense:** AVX-512 kernels are isolated behind the opt-in `avx512` Cargo feature (`#[cfg(feature = "avx512")]`). Default builds completely omit AVX-512 code, keeping EVEX/ZMM instructions out of `.text` and defending the critical 32 KB core L1 instruction cache (L1i) budget.
    - **Architectural Rationale:** Real-time audio inference operates on small sample blocks (e.g., $N=64$). At these block sizes, AVX-512 yields negative or negligible throughput improvements over AVX2 due to CPU frequency transitions and vector setup overheads, while significantly expanding code footprint. AVX-512 sources are retained strictly for offline research, comparative benchmarking, and experimental verification. When enabled, dispatch mandates the complete `F+VL+BW+DQ` host capability matrix to prevent `SIGILL` on hypervisors.
 
@@ -173,7 +175,7 @@ To eliminate circular index wrapping and modulo branching in dilated convolution
 - **Page Size:** Ring sizes are rounded up to whole pages, and the ring length equals the mapping size (the mirror wraps at the mapping boundary), so the whole rounded ring is touched as the write position cycles. Rings are therefore larger on 16 KiB (Apple Silicon) and 64 KiB (some aarch64 Linux kernels) page systems; on 64 KiB kernels a 23-layer A2 model's rings can exceed a core's L2 cache.
 - **Descriptor Lifecycle:** `libc::close(fd)` is called immediately after mappings succeed. On Linux, `MAP_SHARED` maintains page residency independently of the file descriptor; mappings are freed cleanly during `Drop` via `munmap`.
 - **Soundness & `MirrorSafe`:** Storage is zero-filled by the kernel and elements physically alias across virtual halves. To ensure absolute soundness, [`MirroredBuffer<T>`](../src/dsp/mirror_buf.rs) requires `T: MirrorSafe` via a sealed trait implemented only for types where all-bits-zero is sound, `Copy` is implemented (preventing drop leaks or double-drops), and addresses do not dictate identity (e.g. `f32`, `f64`, integer primitives). Non-zero-valid types (like `NonZeroU32`) are statically rejected at compile time.
-- **Portability:** Linux and macOS are supported; other platforms compile a fallback stub returning `Unsupported`. Huge pages are Linux-only.
+- **Portability:** Linux and Apple Silicon macOS (`aarch64-apple-darwin`) are supported; Intel macOS (`x86_64-apple-darwin`) is not validated. Other platforms compile a fallback stub returning `Unsupported`. Huge pages are Linux-only.
 
 ---
 
@@ -218,12 +220,15 @@ The audio thread operates under strict real-time guarantees:
 - **Low-Overhead Telemetry:** Direct read of the CPU cycle counter ([`common::tsc`](../src/common/tsc.rs): RDTSC on x86_64, the generic timer `CNTVCT_EL0` calibrated from `CNTFRQ_EL0` on aarch64) replaces `Instant::now()` (vDSO syscall) for low-cost profiling without kernel jitter.
 - **Cache-Line Isolation:** SPSC communication structures are aligned to 128 bytes (`#[repr(align(128))]`) to prevent multi-core false sharing between audio and control threads.
 
-### Host Hardening (Linux RT)
+### Host Hardening (Linux and macOS RT)
 
 When real-time host hardening is enabled (via the `rt-hardening` feature), the
 engine exposes a host-agnostic bring-up API under
 [`src/rt_hardening/`](../src/rt_hardening/) — never enabled by default and never
-naming a specific host or sibling project:
+naming a specific host or sibling project. The module is split by OS; no
+affinity or `SCHED_FIFO` symbol is exposed on macOS.
+
+#### Linux
 
 - **Scheduling:** `SCHED_FIFO` promotion plus IRQ-aware CPU affinity. The
   optimal core is chosen by `select_cpu_with_source` /
@@ -238,6 +243,36 @@ naming a specific host or sibling project:
 - **Memory Locking:** `mlockall(MCL_CURRENT | MCL_FUTURE)` to eliminate page faults.
 - **Power Management:** PM-QoS lock (`/dev/cpu_dma_latency`) prevents CPU deep C-state sleep transitions.
 - **Kernel Spikes:** THP compaction spikes are disabled via `prctl(PR_SET_THP_DISABLE)`.
+
+#### macOS
+
+The macOS surface follows the XNU real-time contract and the design recorded in
+[`docs/rt-macos-adr.md`](rt-macos-adr.md):
+
+- **QoS:** `pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)`.
+- **Time Constraint:** `thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)` with
+  period, computation and constraint derived from `buffer_frames`/`sample_rate`
+  through `mach_timebase_info`; `compute_thread_timing` is the pure, tested
+  conversion.
+- **Memory Locking:** `mlock_region` (`libc::mlock`) for bounded host-owned
+  model/scratch regions (`mlockall_current` is omitted on macOS until
+  `_mlockall` is verified on an Apple host).
+- **Audio Workgroups:** `join_audio_workgroup` joins the calling thread to a
+  host-supplied `os_workgroup_t` and returns an RAII guard; CoreAudio is never
+  linked or referenced by the crate.
+- **Denormals:** `FPCR.FZ` via `set_ftz_daz` (x86_64 macOS uses MXCSR).
+- **Absent by design:** CPU affinity, `SCHED_FIFO`, PM-QoS and THP do not exist
+  in the XNU contract.
+
+##### macOS Link Flags
+
+`.cargo/config.toml` scopes macOS flags under `cfg(target_os = "macos")` so
+Linux and aarch64 builds do not inherit them. The active flag is
+`-Wl,-dead_strip`. `-Wl,-bind_at_load` was removed because `rust-lld -flavor darwin`
+reports it as not yet implemented and it is deprecated in modern Apple `ld-prime`
+without verified benefit on a real macOS host. The crate cross-build
+(`cargo build --lib --target aarch64-apple-darwin --features rt-hardening`) is
+green; a full executable link is exercised on the `macos-arm64` CI runner.
 
 #### CPU Isolation (generic Linux RT guidance)
 
@@ -381,7 +416,7 @@ NeuralAmpModeler-rs separates the host-agnostic DSP core into distinct architect
 | **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.              |
 | **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute. |
 | **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.    |
-| **RT Hardening** | `src/rt_hardening/` | Optional Linux real-time system tuning (`mlockall`, `SCHED_FIFO`, affinity, PM-QoS).               |
+| **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlockall`/workgroups). |
 | **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).      |
 
 ```mermaid
@@ -410,7 +445,7 @@ graph TD
 | **`heap-audit`**         | No      | Activates allocation-tracking hooks for automated zero-allocation hot-path validation.                                                                                                 |
 | **`fft-radix4-planner`** | No      | Exposes Radix-4 DIT FFT execution planning benchmark routines.                                                                                                                         |
 | **`avx512`**             | No      | Compiles research/benchmarking AVX-512 upward dispatch kernels (omitted from default binaries).                                                                                        |
-| **`rt-hardening`**       | No      | Enables Linux real-time process hardening (`mlockall`, `SCHED_FIFO`, core pinning, PM-QoS).                                                                                            |
+| **`rt-hardening`**       | No      | Enables real-time process hardening (Linux `mlockall`/`SCHED_FIFO`/core pinning/PM-QoS; macOS QoS/time constraint/`mlockall`/Audio Workgroups).                                        |
 | **`on-demand`**          | No      | Developer-only fixture generation and profiling harnesses (never enabled by CI or QA runners).                                                                                          |
 
 ---
@@ -592,7 +627,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 | **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with three pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates), `E2202` (`InvalidCabsimPartitionSize` for zero partition size), and `E2304` (`HostFormatContractViolation` when planar processing helpers receive fewer channel planes than declared by the model). |
 | **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                                                                                                                                                             |
 | **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                                                                                                                                                           |
-| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (Unsupported CPU Architecture lacking `x86-64-v3`).                                                                                                                                                                                                                                                      |
+| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (reserved, discontinued: no runtime `x86-64-v3` check).                                                                                                                                                                                                                                                      |
 
 ### Complete Error Code Reference
 
@@ -600,7 +635,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 - **E2xxx (Audio / DSP):** `E2001` PROCESSING_OVERLOAD, `E2100` AUDIO_INIT_FAILED, `E2101` STREAM_ERROR, `E2200` RESAMPLER_BUILD_FAILED, `E2201` RESAMPLER_CHANNEL_FULL, `E2202` INVALID_CABSIM_PARTITION_SIZE, `E2300` RT_PRIORITY_DENIED, `E2301` CPU_AFFINITY_FAILED, `E2302` BACKEND_FAILURE, `E2304` HOST_FORMAT_CONTRACT_VIOLATION.
 - **E3xxx (SPSC):** `E3100` PARAM_CHANNEL_FULL, `E3101` GC_OVERFLOW, `E3102` GC_CORRUPTED, `E3103` INVALID_SPSC_CAPACITY.
 - **E4xxx (Runtime):** `E4100` INVALID_GAIN_VALUE, `E4101` UNKNOWN_COMMAND, `E4102` CTRL_C_HANDLER_FAILED, `E4103` IR_LOAD_FAILED.
-- **E5xxx (System):** `E5000` OUT_OF_MEMORY, `E5001` UNSUPPORTED_CPU_ARCHITECTURE.
+- **E5xxx (System):** `E5000` OUT_OF_MEMORY; `E5001` UNSUPPORTED_CPU_ARCHITECTURE reserved and discontinued (x86-64-v3 is a compile-time guarantee, `src/lib.rs`).
 
 ### Crash Diagnostics & Cache Retention
 

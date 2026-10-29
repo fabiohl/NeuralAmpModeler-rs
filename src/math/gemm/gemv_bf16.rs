@@ -12,14 +12,14 @@
 //! Uses `_mm512_dpbf16_ps` to process 32 BF16 pairs per instruction,
 //! with 8 independent accumulators to break the FMA dependency chain.
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::arch::simd::*;
 
 /// GEMV BF16 AVX-512: Y = Bias + W * X, where X and W are in BF16 format.
 ///
 /// Processes the linear projection in blocks of 16 output channels, with 8 independent
 /// ZMM accumulators and step 16 in the inner loop (16 BF16 pairs = 32 elements).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[cfg_attr(
     target_arch = "x86_64",

@@ -180,6 +180,12 @@ fn emit_and_assert(label: &str, stats: &DeadlineStats) {
                  reason=\"debug_build_assertions_disabled\" violations={}/{} max={}μs",
                 stats.violations, stats.total_blocks, stats.exact_max_us,
             );
+            if std::env::var("NAM_RT_STRICT").as_deref() == Ok("1") {
+                panic!(
+                    "[STRICT] [{label}] RT deadline assertions disabled in debug build under NAM_RT_STRICT=1 — \
+                     run with --release"
+                );
+            }
         } else {
             println!(
                 "[{label}] RECEIPT: deadline_ok violations={}/{} max={}μs",
@@ -204,6 +210,12 @@ fn emit_and_assert(label: &str, stats: &DeadlineStats) {
             "[{label}] INCONCLUSIVE_ENVIRONMENT — tail/max values not certified \
              (environment preconditions not met)"
         );
+        if std::env::var("NAM_RT_STRICT").as_deref() == Ok("1") {
+            panic!(
+                "[STRICT] [{label}] RT preflight failed in strict mode (NAM_RT_STRICT=1) — \
+                 uncontrolled environment is a failure under utils/tests-long.sh --strict"
+            );
+        }
     }
 }
 

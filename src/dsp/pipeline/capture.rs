@@ -51,7 +51,7 @@ pub fn capture_dsp_pipeline(
     sample_rate: u32,
 ) -> usize {
     use crate::math::common::Avx2Math;
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     use crate::math::common::{Avx512Math, InstructionSet, effective_instruction_set};
 
     // Reassert FTZ+DAZ (MXCSR bits 0x8040) on the audio thread
@@ -72,7 +72,7 @@ pub fn capture_dsp_pipeline(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         #[expect(deprecated)]
         match effective_instruction_set() {
@@ -104,7 +104,7 @@ pub fn capture_dsp_pipeline(
             }
         }
     }
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         // SAFETY: inner invariants upheld by caller.
         unsafe {
@@ -302,7 +302,7 @@ pub fn capture_dsp_pipeline_streaming<'b>(
 ) -> usize {
     let bufs = bufs.into();
     use crate::math::common::Avx2Math;
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     use crate::math::common::{Avx512Math, InstructionSet, effective_instruction_set};
 
     // SAFETY: Setting denormals-as-zero / flush-to-zero is safe on x86_64 targets.
@@ -318,7 +318,7 @@ pub fn capture_dsp_pipeline_streaming<'b>(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         #[expect(deprecated)]
         match effective_instruction_set() {
@@ -352,7 +352,7 @@ pub fn capture_dsp_pipeline_streaming<'b>(
             }
         }
     }
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         // SAFETY: Fallback executes baseline AVX2 kernels supported by x86-64-v3.
         unsafe {

@@ -43,7 +43,8 @@ pub use reference::{grouped_conv1d_block_ref, grouped_conv1d_single_frame_ref};
 
 use simd::{grouped_conv1d_single_frame_simd, process_single_frame_depthwise_avx2};
 
-/// Grouped dilated causal Conv1D with interleaved-4-wide f32 weights.
+/// Grouped dilated causal Conv1D with interleaved-4-wide weights and a
+/// depthwise tap-major SoA copy.
 ///
 /// Divides input and output channels into `groups` independent sub-convolutions.
 /// Each group operates on `in_per_group = in_ch / groups` input channels and
@@ -55,8 +56,16 @@ use simd::{grouped_conv1d_single_frame_simd, process_single_frame_depthwise_avx2
 #[derive(Clone)]
 #[repr(align(64))]
 pub struct A2GroupedConv1d {
-    /// Grouped-interleaved-4-wide f32 weights.
-    /// Layout: `[group][num_blocks][kernel][in_per_group][4]`
+    /// Grouped-conv weights.
+    ///
+    /// The grouped-interleaved-4-wide `[group][num_blocks][kernel][in_per_group][4]`
+    /// block comes first and is consumed by the general kernel and by
+    /// [`reference::grouped_conv1d_single_frame_ref`].
+    ///
+    /// Depthwise convolutions append a tap-major SoA copy
+    /// `[kernel][channel]` after that block; the depthwise kernel reads it by
+    /// offset, so the hot general path keeps the historical field layout and
+    /// the reference keeps validating the pre-repack bytes.
     pub weights: AlignedVec<f32>,
     /// Bias vector `[out_ch]`.
     pub bias: AlignedVec<f32>,
@@ -141,8 +150,12 @@ impl A2GroupedConv1d {
         let num_blocks_per_group = out_per_group.div_ceil(4);
         let total_blocks = groups * num_blocks_per_group;
         let total_padded = total_blocks * 4 * in_per_group * kernel;
+        let is_depthwise = groups == in_ch && groups == out_ch;
 
-        let mut weights = AlignedVec::new(total_padded, 0.0f32)?;
+        // Depthwise appends a compact `[kernel][channel]` SoA tail after the
+        // interleaved block; every other shape uses exactly `total_padded`.
+        let soa_len = if is_depthwise { kernel * in_ch } else { 0 };
+        let mut weights = AlignedVec::new(total_padded + soa_len, 0.0f32)?;
         let bias = AlignedVec::from_vec(raw_bias.to_vec())?;
 
         for g in 0..groups {
@@ -165,6 +178,17 @@ impl A2GroupedConv1d {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // Depthwise compact repack appended after the interleaved block:
+        // collapse the one-valid-lane 4-wide blocks to `[kernel][channel]`.
+        if is_depthwise {
+            let soa_base = total_padded;
+            for g in 0..groups {
+                for k in 0..kernel {
+                    weights[soa_base + k * in_ch + g] = weights[g * (kernel * 4) + k * 4];
                 }
             }
         }

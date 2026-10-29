@@ -4,7 +4,7 @@
 //! Optimized ReLU (Rectified Linear Unit) activation kernels.
 
 use crate::activation_simd_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::activation_simd_avx512;
 use crate::arch::simd::*;
 
@@ -33,7 +33,7 @@ pub unsafe fn simd_relu_dual_avx2(x1: __m256, x2: __m256) -> (__m256, __m256) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn simd_relu_avx512(x: __m512) -> __m512 {
@@ -82,7 +82,7 @@ pub unsafe fn relu_slice_avx2(slice: &mut [f32]) {
 ///
 /// # Safety
 /// Requires AVX-512F and AVX-512VL support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub unsafe fn relu_slice_avx512(slice: &mut [f32]) {

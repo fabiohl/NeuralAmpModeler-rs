@@ -246,7 +246,7 @@ proptest! {
 /// Deterministic sweep of the Padé NR2 AVX-512 path against `f64::tanh`
 /// over the full audio domain `[-10, 10]`.  Only executes on hardware
 /// with AVX-512F+VL+DQ support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_tanh_pade_nr2_sweep_avx512() {
     use crate::arch::simd::*;
@@ -326,7 +326,7 @@ proptest! {
             .unwrap_or(if cfg!(debug_assertions) { 1_000 } else { 100_000 }),
         .. ProptestConfig::default()
     })]
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     fn test_tanh_pade_nr2_proptest_100k_avx512(x in -10.0f32..10.0f32) {
         use crate::arch::simd::*;
@@ -544,9 +544,9 @@ fn test_fused_sigmoid_relu_slice_dispatch_smoke() {
     let original = data.clone();
     // SAFETY: the match dispatches to the kernel matching `SIMD_MATH.instruction_set`, which was validated at detection time; `data` is a valid 64-element slice.
     unsafe {
-        #[cfg_attr(feature = "avx512", expect(deprecated))]
+        #[cfg_attr(nam_avx512, expect(deprecated))]
         match crate::math::common::SIMD_MATH.instruction_set {
-            #[cfg(feature = "avx512")]
+            #[cfg(nam_avx512)]
             crate::math::common::InstructionSet::Avx512
             | crate::math::common::InstructionSet::Avx512VnniBf16 => {
                 fused::fused_sigmoid_relu_slice_avx512(&mut data);
@@ -566,4 +566,21 @@ fn test_fused_sigmoid_relu_slice_dispatch_smoke() {
             "fused[{i}] = {b}, expected {expected}, delta {error}"
         );
     }
+}
+
+/// The scalar tail must apply the same FTZ policy as the SIMD body and keep
+/// the sign of the flushed value (signed zero, not always `+0.0`).
+#[test]
+fn test_tanh_scalar_tail_flushes_subnormals_with_sign() {
+    let _guard = set_thread_local_activation_precision(Some(ActivationPrecision::Fast));
+    let positive = f32::from_bits(1);
+    let negative = f32::from_bits(0x8000_0001);
+    let mut data = vec![0.0_f32; 18];
+    data[16] = positive;
+    data[17] = negative;
+
+    tanh_slice(&mut data);
+
+    assert_eq!(data[16].to_bits(), 0.0_f32.to_bits());
+    assert_eq!(data[17].to_bits(), (-0.0_f32).to_bits());
 }

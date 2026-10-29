@@ -64,6 +64,15 @@ production link targets: the engine test suite (`--lib`), integration suites
 (`--features testing,dual-mono`), and downstream targets (dynamic-library plugin
 builds and standalone hosts).
 
+**Scope of the protection (consumers):** the version script in
+`.cargo/hide-libm-shadow.map` is applied by `build.rs` through
+`cargo:rustc-link-arg`. Cargo passes that argument only to this package's own
+link targets (its tests, bins, examples and dynamic-library outputs). It does not
+propagate to the final binary of a downstream crate. A consumer that links a
+same-named libm shadow from another dependency is **not** protected by this
+crate and must apply an equivalent version script in its own build. No public
+helper exists for this; one is recorded as backlog if demand appears.
+
 ## 2. Why this was hard to find
 
 The DSP algorithm exercised by the failing test (`X2Stage::upsample`/

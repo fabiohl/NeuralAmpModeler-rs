@@ -94,9 +94,11 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Production policy is the AVX2 backend; the AVX-512 match arm is not a
     /// promoted product path (see `docs/architecture.md` §1.2).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        // SAFETY: `dispatch_simd!` expands to a runtime-CPUID-matched call of
-        // `process_internal::<M>`, guaranteeing `M`'s `#[target_feature]` backend is available on
-        // this host; `input`/`output` are the same validated slices passed to this safe wrapper.
+        // SAFETY: `dispatch_simd!` expands to a call of `process_internal::<M>` selected by
+        // `effective_instruction_set()`. The x86-64-v3 baseline (AVX2/FMA) is a compile-time
+        // guarantee (`src/lib.rs`): on a pre-v3 host the binary raises SIGILL and no runtime
+        // rejection exists. AVX-512 is reached only with the `avx512` feature and full host support.
+        // `input`/`output` are the same validated slices passed to this safe wrapper.
         unsafe { crate::math::common::dispatch_simd!(self, process_internal, input, output) };
     }
 
@@ -197,7 +199,7 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     ///
     /// # Safety
     /// Requires a supported processor (AVX-512).
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
     #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]

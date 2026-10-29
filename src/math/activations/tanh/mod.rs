@@ -19,7 +19,7 @@
 /// Also exports the `simd_tanh_sigmoid_dual_poly_*` gated fusion.
 pub mod high_fidelity;
 /// AVX-512 polynomial exp/tanh kernels (re-exported by `high_fidelity`).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub mod high_fidelity_avx512;
 pub mod production;

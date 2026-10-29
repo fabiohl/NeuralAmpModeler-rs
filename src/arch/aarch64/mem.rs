@@ -199,27 +199,13 @@ pub unsafe fn _mm256_i32gather_ps(base_addr: *const f32, vindex: __m256i, scale:
     )
 }
 
-/// Data prefetch. `T0` → L1, `T1` → L2, `T2` → L3, `NTA` → L1 streaming.
-/// A hint only: never dereferences `p` and never faults.
+/// Data prefetch. On x86-64 this maps to `prefetcht0/t1/t2/nta`, whose policy
+/// was measured in `docs/benchmarks.md`. On aarch64 it is a documented no-op:
+/// `prfm` inside `asm!` is a scheduling barrier around the NEON loads, and no
+/// Apple M-series or Neoverse measurement justifies transplanting the x86
+/// policy. The signature is kept so the intrinsic surface stays identical.
 #[inline]
 #[target_feature(enable = "neon")]
 pub fn _mm_prefetch<const STRATEGY: i32>(p: *const i8) {
-    // SAFETY: `prfm` is a hint: it never dereferences `p`, cannot fault, and has no other
-    // effects.
-    unsafe {
-        match STRATEGY {
-            super::_MM_HINT_T0 => core::arch::asm!(
-                "prfm pldl1keep, [{0}]", in(reg) p, options(nostack, readonly, preserves_flags)
-            ),
-            super::_MM_HINT_T1 => core::arch::asm!(
-                "prfm pldl2keep, [{0}]", in(reg) p, options(nostack, readonly, preserves_flags)
-            ),
-            super::_MM_HINT_T2 => core::arch::asm!(
-                "prfm pldl3keep, [{0}]", in(reg) p, options(nostack, readonly, preserves_flags)
-            ),
-            _ => core::arch::asm!(
-                "prfm pldl1strm, [{0}]", in(reg) p, options(nostack, readonly, preserves_flags)
-            ),
-        }
-    }
+    let _ = (p, STRATEGY);
 }

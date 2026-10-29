@@ -4,7 +4,7 @@
 //! RAII Guards for forcing specific instruction set dispatch in testing & benchmarking.
 
 use crate::math::common::dispatch::detect::TEST_ISA_OVERRIDE;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::encode_isa_override;
 use crate::math::common::{InstructionSet, IsaOverrideError, set_test_isa_override};
 use std::sync::atomic::Ordering;
@@ -48,14 +48,14 @@ impl Drop for ForceAvx2Guard {
 /// exclusively on [`InstructionSet::Avx512`] for the lifetime of the guard.
 ///
 /// On [`Drop::drop`], the previous instruction set override setting is restored.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[derive(Debug)]
 pub struct ForceAvx512Guard {
     prev_override: u8,
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl ForceAvx512Guard {
     /// Fallibly creates a new guard, forcing [`InstructionSet::Avx512`] SIMD
@@ -100,7 +100,7 @@ impl ForceAvx512Guard {
     }
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl Default for ForceAvx512Guard {
     fn default() -> Self {
@@ -109,7 +109,7 @@ impl Default for ForceAvx512Guard {
     }
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 impl Drop for ForceAvx512Guard {
     fn drop(&mut self) {
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     #[serial]
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     fn test_force_avx512_guard_try_new_requires_full_capability() {
         // Acceptance: try_new() on a host without the full F+VL+BW+DQ
         // matrix returns a structured error — never a crash/SIGILL.
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     #[serial]
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     fn test_generic_isa_guard_avx512_lifecycle() {
         let initial_isa = effective_instruction_set();
         let result = IsaGuard::try_set(InstructionSet::Avx512);
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     #[serial]
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     fn test_force_avx512_guard_new_unchecked_injects_without_executing() {
         // Controlled fault-injection: new_unchecked() forces the override even
         // on a partial host, but setting the atomic alone does NOT execute any

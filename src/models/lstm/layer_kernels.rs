@@ -86,7 +86,7 @@ macro_rules! define_lstm_process_impl {
         $fused_gates:path,
     ) => {
         $(#[$target_meta])+
-        unsafe fn $fn_name(&mut self, input: &[f32]) {
+        pub(crate) unsafe fn $fn_name(&mut self, input: &[f32]) {
             // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
             // `$target_meta`; callers guarantee the SIMD features and
             // `input.len() >= I`. `state[..I]`/`input[..I]` obey that contract;
@@ -99,10 +99,7 @@ macro_rules! define_lstm_process_impl {
                 // State buffer layout: [x_t (size I) | h_{t-1} (size H)].
                 self.state[..I].copy_from_slice(&input[..I]);
 
-                // 2. Prefetch state buffer to L1 cache for subsequent SIMD operations.
-                _mm_prefetch::<{ _MM_HINT_T0 }>(self.state.as_ptr().cast::<i8>());
-
-                // 3. Affine Gate Pre-activations (GEMV):
+                // 2. Affine Gate Pre-activations (GEMV):
                 // Multiplies concatenated state [x_t, h_{t-1}] by the 4 gate weight matrices plus bias:
                 //   z = [x_t, h_{t-1}] * W^T + b
                 // yielding pre-activation vectors for the 4 LSTM gates:
@@ -118,7 +115,7 @@ macro_rules! define_lstm_process_impl {
                     true,
                 );
 
-                // 4. Memory offsets for the four gate pre-activations in the flattened gate buffer:
+                // 3. Memory offsets for the four gate pre-activations in the flattened gate buffer:
                 //   - Input gate (i): index 0..H
                 //   - Forget gate (f): offset H..2H
                 //   - Cell candidate gate (g): offset 2H..3H
@@ -130,7 +127,7 @@ macro_rules! define_lstm_process_impl {
                 let h_offset = I; // Hidden state destination (h) in state buffer
 
                 let mut i = 0;
-                // 5. Vectorized Recurrence & Cell State Update:
+                // 4. Vectorized Recurrence & Cell State Update:
                 // Evaluates the standard LSTM non-linearities and state recurrence in SIMD lanes:
                 //   f_t = σ(z_f)
                 //   i_t = σ(z_i)
@@ -159,7 +156,7 @@ macro_rules! define_lstm_process_impl {
                     i += $step;
                 }
 
-                // 6. 'Tail' Handling: If the number of neurons is not an exact multiple of the
+                // 5. 'Tail' Handling: If the number of neurons is not an exact multiple of the
                 // parallel processing, we handle the last elements individually.
                 if i < H {
                     let tail_len = H - i;
@@ -235,7 +232,7 @@ impl<const I: usize, const H: usize, const IH: usize, const H4: usize> LstmLayer
     // 2. AVX-512 (F/VL) Specialization:
     // Uses 256-bit EVEX registers with 4-way input unrolling for 4-gate GEMV,
     // eliminating register spilling and serial FMA latency bottlenecks.
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     define_lstm_process!(
         process_sample_avx512,
         process_sample_avx512_hf,

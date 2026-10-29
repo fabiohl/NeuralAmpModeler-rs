@@ -21,6 +21,34 @@ macro_rules! gemm_batch_frame_loop_avx2 {
     };
 }
 
+/// 4-frame batch outer loop with an optional 2-frame pair tail — caller owns
+/// `$f` and `$num_frames`.
+///
+/// `$use_pair` is a const-foldable predicate (for the const kernel: whether the
+/// shape fits the pair tile). When false the expansion is the original batch
+/// plus single-frame tail, so wide shapes keep their pre-pairing codegen. When
+/// true, a two- or three-frame remainder executes the pair tile first and falls
+/// through to the single-frame tail for a one-frame remainder (`num_frames - f == 1`),
+/// emitting the single-frame tail only once and preserving pre-pairing codegen
+/// on 1-frame and 5-frame blocks.
+#[macro_export]
+macro_rules! gemm_batch_frame_loop_pair_avx2 {
+    ($f:ident, $num_frames:expr, $use_pair:expr, { $($batch_body:tt)* }, { $($pair_body:tt)* }, { $($tail_frame:tt)* }) => {
+        while $f + 4 <= $num_frames {
+            { $($batch_body)* }
+            $f += 4;
+        }
+        if $use_pair && $f + 2 <= $num_frames {
+            { $($pair_body)* }
+            $f += 2;
+        }
+        while $f < $num_frames {
+            { $($tail_frame)* }
+            $f += 1;
+        }
+    };
+}
+
 /// 8-wide output channel loop + scalar tail — caller owns `$out_c`.
 #[macro_export]
 macro_rules! gemm_batch_outc_loop_avx2 {

@@ -15,7 +15,7 @@ rm -f "$LOG_DIR/skips.jsonl"
 
 PHASE_NAME=freshness; phase freshness
 log_fresh="$LOG_DIR/quick-freshness.log"; rc_fresh=0
-cargo run --quiet --locked --features testing --bin nam_freshness -- artifacts-hard > "$log_fresh" 2>&1 || rc_fresh=$?
+cargo run --quiet --locked -p nam-qa --bin nam_freshness -- artifacts-hard > "$log_fresh" 2>&1 || rc_fresh=$?
 if [ "$rc_fresh" -eq 0 ]; then
   if grep -q "GENERATOR CHANGED" "$log_fresh"; then gap "generator-drift"; fi
   emit "PHASE: freshness PASS log=$log_fresh"

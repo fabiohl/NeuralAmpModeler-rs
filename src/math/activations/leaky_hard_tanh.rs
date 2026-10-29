@@ -4,7 +4,7 @@
 //! Optimized LeakyHardTanh activation kernels.
 
 use crate::activation_simd_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::activation_simd_avx512;
 use crate::arch::simd::*;
 
@@ -76,7 +76,7 @@ pub unsafe fn leaky_hard_tanh_slice_avx2(
 ///
 /// # Safety
 /// Requires AVX-512F, AVX-512VL, and FMA support.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[cfg_attr(
     target_arch = "x86_64",

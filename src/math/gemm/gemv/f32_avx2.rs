@@ -6,58 +6,286 @@ use crate::gemv_f32_inner_loop_avx2;
 
 const SMALL_IN_LEN_THRESHOLD_AVX2: usize = 4;
 
-/// 8×8 matrix transpose: row_k holds frame (n+k)'s 8 input channels at
-/// offset ic. unpack → shuffle → permute2f128 converts from row-major
-/// [frame][channel] to column-major [channel][frame] layout, so v_in_k
-/// broadcasts channel k across all 8 frames.
-macro_rules! transpose_8x8_f32_avx2 {
-    ($row0:ident, $row1:ident, $row2:ident, $row3:ident,
-     $row4:ident, $row5:ident, $row6:ident, $row7:ident,
-     $v_in0:ident, $v_in1:ident, $v_in2:ident, $v_in3:ident,
-     $v_in4:ident, $v_in5:ident, $v_in6:ident, $v_in7:ident) => {
-        let t0 = _mm256_unpacklo_ps($row0, $row1);
-        let t1 = _mm256_unpackhi_ps($row0, $row1);
-        let t2 = _mm256_unpacklo_ps($row2, $row3);
-        let t3 = _mm256_unpackhi_ps($row2, $row3);
-        let t4 = _mm256_unpacklo_ps($row4, $row5);
-        let t5 = _mm256_unpackhi_ps($row4, $row5);
-        let t6 = _mm256_unpacklo_ps($row6, $row7);
-        let t7 = _mm256_unpackhi_ps($row6, $row7);
+// Lane 0..7 summed in memory order, matching the previous `iter().sum()`
+// reduction without materializing the vector on the stack.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn sequential_lane_sum(v: __m256) -> f32 {
+    let lo = _mm256_castps256_ps128(v);
+    let hi = _mm256_extractf128_ps(v, 1);
+    let mut sum = _mm_cvtss_f32(lo);
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(lo, lo, 0x55));
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(lo, lo, 0xAA));
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(lo, lo, 0xFF));
+    sum += _mm_cvtss_f32(hi);
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(hi, hi, 0x55));
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(hi, hi, 0xAA));
+    sum += _mm_cvtss_f32(_mm_shuffle_ps(hi, hi, 0xFF));
+    sum
+}
+
+// ── Partial output-channel tail ───────────────────────────────────────────────
+//
+// The last `out_len % 8` lanes are accumulated with four 128-bit lanes plus
+// scalar lanes for the remainder. Both paths keep the same per-lane summation
+// order as the 8-accumulator AVX2 loop, so the result is bit-identical to the
+// previous masked implementation while avoiding `_mm256_maskload_ps`,
+// `_mm256_maskstore_ps` and the scratch-mask `memset`/`memcpy` they induced.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gemv_tail_f32<const WITH_BIAS: bool, const BROADCAST: bool>(
+    in_frame: *const f32,
+    weights: *const f32,
+    bias: *const f32,
+    out: *mut f32,
+    in_len: usize,
+    out_len: usize,
+    oc: usize,
+) {
+    let rem = out_len - oc;
+
+    // `in_len == 1`: every output lane is a single fused multiply-add.
+    if BROADCAST {
+        let v_in = _mm_set1_ps(*in_frame);
+        if rem >= 4 {
+            let v_w = _mm_loadu_ps(weights.add(oc));
+            let v_out = if WITH_BIAS {
+                _mm_fmadd_ps(v_in, v_w, _mm_loadu_ps(bias.add(oc)))
+            } else {
+                _mm_mul_ps(v_in, v_w)
+            };
+            _mm_storeu_ps(out.add(oc), v_out);
+        }
+        let mut lane = if rem >= 4 { 4 } else { 0 };
+        while lane < rem {
+            let w = *weights.add(oc + lane);
+            *out.add(oc + lane) = if WITH_BIAS {
+                f32::mul_add(*in_frame, w, *bias.add(oc + lane))
+            } else {
+                *in_frame * w
+            };
+            lane += 1;
+        }
+        return;
+    }
+
+    let mut lane = 0;
+    if rem >= 4 {
+        let mut acc0 = if WITH_BIAS {
+            _mm_loadu_ps(bias.add(oc))
+        } else {
+            _mm_setzero_ps()
+        };
+        let mut acc1 = _mm_setzero_ps();
+        let mut acc2 = _mm_setzero_ps();
+        let mut acc3 = _mm_setzero_ps();
+        let mut acc4 = _mm_setzero_ps();
+        let mut acc5 = _mm_setzero_ps();
+        let mut acc6 = _mm_setzero_ps();
+        let mut acc7 = _mm_setzero_ps();
+        let mut ic = 0;
+        while ic + 8 <= in_len {
+            let w_ptr = weights.add(ic * out_len + oc);
+            acc0 = _mm_fmadd_ps(_mm_set1_ps(*in_frame.add(ic)), _mm_loadu_ps(w_ptr), acc0);
+            acc1 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 1)),
+                _mm_loadu_ps(w_ptr.add(out_len)),
+                acc1,
+            );
+            acc2 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 2)),
+                _mm_loadu_ps(w_ptr.add(2 * out_len)),
+                acc2,
+            );
+            acc3 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 3)),
+                _mm_loadu_ps(w_ptr.add(3 * out_len)),
+                acc3,
+            );
+            acc4 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 4)),
+                _mm_loadu_ps(w_ptr.add(4 * out_len)),
+                acc4,
+            );
+            acc5 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 5)),
+                _mm_loadu_ps(w_ptr.add(5 * out_len)),
+                acc5,
+            );
+            acc6 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 6)),
+                _mm_loadu_ps(w_ptr.add(6 * out_len)),
+                acc6,
+            );
+            acc7 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic + 7)),
+                _mm_loadu_ps(w_ptr.add(7 * out_len)),
+                acc7,
+            );
+            ic += 8;
+        }
+        acc0 = _mm_add_ps(acc0, acc1);
+        acc2 = _mm_add_ps(acc2, acc3);
+        acc4 = _mm_add_ps(acc4, acc5);
+        acc6 = _mm_add_ps(acc6, acc7);
+        acc0 = _mm_add_ps(acc0, acc2);
+        acc4 = _mm_add_ps(acc4, acc6);
+        acc0 = _mm_add_ps(acc0, acc4);
+        while ic < in_len {
+            acc0 = _mm_fmadd_ps(
+                _mm_set1_ps(*in_frame.add(ic)),
+                _mm_loadu_ps(weights.add(ic * out_len + oc)),
+                acc0,
+            );
+            ic += 1;
+        }
+        _mm_storeu_ps(out.add(oc), acc0);
+        lane = 4;
+    }
+
+    // Lanes past the 4-wide block, with the same 8-chain order per lane.
+    while lane < rem {
+        let mut acc0 = if WITH_BIAS { *bias.add(oc + lane) } else { 0.0 };
+        let mut acc1 = 0.0f32;
+        let mut acc2 = 0.0f32;
+        let mut acc3 = 0.0f32;
+        let mut acc4 = 0.0f32;
+        let mut acc5 = 0.0f32;
+        let mut acc6 = 0.0f32;
+        let mut acc7 = 0.0f32;
+        let mut ic = 0;
+        while ic + 8 <= in_len {
+            let w = weights.add(ic * out_len + oc + lane);
+            acc0 = f32::mul_add(*in_frame.add(ic), *w, acc0);
+            acc1 = f32::mul_add(*in_frame.add(ic + 1), *w.add(out_len), acc1);
+            acc2 = f32::mul_add(*in_frame.add(ic + 2), *w.add(2 * out_len), acc2);
+            acc3 = f32::mul_add(*in_frame.add(ic + 3), *w.add(3 * out_len), acc3);
+            acc4 = f32::mul_add(*in_frame.add(ic + 4), *w.add(4 * out_len), acc4);
+            acc5 = f32::mul_add(*in_frame.add(ic + 5), *w.add(5 * out_len), acc5);
+            acc6 = f32::mul_add(*in_frame.add(ic + 6), *w.add(6 * out_len), acc6);
+            acc7 = f32::mul_add(*in_frame.add(ic + 7), *w.add(7 * out_len), acc7);
+            ic += 8;
+        }
+        acc0 += acc1;
+        acc2 += acc3;
+        acc4 += acc5;
+        acc6 += acc7;
+        acc0 += acc2;
+        acc4 += acc6;
+        acc0 += acc4;
+        while ic < in_len {
+            acc0 = f32::mul_add(
+                *in_frame.add(ic),
+                *weights.add(ic * out_len + oc + lane),
+                acc0,
+            );
+            ic += 1;
+        }
+        *out.add(oc + lane) = acc0;
+        lane += 1;
+    }
+}
+
+// ── Single-output dot product, four frames per tile ──────────────────────────
+//
+// `out_len == 1` transposes four frames by eight channels into four YMM
+// accumulators, each packing two channel chains (`k` in the low half, `k + 4`
+// in the high half). The pairwise reduction below reproduces the 8-chain
+// balanced tree exactly, so each frame keeps its previous summation order.
+#[inline]
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+unsafe fn gemv_out1_tile4<const WITH_BIAS: bool>(
+    in_frames: *const f32,
+    weights: *const f32,
+    bias: f32,
+    out: *mut f32,
+    in_len: usize,
+    n: usize,
+) {
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut acc2 = _mm256_setzero_ps();
+    let mut acc3 = _mm256_setzero_ps();
+    let mut ic = 0;
+    while ic + 8 <= in_len {
+        let w0 = *weights.add(ic);
+        let w1 = *weights.add(ic + 1);
+        let w2 = *weights.add(ic + 2);
+        let w3 = *weights.add(ic + 3);
+        let w4 = *weights.add(ic + 4);
+        let w5 = *weights.add(ic + 5);
+        let w6 = *weights.add(ic + 6);
+        let w7 = *weights.add(ic + 7);
+
+        let row0 = _mm256_loadu_ps(in_frames.add(n * in_len + ic));
+        let row1 = _mm256_loadu_ps(in_frames.add((n + 1) * in_len + ic));
+        let row2 = _mm256_loadu_ps(in_frames.add((n + 2) * in_len + ic));
+        let row3 = _mm256_loadu_ps(in_frames.add((n + 3) * in_len + ic));
+
+        let t0 = _mm256_unpacklo_ps(row0, row1);
+        let t1 = _mm256_unpackhi_ps(row0, row1);
+        let t2 = _mm256_unpacklo_ps(row2, row3);
+        let t3 = _mm256_unpackhi_ps(row2, row3);
+
+        // Low 128 bits: channel k across the four frames. High 128 bits:
+        // channel k + 4. Each register is consumed by the FMA that follows.
         let s0 = _mm256_shuffle_ps(t0, t2, 0x44);
         let s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
         let s2 = _mm256_shuffle_ps(t1, t3, 0x44);
         let s3 = _mm256_shuffle_ps(t1, t3, 0xEE);
-        let s4 = _mm256_shuffle_ps(t4, t6, 0x44);
-        let s5 = _mm256_shuffle_ps(t4, t6, 0xEE);
-        let s6 = _mm256_shuffle_ps(t5, t7, 0x44);
-        let s7 = _mm256_shuffle_ps(t5, t7, 0xEE);
-        let $v_in0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-        let $v_in1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-        let $v_in2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-        let $v_in3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-        let $v_in4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-        let $v_in5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-        let $v_in6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-        let $v_in7 = _mm256_permute2f128_ps(s3, s7, 0x31);
-    };
+
+        acc0 = _mm256_fmadd_ps(s0, _mm256_set_m128(_mm_set1_ps(w4), _mm_set1_ps(w0)), acc0);
+        acc1 = _mm256_fmadd_ps(s1, _mm256_set_m128(_mm_set1_ps(w5), _mm_set1_ps(w1)), acc1);
+        acc2 = _mm256_fmadd_ps(s2, _mm256_set_m128(_mm_set1_ps(w6), _mm_set1_ps(w2)), acc2);
+        acc3 = _mm256_fmadd_ps(s3, _mm256_set_m128(_mm_set1_ps(w7), _mm_set1_ps(w3)), acc3);
+        ic += 8;
+    }
+
+    // P0 = [a0 | a4], P1 = [a1 | a5], P2 = [a2 | a6], P3 = [a3 | a7].
+    // (P0 + P1) + (P2 + P3) yields [((a0+a1)+(a2+a3)) | ((a4+a5)+(a6+a7))];
+    // the final half sum matches the original tree.
+    let p01 = _mm256_add_ps(acc0, acc1);
+    let p23 = _mm256_add_ps(acc2, acc3);
+    let packed = _mm256_add_ps(p01, p23);
+    let mut res = _mm_add_ps(
+        _mm256_castps256_ps128(packed),
+        _mm256_extractf128_ps(packed, 1),
+    );
+    while ic < in_len {
+        let v_in = _mm_setr_ps(
+            *in_frames.add(n * in_len + ic),
+            *in_frames.add((n + 1) * in_len + ic),
+            *in_frames.add((n + 2) * in_len + ic),
+            *in_frames.add((n + 3) * in_len + ic),
+        );
+        res = _mm_fmadd_ps(v_in, _mm_set1_ps(*weights.add(ic)), res);
+        ic += 1;
+    }
+    if WITH_BIAS {
+        res = _mm_add_ps(res, _mm_set1_ps(bias));
+    }
+    _mm_storeu_ps(out.add(n), res);
 }
 
 // ── Batched f32 GEMV ──────────────────────────────────────────────────────────
 
 /// Batch GEMV overwrite with bias using native f32 weights via AVX2.
 ///
-/// Unified kernel using broadcast-input / accumulator-output pattern
-/// with masked tail via `_mm256_maskstore_ps`. Covers all shapes without
+/// Unified kernel using broadcast-input / accumulator-output pattern with a
+/// mask-free tail (4-wide SIMD plus scalar lanes). Covers all shapes without
 /// scalar fallback.
 ///
 /// Strategy:
 /// - `in_len == 1`: broadcast the single input, multiply-add weights and bias
-///   in blocks of 8 output channels, maskstore tail.
-/// - `out_len == 1`: batch 8 frames per YMM (8-wide dot product deferred
-///   horizontal reduction), with per-frame fallback for remainder.
+///   in blocks of 8 output channels, mask-free tail.
+/// - `out_len == 1`: two 4-frame tiles per 8-frame block (8-wide dot product
+///   deferred horizontal reduction), with per-frame fallback for remainder.
 /// - General: 8-way unrolled broadcast-input over output-channel blocks
-///   of 8, with `_mm256_maskload_ps` + `_mm256_maskstore_ps` for the
-///   final partial block when `out_len % 8 != 0`.
+///   of 8, with the mask-free tail for the final partial block when
+///   `out_len % 8 != 0`.
 ///
 /// # Safety
 /// - `num_frames` must be > 0.
@@ -102,111 +330,47 @@ pub unsafe fn gemv_with_bias_f32_avx2(
                 oc += 8;
             }
             if oc < out_len {
-                let rem = out_len - oc;
-                let mut mask_buf = [0i32; 8];
-                let mut w_buf = [0.0f32; 8];
-                let mut b_buf = [0.0f32; 8];
-                for i in 0..rem {
-                    mask_buf[i] = -1;
-                    w_buf[i] = *weights.get_unchecked(oc + i);
-                    b_buf[i] = *bias.get_unchecked(oc + i);
-                }
-                let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-                let v_w = _mm256_loadu_ps(w_buf.as_ptr());
-                let v_b = _mm256_loadu_ps(b_buf.as_ptr());
-                let v_out = _mm256_fmadd_ps(v_in, v_w, v_b);
-                _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * out_len + oc), mask, v_out);
+                gemv_tail_f32::<true, true>(
+                    in_frames.as_ptr().add(n),
+                    weights.as_ptr(),
+                    bias.as_ptr(),
+                    out_frames.as_mut_ptr().add(n * out_len),
+                    1,
+                    out_len,
+                    oc,
+                );
             }
         }
         return;
     }
 
-    // ── out_len == 1: batch 8 frames per YMM ────────────────────────────
+    // ── out_len == 1: two 4-frame tiles per 8-frame block ───────────────
     // When projecting down to a single output channel (e.g. WaveNet head arrays or
     // linear projections), processing one frame at a time would underutilize the 8-lane
     // 256-bit AVX2 registers. We therefore batch 8 consecutive audio frames across the SIMD lanes.
     if out_len == 1 {
         let mut n = 0;
         if in_len > SMALL_IN_LEN_THRESHOLD_AVX2 {
-            // Process full 8-frame blocks:
+            // Preserve the previous 8-frame block partition: each block is two
+            // independent 4-frame tiles, so trailing frames keep the legacy
+            // per-frame fallback below.
             while n + 8 <= num_frames {
-                // Initialize 8 independent accumulators to break latency dependency chains.
-                let mut acc0 = _mm256_setzero_ps();
-                let mut acc1 = _mm256_setzero_ps();
-                let mut acc2 = _mm256_setzero_ps();
-                let mut acc3 = _mm256_setzero_ps();
-                let mut acc4 = _mm256_setzero_ps();
-                let mut acc5 = _mm256_setzero_ps();
-                let mut acc6 = _mm256_setzero_ps();
-                let mut acc7 = _mm256_setzero_ps();
-                let mut ic = 0;
-
-                // Inner loop: step through channels 8 at a time.
-                while ic + 8 <= in_len {
-                    // Broadcast each weight scalar across all 8 SIMD lanes:
-                    let v_w0 = _mm256_set1_ps(*weights.get_unchecked(ic));
-                    let v_w1 = _mm256_set1_ps(*weights.get_unchecked(ic + 1));
-                    let v_w2 = _mm256_set1_ps(*weights.get_unchecked(ic + 2));
-                    let v_w3 = _mm256_set1_ps(*weights.get_unchecked(ic + 3));
-                    let v_w4 = _mm256_set1_ps(*weights.get_unchecked(ic + 4));
-                    let v_w5 = _mm256_set1_ps(*weights.get_unchecked(ic + 5));
-                    let v_w6 = _mm256_set1_ps(*weights.get_unchecked(ic + 6));
-                    let v_w7 = _mm256_set1_ps(*weights.get_unchecked(ic + 7));
-
-                    // Load 8 channels from 8 consecutive audio frames (rows):
-                    let row0 = _mm256_loadu_ps(in_frames.as_ptr().add((n) * in_len + ic));
-                    let row1 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 1) * in_len + ic));
-                    let row2 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 2) * in_len + ic));
-                    let row3 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 3) * in_len + ic));
-                    let row4 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 4) * in_len + ic));
-                    let row5 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 5) * in_len + ic));
-                    let row6 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 6) * in_len + ic));
-                    let row7 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 7) * in_len + ic));
-
-                    // In-register 8x8 transpose: converts 8 frames of 8 channels into
-                    // 8 SIMD registers where each register holds the same channel across the 8 frames.
-                    transpose_8x8_f32_avx2!(
-                        row0, row1, row2, row3, row4, row5, row6, row7, v_in0, v_in1, v_in2, v_in3,
-                        v_in4, v_in5, v_in6, v_in7
-                    );
-
-                    // Accumulate dot products across all 8 frames in parallel via FMA (Fused Multiply-Add):
-                    acc0 = _mm256_fmadd_ps(v_in0, v_w0, acc0);
-                    acc1 = _mm256_fmadd_ps(v_in1, v_w1, acc1);
-                    acc2 = _mm256_fmadd_ps(v_in2, v_w2, acc2);
-                    acc3 = _mm256_fmadd_ps(v_in3, v_w3, acc3);
-                    acc4 = _mm256_fmadd_ps(v_in4, v_w4, acc4);
-                    acc5 = _mm256_fmadd_ps(v_in5, v_w5, acc5);
-                    acc6 = _mm256_fmadd_ps(v_in6, v_w6, acc6);
-                    acc7 = _mm256_fmadd_ps(v_in7, v_w7, acc7);
-                    ic += 8;
-                }
-
-                // Balanced reduction tree to sum partial accumulators into acc0:
-                acc0 = _mm256_add_ps(acc0, acc1);
-                acc2 = _mm256_add_ps(acc2, acc3);
-                acc4 = _mm256_add_ps(acc4, acc5);
-                acc6 = _mm256_add_ps(acc6, acc7);
-                acc0 = _mm256_add_ps(acc0, acc2);
-                acc4 = _mm256_add_ps(acc4, acc6);
-                acc0 = _mm256_add_ps(acc0, acc4);
-                while ic < in_len {
-                    let v_w = _mm256_set1_ps(*weights.get_unchecked(ic));
-                    let mut buf = [0.0f32; 8];
-                    #[expect(
-                        clippy::needless_range_loop,
-                        reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
-                    )]
-                    for j in 0..8 {
-                        buf[j] = *in_frames.get_unchecked((n + j) * in_len + ic);
-                    }
-                    let v_in = _mm256_loadu_ps(buf.as_ptr());
-                    acc0 = _mm256_fmadd_ps(v_in, v_w, acc0);
-                    ic += 1;
-                }
-                let v_b = _mm256_set1_ps(*bias.get_unchecked(0));
-                acc0 = _mm256_add_ps(acc0, v_b);
-                _mm256_storeu_ps(out_frames.as_mut_ptr().add(n), acc0);
+                gemv_out1_tile4::<true>(
+                    in_frames.as_ptr(),
+                    weights.as_ptr(),
+                    *bias.get_unchecked(0),
+                    out_frames.as_mut_ptr(),
+                    in_len,
+                    n,
+                );
+                gemv_out1_tile4::<true>(
+                    in_frames.as_ptr(),
+                    weights.as_ptr(),
+                    *bias.get_unchecked(0),
+                    out_frames.as_mut_ptr(),
+                    in_len,
+                    n + 4,
+                );
                 n += 8;
             }
         }
@@ -221,19 +385,43 @@ pub unsafe fn gemv_with_bias_f32_avx2(
             }
             if ic < in_len {
                 let rem = in_len - ic;
-                let mut buf_in = [0.0f32; 8];
-                let mut buf_w = [0.0f32; 8];
-                for i in 0..rem {
-                    buf_in[i] = *in_frames.get_unchecked(n * in_len + ic + i);
-                    buf_w[i] = *weights.get_unchecked(ic + i);
-                }
-                let v_in = _mm256_loadu_ps(buf_in.as_ptr());
-                let v_w = _mm256_loadu_ps(buf_w.as_ptr());
+                let in_at = |i: usize| {
+                    if i < rem {
+                        *in_frames.get_unchecked(n * in_len + ic + i)
+                    } else {
+                        0.0
+                    }
+                };
+                let w_at = |i: usize| {
+                    if i < rem {
+                        *weights.get_unchecked(ic + i)
+                    } else {
+                        0.0
+                    }
+                };
+                let v_in = _mm256_setr_ps(
+                    in_at(0),
+                    in_at(1),
+                    in_at(2),
+                    in_at(3),
+                    in_at(4),
+                    in_at(5),
+                    in_at(6),
+                    in_at(7),
+                );
+                let v_w = _mm256_setr_ps(
+                    w_at(0),
+                    w_at(1),
+                    w_at(2),
+                    w_at(3),
+                    w_at(4),
+                    w_at(5),
+                    w_at(6),
+                    w_at(7),
+                );
                 acc = _mm256_fmadd_ps(v_in, v_w, acc);
             }
-            let mut tmp = [0.0f32; 8];
-            _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
-            let sum: f32 = tmp.iter().sum();
+            let sum = sequential_lane_sum(acc);
             *out_frames.get_unchecked_mut(n) = sum + *bias.get_unchecked(0);
         }
         return;
@@ -264,97 +452,45 @@ pub unsafe fn gemv_with_bias_f32_avx2(
             acc0 = _mm256_add_ps(acc0, acc2);
             acc4 = _mm256_add_ps(acc4, acc6);
             acc0 = _mm256_add_ps(acc0, acc4);
-            let mut tail = [0.0f32; 8];
+            let mut tail = _mm256_setzero_ps();
             while ic < in_len {
-                let inp = *in_frames.get_unchecked(n * in_len + ic);
-                let base_idx = ic * out_len + oc;
-                for (j, t) in tail.iter_mut().enumerate() {
-                    *t = f32::mul_add(inp, *weights.get_unchecked(base_idx + j), *t);
-                }
+                let inp = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
+                let vw = _mm256_loadu_ps(weights.as_ptr().add(ic * out_len + oc));
+                tail = _mm256_fmadd_ps(inp, vw, tail);
                 ic += 1;
             }
-            acc0 = _mm256_add_ps(acc0, _mm256_loadu_ps(tail.as_ptr()));
+            acc0 = _mm256_add_ps(acc0, tail);
             _mm256_storeu_ps(out_frames.as_mut_ptr().add(n * out_len + oc), acc0);
             oc += 8;
         }
         if oc < out_len {
-            let rem = out_len - oc;
-            let mut mask_buf = [0i32; 8];
-            mask_buf.iter_mut().take(rem).for_each(|m| *m = -1);
-            let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-            let mut bias_buf = [0.0f32; 8];
-            for (i, b) in bias_buf.iter_mut().enumerate().take(rem) {
-                *b = *bias.get_unchecked(oc + i);
-            }
-            let mut acc0 = _mm256_loadu_ps(bias_buf.as_ptr());
-            let mut acc1 = _mm256_setzero_ps();
-            let mut acc2 = _mm256_setzero_ps();
-            let mut acc3 = _mm256_setzero_ps();
-            let mut acc4 = _mm256_setzero_ps();
-            let mut acc5 = _mm256_setzero_ps();
-            let mut acc6 = _mm256_setzero_ps();
-            let mut acc7 = _mm256_setzero_ps();
-            let mut ic = 0;
-            while ic + 8 <= in_len {
-                let vs0 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
-                let vs1 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 1));
-                let vs2 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 2));
-                let vs3 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 3));
-                let vs4 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 4));
-                let vs5 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 5));
-                let vs6 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 6));
-                let vs7 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 7));
-                let w_ptr = weights.as_ptr().add(ic * out_len + oc);
-                let w0 = _mm256_maskload_ps(w_ptr, mask);
-                acc0 = _mm256_fmadd_ps(vs0, w0, acc0);
-                let w1 = _mm256_maskload_ps(w_ptr.add(out_len), mask);
-                acc1 = _mm256_fmadd_ps(vs1, w1, acc1);
-                let w2 = _mm256_maskload_ps(w_ptr.add(2 * out_len), mask);
-                acc2 = _mm256_fmadd_ps(vs2, w2, acc2);
-                let w3 = _mm256_maskload_ps(w_ptr.add(3 * out_len), mask);
-                acc3 = _mm256_fmadd_ps(vs3, w3, acc3);
-                let w4 = _mm256_maskload_ps(w_ptr.add(4 * out_len), mask);
-                acc4 = _mm256_fmadd_ps(vs4, w4, acc4);
-                let w5 = _mm256_maskload_ps(w_ptr.add(5 * out_len), mask);
-                acc5 = _mm256_fmadd_ps(vs5, w5, acc5);
-                let w6 = _mm256_maskload_ps(w_ptr.add(6 * out_len), mask);
-                acc6 = _mm256_fmadd_ps(vs6, w6, acc6);
-                let w7 = _mm256_maskload_ps(w_ptr.add(7 * out_len), mask);
-                acc7 = _mm256_fmadd_ps(vs7, w7, acc7);
-                ic += 8;
-            }
-            acc0 = _mm256_add_ps(acc0, acc1);
-            acc2 = _mm256_add_ps(acc2, acc3);
-            acc4 = _mm256_add_ps(acc4, acc5);
-            acc6 = _mm256_add_ps(acc6, acc7);
-            acc0 = _mm256_add_ps(acc0, acc2);
-            acc4 = _mm256_add_ps(acc4, acc6);
-            acc0 = _mm256_add_ps(acc0, acc4);
-            while ic < in_len {
-                let vs = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
-                let vw = _mm256_maskload_ps(weights.as_ptr().add(ic * out_len + oc), mask);
-                acc0 = _mm256_fmadd_ps(vs, vw, acc0);
-                ic += 1;
-            }
-            _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * out_len + oc), mask, acc0);
+            gemv_tail_f32::<true, false>(
+                in_frames.as_ptr().add(n * in_len),
+                weights.as_ptr(),
+                bias.as_ptr(),
+                out_frames.as_mut_ptr().add(n * out_len),
+                in_len,
+                out_len,
+                oc,
+            );
         }
     }
 }
 
 /// Batch GEMV overwrite without bias using native f32 weights via AVX2.
 ///
-/// Unified kernel using broadcast-input / accumulator-output pattern
-/// with masked tail via `_mm256_maskstore_ps`. Covers all shapes without
+/// Unified kernel using broadcast-input / accumulator-output pattern with a
+/// mask-free tail (4-wide SIMD plus scalar lanes). Covers all shapes without
 /// scalar fallback.
 ///
 /// Strategy:
 /// - `in_len == 1`: broadcast the single input, multiply-add weights
-///   in blocks of 8 output channels, maskstore tail.
-/// - `out_len == 1`: batch 8 frames per YMM (8-wide dot product deferred
-///   horizontal reduction), with per-frame fallback for remainder.
+///   in blocks of 8 output channels, mask-free tail.
+/// - `out_len == 1`: two 4-frame tiles per 8-frame block (8-wide dot product
+///   deferred horizontal reduction), with per-frame fallback for remainder.
 /// - General: 8-way unrolled broadcast-input over output-channel blocks
-///   of 8, with `_mm256_maskload_ps` + `_mm256_maskstore_ps` for the
-///   final partial block when `out_len % 8 != 0`.
+///   of 8, with the mask-free tail for the final partial block when
+///   `out_len % 8 != 0`.
 ///
 /// # Safety
 /// - `num_frames` must be > 0.
@@ -395,89 +531,44 @@ pub unsafe fn gemv_no_bias_f32_avx2(
                 oc += 8;
             }
             if oc < out_len {
-                let rem = out_len - oc;
-                let mut mask_buf = [0i32; 8];
-                let mut w_buf = [0.0f32; 8];
-                for i in 0..rem {
-                    mask_buf[i] = -1;
-                    w_buf[i] = *weights.get_unchecked(oc + i);
-                }
-                let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-                let v_w = _mm256_loadu_ps(w_buf.as_ptr());
-                let v_out = _mm256_mul_ps(v_in, v_w);
-                _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * out_len + oc), mask, v_out);
+                gemv_tail_f32::<false, true>(
+                    in_frames.as_ptr().add(n),
+                    weights.as_ptr(),
+                    core::ptr::null(),
+                    out_frames.as_mut_ptr().add(n * out_len),
+                    1,
+                    out_len,
+                    oc,
+                );
             }
         }
         return;
     }
 
-    // ── out_len == 1: batch 8 frames per YMM ────────────────────────────
+    // ── out_len == 1: two 4-frame tiles per 8-frame block ───────────────
     if out_len == 1 {
         let mut n = 0;
         if in_len > SMALL_IN_LEN_THRESHOLD_AVX2 {
+            // Preserve the previous 8-frame block partition: each block is two
+            // independent 4-frame tiles, so trailing frames keep the legacy
+            // per-frame fallback below.
             while n + 8 <= num_frames {
-                let mut acc0 = _mm256_setzero_ps();
-                let mut acc1 = _mm256_setzero_ps();
-                let mut acc2 = _mm256_setzero_ps();
-                let mut acc3 = _mm256_setzero_ps();
-                let mut acc4 = _mm256_setzero_ps();
-                let mut acc5 = _mm256_setzero_ps();
-                let mut acc6 = _mm256_setzero_ps();
-                let mut acc7 = _mm256_setzero_ps();
-                let mut ic = 0;
-                while ic + 8 <= in_len {
-                    let v_w0 = _mm256_set1_ps(*weights.get_unchecked(ic));
-                    let v_w1 = _mm256_set1_ps(*weights.get_unchecked(ic + 1));
-                    let v_w2 = _mm256_set1_ps(*weights.get_unchecked(ic + 2));
-                    let v_w3 = _mm256_set1_ps(*weights.get_unchecked(ic + 3));
-                    let v_w4 = _mm256_set1_ps(*weights.get_unchecked(ic + 4));
-                    let v_w5 = _mm256_set1_ps(*weights.get_unchecked(ic + 5));
-                    let v_w6 = _mm256_set1_ps(*weights.get_unchecked(ic + 6));
-                    let v_w7 = _mm256_set1_ps(*weights.get_unchecked(ic + 7));
-                    let row0 = _mm256_loadu_ps(in_frames.as_ptr().add((n) * in_len + ic));
-                    let row1 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 1) * in_len + ic));
-                    let row2 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 2) * in_len + ic));
-                    let row3 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 3) * in_len + ic));
-                    let row4 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 4) * in_len + ic));
-                    let row5 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 5) * in_len + ic));
-                    let row6 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 6) * in_len + ic));
-                    let row7 = _mm256_loadu_ps(in_frames.as_ptr().add((n + 7) * in_len + ic));
-                    transpose_8x8_f32_avx2!(
-                        row0, row1, row2, row3, row4, row5, row6, row7, v_in0, v_in1, v_in2, v_in3,
-                        v_in4, v_in5, v_in6, v_in7
-                    );
-                    acc0 = _mm256_fmadd_ps(v_in0, v_w0, acc0);
-                    acc1 = _mm256_fmadd_ps(v_in1, v_w1, acc1);
-                    acc2 = _mm256_fmadd_ps(v_in2, v_w2, acc2);
-                    acc3 = _mm256_fmadd_ps(v_in3, v_w3, acc3);
-                    acc4 = _mm256_fmadd_ps(v_in4, v_w4, acc4);
-                    acc5 = _mm256_fmadd_ps(v_in5, v_w5, acc5);
-                    acc6 = _mm256_fmadd_ps(v_in6, v_w6, acc6);
-                    acc7 = _mm256_fmadd_ps(v_in7, v_w7, acc7);
-                    ic += 8;
-                }
-                acc0 = _mm256_add_ps(acc0, acc1);
-                acc2 = _mm256_add_ps(acc2, acc3);
-                acc4 = _mm256_add_ps(acc4, acc5);
-                acc6 = _mm256_add_ps(acc6, acc7);
-                acc0 = _mm256_add_ps(acc0, acc2);
-                acc4 = _mm256_add_ps(acc4, acc6);
-                acc0 = _mm256_add_ps(acc0, acc4);
-                while ic < in_len {
-                    let v_w = _mm256_set1_ps(*weights.get_unchecked(ic));
-                    let mut buf = [0.0f32; 8];
-                    #[expect(
-                        clippy::needless_range_loop,
-                        reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
-                    )]
-                    for j in 0..8 {
-                        buf[j] = *in_frames.get_unchecked((n + j) * in_len + ic);
-                    }
-                    let v_in = _mm256_loadu_ps(buf.as_ptr());
-                    acc0 = _mm256_fmadd_ps(v_in, v_w, acc0);
-                    ic += 1;
-                }
-                _mm256_storeu_ps(out_frames.as_mut_ptr().add(n), acc0);
+                gemv_out1_tile4::<false>(
+                    in_frames.as_ptr(),
+                    weights.as_ptr(),
+                    0.0,
+                    out_frames.as_mut_ptr(),
+                    in_len,
+                    n,
+                );
+                gemv_out1_tile4::<false>(
+                    in_frames.as_ptr(),
+                    weights.as_ptr(),
+                    0.0,
+                    out_frames.as_mut_ptr(),
+                    in_len,
+                    n + 4,
+                );
                 n += 8;
             }
         }
@@ -491,20 +582,44 @@ pub unsafe fn gemv_no_bias_f32_avx2(
                 ic += 8;
             }
             if ic < in_len {
-                let mut buf_in = [0.0f32; 8];
-                let mut buf_w = [0.0f32; 8];
                 let rem = in_len - ic;
-                for i in 0..rem {
-                    buf_in[i] = *in_frames.get_unchecked(n * in_len + ic + i);
-                    buf_w[i] = *weights.get_unchecked(ic + i);
-                }
-                let v_in = _mm256_loadu_ps(buf_in.as_ptr());
-                let v_w = _mm256_loadu_ps(buf_w.as_ptr());
+                let in_at = |i: usize| {
+                    if i < rem {
+                        *in_frames.get_unchecked(n * in_len + ic + i)
+                    } else {
+                        0.0
+                    }
+                };
+                let w_at = |i: usize| {
+                    if i < rem {
+                        *weights.get_unchecked(ic + i)
+                    } else {
+                        0.0
+                    }
+                };
+                let v_in = _mm256_setr_ps(
+                    in_at(0),
+                    in_at(1),
+                    in_at(2),
+                    in_at(3),
+                    in_at(4),
+                    in_at(5),
+                    in_at(6),
+                    in_at(7),
+                );
+                let v_w = _mm256_setr_ps(
+                    w_at(0),
+                    w_at(1),
+                    w_at(2),
+                    w_at(3),
+                    w_at(4),
+                    w_at(5),
+                    w_at(6),
+                    w_at(7),
+                );
                 acc = _mm256_fmadd_ps(v_in, v_w, acc);
             }
-            let mut tmp = [0.0f32; 8];
-            _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
-            let sum: f32 = tmp.iter().sum();
+            let sum = sequential_lane_sum(acc);
             *out_frames.get_unchecked_mut(n) = sum;
         }
         return;
@@ -535,75 +650,27 @@ pub unsafe fn gemv_no_bias_f32_avx2(
             acc0 = _mm256_add_ps(acc0, acc2);
             acc4 = _mm256_add_ps(acc4, acc6);
             acc0 = _mm256_add_ps(acc0, acc4);
-            let mut tail = [0.0f32; 8];
+            let mut tail = _mm256_setzero_ps();
             while ic < in_len {
-                let inp = *in_frames.get_unchecked(n * in_len + ic);
-                let base_idx = ic * out_len + oc;
-                for (j, t) in tail.iter_mut().enumerate() {
-                    *t = f32::mul_add(inp, *weights.get_unchecked(base_idx + j), *t);
-                }
+                let inp = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
+                let vw = _mm256_loadu_ps(weights.as_ptr().add(ic * out_len + oc));
+                tail = _mm256_fmadd_ps(inp, vw, tail);
                 ic += 1;
             }
-            acc0 = _mm256_add_ps(acc0, _mm256_loadu_ps(tail.as_ptr()));
+            acc0 = _mm256_add_ps(acc0, tail);
             _mm256_storeu_ps(out_frames.as_mut_ptr().add(n * out_len + oc), acc0);
             oc += 8;
         }
         if oc < out_len {
-            let rem = out_len - oc;
-            let mut mask_buf = [0i32; 8];
-            mask_buf.iter_mut().take(rem).for_each(|m| *m = -1);
-            let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-            let mut acc0 = _mm256_setzero_ps();
-            let mut acc1 = _mm256_setzero_ps();
-            let mut acc2 = _mm256_setzero_ps();
-            let mut acc3 = _mm256_setzero_ps();
-            let mut acc4 = _mm256_setzero_ps();
-            let mut acc5 = _mm256_setzero_ps();
-            let mut acc6 = _mm256_setzero_ps();
-            let mut acc7 = _mm256_setzero_ps();
-            let mut ic = 0;
-            while ic + 8 <= in_len {
-                let vs0 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
-                let vs1 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 1));
-                let vs2 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 2));
-                let vs3 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 3));
-                let vs4 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 4));
-                let vs5 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 5));
-                let vs6 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 6));
-                let vs7 = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic + 7));
-                let w_ptr = weights.as_ptr().add(ic * out_len + oc);
-                let w0 = _mm256_maskload_ps(w_ptr, mask);
-                acc0 = _mm256_fmadd_ps(vs0, w0, acc0);
-                let w1 = _mm256_maskload_ps(w_ptr.add(out_len), mask);
-                acc1 = _mm256_fmadd_ps(vs1, w1, acc1);
-                let w2 = _mm256_maskload_ps(w_ptr.add(2 * out_len), mask);
-                acc2 = _mm256_fmadd_ps(vs2, w2, acc2);
-                let w3 = _mm256_maskload_ps(w_ptr.add(3 * out_len), mask);
-                acc3 = _mm256_fmadd_ps(vs3, w3, acc3);
-                let w4 = _mm256_maskload_ps(w_ptr.add(4 * out_len), mask);
-                acc4 = _mm256_fmadd_ps(vs4, w4, acc4);
-                let w5 = _mm256_maskload_ps(w_ptr.add(5 * out_len), mask);
-                acc5 = _mm256_fmadd_ps(vs5, w5, acc5);
-                let w6 = _mm256_maskload_ps(w_ptr.add(6 * out_len), mask);
-                acc6 = _mm256_fmadd_ps(vs6, w6, acc6);
-                let w7 = _mm256_maskload_ps(w_ptr.add(7 * out_len), mask);
-                acc7 = _mm256_fmadd_ps(vs7, w7, acc7);
-                ic += 8;
-            }
-            acc0 = _mm256_add_ps(acc0, acc1);
-            acc2 = _mm256_add_ps(acc2, acc3);
-            acc4 = _mm256_add_ps(acc4, acc5);
-            acc6 = _mm256_add_ps(acc6, acc7);
-            acc0 = _mm256_add_ps(acc0, acc2);
-            acc4 = _mm256_add_ps(acc4, acc6);
-            acc0 = _mm256_add_ps(acc0, acc4);
-            while ic < in_len {
-                let vs = _mm256_set1_ps(*in_frames.get_unchecked(n * in_len + ic));
-                let vw = _mm256_maskload_ps(weights.as_ptr().add(ic * out_len + oc), mask);
-                acc0 = _mm256_fmadd_ps(vs, vw, acc0);
-                ic += 1;
-            }
-            _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * out_len + oc), mask, acc0);
+            gemv_tail_f32::<false, false>(
+                in_frames.as_ptr().add(n * in_len),
+                weights.as_ptr(),
+                core::ptr::null(),
+                out_frames.as_mut_ptr().add(n * out_len),
+                in_len,
+                out_len,
+                oc,
+            );
         }
     }
 }
@@ -641,17 +708,15 @@ pub unsafe fn broadcast_scale_f32_avx2<const OUT: usize>(
             oc += 8;
         }
         if oc < OUT {
-            let rem = OUT - oc;
-            let mut mask_buf = [0i32; 8];
-            let mut w_buf = [0.0f32; 8];
-            for i in 0..rem {
-                mask_buf[i] = -1;
-                w_buf[i] = *weights.get_unchecked(oc + i);
-            }
-            let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-            let v_w = _mm256_loadu_ps(w_buf.as_ptr());
-            let v_out = _mm256_mul_ps(v_in, v_w);
-            _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * OUT + oc), mask, v_out);
+            gemv_tail_f32::<false, true>(
+                in_frames.as_ptr().add(n),
+                weights.as_ptr(),
+                core::ptr::null(),
+                out_frames.as_mut_ptr().add(n * OUT),
+                1,
+                OUT,
+                oc,
+            );
         }
     }
 }
@@ -689,20 +754,15 @@ pub unsafe fn broadcast_scale_with_bias_f32_avx2<const OUT: usize>(
             oc += 8;
         }
         if oc < OUT {
-            let rem = OUT - oc;
-            let mut mask_buf = [0i32; 8];
-            let mut w_buf = [0.0f32; 8];
-            let mut b_buf = [0.0f32; 8];
-            for i in 0..rem {
-                mask_buf[i] = -1;
-                w_buf[i] = *weights.get_unchecked(oc + i);
-                b_buf[i] = *bias.get_unchecked(oc + i);
-            }
-            let mask = _mm256_loadu_si256(mask_buf.as_ptr() as *const __m256i);
-            let v_w = _mm256_loadu_ps(w_buf.as_ptr());
-            let v_b = _mm256_loadu_ps(b_buf.as_ptr());
-            let v_out = _mm256_fmadd_ps(v_in, v_w, v_b);
-            _mm256_maskstore_ps(out_frames.as_mut_ptr().add(n * OUT + oc), mask, v_out);
+            gemv_tail_f32::<true, true>(
+                in_frames.as_ptr().add(n),
+                weights.as_ptr(),
+                bias.as_ptr(),
+                out_frames.as_mut_ptr().add(n * OUT),
+                1,
+                OUT,
+                oc,
+            );
         }
     }
 }

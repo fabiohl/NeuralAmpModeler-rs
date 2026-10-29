@@ -8,9 +8,9 @@
 //! reset and tail block processing logic.
 
 use crate::math::common::Avx2Math;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::Avx512Math;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::dispatch::InstructionSet;
 use crate::math::common::traits::SimdMath;
 
@@ -90,7 +90,7 @@ impl super::LinearFftState {
         self.acc_re[..num_bins].fill(0.0);
         self.acc_im[..num_bins].fill(0.0);
 
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         {
             #[expect(deprecated)]
             match self.isa {
@@ -176,7 +176,7 @@ impl super::LinearFftState {
                 }
             }
         }
-        #[cfg(not(feature = "avx512"))]
+        #[cfg(not(nam_avx512))]
         {
             // SAFETY: all slices have length num_bins, guaranteed by construction.
             // Baseline x86-64-v3 (Avx2Math) used directly without runtime branching.

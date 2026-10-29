@@ -47,11 +47,10 @@ fn main() {
 #[cfg(target_arch = "x86_64")]
 /// Prints the runtime-detected CPU hardware flags and OS context-save status.
 ///
-/// Compliance is judged strictly against the project's mandatory
-/// `x86-64-v3` baseline (AVX2 + FMA). AVX-512 is an opt-in extension
-/// (`--features avx512`) and is reported on a separate informative line, so a
-/// host lacking the full F+VL+BW+DQ capability matrix is never flagged as
-/// NON-COMPLIANT hardware.
+/// The `x86-64-v3` baseline (AVX2 + FMA) is a compile-time contract enforced by
+/// `compile_error!` in `src/lib.rs`: a binary that runs at all was built for it,
+/// so the flags below are informational and no runtime verdict is issued. AVX-512
+/// is an opt-in extension (`--features avx512`) reported on its own line.
 fn print_hardware_flags() {
     let avx2 = is_x86_feature_detected!("avx2");
     let fma = is_x86_feature_detected!("fma");
@@ -73,10 +72,7 @@ fn print_hardware_flags() {
     println!("  - xgetbv ZMM:  {}", bool_label(zmm_os_context, ""));
 
     let avx512_complete = avx512_capability_complete(avx512f, avx512vl, avx512bw, avx512dq);
-    println!(
-        "  -> Baseline Hardware (x86-64-v3): [{}]",
-        baseline_status_label(avx2, fma)
-    );
+    println!("  -> Baseline Hardware (x86-64-v3): [BUILD-TIME GUARANTEE, src/lib.rs]");
     println!(
         "  -> AVX-512 Extensions: [{}]",
         avx512_extension_label(avx512_complete)
@@ -106,21 +102,6 @@ fn print_hardware_flags() {
 }
 
 #[cfg(target_arch = "x86_64")]
-/// Verdict label for the mandatory `x86-64-v3` baseline (AVX2 + FMA).
-///
-/// AVX2 and FMA are the project's non-negotiable floor: the default build
-/// targets them via `.cargo/config.toml` and the deterministic dispatch
-/// assumes they are present. The optional AVX-512 extension set must never
-/// influence this verdict.
-fn baseline_status_label(avx2: bool, fma: bool) -> &'static str {
-    if avx2 && fma {
-        "COMPLIANT"
-    } else {
-        "NON-COMPLIANT"
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
 /// Verdict label for the optional AVX-512 extension set (F+VL+BW+DQ).
 fn avx512_extension_label(complete: bool) -> &'static str {
     if complete {
@@ -135,7 +116,7 @@ fn print_compilation_flags() {
     println!("[Crate Compilation Flags]");
     println!(
         "  - feature \"avx512\": [{}]",
-        if cfg!(feature = "avx512") {
+        if cfg!(nam_avx512) {
             "ACTIVE"
         } else {
             "INACTIVE"
@@ -239,22 +220,7 @@ fn bool_label(value: bool, suffix: &str) -> String {
 
 #[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
-    use super::{avx512_extension_label, baseline_status_label};
-
-    /// A host with AVX2+FMA is baseline-compliant even without the optional
-    /// AVX-512 capability matrix: declaring NON-COMPLIANT in that case is a
-    /// false negative that invalidates otherwise valid environments.
-    #[test]
-    fn baseline_is_compliant_with_avx2_fma_even_without_avx512() {
-        assert_eq!(baseline_status_label(true, true), "COMPLIANT");
-    }
-
-    #[test]
-    fn baseline_is_non_compliant_without_full_baseline() {
-        assert_eq!(baseline_status_label(false, true), "NON-COMPLIANT");
-        assert_eq!(baseline_status_label(true, false), "NON-COMPLIANT");
-        assert_eq!(baseline_status_label(false, false), "NON-COMPLIANT");
-    }
+    use super::avx512_extension_label;
 
     #[test]
     fn avx512_extension_label_reports_presence_and_absence() {

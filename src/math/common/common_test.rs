@@ -4,13 +4,13 @@
 use super::ops::set_daz_ftz;
 use super::traits::SimdMath;
 use crate::math::common::Avx2Math;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::Avx512Math;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::common::has_full_avx512;
 use crate::math::dsp::stereo::{compute_energy_avx2, compute_max_diff_avx2};
 use crate::math::gemm::dot_basic::dot_product_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use crate::math::gemm::dot_basic::dot_product_avx512;
 
 #[test]
@@ -36,7 +36,7 @@ fn test_dot_product_avx2_fma() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_dot_product_avx512() {
     // Dot product test version for ultra-modern processors (AVX-512).
@@ -202,7 +202,7 @@ fn test_horizontal_sum() {
             expected
         );
 
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
             // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
             let res_avx512 = unsafe { Avx512Math::horizontal_sum::<N>(data_ptr) };
@@ -251,7 +251,7 @@ fn test_accumulate_head() {
 
     // test_backend::<ScalarMath>(); // ScalarMath removed (Project targets x86-64-v3+)
     test_backend::<Avx2Math>();
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     // Full F+VL+BW+DQ matrix required: Avx512Math reaches F+VL kernels
     // (accumulate_head_avx512vl) that fault on partial subsets.
     if has_full_avx512() {
@@ -292,7 +292,7 @@ fn test_tanh_and_accumulate_with_seed() {
     }
 
     test_backend::<Avx2Math>();
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     // Full F+VL+BW+DQ matrix required: Avx512Math reaches F+VL kernels
     // (tanh_and_accumulate_with_seed_avx512vl) that fault on partial subsets.
     if has_full_avx512() {
@@ -318,7 +318,7 @@ fn test_store_bf16_avx2() {
 
 /// Ensures that saving compact data (bfloat16) using the full AVX-512
 /// width (512 bits) is done without data loss or corruption.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_store_bf16_avx512() {
     // F+VL required: Avx512Math::store_bf16 lowers via 512-bit shift/pack
@@ -350,7 +350,7 @@ fn test_compute_energy_parity() {
     assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_energy(&data) };
@@ -372,7 +372,7 @@ fn test_compute_energy_parity() {
     assert!(avx2_non_finite_nan);
     assert_eq!(res_avx2_nan, 0.0);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: AVX-512 target feature detected; slice is valid.
         let (res_avx512_nan, avx512_non_finite_nan) =
@@ -396,7 +396,7 @@ fn test_compute_energy_stereo_parity() {
     assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_energy_stereo(&l, &r) };
@@ -419,7 +419,7 @@ fn test_compute_energy_stereo_parity() {
     assert!(avx2_non_finite_nan);
     assert_eq!(res_avx2_nan, 0.0);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: AVX-512 target feature detected; slices are valid.
         let (res_avx512_nan, avx512_non_finite_nan) =
@@ -443,7 +443,7 @@ fn test_compute_max_diff_parity() {
     assert_eq!(avx2_non_finite, exp_non_finite);
     assert!((res_avx2 - expected).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let (res_avx512, avx512_non_finite) = unsafe { Avx512Math::compute_max_diff(&a, &b) };
@@ -465,7 +465,7 @@ fn test_compute_max_diff_parity() {
     assert!(avx2_non_finite_nan);
     assert_eq!(res_avx2_nan, 0.0);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: AVX-512 target feature detected; slices are valid.
         let (res_avx512_nan, avx512_non_finite_nan) =
@@ -489,7 +489,7 @@ fn test_compute_peak_abs_stereo_parity() {
     assert!((res_avx2.0 - expected.0).abs() < 1e-6);
     assert!((res_avx2.1 - expected.1).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let res_avx512 = unsafe { Avx512Math::compute_peak_abs_stereo(&l, &r) };
@@ -528,7 +528,7 @@ fn test_convolve_stereo_parity() {
     assert!((res_avx2.0 - expected.0).abs() < 1e-6);
     assert!((res_avx2.1 - expected.1).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let res_avx512 = unsafe {
@@ -557,7 +557,7 @@ fn test_convolve_mono_parity() {
     let res_avx2 = unsafe { Avx2Math::convolve_mono(coeffs.as_ptr(), input.as_ptr(), 32) };
     assert!((res_avx2 - expected).abs() < 1e-6);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let res_avx512 = unsafe { Avx512Math::convolve_mono(coeffs.as_ptr(), input.as_ptr(), 32) };
@@ -608,7 +608,7 @@ fn test_convolve_stereo_dual_parity() {
     assert!((res_avx2.1.0 - expected.1.0).abs() < 1e-5);
     assert!((res_avx2.1.1 - expected.1.1).abs() < 1e-5);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let res_avx512 = unsafe {
@@ -657,7 +657,7 @@ fn test_convolve_mono_dual_parity() {
     assert!((res_avx2.0 - expected.0).abs() < 1e-5);
     assert!((res_avx2.1 - expected.1).abs() < 1e-5);
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     if is_x86_feature_detected!("avx512f") {
         // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.
         let res_avx512 = unsafe {
@@ -671,13 +671,13 @@ fn test_convolve_mono_dual_parity() {
 // ── Regression Tests ────────────────────────────────────────────────────────
 
 /// Converts an f32 slice to BF16 using the correct method (shift right by 16).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn f32_to_bf16_ref(src: &[f32]) -> Vec<u16> {
     src.iter().map(|s| (s.to_bits() >> 16) as u16).collect()
 }
 
 /// Generates pseudo-random BF16 data from deterministic seeds.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn gen_bf16_data(len: usize, seed: f32) -> Vec<u16> {
     (0..len)
         .map(|i| {
@@ -689,7 +689,7 @@ fn gen_bf16_data(len: usize, seed: f32) -> Vec<u16> {
 
 /// Verifies that the F32→BF16 conversion via AVX-512 produces the same bits
 /// as the scalar reference, including in the remainder (< 16 elements).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_f32_to_bf16_avx512_regression() {
     // f32_to_bf16_avx512 is #[target_feature(enable = "avx512f,avx512vl")];
@@ -722,7 +722,7 @@ fn test_f32_to_bf16_avx512_regression() {
 }
 
 /// Validates that dot_product_bf16_avx512 matches the scalar fallback (already correct).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_dot_product_bf16_avx512_regression() {
     if !is_x86_feature_detected!("avx512bf16") {
@@ -753,7 +753,7 @@ fn test_dot_product_bf16_avx512_regression() {
 }
 
 /// Validates that gemv_overwrite_bf16_avx512 matches the scalar fallback.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 fn test_gemv_overwrite_bf16_avx512_regression() {
     if !is_x86_feature_detected!("avx512bf16") {
@@ -836,7 +836,7 @@ fn test_tanh_and_overwrite_block() {
     }
 
     test_backend::<Avx2Math>();
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     // Full F+VL+BW+DQ matrix required: tanh_and_overwrite_block_avx512vl
     // faults on partial subsets.
     if has_full_avx512() {
@@ -875,7 +875,7 @@ fn test_tanh_and_accumulate_block() {
     }
 
     test_backend::<Avx2Math>();
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     // Full F+VL+BW+DQ matrix required: tanh_and_accumulate_block_avx512vl
     // faults on partial subsets.
     if has_full_avx512() {
@@ -904,7 +904,7 @@ fn test_gated_activation_and_overwrite_block() {
     }
 
     test_backend::<Avx2Math>();
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     // Full F+VL+BW+DQ matrix required: gated_activation_and_overwrite_block_avx512vl
     // faults on partial subsets.
     if has_full_avx512() {
@@ -975,7 +975,7 @@ fn test_complex_mac_overwrite_parity() {
         test_simd::<Avx2Math>(
             &h_re, &h_im, &x_re, &x_im, &scalar_re, &scalar_im, len, "AVX2",
         );
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         // complex_mac_overwrite delegates to the AVX2 routine (no AVX-512
         // encoding); still gate on the full matrix for consistency with the
         // rest of the Avx512Math suite — a partial subset must skip, not run.
@@ -1056,7 +1056,7 @@ fn test_complex_mac_accumulate_parity() {
         test_simd::<Avx2Math>(
             &h_re, &h_im, &x_re, &x_im, &init_re, &init_im, &scalar_re, &scalar_im, len, "AVX2",
         );
-        #[cfg(feature = "avx512")]
+        #[cfg(nam_avx512)]
         // complex_mac_accumulate delegates to the AVX2 routine (no AVX-512
         // encoding); still gate on the full matrix for consistency with the
         // rest of the Avx512Math suite — a partial subset must skip, not run.

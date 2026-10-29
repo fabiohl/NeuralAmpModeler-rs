@@ -30,8 +30,8 @@ The `NeuralAmpModeler-rs` crate defines several features in [Cargo.toml](../Carg
 | **`heap-audit`**         | No      | Memory allocation interceptor        | [src/common/alloc_audit.rs](../src/common/alloc_audit.rs), [tests/rt_constraints/](../tests/rt_constraints/) heap checks |
 | **`fft-radix4-planner`** | No      | Radix-4 FFT benchmark planner        | [benches/fft_radix4_bench.rs](../benches/fft_radix4_bench.rs) (Radix-4 DIT FFT planning routines)                        |
 | **`avx512`**             | No      | Research/measurement AVX-512 kernels | [src/math/activations/](../src/math/activations/), SIMD dispatch tables                                                  |
-| **`rt-hardening`**       | No      | Real-time OS host tuning (Linux)     | [src/rt_hardening/](../src/rt_hardening/) (THP, mlockall, SCHED_FIFO, DAZ/FTZ, IRQ affinity)                             |
-| **`on-demand`**          | No      | Developer diagnostics & harnesses    | Developer-only fixture generation and profiling harnesses (never enabled by CI)                                          |
+| **`rt-hardening`**       | No      | Real-time OS host tuning (Linux, macOS) | [src/rt_hardening/](../src/rt_hardening/) (Linux: THP, mlockall, SCHED_FIFO, DAZ/FTZ, IRQ affinity; macOS: QoS, time constraint, mlock_region, workgroups) |
+| **`on-demand`**          | No      | Internal developer diagnostics       | Internal-only fixture generation and profiling harnesses (never enabled by CI or published test instructions)             |
 
 ---
 
@@ -41,42 +41,48 @@ The `NeuralAmpModeler-rs` crate defines several features in [Cargo.toml](../Carg
 
 Unlike test runners, `lints.sh` does not evaluate numerical audio outputs. Instead, it statically proves compilation cleanliness, zero-warning compliance, documentation hygiene, and policy conformance across the entire feature matrix.
 
-### 2.1 The 9 Sequential Verification Gates
+### 2.1 The 11 Sequential Verification Gates
 
 ```mermaid
 graph LR
     L1["1. cargo fmt"] --> L2["2. cargo check (7 axes)"]
     L2 --> L3["3. clippy (-D warnings)"]
-    L3 --> L4["4. cargo doc + doctests"]
-    L4 --> L5["5. SPDX Headers"]
-    L5 --> L6["6. Anti-pattern tests/common"]
-    L6 --> L7["7. Undocumented #[allow]"]
-    L7 --> L8["8. doc(cfg) Validation"]
-    L8 --> L9["9. README / MSRV Check"]
+    L3 --> L4["4. clippy-aarch64"]
+    L4 --> L5["5. cargo doc + doctests"]
+    L5 --> L6["6. SPDX Headers"]
+    L6 --> L7["7. Anti-pattern tests/common"]
+    L7 --> L8["8. Undocumented #[allow]"]
+    L8 --> L9["9. doc(cfg) Validation"]
+    L9 --> L10["10. README / MSRV Check"]
+    L10 --> L11["11. Script Budget"]
 ```
 
-1. **`[1/9] In-Place Formatting (cargo fmt):`**
-   Runs `cargo fmt --all` to enforce standard formatting across library code, binaries, examples, benches, and tests.
-2. **`[2/9] Dynamic Compilation Matrix (cargo check):`**
+1. **`[1/11] In-Place Formatting (cargo fmt):`**
+   Runs `cargo fmt --all` (or `cargo fmt --all --check` when `CI=true`) to enforce standard formatting across library code, binaries, examples, benches, and tests.
+2. **`[2/11] Dynamic Compilation Matrix (cargo check):`**
    Verifies that the codebase compiles cleanly across 7 distinct feature axes, preventing hidden breakages behind conditional compilation:
    - Catch-all: `--all-targets --all-features`
    - Pure minimal core: `--lib --no-default-features`
    - All targets without defaults: `--all-targets --no-default-features`
    - Individual feature permutations: `fft-radix4-planner`, `dual-mono`, `testing`, `heap-audit`, and `rt-hardening`.
-3. **`[3/9] Strict Static Analysis (cargo clippy):`**
+3. **`[3/11] Strict Static Analysis (cargo clippy):`**
    Executes Clippy across the same 7 feature permutations with `-D warnings`. Fails on any compiler or Clippy warning, dead code, or unidiomatic construct.
-4. **`[4/9] Documentation & Doc-Tests (cargo doc + cargo test --doc):`**
+4. **`[4/11] Cross-Target ARM64 Static Analysis (clippy-aarch64):`**
+   Runs `cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings` on `x86_64` hosts to catch warnings and lints in `#[cfg(target_arch = "aarch64")]` NEON code paths before CI.
+5. **`[5/11] Documentation & Doc-Tests (cargo doc + cargo test --doc):`**
    Builds full rustdoc documentation (`cargo doc --no-deps`) with zero warnings under `--all-features`, and executes every documentation test example in public APIs and README code blocks.
-5. **`[5/9] SPDX License Notice Compliance:`**
+6. **`[6/11] SPDX License Notice Compliance:`**
    Scans every source code file to ensure the presence of the proper SPDX identifier comment and copyright notice (`Apache-2.0` for `NeuralAmpModeler-rs`).
-6. **`[6/9] Anti-Pattern Enforcement in Tests:`**
+7. **`[7/11] Anti-Pattern Enforcement in Tests:`**
    Ensures that helper files under `tests/common/` contain zero `#[test]` annotations, preventing duplicate or accidental executions outside official test entry points.
-7. **`[7/9] Undocumented #[allow(...)] Policy Check:`**
+8. **`[8/11] Undocumented #[allow(...)] Policy Check:`**
    Enforces the project's zero-silent-suppression rule: every `#[allow(...)]` or `#![allow(...)]` compiler attribute must have an immediately preceding comment justifying why the lint suppression is necessary.
-8. **`[8/9] doc(cfg) Annotation Consistency:`**
+9. **`[9/11] doc(cfg) Annotation Consistency:`**
    Cross-references all `#[doc(cfg(feature = "..."))]` annotations against the declared features in [Cargo.toml](../Cargo.toml) to prevent orphan or mistyped documentation tags.
-9. **`[9/9] Version & MSRV Synchronization:`**
-   Asserts that the version and Minimum Supported Rust Version (MSRV `1.99.0`) stated in `README.md` exactly match [Cargo.toml](../Cargo.toml).
+10. **`[10/11] Version & MSRV Synchronization:`**
+    Asserts that the version and Minimum Supported Rust Version (MSRV `1.99.0`) stated in `README.md` exactly match [Cargo.toml](../Cargo.toml).
+11. **`[11/11] Script Line Budget Enforcement (script-budget):`**
+    Verifies that every shell script in `utils/` declares `# Orçamento: <n>` in its header and stays within that line ceiling.
 
 ### 2.2 Developer Usage & Flags
 
@@ -94,7 +100,7 @@ The crate page published by docs.rs is rendered by **nightly** rustdoc with `--c
 ./utils/docsrs-check.sh
 ```
 
-The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, derives the feature scope from `package.metadata.docs.rs` in [Cargo.toml](../Cargo.toml), then runs `cargo +nightly doc --locked --lib --no-deps` with that scope (`--lib` mirrors the docs.rs build). Exit `0` means zero rustdoc warnings; exit `2` is a typed gap (nightly or metadata tooling unavailable); any rustdoc warning fails with exit `1`.
+The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, derives the feature scope from `package.metadata.docs.rs` in [Cargo.toml](../Cargo.toml), then runs `cargo +nightly doc --locked --lib --no-deps` with that scope (`--lib` mirrors the docs.rs build), once on the host (x86_64) and once with `--target aarch64-unknown-linux-gnu`. `aarch64-apple-darwin`, also declared in the metadata, is not checked here (no macOS host; covered by the `G-C` cross-check). The `nam_avx512` cfg is emitted by `build.rs` only for x86_64 targets, so the AVX-512 modules are absent from the aarch64 pass. Exit `0` means zero rustdoc warnings on both passes; exit `2` is a typed gap (nightly, its aarch64 target, or metadata tooling unavailable); any rustdoc warning fails with exit `1`.
 
 ### 2.4 SemVer Baseline Check (Opt-in, Pre-release)
 
@@ -127,7 +133,7 @@ Test selection and execution are governed by **two orthogonal axes**:
 
 ```mermaid
 graph TD
-    L0["Static Defense: utils/lints.sh (9 gates)"] --> Q1["Quick: freshness (nam_freshness artifacts-hard)"]
+    L0["Static Defense: utils/lints.sh (11 gates)"] --> Q1["Quick: freshness (nam_freshness artifacts-hard)"]
     Q1 --> Q2["Quick: cargo test --features testing (debug, non-ignored)"]
     Q2 --> L1["Long: 5 preflights + 8 phases (release, --include-ignored)"]
 ```
@@ -137,7 +143,7 @@ graph TD
 The quick suite executes in ~16–46 seconds (measured warm cache; budget ≤ 5 minutes) and runs two sequential phases:
 
 1. **Freshness (`nam_freshness artifacts-hard`):**
-   - **Scope:** Verifies golden artifact freshness and integrity via [src/bin/nam_freshness.rs](../src/bin/nam_freshness.rs). A `GENERATOR CHANGED` line is recorded as the `generator-drift` gap; a nonzero exit fails the phase.
+   - **Scope:** Verifies golden artifact freshness and integrity via [tools/qa/src/bin/nam_freshness.rs](../tools/qa/src/bin/nam_freshness.rs). A `GENERATOR CHANGED` line is recorded as the `generator-drift` gap; a nonzero exit fails the phase.
 2. **Tests (`cargo test --locked --features testing --no-fail-fast`):**
    - **Scope:** Runs every non-ignored test target in the **debug** profile with the `testing` feature. This includes structural/logic/parser/FSM tests, non-ignored numerical and parity checks, and the `libm_export_guard` ELF symbol gate. Float oracles here are smoke checks only; release-profile measurements belong to the long suite.
    - **Exclusions:** `#[ignore]` tests (soak, RT deadline/jitter, exhaustive audits, and the ignored proptest sweeps) are not invoked by the quick suite.
@@ -155,6 +161,16 @@ Golden vectors validate inference determinism against pre-rendered reference out
 
 - **Libm Export Guard:** [tests/libm_export_guard.rs](../tests/libm_export_guard.rs) is a fail-closed ELF symbol gate executed on the linked binary artifact in the `tests-quick.sh` tests phase and the `tests-long.sh` `catch-all` phase. It ensures internal `libm` mathematical symbols are hidden and cannot interpose over system C library symbols.
 - **AVX-512 Segregation Contract:** AVX-512 code is strictly segregated at compile time via `#[cfg(feature = "avx512")]`. Default builds monomorphize only `Avx2Math`; no EVEX or ZMM opcodes are generated in default release artifacts. Runtime hardware capabilities and effective dispatch status are inspected using [`src/bin/simd_probe.rs`](../src/bin/simd_probe.rs) (`cargo run --quiet --bin simd_probe`).
+
+### 3.4 Continuous Integration Workflow (`.github/workflows/ci.yml`)
+
+Every push and pull request targeting `main` or `dev` triggers the multi-platform CI matrix:
+
+1. **`x86_64-linux` (`ubuntu-26.04`):** Installs `aarch64-unknown-linux-gnu` for the cross-target Clippy gate, executes `./utils/lints.sh` (with `CI=true`) and `./utils/tests-quick.sh`, and runs a release smoke pass (`cargo test --locked --release --lib`).
+2. **`aarch64` matrix (`macos-15` Apple Silicon and `ubuntu-26.04-arm`):** Runs `cargo check` across the 7 feature axes, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo clippy --locked --all-targets --no-default-features -- -D warnings`, `./utils/tests-quick.sh`, and `cargo test --locked --release --lib`.
+3. **`msrv` (`ubuntu-26.04`):** Resolves `rust-version` from `Cargo.toml` and verifies `cargo check --locked --all-targets --all-features` and `cargo check --locked --lib --no-default-features` on the exact MSRV toolchain.
+4. **`cpp-parity` (`ubuntu-26.04`, `needs: x86_64-linux`):** Provisions the upstream C++ reference mirror (`./utils/setup-third-party.sh`), compiles the C++ `namcore_render` binary (`./utils/ensure_namcore_render.sh`), and executes `NAM_REQUIRE_CPP_ORACLE=1 ./utils/tests-quick.sh` so that C++ reference parity tests run fail-closed on every push and PR.
+5. **`consumer-smoke` (`ubuntu-26.04` and `ubuntu-26.04-arm`):** Installs the `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin` targets and executes `./utils/consumer-smoke.sh` to validate the external-consumer contract (negative `x86_64` baseline check without `-Ctarget-cpu=x86-64-v3`, positive `x86-64-v3` build, and flagless `aarch64` builds).
 
 ---
 
@@ -218,35 +234,35 @@ Before entering timed test execution, five preflight steps run:
 
 1. **`preflight-render`:** Validates or builds the upstream C++ reference `render` CLI via `utils/ensure_namcore_render.sh`. Exit code `3` (mirror absent) becomes a `SKIPPED` phase with an `optional-dependency-missing` gap unless `--strict` is set.
 2. **`preflight-catalog`:** Runs `cargo test --release --features testing --test models catalog_preflight` against the fixtures and V1/V2 goldens registered in [src/testing/catalog.rs](../src/testing/catalog.rs). The test enforces the strict counting invariant: `present + missing_required.len() + missing_optional.len() + known_gap_files == fixtures_checked`.
-3. **`preflight-package`:** Checks crate packaging hygiene via `cargo package --list --allow-dirty`.
+3. **`preflight-package`:** Verifies the published tarball by running `cargo package --locked --allow-dirty` (verify: the packaged crate must compile), then `utils/consumer-smoke.sh` (timeout 600 s): an external crate in an isolated temporary directory with a `path` dependency on the repository must fail on `x86_64` without `-Ctarget-cpu=x86-64-v3` with the actionable consumer message, compile with `-Ctarget-cpu=x86-64-v3`, and compile for `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin` without flags. Only `nam_perf_gate` and `simd_probe` ship from `src/bin/`.
 4. **`preflight-freshness`:** Runs the `check_freshness hard-fail` helper, i.e. `nam_freshness` in hard-fail mode, against `tests/fixtures/.golden_manifest.sha256`.
 5. **`preflight-simd-probe` (Diagnostic):** Runs `cargo run --quiet --bin simd_probe` to record host SIMD feature bits, OS AVX-512 state, and dispatched engine. It does not require tests, but a nonzero exit still marks the phase `FAILED`.
 
 Each preflight writes `target/logs/long-<phase>.log` (for example, `target/logs/long-preflight-catalog.log`).
 
-### 5.4 Timeouts e ausência de oráculo ou baseline
+### 5.2 Timeouts and Missing Oracle or Baseline
 
-Cada comando externo de uma fase roda sob `timeout --kill-after=30 <tempo>` (função `run_cmd`); exit `124`/`137` vira `FAIL rc=124 (timeout)`. `NAM_PHASE_TIMEOUT_S` sobrescreve o tempo de todos os comandos.
+Every external command in a phase runs under `timeout --kill-after=30 <seconds>` (`run_cmd` helper); exit codes `124`/`137` become `FAIL rc=124 (timeout)`. `NAM_PHASE_TIMEOUT_S` overrides the timeout across all commands.
 
-| Ausência | Sem `--strict` (padrão) | Com `--strict` (noturno com CPU isolada e oráculo) |
-|:--|:--|:--|
-| Oráculo C++ (`preflight-render`, exit 3) | `GAP optional-dependency-missing`; `catch-all` pula `cpp_parity::live_cross_validation` e registra `GAP cpp-parity-skipped:<n>` | `FAIL`; cobertura integral |
-| Baseline de performance (`.performance-baselines/baseline-fingerprint.json`) | `GAP perf-baseline-missing`; a fase `perf` não executa | `FAIL` (`MISSING_BASELINE`; renovação só por operação humana, `--bootstrap-baseline`) |
+| Missing Resource | Without `--strict` (default) | With `--strict` (nightly with isolated CPU and oracle) |
+|:-- |:-- |:-- |
+| C++ Oracle (`preflight-render`, exit 3) | `GAP optional-dependency-missing`; `catch-all` skips `cpp_parity::live_cross_validation` and records `GAP cpp-parity-skipped:<n>` | `FAIL`; full coverage required |
+| Performance baseline (`.performance-baselines/baseline-fingerprint.json`) | `GAP perf-baseline-missing`; phase `perf` does not execute | `FAIL` (`MISSING_BASELINE`; renewal is human-only via `--bootstrap-baseline`) |
 
-Um GAP nunca é `PASS`: fica no recibo como `SKIPPED` e em `RESULT: PASS_WITH_GAPS`.
+A `GAP` is never recorded as `PASS`: it is written to the receipt as `SKIPPED` and surfaced in `RESULT: PASS_WITH_GAPS`.
 
-### 5.2 Sequential Execution Phases
+### 5.3 Sequential Execution Phases
 
 1. **`catch-all` (`phase1`):** `cargo test --release --features testing --no-fail-fast -- --include-ignored`, skipping `rt_deadline::`, `rt_jitter::`, and `soak_test::` (the script's fixed `SKIP` list). This is the broad numerical matrix: live C++ parity, multi-sample-rate V2 goldens, cross-ISA checks, defense/invariant tests, the `libm_export_guard`, and the proptest sweeps.
 2. **`soak` (`phase2`):** `cargo test --release --features testing --test perf_soak soak_test:: -- --ignored --test-threads=1`: 10M+ frames continuous endurance testing and SPSC queue contention sweeps ([tests/perf_soak.rs](../tests/perf_soak.rs)).
 3. **`isa-codegen` (`phase3`):** Runs `cargo run --quiet --bin simd_probe` and then `cargo test --release --features testing --test isa_contract -- --nocapture`.
 4. **`heap-audit` (`phase4`, filtered, `--include-ignored heap_audit`, profile `target/long/heap-audit`):** Strict verification of zero heap allocations on the audio processing hot path (`CountingAllocator` via `--features heap-audit`, including resampler, cabsim, A2 standard, A2-Max dynamic `test_a2_dyn_max_heap_audit`, and sequential chains).
-5. **`rt-deadline` (`phase5`):** Resolves a core with `nam_perf_gate pick-core` (exporting `NAM_BENCH_CORE` unless the result is `GAP`) and runs `cargo test --release --features testing --test rt_constraints rt_deadline:: -- --ignored --nocapture`. Processing budget enforcement ($p99 < 1.33\text{ ms}$ for 64-sample blocks at 48 kHz across all SKUs, including A2-Max `test_rt_deadline_a2_max`), measured with `LatencyHistogram` (256 log-linear sub-bins, relative error bound $\le 12.5\%$) paired with `ExactLatencyReservoir` for exact $p99$ arbitration.
-6. **`rt-jitter` (`phase6`):** Runs `cargo test --release --features testing --test rt_constraints rt_jitter:: -- --ignored --nocapture`: measures processing latency distribution under simulated CPU contention (`stress-1`, `stress-2`, `saturate-N`) across $\ge 16384$ blocks with initial 512-block cache/branch warmup to eliminate cold-start transients.
-7. **`loom` (`phase7`):** `cargo test --release --test loom_tests --config "target.'cfg(target_arch = \"x86_64\")'.rustflags=['--cfg','loom']" -- --nocapture` (profile `target/long/loom`; `--config` soma `--cfg loom` às flags de `.cargo/config.toml` em vez de substituí-las, e `RUSTFLAGS` herdado é ignorado): Loom model verification for lock-free queues and atomic bitmasks.
+5. **`rt-deadline` (`phase5`):** Resolves a core with `nam_perf_gate pick-core` (exporting `NAM_BENCH_CORE` and pinning with `taskset -c "$core"`, or declaring `GAP no-bench-core` if unresolved in non-strict mode) and runs `cargo test --release --features testing --test rt_constraints rt_deadline:: -- --ignored --nocapture`. Processing budget enforcement ($p99 < 1.33\text{ ms}$ for 64-sample blocks at 48 kHz across all SKUs, including A2-Max `test_rt_deadline_a2_max`), measured with `LatencyHistogram` (256 log-linear sub-bins, relative error bound $\le 12.5\%$) paired with `ExactLatencyReservoir` for exact $p99$ arbitration. Under `--strict` (`NAM_RT_STRICT=1`), any environmental preflight failure or missing core fails fail-closed.
+6. **`rt-jitter` (`phase6`):** Inherits or resolves `NAM_BENCH_CORE` via `pick-core` and runs `cargo test --release --features testing --test rt_constraints rt_jitter:: -- --ignored --nocapture`: measures processing latency distribution and context switch telemetry (`cs_vol`, `cs_invol` via `getrusage(RUSAGE_THREAD)`) under CPU contention (`stress-1`, `stress-2`, `saturate-N`) across $\ge 16384$ blocks with initial 512-block cache/branch warmup. When `NAM_BENCH_CORE` is set, the DSP thread runs pinned to the isolated core while stress workers saturate the remaining cores, proving zero deadline violations under full memory/L3 load.
+7. **`loom` (`phase7`):** `cargo test --release --test loom_tests --config "target.'cfg(target_arch = \"x86_64\")'.rustflags=['--cfg','loom']" -- --nocapture` (profile `target/long/loom`; `--config` appends `--cfg loom` to the flags in `.cargo/config.toml` instead of replacing them, and any inherited `RUSTFLAGS` is ignored): Loom model verification for lock-free queues and atomic bitmasks.
 8. **`perf` (`phase8`):** `nam_perf_gate run --check docs/quality-contract.json` (with `--bench-core` when `pick-core` succeeds and `--strict` when requested): automated benchmark regression check against the baseline contracts.
 
-### 5.3 Structured Audit Receipt (`long-audit-receipt.jsonl`)
+### 5.4 Structured Audit Receipt (`long-audit-receipt.jsonl`)
 
 Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl` using the Rust binary `nam_long_receipt`:
 
@@ -280,7 +296,7 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
 - **Fail-Closed Invariant:** `overall: PASSED` is emitted only when all phases complete with `gaps: []` and no timed phase executed zero tests. `nam_long_receipt validate` is a **semantic** verifier — never a substring search: it enforces the canonical roster (`CANONICAL_ROSTER`: 5 preflights + `phase1`..`phase8` + terminal `overall`), rejecting empty/partial receipts, missing/duplicate/unknown IDs, a timed phase that claims `PASSED` with zero executed tests, and a declared `OVERALL:` verdict that disagrees with the verdict derived from the phase/gap evidence (a forged/injected `OVERALL: PASSED` line — including one pasted into a comment — is rejected at parse time). In strict mode (`--strict`) it additionally rejects any declared gap or failure. Verification is enforced via:
 
   ```bash
-  cargo run --locked --features testing --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl
+  cargo run --locked -p nam-qa --bin nam_long_receipt -- validate --strict --out target/logs/long-audit-receipt.jsonl
   ```
 
   The roster is a parameter (`LongAuditReceipt::semantic_verdict_with_roster` /
@@ -298,7 +314,7 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
   so historical goldens remain byte-compatible. `nam_long_receipt append`
   accepts `--oracle-sha256` / `--fixture-sha256` / `--artifact-sha256`.
 
-### 5.4 Build Target Segregation (`CARGO_TARGET_DIR`)
+### 5.5 Build Target Segregation (`CARGO_TARGET_DIR`)
 
 `utils/tests-long.sh` segregates build outputs by profile under `target/long/`, so that switching `--features heap-audit` or `RUSTFLAGS="--cfg loom"` does not invalidate the cache of the other phases:
 
@@ -308,17 +324,19 @@ Each phase appends a structured record to `target/logs/long-audit-receipt.jsonl`
 
 `target/long` is removed at the start only when `--only` is not used; `--only` keeps the caches for iterative reruns. The phase 4 filter is `--test rt_constraints --test cabsim_stereo --test models -- --include-ignored heap_audit`: the heap-audit tests are compiled only with `--features heap-audit`, so phase 1 never runs them, and the filter also covers the non-ignored ones.
 
-### 5.5 Long Suite Workflow on GitHub Actions (`.github/workflows/long.yml`)
+### 5.6 Long Suite Workflow on GitHub Actions (`.github/workflows/long.yml`)
 
 The long QA audit can be dispatched manually by maintainers at the end of an epic or before a release via GitHub Actions:
 
 - **Trigger:** Manual (`workflow_dispatch`), through the GitHub Actions web UI (`Actions → Long QA Suite → Run workflow`) or the GitHub CLI:
   ```bash
-  gh workflow run long.yml -f strict=true
+  gh workflow run long.yml --ref dev -f strict=true
   ```
+- **Operator Runbook (Branch & Provenance Check):** When dispatching `Long QA Suite` from the GitHub Actions web UI ("Use workflow from"), **explicitly select the target branch** (e.g. `dev`) rather than leaving the dropdown on `main` when certifying an unmerged integration branch. Always verify the summary header (`Long QA Suite (<branch> @ <sha>)`) in `$GITHUB_STEP_SUMMARY` to confirm that the workflow executed against the expected commit SHA.
 - **Inputs:**
-  - `phases`: Comma-separated phase IDs to execute (default: `'preflight-render,preflight-catalog,preflight-freshness,phase1,phase2,phase3,phase4,phase7'`).
+  - `phases`: Comma-separated phase IDs to execute (default: `'preflight-render,preflight-catalog,preflight-package,preflight-freshness,phase1,phase2,phase3,phase4,phase7'`).
   - `strict`: Boolean (default: `true`), enforcing fail-closed zero-gap execution.
+  - `dashboard`: Boolean (default: `false`). When `true`, also executes `./utils/quality-dashboard.sh --check docs/quality-contract.json` after the long audit phases.
 - **Default Exclusion Policy:** The default phase list excludes `phase5` (RT deadline), `phase6` (RT jitter), and `phase8` (perf gate). Shared cloud virtual machines exhibit significant scheduling jitter and noisy-neighbor virtualization overhead, making them unsuitable as calibrated real-time performance arbiters.
 - **Artifacts:** On completion, the workflow publishes the execution log (`target/logs/**`) and receipts (`target/long/**/*.jsonl`) as workflow artifacts with 14-day retention, alongside step summary metrics in `$GITHUB_STEP_SUMMARY`.
 
@@ -463,7 +481,7 @@ The contract is governed by [utils/quality-dashboard.sh](../utils/quality-dashbo
 ./utils/quality-dashboard.sh --save docs/quality-contract.json
 ```
 
-The contract schema is enforced via typed serde structures in `src/testing/qa/`.
+The contract schema is enforced via typed serde structures in `src/testing/qa/`. During the `reference_oracle_f64` measurement phase, `nam_quality` executes both the non-ignored `reference_oracle_f64::` suite and the ignored `reference_oracle_f64::test_summary_table` target (`--include-ignored --exact`), ensuring `ESR_F64` metrics are emitted for the summary models (`Linear`, `ConvNet`, `A2Full`, `A2Lite`) as well as the canonicalWaveNet/LSTM tiers.
 
 ### 10.2 Tolerance Envelopes
 
@@ -494,7 +512,7 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 
 | Script                                                                                | Responsibility                       | Guarantees & Operation                                                                                                                                                                                                                                                                                                                               |
 |:------------------------------------------------------------------------------------- |:------------------------------------ |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[`utils/lints.sh`](../utils/lints.sh)**                                             | Static analysis & quality defense    | 9 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, `cargo doc`+doctests, SPDX, and policy checks (§2).                                                                                                                                                                                                                   |
+| **[`utils/lints.sh`](../utils/lints.sh)**                                             | Static analysis & quality defense    | 11 automated gates: in-place `fmt`, compilation & Clippy across 7 feature axes, cross-target `clippy-aarch64`, `cargo doc`+doctests, SPDX, policy checks, and `script-budget` (§2).                                                                                                                                                                     |
 | **`utils/tests-quick.sh`**                                                            | Agile first-line test suite          | Two-phase gate: `nam_freshness artifacts-hard` followed by `cargo test --locked --features testing --no-fail-fast` (debug, non-ignored targets). Runs in ~16–46s (measured warm; budget ≤ 5 min) (§3). |
 | **`utils/tests-long.sh`**                                                             | Nightly & pre-release audit suite    | 5 preflights + 8 phases (`catch-all`, `soak`, `isa-codegen`, `heap-audit`, `rt-deadline`, `rt-jitter`, `loom`, `perf`; ~8–12 min measured). Emits structured JSONL receipts (§5). Nightly & human operator execution.                                                                                                                                                                                           |
 | **`utils/_lib.sh`**                                                                   | Shared shell library                 | Dynamic project path resolution, log formatting, QA-binary resolution and helper primitives.                                                                                                                                                                                                                                                         |
@@ -502,6 +520,7 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | **`src/bin/nam_perf_gate.rs`** | Performance regression wall | Baseline-gated Criterion evaluation (`nam_perf_gate run --check`); statistical confidence interval verification against ±5% noise bands. On-demand execution. |
 | **`utils/setup-third-party.sh`**                                                      | Upstream vendor mirror manager       | Clones or updates pinned commits of `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin`.                                                                                                                                                                                                                                                             |
 | **`utils/ensure_namcore_render.sh`**                                                  | C++ Reference Render Builder         | Idempotently builds the C++ NAMCore render binary for parity oracles.                                                                                                                                                                                                                                                                                |
+| **[`utils/consumer-smoke.sh`](../utils/consumer-smoke.sh)**                           | External consumer contract smoke     | Validates that a standalone external crate in an isolated temporary directory fails on `x86_64` without `-Ctarget-cpu=x86-64-v3`, compiles with it, and compiles without extra flags on `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`.                                                                                                     |
 | **`utils/check-model.sh`**                                                            | Model inspection CLI wrapper         | Diagnostic / spot-check CLI: inspects `.nam` (JSON) and `.namb` (binary) models, reporting topology, metadata, and tensors.                                                                                                                                                                                                                          |
 | **`utils/remote-simd-gate.sh`**                                                       | AVX-512 SIMD gate                    | Targeted SIMD gate: executes automated cross-ISA parity and comparative benchmarking on AVX-512 hardware or under Intel SDE emulation.                                                                                                                                                                                                               |
 | **`utils/miri-audit.sh`**                                                             | Miri UB/aliasing audit (opt-in)      | Out-of-band audit: provenance and aliasing verification under the Miri MIR interpreter (Stacked/Tree Borrows) on lock-free targets. Requires isolated nightly; **never** run in stable gates (§13).                                                                                                                                                  |
@@ -596,7 +615,7 @@ Each script belongs to one of four strict architectural classes:
 | **Class A — Interactive** | `lints.sh`, `tests-quick.sh` | `set -euo pipefail`; aborts on first failure; `ERR` trap emits `RESULT: FAIL` | Real-time developer loops. Fast failure saves cycles and surfaces errors immediately. |
 | **Class B — Decoupled Audit** | `tests-long.sh` | `set -o pipefail` (no `-e`, no `-u`); each phase records status independently; collects all failures; exit `1` at end if any phase failed | Nightly and pre-release audits. Must not abort prematurely so all failures are diagnosed in a single run. |
 | **Class C — Build** | `build-release.sh` | `set -euo pipefail`; aborts on first failure | Build pipelines where intermediate failure invalidates downstream artifacts. |
-| **Class D — Manual Tool** | `setup-third-party.sh`, `ensure_namcore_render.sh`, `miri-audit.sh`, `docsrs-check.sh`, `check-model.sh`, `mod-update.sh`, `remote-simd-gate.sh`, `render-a2-dumps.sh` | `set -euo pipefail` | Targeted utilities executed under direct operator supervision. |
+| **Class D — Manual Tool** | `setup-third-party.sh`, `ensure_namcore_render.sh`, `consumer-smoke.sh`, `miri-audit.sh`, `docsrs-check.sh`, `check-model.sh`, `mod-update.sh`, `remote-simd-gate.sh`, `render-a2-dumps.sh` | `set -euo pipefail` | Targeted utilities executed under direct operator supervision or dedicated CI steps. |
 
 ### 14.2 Output Protocol & Exit Codes
 
@@ -640,8 +659,9 @@ Only the following canonical flags are supported across scripts (no legacy alias
 | **All scripts** | `-h`, `--help` | Displays concise usage and exits 0. |
 | `lints.sh` | None | Strict zero-flag policy; formatting is applied in-place during local development and verified via `CI=true` on CI. |
 | `tests-quick.sh` | None | Fast first-line discipline; no allow-gaps switch and no simulation mode. |
-| `tests-long.sh` | `--strict`, `--only <name>[,<name>]` | `--strict` promotes any `GAP` to `FAIL` (exit 1); `--only` runs specific phases for triage by display name (`preflight-*`, `catch-all`, `soak`, `isa-codegen`, `heap-audit`, `rt-deadline`, `rt-jitter`, `loom`, `perf`; see §5.2). |
-| `quality-dashboard.sh` | `--check [<contract.json>]`, `--save` | `--check` validates against baseline (the contract defaults to `docs/quality-contract.json` inside `nam_quality`); `--save` is reserved for human operators. |
+| `tests-long.sh` | `--strict`, `--only <name>[,<name>]` | `--strict` promotes any `GAP` to `FAIL` (exit 1); `--only` runs specific phases for triage by display name (`preflight-*`, `catch-all`, `soak`, `isa-codegen`, `heap-audit`, `rt-deadline`, `rt-jitter`, `loom`, `perf`; see §5.3). |
+| `quality-dashboard.sh` | `--check [<contract.json>]`, `--save` | `--check` validates against baseline (the contract defaults to `docs/quality-contract.json` inside `nam_quality`); `--save` is reserved for human operators. `nam_quality` reads `target/bench_constants.env` when it exists; `build.rs` (`is_primary_build`) writes that file only when `CARGO_PRIMARY_PACKAGE` is set or, as a fallback on Cargo 1.99.1 (which does not pass `CARGO_PRIMARY_PACKAGE` to build scripts), when `OUT_DIR` is rooted under `<manifest_dir>/target`. An external consumer using its own `target/` directory never triggers the write; the only residual edge case is a consumer that explicitly points `CARGO_TARGET_DIR` inside the crate checkout's `target/` directory. |
+| `consumer-smoke.sh` | None | Executes the external-consumer `x86-64-v3` and `aarch64` compilation contract in an isolated temporary directory (`${TMPDIR:-/tmp}/nam-consumer-XXXXXX`). |
 | `remote-simd-gate.sh` | `--sde`, `--check-only`, `--skip-bench`, `--out <file>` | Runs AVX-512 parity and benchmarks under SDE emulation or native hardware. |
 
 ### 14.5 Canonical Environment Variables
@@ -664,7 +684,7 @@ Only the following canonical flags are supported across scripts (no legacy alias
 |:-------- |:------------- |:------- |:------- |
 | `NAM_RUN_ID` | `utils/_lib.sh` | Test harnesses | Unique timestamped run identifier for logging and receipt isolation. |
 | `NAM_REQUIRE_CPP_ORACLE` | `tests-long.sh --strict` | Parity suites | Enforces hard failure if the C++ reference render binary is unavailable. |
-| `NAM_RT_STRICT` | `tests-long.sh --strict` | RT deadline tests | Rejects latency outliers and deadline budget misses fail-closed. |
+| `NAM_RT_STRICT` | `tests-long.sh --strict` | RT deadline tests | Enforces hard failure on uncontrolled environment (preflight failure) or latency violations fail-closed. |
 | `NAM_CORE_RENDER_BIN` | `_lib.sh` / preflights | C++ Parity tests | Absolute path to the compiled upstream C++ `render` CLI binary. |
 | `NAM_FIXTURES_DIR` | `_lib.sh` / preflights | Model loaders | Explicit path to test model fixtures directory. |
 | `NAM_MODELS_DIR` | User / harness | Model loaders | Root directory for resolving model files hierarchically. |
@@ -680,11 +700,11 @@ Execution times measured on standard development hardware (16-core, SSD):
 | `utils/tests-long.sh` | ~8–12 min (full suite) | $\le 15$ min | Exhaustive catch-all (including ignored tests), soak, ISA/codegen, heap audit, RT deadline/jitter, Loom, and the perf gate. |
 | `utils/quality-dashboard.sh` | ~60s–90s | $\le 3$ min | Evaluates full audio fidelity (ESR, SNR, MR-STFT) and latency envelope contracts. |
 
-#### QA footprint (métrica F-2, 2026-10-27)
+#### QA Footprint (2026-10-27)
 
 Method: `wc -l` over the shell scripts of the `utils/` directory (shell), the Python
 and awk support files of that directory (support glue) and the QA Rust surface
-(engine `src/bin/*` + `src/testing/qa` + `src/testing/receipt`; Plug/Pipe `src/bin/*`).
+(engine `tools/qa/src/bin/*` (`nam-qa`, `publish = false`) + `src/bin/*` + `src/testing/qa` + `src/testing/receipt`; Plug/Pipe `src/bin/*`).
 This is deliberately broader than the v2 estimate (≈20k), which excluded benchmark bins.
 
 | Repository | Shell | Py/awk | Rust QA | Total |

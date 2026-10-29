@@ -122,7 +122,7 @@ pub struct DspBridge {
     pub buffers: [UnsafeCell<BridgeBuffer>; 2],
 
     // =========================================================================
-    // Writer-Owned Line (64 bytes):
+    // Writer-Owned Line (128 bytes):
     // Written exclusively by the capture callback (DSP producer) during block
     // publication and frame-drop accounting. Main thread drains dropped_frames.
     // =========================================================================
@@ -134,21 +134,23 @@ pub struct DspBridge {
     /// Counter of dropped frames (overwritten without consumption).
     /// Incremented by RT callbacks, drained via `drain_dropped_frames()` by the main loop.
     pub dropped_frames: AtomicU32,
-    /// Padding to isolate writer-owned atomic fields to their own 64-byte cache line.
-    /// (8 + 8 + 4 = 20 bytes; 64 - 20 = 44 bytes).
-    _pad_writer: [u8; 44],
+    /// Padding to isolate writer-owned atomic fields to their own 128-byte cache line.
+    /// 128 bytes match the Apple P-core line size; a 64-byte block would place the
+    /// writer and reader fields below in the same physical line on Apple Silicon.
+    /// (8 + 8 + 4 = 20 bytes; 128 - 20 = 108 bytes).
+    _pad_writer: [u8; 108],
 
     // =========================================================================
-    // Reader-Owned Line (64 bytes):
+    // Reader-Owned Line (128 bytes):
     // Written exclusively by the playback callback (consumer) upon block consumption.
     // Read by the writer to detect pending (unconsumed) frames.
     // =========================================================================
     /// Consumed generation counter — updated by the playback callback.
     pub consumed_gen: AtomicU64,
-    /// Padding to isolate reader-owned atomic fields to their own 64-byte cache line
+    /// Padding to isolate reader-owned atomic fields to their own 128-byte cache line
     /// and maintain 128-byte alignment for the entire struct.
-    /// (8 bytes; 64 - 8 = 56 bytes).
-    _pad_reader: [u8; 56],
+    /// (8 bytes; 128 - 8 = 120 bytes).
+    _pad_reader: [u8; 120],
 }
 
 impl DspBridge {
@@ -162,9 +164,9 @@ impl DspBridge {
             active_read_idx: AtomicUsize::new(0),
             generation: AtomicU64::new(0),
             dropped_frames: AtomicU32::new(0),
-            _pad_writer: [0; 44],
+            _pad_writer: [0; 108],
             consumed_gen: AtomicU64::new(0),
-            _pad_reader: [0; 56],
+            _pad_reader: [0; 120],
         }
     }
 

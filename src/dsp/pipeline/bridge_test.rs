@@ -175,43 +175,45 @@ fn test_dsp_bridge_alignment_and_cache_isolation() {
     let off_buf = offset_of!(DspBridge, buffers);
     assert_eq!(off_buf, 0, "buffers must start at offset 0");
 
-    // Writer cache line offsets
+    // Writer cache line offsets. 128-byte granularity: Apple P-cores fetch
+    // whole 128-byte lines, so a 64-byte split between writer and reader still
+    // produces false sharing on macOS/aarch64.
     let off_active_read = offset_of!(DspBridge, active_read_idx);
     let off_gen = offset_of!(DspBridge, generation);
     let off_dropped = offset_of!(DspBridge, dropped_frames);
 
     assert_eq!(
-        off_active_read % 64,
+        off_active_read % 128,
         0,
-        "active_read_idx must be on a 64-byte cache line boundary"
+        "active_read_idx must be on a 128-byte cache line boundary"
     );
     assert_eq!(
-        off_active_read / 64,
-        off_gen / 64,
+        off_active_read / 128,
+        off_gen / 128,
         "generation must share the writer cache line with active_read_idx"
     );
     assert_eq!(
-        off_active_read / 64,
-        off_dropped / 64,
+        off_active_read / 128,
+        off_dropped / 128,
         "dropped_frames must share the writer cache line with active_read_idx"
     );
 
     // Reader cache line offset
     let off_consumed = offset_of!(DspBridge, consumed_gen);
     assert_eq!(
-        off_consumed % 64,
+        off_consumed % 128,
         0,
-        "consumed_gen must be on a distinct 64-byte cache line boundary"
+        "consumed_gen must be on a distinct 128-byte cache line boundary"
     );
     assert_ne!(
-        off_active_read / 64,
-        off_consumed / 64,
-        "writer atomics and reader atomics must reside on distinct cache lines (false sharing prevention)"
+        off_active_read / 128,
+        off_consumed / 128,
+        "writer atomics and reader atomics must reside on distinct 128-byte lines (false sharing prevention)"
     );
 
-    // Spacing between writer and reader cache lines must be at least 64 bytes
+    // Spacing between writer and reader cache lines must be at least 128 bytes
     assert!(
-        off_consumed >= off_active_read + 64,
-        "reader cache line must follow writer cache line by at least 64 bytes"
+        off_consumed >= off_active_read + 128,
+        "reader cache line must follow writer cache line by at least 128 bytes"
     );
 }

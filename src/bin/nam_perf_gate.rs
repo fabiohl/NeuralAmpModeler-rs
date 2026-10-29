@@ -1638,12 +1638,18 @@ fn cmd_run(args: &[String]) {
         let dur_ms = t0.elapsed().as_millis() as u64;
         let dur_str = format_duration_ms(dur_ms);
 
-        if let Err(e) = persist_baseline(
-            Path::new(&criterion_root),
+        match persist_baseline(
             Path::new(&baseline_dir),
+            Path::new(&criterion_root),
             &baseline,
         ) {
-            run_error(format!("cannot persist baseline: {e}"));
+            Ok(0) => run_error(format!(
+                "no '{baseline}' baseline series found under {criterion_root} — nothing persisted (fail-closed)"
+            )),
+            Ok(count) => {
+                eprintln!("  ✓ Persisted {count} baseline series to {baseline_dir}");
+            }
+            Err(e) => run_error(format!("cannot persist baseline: {e}")),
         }
 
         let core_str = resolved_core.map(|c| c.to_string()).unwrap_or_default();

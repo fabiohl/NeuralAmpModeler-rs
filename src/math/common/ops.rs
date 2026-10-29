@@ -12,7 +12,7 @@ use crate::arch::simd::*;
 /// # Safety
 /// `src` and `dest` must be valid slices. `dest` must have at least `src.len()` elements.
 /// AVX-512F+VL target feature must be available (enforced by CPU dispatch).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[target_feature(enable = "avx512f,avx512vl")]
 // SAFETY: Caller must ensure AVX-512F+VL is available and src/dest are valid
@@ -103,30 +103,42 @@ pub unsafe fn adaptive_prefetch_2stage_f32(
 
 /// Speculative prefetch to L1 cache (T0 hint), avoiding pointer arithmetic UB.
 ///
-/// `_mm_prefetch` on an invalid address is a non-faulting hint and is defined
-/// behavior on x86-64; the operation is therefore memory-safe.
+/// On x86-64 `_mm_prefetch` is a non-faulting, memory-safe hint. On aarch64 it
+/// is a documented no-op: the `prfm` emitted by `asm!` acted as a scheduling
+/// barrier around NEON loads and was never measured as a win on Apple or
+/// Neoverse, so the x86 policy is not transplanted to that ISA.
 #[inline(always)]
 pub fn prefetch_t0<T>(base: *const T, offset: usize) {
-    // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
-    unsafe {
-        crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T0 }>(
-            base.wrapping_add(offset).cast(),
-        );
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
+        unsafe {
+            crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T0 }>(
+                base.wrapping_add(offset).cast(),
+            );
+        }
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = (base, offset);
 }
 
 /// Speculative prefetch to L2 cache (T1 hint), avoiding pointer arithmetic UB.
 ///
-/// `_mm_prefetch` on an invalid address is a non-faulting hint and is defined
-/// behavior on x86-64; the operation is therefore memory-safe.
+/// On x86-64 `_mm_prefetch` is a non-faulting, memory-safe hint. On aarch64 it
+/// is a documented no-op for the same reason as [`prefetch_t0`].
 #[inline(always)]
 pub fn prefetch_t1<T>(base: *const T, offset: usize) {
-    // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
-    unsafe {
-        crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T1 }>(
-            base.wrapping_add(offset).cast(),
-        );
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: prefetch does not dereference the pointer, so using wrapping_add is UB-free even if the address goes out of bounds.
+        unsafe {
+            crate::arch::simd::_mm_prefetch::<{ crate::arch::simd::_MM_HINT_T1 }>(
+                base.wrapping_add(offset).cast(),
+            );
+        }
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = (base, offset);
 }
 
 /// Simple prefetch strategy for small/medium dilations.
@@ -232,5 +244,19 @@ pub unsafe fn set_daz_ftz() {
         core::arch::asm!("mrs {0}, fpcr", out(reg) fpcr, options(nomem, nostack, preserves_flags));
         fpcr |= 1 << 24;
         core::arch::asm!("msr fpcr, {0}", in(reg) fpcr, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Flushes a subnormal `f32` to signed zero, matching FTZ/DAZ semantics.
+///
+/// Scalar tails cannot rely on the thread's FP control register (the caller may
+/// not have enabled FTZ/DAZ yet), so they apply the same policy explicitly.
+/// Signed zero is preserved: `-1e-40` becomes `-0.0`, not `+0.0`.
+#[inline]
+pub(crate) fn flush_subnormal(x: f32) -> f32 {
+    if x.abs() < f32::MIN_POSITIVE {
+        0.0_f32.copysign(x)
+    } else {
+        x
     }
 }

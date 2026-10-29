@@ -15,7 +15,7 @@
 //!
 //! Coefficients in `crate::math::constants` (`POLY_*`).
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 pub use super::high_fidelity_avx512::*;
 use crate::arch::simd::*;

@@ -30,7 +30,7 @@ Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
   --only <fases>   roda só as fases nomeadas (preserva target/long)
   preflight-render      render C++ de referência (GAP sem --strict)
   preflight-catalog     catálogo de modelos
-  preflight-package     cargo package --list
+  preflight-package     cargo package --locked (verify) + consumer-smoke (x86/aarch64 sem .cargo do repo)
   preflight-freshness   frescor de artefatos
   preflight-simd-probe  sonda de ISA
   catch-all             --include-ignored, exceto rt-deadline, rt-jitter e soak
@@ -130,10 +130,10 @@ exec_phase() {
     GAPS+=("$pname:optional-dependency-missing")
     emit "PHASE: $pname GAP optional-dependency-missing"
   elif [ "$rc" -ne 0 ] || { [ "$req_tests" -eq 1 ] && ! ran_tests "$log"; }; then
-    status="FAILED"
-    FAILS+=("$pname")
+    status="FAILED"; FAILS+=("$pname")
     case "$rc" in 124|137) note=" (timeout)" ;; esac
     emit "PHASE: $pname FAIL rc=$rc$note log=$log"
+    [ -f "$log" ] && { echo "--- [FAIL LOG: $pname (rc=$rc)] ---" >&2; tail -n 120 "$log" >&2 || true; echo "--- [END LOG: $pname] ---" >&2; }
   elif [ -n "$PHASE_GAP" ]; then
     status="SKIPPED"
     GAPS+=("$pname:$PHASE_GAP")
@@ -159,11 +159,11 @@ run_preflight_catalog() { run_cmd cargo test --release --features testing --test
 exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
-run_preflight_package() { run_cmd cargo package --list --allow-dirty | grep -Ev '(target/|\.git/)'; }
-exec_phase "preflight-package" "preflight-package" 60 0 run_preflight_package
+run_preflight_package() { run_cmd cargo package --locked --allow-dirty && run_cmd bash utils/consumer-smoke.sh; }
+exec_phase "preflight-package" "preflight-package" 600 0 run_preflight_package
 
 # --- Preflight 4: freshness ---
-run_preflight_freshness() { run_cmd cargo run --quiet --locked --features testing --bin nam_freshness -- --root "$PWD" hard-fail; }
+run_preflight_freshness() { run_cmd cargo run --quiet --locked -p nam-qa --bin nam_freshness -- --root "$PWD" hard-fail; }
 exec_phase "preflight-freshness" "preflight-freshness" 60 0 run_preflight_freshness
 
 # --- Preflight 5: simd-probe ---
@@ -211,15 +211,17 @@ run_phase_rt_deadline() {
   [ "$STRICT" -eq 1 ] && pick_args+=("--strict")
   local core
   core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
-  if [ "$core" != "GAP" ]; then
-    export NAM_BENCH_CORE="$core"
-  fi
-  run_cmd cargo test --release --features testing --test rt_constraints rt_deadline:: -- --ignored --nocapture
+  [ "$core" = "GAP" ] && { PHASE_GAP=no-bench-core; return 0; }
+  export NAM_BENCH_CORE="$core"
+  local pin=(taskset -c "$core")
+  run_cmd "${pin[@]}" cargo test --release --features testing --test rt_constraints rt_deadline:: -- --ignored --nocapture
 }
 exec_phase "phase5" "rt-deadline" 300 1 run_phase_rt_deadline
 
 # --- Phase 6: rt-jitter ---
 run_phase_rt_jitter() {
+  [ -z "${NAM_BENCH_CORE:-}" ] && export NAM_BENCH_CORE="$(run_cmd "$PERF_GATE_BIN" pick-core 2>/dev/null || true)"
+  [ "${NAM_BENCH_CORE:-}" = "GAP" ] && unset NAM_BENCH_CORE
   run_cmd cargo test --release --features testing --test rt_constraints rt_jitter:: -- --ignored --nocapture
 }
 exec_phase "phase6" "rt-jitter" 300 1 run_phase_rt_jitter

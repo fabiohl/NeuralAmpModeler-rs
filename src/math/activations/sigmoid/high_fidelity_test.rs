@@ -141,7 +141,7 @@ fn test_sigmoid_poly_saturation() {
 // AVX-512 sweeps — gated on hardware availability
 // ══════════════════════════════════════════════════════════════════════════════
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: consistência matemática (oráculo f64)"]
 fn test_sigmoid_poly_avx512_sweep() {

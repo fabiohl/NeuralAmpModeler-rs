@@ -180,3 +180,68 @@ pub fn bench_a2_comparison(c: &mut Criterion) {
 
     group.finish();
 }
+
+/// Direct grouped/depthwise Conv1D kernels, isolated from the rest of the A2
+/// model. Covers the two shapes the S05 tap-major repack targets: a general
+/// grouped layer (`groups=3`, 3 input channels → 12 output channels) and a
+/// depthwise layer (`groups == in_ch == out_ch = 8`).
+pub fn bench_a2_grouped_conv(c: &mut Criterion) {
+    use neural_amp_modeler_rs::models::a2::A2GroupedConv1d;
+
+    fn raw_weights(len: usize, seed: u32) -> Vec<f32> {
+        let mut state = seed;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((state as f32) / (u32::MAX as f32)) * 0.5 - 0.25
+            })
+            .collect()
+    }
+
+    let mut group = c.benchmark_group("A2_GroupedConv");
+    group.sample_size(50);
+
+    // General grouped: in=3, out=12, groups=3, k=2, d=1.
+    let in_ch = 3;
+    let out_ch = 12;
+    let kernel = 2;
+    let groups = 3;
+    let w = raw_weights((out_ch / groups) * in_ch * kernel, 0xA2_05);
+    let bias = vec![0.0f32; out_ch];
+    let conv = A2GroupedConv1d::new(&w, &bias, true, 1, in_ch, out_ch, kernel, groups)
+        .expect("general grouped bench conv must construct");
+    let frame_idx = 64;
+    let layer_buffer = vec![0.125f32; (frame_idx + kernel + 1) * in_ch];
+    let mut out = vec![0.0f32; out_ch];
+    group.bench_function("general_groups3_3x12_k2", |b| {
+        b.iter(|| {
+            // SAFETY: `layer_buffer` covers `frame_idx`'s full lookback and
+            // `out` has `out_ch` elements.
+            unsafe {
+                conv.process_single_frame(&layer_buffer, &mut out, frame_idx, None);
+            }
+            std::hint::black_box(&out);
+        });
+    });
+
+    // Depthwise: in=out=8, groups=8, k=2, d=1.
+    let channels = 8;
+    let w = raw_weights(channels * kernel, 0xD3);
+    let bias = vec![0.0f32; channels];
+    let conv = A2GroupedConv1d::new(&w, &bias, true, 1, channels, channels, kernel, channels)
+        .expect("depthwise grouped bench conv must construct");
+    let layer_buffer = vec![0.125f32; (frame_idx + kernel + 1) * channels];
+    let mut out = vec![0.0f32; channels];
+    group.bench_function("depthwise_8ch_k2", |b| {
+        b.iter(|| {
+            // SAFETY: `layer_buffer` covers `frame_idx`'s full lookback and
+            // `out` has `out_ch` elements.
+            unsafe {
+                conv.process_single_frame(&layer_buffer, &mut out, frame_idx, None);
+            }
+            std::hint::black_box(&out);
+        });
+    });
+
+    group.finish();
+}
