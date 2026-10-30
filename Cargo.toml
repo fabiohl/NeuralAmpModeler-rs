@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -56,7 +56,7 @@ thiserror = "2.0"
 # and macOS QoS/time-constraint/memory-locking primitives).
 libc = "0.2.191"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
-rtrb = "0.4.0"
+rtrb = "0.4.1"
 # .nam (JSON) model deserialization.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -233,7 +233,10 @@ path = "examples/synthetic_model.rs"
 required-features = []
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(nam_avx512)'] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(loom)',
+    'cfg(nam_avx512)',
+] }
 raw_borrows_via_references = "warn"
 
 [lints.clippy]
@@ -271,5 +274,9 @@ split-debuginfo = "unpacked"
 # targets document the same surface without the AVX-512 modules. x86_64 is the
 # landing target; the aarch64 targets are documented alongside it.
 all-features = true
-targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "aarch64-unknown-linux-gnu"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+]
 rustdoc-args = ["--cfg", "docsrs"]
