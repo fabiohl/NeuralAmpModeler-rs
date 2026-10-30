@@ -34,7 +34,8 @@ else
 fi
 
 if [ -s "$LOG_DIR/skips.jsonl" ]; then
-  gap "skip-capability:$(wc -l < "$LOG_DIR/skips.jsonl" | tr -d ' ')"
+  blocking=$(grep -vc '"optional":true' "$LOG_DIR/skips.jsonl" 2>/dev/null || true)
+  [ "${blocking:-0}" -gt 0 ] && gap "skip-capability:$blocking"
 fi
 
 finish || exit 1

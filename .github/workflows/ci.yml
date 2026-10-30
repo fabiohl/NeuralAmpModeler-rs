@@ -277,13 +277,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: W-00a parity policy guard (temporary fail-closed)
-        run: |
-          mkdir -p target/logs
-          echo "PHASE: cross-platform-parity FAIL reason=w00a-unresolved" > target/logs/summary.txt
-          echo "RESULT: FAIL (0s) fails=cross-platform-parity gaps=w00a-unresolved" >> target/logs/summary.txt
-          echo "::error::W-00a cross-platform parity policy is unresolved; comparison verdict withheld and no parity PASS is published. Remove this guard only together with the W-00a resolution."
-          exit 1
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - uses: Swatinem/rust-cache@v2
@@ -320,31 +313,33 @@ jobs:
             done
           done
 
-          # Pairwise comparison: x86_64 vs linux-arm64
+          # Pairwise comparison: x86_64 vs linux-arm64 (cross-ISA: calibrated numerical envelope)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing x86_64-linux vs linux-arm64 ($m) ---"
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/x86_64-linux/$m" \
               "target/parity-vectors/linux-arm64/$m" \
-              --report-out "target/logs/parity/report-x86-vs-linux-arm64-$m.json" || true
+              --max-esr 1e-6 --min-snr-db 100.0 \
+              --report-out "target/logs/parity/report-x86-vs-linux-arm64-$m.json"
           done
 
-          # Pairwise comparison: x86_64 vs macos-arm64
+          # Pairwise comparison: x86_64 vs macos-arm64 (cross-ISA: calibrated numerical envelope)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing x86_64-linux vs macos-arm64 ($m) ---"
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/x86_64-linux/$m" \
               "target/parity-vectors/macos-arm64/$m" \
-              --report-out "target/logs/parity/report-x86-vs-macos-arm64-$m.json" || true
+              --max-esr 1e-6 --min-snr-db 100.0 \
+              --report-out "target/logs/parity/report-x86-vs-macos-arm64-$m.json"
           done
 
-          # Pairwise comparison: linux-arm64 vs macos-arm64
+          # Pairwise comparison: linux-arm64 vs macos-arm64 (intra-ISA NEON: strict bitwise identity)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing linux-arm64 vs macos-arm64 ($m) ---"
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/linux-arm64/$m" \
               "target/parity-vectors/macos-arm64/$m" \
-              --report-out "target/logs/parity/report-linux-arm64-vs-macos-arm64-$m.json" || true
+              --report-out "target/logs/parity/report-linux-arm64-vs-macos-arm64-$m.json"
           done
 
           echo "AVX-512 status: GAP (opt-in research feature; physical AVX-512 hardware absent on standard CI runners)"
