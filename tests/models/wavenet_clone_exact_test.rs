@@ -100,10 +100,14 @@ fn test_clone_exact_wavenet_official() {
 #[test]
 fn test_clone_exact_slammin_marshall() {
     let basename = "SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam";
-    let Some(model) = load_wavenet_dyn(basename) else {
-        println!("SKIP: {basename} not found (requires third-party/community_models)");
+    if find_model_path(basename).is_none() {
+        neural_amp_modeler_rs::testing::report_skip(
+            "wavenet_clone_exact_test::test_clone_exact_slammin_marshall",
+            &format!("community_model_absent:{basename}"),
+        );
         return;
-    };
+    }
+    let model = load_wavenet_dyn(basename).expect("present Slammin model must load as WaveNetDyn");
 
     let exact_clone = model.clone_exact();
     assert_eq!(exact_clone.ch, model.ch);

@@ -118,6 +118,85 @@ pub fn detect_gap_markers(path: &Path) -> Vec<String> {
     gaps
 }
 
+/// Removes ANSI CSI escape sequences from `input`.
+///
+/// Console transport may decorate libtest output with colour codes even when
+/// the dashboard is piping it to a file. Every regex-like consumer must strip
+/// them first, otherwise `test result: ok. 74 passed` never matches.
+pub fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // CSI sequence: ESC '[' <params/intermediates> <final 0x40..=0x7E>.
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            for n in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&n) {
+                    break;
+                }
+            }
+        } else {
+            // Two-byte escape (e.g. ESC '='/'c'): drop the introducer payload.
+            chars.next();
+        }
+    }
+    out
+}
+
+/// Parses the `N passed` counter of one libtest `test result:` line.
+///
+/// Accepts both `ok.` and `FAILED.` headers; returns `None` for any line that
+/// does not carry the canonical `test result: <verdict>. <N> passed` grammar.
+fn test_result_passed(line: &str) -> Option<u64> {
+    let rest = line.split_once("test result:")?.1.trim_start();
+    let rest = rest
+        .strip_prefix("ok.")
+        .or_else(|| rest.strip_prefix("FAILED."))?
+        .trim_start();
+    let digits = rest
+        .as_bytes()
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return None;
+    }
+    let (number, tail) = rest.split_at(digits);
+    if !tail.starts_with(" passed") {
+        return None;
+    }
+    number.parse().ok()
+}
+
+/// Sums the `N passed` counters of every libtest `test result:` line in
+/// `output`, after stripping ANSI escapes.
+///
+/// Returns `(passed, saw_test_result)`. `saw_test_result` distinguishes a
+/// phase that executed zero tests (fail-closed `no_test_result`) from one that
+/// executed tests and reported zero passes. Lines with `--nocapture` payloads
+/// are handled because the counter is the summary line, not the per-test
+/// `test … ... ok` prefix.
+pub fn tests_passed_from_output(output: &[u8]) -> (u32, bool) {
+    let text = String::from_utf8_lossy(output);
+    let clean = strip_ansi(&text);
+    let mut passed = 0u64;
+    let mut saw_test_result = false;
+    for line in clean.lines() {
+        if !line.contains("test result:") {
+            continue;
+        }
+        saw_test_result = true;
+        if let Some(n) = test_result_passed(line) {
+            passed = passed.saturating_add(n);
+        }
+    }
+    (passed.min(u32::MAX as u64) as u32, saw_test_result)
+}
+
 /// Extracts the integer immediately preceding `needle` in `line` (the libtest
 /// `test result: ok. 123 passed; 0 failed; ...` counter format).
 pub fn count_before(line: &str, needle: &str) -> u64 {
@@ -177,3 +256,7 @@ pub fn count_tests_executed_from_log(path: &Path) -> u64 {
     }
     total
 }
+
+#[cfg(test)]
+#[path = "log_parser_test.rs"]
+mod tests;

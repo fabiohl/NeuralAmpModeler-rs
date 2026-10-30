@@ -32,9 +32,14 @@ pub mod reference_oracle;
 pub mod skip;
 pub mod spectral;
 pub mod stress;
+pub mod vector_protocol;
 pub mod wav;
 
 pub use skip::report_skip;
+pub use vector_protocol::{
+    ChannelMode, DspMode, InitialState, ParityVector, ParityVectorHeader, VectorComparisonReport,
+    VectorIncompatibilityReason, VectorProtocolError, check_compatibility, compare_vectors,
+};
 
 #[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]

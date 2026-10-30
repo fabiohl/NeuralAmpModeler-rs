@@ -7,6 +7,7 @@ use super::super::bridge::MAX_RESAMP_BUF;
 use super::super::context::DspPipelineContext;
 use super::adaptive_ctrl::{WAVENET_CROSSFADE_MAX_STATES, configure_adaptive_model};
 use super::routing::{model_process_stereo_with_os, run_stereo_or_mono};
+use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
 use crate::dsp::resampler::NamResampler;
 use crate::dsp::resampling::StreamingResampleBuffer;
 use crate::math::dsp::gain::crossfade_blend_mono_simd;
@@ -224,8 +225,108 @@ pub fn run_inference(
     crossfade_scratch_l: &mut [f32],
     crossfade_scratch_r: &mut [f32],
 ) -> usize {
-    let is_resamp_bypass = ctx.resampler.is_bypass();
     let n = n_samples.min(MAX_RESAMP_BUF);
+    if n == 0 {
+        return 0;
+    }
+    if n != n_samples {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+    }
+
+    // Defensive buffer capacity validation across all builds (R-16).
+    // An insufficient slice must not panic, access OOB or execute partial DSP.
+    let mut capacity_valid = samples_l.len() >= n && resamp_out_l.len() >= n;
+    if !*ctx.process_mono {
+        capacity_valid = capacity_valid && samples_r.len() >= n && resamp_out_r.len() >= n;
+    }
+
+    let is_resamp_bypass = ctx.resampler.is_bypass();
+    let supports_skip = ctx
+        .active_model_l
+        .as_ref()
+        .is_some_and(|m| m.supports_layer_skip());
+    let is_crossfading_wavenet = supports_skip && ctx.adaptive.is_crossfading();
+
+    if is_resamp_bypass {
+        capacity_valid = capacity_valid && model_out_l.len() >= n;
+        if !*ctx.process_mono {
+            capacity_valid = capacity_valid && model_out_r.len() >= n;
+        }
+        let factor_l = if ctx.os_l.is_bypass() {
+            1
+        } else {
+            ctx.os_l.factor().multiplier()
+        };
+        if factor_l > 1 {
+            let need_os = n * factor_l;
+            capacity_valid =
+                capacity_valid && os_in_l.len() >= need_os && os_model_l.len() >= need_os;
+        }
+        if !*ctx.process_mono {
+            let factor_r = if ctx.os_r.is_bypass() {
+                1
+            } else {
+                ctx.os_r.factor().multiplier()
+            };
+            if factor_r > 1 {
+                let need_os = n * factor_r;
+                capacity_valid =
+                    capacity_valid && os_in_r.len() >= need_os && os_model_r.len() >= need_os;
+            }
+        }
+        if is_crossfading_wavenet {
+            capacity_valid = capacity_valid && crossfade_scratch_l.len() >= n;
+            if !*ctx.process_mono {
+                capacity_valid = capacity_valid && crossfade_scratch_r.len() >= n;
+            }
+        }
+    } else {
+        // Resampler active: intermediate rate conversion chunks require MAX_RESAMP_BUF
+        capacity_valid = capacity_valid
+            && resamp_mid_l.len() >= MAX_RESAMP_BUF
+            && resamp_mid_r.len() >= MAX_RESAMP_BUF
+            && model_out_l.len() >= MAX_RESAMP_BUF;
+        if !*ctx.process_mono {
+            capacity_valid = capacity_valid && model_out_r.len() >= MAX_RESAMP_BUF;
+        }
+        let factor_l = if ctx.os_l.is_bypass() {
+            1
+        } else {
+            ctx.os_l.factor().multiplier()
+        };
+        if factor_l > 1 {
+            let need_os = MAX_RESAMP_BUF * factor_l;
+            capacity_valid =
+                capacity_valid && os_in_l.len() >= need_os && os_model_l.len() >= need_os;
+        }
+        if !*ctx.process_mono {
+            let factor_r = if ctx.os_r.is_bypass() {
+                1
+            } else {
+                ctx.os_r.factor().multiplier()
+            };
+            if factor_r > 1 {
+                let need_os = MAX_RESAMP_BUF * factor_r;
+                capacity_valid =
+                    capacity_valid && os_in_r.len() >= need_os && os_model_r.len() >= need_os;
+            }
+        }
+        if is_crossfading_wavenet {
+            capacity_valid = capacity_valid && crossfade_scratch_l.len() >= MAX_RESAMP_BUF;
+            if !*ctx.process_mono {
+                capacity_valid = capacity_valid && crossfade_scratch_r.len() >= MAX_RESAMP_BUF;
+            }
+        }
+    }
+
+    if !capacity_valid {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        let safe_l = resamp_out_l.len().min(n);
+        resamp_out_l[..safe_l].fill(0.0);
+        let safe_r = resamp_out_r.len().min(n);
+        resamp_out_r[..safe_r].fill(0.0);
+        return 0;
+    }
 
     let lstm_passthrough = configure_adaptive_model(
         ctx.active_model_l,
@@ -233,12 +334,6 @@ pub fn run_inference(
         ctx.adaptive,
         ctx.rt_status,
     );
-
-    let supports_skip = ctx
-        .active_model_l
-        .as_ref()
-        .is_some_and(|m| m.supports_layer_skip());
-    let is_crossfading_wavenet = supports_skip && ctx.adaptive.is_crossfading();
 
     if is_resamp_bypass {
         let model_in_l = &samples_l[..n];
@@ -391,8 +486,61 @@ pub fn run_inference_streaming(
     let n = n_samples
         .min(in_l.len())
         .min(in_r.len())
-        .min(out_l.len())
-        .min(out_r.len());
+        .min(MAX_RESAMP_BUF);
+    if n == 0 {
+        return 0;
+    }
+    if n != n_samples {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+    }
+
+    let mut capacity_valid = in_l.len() >= n && out_l.len() >= n;
+    if !*ctx.process_mono {
+        capacity_valid = capacity_valid && in_r.len() >= n && out_r.len() >= n;
+    }
+
+    let factor_l = if ctx.os_l.is_bypass() {
+        1
+    } else {
+        ctx.os_l.factor().multiplier()
+    };
+    let max_block = stream.max_block();
+    let max_chunk = max_block.min(MAX_RESAMP_BUF);
+    if factor_l > 1 {
+        let need_os = max_chunk * factor_l;
+        capacity_valid = capacity_valid && os_in_l.len() >= need_os && os_model_l.len() >= need_os;
+    }
+    if !*ctx.process_mono {
+        let factor_r = if ctx.os_r.is_bypass() {
+            1
+        } else {
+            ctx.os_r.factor().multiplier()
+        };
+        if factor_r > 1 {
+            let need_os = max_chunk * factor_r;
+            capacity_valid =
+                capacity_valid && os_in_r.len() >= need_os && os_model_r.len() >= need_os;
+        }
+    }
+    let supports_skip = ctx
+        .active_model_l
+        .as_ref()
+        .is_some_and(|m| m.supports_layer_skip());
+    let is_crossfading_wavenet = supports_skip && ctx.adaptive.is_crossfading();
+    if is_crossfading_wavenet {
+        capacity_valid = capacity_valid && crossfade_scratch_l.len() >= max_chunk;
+        if !*ctx.process_mono {
+            capacity_valid = capacity_valid && crossfade_scratch_r.len() >= max_chunk;
+        }
+    }
+    if !capacity_valid {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        let safe_l = out_l.len().min(n);
+        out_l[..safe_l].fill(0.0);
+        let safe_r = out_r.len().min(n);
+        out_r[..safe_r].fill(0.0);
+        return 0;
+    }
 
     let lstm_passthrough = configure_adaptive_model(
         ctx.active_model_l,
@@ -400,11 +548,6 @@ pub fn run_inference_streaming(
         ctx.adaptive,
         ctx.rt_status,
     );
-    let supports_skip = ctx
-        .active_model_l
-        .as_ref()
-        .is_some_and(|m| m.supports_layer_skip());
-    let is_crossfading_wavenet = supports_skip && ctx.adaptive.is_crossfading();
 
     // The streaming adapter's FIFO capacities are sized for `max_block` per
     // call. Drive it in sub-blocks when the host block exceeds that bound so no

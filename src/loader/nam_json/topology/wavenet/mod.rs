@@ -292,6 +292,11 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     }
 
     let condition_size = layers[0].condition_size.unwrap_or(1);
+    if condition_size == 0 {
+        return WavenetTopologyResult::rejected_topology(
+            "WaveNet condition_size must be >= 1 — zero conditioning channels is invalid.",
+        );
+    }
     // H-03: free-geometry (A1) `condition_size` has no compile-time cap —
     // reject oversized values before the dynamic engine allocates
     // conditioning buffers proportional to it.
@@ -300,6 +305,16 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             "WaveNet A1 condition_size ({condition_size}) exceeds maximum \
              {MAX_CONDITION_SIZE} — DoS/OOM protection (H-03)."
         ));
+    }
+
+    for (i, layer) in layers.iter().enumerate() {
+        if let Some(cs) = layer.condition_size
+            && cs != condition_size
+        {
+            return WavenetTopologyResult::rejected_topology(format!(
+                "WaveNet layer[{i}] condition_size ({cs}) does not match layer[0] ({condition_size})."
+            ));
+        }
     }
 
     let extract = match extract_layer_metadata(layers) {

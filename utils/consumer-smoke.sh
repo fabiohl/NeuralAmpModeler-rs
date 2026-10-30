@@ -21,6 +21,7 @@ printf '[package]\nname = "nam-consumer"\nversion = "0.0.0"\nedition = "2024"\n\
 rc=0
 (
   set -e
+  unset CARGO_TARGET_DIR || true
   cd "$d"
   for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
     rustup target list --installed | grep -qx "$t" || { echo "ERROR: target $t missing (run: rustup target add $t)" >&2; exit 1; }

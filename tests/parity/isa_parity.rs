@@ -298,6 +298,7 @@ fn assert_isa_parity(
     let esr = compute_esr(output_ref, output_test);
     let mse = compute_mse(output_ref, output_test);
     let mae = compute_max_abs_error(output_ref, output_test);
+    let bitwise = compare_samples_bitwise(output_ref, output_test);
 
     #[expect(deprecated)]
     let ref_name = match ref_isa {
@@ -317,7 +318,13 @@ fn assert_isa_parity(
     println!(
         "[ISA Matrix] {label} | {ref_name:>10} → {test_name:>10} | \
          ESR={esr:.2e} | MSE={mse:.2e} | MaxAbsErr={mae:.2e} | \
-         budget ESR<{max_esr:.1e}"
+         bitwise mismatches={}/{} (first idx={:?}, ref={:?}, test={:?}) | \
+         budget ESR<{max_esr:.1e}",
+        bitwise.mismatch_count,
+        bitwise.total_samples,
+        bitwise.first_mismatch_idx,
+        bitwise.first_ref_bits.map(|b| format!("0x{b:08X}")),
+        bitwise.first_test_bits.map(|b| format!("0x{b:08X}")),
     );
 
     // Forensic JSONL sink (kind `isa`) — human log unchanged.
@@ -431,6 +438,7 @@ fn assert_isa_self_consistency(
         None => return,
     };
 
+    let bitwise = compare_samples_bitwise(&output1, &output2);
     let mse = compute_mse(&output1, &output2);
     #[expect(deprecated)]
     let isa_name = match isa {
@@ -439,12 +447,21 @@ fn assert_isa_self_consistency(
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
         _ => "UNKNOWN",
     };
-    println!("[ISA Matrix] {label} | {isa_name:>10} self-consistency | MSE={mse:.2e}");
+    println!(
+        "[ISA Matrix] {label} | {isa_name:>10} self-consistency | MSE={mse:.2e} | \
+         bitwise mismatches={}/{}",
+        bitwise.mismatch_count, bitwise.total_samples
+    );
 
     // Self-consistency sinks with `ref_isa == test_isa` (kind `isa`,
     // only `mse` carried) — human log unchanged.
     common::report_isa(label, isa_name, isa_name, None, mse, None, None);
 
+    assert_eq!(
+        bitwise.mismatch_count, 0,
+        "[{label}] {isa_name} self-consistency FAIL: {} bitwise mismatches across {} samples",
+        bitwise.mismatch_count, bitwise.total_samples
+    );
     assert!(
         mse == 0.0,
         "[{label}] {isa_name} self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
@@ -470,6 +487,7 @@ fn assert_isa_hf_self_consistency(
         None => return,
     };
 
+    let bitwise = compare_samples_bitwise(&output1, &output2);
     let mse = compute_mse(&output1, &output2);
     #[expect(deprecated)]
     let isa_name = match isa {
@@ -478,10 +496,19 @@ fn assert_isa_hf_self_consistency(
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
         _ => "UNKNOWN",
     };
-    println!("[ISA HF Matrix] {label} | {isa_name:>10} self-consistency (HF) | MSE={mse:.2e}");
+    println!(
+        "[ISA HF Matrix] {label} | {isa_name:>10} self-consistency (HF) | MSE={mse:.2e} | \
+         bitwise mismatches={}/{}",
+        bitwise.mismatch_count, bitwise.total_samples
+    );
 
     common::report_isa(label, isa_name, isa_name, None, mse, None, None);
 
+    assert_eq!(
+        bitwise.mismatch_count, 0,
+        "[{label}] {isa_name} HF self-consistency FAIL: {} bitwise mismatches across {} samples",
+        bitwise.mismatch_count, bitwise.total_samples
+    );
     assert!(
         mse == 0.0,
         "[{label}] {isa_name} HF self-consistency FAIL: MSE={mse:.6e} (expected 0.0)"
@@ -871,7 +898,7 @@ fn isa_matrix_header_info() {
     println!("║  proptest_math.rs                                            ║");
     println!("║                                                              ║");
     println!("║  Run cross-ISA matrix:                                       ║");
-    println!("║  cargo test --release --test isa_parity -- \\                 ║");
+    println!("║  cargo test --release --test parity isa_parity -- \\                 ║");
     println!("║    --ignored --test-threads=1 --nocapture                    ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();

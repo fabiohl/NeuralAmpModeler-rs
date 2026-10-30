@@ -14,10 +14,11 @@ pub use capability::{
 };
 pub use log_parser::{
     LONG_GAP_MARKERS, colon_detail, count_before, count_tests_executed_from_log, detail_after,
-    detect_gap_markers, extract_attr, is_benchmark_time_line, marker_gap_entry,
+    detect_gap_markers, extract_attr, is_benchmark_time_line, marker_gap_entry, strip_ansi,
+    tests_passed_from_output,
 };
 pub use long_audit::{LongAuditReceipt, LongReceiptError, now_iso8601};
 pub use long_phase::{
-    CANONICAL_ROSTER, LongPhaseReceipt, LongPhaseStatus, PERFORMANCE_PHASE_IDS,
-    PREFLIGHT_PHASE_IDS, is_preflight_id,
+    CANONICAL_ROSTER, FIDELITY_PHASE_IDS, LongPhaseReceipt, LongPhaseStatus, LongReason,
+    PERFORMANCE_PHASE_IDS, PREFLIGHT_PHASE_IDS, is_preflight_id,
 };

@@ -6,11 +6,14 @@
 //! Replaces the bulk of `utils/_lib.sh::check_freshness` with a portable Rust
 //! implementation. Exit codes:
 //!
-//! - 0: freshness gate passed (or `warn-only` mode absorbed failures).
+//! - 0: freshness gate passed cleanly.
 //! - 1: gate failed in the requested mode.
 //! - 2: bad arguments.
+//! - 3: gate passed with non-blocking drift (GAP: generator drift in artifacts-hard mode).
+//! - 5: gate failed due to blocking generator provenance drift (typed cause).
 
 use std::env;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
@@ -80,7 +83,11 @@ fn main() {
 
     let mut mode = FreshnessMode::HardFail;
     let mut root = PathBuf::from(".");
-    let mut no_color = env::var_os("NO_COLOR").is_some();
+    let no_color_env = env::var("NO_COLOR").is_ok_and(|v| {
+        let v = v.trim();
+        v == "1" || v.eq_ignore_ascii_case("true")
+    });
+    let mut no_color = no_color_env || !std::io::stdout().is_terminal();
     let mut mtime_mode = false;
     let mut mtime_sources: Vec<PathBuf> = Vec::new();
     let mut mtime_artifacts: Vec<PathBuf> = Vec::new();
@@ -267,11 +274,18 @@ fn main() {
                 );
             }
 
-            let should_fail = mode.artifact_hard() && !outcome.artifact_integrity_ok
-                || mode.generator_hard() && !outcome.generator_provenance_ok;
-
-            if should_fail {
+            // Generator drift keeps its typed exit code even when artifact
+            // integrity also fails: the runner needs the drift cause to record
+            // `GENERATOR_DRIFT`.
+            if mode.generator_hard() && !outcome.generator_provenance_ok {
+                exit(5);
+            }
+            let artifact_fail = mode.artifact_hard() && !outcome.artifact_integrity_ok;
+            if artifact_fail {
                 exit(1);
+            }
+            if !outcome.generator_drift.is_empty() {
+                exit(3);
             }
             exit(0);
         }

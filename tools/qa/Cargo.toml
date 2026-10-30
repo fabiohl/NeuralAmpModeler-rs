@@ -38,7 +38,12 @@ path = "src/bin/nam_quality.rs"
 name = "nam_remote_simd_receipt"
 path = "src/bin/nam_remote_simd_receipt.rs"
 
+[[bin]]
+name = "nam_parity_vector"
+path = "src/bin/nam_parity_vector.rs"
+
 [dependencies]
 NeuralAmpModeler-rs = { path = "../..", features = ["testing"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11"

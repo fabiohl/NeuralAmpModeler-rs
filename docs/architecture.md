@@ -9,6 +9,14 @@ This document provides the foundational architectural specification for the Neur
 
 NeuralAmpModeler-rs is a host-agnostic, low-latency DSP core engineered in idiomatic Rust for neural inference of audio equipment simulations (Neural Amp Modeler) with strict Real-Time (RT) safety guarantees. It is designed to be embedded as an `rlib` dependency in interactive audio plugins, standalone hosts, offline renderers, analysis tools, and embedded audio pipelines.
 
+## Platform Priority and Evidence Policy
+
+Ubuntu Linux on `x86_64` with the `x86-64-v3` baseline is the primary development and reference platform. Portability changes must not compromise its correctness, real-time safety, numerical fidelity, compatibility, or performance contracts. A new platform must not weaken those contracts or their reference-platform gates; if a proposed change cannot preserve them, isolate or reject it rather than degrading the reference platform.
+
+Prefer current, officially supported platform versions and modern stable capabilities. Platform maturity is established separately for each operating system, architecture, feature and validation scope. When evidence is insufficient, a platform or capability may be identified as experimental with its specific gaps and limitations disclosed; experimental status is not a waiver for known failures or for the reference-platform gates. Community reports and contributions can help close gaps, but do not substitute for recorded evidence. Cross-compilation alone does not establish native execution, audio integration, real-time behavior, or performance.
+
+This policy does not announce Windows support or change the maturity of any existing platform. See the supported-platform list in the [README](../README.md#supported-platforms) and the evidence and quality procedures in [testing.md](testing.md).
+
 ## Public-Library Boundary
 
 The engine operates as an independent, standalone library. Downstream applications may integrate and exercise it, but they do not dictate its internal architecture. Public APIs, diagnostics, RT policies, and error codes express reusable engine concepts rather than the lifecycle, naming conventions, or transport protocols of any specific host, audio backend, or plugin format. Consumer-specific lifecycle adaptations belong downstream.
@@ -66,7 +74,7 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 
    - Vector operations are abstracted behind the [`SimdMath`](../src/math/common/traits/mod.rs) trait and instantiated via the static `dispatch_simd!` macro.
    - **Production Backend:** `Avx2Math` is the sole production math backend (on aarch64 it runs through the NEON layer, reported as `NEON (AVX2-compatible layer)`). The `x86-64-v3` baseline is a compile-time contract enforced by `compile_error!` in `src/lib.rs`; there is no runtime AVX2/FMA check. A host lacking AVX2/FMA running a v3 binary terminates with SIGILL. `E5001` is reserved and discontinued (see the error catalog). No scalar fallback branches exist on the audio hot path.
-   - **AVX-512 Gating & L1i Cache Defense:** AVX-512 kernels are isolated behind the opt-in `avx512` Cargo feature (`#[cfg(feature = "avx512")]`). Default builds completely omit AVX-512 code, keeping EVEX/ZMM instructions out of `.text` and defending the critical 32 KB core L1 instruction cache (L1i) budget.
+   - **AVX-512 Gating & L1i Cache Defense:** AVX-512 kernels are isolated behind the opt-in `avx512` Cargo feature (`#[cfg(feature = "avx512")]`). Default builds completely omit AVX-512 code at compile time, so no AVX-512 kernels are compiled into default artifacts; this protects the critical 32 KB core L1 instruction cache (L1i) budget. Absence of EVEX/ZMM in the linked `.text` is not verified by binary inspection (GAP, see [testing.md §3.3](testing.md)).
    - **Architectural Rationale:** Real-time audio inference operates on small sample blocks (e.g., $N=64$). At these block sizes, AVX-512 yields negative or negligible throughput improvements over AVX2 due to CPU frequency transitions and vector setup overheads, while significantly expanding code footprint. AVX-512 sources are retained strictly for offline research, comparative benchmarking, and experimental verification. When enabled, dispatch mandates the complete `F+VL+BW+DQ` host capability matrix to prevent `SIGILL` on hypervisors.
 
 3. **Numeric Precision (f32 vs. Reduced Precision):**
@@ -408,16 +416,16 @@ NeuralAmpModeler-rs tracks callback latency distributions via atomic, lock-free 
 
 NeuralAmpModeler-rs separates the host-agnostic DSP core into distinct architectural layers:
 
-| Layer            | Path                | Responsibility                                                                                     |
-|:---------------- |:------------------- |:-------------------------------------------------------------------------------------------------- |
-| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.            |
-| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.       |
-| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.   |
-| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.              |
-| **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute. |
-| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.    |
+| Layer            | Path                | Responsibility                                                                                                                   |
+|:---------------- |:------------------- |:-------------------------------------------------------------------------------------------------------------------------------- |
+| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.                                          |
+| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.                                     |
+| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.                                 |
+| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.                                            |
+| **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute.                               |
+| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.                                  |
 | **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlockall`/workgroups). |
-| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).      |
+| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).                                    |
 
 ```mermaid
 graph TD
@@ -446,7 +454,7 @@ graph TD
 | **`fft-radix4-planner`** | No      | Exposes Radix-4 DIT FFT execution planning benchmark routines.                                                                                                                         |
 | **`avx512`**             | No      | Compiles research/benchmarking AVX-512 upward dispatch kernels (omitted from default binaries).                                                                                        |
 | **`rt-hardening`**       | No      | Enables real-time process hardening (Linux `mlockall`/`SCHED_FIFO`/core pinning/PM-QoS; macOS QoS/time constraint/`mlockall`/Audio Workgroups).                                        |
-| **`on-demand`**          | No      | Developer-only fixture generation and profiling harnesses (never enabled by CI or QA runners).                                                                                          |
+| **`on-demand`**          | No      | Developer-only fixture generation and profiling harnesses (never enabled by CI or QA runners).                                                                                         |
 
 ---
 
@@ -627,7 +635,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 | **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with three pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates), `E2202` (`InvalidCabsimPartitionSize` for zero partition size), and `E2304` (`HostFormatContractViolation` when planar processing helpers receive fewer channel planes than declared by the model). |
 | **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                                                                                                                                                             |
 | **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                                                                                                                                                           |
-| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (reserved, discontinued: no runtime `x86-64-v3` check).                                                                                                                                                                                                                                                      |
+| **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (reserved, discontinued: no runtime `x86-64-v3` check).                                                                                                                                                                                                                                                  |
 
 ### Complete Error Code Reference
 

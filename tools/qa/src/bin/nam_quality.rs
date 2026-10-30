@@ -14,16 +14,17 @@
 //!   wrapper calls this once per run; `verify` consumes the result.
 //! - `verify --contract <path> --report <path>`: run the literal port of the
 //!   bash `verify_contract` and print the verdict lines
-//!   (`FIDELITY: OK/FAIL`, `PERFORMANCE: OK/FAIL/NOT_VERIFIED`,
-//!   `CONTRACT VIOLATED`) mirroring the dashboard text. Exit 0 only when
-//!   both domains pass and no oracle review is pending.
+//!   (`PROVENANCE: OK/FAIL/NOT_RUN`, `FIDELITY: OK/FAIL/NOT_VERIFIED`,
+//!   `PERFORMANCE: OK/FAIL/NOT_VERIFIED`, `CONTRACT VIOLATED`) mirroring the
+//!   dashboard text. Exit 0 only when both domains pass and no oracle review
+//!   is pending.
 //! - `receipt append`: append one phase receipt record (serde — replaces the
 //!   dashboard `printf '{`), byte-compatible with the old bash schema.
 //! - `save --contract <path> --receipt <path>`: transactional promotion of a
 //!   validated contract JSON (temp file + atomic rename). Refuses when a
-//!   fidelity phase FAILed — the performance domain never blocks saving
-//!   (PERF-006; `NOT_VERIFIED` performance must not block, bash comment at
-//!   `quality-dashboard.sh:2599-2602`).
+//!   fidelity phase FAILed or the provenance phase failed — the performance
+//!   domain never blocks saving (PERF-006; `NOT_VERIFIED` performance must
+//!   not block, bash comment at `quality-dashboard.sh:2599-2602`).
 //!
 //! Fail-closed CLI contract:
 //! - exit 0: success;
@@ -39,7 +40,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
@@ -50,6 +51,7 @@ use neural_amp_modeler_rs::testing::qa::QualityContract;
 use neural_amp_modeler_rs::testing::qa::classify::{
     RegressionOutcome, classify_fresh_regression, classify_regression_outcome,
 };
+use neural_amp_modeler_rs::testing::qa::command::run_command_with_timeout;
 use neural_amp_modeler_rs::testing::qa::criterion::{
     DEFAULT_DSP_MICRO_BATCH, extract_criterion_latencies, parse_bench_constants_env,
 };
@@ -60,8 +62,10 @@ use neural_amp_modeler_rs::testing::qa::render::{
 };
 use neural_amp_modeler_rs::testing::qa::verify::{
     FidelityOutcome, FidelityVerdict, MalformedReason, Metric as MetricId, MetricOutcome,
-    PerfResult, PerformanceVerdict, VerifyOutcome, parse_verify_report_file, verify_contract,
+    PROVENANCE_PHASE, PerfResult, PerformanceVerdict, ProvenanceVerdict, VerifyOutcome,
+    parse_verify_report_file, verify_contract,
 };
+use neural_amp_modeler_rs::testing::receipt::tests_passed_from_output;
 
 /// Status values accepted by `receipt append` — the documented receipt schema
 /// (`utils/_lib.sh:80`) plus `NOT_VERIFIED`, which the dashboard writes for
@@ -75,8 +79,11 @@ const RECEIPT_STATUSES: [&str; 6] = [
     "NOT_VERIFIED",
 ];
 
-/// Mandatory fidelity phases — a FAIL here (or on any non-`regression_gate`
-/// phase) refuses `save` and fails the fidelity domain of `verify`.
+/// Mandatory fidelity phases of the dashboard suite — a FAIL here refuses
+/// `save` and fails the fidelity domain of `verify`. This is deliberately a
+/// subset of the long-suite [`neural_amp_modeler_rs::testing::receipt::FIDELITY_PHASE_IDS`]:
+/// the two suites cover different phase rosters, so the identifiers are not
+/// interchangeable.
 const FIDELITY_PHASES: [&str; 3] = ["golden_vectors", "reference_oracle_f64", "quick_parity"];
 
 /// Sentinel used internally to forward a `--help` request from `parse_flags`.
@@ -270,6 +277,9 @@ fn cmd_dashboard(args: &[String]) {
         }
         Err(e) => usage_error("dashboard", &e),
     };
+    if flags.get("ansi").is_some() && flags.get("plain").is_some() {
+        usage_error("dashboard", "--ansi and --plain are mutually exclusive");
+    }
 
     let contract_path = flags
         .get("check")
@@ -313,6 +323,7 @@ fn cmd_dashboard(args: &[String]) {
     let mut existing_phases: HashMap<String, String> = HashMap::new();
     for line in &existing_receipt_lines {
         if let Ok(v) = serde_json::from_str::<Value>(line)
+            && v.get("run_id").and_then(Value::as_str) == Some(&run_id)
             && let (Some(pid), Some(st)) = (
                 v.get("phase_id").and_then(Value::as_str),
                 v.get("status").and_then(Value::as_str),
@@ -350,14 +361,14 @@ fn cmd_dashboard(args: &[String]) {
         );
     }
     if !existing_phases.contains_key("third_party") {
-        let tp_exists = Path::new("third-party/NeuralAmpModelerCore").is_dir();
+        let check = check_third_party();
         let rec = PhaseReceiptRecord {
             phase_id: "third_party",
-            status: if tp_exists { "PASS" } else { "SKIP_CAPABILITY" },
+            status: check.status,
             exit_code: 0,
-            observed_records: if tp_exists { 1 } else { 0 },
+            observed_records: check.observed_records,
             expected_records: 1,
-            reason: if tp_exists { "" } else { "third_party_absent" },
+            reason: &check.reason,
             run_id: &run_id,
         };
         let _ = append_line(&receipt_path_str, &serde_json::to_string(&rec).unwrap());
@@ -446,27 +457,47 @@ fn cmd_dashboard(args: &[String]) {
         let isa_log = log_dir.join("isa_self_consistency.log");
         run_dashboard_phase(
             "isa_self_consistency",
-            &[(
-                &[
-                    "cargo",
-                    "test",
-                    "--release",
-                    "--features",
-                    "testing",
-                    "--test",
-                    "parity",
-                    "isa_parity",
-                    "--",
-                    "--test-threads=1",
-                    "--nocapture",
-                ],
-                &[],
-            )],
+            &[
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "parity",
+                        "isa_parity::isa_self_consistency",
+                        "--",
+                        "--include-ignored",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                ),
+                (
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing",
+                        "--test",
+                        "parity",
+                        "isa_parity::isa_hf_self_consistency",
+                        "--",
+                        "--include-ignored",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                ),
+            ],
             &isa_log,
             &receipt_path_str,
             &run_id,
-            5,
-            5,
+            10,
+            10,
         );
         let cross_rec = PhaseReceiptRecord {
             phase_id: "isa_parity_cross_isa",
@@ -474,7 +505,7 @@ fn cmd_dashboard(args: &[String]) {
             exit_code: 0,
             observed_records: 0,
             expected_records: 0,
-            reason: "cross_isa_requires_remote_or_long_suite",
+            reason: neural_amp_modeler_rs::testing::qa::phases::CROSS_ISA_GAP_REASON,
             run_id: &run_id,
         };
         let _ = append_line(
@@ -530,6 +561,9 @@ fn cmd_dashboard(args: &[String]) {
     }
 
     // ── Phase 5: lstm_activation_precision ──
+    // The target has two non-ignored tests (`structural`, `gain`); the stress
+    // sweep stays `#[ignore]` and belongs to the long suite. The gate therefore
+    // certifies the two active tests instead of an unreachable count.
     if !existing_phases.contains_key("lstm_activation_precision") {
         let lstm_log = log_dir.join("lstm_activation_precision.log");
         run_dashboard_phase(
@@ -552,7 +586,7 @@ fn cmd_dashboard(args: &[String]) {
             &lstm_log,
             &receipt_path_str,
             &run_id,
-            5,
+            2,
             1,
         );
     }
@@ -563,10 +597,10 @@ fn cmd_dashboard(args: &[String]) {
         if !tp_exists {
             let qp_rec = PhaseReceiptRecord {
                 phase_id: "quick_parity",
-                status: "SKIP_OPTIONAL_FIXTURE",
+                status: "SKIP_CAPABILITY",
                 exit_code: 0,
                 observed_records: 0,
-                expected_records: 0,
+                expected_records: 1,
                 reason: "third_party_absent",
                 run_id: &run_id,
             };
@@ -595,7 +629,7 @@ fn cmd_dashboard(args: &[String]) {
                 &qp_log,
                 &receipt_path_str,
                 &run_id,
-                50,
+                1,
                 1,
             );
         }
@@ -607,7 +641,9 @@ fn cmd_dashboard(args: &[String]) {
         let probe = EnvProbe::probe();
         let meta = serde_json::json!({
             "kind": "build_metadata",
-            "cargo_profile": "release",
+            "cargo_profile": "mixed (audio=release, tools=dev)",
+            "audio_profile": "release",
+            "tool_profile": "dev",
             "target_triple": probe.host_triple,
             "rustflags": probe.rustflags,
             "rustc_version": probe.rustc_version,
@@ -615,6 +651,7 @@ fn cmd_dashboard(args: &[String]) {
             "git_dirty_state": probe.git_dirty,
             "run_id": run_id,
             "effective_isa": probe.effective_isa,
+            "hardware_class": probe.hardware_class.as_str(),
         });
         let _ = append_line(&receipt_path_str, &meta.to_string());
     }
@@ -761,9 +798,10 @@ fn cmd_dashboard(args: &[String]) {
 
     // ── Render ──
     let style = match (flags.get("ansi").is_some(), flags.get("plain").is_some()) {
-        (true, true) => RenderStyle::Ansi,
         (_, true) => RenderStyle::Plain,
-        _ => RenderStyle::Ansi,
+        (true, _) => RenderStyle::Ansi,
+        _ if io::stdout().is_terminal() => RenderStyle::Ansi,
+        _ => RenderStyle::Plain,
     };
     if let Ok(parsed_report) = parse_quality_report_file(&report_path_str) {
         print!("{}", render_quality_report(&parsed_report, style));
@@ -802,43 +840,181 @@ fn print_dashboard_help() {
     println!("Self-contained quality dashboard orchestrator: executes missing fidelity");
     println!("phases, invokes the performance regression check, ingests the verified");
     println!("report, renders the human-facing table, and verifies or saves the contract.");
+    println!();
+    println!("  --fidelity-only  verify only the fidelity domain (skips performance).");
+    println!("  --ansi           ANSI color escape sequences (default on a TTY).");
+    println!("  --plain          plain text (default when stdout is not a TTY).");
 }
 
 type CommandStep<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
-fn run_command_sequence(commands: &[CommandStep<'_>], log_path: &Path) -> (u32, u32) {
+// ── third-party provenance ──────────────────────────────────────────────────
+
+const THIRD_PARTY_CORE: &str = "third-party/NeuralAmpModelerCore";
+const THIRD_PARTY_PLUGIN: &str = "third-party/NeuralAmpModelerPlugin";
+
+struct ThirdPartyCheck {
+    status: &'static str,
+    observed_records: u32,
+    reason: String,
+}
+
+impl ThirdPartyCheck {
+    fn fail(reason: String) -> Self {
+        Self {
+            status: "FAIL",
+            observed_records: 0,
+            reason,
+        }
+    }
+
+    fn skip(reason: &str) -> Self {
+        Self {
+            status: "SKIP_CAPABILITY",
+            observed_records: 0,
+            reason: reason.to_string(),
+        }
+    }
+}
+
+/// Reads a pin from `variables.env` (`NAME=value`, quotes stripped) without
+/// sourcing shell code — the same file is the single source of truth for
+/// `utils/setup-third-party.sh`.
+fn pinned_commit(name: &str) -> Option<String> {
+    let text = fs::read_to_string("variables.env").ok()?;
+    text.lines().find_map(|line| {
+        let (key, value) = line.trim().split_once('=')?;
+        (key.trim() == name).then(|| value.trim().trim_matches('"').to_string())
+    })
+}
+
+/// First stdout line of a successful `git -C <dir> …` (`None` when git or the
+/// command fails, which stays fail-closed at the call site).
+fn git_line(dir: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn verify_mirror(dir: &str, pin_name: &str, label: &str) -> Result<(), ThirdPartyCheck> {
+    let Some(pin) = pinned_commit(pin_name) else {
+        return Err(ThirdPartyCheck::fail(format!("pin_missing:{pin_name}")));
+    };
+    let Some(head) = git_line(dir, &["rev-parse", "HEAD"]) else {
+        return Err(ThirdPartyCheck::fail(format!("{label}_not_git:{dir}")));
+    };
+    if head != pin {
+        return Err(ThirdPartyCheck::fail(format!(
+            "{label}_commit_mismatch:{head}"
+        )));
+    }
+    match git_line(dir, &["status", "--porcelain"]) {
+        Some(status) if status.is_empty() => {}
+        Some(_) => return Err(ThirdPartyCheck::fail(format!("{label}_dirty"))),
+        None => {
+            return Err(ThirdPartyCheck::fail(format!("{label}_status_unavailable")));
+        }
+    }
+    Ok(())
+}
+
+fn check_third_party() -> ThirdPartyCheck {
+    if !Path::new(THIRD_PARTY_CORE).is_dir() {
+        return ThirdPartyCheck::skip("third_party_absent");
+    }
+    if let Err(failure) = verify_mirror(THIRD_PARTY_CORE, "NAM_CORE_COMMIT", "third_party_core") {
+        return failure;
+    }
+    // Only the core submodules back the render oracle (eigen, AudioDSPTools).
+    // The plugin also pins IDE-only submodules that setup leaves uninitialized.
+    let Some(submodules) = git_line(THIRD_PARTY_CORE, &["submodule", "status"]) else {
+        return ThirdPartyCheck::fail("third_party_core_submodule_status_unavailable".to_string());
+    };
+    if let Some(bad) = submodules
+        .lines()
+        .find(|line| matches!(line.chars().next(), Some('-' | '+' | 'U')))
+    {
+        return ThirdPartyCheck::fail(format!("third_party_core_submodule:{bad}"));
+    }
+    if !Path::new(THIRD_PARTY_PLUGIN).is_dir() {
+        return ThirdPartyCheck::skip("third_party_plugin_absent");
+    }
+    if let Err(failure) = verify_mirror(
+        THIRD_PARTY_PLUGIN,
+        "NAM_PLUGIN_COMMIT",
+        "third_party_plugin",
+    ) {
+        return failure;
+    }
+    ThirdPartyCheck {
+        status: "PASS",
+        observed_records: 1,
+        reason: String::new(),
+    }
+}
+
+struct SequenceResult {
+    exit_code: u32,
+    tests_passed: u32,
+    saw_test_result: bool,
+    output_len: usize,
+}
+
+fn run_command_sequence(commands: &[CommandStep<'_>], log_path: &Path) -> SequenceResult {
+    let timeout_s: u64 = env::var("NAM_PHASE_TIMEOUT_S")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    let timeout = std::time::Duration::from_secs(timeout_s);
+
     let mut all_output = Vec::new();
     let mut final_exit = 0;
+
     for (args, envs) in commands {
         let mut cmd = Command::new(args[0]);
         cmd.args(&args[1..]);
         for (k, v) in *envs {
             cmd.env(k, v);
         }
-        match cmd.output() {
-            Ok(output) => {
-                all_output.extend_from_slice(&output.stdout);
-                all_output.extend_from_slice(&output.stderr);
-                let code = output.status.code().unwrap_or(1) as u32;
-                if code != 0 {
-                    final_exit = code;
-                    break;
-                }
-            }
-            Err(e) => {
-                let msg = format!("failed to spawn {}: {e}\n", args[0]);
-                all_output.extend_from_slice(msg.as_bytes());
-                final_exit = 127;
-                break;
-            }
+
+        let result = run_command_with_timeout(&mut cmd, timeout);
+        all_output.extend_from_slice(&result.output);
+        if result.timed_out {
+            let msg = format!(
+                "command {} timed out after {}s (process tree killed)\n",
+                args[0], timeout_s
+            );
+            all_output.extend_from_slice(msg.as_bytes());
+        }
+        if result.exit_code != 0 {
+            final_exit = result.exit_code;
+            break;
         }
     }
-    let _ = fs::write(log_path, &all_output);
-    let observed = all_output
-        .split(|&b| b == b'\n')
-        .filter(|l| !l.is_empty())
-        .count() as u32;
-    (final_exit, observed)
+
+    if let Err(e) = fs::write(log_path, &all_output) {
+        let msg = format!("failed to write log file {}: {e}\n", log_path.display());
+        eprintln!("{msg}");
+        all_output.extend_from_slice(msg.as_bytes());
+        if final_exit == 0 {
+            final_exit = 1;
+        }
+    }
+
+    let (tests_passed, saw_test_result) = tests_passed_from_output(&all_output);
+    SequenceResult {
+        exit_code: final_exit,
+        tests_passed,
+        saw_test_result,
+        output_len: all_output.len(),
+    }
 }
 
 fn run_dashboard_phase(
@@ -851,11 +1027,26 @@ fn run_dashboard_phase(
     expected_records: u32,
 ) -> bool {
     println!("-> Running {phase_id}...");
-    let (exit_code, observed) = run_command_sequence(commands, log_path);
+    let result = run_command_sequence(commands, log_path);
+    let exit_code = result.exit_code;
+    // `freshness` is a provenance probe, not a libtest run: one successful
+    // non-empty observation is its record. Every other phase must report a
+    // canonical `test result:` line — silence is never a pass.
+    let observed = if phase_id == PROVENANCE_PHASE {
+        u32::from(exit_code == 0 && result.output_len > 0)
+    } else {
+        result.tests_passed
+    };
     let (status, reason) = if exit_code != 0 {
-        ("FAIL", "test command failed")
+        if exit_code == 124 {
+            ("FAIL", "phase command timed out")
+        } else {
+            ("FAIL", "test command failed")
+        }
+    } else if phase_id != PROVENANCE_PHASE && !result.saw_test_result {
+        ("FAIL", "no_test_result")
     } else if observed < min_observed && min_observed > 0 {
-        ("FAIL", "insufficient records in log")
+        ("FAIL", "insufficient test cases executed")
     } else {
         ("PASS", "")
     };
@@ -869,9 +1060,19 @@ fn run_dashboard_phase(
         reason,
         run_id,
     };
-    let _ = append_line(receipt_path, &serde_json::to_string(&rec).unwrap());
+    let rec_str = match serde_json::to_string(&rec) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("failed to serialize receipt record: {e}");
+            return false;
+        }
+    };
+    if let Err(e) = append_line(receipt_path, &rec_str) {
+        eprintln!("failed to append line to receipt {receipt_path}: {e}");
+        return false;
+    }
     println!(
-        "   {} {phase_id} (exit={exit_code}, {observed} lines)",
+        "   {} {phase_id} (exit={exit_code}, {observed} cases)",
         if status == "PASS" { "ok" } else { "FAIL" }
     );
     status == "PASS"
@@ -1128,6 +1329,15 @@ fn join_f64_oracle_esr(metrics: &[String]) -> Vec<String> {
         };
         let mut joined = obj.clone();
         joined.insert("esr_f64".to_string(), esr.clone());
+        let provenance = if family.contains("SlimmableContainer") {
+            format!("proxy:{fixture}")
+        } else {
+            fixture.to_string()
+        };
+        joined.insert(
+            "f64_oracle_provenance".to_string(),
+            Value::String(provenance),
+        );
         out[idx] = Some(serde_json::Value::Object(joined).to_string());
     }
     out.into_iter().flatten().collect()
@@ -1387,8 +1597,14 @@ fn render_outcome(
     }
     out.push('\n');
 
+    match outcome.provenance {
+        ProvenanceVerdict::Ok => out.push_str("  PROVENANCE: OK\n"),
+        ProvenanceVerdict::Fail => out.push_str("  PROVENANCE: FAIL\n"),
+        ProvenanceVerdict::NotRun => out.push_str("  PROVENANCE: NOT_RUN\n"),
+    }
     match outcome.fidelity {
         FidelityVerdict::Ok => out.push_str("  FIDELITY: OK\n"),
+        FidelityVerdict::NotVerified => out.push_str("  FIDELITY: NOT_VERIFIED\n"),
         FidelityVerdict::Fail { violations } => {
             out.push_str(&format!("  FIDELITY: FAIL ({violations} violation(s))\n"));
             if outcome.review_required > 0 {
@@ -1472,7 +1688,9 @@ fn cmd_render(args: &[String]) {
     let style = match (flags.get("ansi").is_some(), flags.get("plain").is_some()) {
         (true, true) => usage_error("render", "--ansi and --plain are mutually exclusive"),
         (_, true) => RenderStyle::Plain,
-        _ => RenderStyle::Ansi,
+        (true, _) => RenderStyle::Ansi,
+        _ if io::stdout().is_terminal() => RenderStyle::Ansi,
+        _ => RenderStyle::Plain,
     };
 
     let report = match parse_quality_report_file(report_path) {
@@ -1491,8 +1709,8 @@ fn print_render_help() {
     println!("never re-derived — the renderer only formats it.");
     println!();
     println!("  --report <path>  verify report (JSONL) produced by `ingest` — required.");
-    println!("  --ansi           ANSI color escape sequences (default).");
-    println!("  --plain          plain text, no escape sequences (visual dump only).");
+    println!("  --ansi           ANSI color escape sequences (default on a TTY).");
+    println!("  --plain          plain text (default when stdout is not a TTY).");
 }
 
 // ── classify ────────────────────────────────────────────────────────────────
@@ -1718,9 +1936,10 @@ fn execute_save(contract_path: &str, receipt_path: &str) {
         Err(e) => run_error(e),
     };
 
-    // Fidelity gate: any phase FAIL outside the performance domain refuses
-    // the save (mirror of the bash `--save` transactional gate; performance
-    // NOT_VERIFIED/FAIL never blocks — PERF-006, dashboard :2599-2602).
+    // Fidelity gate: fidelity-domain phases must PASS; the performance domain
+    // never blocks (PERF-006). Provenance is its own domain: a stale fixture
+    // generator blocks the snapshot, but is reported as a provenance failure,
+    // never as a fidelity failure.
     let receipt_lines = match read_jsonl_lines(receipt_path) {
         Ok(lines) => lines,
         Err(e) => run_error(format!("cannot read phase receipt {receipt_path}: {e}")),
@@ -1739,6 +1958,11 @@ fn execute_save(contract_path: &str, receipt_path: &str) {
             continue;
         };
         let status = value.get("status").and_then(Value::as_str).unwrap_or("");
+        if status == "FAIL" && phase_id == PROVENANCE_PHASE {
+            run_error(format!(
+                "contract NOT saved: provenance phase '{phase_id}' FAILed (--save requires fresh fixtures)"
+            ));
+        }
         if status == "FAIL" && phase_id != "regression_gate" {
             run_error(format!(
                 "contract NOT saved: fidelity phase '{phase_id}' FAILed (--save requires all fidelity phases to pass)"
@@ -1763,7 +1987,8 @@ fn print_save_help() {
     println!("(temp file in the same directory + atomic rename). Refuses with exit 1");
     println!("when any fidelity phase (golden_vectors, reference_oracle_f64,");
     println!("quick_parity — or any phase other than regression_gate) FAILed in the");
-    println!("phase receipt. Performance NOT_VERIFIED never blocks (PERF-006).");
+    println!("phase receipt, or when the provenance phase (freshness) FAILed.");
+    println!("Performance NOT_VERIFIED never blocks (PERF-006).");
 }
 
 /// Writes `content` to a temp sibling of `path` and renames it over `path`,

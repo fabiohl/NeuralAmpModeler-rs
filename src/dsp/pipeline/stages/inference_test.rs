@@ -233,3 +233,75 @@ fn test_run_inference_streaming_oversized_block_subchunked() {
     );
     assert_eq!(stream.underflow_total(), 0);
 }
+
+#[test]
+fn test_run_inference_streaming_short_output_slice_returns_zero_and_raises_flag() {
+    let host = 48_000u32;
+    let model_rate = 48_000u32;
+    let mut stream =
+        StreamingResampleBuffer::new(host, model_rate, 256).expect("streaming buffer failed");
+    let mut os_engine_l = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+    let mut os_engine_r = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+    let gate_params = GateParams::default();
+    let mut silence_hysteresis = DynamicHysteresis::new();
+    let mut mono_hysteresis = DynamicHysteresis::new();
+    let mut process_mono = false;
+    let rt_status = RtStatusFlags::default();
+    let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Off);
+    let mut model_opt: Option<Box<StaticModel>> = None;
+    let mut model_r_opt: Option<Box<StaticModel>> = None;
+    let mut resampler = NamResampler::new_simple(host, model_rate).unwrap();
+    let mut ctx = DspPipelineContext::from_parts(
+        &mut resampler,
+        &mut os_engine_l,
+        &mut os_engine_r,
+        &mut model_opt,
+        &mut model_r_opt,
+        1.0,
+        1.0,
+        &gate_params,
+        &mut silence_hysteresis,
+        &mut mono_hysteresis,
+        0.0,
+        0.0,
+        &mut process_mono,
+        &rt_status,
+        &mut adaptive,
+    );
+
+    let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
+    let (os_in_l, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
+    let (os_in_r, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_l, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (os_model_r, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+    let (scratch_l, scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
+
+    let in_l = vec![0.05f32; 64];
+    let in_r = vec![0.02f32; 64];
+    let mut out_l = vec![99.0f32; 1]; // short output: 1 element vs 64
+    let mut out_r = vec![99.0f32; 1];
+
+    let written = run_inference_streaming(
+        &in_l,
+        &in_r,
+        &mut out_l,
+        &mut out_r,
+        64,
+        &mut ctx,
+        &mut stream,
+        os_in_l,
+        os_in_r,
+        os_model_l,
+        os_model_r,
+        scratch_l,
+        scratch_r,
+    );
+
+    assert_eq!(written, 0, "short output slice must return 0");
+    assert!(
+        rt_status.check_flag(crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION),
+        "short output slice must raise RT_STATUS_HOST_CONTRACT_VIOLATION"
+    );
+    assert_eq!(out_l[0], 0.0, "safe slice portion must be zeroed");
+    assert_eq!(out_r[0], 0.0, "safe slice portion must be zeroed");
+}

@@ -188,30 +188,47 @@ fn json_snr_db(snr: f64) -> serde_json::Value {
 }
 
 /// Appends one JSONL line to the metric sink — thread-local override first,
-/// process env `NAM_METRICS_JSONL` fallback, serialized under [`REPORT_LOCK`]
-/// so concurrent reporters never interleave partial lines.
+/// process env `NAM_METRICS_JSONL` fallback, then the fixed long-suite sink
+/// `target/logs/fidelity-metrics.jsonl` (D-05 = (b): a fixed path, no new
+/// environment variable). Serialized under [`REPORT_LOCK`] so concurrent
+/// reporters never interleave partial lines.
 ///
-/// Shared by the fidelity sink of `report_dsp_fidelity*` and by the secondary
+/// Shared by the fidelity sink of `report_dsp_fidelity*`, by the secondary
 /// oracle sinks (`report_f64_table`, `report_f64_decomp`, `report_activation`,
-/// `report_isa`). A missing/closed sink is silently ignored — the JSONL
-/// stream is an enrichment, never a gate.
+/// `report_isa`), and by the heap-audit total sink (`report_heap_alloc`). A
+/// missing/closed sink is silently ignored — the JSONL stream is an
+/// enrichment, never a gate.
 fn append_metric_line(obj: serde_json::Value) {
-    let jsonl_path = METRIC_JSONL_PATH.with(|c| c.borrow().clone()).or_else(|| {
-        std::env::var("NAM_METRICS_JSONL")
-            .ok()
-            .map(std::path::PathBuf::from)
-    });
-    if let Some(jsonl_path) = jsonl_path {
-        let _lock = REPORT_LOCK.lock().unwrap();
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&jsonl_path)
-        {
-            use std::io::Write;
-            let _ = writeln!(file, "{obj}");
-        }
+    let jsonl_path = METRIC_JSONL_PATH
+        .with(|c| c.borrow().clone())
+        .or_else(|| {
+            std::env::var("NAM_METRICS_JSONL")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("target/logs/fidelity-metrics.jsonl"));
+    let _lock = REPORT_LOCK.lock().unwrap();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&jsonl_path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{obj}");
     }
+}
+
+/// Appends one heap-audit scenario total to the shared metrics JSONL.
+///
+/// The count is the hot-path allocation total already measured by
+/// `get_alloc_count()` under `TrackingGuard`; it is telemetry only and never
+/// changes the existing zero-allocation assertions.
+pub fn report_heap_alloc(scenario: &str, allocations: usize) {
+    append_metric_line(serde_json::json!({
+        "kind": "heap_alloc",
+        "scenario": scenario,
+        "allocations": allocations,
+    }));
 }
 
 // ── Secondary oracle sinks ───────────────────────────────────────────────────

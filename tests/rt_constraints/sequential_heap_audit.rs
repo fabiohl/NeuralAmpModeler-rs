@@ -28,6 +28,7 @@ mod audit_tests {
     use crate::common::alloc_audit::{
         TrackingGuard, get_alloc_count, get_dealloc_count, get_realloc_count,
     };
+    use crate::common::validation::report_heap_alloc;
 
     // =========================================================================
     // Sequential Helper — synthetic Linear stages (public API surface)
@@ -136,6 +137,7 @@ mod audit_tests {
             }
             (get_alloc_count(), get_realloc_count(), get_dealloc_count())
         };
+        report_heap_alloc("sequential-mono-process", allocs);
         assert_zero_heap(allocs, reallocs, deallocs, "Sequential mono process");
     }
 
@@ -187,6 +189,7 @@ mod audit_tests {
         for &o in output.iter() {
             assert!(o.is_finite(), "multichannel chain must stay finite");
         }
+        report_heap_alloc("sequential-multichannel-process-raw", allocs);
         assert_zero_heap(
             allocs,
             reallocs,
@@ -230,6 +233,7 @@ mod audit_tests {
             (get_alloc_count(), get_realloc_count(), get_dealloc_count())
         };
         assert!(chain.prewarm_complete(), "split drain must complete");
+        report_heap_alloc("sequential-split-prewarm-drain", allocs);
         assert_zero_heap(allocs, reallocs, deallocs, "Sequential split prewarm drain");
     }
 }

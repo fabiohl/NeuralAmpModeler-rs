@@ -6,6 +6,11 @@
 # Orçamento: 120
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+case "$#:${1:-}" in
+  0:) ;;
+  1:-h|1:--help) echo "Usage: utils/render-a2-dumps.sh"; exit 0 ;;
+  *) echo "Usage: utils/render-a2-dumps.sh" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
@@ -67,3 +72,4 @@ echo "✓ RENDER REPRODUCED GOLDEN byte-identically ($n frames)"
 (cd "$OUT_DIR" && sha256sum "${DUMPS[@]}" > SHA256SUMS)
 cat "$OUT_DIR/SHA256SUMS"
 echo "Dumps ready: $OUT_DIR"
+echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"

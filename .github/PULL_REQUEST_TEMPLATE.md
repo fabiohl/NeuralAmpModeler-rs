@@ -79,7 +79,7 @@ utils/lints.sh
 utils/tests-quick.sh
 ```
 
-- [ ] **`utils/lints.sh` Passed**: 100% clean across all 9 gates and feature permutations (`--all-features`, pure core `--lib --no-default-features`, `--no-default-features`, `fft-radix4-planner`, `dual-mono`, `testing`, `heap-audit`, `rt-hardening`).
+- [ ] **`utils/lints.sh` Passed**: All eight phases and the four documented check/Clippy configurations passed.
 - [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 

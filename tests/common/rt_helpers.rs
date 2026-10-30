@@ -172,6 +172,15 @@ pub fn rt_preflight_jitter() -> RtPreflightResult {
 fn rt_preflight_impl(single_core_required: bool) -> RtPreflightResult {
     let num_cpus = system_cpu_count();
 
+    #[cfg(target_os = "linux")]
+    if let (true, Some(core)) = (single_core_required, effective_bench_core()) {
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_SET(core as usize, &mut set);
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+        }
+    }
+
     let (cpu_affinity_ok, pinned_core) = check_cpu_affinity(single_core_required);
     let (governor_ok, governor) = check_governor();
     let (background_load_ok, load_1m) = check_background_load(num_cpus);

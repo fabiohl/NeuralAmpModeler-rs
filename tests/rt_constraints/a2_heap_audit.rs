@@ -15,6 +15,7 @@ mod audit_tests {
     use crate::common::alloc_audit::{
         TrackingGuard, get_alloc_count, get_dealloc_count, get_realloc_count,
     };
+    use crate::common::validation::report_heap_alloc;
 
     fn assert_zero_heap(allocs: usize, reallocs: usize, deallocs: usize, label: &str) {
         assert_eq!(
@@ -131,6 +132,7 @@ mod audit_tests {
         };
 
         assert_zero_heap(allocs, reallocs, deallocs, &format!("A2-{label}"));
+        report_heap_alloc(&format!("a2-{label}"), allocs);
     }
 
     #[test]
@@ -197,5 +199,6 @@ mod audit_tests {
         };
 
         assert_zero_heap(allocs, reallocs, deallocs, "A2-Max dynamic");
+        report_heap_alloc("a2-max-dynamic", allocs);
     }
 }

@@ -37,12 +37,13 @@ if [ "$USE_SDE" -eq 1 ]; then
 elif [[ "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER:-}" =~ sde ]]; then
   echo "Hardware: Intel SDE Emulation" > "$log_probe"; emit "PHASE: preflight PASS log=$log_probe"
 else
-  cargo run --quiet --bin simd_probe > "$log_probe" 2>&1 || true
-  if grep -qE "avx512f:\s*YES" "$log_probe"; then
-    emit "PHASE: preflight PASS log=$log_probe"
-  else
-    GAPS+=("avx512-not-detected"); emit "PHASE: preflight GAP avx512-not-detected"; finish; exit 0
-  fi
+  rc_probe=0
+  cargo run --quiet --bin simd_probe -- --check-avx512 > "$log_probe" 2>&1 || rc_probe=$?
+  case "$rc_probe" in
+    0) emit "PHASE: preflight PASS log=$log_probe" ;;
+    3) GAPS+=("avx512-not-detected"); emit "PHASE: preflight GAP avx512-not-detected"; finish; exit 0 ;;
+    *) FAILS+=("preflight"); emit "PHASE: preflight FAIL rc=$rc_probe log=$log_probe"; finish || true; exit 1 ;;
+  esac
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then finish; exit 0; fi
@@ -50,19 +51,18 @@ if [ "$CHECK_ONLY" -eq 1 ]; then finish; exit 0; fi
 PHASE_NAME=parity; phase parity
 log_parity="$LOG_DIR/remote-simd-parity.log"; rc_parity=0
 cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 > "$log_parity" 2>&1 || rc_parity=$?
-if [ "$rc_parity" -eq 0 ] && ran_tests "$log_parity"; then
+n_exercised=$(grep -c -E "^AVX512_MATRIX: EXERCISED" "$log_parity" || true)
+if [ "$rc_parity" -eq 0 ] && ran_tests "$log_parity" && [ "$n_exercised" -gt 0 ]; then
   emit "PHASE: parity PASS log=$log_parity"
 else
-  FAILS+=("parity"); emit "PHASE: parity FAIL rc=$rc_parity log=$log_parity"; finish || true; exit 1
+  FAILS+=("parity"); emit "PHASE: parity FAIL rc=${rc_parity:-1} log=$log_parity"; finish || true; exit 1
 fi
 
 if [ "$USE_SDE" -eq 0 ] && [ "$SKIP_BENCH" -eq 0 ]; then
   PHASE_NAME=bench; phase bench
   log_bench="$LOG_DIR/remote-simd-bench.log"; rc_bench=0
   cargo bench --features avx512 --bench inference_bench -- ISA_Compare > "$log_bench" 2>&1 || rc_bench=$?
-  if [ -f "tools/qa/src/bin/nam_remote_simd_receipt.rs" ]; then
-    cargo run --quiet -p nam-qa --bin nam_remote_simd_receipt -- --criterion-dir "target/criterion" --out "$RECEIPT_OUT" >> "$log_bench" 2>&1 || rc_bench=$?
-  fi
+  cargo run --quiet -p nam-qa --bin nam_remote_simd_receipt -- --criterion-dir "target/criterion" --out "$RECEIPT_OUT" >> "$log_bench" 2>&1 || rc_bench=$?
   if [ "$rc_bench" -eq 0 ]; then emit "PHASE: bench PASS log=$log_bench"
   else FAILS+=("bench"); emit "PHASE: bench FAIL rc=$rc_bench log=$log_bench"; finish || true; exit 1
   fi

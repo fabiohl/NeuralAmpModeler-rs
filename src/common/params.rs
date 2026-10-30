@@ -59,7 +59,7 @@ pub struct ProcessingParams {
     #[serde(default)]
     pub bypass: bool,
     /// Adaptive compute mode for soft-degrade under CPU pressure.
-    /// Default: `Off` for standalone; `Conservative` for host plugin.
+    /// Default: `Off`. Downstream hosts, plugins, or standalone callers may configure alternate policies explicitly.
     #[serde(default)]
     pub adaptive_compute: AdaptiveComputeMode,
     /// Manual slim override quality level. Default: `Auto` (FSM decides).

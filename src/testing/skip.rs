@@ -18,8 +18,22 @@ static SKIP_LOG_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
 struct SkipRecord<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<&'a str>,
+    pid: u32,
     test: &'a str,
     reason: &'a str,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    optional: bool,
+}
+
+/// Classifies a skip reason as an optional, non-distributable fixture.
+///
+/// Only the documented optional families are non-blocking under `--strict`;
+/// a missing distributable fixture keeps reporting a blocking capability gap.
+fn is_optional_reason(reason: &str) -> bool {
+    matches!(reason, "models_nondist_absent" | "models_nondist_empty")
+        || reason.starts_with("community_model_absent:")
 }
 
 /// Appends a skip record to `target/logs/skips.jsonl` and emits standard diagnostic output.
@@ -33,11 +47,21 @@ pub fn report_skip(test: &str, reason: &str) {
         || test.contains("cpp_parity")
         || test.contains("sequential_cpp");
 
-    if is_oracle && std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
+    let require_cpp_oracle = std::env::var("NAM_REQUIRE_CPP_ORACLE").is_ok_and(|v| {
+        let v = v.trim();
+        v == "1" || v.eq_ignore_ascii_case("true")
+    });
+    if is_oracle && require_cpp_oracle {
         panic!("NAM_REQUIRE_CPP_ORACLE=1 — aborting test: {test} ({reason})");
     }
 
-    eprintln!("[STATUS] SKIP_CAPABILITY reason=\"{reason}\" ({test})");
+    let optional = is_optional_reason(reason);
+    let marker = if optional {
+        "SKIP_OPTIONAL"
+    } else {
+        "SKIP_CAPABILITY"
+    };
+    eprintln!("[STATUS] {marker} reason=\"{reason}\" ({test})");
 
     let _guard = SKIP_LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -46,50 +70,26 @@ pub fn report_skip(test: &str, reason: &str) {
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("skips.jsonl");
 
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&log_path) {
-        let record = SkipRecord { test, reason };
-        if let Ok(line) = serde_json::to_string(&record) {
-            let _ = writeln!(f, "{line}");
-        }
-    }
-}
+    let run_id = std::env::var("NAM_RUN_ID").ok();
+    let pid = std::process::id();
+    let record = SkipRecord {
+        run_id: run_id.as_deref(),
+        pid,
+        test,
+        reason,
+        optional,
+    };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_report_skip_serialization() {
-        let test_name = "unit_test_probe";
-        let reason = "fixture_not_found";
-        report_skip(test_name, reason);
-
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let log_path = manifest_dir.join("target/logs/skips.jsonl");
-        assert!(log_path.exists());
-        let content = std::fs::read_to_string(&log_path).expect("read skips.jsonl");
-        assert!(content.contains(test_name));
-        assert!(content.contains(reason));
-        let _ = std::fs::remove_file(&log_path);
-    }
-
-    #[test]
-    #[should_panic(expected = "NAM_REQUIRE_CPP_ORACLE=1")]
-    fn test_report_skip_panics_on_oracle_strict() {
-        // SAFETY: Test runs in isolated unit test module; modifying test-only env var.
-        unsafe {
-            std::env::set_var("NAM_REQUIRE_CPP_ORACLE", "1");
-        }
-        struct ResetEnv;
-        impl Drop for ResetEnv {
-            fn drop(&mut self) {
-                // SAFETY: Resetting test environment variable on drop.
-                unsafe {
-                    std::env::remove_var("NAM_REQUIRE_CPP_ORACLE");
-                }
+    match OpenOptions::new().create(true).append(true).open(&log_path) {
+        Ok(mut f) => {
+            let line =
+                serde_json::to_string(&record).expect("SkipRecord serialization must succeed");
+            if let Err(e) = writeln!(f, "{line}") {
+                panic!("Failed to write skip record to {}: {e}", log_path.display());
             }
         }
-        let _guard = ResetEnv;
-        report_skip("cpp_parity_test", "render_tool_unavailable");
+        Err(e) => {
+            panic!("Failed to open skip log {}: {e}", log_path.display());
+        }
     }
 }

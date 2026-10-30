@@ -6,13 +6,15 @@
 # Orçamento: 80
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+case "$#:${1:-}" in
+  0:) ;;
+  1:-h|1:--help) echo "Usage: utils/docsrs-check.sh"; exit 0 ;;
+  *) echo "Usage: utils/docsrs-check.sh" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-echo -e "=================================================================="
-echo -e "      NeuralAmpModeler-rs docs.rs Parity Check (nightly)          "
-echo -e "=================================================================="
-
+PHASE_NAME=docsrs; phase docsrs
 require_nightly
 
 docsrs_feature_scope=$(awk '
@@ -49,4 +51,5 @@ for docsrs_target in "" aarch64-unknown-linux-gnu; do
     exit 1
   fi
 done
-echo "OK: rustdoc (nightly, docsrs cfg, derived feature scope) emitted zero warnings on x86_64 and aarch64."
+ok "rustdoc emitted zero warnings on x86_64 and aarch64."
+finish

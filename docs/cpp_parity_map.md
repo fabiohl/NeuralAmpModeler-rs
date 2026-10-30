@@ -47,7 +47,7 @@ The audit tracks the canonical C++ reference at tag **`v0.6.0`** (commit `0b3d3c
 
 ### 0.2 Numerical Scope & ISA Independence
 
-This audit targets **numerical and architectural semantics**. NeuralAmpModeler-rs implements multiple SIMD dispatch backends (`scalar`, `sse4.2`, `avx2`, and opt-in `avx512`). All vector kernels are required to produce bit-exact or sub-ULP equivalent results to the scalar reference. ISA parity verification is enforced by dedicated cross-ISA test suites (`tests/models/isa_parity.rs`).
+This audit targets **numerical and architectural semantics**. NeuralAmpModeler-rs implements multiple SIMD dispatch backends (`scalar`, `avx2`, and opt-in `avx512`). All vector kernels are required to produce bit-exact or sub-ULP equivalent results to the scalar reference. ISA parity verification is enforced by dedicated cross-ISA test suites (`tests/parity/isa_parity.rs`) and the binary parity vector protocol (`NAMPARV1` via `nam_parity_vector`), maintaining strict separation between bit-exact cross-platform identity (`f32::to_bits()`) and C++ NAMCore/f64 perceptual and mathematical tolerance envelopes.
 
 ### 0.3 Architecture Audit Status
 

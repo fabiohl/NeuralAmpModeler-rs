@@ -661,8 +661,10 @@ fn esr_color_class(esr: f64) -> &'static str {
 
 /// Short qualitative ESR verdict (English — the bash used PT here).
 fn esr_verdict_short(esr: f64) -> &'static str {
-    if esr < 1e-10 {
-        "IDENTICAL"
+    if esr == 0.0 {
+        "ZERO-ERROR"
+    } else if esr < 1e-10 {
+        "NOISE-FLOOR"
     } else if esr < 1e-5 {
         "IMPERCEPTIBLE"
     } else if esr < 1e-2 {
@@ -1094,7 +1096,7 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
         let cross_phase = super::phases::ISA_PARITY_CROSS_ISA_PHASE;
         if report.phase_status(self_phase) == "PASS" {
             out.push_str(
-                "  ok isa_self_consistency passed (AVX2 vs AVX2 internal consistency; MSE=0).\n",
+                "  (i) isa_self_consistency passed but no per-model metric rows recorded.\n",
             );
         } else if report.phase_status(self_phase) == "FAIL" {
             out.push_str(&p.red("  FAIL isa_self_consistency (AVX2 determinism violated).\n\n"));
@@ -1126,11 +1128,11 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
         return out;
     }
 
-    let self_consistency_count = report
+    let self_consistency: Vec<&IsaRow> = report
         .isa
         .iter()
         .filter(|row| row.ref_isa == row.test_isa)
-        .count();
+        .collect();
     let cross_isa: Vec<&IsaRow> = report
         .isa
         .iter()
@@ -1145,7 +1147,7 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
         .count();
 
     if cross_isa_pass == cross_isa.len() && !cross_isa.is_empty() {
-        out.push_str(&p.green("  AVX2 vs AVX-512: bitwise identical\n"));
+        out.push_str(&p.green("  AVX2 vs AVX-512: within ESR budget (near-lossless)\n"));
     } else if !cross_isa.is_empty() {
         out.push_str(&p.yellow(&format!(
             "  AVX2 vs AVX-512: divergent on {}/{} models\n",
@@ -1159,8 +1161,26 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
     }
 
     out.push_str(&format!(
-        "  Self-consistency checks: {self_consistency_count} executed\n\n"
+        "  Self-consistency checks: {} executed\n",
+        self_consistency.len()
     ));
+
+    if !self_consistency.is_empty() {
+        out.push_str("  Self-consistency details (AVX2 vs AVX2):\n");
+        for row in &self_consistency {
+            let mse_text = fmt_metric(&row.mse);
+            let pass = match metric_f64(&row.mse) {
+                Some(mse) => mse == 0.0,
+                None => false,
+            };
+            let mark = if pass { p.green("ok") } else { p.yellow("⚠") };
+            out.push_str(&format!(
+                "    {} | MSE={} | {}\n",
+                row.label, mse_text, mark
+            ));
+        }
+        out.push('\n');
+    }
 
     if !cross_isa.is_empty() {
         out.push_str("  Cross-ISA details:\n");

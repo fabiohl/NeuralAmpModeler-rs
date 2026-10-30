@@ -53,7 +53,7 @@ body:
       placeholder: |
         - Baseline Throughput / Time: e.g. WaveNet Standard: 12.4 us / 64 samples
         - Measured Throughput / Time: e.g. WaveNet Standard: 28.1 us / 64 samples (2.26x slower)
-        - Regression Gate output: `cargo bench --bench regression_gate` or `utils/tests-performance-regression.sh`
+        - Regression Gate output: `cargo bench --bench regression_gate`
         - Quality Contract comparison: `utils/quality-dashboard.sh --check docs/quality-contract.json`
         - Receipt / Log excerpt: (from target/logs/regression_phase_receipt.jsonl or criterion reports)
         - Cycles per Sample / IPC: ...
@@ -82,11 +82,9 @@ body:
         # Recommended isolated reproduction commands:
         1. cargo run --quiet --bin simd_probe                                  # Probe CPU SIMD flags & governor
         2. taskset -c <isolated-core> cargo bench --bench regression_gate
-        # Or using the performance regression wall (with thermal cooldown):
-        3. NAM_THERMAL_COOLDOWN_S=60 utils/tests-performance-regression.sh
         # Quality contract baseline validation:
-        4. utils/quality-dashboard.sh --check docs/quality-contract.json
-        5. Observe regression on benchmark group `wavenet_standard`
+        3. utils/quality-dashboard.sh --check docs/quality-contract.json
+        4. Observe regression on benchmark group `wavenet_standard`
     validations:
       required: true
 

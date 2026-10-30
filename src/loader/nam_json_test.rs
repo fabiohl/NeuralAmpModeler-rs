@@ -254,6 +254,66 @@ fn test_topology_accepts_f2_multi_condition_as_free() {
     }
 }
 
+#[test]
+fn test_topology_rejects_condition_size_zero() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [
+                {
+                    "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "condition_size": 0,
+                    "dilations": [1,2,4,8],
+                    "gated": false, "head_bias": false
+                }
+            ],
+            "head": null, "head_scale": 0.02
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).unwrap();
+    let result = get_wavenet_topology(&parsed);
+    assert!(
+        matches!(result, WavenetTopologyResult::Rejected { .. }),
+        "condition_size=0 must be rejected, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_topology_rejects_mismatched_condition_size_across_layers() {
+    let json = r#"{
+        "version": "0.5.4",
+        "architecture": "WaveNet",
+        "config": {
+            "layers": [
+                {
+                    "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "condition_size": 2,
+                    "dilations": [1,2,4,8],
+                    "gated": false, "head_bias": false
+                },
+                {
+                    "channels": 8, "kernel_size": 3, "head_size": 4,
+                    "condition_size": 3,
+                    "dilations": [1,2,4,8],
+                    "gated": false, "head_bias": true
+                }
+            ],
+            "head": null, "head_scale": 0.02
+        },
+        "weights": [0.0]
+    }"#;
+    let parsed = parse_nam_json(json).unwrap();
+    let result = get_wavenet_topology(&parsed);
+    assert!(
+        matches!(result, WavenetTopologyResult::Rejected { .. }),
+        "mismatched condition_size across layers must be rejected, got: {:?}",
+        result
+    );
+}
+
 /// Catalog Feather model with `condition_dsp` sub-model must NOT match the catalog
 /// SKU. The static const-generic fast-path does not
 /// process condition_dsp, so the model must be routed to the dynamic engine.

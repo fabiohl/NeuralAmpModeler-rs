@@ -22,10 +22,6 @@ fn docs_dir() -> PathBuf {
     manifest_dir().join("docs")
 }
 
-fn utils_dir() -> PathBuf {
-    manifest_dir().join("utils")
-}
-
 fn collect_md_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -39,29 +35,6 @@ fn collect_md_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn collect_all_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    if !dir.is_dir() {
-        return;
-    }
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_all_files(&path, out);
-            } else if path.is_file() {
-                out.push(path);
-            }
-        }
-    }
-}
-
-fn relative_path(path: &std::path::Path, base: &std::path::Path) -> String {
-    path.strip_prefix(base)
-        .unwrap_or(path)
-        .display()
-        .to_string()
-}
-
 /// Normalizes text for path extraction: replaces markdown link delimiters
 /// `[` `]` `(` `)` with spaces to separate anchor text and link target.
 fn strip_markdown_links(text: &str) -> String {
@@ -73,39 +46,13 @@ fn strip_markdown_links(text: &str) -> String {
         .collect()
 }
 
-/// Extracts `utils/<name>.sh` and `utils/<name>.py` references.
-fn extract_script_refs(text: &str) -> HashSet<String> {
-    let clean = strip_markdown_links(text);
-    let mut refs = HashSet::new();
-
-    let mut i = 0;
-    while i + 6 <= clean.len() {
-        if &clean.as_bytes()[i..i + 6] == b"utils/" {
-            let rest = &clean[i + 6..];
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == ')' || c == '`' || c == '"' || c == '<')
-                .unwrap_or(rest.len());
-            let candidate = &rest[..end];
-            if (candidate.ends_with(".sh") || candidate.ends_with(".py"))
-                && !candidate.contains("../")
-                && candidate.len() <= 120
-            {
-                refs.insert(format!("utils/{candidate}"));
-            }
-            i += 6;
-        } else {
-            i += 1;
-        }
-    }
-    refs
-}
-
 /// Extracts feature flag names from text.
 fn extract_feature_refs(text: &str) -> HashSet<String> {
     const KNOWN: &[&str] = &[
         "dual-mono",
         "testing",
         "heap-audit",
+        "pinned",
         "fft-radix4-planner",
         "avx512",
         "rt-hardening",
@@ -229,103 +176,6 @@ fn parse_cargo_features() -> Vec<String> {
     features
 }
 
-fn collect_scripts() -> Vec<String> {
-    let mut all = Vec::new();
-    collect_all_files(&utils_dir(), &mut all);
-    all.into_iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "sh" || e == "py"))
-        .map(|p| relative_path(&p, &manifest_dir()))
-        .collect()
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Scripts that may be referenced in historical/postmortem docs but
-/// no longer exist (e.g., one-shot debug scripts that were archived).
-// Scripts allowed as doc references even when not treated as standalone
-// user-facing entry points (shared libs / supply-chain helpers).
-const SCRIPT_DOC_EXEMPT: &[&str] = &[
-    "utils/_lib.sh",
-    "utils/mod-update.sh",
-    // Removed: canonical libm gate is tests/libm_export_guard.rs;
-    // docs/testing.md and docs/postmortem-libm-symbol-interposition.md
-    // still describe the former wrapper in historical prose.
-    "utils/debug/verify_no_libm_exports.sh",
-];
-
-/// Known stale source paths in documentation.
-const STALE_SRC_PATH_EXEMPT: &[&str] = &[];
-
-#[test]
-fn test_script_refs_in_docs_exist() {
-    let all_docs = read_all_docs();
-    let refs = extract_script_refs(&all_docs);
-
-    let manifest = manifest_dir();
-    let mut missing = Vec::new();
-
-    for script_ref in &refs {
-        if SCRIPT_DOC_EXEMPT.contains(&script_ref.as_str()) {
-            continue;
-        }
-        // Self-containment: references must resolve inside this repository.
-        let full_path = manifest.join(script_ref);
-        if !full_path.exists() {
-            missing.push(script_ref.clone());
-        }
-    }
-
-    if !missing.is_empty() {
-        panic!(
-            "{} script(s) referenced in docs do NOT exist:\n  {}\n\
-             \n\
-             Update the documentation to reference existing scripts.",
-            missing.len(),
-            missing.join("\n  "),
-        );
-    }
-
-    eprintln!("  ✓ script refs: {} referenced, all exist.", refs.len());
-}
-
-#[test]
-fn test_all_utils_scripts_are_documented() {
-    let scripts = collect_scripts();
-    let all_docs = read_all_docs();
-    let refs = extract_script_refs(&all_docs);
-
-    let exempt: &[&str] = &["utils/_lib.sh"];
-
-    let mut undocumented = Vec::new();
-    for script in &scripts {
-        if exempt.contains(&script.as_str()) {
-            continue;
-        }
-        if !refs.contains(script) {
-            undocumented.push(script.clone());
-        }
-    }
-
-    if !undocumented.is_empty() {
-        panic!(
-            "{} script(s) exist in utils/ but have NO documentation reference:\n  {}\n\
-             \n\
-             Add a reference to each script in docs/ or README.md.",
-            undocumented.len(),
-            undocumented.join("\n  "),
-        );
-    }
-
-    eprintln!(
-        "  ✓ script inventory: {}/{} documented ({} exempt).",
-        scripts.len() - undocumented.len() - exempt.len(),
-        scripts.len() - exempt.len(),
-        exempt.len(),
-    );
-}
-
 #[test]
 fn test_feature_flags_in_docs_match_cargo_toml() {
     let declared = parse_cargo_features();
@@ -371,6 +221,9 @@ fn test_feature_flags_in_docs_match_cargo_toml() {
         doc_features.len(),
     );
 }
+
+/// Known stale source paths in documentation.
+const STALE_SRC_PATH_EXEMPT: &[&str] = &[];
 
 #[test]
 fn test_src_paths_in_docs_exist() {

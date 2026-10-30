@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::long_phase::{
-    CANONICAL_ROSTER, LongPhaseReceipt, LongPhaseStatus, PERFORMANCE_PHASE_IDS,
+    CANONICAL_ROSTER, FIDELITY_PHASE_IDS, LongPhaseReceipt, LongPhaseStatus, LongReason,
     PREFLIGHT_PHASE_IDS, is_preflight_id,
 };
 use crate::common::diagnostics::format::timestamp as iso_timestamp;
@@ -74,6 +74,37 @@ fn gap_has_id(gap: &str, id: &str) -> bool {
         || gap
             .strip_prefix(id)
             .is_some_and(|rest| rest.starts_with(':'))
+}
+
+/// Exhaustive RT verdict mapping shared by `RT_DEADLINE` and `RT_JITTER`.
+///
+/// Every `LongPhaseStatus` variant is matched explicitly — there is no `_`
+/// arm, so adding a status forces a deliberate verdict decision. `PASS` is
+/// emitted only for a `PASSED` phase with no declared gap; a measurement that
+/// did not happen is never a pass.
+fn rt_verdict_for_phase(p: &LongPhaseReceipt) -> &'static str {
+    match p.status {
+        LongPhaseStatus::Failed => "FAIL",
+        LongPhaseStatus::Inconclusive | LongPhaseStatus::Skipped => "INCONCLUSIVE",
+        LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
+        LongPhaseStatus::NotRun | LongPhaseStatus::Simulated => "NOT_RUN",
+        LongPhaseStatus::CompletedWithGaps => "INCONCLUSIVE",
+        LongPhaseStatus::Passed => {
+            if p.gaps.iter().any(|g| gap_has_id(g, "skip_capability")) {
+                "SKIP_CAPABILITY"
+            } else if p
+                .gaps
+                .iter()
+                .any(|g| gap_has_id(g, "inconclusive") || gap_has_id(g, "inconclusive_environment"))
+            {
+                "INCONCLUSIVE"
+            } else if p.gaps.is_empty() {
+                "PASS"
+            } else {
+                "INCONCLUSIVE"
+            }
+        }
+    }
 }
 
 /// `true` when a timed phase (`phase<N>`) reports `PASSED` while executing zero
@@ -272,6 +303,20 @@ impl LongAuditReceipt {
             }
         }
 
+        let mut optional_gaps = Vec::new();
+        for p in self.phase_entries() {
+            for g in &p.optional_gaps {
+                let entry = if g.starts_with(&format!("{}:", p.phase_id)) {
+                    g.clone()
+                } else {
+                    format!("{}:{}", p.phase_id, g)
+                };
+                if !optional_gaps.contains(&entry) {
+                    optional_gaps.push(entry);
+                }
+            }
+        }
+
         LongPhaseReceipt {
             phase_id: "overall".to_string(),
             name: "Long Audit Suite".to_string(),
@@ -279,6 +324,7 @@ impl LongAuditReceipt {
             duration_ms: self.duration_ms_total(),
             tests_executed: self.tests_executed_total(),
             gaps,
+            optional_gaps,
             timestamp: now_iso8601(),
             ..Default::default()
         }
@@ -510,97 +556,118 @@ impl LongAuditReceipt {
         self.phase_entries().find(|p| p.phase_id == phase_id)
     }
 
-    /// Human `FIDELITY` verdict: `OK` unless a fidelity-class phase failed.
+    /// Human `PROVENANCE` verdict from the `preflight-freshness` receipt line.
     ///
-    /// Fidelity-class = every phase outside [`PERFORMANCE_PHASE_IDS`]
-    /// (preflights included). Declared gaps never downgrade FIDELITY to
-    /// `FAIL` — that is what the `OVERALL: COMPLETED_WITH_GAPS` verdict is
-    /// for (the pre-S5 `ANY_FIDELITY_FAILED` semantics).
+    /// `OK` when the freshness gate passed, `FAIL` when it failed. A simulated
+    /// or absent freshness step reports `NOT_RUN`: provenance cannot be
+    /// certified without evidence.
+    pub fn provenance_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
+        match self.phase_by_id("preflight-freshness") {
+            Some(p) => match p.status {
+                LongPhaseStatus::Passed => "OK",
+                LongPhaseStatus::Failed => "FAIL",
+                _ => "NOT_RUN",
+            },
+            None => "NOT_RUN",
+        }
+    }
+
+    /// Human `FIDELITY` verdict over the fidelity-class phases
+    /// ([`FIDELITY_PHASE_IDS`]).
     ///
-    /// A fidelity-class phase that was never executed (`SIMULATED`)
-    /// reports `NOT_RUN` instead of the vacuous
-    /// `OK`: a green verdict requires tests that actually ran (F-07). An
-    /// all-`SIMULATED` receipt reports `NOT_RUN` unconditionally, even when
-    /// it carries no fidelity-class entry.
+    /// Declared gaps never downgrade FIDELITY to `FAIL` — that is what the
+    /// `OVERALL: COMPLETED_WITH_GAPS` verdict is for. A simulated fidelity
+    /// phase reports `NOT_RUN` instead of the vacuous `OK`.
+    ///
+    /// D-06: a failed `PROVENANCE` means the fixtures behind the fidelity
+    /// phases cannot be trusted, so FIDELITY becomes `NOT_VERIFIED` (neither a
+    /// green nor a red assertion).
     pub fn fidelity_verdict(&self) -> &'static str {
         if self.is_simulated_only() {
             return "NOT_RUN";
         }
+        if self.provenance_verdict() == "FAIL" {
+            return "NOT_VERIFIED";
+        }
         let simulated_fidelity = self.phase_entries().any(|p| {
-            p.status == LongPhaseStatus::Simulated
-                && !PERFORMANCE_PHASE_IDS.contains(&p.phase_id.as_str())
+            FIDELITY_PHASE_IDS.contains(&p.phase_id.as_str())
+                && p.status == LongPhaseStatus::Simulated
         });
         if simulated_fidelity {
             return "NOT_RUN";
         }
         let failed_fidelity = self.phase_entries().any(|p| {
-            p.status == LongPhaseStatus::Failed
-                && !PERFORMANCE_PHASE_IDS.contains(&p.phase_id.as_str())
+            FIDELITY_PHASE_IDS.contains(&p.phase_id.as_str()) && p.status == LongPhaseStatus::Failed
         });
         if failed_fidelity { "FAIL" } else { "OK" }
     }
 
+    /// Human `PERF` verdict from the `phase8` receipt line.
+    ///
+    /// `PASS` only when the phase executed, passed, and declared no
+    /// `perf-baseline-missing` gap. A missing baseline is a deliberate
+    /// non-verification (`NOT_VERIFIED`), never a performance regression: the
+    /// gate did not compare any benchmark. The phase8 line is authoritative —
+    /// the regression comparison receipt is only consulted for the
+    /// `PERF_REGRESSION` line when `PERF` is `PASS`.
+    pub fn perf_verdict(&self) -> &'static str {
+        if self.is_simulated_only() {
+            return "NOT_RUN";
+        }
+        match self.phase_by_id("phase8") {
+            None => "NOT_RUN",
+            Some(p) => match p.status {
+                LongPhaseStatus::Passed
+                    if p.gaps
+                        .iter()
+                        .any(|g| gap_has_id(g, "perf-baseline-missing")) =>
+                {
+                    "NOT_VERIFIED"
+                }
+                LongPhaseStatus::Passed => "PASS",
+                LongPhaseStatus::Failed => match p.reason {
+                    Some(LongReason::MissingBaseline) => "NOT_VERIFIED",
+                    _ => "FAIL",
+                },
+                LongPhaseStatus::Simulated => "NOT_RUN",
+                _ => "NOT_VERIFIED",
+            },
+        }
+    }
+
     /// Human `RT_DEADLINE` verdict from the `phase5` receipt line.
     ///
-    /// Mirrors the pre-S5 bash mapping (FAILED → FAIL, SKIPPED → PASS,
-    /// anything else → PASS) plus the typed gap carrier: a `PASSED` phase
-    /// whose log carried the `inconclusive_environment` marker is reported
-    /// `INCONCLUSIVE`. A `SIMULATED` phase (never executed) reports
-    /// `NOT_RUN`, never a vacuous `PASS`. The bash override that used to
-    /// patch `PHASE_STATUS` is gone (S5) — the marker is authoritative, and
-    /// "exit-0 with internal measurement bypass" must not be promoted to
-    /// PASS. If phase5 was never executed (None), returns `NOT_RUN`.
+    /// `PASS` requires an effective, successful measurement: a phase that was
+    /// skipped, never ran, bypassed itself, or carried any gap is never
+    /// promoted to `PASS`. The mapping is shared with `RT_JITTER` so both
+    /// verdicts cannot diverge. A `SIMULATED` phase reports `NOT_RUN`. If
+    /// phase5 was never executed (None), returns `NOT_RUN`.
     pub fn rt_deadline_verdict(&self) -> &'static str {
         if self.is_simulated_only() {
             return "NOT_RUN";
         }
         match self.phase_by_id("phase5") {
-            Some(p) => match p.status {
-                LongPhaseStatus::Failed => "FAIL",
-                LongPhaseStatus::Inconclusive => "INCONCLUSIVE",
-                LongPhaseStatus::Simulated => "NOT_RUN",
-                LongPhaseStatus::Passed
-                    if p.gaps
-                        .iter()
-                        .any(|g| gap_has_id(g, "inconclusive_environment")) =>
-                {
-                    "INCONCLUSIVE"
-                }
-                _ => "PASS",
-            },
+            Some(p) => rt_verdict_for_phase(p),
             None => "NOT_RUN",
         }
     }
 
     /// Human `RT_JITTER` verdict from the `phase6` receipt line.
     ///
-    /// Mirrors the pre-S5 bash mapping (PASSED → PASS, INCONCLUSIVE →
-    /// INCONCLUSIVE, SKIP_CAPABILITY → SKIP_CAPABILITY, FAILED → FAIL,
-    /// SKIPPED → INCONCLUSIVE), with the typed log markers as the carrier
-    /// for bypasses now that the bash `PHASE_STATUS` overrides are gone. A
-    /// `SIMULATED` phase (never executed) reports `NOT_RUN`, never a vacuous
-    /// `PASS`. If phase6 was never executed (None), returns `NOT_RUN`.
+    /// Uses the same explicit, exhaustive mapping as `RT_DEADLINE`: no
+    /// residual variant and no declared gap can fall through to `PASS`. A
+    /// `SIMULATED` phase reports `NOT_RUN`. If phase6 was never executed
+    /// (None), returns `NOT_RUN`.
     pub fn rt_jitter_verdict(&self) -> &'static str {
         if self.is_simulated_only() {
             return "NOT_RUN";
         }
         match self.phase_by_id("phase6") {
+            Some(p) => rt_verdict_for_phase(p),
             None => "NOT_RUN",
-            Some(p) => match p.status {
-                LongPhaseStatus::Failed => "FAIL",
-                LongPhaseStatus::Inconclusive | LongPhaseStatus::Skipped => "INCONCLUSIVE",
-                LongPhaseStatus::SkipCapability => "SKIP_CAPABILITY",
-                LongPhaseStatus::Simulated => "NOT_RUN",
-                LongPhaseStatus::Passed
-                    if p.gaps.iter().any(|g| gap_has_id(g, "skip_capability")) =>
-                {
-                    "SKIP_CAPABILITY"
-                }
-                LongPhaseStatus::Passed if p.gaps.iter().any(|g| gap_has_id(g, "inconclusive")) => {
-                    "INCONCLUSIVE"
-                }
-                _ => "PASS",
-            },
         }
     }
 
@@ -726,7 +793,7 @@ impl LongAuditReceipt {
         for p in self.phase_entries() {
             let selected = is_phase_selected_by_only(&p.phase_id, &p.name, only);
             if p.status == LongPhaseStatus::Failed {
-                lines.push(format!("ERROR: {} {} — FAILED", p.phase_id, p.name));
+                lines.push(format!("ERROR: {} — FAILED", p.phase_id));
             } else if selected
                 && (p.status.is_gap()
                     || (p.status == LongPhaseStatus::Passed && !p.gaps.is_empty()))
@@ -746,29 +813,41 @@ impl LongAuditReceipt {
             }
         }
         let overall = self.summary_receipt_with_only(only);
-        let perf_verdict =
-            if self.is_simulated_only() || !is_phase_selected_by_only("phase8", "perf", only) {
-                "NOT_RUN"
-            } else if let Some(p) = reg_path {
-                Self::perf_regression_verdict_at(
-                    p,
-                    Some(Duration::from_secs(24 * 3600)),
-                    std::env::var("NAM_RUN_ID").ok().as_deref(),
-                )
-            } else {
-                self.perf_regression_verdict()
-            };
+        let perf_selected =
+            !self.is_simulated_only() && is_phase_selected_by_only("phase8", "perf", only);
+        let perf_verdict = if perf_selected {
+            self.perf_verdict()
+        } else {
+            "NOT_RUN"
+        };
 
-        if perf_verdict == "FAIL" {
+        // `PERF_REGRESSION` is a comparison verdict: it only has meaning when
+        // `PERF` executed and passed. A missing baseline (or any other
+        // non-verification state) reports `NOT_RUN`, never a false regression.
+        let perf_regression_verdict = if perf_verdict == "FAIL" {
+            "FAIL"
+        } else if perf_verdict != "PASS" {
+            "NOT_RUN"
+        } else if let Some(p) = reg_path {
+            Self::perf_regression_verdict_at(
+                p,
+                Some(Duration::from_secs(24 * 3600)),
+                std::env::var("NAM_RUN_ID").ok().as_deref(),
+            )
+        } else {
+            self.perf_regression_verdict()
+        };
+
+        if perf_regression_verdict == "FAIL" {
             lines.push("ERROR: perf_regression — FAILED".to_string());
         }
 
-        let overall_status = if perf_verdict == "FAIL" && overall.status != LongPhaseStatus::Failed
-        {
-            LongPhaseStatus::Failed
-        } else {
-            overall.status
-        };
+        let overall_status =
+            if perf_regression_verdict == "FAIL" && overall.status != LongPhaseStatus::Failed {
+                LongPhaseStatus::Failed
+            } else {
+                overall.status
+            };
 
         let rt_deadline_verdict = if is_phase_selected_by_only("phase5", "rt-deadline", only) {
             self.rt_deadline_verdict()
@@ -783,10 +862,12 @@ impl LongAuditReceipt {
         };
 
         lines.push(format!("OVERALL: {}", overall_status.as_str()));
+        lines.push(format!("PROVENANCE: {}", self.provenance_verdict()));
         lines.push(format!("FIDELITY: {}", self.fidelity_verdict()));
         lines.push(format!("RT_DEADLINE: {}", rt_deadline_verdict));
         lines.push(format!("RT_JITTER: {}", rt_jitter_verdict));
-        lines.push(format!("PERF_REGRESSION: {}", perf_verdict));
+        lines.push(format!("PERF: {}", perf_verdict));
+        lines.push(format!("PERF_REGRESSION: {}", perf_regression_verdict));
         lines
     }
 

@@ -982,7 +982,10 @@ fn test_community_models_inference() {
         let path = model_path(filename);
 
         if !path.exists() {
-            eprintln!("SKIP: Community model not found: {path:?}. Skipping tests for {filename}.");
+            neural_amp_modeler_rs::testing::report_skip(
+                "nam_infer_test::test_community_models_inference",
+                &format!("community_model_absent:{filename}"),
+            );
             continue;
         }
 

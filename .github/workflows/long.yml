@@ -14,10 +14,6 @@ on:
         description: 'Strict mode (treat gaps as failures)'
         type: boolean
         default: true
-      dashboard:
-        description: 'Run quality-dashboard --check against docs/quality-contract.json'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -53,14 +49,14 @@ jobs:
             STRICT_FLAG="--strict"
           fi
           ./utils/tests-long.sh $STRICT_FLAG --only "${{ inputs.phases }}"
-      - name: Quality Dashboard (--check)
-        if: inputs.dashboard == true
-        run: ./utils/quality-dashboard.sh --check docs/quality-contract.json
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
         with:
           title: Long QA Suite (${{ github.ref_name }} @ ${{ github.sha }})
+      - name: Quality Dashboard (fidelity + parity)
+        if: always()
+        run: ./utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only
       - name: Upload logs and receipts
         if: always()
         uses: actions/upload-artifact@v4

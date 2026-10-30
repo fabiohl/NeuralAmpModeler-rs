@@ -49,10 +49,10 @@ Where $r_i$ is the reference sample and $t_i$ is the test sample.
 - **DC Offset Masking & Diagnostic DC-Free ESR:** When a golden vector contains a pronounced DC offset (notably `golden_wavenet_a2_max.bin` with mean $\mu \approx 8.19$ and standard deviation $\sigma \approx 2.45$), over $90\%$ of total signal energy ($P_{\text{sig}} \approx 73$) resides in the DC constant. In such cases, standard raw ESR is dominated by the constant term and can mask divergence in the dynamic AC components. To maintain diagnostic rigor, the test harness evaluates both raw ESR and DC-free ESR ($\text{ESR}_{\text{dc-free}}$ after mean removal from reference and test vectors). For `wavenet_a2_max`, raw ESR is $2.57 \times 10^{-14}$ while DC-free ESR is $3.08 \times 10^{-13}$ (~12× ratio, still $\approx -125\text{ dB}$, confirming that both AC and DC components remain at the float32 numerical noise floor). The DC-free metric serves as an informational diagnostic and does not replace the raw ESR parity gate.
 - **Limitation:** ESR is a global time-domain metric. It cannot separate harmonic generation from inharmonic aliasing artifacts (Sato & Smith, DAFx 2025) and correlates non-linearly with human loudness perception (Wright & Välimäki, ICASSP 2020). For this reason, NeuralAmpModeler-rs supplements ESR with spectral metrics (MR-STFT, ASR).
 
-| ESR (Linear)                | ESR (dB)                       | Practical Interpretation                                          |
-|:--------------------------- |:------------------------------ |:----------------------------------------------------------------- |
-| $0.0$                       | $-\infty\text{ dB}$            | Bit-identical output.                                             |
-| $< 10^{-11}$                | $< -110\text{ dB}$             | Float32 numerical noise floor (near-bit-exact across ISAs).       |
+| ESR (Linear)                | ESR (dB)                       | Practical Interpretation                                                             |
+|:--------------------------- |:------------------------------ |:------------------------------------------------------------------------------------ |
+| $0.0$                       | $-\infty\text{ dB}$            | Zero squared numerical error (ESR = 0.0); bitwise identity requires bitwise sample verification. |
+| $< 10^{-11}$                | $< -110\text{ dB}$             | Float32 numerical noise floor (near-lossless floating-point precision across ISAs).          |
 | $\sim 10^{-7}$ to $10^{-5}$ | $-70\text{ to } -50\text{ dB}$ | High implementation agreement (floating-point summation noise).   |
 | $\sim 3.3 \times 10^{-3}$   | $-24.8\text{ dB}$              | Tone3000 median error for WaveNet A2-Full vs analog hardware.     |
 | $\sim 6.2 \times 10^{-3}$   | $-22.1\text{ dB}$              | Tone3000 median error for WaveNet A1-Standard vs analog hardware. |

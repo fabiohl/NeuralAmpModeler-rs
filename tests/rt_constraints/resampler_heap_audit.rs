@@ -8,6 +8,7 @@ mod audit_tests {
     use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 
     use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+    use crate::common::validation::report_heap_alloc;
 
     fn generate_noise(samples: usize) -> Vec<f32> {
         (0..samples).map(|i| (i as f32 * 0.1234).sin()).collect()
@@ -49,6 +50,13 @@ mod audit_tests {
             get_alloc_count()
         };
 
+        report_heap_alloc(
+            &format!(
+                "resampler-{host_rate}to{nam_rate}-chunk{chunk_size}-{}",
+                if is_mono { "mono" } else { "dual-mono" }
+            ),
+            count,
+        );
         assert_eq!(
             count, 0,
             "Allocations detected during resampling! (host_rate={}, nam_rate={}, mono={})",

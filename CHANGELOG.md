@@ -142,6 +142,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Quality Dashboard Test Counting:**
+  - `nam_quality` now counts libtest `test result: ok. N passed` summaries (ANSI-stripped) across every command of a phase instead of per-test `test … ... ok` lines, so `--nocapture` runs no longer undercount green phases. A phase without a `test result` line fails closed as `no_test_result`; the unreachable `lstm_activation_precision` minimum now matches its two non-ignored tests.
+- **Quality Provenance Verdict:**
+  - `verify_contract` classifies `freshness` as `PROVENANCE` instead of a fidelity violation, emitting `PROVENANCE: FAIL` with `FIDELITY: NOT_VERIFIED` (D-06) when fixtures are stale; `--save` refuses failed provenance separately from failed fidelity.
+- **Bounded Dashboard Commands:**
+  - Dashboard phases now enforce their wall-clock deadline by killing the whole child process group and draining captured pipes, so a hung `cargo test` cannot leave orphaned test binaries behind.
 - **Deterministic Benchmark Binary Extraction:**
   - Fixed benchmark binary resolution in [`utils/_lib_core.sh`](utils/_lib_core.sh) to deterministically select the primary benchmark harness via `jq`, preventing trailing binary mismatches.
 - **Quality Dashboard Log Diagnostics:**

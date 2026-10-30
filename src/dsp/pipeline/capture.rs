@@ -71,6 +71,26 @@ pub fn capture_dsp_pipeline(
     if n != n_samples {
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
+    if n == 0 {
+        if let Some(writer) = ctx.bridge_writer {
+            writer.write_silence();
+        }
+        return 0;
+    }
+
+    // Defensive buffer capacity validation across all builds (R-16).
+    // An insufficient slice must not panic, access OOB or execute partial DSP.
+    if bufs.resamp_out_l.len() < n || bufs.resamp_out_r.len() < n {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        let safe_l = bufs.resamp_out_l.len().min(n);
+        bufs.resamp_out_l[..safe_l].fill(0.0);
+        let safe_r = bufs.resamp_out_r.len().min(n);
+        bufs.resamp_out_r[..safe_r].fill(0.0);
+        if let Some(writer) = ctx.bridge_writer {
+            writer.write_silence();
+        }
+        return 0;
+    }
 
     #[cfg(nam_avx512)]
     {
@@ -216,16 +236,17 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
     if convolved && *ctx.process_mono {
         // Mono: cab-sim runs on the left channel only; the right channel
         // mirrors the processed left signal.
-        // SAFETY: `n_pw <= MAX_RESAMP_BUF` and both `resamp_out_l`/`resamp_out_r`
-        // are at least `MAX_RESAMP_BUF` elements long, so the `n_pw`-element
-        // source and destination ranges are in-bounds; the two buffers are
-        // distinct allocations, hence non-overlapping.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bufs.resamp_out_l.as_ptr(),
-                bufs.resamp_out_r.as_mut_ptr(),
-                n_pw,
-            );
+        if bufs.resamp_out_l.len() >= n_pw && bufs.resamp_out_r.len() >= n_pw && n_pw > 0 {
+            // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and `resamp_out_r`
+            // have at least `n_pw` capacity and `n_pw > 0`. The two buffers are distinct
+            // allocations, hence non-overlapping.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    bufs.resamp_out_l.as_ptr(),
+                    bufs.resamp_out_r.as_mut_ptr(),
+                    n_pw,
+                );
+            }
         }
     }
 
@@ -316,6 +337,26 @@ pub fn capture_dsp_pipeline_streaming<'b>(
         .min(super::bridge::MAX_RESAMP_BUF);
     if n != n_samples {
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+    }
+    if n == 0 {
+        if let Some(writer) = ctx.bridge_writer {
+            writer.write_silence();
+        }
+        return 0;
+    }
+
+    // Defensive buffer capacity validation across all builds (R-16).
+    // An insufficient slice must not panic, access OOB or execute partial DSP.
+    if bufs.resamp_out_l.len() < n || bufs.resamp_out_r.len() < n {
+        ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
+        let safe_l = bufs.resamp_out_l.len().min(n);
+        bufs.resamp_out_l[..safe_l].fill(0.0);
+        let safe_r = bufs.resamp_out_r.len().min(n);
+        bufs.resamp_out_r[..safe_r].fill(0.0);
+        if let Some(writer) = ctx.bridge_writer {
+            writer.write_silence();
+        }
+        return 0;
     }
 
     #[cfg(nam_avx512)]
@@ -443,17 +484,20 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
             if *ctx.process_mono {
                 // Mono mirror: cab-sim runs on the left channel only; the
                 // right channel mirrors the drained left signal.
-                // SAFETY: `n_samples <= MAX_RESAMP_BUF` and both `resamp_out_l`
-                // / `resamp_out_r` are at least `MAX_RESAMP_BUF` elements long,
-                // so the `n_samples`-element source and destination ranges are
-                // in-bounds; the two buffers are distinct allocations, hence
-                // non-overlapping.
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        bufs.resamp_out_l.as_ptr(),
-                        bufs.resamp_out_r.as_mut_ptr(),
-                        n_samples,
-                    );
+                if bufs.resamp_out_l.len() >= n_samples
+                    && bufs.resamp_out_r.len() >= n_samples
+                    && n_samples > 0
+                {
+                    // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and
+                    // `resamp_out_r` have at least `n_samples` capacity and `n_samples > 0`.
+                    // The two buffers are distinct allocations, hence non-overlapping.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            bufs.resamp_out_l.as_ptr(),
+                            bufs.resamp_out_r.as_mut_ptr(),
+                            n_samples,
+                        );
+                    }
                 }
             }
 
@@ -556,13 +600,19 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
     };
 
     if convolved && *ctx.process_mono {
-        // SAFETY: bufs.resamp_out_l and bufs.resamp_out_r are disjoint slices of length >= n_pw.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bufs.resamp_out_l.as_ptr(),
-                bufs.resamp_out_r.as_mut_ptr(),
-                n_pw,
-            );
+        // Mono mirror: cab-sim runs on the left channel only; the right channel
+        // mirrors the processed left signal.
+        if bufs.resamp_out_l.len() >= n_pw && bufs.resamp_out_r.len() >= n_pw && n_pw > 0 {
+            // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and `resamp_out_r`
+            // have at least `n_pw` capacity and `n_pw > 0`. The two buffers are disjoint
+            // slices of distinct allocations.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    bufs.resamp_out_l.as_ptr(),
+                    bufs.resamp_out_r.as_mut_ptr(),
+                    n_pw,
+                );
+            }
         }
     }
 

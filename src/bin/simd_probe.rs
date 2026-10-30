@@ -29,11 +29,13 @@ use neural_amp_modeler_rs::models::lstm::Lstm2x8;
 const PROBE_BLOCK: usize = 64;
 
 fn main() {
+    let check_avx512 = std::env::args().any(|arg| arg == "--check-avx512");
+
     println!("=======================================================");
     println!(" NeuralAmpModeler-rs SIMD Diagnostic & Capability Probe");
     println!("=======================================================");
 
-    print_hardware_flags();
+    let avx512_ok = print_hardware_flags();
 
     println!();
     print_compilation_flags();
@@ -42,6 +44,14 @@ fn main() {
     print_dispatch_resolution();
 
     println!("=======================================================");
+
+    if check_avx512 {
+        if avx512_ok {
+            std::process::exit(0);
+        } else {
+            std::process::exit(3);
+        }
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -51,7 +61,7 @@ fn main() {
 /// `compile_error!` in `src/lib.rs`: a binary that runs at all was built for it,
 /// so the flags below are informational and no runtime verdict is issued. AVX-512
 /// is an opt-in extension (`--features avx512`) reported on its own line.
-fn print_hardware_flags() {
+fn print_hardware_flags() -> bool {
     let avx2 = is_x86_feature_detected!("avx2");
     let fma = is_x86_feature_detected!("fma");
     let avx512f = is_x86_feature_detected!("avx512f");
@@ -77,12 +87,13 @@ fn print_hardware_flags() {
         "  -> AVX-512 Extensions: [{}]",
         avx512_extension_label(avx512_complete)
     );
+    avx512_complete
 }
 
 /// Prints the runtime-detected aarch64 CPU features. NEON is the mandatory
 /// baseline (always present on aarch64); the rest are informative.
 #[cfg(target_arch = "aarch64")]
-fn print_hardware_flags() {
+fn print_hardware_flags() -> bool {
     println!("[CPU Hardware Flags]");
     for (name, present) in [
         ("neon", std::arch::is_aarch64_feature_detected!("neon")),
@@ -99,6 +110,7 @@ fn print_hardware_flags() {
         println!("  - {name:<12} {}", bool_label(present, ""));
     }
     println!("  -> Baseline Hardware (aarch64 NEON): [COMPLIANT]");
+    false
 }
 
 #[cfg(target_arch = "x86_64")]

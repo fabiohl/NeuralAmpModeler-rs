@@ -100,15 +100,17 @@ impl A2GroupedConv1d {
     ///
     /// # Errors
     /// Returns [`NamErrorCode::InvalidModelTopology`] when `groups == 0`,
-    /// when `kernel` is zero or exceeds `MAX_KERNEL`, or when
-    /// `in_ch`/`out_ch` are not exactly divisible by `groups`, and
-    /// [`NamErrorCode::WeightCountMismatch`] when `raw_weights` does not hold
-    /// exactly `(out_ch * in_ch / groups) * kernel` values. The constructor is
-    /// reachable from hostile `.nam` parsing (public loader path), so every
-    /// violation is a typed `Err` — never `assert!`, which would panic the
-    /// host process in release builds too (F-RES2-01). Rejection logging
-    /// happens at the off-RT loader call site (this file also hosts the
-    /// SIMD hot-path kernels, so no `log::` calls are allowed here).
+    /// when `kernel` is zero or exceeds `MAX_KERNEL`, when
+    /// `in_ch`/`out_ch` are not exactly divisible by `groups`, or when geometry
+    /// calculations overflow. Returns [`NamErrorCode::WeightCountMismatch`] when
+    /// `raw_weights` does not hold exactly `(out_ch * in_ch / groups) * kernel`
+    /// values, or when `raw_bias` is absent, short, or mismatched with `out_ch`
+    /// (when `do_bias` is enabled, or when a non-empty bias vector is supplied
+    /// with `do_bias` disabled). The constructor is reachable from hostile `.nam`
+    /// parsing (public loader path), so every violation is a typed `Err` — never
+    /// `assert!`, which would panic the host process in release builds too (F-RES2-01).
+    /// Rejection logging happens at the off-RT loader call site (this file also
+    /// hosts the SIMD hot-path kernels, so no `log::` calls are allowed here).
     pub fn new(
         raw_weights: &[f32],
         raw_bias: &[f32],
@@ -148,15 +150,50 @@ impl A2GroupedConv1d {
         let in_per_group = in_ch / groups;
         let out_per_group = out_ch / groups;
         let num_blocks_per_group = out_per_group.div_ceil(4);
-        let total_blocks = groups * num_blocks_per_group;
-        let total_padded = total_blocks * 4 * in_per_group * kernel;
+        let total_blocks = groups
+            .checked_mul(num_blocks_per_group)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let total_padded = total_blocks
+            .checked_mul(4)
+            .and_then(|p| p.checked_mul(in_per_group))
+            .and_then(|p| p.checked_mul(kernel))
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
         let is_depthwise = groups == in_ch && groups == out_ch;
 
         // Depthwise appends a compact `[kernel][channel]` SoA tail after the
         // interleaved block; every other shape uses exactly `total_padded`.
-        let soa_len = if is_depthwise { kernel * in_ch } else { 0 };
-        let mut weights = AlignedVec::new(total_padded + soa_len, 0.0f32)?;
-        let bias = AlignedVec::from_vec(raw_bias.to_vec())?;
+        let soa_len = if is_depthwise {
+            kernel
+                .checked_mul(in_ch)
+                .ok_or(NamErrorCode::InvalidModelTopology)?
+        } else {
+            0
+        };
+        let total_alloc = total_padded
+            .checked_add(soa_len)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let mut weights = AlignedVec::new(total_alloc, 0.0f32)?;
+
+        // Bias contract (R-18):
+        // When `do_bias` is true, `raw_bias` must hold exactly `out_ch` elements.
+        // If `raw_bias` is absent/empty or short (`raw_bias.len() < out_ch`), the
+        // constructor rejects it with `WeightCountMismatch` before SIMD accesses.
+        // When `do_bias` is false, `raw_bias` may be empty (in which case `bias`
+        // is safely pre-allocated with `out_ch` zeros for alignment and safe bounds),
+        // or hold exactly `out_ch` elements; any non-empty mismatched slice is rejected.
+        let bias = if do_bias {
+            if raw_bias.len() != out_ch {
+                return Err(NamErrorCode::WeightCountMismatch);
+            }
+            AlignedVec::from_vec(raw_bias.to_vec())?
+        } else if raw_bias.is_empty() {
+            AlignedVec::new(out_ch, 0.0f32)?
+        } else {
+            if raw_bias.len() != out_ch {
+                return Err(NamErrorCode::WeightCountMismatch);
+            }
+            AlignedVec::from_vec(raw_bias.to_vec())?
+        };
 
         for g in 0..groups {
             for b in 0..num_blocks_per_group {

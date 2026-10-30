@@ -4,7 +4,10 @@
 //  Live cross-validation tests NeuralAmpModeler-rs ↔ NeuralAmpModelerCore (Layer 2).
 //
 //  ## When it runs
-//  - `utils/tests-long.sh` (full slow suite)
+//  - `utils/tests-quick.sh`: the 15 non-ignored multichannel-linear and WAV-IR
+//    cases run when the oracle capability is available; under
+//    `NAM_REQUIRE_CPP_ORACLE=1` a missing oracle is a hard failure.
+//  - `utils/tests-long.sh` (full slow suite, `--include-ignored`)
 //  - `cargo test --test cpp_parity -- --ignored --nocapture`
 //
 //  ## Pipeline
@@ -13,7 +16,8 @@
 //  3. Writes WAV, executes render via `std::process::Command`
 //  4. Reads WAV output, compares C++ vs Rust with `report_dsp_fidelity()`
 //
-//  Tests are `#[ignore]` in normal CI — requires C++ toolchain installed.
+//  The full cross-validation matrix is `#[ignore]` because it requires the C++
+//  toolchain and is exercised by the long discipline.
 //
 //  ## Parity Thresholds (Aggressive Live Floors)
 //
@@ -161,12 +165,12 @@ fn ensure_render_compiled() -> bool {
     }
 
     let bin = render_bin();
-    if bin.exists() {
-        return true;
-    }
-
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let nam_core = nam_core_dir();
+    // A cached binary with no source mirror to re-validate against stays usable.
+    if bin.exists() && !nam_core.exists() {
+        return true;
+    }
 
     if !nam_core.exists() {
         return skip_or_abort(&format!(
@@ -199,7 +203,9 @@ fn ensure_render_compiled() -> bool {
         ));
     }
 
-    eprintln!("Compiling render tool (utils/ensure_namcore_render.sh)...");
+    if !bin.exists() {
+        eprintln!("Compiling render tool (utils/ensure_namcore_render.sh)...");
+    }
 
     let output = Command::new("bash")
         .arg(&helper)
@@ -1166,6 +1172,19 @@ fn live_cross_validation_a2_example_slimmable() {
     assert_eq!(outcome, ParityOutcome::Completed, "a2_example.nam");
 }
 
+/// D-02 capability probe: when the optional C++ oracle is absent in the
+/// non-strict long run, `catch-all` omits the `live_cross_validation_*` matrix
+/// through `--skip`. This probe is the typed evidence for that omission: it
+/// reports the skip through `report_skip`, so `skips.jsonl` stays the single
+/// source of the `skip-capability:<n>` gap (no `grep` over `cargo test --list`).
+/// Under `NAM_REQUIRE_CPP_ORACLE=1`, `ensure_render_compiled` panics instead
+/// (fail-closed).
+#[test]
+#[ignore = "long: probe for the optional C++ oracle (D-02)"]
+fn d02_live_cross_validation_oracle_probe() {
+    let _ = ensure_render_compiled();
+}
+
 // --- v2 (multi-SR, comprehensive) ---
 
 #[test]
@@ -1891,6 +1910,38 @@ fn render_multichannel_bin() -> PathBuf {
     project_root.join(BUILD_DIR).join("render_multichannel")
 }
 
+/// Cache key for the `render_multichannel` wrapper: the wrapper source, the
+/// ordered NAMCore object files (path + size), the compiler identity and the
+/// fixed flags. Any change forces a rebuild instead of reusing a stale binary.
+fn render_multichannel_fingerprint(
+    wrapper: &std::path::Path,
+    objs: &[PathBuf],
+    cxx: &str,
+) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(fs::read(wrapper).unwrap_or_default());
+    for obj in objs {
+        let len = fs::metadata(obj).map_or(0, |m| m.len());
+        hasher.update(obj.to_string_lossy().as_bytes());
+        hasher.update(len.to_le_bytes());
+    }
+    let version = Command::new(cxx)
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    hasher.update(version.as_bytes());
+    hasher.update(b"-std=c++20 -O3");
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn ensure_render_multichannel_compiled() -> bool {
     use std::sync::Mutex;
     static MC_BUILD_LOCK: Mutex<()> = Mutex::new(());
@@ -1899,9 +1950,6 @@ fn ensure_render_multichannel_compiled() -> bool {
         return false;
     }
     let mc_bin = render_multichannel_bin();
-    if mc_bin.exists() {
-        return true;
-    }
 
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let nam_core = nam_core_dir();
@@ -1927,7 +1975,8 @@ fn ensure_render_multichannel_compiled() -> bool {
     let obj_dir = project_root
         .join(BUILD_DIR)
         .join("tools/CMakeFiles/render.dir");
-    let obj_files = collect_objs(&obj_dir);
+    let mut obj_files = collect_objs(&obj_dir);
+    obj_files.sort();
     if obj_files.is_empty() {
         neural_amp_modeler_rs::testing::report_skip(
             "cpp_parity::ensure_render_multichannel_compiled",
@@ -1936,8 +1985,28 @@ fn ensure_render_multichannel_compiled() -> bool {
         return false;
     }
 
-    let cxx = std::env::var("CXX").unwrap_or_else(|_| "g++".to_string());
-    let mut cmd = Command::new(cxx);
+    let cxx = std::env::var("CXX").unwrap_or_else(|_| {
+        let available = |name: &str| {
+            Command::new(name)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        if available("g++") {
+            "g++".to_string()
+        } else {
+            "clang++".to_string()
+        }
+    });
+    let mc_config = project_root
+        .join(BUILD_DIR)
+        .join(".render_multichannel_config");
+    let fingerprint = render_multichannel_fingerprint(&mc_cpp, &obj_files, &cxx);
+    if mc_bin.exists() && fs::read_to_string(&mc_config).is_ok_and(|s| s.trim() == fingerprint) {
+        return true;
+    }
+
+    let mut cmd = Command::new(&cxx);
     cmd.arg("-std=c++20")
         .arg("-O3")
         .arg("-I")
@@ -1955,7 +2024,10 @@ fn ensure_render_multichannel_compiled() -> bool {
     cmd.arg("-o").arg(&mc_bin);
 
     match cmd.output() {
-        Ok(out) if out.status.success() => mc_bin.exists(),
+        Ok(out) if out.status.success() && mc_bin.exists() => {
+            let _ = fs::write(&mc_config, format!("{fingerprint}\n"));
+            true
+        }
         Ok(out) => {
             eprintln!(
                 "Failed to compile render_multichannel: {}",

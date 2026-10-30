@@ -17,10 +17,15 @@
 #![cfg(all(target_os = "linux", target_env = "gnu"))]
 
 use std::env;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
 const LIBM_SYMBOLS: &[&str] = &["log10f", "atan2f", "acosf", "cbrt", "cbrtf", "fma", "fmod"];
+
+/// `__libc_start_main` is imported by any glibc-linked executable and
+/// remains visible in `.dynsym` even when the binary is stripped. It is the
+/// witness that `nm -D` actually read the dynamic symbol table.
+const DYNAMIC_WITNESS: &str = "__libc_start_main";
 
 fn nm_tool() -> &'static str {
     for tool in ["nm", "llvm-nm"] {
@@ -39,12 +44,17 @@ fn nm_tool() -> &'static str {
     );
 }
 
+fn symbol_name(field: &str) -> &str {
+    field.split('@').next().unwrap_or(field)
+}
+
 fn is_global_export(line: &str, symbol: &str) -> bool {
-    let mut parts = line.split_whitespace();
-    let addr = parts.next().unwrap_or("");
-    let kind = parts.next().unwrap_or("");
-    let name = parts.next().unwrap_or("");
-    if name != symbol || parts.next().is_some() {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let (addr, kind, name) = match parts.as_slice() {
+        [addr, kind, name] => (*addr, *kind, *name),
+        _ => return false,
+    };
+    if symbol_name(name) != symbol {
         return false;
     }
     if addr != "U" && (!addr.chars().all(|c| c.is_ascii_hexdigit()) || addr.is_empty()) {
@@ -53,8 +63,23 @@ fn is_global_export(line: &str, symbol: &str) -> bool {
     matches!(kind, "T" | "W")
 }
 
-fn leaked_in(nm: &str, artifact: &PathBuf, extra_args: &[&str]) -> Vec<&'static str> {
+fn has_undefined(stdout: &str, symbol: &str) -> bool {
+    stdout.lines().any(|line| {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            ["U", name] => symbol_name(name) == symbol,
+            [addr, "U", name] if !addr.is_empty() => symbol_name(name) == symbol,
+            _ => false,
+        }
+    })
+}
+
+/// Runs `nm` with a fixed C locale so the verdict never depends on the
+/// process locale, and fails closed on any tool error.
+fn nm_stdout(nm: &str, artifact: &Path, extra_args: &[&str]) -> String {
     let output = Command::new(nm)
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
         .args(extra_args)
         .arg(artifact)
         .output()
@@ -68,24 +93,15 @@ fn leaked_in(nm: &str, artifact: &PathBuf, extra_args: &[&str]) -> Vec<&'static 
     // look like "no leaks" and certify an unchecked surface.
     assert!(
         output.status.success(),
-        "libm_export_guard: {} exited {:?} on {}",
+        "libm_export_guard: {} exited {:?} on {}; cannot certify ELF surface",
         nm,
         output.status.code(),
         artifact.display()
     );
-    // A stripped binary reports "no symbols" on stderr with empty stdout;
-    // passing vacuously here would certify nothing, so fail instead.
-    if output.stdout.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !stderr.contains("no symbols"),
-            "libm_export_guard: {} reported no symbols on {} (stderr: {}); cannot certify ELF surface",
-            nm,
-            artifact.display(),
-            stderr.trim()
-        );
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn leaked_in(stdout: &str) -> Vec<&'static str> {
     LIBM_SYMBOLS
         .iter()
         .copied()
@@ -97,8 +113,27 @@ fn leaked_in(nm: &str, artifact: &PathBuf, extra_args: &[&str]) -> Vec<&'static 
 fn no_libm_symbols_exported_from_linked_binary() {
     let exe = env::current_exe().expect("libm_export_guard: current_exe unavailable");
     let nm = nm_tool();
-    let mut leaked = leaked_in(nm, &exe, &[]);
-    leaked.extend(leaked_in(nm, &exe, &["-D"]));
+
+    // The dynamic table is the canonical surface for interposition.
+    let dynamic = nm_stdout(nm, &exe, &["-D"]);
+    assert!(
+        has_undefined(&dynamic, DYNAMIC_WITNESS),
+        "libm_export_guard: {} -D reported no {DYNAMIC_WITNESS} import on {}; \
+         cannot certify the dynamic ELF surface (stdout was empty or invalid)",
+        nm,
+        exe.display()
+    );
+
+    let mut leaked = leaked_in(&dynamic);
+
+    // The static table is a complementary surface. A stripped release binary
+    // legitimately has none; in that case the dynamic witness above is the
+    // certification. Never decide by localized `nm` stderr text.
+    let static_surface = nm_stdout(nm, &exe, &[]);
+    if !static_surface.trim().is_empty() {
+        leaked.extend(leaked_in(&static_surface));
+    }
+
     leaked.sort_unstable();
     leaked.dedup();
     assert!(

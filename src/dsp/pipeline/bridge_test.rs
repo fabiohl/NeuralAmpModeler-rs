@@ -217,3 +217,101 @@ fn test_dsp_bridge_alignment_and_cache_isolation() {
         "reader cache line must follow writer cache line by at least 128 bytes"
     );
 }
+
+/// S1-T01 / R-15 regression suite: verifies that `DspBridgeWriter::write_block` validates source slice
+/// lengths defensively across all builds (debug and release), preventing out-of-bounds reads or panics
+/// on 0, 1, n-1, n, short-origin and max-capacity buffer lengths in both mono and stereo.
+#[test]
+fn test_bridge_write_block_source_length_bounds_safeguard() {
+    let mut bridge = new_bridge();
+    let bridge_ptr = &raw mut *bridge;
+    // SAFETY: `bridge_ptr` is derived from a live `Box<DspBridge>` allocated by `new_bridge()`
+    // which outlives both writer and reader in this test.
+    let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
+    // SAFETY: same valid pointer into live heap allocation.
+    let reader = unsafe { DspBridgeReader::new(bridge_ptr) };
+    let mut last_gen = 0u64;
+
+    // 1. Length 0: n_pw = 0
+    writer.write_block(&[], &[], 0, false);
+    let seen = reader.read_block(&mut last_gen, |l, _| l.len());
+    assert_eq!(seen, None, "Length 0 write publishes silence (None)");
+
+    // 2. Length 1: n_pw = 1, valid buffer
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&[42.0], &[84.0], 1, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(seen, Some((1, 42.0, 84.0)));
+
+    // 3. Length n-1: n_pw = 64, but slice has only 63 elements (short origin)
+    let src63_l = vec![1.5f32; 63];
+    let src63_r = vec![2.5f32; 63];
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&src63_l, &src63_r, 64, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(
+        seen,
+        Some((63, 1.5, 2.5)),
+        "Short slice n-1 clamped safely without panic or OOB"
+    );
+
+    // 4. Length n: n_pw = 64, slice has exactly 64 elements
+    let src64_l = vec![3.0f32; 64];
+    let src64_r = vec![4.0f32; 64];
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&src64_l, &src64_r, 64, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(seen, Some((64, 3.0, 4.0)), "Exact length n preserved");
+
+    // 5. Short origin extreme (reproducing R-15 without crash): n_pw = 64, slice has 1 element
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&[9.9], &[8.8], 64, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(
+        seen,
+        Some((1, 9.9, 8.8)),
+        "Extreme 1-element slice clamped safely in debug and release"
+    );
+
+    // 6. Mono mode with empty right slice: mono only copies left channel to both L and R
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&[7.7; 32], &[], 32, true);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(
+        seen,
+        Some((32, 7.7, 7.7)),
+        "Mono mode uses only L and copies to both channels"
+    );
+
+    // 7. Stereo mode with short right slice: clamps to available min(L, R)
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&[1.0; 64], &[2.0; 10], 64, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(seen, Some((10, 1.0, 2.0)), "Stereo clamps to min(L, R)");
+
+    // 8. Max capacity ceiling: n_pw > MAX_BRIDGE_BUF
+    let huge_l = vec![5.0f32; MAX_BRIDGE_BUF + 100];
+    let huge_r = vec![6.0f32; MAX_BRIDGE_BUF + 100];
+    bridge
+        .consumed_gen
+        .store(bridge.generation.load(Ordering::Relaxed), Ordering::Release);
+    writer.write_block(&huge_l, &huge_r, MAX_BRIDGE_BUF + 100, false);
+    let seen = reader.read_block(&mut last_gen, |l, r| (l.len(), l[0], r[0]));
+    assert_eq!(
+        seen,
+        Some((MAX_BRIDGE_BUF, 5.0, 6.0)),
+        "Clamped to MAX_BRIDGE_BUF"
+    );
+}

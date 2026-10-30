@@ -458,7 +458,10 @@ fn run_oracle_esr_paired(model_filename: &str, label: &str) -> f64 {
     let oracle_last = &oracle[24_000..];
 
     let esr = compute_esr_f64(oracle_last, &prod_last_f64);
-    let verbose = std::env::var("NAM_ORACLE_VERBOSE").as_deref() == Ok("1");
+    let verbose = std::env::var("NAM_ORACLE_VERBOSE").is_ok_and(|v| {
+        let v = v.trim();
+        v == "1" || v.eq_ignore_ascii_case("true")
+    });
     if verbose {
         println!(
             "PROD FIRST 10: {:?}",
@@ -1244,7 +1247,10 @@ fn test_oracle_vs_python_anchor_a2_generic() {
     // Measured: ESR = 5.79e-32 (-312.4 dB) — f64 agreement floor.
     let anchor_path = anchors_dir().join("a2_max_256_f64.bin");
     if !anchor_path.exists() {
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"anchor_not_found:a2_max_256_f64.bin\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            "reference_oracle_f64::test_oracle_vs_python_anchor_a2_generic",
+            "anchor_not_found:a2_max_256_f64.bin",
+        );
         return;
     }
     let path = models_dir().join("wavenet_a2_max.nam");

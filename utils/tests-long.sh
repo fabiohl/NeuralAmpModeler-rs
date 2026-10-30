@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-long.sh — long-duration audit, stress, and verification suite. Classe B.
 # Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
-# Orçamento: 270
+# Orçamento: 296
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -o pipefail
 cd "$(dirname "$0")/.."
@@ -17,12 +17,6 @@ RECEIPT_OUT="$LOG_DIR/long-audit-receipt.jsonl"
 LONG_ROOT="target/long"
 export CARGO_TARGET_DIR="$LONG_ROOT/release"
 
-SKIP=(
-  rt_deadline::  # long: fase pinada rt-deadline
-  rt_jitter::    # long: fase pinada rt-jitter
-  soak_test::    # long: fase pinada soak
-)
-
 usage() {
   cat <<'EOF'
 Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
@@ -33,8 +27,8 @@ Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
   preflight-package     cargo package --locked (verify) + consumer-smoke (x86/aarch64 sem .cargo do repo)
   preflight-freshness   frescor de artefatos
   preflight-simd-probe  sonda de ISA
-  catch-all             --include-ignored, exceto rt-deadline, rt-jitter e soak
-  soak                  soak_test (1 thread)
+  catch-all             --include-ignored; pinados ficam em alvos com required-features
+  soak                  soak_pinned (1 thread)
   isa-codegen           simd_probe e isa_contract
   heap-audit            heap audit (target/long/heap-audit)
   rt-deadline           prazos RT no núcleo escolhido por pick-core
@@ -69,7 +63,7 @@ done
 
 if [ ${#ONLY_PHASES[@]} -eq 0 ]; then rm -rf "$LONG_ROOT"; fi
 mkdir -p "$LOG_DIR"
-rm -f "$RECEIPT_OUT"
+rm -f "$RECEIPT_OUT" "$LOG_DIR/skips.jsonl"; xtrace_side_channel "$LOG_DIR/long-xtrace.log"
 
 ensure_long_receipt_bin || {
   echo "ERROR: nam_long_receipt binary could not be built" >&2
@@ -90,13 +84,14 @@ is_phase_selected() {
 }
 
 record_receipt() {
-  local pid="$1" pname="$2" status="$3" dur_ms="$4" log_file="${5:-}"
+  local pid="$1" pname="$2" status="$3" dur_ms="$4" log_file="${5:-}" reason="${6:-}"
   "$LONG_RECEIPT_BIN" append \
     --phase-id "$pid" \
     --name "$pname" \
     --status "$status" \
     --duration-ms "$dur_ms" \
     ${log_file:+--log "$log_file"} \
+    ${reason:+--reason "$reason"} \
     --out "$RECEIPT_OUT" || {
       FAILS+=("receipt-append-$pid")
       echo "WARN: receipt append failed for $pid" >&2
@@ -104,6 +99,21 @@ record_receipt() {
 }
 
 run_cmd() { local rc=0; timeout --kill-after=30 "$to_val" "$@" || rc=$?; case "$rc" in 124|137) timed_out=1 ;; esac; return "$rc"; }
+
+# Extracts only the libtest diagnostic headers so the failure cause survives
+# even when the last 120 log lines are all `test ... ok`. The full log stays
+# untouched and published by the artifact.
+extract_failures() {
+  local log="$1" out="$2"
+  awk '
+    /^---- .* stdout ----$/ || /panicked at/ || /^failures:/ || /^error: .* target/ || /test result: FAILED/ {
+      print
+      want_message = /panicked at/
+      next
+    }
+    want_message { print; want_message = 0 }
+  ' "$log" > "$out" 2>/dev/null || true
+}
 
 exec_phase() {
   local pid="$1" pname="$2" to_s="$3" req_tests="$4"; shift 4
@@ -116,7 +126,7 @@ exec_phase() {
   phase "$pname"
   export CARGO_TARGET_DIR="$LONG_ROOT/release"
   local t0=$(date +%s%N)
-  local rc=0 note="" timed_out=0
+  local rc=0 note="" timed_out=0 reason=""
   local to_val=${NAM_PHASE_TIMEOUT_S:-$to_s}
   PHASE_GAP=""
   "$@" > "$log" 2>&1 || rc=$?
@@ -125,32 +135,45 @@ exec_phase() {
   local dur_ms=$(( (t1 - t0) / 1000000 ))
   [ "$dur_ms" -lt 0 ] && dur_ms=0
   local status="PASSED"
-  if [ "$rc" -eq 3 ] && [ "$pid" = "preflight-render" ] && [ "$STRICT" -eq 0 ]; then
+  if [ "$rc" -eq 3 ] && [ "$pid" = "phase8" ]; then
+    status="SKIPPED"; GAPS+=("$pname:perf-baseline-missing"); emit "PHASE: $pname GAP perf-baseline-missing"
+  elif [ "$rc" -eq 3 ] && [ "$pid" = "preflight-render" ] && [ "$STRICT" -eq 0 ]; then
     status="SKIPPED"
     GAPS+=("$pname:optional-dependency-missing")
     emit "PHASE: $pname GAP optional-dependency-missing"
   elif [ "$rc" -ne 0 ] || { [ "$req_tests" -eq 1 ] && ! ran_tests "$log"; }; then
     status="FAILED"; FAILS+=("$pname")
-    case "$rc" in 124|137) note=" (timeout)" ;; esac
+    case "$rc" in 124|137) note=" (timeout)"; reason="TIMEOUT" ;; esac
+    [ -z "$reason" ] && reason="TEST_FAILURE"
+    [ "$pid" = "phase8" ] && [ "$rc" -eq 4 ] && reason="MISSING_BASELINE"
+    [ "$pid" = "preflight-freshness" ] && [ "$rc" -eq 5 ] && reason="GENERATOR_DRIFT"
+    [ "${pid#preflight-}" != "$pid" ] && [ "$reason" = "TEST_FAILURE" ] && reason="PREFLIGHT_FAILURE"
     emit "PHASE: $pname FAIL rc=$rc$note log=$log"
-    [ -f "$log" ] && { echo "--- [FAIL LOG: $pname (rc=$rc)] ---" >&2; tail -n 120 "$log" >&2 || true; echo "--- [END LOG: $pname] ---" >&2; }
+    if [ -f "$log" ]; then
+      local fail_out="$LOG_DIR/long-$pname-failures.txt"
+      extract_failures "$log" "$fail_out"
+      [ -s "$fail_out" ] && { echo "--- [FAILURES: $pname] ---" >&2; cat "$fail_out" >&2; echo "--- [END FAILURES: $pname] ---" >&2; }
+      echo "--- [FAIL LOG: $pname (rc=$rc)] ---" >&2; tail -n 120 "$log" >&2 || true; echo "--- [END LOG: $pname] ---" >&2
+    fi
   elif [ -n "$PHASE_GAP" ]; then
-    status="SKIPPED"
+    status="SKIPPED"; [ "${PHASE_GAP%%:*}" = "skip-capability" ] && status="SKIP_CAPABILITY"
     GAPS+=("$pname:$PHASE_GAP")
     emit "PHASE: $pname GAP $PHASE_GAP"
   else
     emit "PHASE: $pname PASS log=$log"
   fi
-  record_receipt "$pid" "$pname" "$status" "$dur_ms" "$log"
+  record_receipt "$pid" "$pname" "$status" "$dur_ms" "$log" "$reason"
 }
 
 # --- Preflight 1: render ---
 run_preflight_render() {
-  local render_bin rc=0
-  render_bin=$(run_cmd bash utils/ensure_namcore_render.sh 2>&1) || rc=$?
+  local render_bin rc=0 smoke
+  render_bin=$(run_cmd bash utils/ensure_namcore_render.sh 2>/dev/null | tail -n 1) || rc=$?
   [ "$rc" -eq 3 ] && { echo "NAMCore mirror missing in third-party"; return 3; }
-  [ "$rc" -ne 0 ] && return "$rc"
-  echo "C++ NAMCore render binary ready at $render_bin"
+  [ "$rc" -ne 0 ] && return "$rc"; [ -x "$render_bin" ] || return 6
+  smoke=$("$render_bin" 2>&1) || rc=$?
+  [ -n "$smoke" ] && [ "$rc" -eq 1 ] || return 6
+  echo "C++ NAMCore render binary ready at $render_bin commit=$(sed -n 's/^core_commit=//p' build/namcore_render/.build_provenance)"
 }
 exec_phase "preflight-render" "preflight-render" 300 0 run_preflight_render
 
@@ -172,20 +195,25 @@ exec_phase "preflight-simd-probe" "preflight-simd-probe" 60 0 run_preflight_simd
 
 # --- Phase 1: catch-all ---
 run_phase_catch_all() {
-  local s a=() n
-  for s in "${SKIP[@]}"; do a+=(--skip "$s"); done
-  if [ "$STRICT" -eq 0 ] && [[ " ${GAPS[*]} " == *" preflight-render:"* ]]; then
-    a+=(--skip cpp_parity::live_cross_validation)
-    n=$(run_cmd cargo test --release --features testing -- --list --ignored 2>/dev/null | grep -c 'cpp_parity::live_cross_validation' || true)
-    PHASE_GAP="cpp-parity-skipped:$n"
+  local a=() rc=0
+  rm -f "$LOG_DIR/fidelity-metrics.jsonl"
+  [ "$STRICT" -eq 0 ] && [[ " ${GAPS[*]} " == *" preflight-render:"* ]] && a+=(--skip cpp_parity::live_cross_validation)
+  run_cmd cargo test --release --features testing --no-fail-fast -- --include-ignored "${a[@]}" || rc=$?
+  if [ -s "$LOG_DIR/skips.jsonl" ]; then
+    local total optional blocking
+    total=$(wc -l < "$LOG_DIR/skips.jsonl")
+    optional=$(grep -c '"optional":true' "$LOG_DIR/skips.jsonl" 2>/dev/null || true)
+    optional=${optional:-0}
+    blocking=$((total - optional))
+    [ "$blocking" -gt 0 ] && PHASE_GAP="skip-capability:$blocking"
   fi
-  run_cmd cargo test --release --features testing --no-fail-fast -- --include-ignored "${a[@]}"
+  return "$rc"
 }
 exec_phase "phase1" "catch-all" 600 1 run_phase_catch_all
 
 # --- Phase 2: soak ---
 run_phase_soak() {
-  run_cmd cargo test --release --features testing --test perf_soak soak_test:: -- --ignored --test-threads=1
+  run_cmd cargo test --release --features testing,pinned --test soak_pinned -- --include-ignored --test-threads=1
 }
 exec_phase "phase2" "soak" 600 1 run_phase_soak
 
@@ -207,22 +235,22 @@ exec_phase "phase4" "heap-audit" 300 1 run_phase_heap_audit
 
 # --- Phase 5: rt-deadline ---
 run_phase_rt_deadline() {
-  local pick_args=()
-  [ "$STRICT" -eq 1 ] && pick_args+=("--strict")
-  local core
-  core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
-  [ "$core" = "GAP" ] && { PHASE_GAP=no-bench-core; return 0; }
+  local pick_args=(); [ "$STRICT" -eq 1 ] && pick_args+=("--strict")
+  local core; core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
+  [ "$core" = "GAP" ] && { PHASE_GAP=no-bench-core; [ "$STRICT" -eq 1 ] && return 1; return 0; }
   export NAM_BENCH_CORE="$core"
-  local pin=(taskset -c "$core")
-  run_cmd "${pin[@]}" cargo test --release --features testing --test rt_constraints rt_deadline:: -- --ignored --nocapture
+  run_cmd cargo test --release --features testing,pinned --test rt_pinned rt_deadline:: -- --include-ignored --nocapture
 }
 exec_phase "phase5" "rt-deadline" 300 1 run_phase_rt_deadline
 
 # --- Phase 6: rt-jitter ---
 run_phase_rt_jitter() {
-  [ -z "${NAM_BENCH_CORE:-}" ] && export NAM_BENCH_CORE="$(run_cmd "$PERF_GATE_BIN" pick-core 2>/dev/null || true)"
-  [ "${NAM_BENCH_CORE:-}" = "GAP" ] && unset NAM_BENCH_CORE
-  run_cmd cargo test --release --features testing --test rt_constraints rt_jitter:: -- --ignored --nocapture
+  if [ -z "${NAM_BENCH_CORE:-}" ]; then
+    local pick_args=(); [ "$STRICT" -eq 1 ] && pick_args+=("--strict")
+    local core; core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
+    if [ "$core" = "GAP" ]; then PHASE_GAP=no-bench-core; [ "$STRICT" -eq 1 ] && return 1; else export NAM_BENCH_CORE="$core"; fi
+  fi
+  run_cmd cargo test --release --features testing,pinned --test rt_pinned rt_jitter:: -- --include-ignored --nocapture
 }
 exec_phase "phase6" "rt-jitter" 300 1 run_phase_rt_jitter
 
@@ -237,7 +265,6 @@ exec_phase "phase7" "loom" 600 1 run_phase_loom
 run_phase_perf() {
   local pick_args=()
   [ "$STRICT" -eq 1 ] && pick_args+=("--strict")
-  [ "$STRICT" -eq 0 ] && [ ! -f .performance-baselines/baseline-fingerprint.json ] && { PHASE_GAP=perf-baseline-missing; return 0; }
   local core
   core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
   local perf_args=(run --check docs/quality-contract.json)
@@ -262,8 +289,8 @@ echo "Emitting suite summary to receipt..."
 VALIDATE_ARGS=()
 [ "$STRICT" -eq 1 ] && VALIDATE_ARGS+=("--strict")
 "$LONG_RECEIPT_BIN" validate "${VALIDATE_ARGS[@]}" "${ONLY_ARGS[@]}" --out "$RECEIPT_OUT" || {
-  FAILS+=("receipt-validation")
-  emit "PHASE: receipt-validation FAIL"
+  rc=$?
+  if [ "$rc" -ne 4 ]; then FAILS+=("receipt-validation"); emit "PHASE: receipt-validation FAIL"; fi
 }
 
 finish

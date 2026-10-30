@@ -181,11 +181,24 @@ impl WaveNetA2Dyn {
         let dest_frames = dest.len() / cond_size;
         let src_frames = cond_buf.len() / cond_size;
         let nf_copied = nf.min(dest_frames).min(src_frames);
-        if nf_copied > 0 {
+        if nf_copied == nf {
             let n = nf_copied * cond_size;
             // When `condition_dsp` is present the caller passes the engine's own
             // `condition_dsp_output` as `cond_buf` — a self-copy. Skip it to
             // avoid overlapping `copy_from_slice` (UB contract violation).
+            if !core::ptr::eq(cond_buf.as_ptr(), dest.as_ptr()) {
+                dest[0..n].copy_from_slice(&cond_buf[0..n]);
+            }
+        } else if cond_size > 1 && cond_buf.len() >= nf && dest_frames >= nf {
+            // Mono input broadcast across all condition channels when condition_dsp is absent (R-18).
+            for f in 0..nf {
+                let val = cond_buf[f];
+                for c in 0..cond_size {
+                    dest[f * cond_size + c] = val;
+                }
+            }
+        } else if nf_copied > 0 {
+            let n = nf_copied * cond_size;
             if !core::ptr::eq(cond_buf.as_ptr(), dest.as_ptr()) {
                 dest[0..n].copy_from_slice(&cond_buf[0..n]);
             }

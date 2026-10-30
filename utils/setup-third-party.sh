@@ -25,6 +25,11 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 # Overrides: NAM_COMMUNITY_MODELS_SRC (absolute path to link as community_models).
 
 set -euo pipefail
+case "$#:${1:-}" in
+    0:) ;;
+    1:-h|1:--help) echo "Usage: utils/setup-third-party.sh"; exit 0 ;;
+    *) echo "Usage: utils/setup-third-party.sh" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
@@ -127,3 +132,4 @@ else
 fi
 
 ok "third-party environment ready under: $THIRD_PARTY_DIR"
+echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"

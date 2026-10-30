@@ -32,7 +32,12 @@
 //! - 0: success;
 //! - 1: run-time failure (missing/incomparable baseline, coverage gap,
 //!   machine regression / blind verdict, I/O);
-//! - 2: usage error (unknown subcommand/flag, malformed argument).
+//! - 2: usage error (unknown subcommand/flag, malformed argument);
+//! - 3: `pick-core --require-isolated` found no online isolated CPU (`GAP`),
+//!   or `run --check` found no performance baseline outside `--strict`
+//!   (`GAP perf-baseline-missing`);
+//! - 4: `run --check --strict` found no performance baseline (`FAIL`, typed
+//!   reason `MISSING_BASELINE`).
 
 use std::collections::HashMap;
 use std::env;
@@ -55,7 +60,9 @@ use neural_amp_modeler_rs::testing::qa::coverage::{
 };
 use neural_amp_modeler_rs::testing::qa::fingerprint::Fingerprint;
 use neural_amp_modeler_rs::testing::qa::fingerprint::FingerprintError;
-use neural_amp_modeler_rs::testing::qa::pick_core::resolve_bench_core;
+use neural_amp_modeler_rs::testing::qa::pick_core::{
+    DEFAULT_SYSFS_CPU_DIR, is_cpu_online, parse_cpu_list, resolve_bench_core,
+};
 use neural_amp_modeler_rs::testing::qa::verdict::{
     DEFAULT_NOISE_THRESHOLD, VerdictBlind, VerdictFinding, VerdictOptions,
     regression_verdict_with_options,
@@ -65,6 +72,16 @@ use neural_amp_modeler_rs::testing::qa::verdict::{
 const DEFAULT_BASELINE_DIR: &str = ".performance-baselines";
 /// Criterion transient working area.
 const DEFAULT_CRITERION_ROOT: &str = "target/criterion";
+
+fn default_criterion_root() -> String {
+    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
+        let trimmed = target_dir.trim();
+        if !trimmed.is_empty() {
+            return format!("{trimmed}/criterion");
+        }
+    }
+    DEFAULT_CRITERION_ROOT.to_string()
+}
 /// Regression phase receipt (bash `REGRESSION_RECEIPT`).
 const DEFAULT_RECEIPT: &str = "target/logs/regression_phase_receipt.jsonl";
 
@@ -121,7 +138,9 @@ fn print_help() {
     println!("orchestrates taskset/cargo bench and calls this binary.");
     println!();
     println!("Usage:");
-    println!("  nam_perf_gate pick-core [--bench-core <core>] [--sysfs <dir>] [--strict]");
+    println!(
+        "  nam_perf_gate pick-core [--bench-core <core>] [--sysfs <dir>] [--strict] [--require-isolated]"
+    );
     println!("  nam_perf_gate run [--check | --bootstrap-baseline] [--baseline <name>]");
     println!("                    [--baseline-dir <dir>] [--criterion-root <dir>]");
     println!("                    [--bench-core <core>] [--sysfs <dir>] [--suite <name>]");
@@ -169,7 +188,8 @@ fn print_help() {
     println!();
     println!("Exit codes: 0 success, 1 run-time failure / regression detected,");
     println!("2 usage error or unstable baseline (with --strict-stability),");
-    println!("3 blind verdict (missing log or estimates).");
+    println!("3 GAP (blind verdict, no isolated CPU, or missing baseline without");
+    println!("--strict), 4 FAIL with reason MISSING_BASELINE (run --check --strict).");
 }
 
 // ── Strict flag parsing (fail-closed: unknown flag ⇒ exit 2) ─────────────────
@@ -424,8 +444,8 @@ fn cmd_coverage(args: &[String]) {
     };
     let criterion_root = flags
         .get("root")
-        .unwrap_or(DEFAULT_CRITERION_ROOT)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(default_criterion_root);
     let name = baseline_name(&flags);
 
     // An absent/unreadable log maps to empty text — the same blind gate as
@@ -585,8 +605,8 @@ fn cmd_verdict(args: &[String]) {
     };
     let criterion_root = flags
         .get("root")
-        .unwrap_or(DEFAULT_CRITERION_ROOT)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(default_criterion_root);
     let noise = parse_noise(&flags, "noise", "verdict");
     let strict_stability = flags.get_bool("strict-stability");
     let check_stability = strict_stability || flags.get_bool("check-stability");
@@ -902,8 +922,8 @@ fn cmd_persist_baseline(args: &[String]) {
         .to_string();
     let criterion_root = flags
         .get("criterion-root")
-        .unwrap_or(DEFAULT_CRITERION_ROOT)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(default_criterion_root);
     let name = baseline_name(&flags);
 
     match persist_baseline(Path::new(&baseline_dir), Path::new(&criterion_root), &name) {
@@ -933,8 +953,8 @@ fn cmd_restore_baseline(args: &[String]) {
         .to_string();
     let criterion_root = flags
         .get("criterion-root")
-        .unwrap_or(DEFAULT_CRITERION_ROOT)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(default_criterion_root);
     let name = baseline_name(&flags);
 
     match restore_baseline(Path::new(&baseline_dir), Path::new(&criterion_root), &name) {
@@ -1435,11 +1455,15 @@ fn run_benchmark_process(
 // ── pick-core ────────────────────────────────────────────────────────────────
 
 fn cmd_pick_core(args: &[String]) {
-    let flags = match parse_flags_full(args, &["bench-core", "sysfs"], &["strict"]) {
+    let flags = match parse_flags_full(
+        args,
+        &["bench-core", "sysfs"],
+        &["strict", "require-isolated"],
+    ) {
         Ok(f) => f,
         Err(e) if e == HELP_REQUEST => {
             println!(
-                "Usage: nam_perf_gate pick-core [--bench-core <core>] [--sysfs <dir>] [--strict]"
+                "Usage: nam_perf_gate pick-core [--bench-core <core>] [--sysfs <dir>] [--strict] [--require-isolated]"
             );
             exit(0);
         }
@@ -1450,6 +1474,48 @@ fn cmd_pick_core(args: &[String]) {
     let env_core = env::var("NAM_BENCH_CORE").ok();
     let explicit_str = explicit_flag.or(env_core.as_deref());
     let sysfs = flags.get("sysfs").map(Path::new);
+
+    if flags.get_bool("require-isolated") {
+        let base = sysfs.unwrap_or_else(|| Path::new(DEFAULT_SYSFS_CPU_DIR));
+        let isolated = fs::read_to_string(base.join("isolated")).unwrap_or_default();
+        let candidates = parse_cpu_list(&isolated);
+        let host = Path::new(DEFAULT_SYSFS_CPU_DIR);
+        let online = |core: u32| {
+            let idx = core as usize;
+            if base.join(format!("cpu{idx}")).is_dir() {
+                is_cpu_online(base, idx)
+            } else {
+                is_cpu_online(host, idx)
+            }
+        };
+        let explicit = explicit_str.and_then(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed == "auto" {
+                None
+            } else {
+                trimmed.parse::<u32>().ok()
+            }
+        });
+        let selected = match explicit {
+            Some(core) => (candidates.contains(&(core as usize)) && online(core)).then_some(core),
+            None => candidates
+                .into_iter()
+                .find(|core| online(*core as u32))
+                .map(|core| core as u32),
+        };
+        match selected {
+            Some(core) => {
+                println!("{core}");
+                exit(0);
+            }
+            None => {
+                println!("GAP");
+                eprintln!("pick-core: no online isolated bench core found (--require-isolated)");
+                exit(3);
+            }
+        }
+    }
+
     let resolved = resolve_bench_core(explicit_str, sysfs);
 
     match resolved {
@@ -1529,8 +1595,8 @@ fn cmd_run(args: &[String]) {
         });
     let criterion_root = flags
         .get("criterion-root")
-        .unwrap_or(DEFAULT_CRITERION_ROOT)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(default_criterion_root);
     let suite = flags.get("suite").unwrap_or("regression_gate").to_string();
     let manifest = flags.get("manifest").map(str::to_string);
     let receipt_path = flags.get("receipt").unwrap_or(DEFAULT_RECEIPT).to_string();
@@ -1577,6 +1643,30 @@ fn cmd_run(args: &[String]) {
         .get("fingerprint")
         .map(String::from)
         .unwrap_or_else(|| format!("{baseline_dir}/baseline-fingerprint.json"));
+
+    // Baseline presence is a state decision (A2): decide it here, before the
+    // benchmark pre-compilation (L-06). A missing baseline is a GAP in
+    // non-strict mode (exit 3) and a typed FAIL in strict mode (exit 4),
+    // never a performance regression.
+    if !mode_bootstrap && !Path::new(&fingerprint_path).is_file() {
+        println!("MISSING_BASELINE no baseline fingerprint at {fingerprint_path}");
+        println!("Re-bootstrap the baseline with `--bootstrap-baseline` (human operation).");
+        if is_strict {
+            let _ = append_phase_receipt(
+                &receipt_path,
+                "regression_check",
+                "FAIL",
+                4,
+                0,
+                1,
+                "MISSING_BASELINE",
+                &run_id,
+            );
+            exit(4);
+        }
+        println!("GAP perf-baseline-missing (non-strict mode)");
+        exit(3);
+    }
 
     let bench_exe: Option<PathBuf> = if let Some(exe) = flags.get("bench-exe") {
         let p = PathBuf::from(exe);
@@ -1698,17 +1788,20 @@ fn cmd_run(args: &[String]) {
         Err(FingerprintError::MissingBaseline) => {
             println!("MISSING_BASELINE no baseline fingerprint at {fingerprint_path}");
             println!("Re-bootstrap the baseline with `--bootstrap-baseline` (human operation).");
-            let _ = append_phase_receipt(
-                &receipt_path,
-                "regression_check",
-                "FAIL",
-                1,
-                0,
-                1,
-                "MISSING_BASELINE",
-                &run_id,
-            );
-            exit(1);
+            if is_strict {
+                let _ = append_phase_receipt(
+                    &receipt_path,
+                    "regression_check",
+                    "FAIL",
+                    4,
+                    0,
+                    1,
+                    "MISSING_BASELINE",
+                    &run_id,
+                );
+                exit(4);
+            }
+            exit(3);
         }
         Err(e) => {
             eprintln!("cannot read baseline fingerprint {fingerprint_path}: {e}");

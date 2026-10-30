@@ -596,7 +596,7 @@ To evaluate prospective SIMD extensions or verify cross-ISA parity on remote mac
    ./utils/remote-simd-gate.sh --sde
    ```
 
-3. **Audit Receipt:** Running the suite generates `target/logs/remote-simd-receipt.json`, recording machine provenance, sample distributions, and two-tailed Welch t-test results.
+3. **Audit Receipt:** Native runs without `--skip-bench` generate `target/logs/remote-simd-receipt.jsonl`, recording machine provenance and statistical results. SDE runs do not generate a benchmark receipt; the script does not currently enforce the receipt verdict.
 
 ---
 

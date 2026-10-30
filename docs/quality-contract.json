@@ -8,6 +8,7 @@
     "run_id": "1792002753056508658-12386",
     "effective_isa": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
     "cpu_model": "AMD Ryzen 7 5700U with Radeon Graphics",
+    "hardware_class": "x86_zen3_laptop",
     "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
     "cargo_profile": "release"
   },

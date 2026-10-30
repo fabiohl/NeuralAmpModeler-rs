@@ -53,6 +53,8 @@ pub const FIELD_BUILD_PROFILE: &str = "build_profile";
 pub const FIELD_FREQUENCY_GOVERNOR: &str = "frequency_governor";
 /// Reason field of the bench core comparison (`bench_core`).
 pub const FIELD_BENCH_CORE: &str = "bench_core";
+/// Reason field of the hardware class comparison (`hardware_class`, R-12, R-23, S6-T03).
+pub const FIELD_HARDWARE_CLASS: &str = "hardware_class";
 /// Audit field for git working directory dirty state (`git_dirty`).
 pub const FIELD_GIT_DIRTY: &str = "git_dirty";
 /// Audit field for Cargo.lock digest (`cargo_lock_sha256`).
@@ -110,6 +112,9 @@ pub struct Fingerprint {
     /// SHA-256 digest of `Cargo.lock` if present at probe time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo_lock_sha256: Option<String>,
+    /// Hardware class for baseline comparability (R-12, R-23, S6-T03).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware_class: Option<String>,
 }
 
 /// Typed failure of fingerprint I/O and comparison.
@@ -158,6 +163,7 @@ impl Fingerprint {
             bench_core: bench_core.to_string(),
             git_dirty: Some(probe.git_dirty),
             cargo_lock_sha256: compute_cargo_lock_sha256(),
+            hardware_class: Some(probe.hardware_class.as_str().to_string()),
         }
     }
 
@@ -299,6 +305,16 @@ impl Fingerprint {
                 current: self.physical_cores.to_string(),
             });
         }
+        if let (Some(baseline_hw), Some(current_hw)) =
+            (&baseline.hardware_class, &self.hardware_class)
+            && baseline_hw != current_hw
+        {
+            return Err(FingerprintError::IncomparableEnvironment {
+                field: FIELD_HARDWARE_CLASS,
+                baseline: baseline_hw.clone(),
+                current: current_hw.clone(),
+            });
+        }
         if let (Some(b), Some(c)) = (baseline.git_dirty, self.git_dirty)
             && b != c
         {
@@ -320,3 +336,7 @@ impl Fingerprint {
         self.compare(&baseline)
     }
 }
+
+#[cfg(test)]
+#[path = "fingerprint_test.rs"]
+mod tests;

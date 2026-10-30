@@ -6,6 +6,11 @@
 # Orçamento: 100
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+case "$#:${1:-}" in
+    0:) ;;
+    1:-h|1:--help) echo "Usage: utils/miri-audit.sh"; exit 0 ;;
+    *) echo "Usage: utils/miri-audit.sh" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
@@ -68,3 +73,4 @@ run_target "dsp::utils::delay_line" "dsp::utils::delay_line"    16
 echo ""
 ok "Miri concurrency and aliasing audit completed successfully (all targets green)."
 echo "  Full log: ${MIRI_LOG}"
+echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"

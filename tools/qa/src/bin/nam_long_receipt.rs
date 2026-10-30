@@ -24,17 +24,19 @@
 //! - 0: success.
 //! - 1: I/O or validation error (receipt file missing/corrupt, write failure).
 //! - 2: usage error (unknown subcommand/flag, malformed argument).
+//! - 4: `validate` only — receipt is valid but the audit verdict is FAILED.
 
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::exit;
+use std::process::{Command, exit};
 use std::str::FromStr;
 
 use neural_amp_modeler_rs::testing::receipt::{
-    CANONICAL_ROSTER, LongAuditReceipt, LongPhaseReceipt, LongPhaseStatus, PREFLIGHT_PHASE_IDS,
-    count_tests_executed_from_log, detect_gap_markers, is_preflight_id, now_iso8601,
+    CANONICAL_ROSTER, LongAuditReceipt, LongPhaseReceipt, LongPhaseStatus, LongReason,
+    PREFLIGHT_PHASE_IDS, count_tests_executed_from_log, detect_gap_markers, is_preflight_id,
+    now_iso8601,
 };
 
 const DEFAULT_OUT: &str = "target/logs/long-audit-receipt.jsonl";
@@ -70,7 +72,7 @@ fn print_help() {
     println!("                        --duration-ms <ms> [--tests-executed <n>] [--log <path>]");
     println!("                        [--gaps <a,b,...>] [--out <file>]");
     println!("                        [--oracle-sha256 <hex>] [--fixture-sha256 <hex>]");
-    println!("                        [--artifact-sha256 <hex>]");
+    println!("                        [--artifact-sha256 <hex>] [--reason <REASON>]");
     println!("  nam_long_receipt summary [--out <file>] [--only <a,b,...>]");
     println!("  nam_long_receipt validate [--out <file>] [--strict] [--only <a,b,...>]");
     println!("  nam_long_receipt count-log --log <path>");
@@ -81,6 +83,9 @@ fn print_help() {
     println!(
         "Canonical preflight ids: {}",
         PREFLIGHT_PHASE_IDS.join(", ")
+    );
+    println!(
+        "Reasons: GENERATOR_DRIFT, MISSING_BASELINE, TEST_FAILURE, TIMEOUT, PREFLIGHT_FAILURE"
     );
     println!("Default output file: {DEFAULT_OUT}");
     println!(
@@ -176,6 +181,7 @@ fn cmd_append(args: &[String]) {
     };
 
     let mut gaps: Vec<String> = Vec::new();
+    let mut optional_gaps: Vec<String> = Vec::new();
     if let Some(list) = flags.get("gaps") {
         for g in list.split(',') {
             let g = g.trim();
@@ -189,12 +195,32 @@ fn cmd_append(args: &[String]) {
     }
     if let Some(path) = log_path.as_deref() {
         for marker in detect_gap_markers(path) {
-            if !gaps.contains(&marker) {
-                gaps.push(marker);
+            let is_optional = marker == "skip_optional" || marker.starts_with("skip_optional:");
+            let target = if is_optional {
+                &mut optional_gaps
+            } else {
+                &mut gaps
+            };
+            if !target.contains(&marker) {
+                target.push(marker);
             }
         }
     }
 
+    let reason = match flags.get("reason") {
+        Some(value) => match LongReason::from_str(value) {
+            Ok(r) => Some(r),
+            Err(e) => die_usage("append", &e),
+        },
+        None => None,
+    };
+
+    let (git_sha, git_dirty) = git_provenance();
+    let (oracle_core_commit, oracle_compiler) = if phase_id == "preflight-render" {
+        render_oracle_provenance()
+    } else {
+        (None, None)
+    };
     let receipt = LongPhaseReceipt {
         phase_id,
         name,
@@ -202,10 +228,17 @@ fn cmd_append(args: &[String]) {
         duration_ms,
         tests_executed,
         gaps,
+        optional_gaps,
         timestamp: now_iso8601(),
         oracle_sha256: flags.get("oracle-sha256").cloned(),
+        oracle_core_commit,
+        oracle_compiler,
         fixture_sha256: flags.get("fixture-sha256").cloned(),
         artifact_sha256: flags.get("artifact-sha256").cloned(),
+        run_id: env::var("NAM_RUN_ID").ok().filter(|v| !v.is_empty()),
+        git_sha,
+        git_dirty,
+        reason,
     };
 
     if let Err(e) = append_line(&out, &receipt.render_jsonl_line()) {
@@ -335,6 +368,62 @@ fn cmd_validate(args: &[String]) {
     println!("{summary}");
 
     if strict {
+        // Every FAILED line must name its typed root cause; a bare FAILED makes
+        // the audit unreproducible for the operator.
+        let missing: Vec<&str> = audit
+            .phase_entries()
+            .filter(|p| p.status == LongPhaseStatus::Failed && p.reason.is_none())
+            .map(|p| p.phase_id.as_str())
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "STRICT: FAIL — FAILED phase(s) without reason: {}",
+                missing.join(", ")
+            );
+            exit(1);
+        }
+        // Provenance is part of the certification claim: every phase line must
+        // carry run_id/git_sha/git_dirty, come from a clean tree and share the
+        // same run and commit.
+        let mut run_id: Option<&str> = None;
+        let mut git_sha: Option<&str> = None;
+        for p in audit.phase_entries() {
+            let (Some(run), Some(sha), Some(dirty)) =
+                (p.run_id.as_deref(), p.git_sha.as_deref(), p.git_dirty)
+            else {
+                eprintln!(
+                    "STRICT: FAIL — phase '{}' lacks provenance (run_id/git_sha/git_dirty)",
+                    p.phase_id
+                );
+                exit(1);
+            };
+            if dirty {
+                eprintln!(
+                    "STRICT: FAIL — phase '{}' was emitted from a dirty tree",
+                    p.phase_id
+                );
+                exit(1);
+            }
+            if *run_id.get_or_insert(run) != run || *git_sha.get_or_insert(sha) != sha {
+                eprintln!("STRICT: FAIL — mixed run/commit provenance across receipt lines");
+                exit(1);
+            }
+        }
+    }
+
+    // A structurally valid receipt whose audit verdict is FAILED is still a
+    // rejected audit: report it with the typed code 4 (1 stays reserved for a
+    // corrupt/invalid receipt). The runner already has the root causes.
+    if audit
+        .phases
+        .last()
+        .is_some_and(|p| p.status == LongPhaseStatus::Failed)
+    {
+        eprintln!("validate: valid receipt, but overall audit FAILED (audit rejected)");
+        exit(4);
+    }
+
+    if strict {
         // Fail-closed strict-pre-release — any declared gap (or failure)
         // rejects the receipt with a non-zero exit code.
         match audit.campaign_strict_verdict_with_only(&CANONICAL_ROSTER, only_list.as_deref()) {
@@ -365,6 +454,50 @@ fn cmd_count_log(args: &[String]) {
     };
     println!("{}", count_tests_executed_from_log(&log));
     exit(0);
+}
+
+/// C++ oracle provenance recorded by `utils/ensure_namcore_render.sh` in
+/// `build/namcore_render/.build_provenance`. Read here so the shell runner
+/// stays a thin orchestrator and the receipt owns the structured capture.
+fn render_oracle_provenance() -> (Option<String>, Option<String>) {
+    let path = Path::new("build/namcore_render/.build_provenance");
+    let Ok(text) = fs::read_to_string(path) else {
+        return (None, None);
+    };
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key).map(str::trim))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    (
+        field("core_commit="),
+        field("compiler=").map(|c| {
+            let version = field("compiler_version=").unwrap_or_default();
+            if version.is_empty() {
+                c
+            } else {
+                format!("{c}: {version}")
+            }
+        }),
+    )
+}
+
+fn git_provenance() -> (Option<String>, Option<bool>) {
+    let sha = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| !o.stdout.is_empty());
+    (sha, dirty)
 }
 
 fn append_line(out: &str, line: &str) -> std::io::Result<()> {

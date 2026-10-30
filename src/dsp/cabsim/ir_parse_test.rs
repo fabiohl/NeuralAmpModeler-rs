@@ -92,3 +92,120 @@ fn scan_cap_boundary_exact() {
     let err = parse_wav(&at_cap).expect_err("scan cap must abort before data");
     assert!(err.to_string().contains("not found"), "unexpected: {err}");
 }
+
+#[test]
+fn parse_wav_rejects_sub_12_bytes_without_panic() {
+    // R-17: 0 to 11 bytes must return typed InvalidData without panicking on header slice indexing.
+    let full = build_synthetic_wav(0);
+    for len in 0..12 {
+        let truncated = &full[..len];
+        let res = parse_wav(truncated);
+        assert!(
+            res.is_err(),
+            "buffer of length {len} must be rejected, not parsed"
+        );
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidData,
+            "error kind must be InvalidData for length {len}"
+        );
+    }
+}
+
+#[test]
+fn parse_wav_rejects_truncated_headers() {
+    // R-17: headers truncated between 12 and WAV_HEADER_MIN (44 bytes) must return InvalidData.
+    let full = build_synthetic_wav(0);
+    for len in 12..WAV_HEADER_MIN {
+        let truncated = &full[..len];
+        let res = parse_wav(truncated);
+        assert!(
+            res.is_err(),
+            "truncated header of length {len} must be rejected"
+        );
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+}
+
+/// Mock reader that yields pre-configured chunks to simulate deterministic stream mutation.
+struct MockStream {
+    chunks: Vec<Vec<u8>>,
+    idx: usize,
+}
+
+impl std::io::Read for MockStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.idx >= self.chunks.len() {
+            return Ok(0);
+        }
+        let chunk = &self.chunks[self.idx];
+        self.idx += 1;
+        let to_copy = chunk.len().min(buf.len());
+        buf[..to_copy].copy_from_slice(&chunk[..to_copy]);
+        Ok(to_copy)
+    }
+}
+
+#[test]
+fn read_ir_reader_detects_controlled_stream_truncation() {
+    // R-17: hint specifies 1000 bytes, but reader truncates after 20 bytes (less than WAV_HEADER_MIN).
+    let mut stream = MockStream {
+        chunks: vec![vec![0u8; 20]],
+        idx: 0,
+    };
+    let res = read_ir_reader(&mut stream, Some(1000));
+    assert!(res.is_err(), "truncated stream must be rejected");
+    let err = res.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("too small"),
+        "error must report size shortfall: {err}"
+    );
+}
+
+/// Mock reader that yields an endless stream of bytes to verify bounded read behavior.
+struct EndlessStream {
+    remaining: usize,
+}
+
+impl std::io::Read for EndlessStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let to_fill = buf.len().min(self.remaining);
+        buf[..to_fill].fill(0x55);
+        self.remaining -= to_fill;
+        Ok(to_fill)
+    }
+}
+
+#[test]
+fn read_ir_reader_detects_oversized_stream() {
+    // R-17: stream exceeding MAX_IR_FILE_SIZE must abort with typed error, not allocate unbounded memory.
+    let mut stream = EndlessStream {
+        remaining: (MAX_IR_FILE_SIZE as usize) + 1024,
+    };
+    let res = read_ir_reader(&mut stream, Some(4096));
+    assert!(res.is_err(), "oversized stream must be rejected");
+    let err = res.unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("too large"),
+        "error must report oversized stream: {err}"
+    );
+}
+
+#[test]
+fn read_ir_reader_valid_wav_roundtrip() {
+    let wav = build_synthetic_wav(0);
+    let mut cursor = io::Cursor::new(&wav);
+    let read_bytes = read_ir_reader(&mut cursor, Some(wav.len()))
+        .expect("valid synthetic WAV must read successfully");
+    assert_eq!(read_bytes.len(), wav.len());
+    let (samples, rate) = parse_wav(&read_bytes).expect("valid WAV must parse");
+    assert_eq!(rate, 48000);
+    assert_eq!(samples.len(), 8);
+}

@@ -90,6 +90,9 @@ pub struct Provenance {
     pub rustc: String,
     /// Cargo profile used for the measurement (e.g. `release`).
     pub cargo_profile: String,
+    /// Hardware class for baseline comparability (R-12, R-23, S6-T03).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware_class: Option<String>,
 }
 
 /// Numeric acceptance envelopes applied by the verify engine.
@@ -297,6 +300,9 @@ pub mod phases;
 
 /// Contract verify engine — literal port of the bash `verify_contract`.
 pub mod verify;
+
+/// Bounded subprocess execution for dashboard phases (time-out kills the tree).
+pub mod command;
 
 /// Human-facing dashboard renderer — pure `QualityReport → String`
 /// (ANSI/plain), consumed by `nam_quality render` and the dashboard wrapper.

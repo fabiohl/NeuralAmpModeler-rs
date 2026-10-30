@@ -220,6 +220,192 @@ mod tests {
         assert!(!rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
     }
 
+    /// Buffer capacity guard (R-16): a host or consumer passing insufficient slice capacity
+    /// in `DspBuffers` (e.g. 64 input samples with a 1-sample output buffer) must not panic or
+    /// segfault, must return 0, must safely zero the buffer up to safe capacity, and must raise
+    /// `RT_STATUS_HOST_CONTRACT_VIOLATION`.
+    #[test]
+    fn short_dsp_buffers_resamp_out_returns_zero_and_raises_flag() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
+        let mut bridge = DspBridge::new_boxed();
+        let rt_status = RtStatusFlags::default();
+
+        let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
+        let mut short_resamp_out_l = vec![1.234f32; 1]; // 1-element slice as in finding R-16
+        let mut resamp_out_r = vec![0.0; MAX_RESAMP_BUF];
+        let mut model_out_l = [0.0; MAX_RESAMP_BUF];
+        let mut model_out_r = [0.0; MAX_RESAMP_BUF];
+
+        let gate_params = GateParams::default();
+        let mut silence_hysteresis = DynamicHysteresis::new();
+        let mut mono_hysteresis = DynamicHysteresis::new();
+        let mut process_mono = false;
+
+        let mut samples_l = vec![0.05f32; 64];
+        let mut samples_r = vec![0.05f32; 64];
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Off);
+
+        let mut os_engine_l = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+        let mut os_engine_r = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+
+        let ctx = DspPipelineContext {
+            resampler: &mut resampler,
+            os_l: &mut os_engine_l,
+            os_r: &mut os_engine_r,
+            active_model_l: &mut None,
+            active_model_r: &mut None,
+            input_gain_mult: 1.0,
+            output_gain_mult: 1.0,
+            gate_params: &gate_params,
+            silence_hysteresis: &mut silence_hysteresis,
+            mono_hysteresis: &mut mono_hysteresis,
+            threshold_open_sq: 0.0,
+            threshold_close_sq: 0.0,
+            process_mono: &mut process_mono,
+            rt_status: &rt_status,
+            adaptive: &mut adaptive,
+            // SAFETY: `bridge` is kept alive for the duration of this test and the raw pointer
+            // to the boxed bridge is valid and non-null.
+            bridge_writer: unsafe { Some(DspBridgeWriter::new(&raw mut *bridge)) },
+            conv: None,
+            conv_pair: None,
+        };
+
+        let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
+        let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
+        let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
+
+        let bufs = DspBuffers {
+            resamp_mid_l: &mut resamp_mid_l,
+            resamp_mid_r: &mut resamp_mid_r,
+            resamp_out_l: &mut short_resamp_out_l,
+            resamp_out_r: &mut resamp_out_r,
+            model_out_l: &mut model_out_l,
+            model_out_r: &mut model_out_r,
+            os_in_l: os_in_l_slice,
+            os_in_r: os_in_r_slice,
+            os_model_l: os_model_l_slice,
+            os_model_r: os_model_r_slice,
+            crossfade_scratch_l,
+            crossfade_scratch_r,
+        };
+
+        let n_processed =
+            capture_dsp_pipeline(&mut samples_l, &mut samples_r, 64, ctx, bufs, 48000);
+
+        assert_eq!(n_processed, 0, "insufficient output slice must return 0");
+        assert!(
+            rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION),
+            "insufficient output slice must raise HOST_CONTRACT_VIOLATION"
+        );
+        assert_eq!(
+            short_resamp_out_l[0], 0.0,
+            "safe portion of output must be zeroed"
+        );
+    }
+
+    /// Buffer capacity guard in `run_inference` (R-16): insufficient `model_out_l` must return 0
+    /// and raise `RT_STATUS_HOST_CONTRACT_VIOLATION` without panic.
+    #[test]
+    fn short_model_out_in_run_inference_returns_zero_and_raises_flag() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        let mut resampler = NamResampler::new_simple(48000, 48000).unwrap();
+        let rt_status = RtStatusFlags::default();
+
+        let mut resamp_mid_l = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_mid_r = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_out_l = vec![0.0; MAX_RESAMP_BUF];
+        let mut resamp_out_r = vec![0.0; MAX_RESAMP_BUF];
+        let mut short_model_out_l = [0.0; 1]; // insufficient: 1 < 64
+        let mut model_out_r = [0.0; MAX_RESAMP_BUF];
+
+        let gate_params = GateParams::default();
+        let mut silence_hysteresis = DynamicHysteresis::new();
+        let mut mono_hysteresis = DynamicHysteresis::new();
+        let mut process_mono = false;
+
+        let mut samples_l = vec![0.05f32; 64];
+        let mut samples_r = vec![0.05f32; 64];
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Off);
+
+        let mut os_engine_l = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+        let mut os_engine_r = OversampleEngine::new(OversampleFactor::Off, MAX_RESAMP_BUF).unwrap();
+
+        let mut ctx = DspPipelineContext {
+            resampler: &mut resampler,
+            os_l: &mut os_engine_l,
+            os_r: &mut os_engine_r,
+            active_model_l: &mut None,
+            active_model_r: &mut None,
+            input_gain_mult: 1.0,
+            output_gain_mult: 1.0,
+            gate_params: &gate_params,
+            silence_hysteresis: &mut silence_hysteresis,
+            mono_hysteresis: &mut mono_hysteresis,
+            threshold_open_sq: 0.0,
+            threshold_close_sq: 0.0,
+            process_mono: &mut process_mono,
+            rt_status: &rt_status,
+            adaptive: &mut adaptive,
+            bridge_writer: None,
+            conv: None,
+            conv_pair: None,
+        };
+
+        let mut os_buf: [f32; MAX_RESAMP_BUF * 6] = [0.0f32; MAX_RESAMP_BUF * 6];
+        let (os_in_l_slice, rest) = os_buf.split_at_mut(MAX_RESAMP_BUF);
+        let (os_in_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (os_model_l_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (os_model_r_slice, rest) = rest.split_at_mut(MAX_RESAMP_BUF);
+        let (crossfade_scratch_l, crossfade_scratch_r) = rest.split_at_mut(MAX_RESAMP_BUF);
+
+        let n = run_inference(
+            &mut samples_l,
+            &mut samples_r,
+            64,
+            &mut ctx,
+            &mut resamp_mid_l,
+            &mut resamp_mid_r,
+            &mut resamp_out_l,
+            &mut resamp_out_r,
+            &mut short_model_out_l,
+            &mut model_out_r,
+            os_in_l_slice,
+            os_in_r_slice,
+            os_model_l_slice,
+            os_model_r_slice,
+            crossfade_scratch_l,
+            crossfade_scratch_r,
+        );
+
+        assert_eq!(n, 0, "short model_out must return 0");
+        assert!(
+            rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION),
+            "short model_out must raise HOST_CONTRACT_VIOLATION"
+        );
+    }
+
+    /// Zero samples input in `capture_dsp_pipeline` must return 0 without panic.
+    #[test]
+    fn zero_samples_input_returns_zero() {
+        let input_l = vec![0.0f32; 0];
+        let input_r = vec![0.0f32; 0];
+        let rt_status = RtStatusFlags::default();
+
+        let (out_l, out_r) =
+            run_pipeline_test_with_status(48000, 48000, &input_l, &input_r, 0, false, &rt_status);
+
+        assert_eq!(out_l.len(), 0);
+        assert_eq!(out_r.len(), 0);
+    }
+
     /// The pipeline entry point must reassert FTZ (MXCSR bit 15)
     /// and DAZ (MXCSR bit 6) on the audio thread. The test clears both bits
     /// first, runs a full `capture_dsp_pipeline` call, then asserts the bits

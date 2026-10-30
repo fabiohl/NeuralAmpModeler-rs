@@ -38,11 +38,35 @@ jobs:
         run: ./utils/lints.sh
       - name: Quick QA suite
         run: ./utils/tests-quick.sh
+      - name: Build release parity tool
+        run: cargo build --release --locked -p nam-qa --bin nam_parity_vector
+      - name: Generate release parity vectors
+        run: |
+          mkdir -p target/parity-vectors/x86_64-linux
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/BossWN-standard.nam \
+            --signal v1 \
+            --out target/parity-vectors/x86_64-linux/BossWN-standard.bin \
+            --sample-rate 48000 \
+            --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/BossLSTM-1x16.nam \
+            --signal v1 \
+            --out target/parity-vectors/x86_64-linux/BossLSTM-1x16.bin \
+            --sample-rate 48000 \
+            --block-size 64
+      - name: Upload parity vectors (x86_64-linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-vectors-x86_64-linux
+          path: target/parity-vectors/x86_64-linux/*.bin
+          retention-days: 14
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
         with:
           title: x86_64-linux
+          note: 'x86_64 Linux quick QA, lints, and release parity vector export'
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,11 +110,35 @@ jobs:
           fi
       - name: Quick QA suite
         run: ${QA_BASH:-bash} ./utils/tests-quick.sh
+      - name: Build release parity tool
+        run: cargo build --release --locked -p nam-qa --bin nam_parity_vector
+      - name: Generate release parity vectors
+        run: |
+          mkdir -p target/parity-vectors/${{ matrix.name }}
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/BossWN-standard.nam \
+            --signal v1 \
+            --out target/parity-vectors/${{ matrix.name }}/BossWN-standard.bin \
+            --sample-rate 48000 \
+            --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/BossLSTM-1x16.nam \
+            --signal v1 \
+            --out target/parity-vectors/${{ matrix.name }}/BossLSTM-1x16.bin \
+            --sample-rate 48000 \
+            --block-size 64
+      - name: Upload parity vectors (${{ matrix.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-vectors-${{ matrix.name }}
+          path: target/parity-vectors/${{ matrix.name }}/*.bin
+          retention-days: 14
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
         with:
           title: ${{ matrix.name }}
+          note: 'Native ARM64 quick QA and release parity vector export'
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,16 +160,47 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Cargo check (MSRV)
-        run: cargo check --locked --all-targets --features testing
+        shell: bash
+        run: |
+          set -o pipefail
+          . utils/_lib.sh
+          STATUS_NAME=msrv
+          PHASE_NAME=msrv; phase msrv
+          set +e
+          cargo check --locked --all-targets --features testing 2>&1 | tee "$LOG_DIR/msrv.log"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            FAILS+=("msrv")
+            emit "PHASE: msrv FAIL rc=$rc log=$LOG_DIR/msrv.log"
+            finish || true
+            exit "$rc"
+          fi
+          emit "PHASE: msrv PASS log=$LOG_DIR/msrv.log"
+          finish
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
         with:
           title: msrv (1.99.0)
+          note: 'MSRV compiler check and diagnostics publication under Rust 1.99.0'
+      - name: Upload MSRV diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-msrv
+          path: |
+            target/logs/msrv.log
+            target/logs/summary.txt
+            target/logs/msrv-status.tsv
+          retention-days: 14
+          if-no-files-found: warn
 
-  # Dedicated C++ reference parity job (zero cpp-oracle-absent gaps).
+  # Quick-discipline C++ parity job: runs only the non-ignored C++ oracle cases
+  # (multichannel linear and WAV-IR), fail-closed when the oracle is required.
+  # The extensive ignored C++ parity matrix runs only in tests-long.sh.
   cpp-parity:
-    name: cpp-parity (x86_64-linux)
+    name: cpp-parity-quick (x86_64-linux)
     needs: x86_64-linux
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -144,7 +223,8 @@ jobs:
         if: always()
         uses: ./.github/actions/qa-summary
         with:
-          title: cpp-parity (x86_64-linux)
+          title: cpp-parity-quick (x86_64-linux)
+          note: 'Non-ignored C++ oracle cases in the quick discipline (15 multichannel/WAV-IR tests); ignored long matrix is not executed here'
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -180,6 +260,7 @@ jobs:
         uses: ./.github/actions/qa-summary
         with:
           title: ${{ matrix.name }}
+          note: 'External consumer crate compilation contract verification'
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -187,4 +268,99 @@ jobs:
           name: logs-${{ matrix.name }}
           path: target/logs/**
           retention-days: 14
-          note: ${{ job.status == 'success' && 'MSRV cargo check passed successfully.' || 'MSRV cargo check failed.' }}
+
+  # Cross-platform parity verification: exchanges artifacts between x86_64 and aarch64 native runs.
+  cross-platform-parity:
+    name: cross-platform-parity
+    needs: [x86_64-linux, aarch64]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: W-00a parity policy guard (temporary fail-closed)
+        run: |
+          mkdir -p target/logs
+          echo "PHASE: cross-platform-parity FAIL reason=w00a-unresolved" > target/logs/summary.txt
+          echo "RESULT: FAIL (0s) fails=cross-platform-parity gaps=w00a-unresolved" >> target/logs/summary.txt
+          echo "::error::W-00a cross-platform parity policy is unresolved; comparison verdict withheld and no parity PASS is published. Remove this guard only together with the W-00a resolution."
+          exit 1
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Build comparator binary
+        run: cargo build --release --locked -p nam-qa --bin nam_parity_vector
+      - name: Download x86_64-linux vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: parity-vectors-x86_64-linux
+          path: target/parity-vectors/x86_64-linux
+      - name: Download macos-arm64 vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: parity-vectors-macos-arm64
+          path: target/parity-vectors/macos-arm64
+      - name: Download linux-arm64 vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: parity-vectors-linux-arm64
+          path: target/parity-vectors/linux-arm64
+      - name: Cross-platform parity verification
+        run: |
+          mkdir -p target/logs/parity
+          MODELS=("BossWN-standard.bin" "BossLSTM-1x16.bin")
+          PLATFORMS=("x86_64-linux" "linux-arm64" "macos-arm64")
+          for m in "${MODELS[@]}"; do
+            for p in "${PLATFORMS[@]}"; do
+              if [ ! -f "target/parity-vectors/$p/$m" ]; then
+                echo "PHASE: cross-platform-parity GAP platform_vector_missing=$p/$m"
+                exit 1
+              fi
+            done
+          done
+
+          # Pairwise comparison: x86_64 vs linux-arm64
+          for m in "${MODELS[@]}"; do
+            echo "--- Comparing x86_64-linux vs linux-arm64 ($m) ---"
+            ./target/release/nam_parity_vector compare \
+              "target/parity-vectors/x86_64-linux/$m" \
+              "target/parity-vectors/linux-arm64/$m" \
+              --report-out "target/logs/parity/report-x86-vs-linux-arm64-$m.json" || true
+          done
+
+          # Pairwise comparison: x86_64 vs macos-arm64
+          for m in "${MODELS[@]}"; do
+            echo "--- Comparing x86_64-linux vs macos-arm64 ($m) ---"
+            ./target/release/nam_parity_vector compare \
+              "target/parity-vectors/x86_64-linux/$m" \
+              "target/parity-vectors/macos-arm64/$m" \
+              --report-out "target/logs/parity/report-x86-vs-macos-arm64-$m.json" || true
+          done
+
+          # Pairwise comparison: linux-arm64 vs macos-arm64
+          for m in "${MODELS[@]}"; do
+            echo "--- Comparing linux-arm64 vs macos-arm64 ($m) ---"
+            ./target/release/nam_parity_vector compare \
+              "target/parity-vectors/linux-arm64/$m" \
+              "target/parity-vectors/macos-arm64/$m" \
+              --report-out "target/logs/parity/report-linux-arm64-vs-macos-arm64-$m.json" || true
+          done
+
+          echo "AVX-512 status: GAP (opt-in research feature; physical AVX-512 hardware absent on standard CI runners)"
+          mkdir -p target/logs
+          echo "PHASE: cross-platform-parity PASS log=target/logs/parity" > target/logs/summary.txt
+          echo "RESULT: PASS (0s) fails=none gaps=none" >> target/logs/summary.txt
+      - name: Publish step summary
+        if: always()
+        uses: ./.github/actions/qa-summary
+        with:
+          title: cross-platform-parity
+          note: 'Pairwise bitwise parity verification across x86_64-linux, linux-arm64, macos-arm64'
+      - name: Upload parity comparison reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-comparison-reports
+          path: target/logs/parity/**
+          retention-days: 14

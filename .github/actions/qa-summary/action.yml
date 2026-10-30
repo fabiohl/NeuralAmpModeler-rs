@@ -39,14 +39,23 @@ runs:
             printf '%s\n' "$fails" | while IFS= read -r line; do
               log=$(printf '%s\n' "$line" | sed -n 's/.* log=\([^ ]*\).*/\1/p')
               [ -f "$log" ] || continue
+              fail_out="${log%.log}-failures.txt"
               echo "::group::Failure log tail: $(basename "$log")"
-              tail -n 120 "$log"
+              if [ -s "$fail_out" ]; then
+                cat "$fail_out"
+              else
+                tail -n 120 "$log"
+              fi
               echo "::endgroup::"
               {
                 echo "<details open><summary>Failure: $(basename "$log")</summary>"
                 echo ''
                 echo '```text'
-                tail -n 120 "$log"
+                if [ -s "$fail_out" ]; then
+                  cat "$fail_out"
+                else
+                  tail -n 120 "$log"
+                fi
                 echo '```'
                 echo '</details>'
               } >> "$GITHUB_STEP_SUMMARY"

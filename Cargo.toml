@@ -157,6 +157,9 @@ default = ["dual-mono"]
 dual-mono = []
 # Exposes off-RT test utilities, audio signal generators, and perceptual metrics.
 testing = []
+# Harness for the pinned phases of tests-long (rt-deadline, rt-jitter, soak).
+# Not public API; enable only from utils/tests-long.sh and utils/tests-quick.sh.
+pinned = []
 # Enables heap-allocation auditing infrastructure.
 heap-audit = []
 # Exposes Radix-4 DIT FFT execution planning routines (FftPlannerRadix4).
@@ -172,6 +175,18 @@ avx512 = []
 rt-hardening = []
 # Internal-only developer diagnostics, baseline fixture generators, and profiling harnesses. Never enabled by CI or test scripts.
 on-demand = []
+
+# Pinned long-test targets. Declaring them explicitly overrides autodiscovery,
+# so they are not even compiled without the `pinned` feature.
+[[test]]
+name = "rt_pinned"
+path = "tests/rt_pinned.rs"
+required-features = ["testing", "pinned"]
+
+[[test]]
+name = "soak_pinned"
+path = "tests/soak_pinned.rs"
+required-features = ["testing", "pinned"]
 
 [[bin]]
 name = "nam_perf_gate"

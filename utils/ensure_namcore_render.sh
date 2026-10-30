@@ -5,23 +5,13 @@
 # Uso: utils/ensure_namcore_render.sh [flags canônicas]
 # Orçamento: 27
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
-#
-# ensure_namcore_render.sh — CLI wrapper for the single, unified C++ render
-# build. All build logic lives in _lib.sh::ensure_namcore_render; this
-# script only sources it and forwards the exit code.
-#
-# Compiles (idempotently) the NAMCore `render` binary into
-# build/namcore_render/ and prints its path on success.
-#
-# Usage:
-#   ./utils/ensure_namcore_render.sh
-#
-# Knobs: CXX, NAM_RENDER_JOBS (see _lib.sh for documented exit codes and logs).
-
 set -euo pipefail
-
-PHASE_TOTAL=1
-# shellcheck disable=SC1091
-source "$(dirname "$0")/_lib.sh"
+case "$#:${1:-}" in
+    0:) ;;
+    1:-h|1:--help) echo "Usage: utils/ensure_namcore_render.sh"; exit 0 ;;
+    *) echo "Usage: utils/ensure_namcore_render.sh" >&2; exit 2 ;;
+esac
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 
 ensure_namcore_render "$@"

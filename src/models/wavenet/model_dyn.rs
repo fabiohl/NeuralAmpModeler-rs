@@ -316,6 +316,18 @@ impl WaveNetModelDyn {
                     }
                 }
                 cond_out
+            } else if cond > 1 {
+                // Free-geometry multi-condition WaveNet without condition_dsp (R-18):
+                // Broadcast mono input across all `cond` channels so input_mixin
+                // receives the full `num_frames * cond` slice safely.
+                let cond_out = &mut self.condition_dsp_output[0..num_frames * cond];
+                for f in 0..num_frames {
+                    let val = in_slice[f];
+                    for c in 0..cond {
+                        cond_out[f * cond + c] = val;
+                    }
+                }
+                cond_out
             } else {
                 in_slice
             };
@@ -470,6 +482,11 @@ impl WaveNetModelDyn {
                     }
                 }
             }
+            &self.condition_dsp_output[0..cond]
+        } else if cond > 1 {
+            // Free-geometry multi-condition WaveNet without condition_dsp:
+            // Zero-fill all `cond` channels for prewarm.
+            self.condition_dsp_output[0..cond].fill(0.0);
             &self.condition_dsp_output[0..cond]
         } else {
             &zero_input

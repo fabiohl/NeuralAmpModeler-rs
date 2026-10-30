@@ -3,8 +3,9 @@
 
 //! Performance and soak test suite entry point for `NeuralAmpModeler-rs`.
 //!
-//! Validates concurrency stress tolerance, high-load SPSC ring pipelines, and extended
-//! continuous processing stability (soak tests) under heavy buffer contention.
+//! Validates concurrency stress tolerance and high-load SPSC ring pipelines.
+//! The extended soak battery lives in `tests/soak_pinned.rs`, compiled only
+//! with the `pinned` feature.
 
 mod common;
 
@@ -47,7 +48,5 @@ fn audit_harness_counts_allocations() {
 mod concurrency_stress;
 #[path = "perf_soak/pipeline_soak.rs"]
 mod pipeline_soak;
-#[path = "perf_soak/soak_test.rs"]
-mod soak_test;
 #[path = "perf_soak/spsc_pipeline.rs"]
 mod spsc_pipeline;

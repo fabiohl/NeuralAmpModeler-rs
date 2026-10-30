@@ -73,6 +73,8 @@ impl fmt::Display for FreshnessMode {
 pub enum FreshnessReason {
     /// No drift detected.
     Ok,
+    /// Generator script drifted (fixture provenance changed).
+    GeneratorDrift,
     /// At least one fixture/model hash changed.
     StaleFixtures,
     /// At least one expected fixture/golden is missing on disk.
@@ -87,6 +89,7 @@ impl fmt::Display for FreshnessReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ok => write!(f, "OK"),
+            Self::GeneratorDrift => write!(f, "GENERATOR_DRIFT"),
             Self::StaleFixtures => write!(f, "STALE_FIXTURES"),
             Self::MissingFixtures => write!(f, "MISSING_FIXTURES"),
             Self::OrphanFixture => write!(f, "ORPHAN_FIXTURE"),
@@ -327,7 +330,7 @@ fn check_freshness_manifest(
     } else if !orphans.is_empty() {
         FreshnessReason::OrphanFixture
     } else if !generator_drift.is_empty() {
-        FreshnessReason::StaleFixtures
+        FreshnessReason::GeneratorDrift
     } else {
         FreshnessReason::Ok
     };
@@ -337,6 +340,8 @@ fn check_freshness_manifest(
 
     let reason = if should_fail {
         natural_reason
+    } else if !generator_drift.is_empty() {
+        FreshnessReason::GeneratorDrift
     } else {
         FreshnessReason::Ok
     };

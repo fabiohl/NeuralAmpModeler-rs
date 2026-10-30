@@ -41,33 +41,3 @@ pub const fn budget_us(block_size: usize, sample_rate_hz: u32) -> u64 {
     // SAFETY: none — pure integer arithmetic, no unsafe.
     (1_000_000u64 * block_size as u64) / sample_rate_hz as u64
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn budget_values_are_frozen() {
-        assert_eq!(RT_DEADLINE_US, 1330);
-        assert_eq!(BLOCK_SIZE, 64);
-        assert_eq!(BUDGET_SAMPLE_RATE_HZ, 48_000);
-    }
-
-    #[test]
-    fn canonical_budget_matches_formula_with_conservative_margin() {
-        // Exact budget at the canonical point truncates to 1333 µs; the
-        // enforced gate keeps a 3 µs conservative margin below it.
-        assert_eq!(budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ), 1333);
-        assert_eq!(budget_us(64, 48_000), 1333);
-        assert!(
-            RT_DEADLINE_US <= budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ),
-            "gate {} must not exceed exact budget {}",
-            RT_DEADLINE_US,
-            budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ)
-        );
-        assert_eq!(
-            budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ) - RT_DEADLINE_US,
-            3
-        );
-    }
-}

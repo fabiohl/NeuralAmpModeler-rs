@@ -428,3 +428,154 @@ fn test_dynamic_no_nan() {
         assert!(v.is_finite(), "Non-finite output at sample {}: {}", i, v);
     }
 }
+
+/// Helper: builds a dynamic model with configurable `cond` (condition_size).
+fn build_dynamic_model_with_cond(ch: usize, k: usize, head: usize, cond: usize) -> WaveNetModelDyn {
+    let rf = TEST_DILATIONS.iter().max().unwrap_or(&1) * (k - 1);
+
+    let make_conv1d_dyn = |in_ch: usize, out_ch: usize, dilation: usize| -> Conv1dDyn {
+        let interleave_width = select_interleave_width(out_ch);
+        Conv1dDyn {
+            weights: make_conv1d_weights(in_ch, out_ch, k),
+            bias: make_bias(out_ch),
+            do_bias: false,
+            dilation,
+            in_ch,
+            out_ch,
+            num_blocks: out_ch.div_ceil(interleave_width),
+            interleave_width,
+            kernel: k,
+        }
+    };
+
+    let make_dense_dyn = |in_ch: usize, out_ch: usize, do_bias: bool| -> DenseLayerDyn {
+        DenseLayerDyn {
+            in_ch,
+            out_ch,
+            weights: make_dense_weights(in_ch, out_ch),
+            bias: make_bias(out_ch),
+            do_bias,
+        }
+    };
+
+    let layers_1: Vec<WaveNetLayerDyn> = TEST_DILATIONS
+        .iter()
+        .map(|&d| {
+            WaveNetLayerDyn::new(
+                ch,
+                make_conv1d_dyn(ch, ch, d),
+                make_dense_dyn(cond, ch, false),
+                make_dense_dyn(ch, ch, false),
+            )
+            .unwrap()
+        })
+        .collect();
+    let states_1: Vec<WaveNetLayerState> = (0..layers_1.len())
+        .map(|i| WaveNetLayerState::new(ch, rf, i).expect("Failed to create WaveNetLayerState"))
+        .collect();
+    let num_layers_1 = layers_1.len();
+
+    let array1 = WaveNetLayerArrayDyn {
+        in_ch: 1,
+        cond,
+        ch,
+        k,
+        head,
+        layers: layers_1,
+        states: states_1,
+        effective_layers: num_layers_1,
+        rechannel: make_dense_dyn(1, ch, false),
+        head_rechannel: make_dense_dyn(ch, head, false).into(),
+        array_outputs: AlignedVec::from_vec(vec![0.0; ch * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        head_accum: AlignedVec::from_vec(vec![0.0; ch * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        head_outputs: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        receptive_field_size: rf,
+        block_size: ch,
+        block_buffer: AlignedVec::from_vec(vec![0.0; ch * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+    };
+
+    let layers_2: Vec<WaveNetLayerDyn> = TEST_DILATIONS
+        .iter()
+        .map(|&d| {
+            WaveNetLayerDyn::new(
+                head,
+                make_conv1d_dyn(head, head, d),
+                make_dense_dyn(cond, head, false),
+                make_dense_dyn(head, head, false),
+            )
+            .unwrap()
+        })
+        .collect();
+    let states_2: Vec<WaveNetLayerState> = (0..layers_2.len())
+        .map(|i| WaveNetLayerState::new(head, rf, i).expect("Failed to create WaveNetLayerState"))
+        .collect();
+    let num_layers_2 = layers_2.len();
+
+    let array2 = WaveNetLayerArrayDyn {
+        in_ch: ch,
+        cond,
+        ch: head,
+        k,
+        head: 1,
+        layers: layers_2,
+        states: states_2,
+        effective_layers: num_layers_2,
+        rechannel: make_dense_dyn(ch, head, false),
+        head_rechannel: make_dense_dyn(head, 1, true).into(),
+        array_outputs: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        head_accum: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        head_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        receptive_field_size: rf,
+        block_size: head,
+        block_buffer: AlignedVec::from_vec(vec![0.0; head * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+    };
+
+    WaveNetModelDyn {
+        ch,
+        k,
+        head,
+        arrays: vec![array1, array2],
+        head_scale: 0.02,
+        receptive_field_size: rf,
+        condition_dsp: None,
+        condition_dsp_output: AlignedVec::from_vec(vec![0.0; cond * WAVENET_MAX_NUM_FRAMES])
+            .expect("allocation should succeed for test-sized buffers"),
+        post_stack_head: None,
+        head_output_scratch: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0)
+            .expect("allocation should succeed for test-sized buffers"),
+        prewarm_on_reset: true,
+        prewarm_pending: false,
+        slimmable_capable: false,
+        allowed_channels: None,
+        pending_slim_channel: None,
+    }
+}
+
+#[test]
+fn test_dynamic_wavenet_multi_condition_without_condition_dsp() {
+    // R-18: condition_size > 1 without condition_dsp must broadcast the mono input
+    // safely to all channels, executing prewarm and process without panicking or OOB reads.
+    let mut model = build_dynamic_model_with_cond(4, 3, 2, 3); // cond = 3
+    model.prewarm();
+
+    let input: Vec<f32> = (0..256).map(|i| ((i as f32) * 0.05).sin() * 0.4).collect();
+    let mut output = vec![0.0f32; input.len()];
+    model.process(&input, &mut output);
+
+    assert_eq!(output.len(), input.len());
+    for (i, &v) in output.iter().enumerate() {
+        assert!(v.is_finite(), "Non-finite output at sample {i}: {v}");
+    }
+    assert!(
+        output.iter().any(|&v| v.abs() > 1e-6),
+        "Output should be non-zero"
+    );
+}

@@ -106,6 +106,63 @@ impl std::fmt::Display for LongPhaseStatus {
     }
 }
 
+/// Typed root cause attached to a `FAILED` receipt line.
+///
+/// The human summary and the strict validator use this instead of re-reading
+/// phase logs, so a failure is explained by its cause (generator drift,
+/// missing baseline, timeout, …) rather than by a free-form string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LongReason {
+    /// Fixture generator provenance drifted from the committed manifest.
+    GeneratorDrift,
+    /// The performance baseline required by the phase is absent.
+    MissingBaseline,
+    /// The phase executed tests and at least one failed.
+    TestFailure,
+    /// The phase exceeded its timeout.
+    Timeout,
+    /// A preflight step failed before the timed phases.
+    PreflightFailure,
+}
+
+impl LongReason {
+    /// Canonical serialized name (e.g. `GENERATOR_DRIFT`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LongReason::GeneratorDrift => "GENERATOR_DRIFT",
+            LongReason::MissingBaseline => "MISSING_BASELINE",
+            LongReason::TestFailure => "TEST_FAILURE",
+            LongReason::Timeout => "TIMEOUT",
+            LongReason::PreflightFailure => "PREFLIGHT_FAILURE",
+        }
+    }
+}
+
+impl FromStr for LongReason {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "GENERATOR_DRIFT" => Ok(LongReason::GeneratorDrift),
+            "MISSING_BASELINE" => Ok(LongReason::MissingBaseline),
+            "TEST_FAILURE" => Ok(LongReason::TestFailure),
+            "TIMEOUT" => Ok(LongReason::Timeout),
+            "PREFLIGHT_FAILURE" => Ok(LongReason::PreflightFailure),
+            other => Err(format!(
+                "invalid long-suite reason '{other}' (expected one of: \
+                 GENERATOR_DRIFT, MISSING_BASELINE, TEST_FAILURE, TIMEOUT, PREFLIGHT_FAILURE)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for LongReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Single JSONL line: structured audit receipt entry for one long-suite phase.
 ///
 /// The optional `*_sha256` fields carry the provenance of the **referenced
@@ -134,17 +191,40 @@ pub struct LongPhaseReceipt {
     /// Declared gap markers for this phase (typed log markers + explicit gaps
     /// + the phase status itself when it is a gap status).
     pub gaps: Vec<String>,
+    /// Optional, non-distributable fixture skips. Reported and counted for
+    /// traceability, but never part of the blocking gap set under `--strict`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_gaps: Vec<String>,
     /// ISO-8601 emission timestamp (UTC).
     pub timestamp: String,
     /// Optional SHA-256 of the oracle/render artifact referenced by the phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_sha256: Option<String>,
+    /// Optional git commit of the C++ oracle source tree (NAMCore) that backed
+    /// the phase verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_core_commit: Option<String>,
+    /// Optional C++ compiler identity used to build the oracle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_compiler: Option<String>,
     /// Optional SHA-256 of the input fixture referenced by the phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixture_sha256: Option<String>,
     /// Optional SHA-256 of the produced artifact referenced by the phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_sha256: Option<String>,
+    /// Optional run identifier exported by the runner (`NAM_RUN_ID`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Optional `git rev-parse HEAD` captured when the line was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_sha: Option<String>,
+    /// Optional tracked-tree dirtiness captured when the line was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
+    /// Optional typed root cause; mandatory for `FAILED` under strict validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<LongReason>,
 }
 
 impl Default for LongPhaseReceipt {
@@ -158,10 +238,17 @@ impl Default for LongPhaseReceipt {
             duration_ms: 0,
             tests_executed: 0,
             gaps: Vec::new(),
+            optional_gaps: Vec::new(),
             timestamp: String::new(),
             oracle_sha256: None,
+            oracle_core_commit: None,
+            oracle_compiler: None,
             fixture_sha256: None,
             artifact_sha256: None,
+            run_id: None,
+            git_sha: None,
+            git_dirty: None,
+            reason: None,
         }
     }
 }
@@ -234,9 +321,16 @@ pub fn is_preflight_id(phase_id: &str) -> bool {
     phase_id.starts_with("preflight-")
 }
 
-/// Phase ids of the long suite's performance-class phases (the bash
-/// `PHASE_CLASS` table, moved to the receipt in S5 so the human summary
-/// derives `FIDELITY` without reclassifying logs): RT Deadline = `phase5`,
-/// RT Jitter = `phase6`, Perf Gate = `phase8`. The phase matrix itself is an invariant of
-/// `utils/tests-long.sh`.
+/// Phase ids of the long suite's performance-class phases: RT Deadline =
+/// `phase5`, RT Jitter = `phase6`, Perf Gate = `phase8`. Kept as the canonical
+/// public matrix for consumers that classify performance phases separately
+/// (the human `FIDELITY` verdict uses [`FIDELITY_PHASE_IDS`] instead). The
+/// phase matrix itself is an invariant of `utils/tests-long.sh`.
 pub const PERFORMANCE_PHASE_IDS: [&str; 3] = ["phase5", "phase6", "phase8"];
+
+/// Phase ids that back the human `FIDELITY` verdict. Preflights whose object is
+/// provenance or packaging (`preflight-render`, `preflight-package`,
+/// `preflight-simd-probe`) are deliberately excluded: their failure is reported
+/// by `PROVENANCE`/the overall verdict, not as a fidelity failure.
+pub const FIDELITY_PHASE_IDS: [&str; 5] =
+    ["preflight-catalog", "phase1", "phase3", "phase4", "phase7"];

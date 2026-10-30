@@ -47,10 +47,9 @@ pub(crate) const MAX_CHUNKS_SCANNED: usize = 1024;
 
 /// Reads and validates the file, guarding against oversized inputs.
 ///
-/// Uses a single file-open to avoid TOCTOU races between metadata check and read.
+/// Uses a single file-open to avoid TOCTOU races between metadata check and read,
+/// delegating the bounded read and post-read length validation to [`read_ir_reader`].
 pub(crate) fn read_file(path: &std::path::Path) -> io::Result<Vec<u8>> {
-    use std::io::Read;
-
     let mut file = std::fs::File::open(path)?;
     let metadata = file.metadata()?;
     let file_size = metadata.len();
@@ -82,8 +81,52 @@ pub(crate) fn read_file(path: &std::path::Path) -> io::Result<Vec<u8>> {
         ));
     }
 
-    let mut data = Vec::with_capacity(file_size as usize);
-    file.read_to_end(&mut data)?;
+    read_ir_reader(&mut file, Some(file_size as usize))
+}
+
+/// Reads and validates an IR WAV stream from any `io::Read` source,
+/// bounding reading to `MAX_IR_FILE_SIZE` and guarding against overflow or truncation.
+pub(crate) fn read_ir_reader<R: io::Read>(
+    reader: &mut R,
+    hint_size: Option<usize>,
+) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+
+    let initial_cap = hint_size.unwrap_or(4096).min(MAX_IR_FILE_SIZE as usize);
+    let mut data = Vec::with_capacity(initial_cap);
+
+    // Bounded read: take up to MAX_IR_FILE_SIZE + 1 to detect overflow safely.
+    let mut limited = reader.take(MAX_IR_FILE_SIZE + 1);
+    limited.read_to_end(&mut data)?;
+
+    if data.len() > MAX_IR_FILE_SIZE as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "IR WAV file too large (exceeds max {} bytes)",
+                MAX_IR_FILE_SIZE
+            ),
+        ));
+    }
+
+    if data.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "IR WAV file is empty",
+        ));
+    }
+
+    if data.len() < WAV_HEADER_MIN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "IR WAV file too small ({} bytes, min {})",
+                data.len(),
+                WAV_HEADER_MIN
+            ),
+        ));
+    }
+
     debug!("[Loader] IR file read: {} bytes", data.len());
     Ok(data)
 }
@@ -93,6 +136,28 @@ pub(crate) fn read_file(path: &std::path::Path) -> io::Result<Vec<u8>> {
 /// Handles PCM16, PCM24, and IEEE float32 in mono.
 /// Scans for `"fmt "` and `"data"` chunks rather than assuming fixed offsets.
 pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
+    if data.len() < WAV_HEADER_MIN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "IR WAV: header too small ({} bytes, min {})",
+                data.len(),
+                WAV_HEADER_MIN
+            ),
+        ));
+    }
+
+    if data.len() > MAX_IR_FILE_SIZE as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "IR WAV: file too large ({} bytes, max {})",
+                data.len(),
+                MAX_IR_FILE_SIZE
+            ),
+        ));
+    }
+
     if data[0..4] != RIFF_ID || data[8..12] != WAVE_ID {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

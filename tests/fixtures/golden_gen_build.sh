@@ -1,6 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# golden_gen_build.sh — Builds render tool and generates all golden vectors. Classe D.
+# Uso: tests/fixtures/golden_gen_build.sh
+# Orçamento: 850
+set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
+set -euo pipefail
 
 # golden_gen_build.sh — Builds the NeuralAmpModelerCore render tool, clones
 # NeuralAmpModelerPlugin (C++ IR reference), and generates all golden vectors.

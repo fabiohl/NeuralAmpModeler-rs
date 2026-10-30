@@ -501,7 +501,11 @@ pub fn require_render_or_skip(context: &str) -> Option<PathBuf> {
     match namcore_render_bin() {
         Some(bin) => Some(bin),
         None => {
-            if std::env::var("NAM_REQUIRE_CPP_ORACLE").as_deref() == Ok("1") {
+            let require_oracle = std::env::var("NAM_REQUIRE_CPP_ORACLE").is_ok_and(|v| {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true")
+            });
+            if require_oracle {
                 panic!(
                     "[STRICT] {context}: namcore_render binary unavailable — missing C++ \
                      parity evidence is a failure under NAM_REQUIRE_CPP_ORACLE=1 \

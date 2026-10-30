@@ -20,9 +20,9 @@ fn test_nondist_models_validation() {
         if community.exists() {
             nondist_path = community;
         } else {
-            println!(
-                "[STATUS] SKIP_OPTIONAL: models_nondist_absent \
-                 (tests/fixtures/models-nondist or third-party/community_models)"
+            neural_amp_modeler_rs::testing::report_skip(
+                "nondist_validation",
+                "models_nondist_absent",
             );
             return;
         }
@@ -60,10 +60,7 @@ fn test_nondist_models_validation() {
     };
 
     if models.is_empty() {
-        println!(
-            "[STATUS] SKIP_OPTIONAL: models_nondist_empty ({:?})",
-            nondist_path
-        );
+        neural_amp_modeler_rs::testing::report_skip("nondist_validation", "models_nondist_empty");
         return;
     }
 

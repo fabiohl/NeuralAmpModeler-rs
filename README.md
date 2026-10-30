@@ -65,18 +65,20 @@ The crate is host-agnostic, standalone, and general-purpose: public APIs remain 
 
 ## 🛠️ System Prerequisites & Build Requirements
 
-| Dependency                        | Minimum Requirement                                                | Purpose                                                    |
-|:--------------------------------- |:------------------------------------------------------------------ |:---------------------------------------------------------- |
-| **CPU Architecture**              | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels                                |
-| **Rust Toolchain**                | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                                        |
-| **Linker (consumers)**            | A C toolchain for the target (e.g. `gcc`/`clang`)                  | Linking the crate; no CMake needed                         |
-| **Build Tools (contributors)**    | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4            | C++ parity oracles, fixtures and the `./utils/` QA scripts |
+| Dependency                     | Minimum Requirement                                                | Purpose                                                    |
+|:------------------------------ |:------------------------------------------------------------------ |:---------------------------------------------------------- |
+| **CPU Architecture**           | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels                                |
+| **Rust Toolchain**             | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                                        |
+| **Linker (consumers)**         | A C toolchain for the target (e.g. `gcc`/`clang`)                  | Linking the crate; no CMake needed                         |
+| **Build Tools (contributors)** | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4           | C++ parity oracles, fixtures and the `./utils/` QA scripts |
 
 > **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
-
+>
 > **Consumers and libm:** the libm symbol-interposition guard (`.cargo/hide-libm-shadow.map`) applies only to this crate's own link targets. A downstream binary is not covered and must add an equivalent linker version script if it links a same-named libm shadow. See [the postmortem](docs/postmortem-libm-symbol-interposition.md).
 
 ### Supported Platforms
+
+Ubuntu Linux `x86_64` with `x86-64-v3` is the primary reference platform. Other platforms must not weaken its correctness, real-time, numerical, compatibility, or performance contracts. Platform-specific evidence gaps may require an explicit experimental designation; see the [platform priority and evidence policy](docs/architecture.md#platform-priority-and-evidence-policy). Windows support is not currently claimed.
 
 NeuralAmpModeler-rs officially supports:
 
@@ -286,14 +288,14 @@ API Documentation:
 
 NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities, diagnostic tooling, and benchmarking:
 
-| Feature              | Default     | Description                                                                                                                     | Category                |
-|:-------------------- |:----------- |:------------------------------------------------------------------------------------------------------------------------------- |:----------------------- |
-| `dual-mono`          | **Enabled** | Independent per-channel neural inference across the DSP pipeline for stereo/dual-mono signals. Disable for single-channel mono. | Production              |
-| `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                  | Diagnostics             |
-| `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.        | Tooling / QA            |
-| `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                        | Tooling / Benchmarks    |
+| Feature              | Default     | Description                                                                                                                                                   | Category                    |
+|:-------------------- |:----------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------- |
+| `dual-mono`          | **Enabled** | Independent per-channel neural inference across the DSP pipeline for stereo/dual-mono signals. Disable for single-channel mono.                               | Production                  |
+| `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                                                | Diagnostics                 |
+| `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.                                      | Tooling / QA                |
+| `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                                                      | Tooling / Benchmarks        |
 | `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity, PM-QoS; macOS: QoS, time constraint, `mlockall`, Audio Workgroups; DAZ/FTZ). | Production (Linux/macOS RT) |
-| `avx512`             | Disabled    | Experimental AVX-512 kernels and instruction dispatch for research and cross-ISA validation.                                    | Research / Experimental |
+| `avx512`             | Disabled    | Experimental AVX-512 kernels and instruction dispatch for research and cross-ISA validation.                                                                  | Research / Experimental     |
 
 > **Note on `avx512`:** Production builds target the `x86-64-v3` (AVX2 + FMA) baseline. Benchmarks demonstrate that AVX2 delivers lower latency and higher throughput across canonical NAM channel geometries ($C \le 16$). The opt-in `avx512` feature is maintained for research, hardware benchmarking, and architectural exploration. See [`docs/architecture.md`](docs/architecture.md) and [`docs/benchmarks.md`](docs/benchmarks.md).
 
@@ -351,17 +353,17 @@ NAM_COMMUNITY_MODELS_SRC=/path/to/models ./utils/setup-third-party.sh
 
 The `./utils/` suite automates formatting, static analysis, parity verification, and quality gates:
 
-| Script                                                                           | Purpose & Scope                                                                                                                       |
-|:-------------------------------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
-| [`utils/lints.sh`](utils/lints.sh)                                               | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
-| [`utils/tests-quick.sh`](utils/tests-quick.sh)                                   | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
-| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh)                       | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
-| [`nam_perf_gate`](src/bin/nam_perf_gate.rs) | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
-| [`utils/check-model.sh`](utils/check-model.sh)                                   | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
-| [`utils/tests-long.sh`](utils/tests-long.sh)                                     | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
-| [`utils/miri-audit.sh`](utils/miri-audit.sh)                                     | **Memory Safety & Aliasing Audit:** Validates unsafe blocks, SPSC ring buffers, and delay lines under Miri.                           |
-| [`utils/setup-third-party.sh`](utils/setup-third-party.sh)                       | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
-| [`utils/mod-update.sh`](utils/mod-update.sh)                                     | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
+| Script                                                     | Purpose & Scope                                                                                                                       |
+|:---------------------------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------- |
+| [`utils/lints.sh`](utils/lints.sh)                         | **Static Analysis Gate:** Runs `cargo fmt`, strict `clippy`, compilation checks, doc-tests, and SPDX header verification.             |
+| [`utils/tests-quick.sh`](utils/tests-quick.sh)             | **Agile QA Suite:** Multi-phase test run covering unit tests, C++ parity quick checks, and parser fuzzing.                            |
+| [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh) | **Quality & Regression Gate:** Verifies benchmark timings and audio fidelity against `docs/quality-contract.json`.                    |
+| [`nam_perf_gate`](src/bin/nam_perf_gate.rs)                | **Performance Regression Gate:** Validates runtime execution headroom and detects latency regressions against calibrated baselines.   |
+| [`utils/check-model.sh`](utils/check-model.sh)             | **Model Inspector CLI:** Inspects `.nam` and `.namb` files, outputting detailed reports, JSON, or manifest arrays.                    |
+| [`utils/tests-long.sh`](utils/tests-long.sh)               | **Pre-Release Audit:** Exhaustive suite including soak tests, full proptest/fuzzing, cross-ISA, and heap audits (run by maintainers). |
+| [`utils/miri-audit.sh`](utils/miri-audit.sh)               | **Memory Safety & Aliasing Audit:** Validates unsafe blocks, SPSC ring buffers, and delay lines under Miri.                           |
+| [`utils/setup-third-party.sh`](utils/setup-third-party.sh) | **Local Environment Bootstrap:** Clones and syncs pinned vendor mirrors into `third-party/`.                                          |
+| [`utils/mod-update.sh`](utils/mod-update.sh)               | **Dependency Maintenance:** Updates the Rust toolchain and dependencies via `cargo upgrade`.                                          |
 
 Standard verification workflow:
 

@@ -4,7 +4,8 @@
 //! Real-time constraint test suite entry point for `NeuralAmpModeler-rs`.
 //!
 //! Validates real-time audio thread guarantees, including zero-heap allocation audits
-//! (`#[cfg(feature = "heap-audit")]`), processing deadline compliance, and timing jitter bounds.
+//! (`#[cfg(feature = "heap-audit")]`). Deadline and jitter suites live in
+//! `tests/rt_pinned.rs`, which is compiled only with the `pinned` feature.
 
 mod common;
 
@@ -45,8 +46,40 @@ fn audit_harness_counts_allocations() {
 }
 
 // ── Shared RT budget (single source of truth) ─────────────────────────
+// The budget unit tests stay in this target so the unpinned catch-all keeps
+// exercising the frozen values; `tests/rt_pinned.rs` reuses the constants only.
 #[path = "rt_constraints/budget.rs"]
 mod budget;
+
+#[cfg(test)]
+mod budget_tests {
+    use super::budget::*;
+
+    #[test]
+    fn budget_values_are_frozen() {
+        assert_eq!(RT_DEADLINE_US, 1330);
+        assert_eq!(BLOCK_SIZE, 64);
+        assert_eq!(BUDGET_SAMPLE_RATE_HZ, 48_000);
+    }
+
+    #[test]
+    fn canonical_budget_matches_formula_with_conservative_margin() {
+        // Exact budget at the canonical point truncates to 1333 µs; the
+        // enforced gate keeps a 3 µs conservative margin below it.
+        assert_eq!(budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ), 1333);
+        assert_eq!(budget_us(64, 48_000), 1333);
+        assert!(
+            RT_DEADLINE_US <= budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ),
+            "gate {} must not exceed exact budget {}",
+            RT_DEADLINE_US,
+            budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ)
+        );
+        assert_eq!(
+            budget_us(BLOCK_SIZE, BUDGET_SAMPLE_RATE_HZ) - RT_DEADLINE_US,
+            3
+        );
+    }
+}
 
 // ── Zero-Heap Allocation Audit Submodules ────────────────────────────────────
 #[path = "rt_constraints/a2_heap_audit.rs"]
@@ -55,28 +88,3 @@ mod a2_heap_audit;
 mod cabsim_heap_audit;
 #[path = "rt_constraints/resampler_heap_audit.rs"]
 mod resampler_heap_audit;
-
-// ── Real-Time Timing & Determinism Submodules ───────────────────────────────
-#[path = "rt_constraints/rt_deadline.rs"]
-mod rt_deadline;
-#[path = "rt_constraints/rt_jitter.rs"]
-mod rt_jitter;
-
-// ── Budget coherence: both suites must observe the same RT budget ────────────
-#[cfg(test)]
-mod budget_coherence {
-    use super::budget;
-
-    #[test]
-    fn rt_deadline_and_jitter_share_one_budget() {
-        assert_eq!(budget::RT_DEADLINE_US, super::rt_deadline::RT_DEADLINE_US);
-        assert_eq!(budget::BLOCK_SIZE, super::rt_deadline::BLOCK_SIZE);
-        assert_eq!(budget::RT_DEADLINE_US, super::rt_jitter::RT_DEADLINE_US);
-        assert_eq!(budget::BLOCK_SIZE, super::rt_jitter::BLOCK_SIZE);
-        assert_eq!(
-            budget::RT_DEADLINE_US,
-            budget::budget_us(budget::BLOCK_SIZE, budget::BUDGET_SAMPLE_RATE_HZ) - 3,
-            "gate keeps its 3 µs conservative margin below the exact budget"
-        );
-    }
-}

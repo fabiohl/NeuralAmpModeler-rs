@@ -11,6 +11,7 @@ mod audit_tests {
     use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
 
     use crate::common::alloc_audit::{TrackingGuard, get_alloc_count};
+    use crate::common::validation::report_heap_alloc;
 
     // =============================================================================
     // Synthetic IR helpers
@@ -63,6 +64,7 @@ mod audit_tests {
             get_alloc_count()
         };
 
+        report_heap_alloc(&format!("cabsim-{label}"), count);
         assert_eq!(
             count, 0,
             "Heap allocations detected on cabsim-{label} hot-path! count={count}",
@@ -114,6 +116,7 @@ mod audit_tests {
             get_alloc_count()
         };
 
+        report_heap_alloc("cabsim-passthrough", count);
         assert_eq!(
             count, 0,
             "Heap allocations detected on cabsim-passthrough hot-path! count={count}",

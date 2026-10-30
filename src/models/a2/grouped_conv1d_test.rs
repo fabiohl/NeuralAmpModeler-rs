@@ -1109,6 +1109,215 @@ fn new_accepts_kernel_at_max_kernel() {
     assert_eq!(conv.kernel, kernel);
 }
 
+// -----------------------------------------------------------------------------
+// R-18 — Bias contract tests for A2GroupedConv1d::new
+// -----------------------------------------------------------------------------
+
+#[test]
+fn new_rejects_missing_bias_when_do_bias_true() {
+    // R-18: bias ausente com do_bias=true deve ser rejeitado com WeightCountMismatch
+    let in_ch = 8;
+    let out_ch = 4;
+    let kernel = 3;
+    let groups = 2;
+    let (raw_weights, _) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+
+    let err = A2GroupedConv1d::new(
+        &raw_weights,
+        &[], // missing bias
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .err()
+    .expect("missing bias with do_bias=true must be rejected");
+    assert_eq!(err, NamErrorCode::WeightCountMismatch);
+}
+
+#[test]
+fn new_rejects_short_bias_when_do_bias_true() {
+    // R-18: bias curto (len < out_ch) com do_bias=true deve ser rejeitado com WeightCountMismatch
+    let in_ch = 8;
+    let out_ch = 4;
+    let kernel = 3;
+    let groups = 2;
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+    let short_bias = &raw_bias[..out_ch - 1]; // 3 elements instead of 4
+
+    let err = A2GroupedConv1d::new(
+        &raw_weights,
+        short_bias,
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .err()
+    .expect("short bias with do_bias=true must be rejected");
+    assert_eq!(err, NamErrorCode::WeightCountMismatch);
+}
+
+#[test]
+fn new_rejects_long_bias_when_do_bias_true() {
+    let in_ch = 8;
+    let out_ch = 4;
+    let kernel = 3;
+    let groups = 2;
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 42);
+    let mut long_bias = raw_bias.clone();
+    long_bias.push(0.5); // 5 elements instead of 4
+
+    let err = A2GroupedConv1d::new(
+        &raw_weights,
+        &long_bias,
+        true,
+        2,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .err()
+    .expect("oversized bias with do_bias=true must be rejected");
+    assert_eq!(err, NamErrorCode::WeightCountMismatch);
+}
+
+#[test]
+fn new_accepts_exact_bias_and_matches_reference() {
+    // R-18: bias exato com do_bias=true constrói e mantém paridade com referência
+    let in_ch = 8;
+    let out_ch = 4;
+    let kernel = 3;
+    let groups = 2;
+    let dilation = 2;
+    let (raw_weights, raw_bias) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 77);
+
+    let conv = A2GroupedConv1d::new(
+        &raw_weights,
+        &raw_bias,
+        true,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .expect("exact bias with do_bias=true must construct");
+    assert_eq!(conv.bias.len(), out_ch);
+
+    let buf_frames = 64;
+    let layer_buffer = make_layer_buffer(buf_frames, in_ch, 55);
+    let frame_idx = 30;
+
+    let mut simd_out = vec![0.0f32; out_ch];
+    let mut ref_out = vec![0.0f32; out_ch];
+
+    // SAFETY: buffers sized to kernel contract (`layer_buffer` = buf_frames * in_ch,
+    // `simd_out` = out_ch, `frame_idx` within history); pointers remain valid for call.
+    unsafe {
+        grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
+    }
+    grouped_conv1d_single_frame_ref(
+        &conv.weights,
+        &conv.bias,
+        conv.do_bias,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+        &layer_buffer,
+        frame_idx,
+        &mut ref_out,
+    );
+
+    for c in 0..out_ch {
+        assert!(
+            (simd_out[c] - ref_out[c]).abs() < 1e-5,
+            "channel {c} mismatch: simd={}, ref={}",
+            simd_out[c],
+            ref_out[c]
+        );
+    }
+}
+
+#[test]
+fn new_accepts_missing_bias_when_do_bias_false() {
+    // R-18: bias ausente com do_bias=false constrói com bias pre-alocado seguro
+    let in_ch = 8;
+    let out_ch = 4;
+    let kernel = 3;
+    let groups = 2;
+    let dilation = 1;
+    let (raw_weights, _) = make_test_weights_grouped(in_ch, out_ch, kernel, groups, 99);
+
+    let conv = A2GroupedConv1d::new(
+        &raw_weights,
+        &[], // missing bias is valid when do_bias=false
+        false,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+    )
+    .expect("missing bias with do_bias=false must construct");
+    assert_eq!(conv.bias.len(), out_ch);
+    assert!(conv.bias.iter().all(|&b| b == 0.0));
+
+    let buf_frames = 64;
+    let layer_buffer = make_layer_buffer(buf_frames, in_ch, 12);
+    let frame_idx = 20;
+
+    let mut simd_out = vec![0.0f32; out_ch];
+    let mut ref_out = vec![0.0f32; out_ch];
+
+    // SAFETY: buffers sized to kernel contract (`layer_buffer` = buf_frames * in_ch,
+    // `simd_out` = out_ch, `frame_idx` within history); pointers remain valid for call.
+    unsafe {
+        grouped_conv1d_single_frame_simd(&conv, &layer_buffer, &mut simd_out, frame_idx, None);
+    }
+    grouped_conv1d_single_frame_ref(
+        &conv.weights,
+        &conv.bias,
+        conv.do_bias,
+        dilation,
+        in_ch,
+        out_ch,
+        kernel,
+        groups,
+        &layer_buffer,
+        frame_idx,
+        &mut ref_out,
+    );
+
+    for c in 0..out_ch {
+        assert!(
+            (simd_out[c] - ref_out[c]).abs() < 1e-5,
+            "channel {c} mismatch with do_bias=false: simd={}, ref={}",
+            simd_out[c],
+            ref_out[c]
+        );
+    }
+}
+
+#[test]
+fn new_rejects_geometry_arithmetic_overflow() {
+    // Hostile geometry with huge dimensions must fail safely via checked math
+    let in_ch = usize::MAX / 2;
+    let out_ch = usize::MAX / 2;
+    let kernel = 4;
+    let groups = 1;
+
+    let res = A2GroupedConv1d::new(&[], &[], false, 1, in_ch, out_ch, kernel, groups);
+    assert!(res.is_err());
+}
+
 // =============================================================================
 // T05.1 — Frozen bit-exact goldens (recorded before the SoA repack)
 // =============================================================================

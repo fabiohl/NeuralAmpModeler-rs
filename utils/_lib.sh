@@ -8,6 +8,7 @@ LOG_DIR=target/logs; [ -d "$LOG_DIR" ] || { command -v mkdir >/dev/null 2>&1 && 
 export NAM_RUN_ID="${NAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 [ "$(cat "$LOG_DIR/.summary-run" 2>/dev/null)" = "$NAM_RUN_ID" ] || { : > "$LOG_DIR/summary.txt"; printf '%s\n' "$NAM_RUN_ID" > "$LOG_DIR/.summary-run"; }
 T0=$SECONDS; FAILS=(); GAPS=(); STRICT=0
+SCRIPT_NAME="$(basename "${0%.sh}")"; STATUS_NAME="$SCRIPT_NAME"
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$LIB_DIR")"; cd "$PROJECT_DIR"
@@ -23,16 +24,9 @@ ok()   { echo "OK: $*"; }
 phase() { emit "PHASE: $1"; }
 gap()   { GAPS+=("$1"); emit "PHASE: $1 GAP"; }
 
-run_phase() {
-  local name=$1 to=${NAM_PHASE_TIMEOUT_S:-$2} log="$LOG_DIR/${SCRIPT_NAME:-run}-$1.log"; shift 2
-  phase "$name"
-  timeout --kill-after=30 "$to" "$@" 2>&1 | tee "$log"
-  local rc=${PIPESTATUS[0]}
-  if [ "$rc" -eq 0 ] && { [ "${REQUIRE_TESTS:-1}" = 0 ] || ran_tests "$log"; }; then
-    emit "PHASE: $name PASS log=$log"
-  else
-    FAILS+=("$name"); emit "PHASE: $name FAIL rc=$rc log=$log"
-  fi
+xtrace_side_channel() {
+  [ -n "${BASH_XTRACEFD:-}" ] && return 0
+  exec 8>"$1"; export BASH_XTRACEFD=8
 }
 
 ran_tests() {
@@ -49,9 +43,16 @@ ran_tests() {
 }
 
 finish() {
-  local s=PASS
+  local s=PASS sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
+  if ! printf '%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
+    "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" > "$sf" 2>/dev/null; then
+    echo "ERROR: cannot write status carrier $sf" >&2
+    emit "PHASE: carrier FAIL path=$sf"
+    s=FAIL
+    [ ${#FAILS[@]} -gt 0 ] || FAILS+=("carrier")
+  fi
   emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}"
   [ "$s" != FAIL ]
 }
@@ -68,7 +69,13 @@ require_nightly() {
     }
   fi
 }
-assert_ran_tests() { ran_tests "$1"; }
+assert_ran_tests() {
+  local log="$1" min="${2:-1}" clean passed
+  ran_tests "$log" || return 1
+  clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" 2>/dev/null || true)
+  passed=$(awk '/test result: ok\./ { p+=$4 } END { print p+0 }' <<<"$clean")
+  [ "$passed" -ge "$min" ]
+}
 
 
 ensure_third_party() {
@@ -89,7 +96,7 @@ ensure_namcore_render() {
   local build_type="Release"
   local flags="-w -fno-fast-math -ffp-contract=off"
   local jobs="${NAM_RENDER_JOBS:-$(nproc 2>/dev/null || echo 2)}"
-  local bin="" config_file="$build_dir/.build_config"
+  local bin="" config_file="$build_dir/.build_config" prov_file="$build_dir/.build_provenance"
   command -v cmake >/dev/null 2>&1 || { warn "cmake not found"; return 2; }
   local cxx="${CXX:-}"
   if [ -z "$cxx" ]; then
@@ -100,7 +107,12 @@ ensure_namcore_render() {
   for cand in tools/render Release/render Debug/render; do
     [ -x "$build_dir/$cand" ] && bin="$build_dir/$cand" && break
   done
-  local fingerprint="$cxx:$build_type:$flags"
+  local core_commit plugin_commit cxx_ver cmake_ver
+  core_commit=$(git -C "$CORE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+  plugin_commit=$(git -C "$THIRD_PARTY_DIR/NeuralAmpModelerPlugin" rev-parse HEAD 2>/dev/null || echo absent)
+  cxx_ver=$("$cxx" --version 2>/dev/null | head -n 1)
+  cmake_ver=$(cmake --version 2>/dev/null | head -n 1)
+  local fingerprint="$cxx:$build_type:$flags:std=20:a2=ON:core=$core_commit:plugin=$plugin_commit:cc=$cxx_ver:cmake=$cmake_ver"
   if [ -n "$bin" ] && [ -f "$config_file" ] && [ "$(cat "$config_file" 2>/dev/null)" = "$fingerprint" ]; then
     echo "$bin"; return 0
   fi
@@ -117,20 +129,8 @@ ensure_namcore_render() {
   done
   [ -z "$bin" ] && return 6
   echo "$fingerprint" > "$config_file"
-  local mc_cpp="$PROJECT_DIR/tests/fixtures/render_multichannel.cpp"
-  if [ -f "$mc_cpp" ]; then
-    local objs
-    objs=$(find "$build_dir/tools/CMakeFiles/render.dir" -name "*.o" ! -name "render.cpp.o" 2>/dev/null || true)
-    if [ -n "$objs" ]; then
-      "$cxx" -std=c++20 -O3 -I "$CORE_DIR" -I "$CORE_DIR/Dependencies/eigen" \
-        -I "$CORE_DIR/Dependencies/AudioDSPTools" -I "$CORE_DIR/Dependencies/nlohmann" \
-        "$mc_cpp" $objs -o "$build_dir/render_multichannel" > "$logs_dir/compile-mc.log" 2>&1 || {
-        warn "render_multichannel compilation failed (see $logs_dir/compile-mc.log)"
-      }
-    else
-      warn "NAMCore object files not found in $build_dir/tools/CMakeFiles/render.dir"
-    fi
-  fi
+  printf 'core_commit=%s\nplugin_commit=%s\ncompiler=%s\ncompiler_version=%s\ncmake=%s\nflags=%s\n' \
+    "$core_commit" "$plugin_commit" "$cxx" "$cxx_ver" "$cmake_ver" "$flags" > "$prov_file"
   echo "$bin"
 }
 
@@ -151,11 +151,4 @@ ensure_long_receipt_bin() {
   [ -n "$LONG_RECEIPT_BIN" ] && [ -x "$LONG_RECEIPT_BIN" ] && return 0
   LONG_RECEIPT_BIN=$(ensure_qa_bin nam_long_receipt testing) || return 1
   export LONG_RECEIPT_BIN
-}
-
-check_freshness() {
-  local mode="${1:-hard-fail}"
-  local bin
-  bin=$(ensure_qa_bin nam_freshness testing) || return 1
-  "$bin" --root "$PROJECT_DIR" "$mode"
 }

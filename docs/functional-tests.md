@@ -24,12 +24,12 @@ This guide defines the manual functional verification procedures and the formal 
 
 | **Tier / Runner**       | **Scope & Purpose**                                                                      | **Target Duration**          | **Execution Cadence**                              |
 |:----------------------- |:---------------------------------------------------------------------------------------- |:---------------------------- |:-------------------------------------------------- |
-| **Static Quality Gate** | 🔍 **Static Analysis & Lints:** Formatting, 7-axis check, Clippy, doc-tests, SPDX        | ~45s                         | Routine developer loop, pre-commit & Receipt #1    |
+| **Static Quality Gate** | 🔍 **Static Analysis & Lints:** Formatting, four-configuration check and Clippy, documentation, SPDX        | ~45s                         | Routine developer loop, pre-commit & Receipt #1    |
 | **Tier 1 (Manual)**     | ⚡ **Smoke Test:** Sanity checks on model loading, dispatch, and basic inference         | ~2 min                       | After modifications to core DSP or loader modules  |
 | **Tier 2 (Manual)**     | 🎯 **Feature Verification:** Block-invariance, reset idempotency, DSP stage transitions  | ~10–15 min                   | Milestone completion or major feature integration  |
 | **Tier 3 (Manual)**     | 🛡️ **Robustness & Stress:** Continuous soak, SPSC burst contention, rate modulation      | ~20–30 min                   | Pre-release audits or major engine refactorings    |
-| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing     | ~16–46s (warm; budget ≤ 5 min)| Pre-commit check or local iterative validation     |
-| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, full parity matrix, heap audit, RT deadline   | ~8–12 min (measured)         | Nightly builds and pre-release human certification |
+| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing     | ~16–87s (16–22s warm; 64–87s cold; budget ≤ 5 min) | Pre-commit check or local iterative validation     |
+| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, full parity matrix, heap audit, RT deadline   | ~10–13 min (625–749s measured) | Nightly builds and pre-release human certification |
 
 ---
 
@@ -168,29 +168,31 @@ fn verify_model_invariance(model_path: &Path) -> anyhow::Result<()> {
 
 ### 4.1 Agile Quick Suite (`utils/tests-quick.sh`)
 
-The quick suite is the primary automated gate for local development (~16–46s measured warm; budget ≤ 5 min).
+The quick suite is the primary automated gate for local development (~16–87s measured: 16–22s warm incremental, 64–87s cold; budget ≤ 5 min).
 
 ```bash
 # Standard local verification (skips missing optional vendor fixtures gracefully)
 ./utils/tests-quick.sh
 
-# Lacunas do oráculo C++ ficam em target/logs/skips.jsonl (GAP); o modo estrito é do long:
+# Capacidades e fixtures obrigatórias ausentes ficam em target/logs/skips.jsonl
+# como GAP skip-capability:<n>; skips opcionais (models_nondist*/community_model_absent*)
+# são tipados como opcionais e não reprovam --strict. O modo estrito é do long:
 # ./utils/tests-long.sh --strict
 ```
 
-- **Freshness (`nam_freshness artifacts-hard`):** Verifies golden-artifact freshness and integrity; a `GENERATOR CHANGED` line becomes a `generator-drift` gap and a nonzero exit fails the run.
-- **Tests (`cargo test --locked --features testing --no-fail-fast`, Debug):** Runs every non-ignored test target, including structural/logic/parser/FSM checks, non-ignored numerical and parity checks, and the `libm_export_guard` symbol gate. Ignored tests are not invoked.
+- **Freshness (`nam_freshness artifacts-hard`):** Verifies golden-artifact freshness and integrity; exit code 3 becomes a `generator-drift` gap, exit code 0 passes, and other nonzero exits fail the run.
+- **Tests (`cargo test --locked --features testing,pinned --no-fail-fast`, Debug):** Runs every non-ignored test target, including structural/logic/parser/FSM checks, non-ignored numerical and parity checks, and the `libm_export_guard` symbol gate. Ignored tests are not invoked.
 
 **Expected Outcome:**
 
-- Local runs: `RESULT: PASS` or `RESULT: PASS_WITH_GAPS` with exit status 0 (a `cpp-oracle-absent:<n>` gap is derived from `target/logs/skips.jsonl`); a failed phase yields `RESULT: FAIL` and exit status 1.
+- Local runs: `RESULT: PASS` or `RESULT: PASS_WITH_GAPS` with exit status 0 (a `skip-capability:<n>` gap is derived only from blocking records of `target/logs/skips.jsonl`; optional non-distributable model skips are recorded with `"optional":true` and do not create a blocking gap); a failed phase yields `RESULT: FAIL` and exit status 1. Freshness, test/compilation, zero-test and unexpected-error paths all terminate through `finish`, producing exactly one `RESULT`, the phase `FAIL` with its log path, and the current `target/logs/tests-quick-status.tsv` carrier (a stale carrier is removed at start, and a carrier write failure fails the run).
 - The quick suite emits no receipt. Release certification requires `utils/tests-long.sh --strict` with zero gaps and exit status 0 (the quick suite has no strict flag).
 
 ---
 
 ### 4.2 Long Audit Suite (`utils/tests-long.sh`)
 
-The long audit suite provides exhaustive pre-release validation (~8–12 minutes measured).
+The long audit suite provides exhaustive pre-release validation (~10–13 minutes, 625–749 s measured).
 
 ```bash
 # Standard nightly audit (tolerates gaps for missing optional fixtures; exit status 0)
@@ -200,9 +202,15 @@ The long audit suite provides exhaustive pre-release validation (~8–12 minutes
 ./utils/tests-long.sh --strict
 ```
 
-- **Preflight Gates:** `preflight-render`, `preflight-catalog`, `preflight-package`, `preflight-freshness`, and diagnostic `preflight-simd-probe`.
+- **Preflight Gates:** `preflight-render` (build fingerprint by oracle commit/compiler, wrapper `render_multichannel` cache key, binary smoke, receipt provenance), `preflight-catalog`, `preflight-package`, `preflight-freshness`, and diagnostic `preflight-simd-probe`.
 
-- **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log`.
+- **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log` with shell xtrace routed to `target/logs/long-xtrace.log` by `xtrace_side_channel` (`utils/_lib.sh`), so the phase log contains command output only.
+
+- **Numeric telemetry:** `target/logs/fidelity-metrics.jsonl` carries ESR/SNR/MR-STFT/MSE rows from the fidelity helpers and `heap_alloc` totals (`scenario`, `allocations`) from `phase4`; it is truncated before `phase1` and never gates a phase.
+
+- **Quality verdict:** `utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only` checks fidelity without the performance baseline. The full `--check` remains receipt 5 for release certification.
+
+- **Typed discipline verdicts:** each discipline that uses `_lib.sh` writes `target/logs/<script>-status.tsv` (discipline, verdict, comma-separated gaps, comma-separated fails).
 
 - **Receipt Validation:**
 
@@ -219,8 +227,9 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 | File Path                                        | Generating Component / Phase           | Diagnostic Contents                                                                                                                          |
 |:------------------------------------------------ |:-------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`target/logs/quick-freshness.log`**            | `tests-quick.sh` (freshness)           | `nam_freshness artifacts-hard` output and generator-drift diagnostics.                                                                       |
-| **`target/logs/quick-tests.log`**                | `tests-quick.sh` (tests)               | Full non-ignored `cargo test --features testing` output (Debug profile).                                                                     |
-| **`target/logs/skips.jsonl`**                    | `tests-quick.sh` / test harness        | Structured skip records (e.g. missing optional C++ oracle) aggregated into `cpp-oracle-absent:<n>` gaps.                                    |
+| **`target/logs/quick-tests.log`**                | `tests-quick.sh` (tests)               | Full non-ignored `cargo test --features testing,pinned` output (Debug profile).                                                                     |
+| **`target/logs/skips.jsonl`**                    | `tests-quick.sh` / test harness        | Typed `report_skip` records (missing C++ oracle, distributable fixtures, non-distributable/community models); blocking records aggregate into `skip-capability:<n>` gaps, optional ones are flagged `optional:true`. |
+| **`target/logs/<script>-status.tsv`**            | `finish` em `utils/_lib.sh`            | Typed discipline verdict, gaps and failures, separated by commas.                                                                                                 |
 | **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)                | Machine-readable structured audit receipt (per-phase JSON entries).                                                                          |
 | **`target/logs/long-preflight-render.log`**      | `tests-long.sh` (`preflight-render`)   | C++ reference render build/validation diagnostics.                                                                                           |
 | **`target/logs/long-preflight-catalog.log`**     | `tests-long.sh` (`preflight-catalog`)  | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.                                                         |
@@ -230,18 +239,25 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 | **`target/logs/cmake-configure.log`**            | `utils/ensure_namcore_render.sh`       | CMake configuration output when compiling C++ `render` CLI.                                                                                  |
 | **`target/logs/cmake-build.log`**                | `utils/ensure_namcore_render.sh`       | Compilation logs for the C++ reference render binary.                                                                                        |
 | **`target/logs/long-catch-all.log`**             | `tests-long.sh` (`catch-all`)          | Full release suite including ignored tests: parity, multi-SR goldens, proptests, defense/invariants, and the libm export guard.              |
+| **`target/logs/long-<phase>-failures.txt`**      | `tests-long.sh` (failed phase)         | Diagnostic extract with libtest failure headers, `panicked at` and its message, `failures:`, and `test result: FAILED`; the full log is preserved. |
 | **`target/logs/long-soak.log`**                  | `tests-long.sh` (`soak`)               | Numerical soak logs, SPSC queue sweeps, and endurance metrics.                                                                               |
 | **`target/logs/long-isa-codegen.log`**           | `tests-long.sh` (`isa-codegen`)        | `simd_probe` output and `isa_contract` checks.                                                                                               |
 | **`target/logs/long-heap-audit.log`**            | `tests-long.sh` (`heap-audit`)         | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                                                      |
+| **`target/logs/fidelity-metrics.jsonl`**         | `tests-long.sh` (`catch-all`/`heap-audit`)| Numeric telemetry: fidelity rows (ESR/SNR/MR-STFT/MSE) and `heap_alloc` totals per scenario; truncated before `phase1`, never a gate.        |
+| **`target/logs/quality_report.jsonl`**           | `nam_quality dashboard` (quality phase)| Typed per-phase quality report (`freshness`, `third_party`, fidelity phases, performance). `observed_records` counts executed test cases for test-backed phases and measured metrics for measurement phases. |
+| **`target/logs/fidelity_metrics.jsonl`**         | `nam_quality dashboard` (quality phase)| Quality fidelity metrics (ESR/SNR/MR-STFT/MSE) consumed by `nam_quality ingest`; the underscore distinguishes it from the long-suite `fidelity-metrics.jsonl` (hyphen). |
+| **`target/logs/long-xtrace.log`**                | `tests-long.sh` (manual runs)          | Shell xtrace side-channel for long phases.                  |
 | **`target/logs/long-rt-deadline.log`**           | `tests-long.sh` (`rt-deadline`)        | Latency histograms and deadline statistics ($p99 < 1.33\text{ ms}$). High-resolution linear bins (0.5 µs resolution via `LatencyHistogram`). |
 | **`target/logs/long-rt-jitter.log`**             | `tests-long.sh` (`rt-jitter`)          | Real-time jitter telemetry and thread contention profiles.                                                                                   |
 | **`target/logs/long-loom.log`**                  | `tests-long.sh` (`loom`)               | Loom model-checking state-space exploration logs.                                                                                            |
 | **`target/logs/long-perf.log`**                  | `tests-long.sh` (`perf`)               | `nam_perf_gate run --check docs/quality-contract.json` output.                                                                               |
-| **`target/logs/regression_phase_receipt.jsonl`** | `nam_quality` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary.                                            |
+| **`target/logs/regression_phase_receipt.jsonl`** | `nam_quality` / S2 | Machine-readable performance regression phase receipts integrated fail-closed into audit summary (enforces `hardware_class` comparability).  |
 | **`target/logs/regression-check.log`**           | `nam_perf_gate run --check`            | Detailed Criterion output and statistical confidence interval results during regression checks (truncated on invocation start).              |
 | **`target/logs/remote-simd-receipt.jsonl`**      | `utils/remote-simd-gate.sh`            | Structured multi-ISA verification receipt emitted from remote or emulated AVX-512 runs.                                                      |
 | **`target/logs/remote-simd-parity.log`**         | `utils/remote-simd-gate.sh`            | Detailed parity output comparing AVX2 and AVX-512 execution streams.                                                                         |
-| **`target/logs/dashboard/`**                     | `utils/quality-dashboard.sh`           | Structured JSON outputs for individual model fidelity and latency benchmarks.                                                                |
+| **`target/logs/`**                              | `utils/quality-dashboard.sh`           | Structured JSON outputs (receipt, metrics, report) for individual model fidelity and latency benchmarks.                                      |
+| **`target/parity-vectors/<target>/*.bin`**       | `nam_parity_vector generate` / CI      | `NAMPARV1` binary parity vectors containing exact IEEE-754 output samples and provenance headers.                                              |
+| **`target/logs/parity/report-*.json`**           | `nam_parity_vector compare` / CI       | Detailed forensic JSON reports from pairwise cross-platform bitwise parity comparisons.                                                       |
 | **`target/debug-logs/<label>.log`**              | `utils/debug/repro_oversample_hang.sh` | Timestamped execution log and command output under systemd cgroup v2 resource limits.                                                        |
 | **`target/debug-logs/<label>.exit`**             | `utils/debug/repro_oversample_hang.sh` | Raw exit status code emitted by the wrapped command or systemd scope timeout (`143` on SIGTERM, `137` on SIGKILL).                           |
 | **`~/.cache/neural-amp-modeler-rs/crash-*.txt`** | Runtime Panic Hook                     | Diagnostic crash reports rendered without heap allocations.                                                                                  |
@@ -326,6 +342,7 @@ The AVX-512 backend (`src/dsp/simd/avx512/`) provides opt-in mathematical accele
 To maintain strict hygiene across public checkouts, the fixture catalog (`src/testing/catalog.rs`) partitions models and goldens:
 - **`RequiredLocal`:** Standard models committed to repository git history (`tests/fixtures/models/*.nam`). Their absence hard-fails the preflight gate.
 - **`OptionalExternal`:** Proprietary community models (`EVH-5150-Lite.nam`, `APP-EVH-Stealth100-Dialled-xSTD.nam`, `Boss BD-2 H2O Mod T-12_00 G-12_00.nam`, `SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam`). When absent in clean developer clones, `catalog_preflight` gracefully classifies them as `MISSING-OPTIONAL` / `SKIP-CAPABILITY`, allowing `catalog_preflight` to pass cleanly with exit code 0 (`PASS`).
+- **Typed skip evidence:** tests that need an absent optional model (`nondist_validation`, `nam_infer_test::test_community_models_inference`) call `neural_amp_modeler_rs::testing::report_skip` with reasons `models_nondist_absent`, `models_nondist_empty`, or `community_model_absent:<file>`. The record lands in `target/logs/skips.jsonl`; blocking records become a `skip-capability:<n>` gap, while the three documented optional reasons are non-blocking under the long `--strict` and remain counted in the receipt. A missing model is never a silent `PASS`.
 
 ---
 
@@ -338,8 +355,8 @@ A build is certified for release only when **all five mandatory receipts** are p
 | #   | Receipt Artifact        | Generating Command                                              | Execution Flags / Env                    | Blocking Criteria                                                                                                                                 |
 |:---:|:----------------------- |:--------------------------------------------------------------- |:---------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | `lints.log`             | `utils/lints.sh`                                                | `--all-targets --all-features` (script)  | Exit 0; zero compiler/clippy/rustdoc warnings; SPDX and anti-pattern checks green; AVX-512 compile-time segregation confirmed.                    |
-| 2   | `quick-strict.log`      | `utils/tests-quick.sh`                                          | Canonical execution                      | Exit 0; `FIDELITY: OK`; `OVERALL: PASSED`; zero `GAP:` entries.                                                                                   |
-| 3   | `long-strict.log`       | `utils/tests-long.sh --strict`                                  | `--strict`                               | Exit 0; `OVERALL: PASSED`; `gaps: []`; receipt validated via `nam_long_receipt validate --strict`.                                                |
+| 2   | `quick-strict.log`      | `utils/tests-quick.sh`                                          | Canonical execution                      | Exit 0; `RESULT: PASS`; zero gaps.                                                                                                                |
+| 3   | `long-strict.log`       | `utils/tests-long.sh --strict`                                  | `--strict`                               | Exit 0; `RESULT: PASS`; `gaps: []`; receipt validated via `nam_long_receipt validate --strict`.                                                |
 | 4   | `perf-check.log`        | `nam_perf_gate run --check`                 | Pre-approved baseline (see §5.2)         | Exit 0; machine regression verdict green (`nam_perf_gate verdict` over Criterion `change/estimates.json`) against a pre-approved baseline commit. |
 | 5   | `quality-contract.json` | `utils/quality-dashboard.sh --check docs/quality-contract.json` | `docs/quality-contract.json` (committed) | Exit 0; all audio fidelity envelopes (ESR/SNR/MR-STFT) and f64-oracle checks satisfied; `regression_gate` is not `NOT_VERIFIED`.                  |
 

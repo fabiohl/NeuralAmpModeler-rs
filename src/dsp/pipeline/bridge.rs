@@ -415,15 +415,13 @@ impl DspBridgeWriter {
         n_pw: usize,
         process_mono: bool,
     ) {
-        let n_bridge = n_pw.min(MAX_BRIDGE_BUF);
-        debug_assert!(
-            resamp_out_l.len() >= n_bridge,
-            "resamp_out_l slice smaller than n_bridge"
-        );
-        debug_assert!(
-            process_mono || resamp_out_r.len() >= n_bridge,
-            "resamp_out_r slice smaller than n_bridge in stereo mode"
-        );
+        let avail_l = resamp_out_l.len();
+        let avail = if process_mono {
+            avail_l
+        } else {
+            avail_l.min(resamp_out_r.len())
+        };
+        let n_bridge = n_pw.min(MAX_BRIDGE_BUF).min(avail);
 
         // SAFETY: self.0 is NonNull<DspBridge> into heap-immortal memory. The
         // whole-struct pointer is only ever narrowed to field places and raw
@@ -433,12 +431,11 @@ impl DspBridgeWriter {
         // back-buffer (1 - active_read_idx); the reader only accesses the
         // complementary front-buffer.
         // Bounds & non-overlap: `n_bridge <= MAX_BRIDGE_BUF` by definition;
-        // `buf_l`/`buf_r` have capacity `MAX_BRIDGE_BUF`; the caller contract
-        // (checked by the debug_asserts above) guarantees
-        // `resamp_out_l.len() >= n_bridge` and, in stereo,
-        // `resamp_out_r.len() >= n_bridge`. The input (resampler scratch) and
-        // output (bridge back-buffer) regions do not overlap. Release stores
-        // synchronize visibility with the reader's Acquire loads.
+        // `buf_l`/`buf_r` have capacity `MAX_BRIDGE_BUF`; `n_bridge <= resamp_out_l.len()`
+        // and, in stereo, `n_bridge <= resamp_out_r.len()` guaranteed by the release clamp
+        // above (R-15). The input (resampler scratch) and output (bridge back-buffer)
+        // regions do not overlap. Release stores synchronize visibility with the reader's
+        // Acquire loads.
         unsafe {
             let bridge = self.0.as_ptr();
 
@@ -455,23 +452,25 @@ impl DspBridgeWriter {
             let back_idx = 1 - (*bridge).active_read_idx.load(Ordering::Relaxed);
             let back_buf = (*bridge).buffers[back_idx].get();
 
-            core::ptr::copy_nonoverlapping(
-                resamp_out_l.as_ptr(),
-                (*back_buf).buf_l.as_mut_ptr(),
-                n_bridge,
-            );
-            if process_mono {
+            if n_bridge > 0 {
                 core::ptr::copy_nonoverlapping(
                     resamp_out_l.as_ptr(),
-                    (*back_buf).buf_r.as_mut_ptr(),
+                    (*back_buf).buf_l.as_mut_ptr(),
                     n_bridge,
                 );
-            } else {
-                core::ptr::copy_nonoverlapping(
-                    resamp_out_r.as_ptr(),
-                    (*back_buf).buf_r.as_mut_ptr(),
-                    n_bridge,
-                );
+                if process_mono {
+                    core::ptr::copy_nonoverlapping(
+                        resamp_out_l.as_ptr(),
+                        (*back_buf).buf_r.as_mut_ptr(),
+                        n_bridge,
+                    );
+                } else {
+                    core::ptr::copy_nonoverlapping(
+                        resamp_out_r.as_ptr(),
+                        (*back_buf).buf_r.as_mut_ptr(),
+                        n_bridge,
+                    );
+                }
             }
             (*back_buf).n_samples = n_bridge as u32;
             (*back_buf).generation = next_gen;

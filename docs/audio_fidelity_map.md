@@ -78,11 +78,11 @@ Standard exact activations and neural stage oversampling operate synergistically
 
 **Measured Interop Parity:** Under `ActivationPrecision::Standard`, recurrent state drift between NeuralAmpModeler-rs and reference NAMCore is eliminated across all catalogued LSTM models:
 
-| Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                   |
-|:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:------------------------ |
-| **BossLSTM-1×16**       | **$8.51 \times 10^{-12}$** | $110.7\text{ dB}$ | **$9.08 \times 10^{-13}$** | ✅ Bit-identical interop |
-| **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.78 \times 10^{-13}$** | ✅ Bit-identical interop |
-| **Official lstm (H=3)** | **$7.86 \times 10^{-13}$** | $121.0\text{ dB}$ | **$2.71 \times 10^{-12}$** | ✅ Bit-identical interop |
+| Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                          |
+|:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:------------------------------- |
+| **BossLSTM-1×16**       | **$8.51 \times 10^{-12}$** | $110.7\text{ dB}$ | **$9.08 \times 10^{-13}$** | ✅ Noise-floor interop (< 1e-11) |
+| **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.78 \times 10^{-13}$** | ✅ Noise-floor interop (< 1e-11) |
+| **Official lstm (H=3)** | **$7.86 \times 10^{-13}$** | $121.0\text{ dB}$ | **$2.71 \times 10^{-12}$** | ✅ Noise-floor interop (< 1e-11) |
 
 *Measurements taken after 24,000-sample warmup prewarm in canonical live mode ([`docs/quality-contract.json`](quality-contract.json)).*
 

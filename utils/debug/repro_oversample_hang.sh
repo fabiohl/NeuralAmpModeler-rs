@@ -73,7 +73,7 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 # like a confirmed hang). Output is redirected straight to the log file and
 # `$?` is read immediately, unambiguously.
 
-set -uo pipefail
+set -euo pipefail
 
 # Resolve project root dynamically so `target/debug-logs/` always lands at the
 # repository root, regardless of the caller's current working directory.
@@ -113,6 +113,10 @@ case "$TIMEOUT_S" in
         usage
         ;;
 esac
+if [[ ! "$TIMEOUT_S" =~ [1-9] ]]; then
+    echo "Error: <timeout_seconds> must be greater than zero." >&2
+    usage
+fi
 
 # Restrict <label> to a safe charset: it becomes part of a filesystem path
 # below (target/debug-logs/<label>.log|.exit). Without this check a crafted

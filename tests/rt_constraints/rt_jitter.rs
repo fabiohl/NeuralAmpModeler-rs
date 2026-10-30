@@ -86,15 +86,33 @@ use neural_amp_modeler_rs::models::NamModel;
 const WARMUP_BLOCKS: usize = 512;
 const MEASURE_BLOCKS: usize = 16384;
 
-#[cfg(target_os = "linux")]
 fn pin_thread(cpus: &[usize]) {
-    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    for &cpu in cpus {
-        if cpu < libc::CPU_SETSIZE as usize {
-            unsafe { libc::CPU_SET(cpu, &mut set) };
+    #[cfg(target_os = "linux")]
+    {
+        let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        for &cpu in cpus {
+            if cpu < libc::CPU_SETSIZE as usize {
+                unsafe { libc::CPU_SET(cpu, &mut set) };
+            }
         }
+        let _ = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
     }
-    let _ = unsafe { libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set) };
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cpus;
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn thread_context_switches() -> Option<(u64, u64)> {
+    neural_amp_modeler_rs::testing::host::proc::read_thread_rusage()
+        .ok()
+        .map(|usage| (usage.nvcsw, usage.nivcsw))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_context_switches() -> Option<(u64, u64)> {
+    None
 }
 
 fn initial_process_cpus() -> Vec<usize> {
@@ -141,8 +159,8 @@ struct JitterStats {
     exact_max_us: u64,
     violations: u64,
     total_blocks: usize,
-    voluntary_cs: u64,
-    involuntary_cs: u64,
+    voluntary_cs: Option<u64>,
+    involuntary_cs: Option<u64>,
 }
 
 impl JitterStats {
@@ -215,7 +233,6 @@ fn measure_latency(
 
     // If a bench core is designated, pin the DSP thread to that core.
     if let Some(core) = bench_core {
-        #[cfg(target_os = "linux")]
         pin_thread(&[core]);
     }
 
@@ -260,7 +277,6 @@ fn measure_latency(
         };
         workers.push(thread::spawn(move || {
             if let Some(core) = target_core {
-                #[cfg(target_os = "linux")]
                 pin_thread(&[core]);
             }
             stress_worker(r);
@@ -283,7 +299,7 @@ fn measure_latency(
     let hist = LatencyHistogram::new();
     let mut violations: u64 = 0;
 
-    let rusage_before = neural_amp_modeler_rs::testing::host::proc::read_thread_rusage().ok();
+    let cs_before = thread_context_switches();
 
     // `black_box` around the process call and the
     // output consumption proves the loop exercises the buffers and
@@ -310,13 +326,13 @@ fn measure_latency(
     }
     std::hint::black_box(&output);
 
-    let rusage_after = neural_amp_modeler_rs::testing::host::proc::read_thread_rusage().ok();
-    let (voluntary_cs, involuntary_cs) = match (rusage_before, rusage_after) {
-        (Some(b), Some(a)) => (
-            a.nvcsw.saturating_sub(b.nvcsw),
-            a.nivcsw.saturating_sub(b.nivcsw),
+    let cs_after = thread_context_switches();
+    let (voluntary_cs, involuntary_cs) = match (cs_before, cs_after) {
+        (Some((v_before, i_before)), Some((v_after, i_after))) => (
+            Some(v_after.saturating_sub(v_before)),
+            Some(i_after.saturating_sub(i_before)),
         ),
-        _ => (0, 0),
+        _ => (None, None),
     };
 
     running.store(false, Ordering::Relaxed);
@@ -347,11 +363,15 @@ fn measure_latency(
         stats.violations,
         stats.total_blocks,
         stats.violation_pct(),
-        stats.voluntary_cs,
-        stats.involuntary_cs,
+        fmt_cs(stats.voluntary_cs),
+        fmt_cs(stats.involuntary_cs),
     );
 
     stats
+}
+
+fn fmt_cs(value: Option<u64>) -> String {
+    value.map_or_else(|| "N/A".to_string(), |v| v.to_string())
 }
 
 fn delta_pct(current: u64, baseline: u64) -> String {
@@ -375,8 +395,8 @@ fn emit_receipt(label: &str, stress_workers: usize, stats: &JitterStats) {
         stats.exact_max_us,
         stats.violations,
         stats.total_blocks,
-        stats.voluntary_cs,
-        stats.involuntary_cs,
+        fmt_cs(stats.voluntary_cs),
+        fmt_cs(stats.involuntary_cs),
     );
 }
 
@@ -477,7 +497,6 @@ fn test_jitter_characterization_baseline_wavenet_standard() {
     let all_cpus = initial_process_cpus();
     let bench_core = bench_core_env().filter(|c| all_cpus.contains(c));
     if let Some(core) = bench_core {
-        #[cfg(target_os = "linux")]
         pin_thread(&[core]);
     }
     println!(
