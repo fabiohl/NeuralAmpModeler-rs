@@ -47,7 +47,28 @@ pub use many_to_one::LinearManyToOne;
 pub use mode::MultichannelMode;
 pub use one_to_many::LinearOneToMany;
 
+use crate::dsp::mirror_buf::MirroredBuffer;
 use crate::loader::nam_json::LinearTopology;
+
+/// Shared delay-line bound used by the multichannel safe boundary.
+///
+/// Returns whether `write_pos` can accept a sample and still expose the full
+/// `receptive_field` history window without leaving the mirrored view.
+pub(crate) fn history_is_sound(
+    history: &MirroredBuffer<f32>,
+    write_pos: usize,
+    receptive_field: usize,
+    double_limit: usize,
+) -> bool {
+    let size = history.size();
+    if receptive_field == 0 || size < receptive_field {
+        return false;
+    }
+    let Some(total) = size.checked_mul(2) else {
+        return false;
+    };
+    double_limit == total && write_pos >= receptive_field && write_pos < total
+}
 
 /// Unified multichannel dispatcher enum for the Linear model.
 pub enum LinearMultichannel {
@@ -60,6 +81,36 @@ pub enum LinearMultichannel {
 }
 
 impl LinearMultichannel {
+    /// Number of input channels declared by the selected engine.
+    #[inline]
+    pub fn in_channels(&self) -> usize {
+        match self {
+            Self::OneToMany(_) => 1,
+            Self::ManyToOne(m) => m.in_channels,
+            Self::ManyToManyShared(m) => m.channels,
+        }
+    }
+
+    /// Number of output channels declared by the selected engine.
+    #[inline]
+    pub fn out_channels(&self) -> usize {
+        match self {
+            Self::OneToMany(m) => m.out_channels,
+            Self::ManyToOne(_) => 1,
+            Self::ManyToManyShared(m) => m.channels,
+        }
+    }
+
+    /// Returns whether the selected variant can safely reach its unchecked
+    /// kernels.
+    pub fn is_sound(&self) -> bool {
+        match self {
+            Self::OneToMany(m) => m.is_sound(),
+            Self::ManyToOne(m) => m.is_sound(),
+            Self::ManyToManyShared(m) => m.is_sound(),
+        }
+    }
+
     /// Constructs a specialized multichannel Linear model according to `topo`.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
         let in_ch = topo.in_channels;

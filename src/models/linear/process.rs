@@ -11,6 +11,22 @@ use super::LinearMode;
 use crate::math::common::SimdMath;
 use crate::models::plane_adapter;
 
+/// Writes silence to the declared output planes of a multichannel model.
+///
+/// # Safety
+/// The caller guarantees `output` points to at least `out_channels` valid
+/// non-null pointers, each covering `num_frames` writable samples.
+unsafe fn silence_output_planes(out_channels: usize, output: *const *mut f32, num_frames: usize) {
+    for ch in 0..out_channels {
+        // SAFETY: `output` has `out_channels` slots by the caller contract.
+        let plane = unsafe { *output.add(ch) };
+        if !plane.is_null() {
+            // SAFETY: each slot points to `num_frames` writable samples.
+            unsafe { core::slice::from_raw_parts_mut(plane, num_frames) }.fill(0.0);
+        }
+    }
+}
+
 impl super::LinearModel {
     /// Processes a single audio sample using the Linear model.
     ///
@@ -78,7 +94,10 @@ impl super::LinearModel {
                 if state.sample_counter >= p {
                     let block_start = self.write_pos - 2 * p;
                     let block_window = &self.history[block_start..self.write_pos];
-                    state.process_tail_block(block_window);
+                    // SAFETY: this model validated the whole state at the safe entry point; no
+                    // public field can change under the current `&mut self` borrow,
+                    // and `block_window` has exactly `2P` samples.
+                    unsafe { state.process_tail_block_unchecked(block_window) };
                     state.sample_counter = 0;
                 }
 
@@ -180,7 +199,10 @@ impl super::LinearModel {
                     if state.sample_counter >= p {
                         let block_start = self.write_pos - 2 * p;
                         let block_window = &self.history[block_start..self.write_pos];
-                        state.process_tail_block(block_window);
+                        // SAFETY: this model validated the whole state at the safe entry point; no
+                        // public field can change under the current `&mut self` borrow,
+                        // and `block_window` has exactly `2P` samples.
+                        unsafe { state.process_tail_block_unchecked(block_window) };
                         state.sample_counter = 0;
                     }
 
@@ -196,6 +218,11 @@ impl super::LinearModel {
     /// `self.weights` must be 64-byte aligned.
     #[inline(always)]
     pub unsafe fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        if !self.validate_state() {
+            let frames = input.len().min(output.len());
+            output[..frames].fill(0.0);
+            return;
+        }
         // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a
         // matching `#[target_feature]` backend; `input`/`output` are the same valid
         // slices passed to this `unsafe fn`, whose documented precondition
@@ -225,7 +252,18 @@ impl super::LinearModel {
         output: *const *mut f32,
         num_frames: usize,
     ) {
+        let multichannel_sound = self.validate_multichannel_state();
+        let declared_out = self.out_channels;
         if let Some(ref mut mc) = self.multichannel {
+            if !multichannel_sound {
+                // Defined rejection: unsound public-field mutations, including
+                // a declared/engine channel mismatch, must not reach the
+                // raw-pointer channel kernels. Silence the declared planes so
+                // hosts do not emit stale audio.
+                // SAFETY: caller guarantees the declared output geometry.
+                unsafe { silence_output_planes(declared_out, output, num_frames) };
+                return;
+            }
             // SAFETY: Caller guarantees input and output pointers point to valid channel buffers of length num_frames.
             unsafe { mc.process_raw(input, output, num_frames) };
         } else {

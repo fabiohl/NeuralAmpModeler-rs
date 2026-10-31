@@ -50,6 +50,26 @@ impl WaveNetLayerDyn {
         })
     }
 
+    /// Returns whether this layer still satisfies the geometry and buffer
+    /// contract of [`Self::process_block_internal`].
+    #[inline]
+    pub(crate) fn is_sound(&self, ch: usize, cond: usize) -> bool {
+        let Some(scratch_min) = ch.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        self.conv1d.in_ch == ch
+            && self.conv1d.out_ch == ch
+            && self.conv1d.is_sound()
+            && self.input_mixin.in_ch == cond
+            && self.input_mixin.out_ch == ch
+            && self.input_mixin.is_sound()
+            && self.one_by_one.in_ch == ch
+            && self.one_by_one.out_ch == ch
+            && self.one_by_one.is_sound()
+            && self.scratch_mixin.len() >= scratch_min
+            && self.scratch_conv.len() >= scratch_min
+    }
+
     /// Processes a full WaveNet layer with runtime-dimensional scratch buffers.
     ///
     /// Uses dual-frame Conv1D tiling (process_block) for SIMD amortization.

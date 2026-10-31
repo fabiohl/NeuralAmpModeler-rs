@@ -171,6 +171,64 @@ impl Clone for WaveNetModelDyn {
 }
 
 impl WaveNetModelDyn {
+    /// Returns whether the whole model can safely reach its unchecked kernels.
+    ///
+    /// The model, array, layer and tensor fields are all public, so a consumer
+    /// can invalidate construction-time invariants from safe Rust. The safe
+    /// entry points ([`Self::process`], [`Self::prewarm`]) consult this
+    /// predicate before dispatching; while it reports `false`, processing
+    /// produces silence instead of dereferencing corrupted state.
+    pub fn validate_state(&self) -> bool {
+        let Some(first) = self.arrays.first() else {
+            return false;
+        };
+        let Some(last) = self.arrays.last() else {
+            return false;
+        };
+        // Array 0 receives the raw mono input as its layer input.
+        if first.in_ch != 1 {
+            return false;
+        }
+        let cond = first.cond;
+        if cond == 0 {
+            return false;
+        }
+        if !self.arrays.iter().all(|array| array.is_sound()) {
+            return false;
+        }
+        if self.arrays.iter().any(|array| array.cond != cond) {
+            return false;
+        }
+        // Array chaining: `prev.array_outputs` feeds `curr.layer_inputs`, and
+        // `prev.head_outputs` seeds `curr.head_accum` (seed must be at least as
+        // long as the current block).
+        if self
+            .arrays
+            .windows(2)
+            .any(|pair| pair[0].ch != pair[1].in_ch || pair[0].head < pair[1].ch)
+        {
+            return false;
+        }
+        let needs_condition_buffer = self.condition_dsp.is_some() || cond > 1;
+        if needs_condition_buffer {
+            let Some(min_cond) = cond.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+                return false;
+            };
+            if self.condition_dsp_output.len() < min_cond {
+                return false;
+            }
+        }
+        if let Some(ref head) = self.post_stack_head {
+            let Some(min_scratch) = head.out_channels().checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+                return false;
+            };
+            if !head.is_sound(last.head) || self.head_output_scratch.len() < min_scratch {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Returns whether this dynamic WaveNet model was explicitly constructed as slimmable capable.
     #[inline(always)]
     pub fn is_slimmable_capable(&self) -> bool {
@@ -199,13 +257,43 @@ impl WaveNetModelDyn {
     }
 
     /// Restores the `buffer_start` pointers of all layer arrays from a slice.
+    ///
+    /// Restores are all-or-nothing: every supplied candidate is validated
+    /// against the release-stable delay-line bounds (see
+    /// `WaveNetLayerState::start_is_sound`) before any state is modified. If a
+    /// candidate is invalid, the model is left untouched. `offset` always
+    /// advances for every visited state, so the caller's position contract is
+    /// preserved.
+    ///
+    /// # Compatibility
+    /// Previously every value was applied unconditionally. Restoring a
+    /// corrupt or cross-version snapshot now leaves the model unchanged
+    /// instead of partially rewinding it; callers that need to distinguish
+    /// this case should validate their snapshot before calling.
     #[inline(always)]
     pub fn restore_buffer_starts(&mut self, starts: &[usize], offset: &mut usize) {
+        let first = *offset;
+        let mut cursor = first;
+        let mut valid = true;
+        for array in &self.arrays {
+            let ch = array.ch;
+            for state in &array.states {
+                if cursor < starts.len() {
+                    valid &= state.start_is_sound(starts[cursor], ch);
+                    cursor += 1;
+                }
+            }
+        }
+        *offset = cursor;
+        if !valid {
+            return;
+        }
+        let mut cursor = first;
         for array in &mut self.arrays {
             for state in &mut array.states {
-                if *offset < starts.len() {
-                    state.buffer_start = starts[*offset];
-                    *offset += 1;
+                if cursor < starts.len() {
+                    state.buffer_start = starts[cursor];
+                    cursor += 1;
                 }
             }
         }
@@ -252,6 +340,11 @@ impl WaveNetModelDyn {
     /// Dynamic WaveNet is hardcoded to `Avx2Math`. It does not call
     /// `dispatch_simd!` and has no AVX-512 monomorph.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        if !self.validate_state() {
+            let frames = input.len().min(output.len());
+            output[..frames].fill(0.0);
+            return;
+        }
         // SAFETY: `process_internal` is an `unsafe fn` whose `M` is fixed to `Avx2Math` (this
         // model hardcodes the AVX2 backend and never dispatches AVX-512), and it clamps the frame
         // count to `input.len()`/`output.len()` per its documented contract.
@@ -408,6 +501,9 @@ impl WaveNetModelDyn {
     /// the dispatch pattern of the rest of the codebase).
     #[cold]
     pub fn prewarm(&mut self) {
+        if !self.validate_state() {
+            return;
+        }
         // SAFETY: `prewarm_internal` is an `unsafe fn` reached here with `M` fixed to `Avx2Math`
         // (this model's only backend), and it only touches the model's own pre-allocated buffers
         // and the optional condition-DSP sub-model.
@@ -450,6 +546,9 @@ impl WaveNetModelDyn {
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
+        if !self.validate_state() {
+            return;
+        }
         // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
         // `Avx2Math` is selected only on such hosts, so its instructions are available;
         // `prewarm_internal` only touches the model's own pre-allocated buffers.

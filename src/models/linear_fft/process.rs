@@ -66,12 +66,37 @@ impl super::LinearFftState {
     /// path.
     #[inline(never)]
     pub fn process_tail_block(&mut self, input_window: &[f32]) {
+        // Defined rejection for direct safe calls on state mutated after
+        // construction: never reach the SIMD kernels with inconsistent
+        // lengths, an uninitialized window or an unsupported captured ISA.
+        // Compute the expected size with checked arithmetic first so a public
+        // `p > usize::MAX / 2` cannot panic in debug builds.
+        let Some(block_size) = self.p.checked_mul(2) else {
+            return;
+        };
+        if input_window.len() != block_size || !self.is_sound_internal() {
+            return;
+        }
+        // SAFETY: the guard above established `input_window.len() == 2P` and
+        // internal consistency for this call.
+        unsafe { self.process_tail_block_unchecked(input_window) };
+    }
+
+    /// Unchecked tail block used by model paths that already validated the
+    /// whole state under the current `&mut self` borrow.
+    ///
+    /// # Safety
+    /// `input_window.len() == 2 * self.p`, and `self` must have satisfied
+    /// `is_sound_internal()` at the nearest safe entry point.
+    #[inline(never)]
+    pub(crate) unsafe fn process_tail_block_unchecked(&mut self, input_window: &[f32]) {
         let p = self.p;
-        let block_size = 2 * p;
+        let Some(block_size) = p.checked_mul(2) else {
+            return;
+        };
+        debug_assert_eq!(input_window.len(), block_size);
         let num_bins = self.num_bins;
         let num_partitions = self.num_partitions;
-
-        debug_assert_eq!(input_window.len(), block_size);
 
         if num_partitions == 0 {
             return;

@@ -339,3 +339,19 @@ fn process_tail_block_reset_then_process() {
         state.tail_output_buf[1]
     );
 }
+
+#[test]
+fn process_tail_block_rejects_state_mutated_after_construction() {
+    let ir = vec![0.1f32; 64];
+    let mut state =
+        LinearFftState::new(16, &ir).expect("construction should succeed for test-sized buffers");
+    let before = state.tail_output_buf.to_vec();
+
+    // `p` is public: growing it desynchronizes `p`, `rfft` and the buffers.
+    state.p = 32;
+    assert!(!state.is_sound_internal());
+    let window = [1.0f32; 64];
+    state.process_tail_block(&window);
+    assert_eq!(state.tail_output_buf.to_vec(), before);
+    assert_eq!(state.sample_counter, 0);
+}

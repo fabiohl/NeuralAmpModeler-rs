@@ -31,6 +31,28 @@ pub struct LinearManyToManyShared {
 }
 
 impl LinearManyToManyShared {
+    /// Returns whether this variant can safely reach its unchecked kernels.
+    pub fn is_sound(&self) -> bool {
+        let rf = self.receptive_field;
+        let chs = self.channels;
+        if chs == 0
+            || self.weights.len() < rf
+            || self.biases.len() < chs
+            || self.histories.len() < chs
+            || self.histories.iter().take(chs).any(|history| {
+                !super::history_is_sound(history, self.write_pos, rf, self.double_limit)
+            })
+        {
+            return false;
+        }
+        match &self.mode {
+            MultichannelMode::Direct => true,
+            MultichannelMode::Fft(states) => {
+                states.len() >= chs && states.iter().all(|state| state.is_sound(rf))
+            }
+        }
+    }
+
     /// Constructs a new `LinearManyToManyShared` instance.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
         let channels = topo.in_channels;
@@ -203,7 +225,10 @@ impl LinearManyToManyShared {
                         let block_start = self.write_pos - 2 * p;
                         for (ch, state) in states.iter_mut().enumerate().take(chs) {
                             let block_window = &self.histories[ch][block_start..self.write_pos];
-                            state.process_tail_block(block_window);
+                            // SAFETY: this model validated the whole state at the safe entry point; no
+                            // public field can change under the current `&mut self` borrow,
+                            // and `block_window` has exactly `2P` samples.
+                            unsafe { state.process_tail_block_unchecked(block_window) };
                             state.sample_counter = 0;
                         }
                     }

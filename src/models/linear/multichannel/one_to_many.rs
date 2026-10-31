@@ -31,6 +31,29 @@ pub struct LinearOneToMany {
 }
 
 impl LinearOneToMany {
+    /// Returns whether this variant can safely reach its unchecked kernels.
+    pub fn is_sound(&self) -> bool {
+        let rf = self.receptive_field;
+        if !super::history_is_sound(&self.history, self.write_pos, rf, self.double_limit)
+            || self.out_channels == 0
+            || self.weights.len() < self.out_channels
+            || self.biases.len() < self.out_channels
+            || self
+                .weights
+                .iter()
+                .take(self.out_channels)
+                .any(|w| w.len() < rf)
+        {
+            return false;
+        }
+        match &self.mode {
+            MultichannelMode::Direct => true,
+            MultichannelMode::Fft(states) => {
+                states.len() >= self.out_channels && states.iter().all(|state| state.is_sound(rf))
+            }
+        }
+    }
+
     /// Constructs a new `LinearOneToMany` instance.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
         let out_channels = topo.out_channels;
@@ -201,7 +224,10 @@ impl LinearOneToMany {
                         let block_start = self.write_pos - 2 * p;
                         let block_window = &self.history[block_start..self.write_pos];
                         for state in states.iter_mut() {
-                            state.process_tail_block(block_window);
+                            // SAFETY: this model validated the whole state at the safe entry point; no
+                            // public field can change under the current `&mut self` borrow,
+                            // and `block_window` has exactly `2P` samples.
+                            unsafe { state.process_tail_block_unchecked(block_window) };
                             state.sample_counter = 0;
                         }
                     }

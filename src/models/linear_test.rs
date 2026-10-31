@@ -1154,3 +1154,160 @@ fn test_static_model_multichannel_dispatch() {
     assert_eq!(in_out0[0], 0.5);
     assert_eq!(in_out1[0], 1.0);
 }
+
+// ── Safe-boundary rejection (AI-17 / T-1.2) ──
+
+fn mono_topo(receptive_field: usize, has_bias: bool) -> LinearTopology {
+    LinearTopology {
+        in_channels: 1,
+        out_channels: 1,
+        receptive_field,
+        has_bias,
+        implementation: LinearImplementation::Direct,
+    }
+}
+
+#[test]
+fn test_new_with_topology_rejects_weights_shorter_than_receptive_field() {
+    let err = LinearModel::new_with_topology(mono_topo(8, false), Vec::new(), vec![0.0])
+        .err()
+        .expect("empty weights with receptive_field=8 must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    let err = LinearModel::new_with_topology(mono_topo(8, false), vec![0.0; 7], vec![0.0])
+        .err()
+        .expect("short weights must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    let model = LinearModel::new_with_topology(mono_topo(8, false), vec![0.0; 8], vec![0.0])
+        .expect("exact weight count is valid");
+    assert!(model.validate_state());
+}
+
+#[test]
+fn test_new_with_topology_rejects_zero_receptive_field() {
+    let err = LinearModel::new_with_topology(mono_topo(0, false), Vec::new(), vec![0.0])
+        .err()
+        .expect("receptive_field=0 must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_new_with_topology_rejects_declared_bias_without_values() {
+    let err = LinearModel::new_with_topology(mono_topo(4, true), vec![0.0; 4], Vec::new())
+        .err()
+        .expect("has_bias=true with no bias value must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_new_with_topology_rejects_invalid_multichannel_geometry() {
+    let topo = LinearTopology {
+        in_channels: 2,
+        out_channels: 2,
+        receptive_field: 4,
+        has_bias: false,
+        implementation: LinearImplementation::Direct,
+    };
+    let err = LinearModel::new_with_topology(topo, vec![0.0; 3], vec![0.0; 2])
+        .err()
+        .expect("N->N needs one full kernel of receptive_field taps");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    let topo = LinearTopology {
+        in_channels: 0,
+        out_channels: 1,
+        receptive_field: 4,
+        has_bias: false,
+        implementation: LinearImplementation::Direct,
+    };
+    let err = LinearModel::new_with_topology(topo, vec![0.0; 4], vec![0.0])
+        .err()
+        .expect("zero input channels must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_mutated_weights_yield_defined_silence() {
+    let mut model =
+        LinearModel::new_with_topology(mono_topo(8, false), vec![0.5; 8], vec![0.0]).unwrap();
+    // Simulate a safe consumer replacing the public weight buffer with a
+    // shorter one: the kernel must not read past it.
+    model.weights = AlignedVec::new(0, 0.0f32).unwrap();
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 16];
+    let mut output = [1.0f32; 16];
+    NamModel::process(&mut model, &input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_mutated_receptive_field_yields_defined_silence() {
+    let mut model =
+        LinearModel::new_with_topology(mono_topo(8, false), vec![0.5; 8], vec![0.0]).unwrap();
+    model.receptive_field = 9;
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 16];
+    let mut output = [1.0f32; 16];
+    NamModel::process(&mut model, &input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_mutated_write_pos_yields_defined_silence() {
+    let mut model = LinearModel::new(vec![0.5; 8], 0.0, LinearImplementation::Direct).unwrap();
+    model.write_pos = 0; // below the receptive field: no complete history window
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 16];
+    let mut output = [1.0f32; 16];
+    NamModel::process(&mut model, &input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_fft_sample_counter_at_p_yields_defined_silence() {
+    let mut model = LinearModel::new(vec![0.1f32; 256], 0.0, LinearImplementation::Fft).unwrap();
+    let p = match &mut model.mode {
+        LinearMode::Fft(state) => {
+            state.sample_counter = state.p;
+            state.p
+        }
+        LinearMode::Direct => panic!("Fft implementation must select the FFT path"),
+    };
+    assert!(p > 0);
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 32];
+    let mut output = [1.0f32; 32];
+    NamModel::process(&mut model, &input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_multichannel_channel_mismatch_yields_defined_silence() {
+    let topo = LinearTopology {
+        in_channels: 1,
+        out_channels: 4,
+        receptive_field: 4,
+        has_bias: false,
+        implementation: LinearImplementation::Direct,
+    };
+    let mut model = LinearModel::new_with_topology(topo, vec![0.5f32; 16], vec![0.0; 4]).unwrap();
+    assert!(model.multichannel.is_some());
+
+    // Safe mutation of the declared output count: the engine still expects 4
+    // planes, but the safe wrapper will supply only 1.
+    model.out_channels = 1;
+    assert!(!model.validate_multichannel_state());
+
+    let input = [0.0f32; 8];
+    let mut output = [1.0f32; 8];
+    let inputs: [&[f32]; 1] = [&input];
+    let mut outputs: [&mut [f32]; 1] = [&mut output];
+    let frames = NamModel::process_multichannel(&mut model, &inputs, &mut outputs).unwrap();
+    assert_eq!(frames, 8);
+    assert!(output.iter().all(|&s| s == 0.0));
+}

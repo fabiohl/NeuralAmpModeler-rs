@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use super::common::{WaveNetLayerState, WavenetProcessContext};
+use super::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState, WavenetProcessContext};
 use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;
 use super::layer_dyn::WaveNetLayerDyn;
@@ -26,6 +26,28 @@ pub enum HeadRechannelDyn {
 impl From<DenseLayerDyn> for HeadRechannelDyn {
     fn from(dense: DenseLayerDyn) -> Self {
         HeadRechannelDyn::Dense(dense)
+    }
+}
+
+impl HeadRechannelDyn {
+    /// Returns whether the selected head projection still satisfies the
+    /// contract of its kernels for `ch` channels and `head` outputs.
+    #[inline]
+    pub(crate) fn is_sound(&self, ch: usize, head: usize) -> bool {
+        match self {
+            HeadRechannelDyn::Dense(dense) => {
+                dense.in_ch == ch && dense.out_ch == head && dense.is_sound()
+            }
+            HeadRechannelDyn::Conv1d { conv, state } => {
+                conv.in_ch == ch
+                    && conv.out_ch == head
+                    && conv.is_sound()
+                    && conv
+                        .backreach()
+                        .is_some_and(|back| back <= state.receptive_field_size)
+                    && state.is_sound_for(ch)
+            }
+        }
     }
 }
 
@@ -74,6 +96,61 @@ impl WaveNetLayerArrayDyn {
         self.effective_layers = n.min(self.layers.len()).max(1);
     }
 
+    /// Returns whether this array can be dispatched to its unchecked kernels.
+    ///
+    /// Covers the invariants that the public fields can otherwise break after
+    /// construction: layer/state pairing, effective-layer bounds, scratch
+    /// capacities, tensor geometry and the delay-line windows of every state
+    /// (including the optional convolution head).
+    pub fn is_sound(&self) -> bool {
+        if self.in_ch == 0 || self.cond == 0 || self.ch == 0 || self.head == 0 || self.k == 0 {
+            return false;
+        }
+        if self.layers.is_empty()
+            || self.layers.len() != self.states.len()
+            || self.effective_layers == 0
+            || self.effective_layers > self.layers.len()
+        {
+            return false;
+        }
+        let Some(frame_elems) = self.ch.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        let Some(head_elems) = self.head.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        let Some(block_elems) = self.block_size.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        if self.array_outputs.len() < frame_elems
+            || self.head_accum.len() < frame_elems
+            || self.head_outputs.len() < head_elems
+            || self.block_buffer.len() < block_elems
+        {
+            return false;
+        }
+        if self.rechannel.in_ch != self.in_ch
+            || self.rechannel.out_ch != self.ch
+            || !self.rechannel.is_sound()
+        {
+            return false;
+        }
+        if !self.head_rechannel.is_sound(self.ch, self.head) {
+            return false;
+        }
+        self.layers
+            .iter()
+            .zip(self.states.iter())
+            .all(|(layer, state)| {
+                layer.is_sound(self.ch, self.cond)
+                    && layer
+                        .conv1d
+                        .backreach()
+                        .is_some_and(|back| back <= state.receptive_field_size)
+                    && state.is_sound_for(self.ch)
+            })
+    }
+
     /// Array's central processing. Fully shielded against allocations.
     ///
     /// When `prev_head_outputs` is `Some`, it is passed as `seed` in the
@@ -95,6 +172,16 @@ impl WaveNetLayerArrayDyn {
         prev_head_outputs: Option<&[f32]>,
     ) {
         debug_assert_eq!(self.layers.len(), self.states.len());
+        // Defense in depth: never derive the loop bound from a value that can
+        // exceed the real vector lengths. `effective_layers` is public, so a
+        // safe caller may set it above `layers.len()`/`states.len()`.
+        let num_layers = self
+            .effective_layers
+            .min(self.layers.len())
+            .min(self.states.len());
+        if num_layers == 0 {
+            return;
+        }
         let states_ptr = self.states.as_mut_ptr();
         let ch = self.ch;
         let head = self.head;
@@ -113,7 +200,6 @@ impl WaveNetLayerArrayDyn {
                 num_frames,
             );
 
-            let num_layers = self.effective_layers;
             let last_layer = num_layers - 1;
 
             for (i, layer) in self.layers.iter_mut().enumerate() {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-use super::common::{WaveNetLayerState, WavenetProcessContext};
+use super::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState, WavenetProcessContext};
 use super::dense::DenseLayer;
 use super::layer::WaveNetLayer;
 use crate::arch::simd::{_MM_HINT_T0, _mm_prefetch};
@@ -53,6 +53,54 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
         self.effective_layers = n.min(self.layers.len()).max(1);
     }
 
+    /// Returns whether this array can be dispatched to its unchecked kernels.
+    ///
+    /// The public fields may be mutated after construction, so the safe model
+    /// entry points consult this predicate before reaching the raw-pointer
+    /// layer cascade.
+    pub fn is_sound(&self) -> bool {
+        if CH == 0 || COND == 0 || K == 0 {
+            return false;
+        }
+        if self.layers.is_empty()
+            || self.layers.len() != self.states.len()
+            || self.effective_layers == 0
+            || self.effective_layers > self.layers.len()
+        {
+            return false;
+        }
+        let Some(frame_elems) = CH.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        let Some(head_elems) = HEAD.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        let Some(block_elems) = self.block_size.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        if self.array_outputs.len() < frame_elems
+            || self.head_accum.len() < frame_elems
+            || self.head_outputs.len() < head_elems
+            || self.block_buffer.len() < block_elems
+        {
+            return false;
+        }
+        if !self.rechannel.is_sound() || !self.head_rechannel.is_sound() {
+            return false;
+        }
+        self.layers
+            .iter()
+            .zip(self.states.iter())
+            .all(|(layer, state)| {
+                layer.is_sound()
+                    && layer
+                        .conv1d
+                        .backreach()
+                        .is_some_and(|back| back <= state.receptive_field_size)
+                    && state.is_sound_for(CH)
+            })
+    }
+
     /// Array's central processing. Fully shielded against allocations.
     ///
     /// When `prev_head_outputs` is `Some`, it is passed as `seed` in the
@@ -74,6 +122,15 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
         prev_head_outputs: Option<&[f32]>,
     ) {
         debug_assert_eq!(self.layers.len(), self.states.len());
+        // Defense in depth: `effective_layers` is public and may exceed the
+        // real vector lengths without `set_effective_layers`.
+        let num_layers = self
+            .effective_layers
+            .min(self.layers.len())
+            .min(self.states.len());
+        if num_layers == 0 {
+            return;
+        }
         let states_ptr = self.states.as_mut_ptr();
 
         // SAFETY: `states_ptr` is derived from `self.states` with `layers.len() == states.len()`
@@ -90,7 +147,6 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
                 num_frames,
             );
 
-            let num_layers = self.effective_layers;
             let last_layer = num_layers - 1;
 
             // [STEP 4: Layer Inference Cascade]

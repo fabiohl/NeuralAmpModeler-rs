@@ -129,6 +129,75 @@ impl fmt::Debug for LinearFftState {
 }
 
 impl LinearFftState {
+    /// Returns whether this state can safely be consumed by the unchecked
+    /// hot-path kernels of a Linear model whose receptive field is
+    /// `receptive_field`.
+    ///
+    /// Every field of this type is public, so a safe caller may replace the
+    /// partition size, the buffers or the captured instruction set after
+    /// construction. The Linear safe entry point consults this predicate
+    /// before dispatching.
+    pub(crate) fn is_sound(&self, receptive_field: usize) -> bool {
+        // The hybrid path reads the direct head plus a 2P-window history.
+        let Some(block) = self.p.checked_mul(2) else {
+            return false;
+        };
+        // `is_sound_internal` accepts `sample_counter == p` because
+        // `process_tail_block` is called in that transient state. Entry points
+        // that consume ready tail samples must require a strictly in-range
+        // index (`tail_output_buf[sample_counter]`).
+        self.n == receptive_field
+            && block <= receptive_field
+            && self.sample_counter < self.p
+            && self.is_sound_internal()
+    }
+
+    /// Internal consistency check, independent of an external receptive field.
+    ///
+    /// Also used by the public [`Self::process_tail_block`] entry so a direct
+    /// safe call on a state mutated after construction cannot reach the SIMD
+    /// kernels with inconsistent lengths or an unsupported captured ISA.
+    pub(crate) fn is_sound_internal(&self) -> bool {
+        let p = self.p;
+        if p == 0 || !p.is_power_of_two() {
+            return false;
+        }
+        let Some(block) = p.checked_mul(2) else {
+            return false;
+        };
+        let Some(num_bins) = p.checked_add(1) else {
+            return false;
+        };
+        if self.num_bins != num_bins || self.rfft.n != block {
+            return false;
+        }
+        let expected_partitions = self.n.saturating_sub(p).div_ceil(p);
+        if self.num_partitions != expected_partitions {
+            return false;
+        }
+        let Some(fdl_total) = self.num_partitions.checked_mul(num_bins) else {
+            return false;
+        };
+        if self.h_fdl_re.len() < fdl_total
+            || self.h_fdl_im.len() < fdl_total
+            || self.fdl_re.len() < fdl_total
+            || self.fdl_im.len() < fdl_total
+            || self.input_buf.len() < block
+            || self.fft_re.len() < num_bins
+            || self.fft_im.len() < num_bins
+            || self.acc_re.len() < num_bins
+            || self.acc_im.len() < num_bins
+            || self.output_buf.len() < block
+            || self.tail_output_buf.len() < p
+            || self.sample_counter > p
+            || self.fdl_write_idx >= self.num_partitions.max(1)
+        {
+            return false;
+        }
+        // The captured ISA must remain the one the host actually supports.
+        self.isa == SimdMathConfig::current().instruction_set
+    }
+
     /// Creates a new `LinearFftState` for the given impulse response.
     ///
     /// `p` is the partition size (head length), which must be a power of

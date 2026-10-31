@@ -14,6 +14,7 @@
 //! 4. Feeds identical random input through both
 //! 5. Asserts bit-exact output match
 
+use crate::dsp::mirror_buf::MirroredBuffer;
 use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
 use crate::loader::dispatcher::wavenet::layout::transpose_conv1d_interleaved_8wide;
 use crate::loader::dispatcher::wavenet::layout::transpose_conv1d_interleaved_16wide;
@@ -578,4 +579,82 @@ fn test_dynamic_wavenet_multi_condition_without_condition_dsp() {
         output.iter().any(|&v| v.abs() > 1e-6),
         "Output should be non-zero"
     );
+}
+
+// ── Safe-boundary rejection (AI-16 / T-1.1) ──
+
+#[test]
+fn test_invalid_effective_layers_yields_defined_silence() {
+    let mut model = build_dynamic_model(4, 3, 2);
+    model.arrays[0].effective_layers = model.arrays[0].layers.len() + 1;
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 32];
+    let mut output = [1.0f32; 32];
+    model.process(&input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_truncated_layer_weights_yield_defined_silence() {
+    let mut model = build_dynamic_model(4, 3, 2);
+    model.arrays[1].layers[0].conv1d.weights = AlignedVec::new(0, 0.0f32).unwrap();
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 32];
+    let mut output = [1.0f32; 32];
+    model.process(&input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn test_restore_buffer_starts_rejects_out_of_bounds_values() {
+    let mut model = build_dynamic_model(4, 3, 2);
+    let count: usize = model.arrays.iter().map(|array| array.states.len()).sum();
+    let mut backup = vec![0usize; count];
+    let mut offset = 0;
+    model.backup_buffer_starts(&mut backup, &mut offset);
+    assert_eq!(offset, count);
+
+    let hostile = vec![usize::MAX - 4096; count];
+    let mut restore_offset = 0;
+    model.restore_buffer_starts(&hostile, &mut restore_offset);
+    assert_eq!(restore_offset, count);
+    assert!(model.validate_state());
+
+    let mut after = vec![0usize; count];
+    let mut after_offset = 0;
+    model.backup_buffer_starts(&mut after, &mut after_offset);
+    assert_eq!(after, backup);
+}
+
+#[test]
+fn test_empty_arrays_yield_defined_silence() {
+    let mut model = build_dynamic_model(4, 3, 2);
+    model.arrays.clear();
+    assert!(!model.validate_state());
+
+    let input = [1.0f32; 32];
+    let mut output = [1.0f32; 32];
+    model.process(&input, &mut output);
+    assert!(output.iter().all(|&s| s == 0.0));
+
+    model.prewarm();
+    model.clear_state();
+}
+
+#[test]
+fn test_delay_line_requires_block_margin() {
+    let mut state = WaveNetLayerState::new(32, 0, 0).expect("state allocation");
+    state.layer_buffer = MirroredBuffer::new(1024).expect("small mirrored buffer");
+    state.receptive_field_size = 0;
+    state.buffer_start = 0;
+
+    // 1024 elements / 32 channels = 32 frames, which cannot preserve the
+    // advance_frames window across a maximum-size block.
+    assert!(!state.is_sound_for(32));
+
+    state.layer_buffer =
+        MirroredBuffer::new(32 * (WAVENET_MAX_NUM_FRAMES + 1)).expect("buffer allocation");
+    assert!(state.is_sound_for(32));
 }
