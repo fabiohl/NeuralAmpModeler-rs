@@ -14,6 +14,11 @@ on:
         description: 'Strict mode (treat gaps as failures)'
         type: boolean
         default: true
+      ref:
+        description: 'Git ref or SHA to test (empty = selected branch)'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,12 +39,32 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin && rustc --version
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Record provenance
+        id: provenance
+        run: |
+          set -euo pipefail
+          mkdir -p target/logs
+          sha=$(git rev-parse HEAD)
+          ref=$(git rev-parse --abbrev-ref HEAD)
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s\n' \
+            "$ref" "$sha" "$version" | tee target/logs/ci-provenance.log
+          {
+            echo "### Long QA provenance"
+            echo "- ref: \`$ref\`"
+            echo "- sha: \`$sha\`"
+            echo "- package: \`$version\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Setup third-party (C++ oracle)
         run: ./utils/setup-third-party.sh
       - name: Long QA Suite
@@ -56,7 +81,7 @@ jobs:
         if: always()
         uses: ./.github/actions/qa-summary
         with:
-          title: Long QA Suite (${{ github.ref_name }} @ ${{ github.sha }})
+          title: Long QA Suite (${{ inputs.ref || github.ref }} @ ${{ steps.provenance.outputs.sha }})
       - name: Upload logs and receipts
         if: always()
         uses: actions/upload-artifact@v4

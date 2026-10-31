@@ -51,7 +51,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "1.1"
+//! NeuralAmpModeler-rs = "2.0"
 //! ```
 //!
 //! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
@@ -67,7 +67,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "2.0", features = ["testing"] }
 //! ```
 //!
 //! ```no_run

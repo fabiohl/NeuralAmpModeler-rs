@@ -85,6 +85,8 @@ mkdir -p "$LOGS_DIR"
 # THIRD_PARTY_DIR, NAM_CORE_DIR, NAM_PLUGIN_DIR, VARIABLES_ENV).
 PHASE_TOTAL=14
 source "$PROJECT_ROOT/utils/_lib.sh"
+NAM_CORE_DIR="${NAM_CORE_DIR:-$CORE_DIR}"
+NAM_PLUGIN_DIR="${NAM_PLUGIN_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerPlugin}"
 
 # Shell shared resolve — mirrors src/testing/fixtures.rs::model_path order.
 # Usage: resolve_nam_model <filename>  →  echoes absolute path || return 1

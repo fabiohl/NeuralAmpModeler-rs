@@ -22,7 +22,9 @@ env:
   NAM_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
-  # x86_64 is the reference platform: canonical lints + quick QA suite disciplines.
+  # x86_64 is the reference platform: canonical lints discipline.
+  # Quick QA and parity vectors live in a separate job so a documentation-only
+  # lint failure cannot suppress functional evidence (see AI-24).
   x86_64-linux:
     runs-on: ubuntu-26.04
     timeout-minutes: 25
@@ -36,6 +38,32 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Lints (fmt, check, clippy, policies, budget)
         run: ./utils/lints.sh
+      - name: Publish step summary
+        if: always()
+        uses: ./.github/actions/qa-summary
+        with:
+          title: x86_64-linux-lints
+          note: 'x86_64 Linux canonical lints (fmt, check, clippy, policies, budget)'
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-x86_64-linux
+          path: target/logs/**
+          retention-days: 14
+
+  # x86_64 functional evidence is independent of the lints job.
+  x86_64-linux-quick:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Quick QA suite
         run: ./utils/tests-quick.sh
       - name: Build release parity tool
@@ -65,13 +93,13 @@ jobs:
         if: always()
         uses: ./.github/actions/qa-summary
         with:
-          title: x86_64-linux
-          note: 'x86_64 Linux quick QA, lints, and release parity vector export'
+          title: x86_64-linux-quick
+          note: 'x86_64 Linux quick QA and release parity vector export'
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-x86_64-linux
+          name: logs-x86_64-linux-quick
           path: target/logs/**
           retention-days: 14
 
@@ -201,7 +229,6 @@ jobs:
   # The extensive ignored C++ parity matrix runs only in tests-long.sh.
   cpp-parity:
     name: cpp-parity-quick (x86_64-linux)
-    needs: x86_64-linux
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -272,7 +299,7 @@ jobs:
   # Cross-platform parity verification: exchanges artifacts between x86_64 and aarch64 native runs.
   cross-platform-parity:
     name: cross-platform-parity
-    needs: [x86_64-linux, aarch64]
+    needs: [x86_64-linux-quick, aarch64]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:

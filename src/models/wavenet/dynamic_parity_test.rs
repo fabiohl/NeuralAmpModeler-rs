@@ -650,11 +650,16 @@ fn test_delay_line_requires_block_margin() {
     state.receptive_field_size = 0;
     state.buffer_start = 0;
 
-    // 1024 elements / 32 channels = 32 frames, which cannot preserve the
-    // advance_frames window across a maximum-size block.
-    assert!(!state.is_sound_for(32));
+    // The allocator rounds the requested size up to the system page, so 1024
+    // elements is not portable. Use one channel per element: the resulting
+    // single frame is below receptive_field + WAVENET_MAX_NUM_FRAMES on every
+    // page size.
+    let one_frame_channels = state.layer_buffer.size();
+    assert!(!state.is_sound_for(one_frame_channels));
+    assert!(!state.start_is_sound(0, one_frame_channels));
 
     state.layer_buffer =
         MirroredBuffer::new(32 * (WAVENET_MAX_NUM_FRAMES + 1)).expect("buffer allocation");
     assert!(state.is_sound_for(32));
+    assert!(state.start_is_sound(0, 32));
 }

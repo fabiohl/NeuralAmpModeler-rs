@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — 1.1.0
+## [Unreleased] — 2.0.0
 
 ### Added
 
@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (S1):** `LinearModel::new_with_topology` now rejects weights/bias
+  below the receptive-field requirement; `restore_buffer_starts` is atomic; and
+  `process`/`prewarm` emit defined silence/no-op for inconsistent state instead
+  of processing it. See `src/models/linear.rs` and the S1 audit notes.
 - **f32 GEMV tail and `out_len == 1`:** the partial output-channel tail no
   longer uses masked AVX2 loads/stores (or their NEON predicate emulation).
   It accumulates four 128-bit lanes plus scalar lanes while keeping the exact
