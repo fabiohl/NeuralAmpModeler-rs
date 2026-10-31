@@ -96,7 +96,13 @@ fn check_x86_64_v3() {
         } else {
             "NeuralAmpModeler-rs is compiled as a dependency and requires full x86-64-v3 target support."
         };
+        let role_id = if is_primary_build() {
+            "primary"
+        } else {
+            "dependency"
+        };
         let mut msg_lines = vec![
+            format!("NAM_CONTRACT code=x86-64-v3-missing role={role_id}"),
             role.to_string(),
             format!("Missing required feature(s): {missing_str} (detected: {target_feature})."),
             "Set RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\" to compile, or add the \

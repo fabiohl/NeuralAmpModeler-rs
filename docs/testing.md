@@ -601,7 +601,24 @@ The `utils/` directory provides deterministic defense tools, inspection utilitie
 | **[`utils/mod-update.sh`](../utils/mod-update.sh)**                                   | Supply chain update pipeline         | Updates Rust toolchain (`rustup update`), `Cargo.toml` specifications (`cargo upgrade`), and `Cargo.lock` (`cargo update`); missing `rustup` or `cargo upgrade` is reported as a typed gap.                                                                                                                                                                       |
 | **[`utils/render-a2-dumps.sh`](../utils/render-a2-dumps.sh)**                         | Forensic A2-Max tensor dumps         | Offline / forensic utility: regenerates intermediate activation dumps for A2-Max (`tests/fixtures/dumps_a2_max/`) using the C++ instrumentation in `utils/namcore-a2-dumps.patch`.                                                                                                                                                                   |
 | **[`utils/namcore-a2-dumps.patch`](../utils/namcore-a2-dumps.patch)**                 | C++ A2 activation patch              | Tracked Git patch for `NeuralAmpModelerCore` v0.6.0 instrumenting per-layer intermediate activations in the A2-Max model.                                                                                                                                                                                                                            |
-| **[`utils/debug/repro_oversample_hang.sh`](../utils/debug/repro_oversample_hang.sh)** | Debug safety wrapper for hangs       | Diagnostic safety harness for manual thread-hang reproduction under systemd scopes (`RuntimeMaxSec`, cgroup v2, resource isolation) with guaranteed teardown of descendant processes (§15).                                                                                                                                                          |
+| **[`utils/debug/repro_oversample_hang.sh`](../utils/debug/repro_oversample_hang.sh)** | Debug safety wrapper for hangs       | Diagnostic safety harness for manual thread-hang reproduction under systemd scopes (`RuntimeMaxSec`, cgroup v2, resource isolation) with guaranteed teardown of descendant processes (§15).                                                                                    
+
+#### 11.1 Manual tools: output channel and status inventory (S3 / T2.2)
+
+Manual operator tools are classified by where their **machine data** goes. Only tools whose stdout is human-readable may end with the `RESULT:` line emitted by `finish`/`emit` (stdout + `summary.txt`).
+
+| Tool | Consumer of stdout | Stdout kind | Status contract |
+|:-----|:-------------------|:------------|:----------------|
+| `utils/check-model.sh` | operator; `--json`/`--manifest` consumers | machine data (JSON) | `exec cargo run`; process exit code only. No `RESULT:` line, because it would corrupt the JSON on stdout. Documented exception to the common protocol. |
+| `utils/ensure_namcore_render.sh` | `tests-long.sh` (`tail -n 1` = render binary path) | machine data (path) | Internal helper; exit codes `3`/`4`/`5`/`6` are its contract. Documented exception: no `RESULT:` line on stdout. |
+| `utils/setup-third-party.sh` | operator; `ensure_third_party` in `_lib.sh`; `cpp-parity` CI | human | `finish` on success and on any failure (`ERR`/`EXIT` trap → `FAIL` carrier). Missing optional `community_models` is a typed `GAP`. |
+| `utils/render-a2-dumps.sh` | operator | human | `finish` on success and on failure; carrier `render-a2-dumps-status.tsv`. **Open conflict:** the script applies `utils/namcore-a2-dumps.patch` to `third-party/NeuralAmpModelerCore` (read-only per §10 rules). It is not executed by the agents; the replacement (instrumented build without patching the vendor tree) is unplanned upstream work. |
+| `utils/miri-audit.sh` | operator (nightly, opt-in) | human | `finish` on success and on failure. Exit `2` (missing nightly/`miri`) is a `GAP` with no carrier written, so no stale verdict survives. |
+| `utils/consumer-smoke.sh` | CI and `preflight-package` | human + typed marker | Expected x86 failure is recognised by the `NAM_CONTRACT code=x86-64-v3-missing role=dependency` marker emitted by `build.rs`, not by prose. |
+| `utils/mod-update.sh` | operator | human | Presence of `cargo upgrade` is detected with `command -v cargo-upgrade` (Cargo external subcommand discovery), not by parsing `cargo --list`. Absence is a `GAP`; operational failure of `cargo upgrade` exits the script. |
+
+Every converted script removes its own previous `<script>-status.tsv` at start, so an interrupted run cannot leave a stale verdict that looks current.
+                                                                                                                                                          |
 
 ---
 

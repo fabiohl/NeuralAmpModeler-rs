@@ -13,6 +13,8 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
+rm -f "$LOG_DIR/render-a2-dumps-status.tsv"
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(render-a2-dumps); DONE=1; finish; }' EXIT
 
 PROJECT_ROOT="$PWD"
 VENDOR="$PROJECT_ROOT/third-party/NeuralAmpModelerCore"
@@ -72,4 +74,4 @@ echo "✓ RENDER REPRODUCED GOLDEN byte-identically ($n frames)"
 (cd "$OUT_DIR" && sha256sum "${DUMPS[@]}" > SHA256SUMS)
 cat "$OUT_DIR/SHA256SUMS"
 echo "Dumps ready: $OUT_DIR"
-echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"
+DONE=1; finish

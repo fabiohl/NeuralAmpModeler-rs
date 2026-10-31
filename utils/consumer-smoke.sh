@@ -29,7 +29,7 @@ rc=0
   if env -u RUSTFLAGS cargo check --target x86_64-unknown-linux-gnu > bare.log 2>&1; then
     echo "consumer x86 sem flag: verde (esperado FAIL)" >&2; exit 1
   fi
-  grep -q "compiled as a dependency" bare.log || { echo "consumer x86 sem flag: mensagem de consumidor ausente" >&2; cat bare.log >&2; exit 1; }
+  grep -qF "NAM_CONTRACT code=x86-64-v3-missing role=dependency" bare.log || { echo "consumer x86 sem flag: marcador de contrato ausente" >&2; cat bare.log >&2; exit 1; }
   for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
     flags=""; [ "$t" = x86_64-unknown-linux-gnu ] && flags="-Ctarget-cpu=x86-64-v3"
     RUSTFLAGS="$flags" cargo check --target "$t" || { echo "consumer $t: FAIL" >&2; exit 1; }

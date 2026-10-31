@@ -13,6 +13,8 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
+rm -f "target/logs/miri-audit-status.tsv"
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ -n "${DONE:-}" ] || { FAILS+=(miri-audit); DONE=1; finish; }' EXIT
 
 LOG_DIR="target/logs"
 mkdir -p "$LOG_DIR"
@@ -78,4 +80,4 @@ run_target "dsp::utils::delay_line" "dsp::utils::delay_line"    16
 echo ""
 ok "Miri concurrency and aliasing audit completed successfully (all targets green)."
 echo "  Full log: ${MIRI_LOG}"
-echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"
+DONE=1; finish
