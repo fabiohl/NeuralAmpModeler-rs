@@ -8,8 +8,8 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
-rc=0
-"$(ensure_qa_bin nam_quality testing)" dashboard "$@" || rc=$?
+rc=0; "$(ensure_qa_bin nam_quality testing)" dashboard "$@" || rc=$?
 [ "$rc" -eq 0 ] || FAILS+=(quality)
-finish || true
+frc=0; finish || frc=$?
+[ "$rc" -ne 0 ] || rc=$frc
 exit "$rc"

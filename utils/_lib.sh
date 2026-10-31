@@ -43,18 +43,18 @@ ran_tests() {
 }
 
 finish() {
-  local s=PASS sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
+  local s=PASS e=0 sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
   if ! printf '%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
     "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" > "$sf" 2>/dev/null; then
     echo "ERROR: cannot write status carrier $sf" >&2
-    emit "PHASE: carrier FAIL path=$sf"
+    emit "PHASE: carrier FAIL path=$sf" || e=1
     s=FAIL
     [ ${#FAILS[@]} -gt 0 ] || FAILS+=("carrier")
   fi
-  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}"
-  [ "$s" != FAIL ]
+  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}" || e=1
+  [ "$s" != FAIL ] && [ "$e" -eq 0 ]
 }
 
 require_nightly() {

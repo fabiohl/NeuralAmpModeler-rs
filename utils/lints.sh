@@ -59,9 +59,14 @@ phase_doc() { RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-feat
 run_step doc phase_doc
 
 phase_spdx() {
-  local missing
-  missing=$(git ls-files 'src/*.rs' 'tests/*.rs' 'benches/*.rs' 'examples/*.rs' 'utils/*.sh' 'tests/*.sh' 'tests/fixtures/*.py' 'build.rs' 'Cargo.toml' | xargs grep -L -E "SPDX-License-Identifier: (Apache-2\.0|MIT)" || true)
-  if [ -n "$missing" ]; then echo "Missing/invalid SPDX in:" >&2; echo "$missing" >&2; exit 1; fi
+  local files f rc missing=()
+  files=$(git ls-files 'src/*.rs' 'tests/*.rs' 'benches/*.rs' 'examples/*.rs' 'utils/*.sh' 'tests/*.sh' 'tests/fixtures/*.py' 'build.rs' 'Cargo.toml') || { echo "ERROR: git ls-files failed" >&2; exit 1; }
+  [ -n "$files" ] || { echo "ERROR: SPDX enumeration returned no files" >&2; exit 1; }
+  while IFS= read -r f; do
+    rc=0; grep -qE "SPDX-License-Identifier: (Apache-2\.0|MIT)" "$f" || rc=$?
+    case "$rc" in 0) ;; 1) missing+=("$f") ;; *) echo "ERROR: grep failed (rc=$rc) on $f" >&2; exit 1 ;; esac
+  done <<< "$files"
+  if [ "${#missing[@]}" -gt 0 ]; then echo "Missing/invalid SPDX in:" >&2; printf '%s\n' "${missing[@]}" >&2; exit 1; fi
 }
 run_step spdx phase_spdx
 

@@ -49,7 +49,7 @@ Unlike test runners, `lints.sh` does not evaluate numerical audio outputs. Inste
 3. **Clippy:** Runs the same four configurations with `-D warnings`.
 4. **Cross-target Clippy:** Requires `aarch64-unknown-linux-gnu` and runs `cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings`.
 5. **Documentation:** Runs `cargo doc --locked --no-deps --all-features` with rustdoc warnings denied. Doc-tests belong to the test runner, not this phase.
-6. **SPDX:** Checks tracked source files for an accepted SPDX identifier.
+6. **SPDX:** Checks tracked source files for an accepted SPDX identifier. Enumeration failures, an empty enumeration, and `grep` errors fail the phase; only files that were inspected and lack the identifier are reported as missing.
 7. **Policies:** Checks `tests/common/`, lint-suppression comments, `doc(cfg)` features, and README version and MSRV.
 8. **Script budget:** Checks declared line budgets for shell scripts in `utils/` and `tests/fixtures/`.
 
@@ -545,6 +545,8 @@ The contract is governed by [utils/quality-dashboard.sh](../utils/quality-dashbo
 
 The dashboard also accepts `--fidelity-only` to check fidelity and parity without the performance baseline. Full `--check` (including the `regression_gate` performance domain) remains receipt 5 for release certification. The fidelity-only check re-executes its suites and was measured at ~134–164 s on 2026-10-30. `.github/workflows/long.yml` runs it mandatorily in `--fidelity-only` mode, since cloud runners are not comparable to the calibrated reference machine.
 
+The exit status is the `nam_quality` status (`0` success, `1` run-time failure or failing contract, `2` usage error). If the dashboard itself succeeds but the status carrier (`target/logs/quality-dashboard-status.tsv`) or the `RESULT:` line cannot be recorded, the script exits `1`.
+
 The dashboard counts executed tests from the canonical libtest `test result: ok. N passed` summary (after stripping ANSI escapes), summing every command of a phase. A phase with no `test result` line fails closed with the typed reason `no_test_result`; per-test `test … ... ok` lines are never counted, so `--nocapture` output cannot undercount a green phase. `lstm_activation_precision` certifies its two non-ignored tests (`structural`, `gain`); the ignored `gain_stress_v2` sweep remains part of the long suite.
 
 `freshness` is a provenance phase, not a fidelity phase. The dashboard reports it separately as `PROVENANCE: OK|FAIL|NOT_RUN`; when provenance is `FAIL`, `FIDELITY` becomes `NOT_VERIFIED` (D-06) rather than `FAIL`, because stale fixtures cannot back either a green or a red fidelity assertion. The `--save` gate refuses a failed fidelity phase and a failed provenance phase, while performance `NOT_VERIFIED` never blocks (PERF-006).
@@ -650,6 +652,8 @@ full log at `target/logs/miri-audit.log`):
 displaced items (the `GcOverflowBuffer` controlled-leak contract) and the corrupted-slot tests leak
 on purpose; without it, Miri reports those *intentional* leaks and drowns the provenance/aliasing
 signal being audited.
+
+**Sysroot preparation.** `cargo +nightly miri setup` output is kept on the console and in `target/logs/miri-audit.log`. A failed setup exits `1` before any target runs; a missing nightly or `miri` component exits `2` as a `GAP`. Neither outcome is reported as a pass.
 
 **Accepted provenance limitation (GC overflow packing).** The `GcOverflowBuffer`
 packs a heap pointer and a `type_id` into a single `AtomicU64`

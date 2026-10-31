@@ -31,7 +31,12 @@ echo ""
 
 # Ensure the Miri sysroot is pre-compiled/cached. Override [build] warnings =
 # "deny" from .cargo/config.toml for the sysroot generator invocation.
-CARGO_BUILD_WARNINGS=allow cargo +nightly miri setup >/dev/null 2>&1 || true
+# Setup diagnostics are kept on stdout and in MIRI_LOG; a failed setup aborts (rc=1)
+# before any target runs, so it can never be mistaken for a prepared sysroot.
+setup_rc=0
+CARGO_BUILD_WARNINGS=allow cargo +nightly miri setup 2>&1 | tee -a "$MIRI_LOG" || setup_rc=$?
+[ "$setup_rc" -eq 0 ] || die "Miri setup failed (rc=${setup_rc}); no Miri target was executed. See ${MIRI_LOG}."
+ok "Miri sysroot prepared (miri setup rc=0)"
 
 export MIRIFLAGS="${MIRIFLAGS:--Zmiri-disable-isolation -Zmiri-ignore-leaks}"
 
