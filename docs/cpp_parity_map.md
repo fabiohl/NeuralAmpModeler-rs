@@ -148,7 +148,7 @@ Gate ordering in memory is fixed to **I, F, G, O** at strides `0, H, 2H, 3H` (`l
 | 2-layer chain (`lstm.cpp:151-153`)                                 | `LstmModel2` software-pipelined chain (`model2.rs`)                    | ✅ Bit-exact sequential stacking, optimized for ILP         |
 | Linear head projection (`lstm.cpp:161-164`)                        | `dot_product(..) + head_bias` with Kahan summation compensation        | ✅ Exact match (reduces floating-point accumulation drift)  |
 | Prewarm length: `0.5 × sample_rate` (`lstm.cpp:125-132`)           | `prewarm_samples()` computes identical `(0.5 * sr) as usize`           | ✅ Exact formula match                                      |
-| Reset prewarm opt-out (`dsp.cpp:130-139`)                          | `NamModel::reset()` respects `prewarm_on_reset()` (default `true`)     | ✅ Exact behavioral match                                   |
+| Reset prewarm opt-out (`dsp.cpp:130-139`)                          | `NamModel::reset()` respects `prewarm_on_reset()` (default `true`)     | ⚠️ Deliberate divergence (DEC-03): prewarm policy matches, but a Rust reset always clears LSTM state while C++ without prewarm retains file-loaded state |
 
 ### 2.3 Weight Storage & Layout
 
@@ -303,6 +303,14 @@ Measured against NAMcore baseline at 48 kHz:
 | EVH-5150-Lite (CH12)    | 1.46e-12        | 2.64e-13          | 118.4    | 4.31e-06 | ✅ Near-bit-exact  |
 | WaveNet Official (CH3)  | 9.03e-14        | 6.13e-14          | 130.4    | 1.66e-05 | ✅ Bit-exact floor |
 
+**Scenario provenance for WaveNet Official.** The table row above is the short
+fidelity fixture at 48 kHz. The five-second v2 stress signal at the same rate is
+a different measurement: SNR 121.2 dB, ESR 7.66e-13, MR-STFT 1.26e-4
+(`test_golden_vectors_v2_wavenet_official`, local Linux x86-64-v3). The 14 dB
+SNR / 3.5e-2 ESR / 0.45 MR-STFT gate applies to that v2 scenario; it is not a
+calibration derived from the short row. No threshold change is implied by
+either measurement.
+
 ### 3.6 Formal `condition_dsp` Specification
 
 `condition_dsp` embeds an auxiliary sub-model that modulates the main network:
@@ -431,7 +439,7 @@ Evidence: `test_h0_triple_decomposition --ignored` (all three legs ≥ 90 dB).
 
 - **C++ Reference:** Uses `NAM_UNKNOWN_EXPECTED_SAMPLE_RATE = -1.0` (`NAM/dsp.h:30`) when `sample_rate` is missing from the JSON config, which evaluates prewarm to 1 sample.
 - **NeuralAmpModeler-rs Standalone Policy:** Defaults missing `sample_rate` to **48000.0 Hz** (`DEFAULT_SAMPLE_RATE` in `src/loader/loaded_model_pair.rs`).
-- *Rationale:* Ensures models settle to their physical steady state during prewarm. Standard community models explicitly declare sample rate; this divergence affects only hand-crafted test configurations.
+- *Rationale:* Ensures models settle to their physical steady state during prewarm. Standard community models may omit the field: `BossLSTM-1x16.nam` and `BossLSTM-2x8.nam` are real community captures with no `sample_rate` in their JSON (see [fixtures.md §3](fixtures.md#3-model-inventory--provenance-registry)). For those files the C++ reference computes a 1-sample prewarm (`NAM/lstm.cpp:127-133`) while Rust prewarms 0.5 × 48000 samples, so the initial transient after load is **not** equivalent. This is a property of the load/prewarm policy, not of steady-state inference; golden vectors exercise it with an explicit `prewarm(2048)` call, not with the C++ missing-rate path. See DEC-01 and `docs/architecture.md` §1.7 for the LSTM reset divergence (DEC-03).
 
 #### DEC-01 Decision Record — Missing Sample Rate in Sequential Models
 
@@ -635,7 +643,7 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 
 **DEC-01/DEC-02 live semantics:** `sequential_linear2.nam`/`sequential_linear_wavenet.nam` declare no rate anywhere (all-unknown branch): the C++ `render` accepts any input WAV rate and runs at it; the Rust chain resets operationally at the WAV rate. The declared-rate double-LSTM chain keeps the DEC-02 contract live: the C++ render rejects non-48k inputs (exit 1, mirrored probe) while the Rust engine accepts and reconfigures — no reinstability at the operational rate.
 
-**Note:** the small WaveNet child of `sequential_linear_wavenet.nam` (Linear → WaveNet) is canonical two-array A1 (correct f64-oracle routing requires `.layers.len() >= 2` for single-layer WaveNets, which the A1 oracle bail-outs to silence).
+**Note:** the small WaveNet child of `sequential_linear_wavenet.nam` (Linear → WaveNet) is canonical two-array A1. The f64 oracle requires exactly two arrays for the A1 path; a single-array WaveNet is rejected with `OracleError::UnsupportedTopology` instead of being scored against silence.
 
 ### 6.7 Loading-Time Parity Notes
 

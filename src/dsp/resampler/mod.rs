@@ -480,20 +480,41 @@ impl NamResampler {
     /// - `input_samples`: number of input samples to be processed.
     /// - `in_rate`: input sample rate (Hz).
     /// - `out_rate`: output sample rate (Hz).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `in_rate` is zero (division by zero). Callers must validate
+    /// the rate before using this helper; the resampler itself never accepts a
+    /// zero rate.
     #[inline]
     pub fn min_output_samples(input_samples: usize, in_rate: u32, out_rate: u32) -> usize {
+        Self::min_output_samples_checked(input_samples, in_rate, out_rate)
+            .expect("min_output_samples: in_rate must be non-zero")
+    }
+
+    /// Checked variant of [`Self::min_output_samples`]: returns `None` when
+    /// `in_rate` is zero instead of panicking. Overflow still saturates at
+    /// `usize::MAX`, as documented for the unchecked helper.
+    #[inline]
+    pub fn min_output_samples_checked(
+        input_samples: usize,
+        in_rate: u32,
+        out_rate: u32,
+    ) -> Option<usize> {
+        if in_rate == 0 {
+            return None;
+        }
         let numer = if let Some(v) = (input_samples as u64).checked_mul(out_rate as u64) {
             v
         } else {
-            return usize::MAX;
+            return Some(usize::MAX);
         };
-        let denom = in_rate as u64;
-        let min = numer.div_ceil(denom);
-        if min > usize::MAX as u64 {
+        let min = numer.div_ceil(in_rate as u64);
+        Some(if min > usize::MAX as u64 {
             usize::MAX
         } else {
             min as usize
-        }
+        })
     }
 
     /// Computes the maximum number of input samples that can be safely
@@ -509,20 +530,41 @@ impl NamResampler {
     /// - `output_capacity`: available output buffer size (samples).
     /// - `in_rate`: input sample rate (Hz).
     /// - `out_rate`: output sample rate (Hz).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `out_rate` is zero (division by zero). Callers must validate
+    /// the rate before using this helper; the resampler itself never accepts a
+    /// zero rate.
     #[inline]
     pub fn max_input_samples(output_capacity: usize, in_rate: u32, out_rate: u32) -> usize {
+        Self::max_input_samples_checked(output_capacity, in_rate, out_rate)
+            .expect("max_input_samples: out_rate must be non-zero")
+    }
+
+    /// Checked variant of [`Self::max_input_samples`]: returns `None` when
+    /// `out_rate` is zero instead of panicking. Overflow still saturates at
+    /// `usize::MAX`, as documented for the unchecked helper.
+    #[inline]
+    pub fn max_input_samples_checked(
+        output_capacity: usize,
+        in_rate: u32,
+        out_rate: u32,
+    ) -> Option<usize> {
+        if out_rate == 0 {
+            return None;
+        }
         let numer = if let Some(v) = (output_capacity as u64).checked_mul(in_rate as u64) {
             v
         } else {
-            return usize::MAX;
+            return Some(usize::MAX);
         };
-        let denom = out_rate as u64;
-        let max = numer / denom;
-        if max > usize::MAX as u64 {
+        let max = numer / (out_rate as u64);
+        Some(if max > usize::MAX as u64 {
             usize::MAX
         } else {
             max as usize
-        }
+        })
     }
 
     /// **Input resampling** (input path): `host_rate → nam_rate`.

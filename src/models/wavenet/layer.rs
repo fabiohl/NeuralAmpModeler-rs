@@ -44,6 +44,20 @@ pub struct WaveNetLayer<const COND: usize, const CH: usize, const K: usize> {
 }
 
 impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, K> {
+    /// Returns whether this layer still satisfies the geometry and buffer
+    /// contract of [`Self::process_block_internal`].
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        let Some(scratch_min) = CH.checked_mul(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        self.conv1d.is_sound()
+            && self.input_mixin.is_sound()
+            && self.one_by_one.is_sound()
+            && self.scratch_mixin.len() >= scratch_min
+            && self.scratch_conv.len() >= scratch_min
+    }
+
     /// Processes a full WaveNet layer, iterating `FastMath` in AVX2.
     ///
     /// Conv1D uses full-precision f32 weights; DenseLayer uses standard quantized paths.

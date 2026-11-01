@@ -294,6 +294,10 @@ pub mod fingerprint;
 /// label↔fixture projection, explicit `RT_*` bench table).
 pub mod ids;
 
+#[cfg(test)]
+#[path = "ids_test.rs"]
+mod ids_test;
+
 /// Canonical QA phase-identifier constants shared by renderer, verify docs
 /// and the dashboard receipt emitter (maintains distinct self-consistency vs. cross-ISA phase records).
 pub mod phases;

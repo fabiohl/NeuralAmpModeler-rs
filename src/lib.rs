@@ -51,7 +51,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "1.1"
+//! NeuralAmpModeler-rs = "2.0"
 //! ```
 //!
 //! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
@@ -67,7 +67,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "2.0", features = ["testing"] }
 //! ```
 //!
 //! ```no_run
@@ -108,7 +108,7 @@
 //!
 //! | Feature | Default | Description |
 //! |:------- |:------- |:----------- |
-//! | `dual-mono` | **Enabled** | Independent per-channel neural inference for stereo/dual-mono signals. Disable for lean single-channel mode. |
+//! | `dual-mono` | **Enabled** | Independent per-channel neural inference for dual-mono signals. Disable for lean single-channel mode. |
 //! | `heap-audit` | Disabled | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants. |
 //! | `testing` | Disabled | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles. |
 //! | `fft-radix4-planner` | Disabled | Radix-4 DIT FFT execution planning routines and benchmarks. |

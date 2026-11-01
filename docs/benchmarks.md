@@ -19,10 +19,10 @@ All benchmark commands must be executed within the `NeuralAmpModeler-rs/` subpro
 
 ```bash
 # Core inference benchmark suite
-cargo bench --bench inference_bench
+cargo bench --features testing --bench inference_bench
 
 # Performance regression gate suite (22 canonical targets)
-cargo bench --bench regression_gate
+cargo bench --features testing --bench regression_gate
 
 # Specialized DSP, Math & Kernel benchmark suites
 cargo bench --bench cabsim_bench
@@ -38,6 +38,16 @@ cargo bench --bench fft_radix4_bench
 cargo bench --bench kahan_conv1d_bench
 cargo bench --bench conv1d_hotpath_bench
 ```
+
+> [!NOTE]
+> **Published package.** `tests/` and `third-party/` are not shipped, so the
+> published crate carries no model fixtures. `inference_bench` and
+> `regression_gate` declare `required-features = ["testing"]` because they use
+> the `testing` module; without `--features testing`, Cargo rejects the target
+> with an explicit message. For any benchmark that loads a `.nam`/`.namb`
+> fixture, point `NAM_MODELS_DIR` or `NAM_FIXTURES_DIR` at a fixture root. An
+> absent fixture is reported on `stderr` and that benchmark skips instead of
+> passing silently. See [fixtures.md §Distribution Contract](fixtures.md#distribution-contract-published-crate).
 
 ### Audio Block Budgets & Soak Benchmarks
 

@@ -638,4 +638,60 @@ mod tests {
         assert_eq!(params.fade_frames, 128);
         assert_eq!(params.mono_epsilon, 2e-4);
     }
+
+    #[test]
+    fn test_stale_inverse_field_does_not_change_ramp() {
+        let coherent = GateParams::new(-10.0, -20.0, 4, 16, 1e-4);
+        let mut stale = coherent;
+        stale.inv_fade_frames = 1.0;
+        let (th_open, th_close) = (1.0, 0.5);
+        let mut a = DynamicHysteresis::new();
+        let mut b = DynamicHysteresis::new();
+        let script = [(0.0, 8), (0.0, 8), (2.0, 5), (0.0, 16), (2.0, 4), (2.0, 16)];
+        let mut states = std::collections::HashSet::new();
+        for &(value, n) in &script {
+            a.update(value, th_open, th_close, &coherent, n);
+            b.update(value, th_open, th_close, &stale, n);
+            states.insert(std::mem::discriminant(&a.state()));
+            assert_eq!(a.state(), b.state());
+            assert_eq!(a.multiplier().to_bits(), b.multiplier().to_bits());
+        }
+        assert_eq!(states.len(), 4, "script must traverse every gate state");
+    }
+
+    #[test]
+    fn test_fade_shrink_mid_fade_keeps_multiplier_in_unit_range() {
+        let long = GateParams::new(-10.0, -20.0, 1, 256, 1e-4);
+        let short = GateParams::new(-10.0, -20.0, 1, 32, 1e-4);
+        let (th_open, th_close) = (1.0, 0.5);
+        let mut dh = DynamicHysteresis::new();
+        dh.update(0.0, th_open, th_close, &long, 1);
+        dh.update(0.0, th_open, th_close, &long, 100);
+        assert_eq!(dh.state(), GateState::FadingOut);
+
+        dh.update(0.0, th_open, th_close, &short, 8);
+        assert_eq!(dh.state(), GateState::FadingOut);
+        assert!((0.0..=1.0).contains(&dh.multiplier()));
+        assert!((dh.multiplier() - 0.75).abs() < 1e-6);
+
+        dh.update(0.0, th_open, th_close, &short, 64);
+        assert_eq!(dh.state(), GateState::Closed);
+        assert_eq!(dh.multiplier(), 0.0);
+    }
+
+    #[test]
+    fn test_zero_fade_mid_ramp_closes_immediately() {
+        let long = GateParams::new(-10.0, -20.0, 1, 256, 1e-4);
+        let zero = GateParams::new(-10.0, -20.0, 1, 0, 1e-4);
+        let (th_open, th_close) = (1.0, 0.5);
+        let mut dh = DynamicHysteresis::new();
+        dh.update(0.0, th_open, th_close, &long, 1);
+        dh.update(0.0, th_open, th_close, &long, 100);
+        assert_eq!(dh.state(), GateState::FadingOut);
+
+        dh.update(0.0, th_open, th_close, &zero, 1);
+        assert_eq!(dh.state(), GateState::Closed);
+        assert_eq!(dh.multiplier(), 0.0);
+        assert!(dh.multiplier().is_finite());
+    }
 }

@@ -790,10 +790,15 @@ fn render_quick_summary(report: &QualityReport, p: &Palette) -> String {
     out.push_str("QUICK SUMMARY (non-specialist)\n");
     out.push_str("═══════════════════════════════════════\n\n");
 
+    let mut has_proxy = false;
     for (display, bench_id, patterns) in QUICK_REPS {
         let Some(record) = find_representative(&report.fidelity, patterns) else {
             continue;
         };
+        has_proxy |= record
+            .f64_oracle_provenance
+            .as_deref()
+            .is_some_and(|p| p.starts_with("proxy:"));
         let esr_nam = fmt_metric(&record.esr);
         let esr_nam_colored = match metric_f64(&record.esr) {
             Some(esr) => p.paint_class(esr_color_class(esr), &esr_nam),
@@ -806,7 +811,7 @@ fn render_quick_summary(report: &QualityReport, p: &Palette) -> String {
             }
             None => "N/A".to_string(),
         };
-        let esr_f64 = fmt_metric(&record.esr_f64);
+        let esr_f64 = fmt_f64_esr(record);
         let esr_f64_colored = match metric_f64(&record.esr_f64) {
             Some(esr) => p.paint_class(esr_color_class(esr), &esr_f64),
             None => esr_f64.clone(),
@@ -827,6 +832,9 @@ fn render_quick_summary(report: &QualityReport, p: &Palette) -> String {
             esr_f64_colored,
             cpu,
         ));
+    }
+    if has_proxy {
+        out.push_str("  * = f64 ESR measured on a substitute fixture (proxy), not on this model\n");
     }
     out.push('\n');
     out
@@ -917,8 +925,21 @@ fn render_fidelity_details(report: &QualityReport, p: &Palette) -> String {
         "    {} = audible — needs investigation (ESR >= 1e-1)\n",
         p.red("red")
     ));
+    out.push_str("    * = f64 ESR measured on a substitute fixture (proxy), not on this model\n");
     out.push('\n');
     out
+}
+
+fn fmt_f64_esr(record: &FidelityRecord) -> String {
+    let mut value = fmt_metric(&record.esr_f64);
+    if record
+        .f64_oracle_provenance
+        .as_deref()
+        .is_some_and(|p| p.starts_with("proxy:"))
+    {
+        value.push('*');
+    }
+    value
 }
 
 fn fidelity_row(record: &FidelityRecord, p: &Palette) -> String {
@@ -927,7 +948,7 @@ fn fidelity_row(record: &FidelityRecord, p: &Palette) -> String {
         Some(esr) => p.paint_class(esr_color_class(esr), &esr_nam),
         None => esr_nam,
     };
-    let esr_f64 = fmt_metric(&record.esr_f64);
+    let esr_f64 = fmt_f64_esr(record);
     let esr_f64_colored = match metric_f64(&record.esr_f64) {
         Some(esr) => p.paint_class(esr_color_class(esr), &esr_f64),
         None => esr_f64,

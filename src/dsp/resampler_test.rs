@@ -1159,6 +1159,59 @@ fn test_helpers_overflow_protection() {
     assert_eq!(huge_inv, usize::MAX, "overflow must saturate at usize::MAX");
 }
 
+#[test]
+fn test_checked_helpers_reject_zero_rate() {
+    for &rate in TEST_RATES {
+        assert_eq!(
+            NamResampler::min_output_samples_checked(1024, 0, rate),
+            None
+        );
+        assert_eq!(NamResampler::max_input_samples_checked(1024, rate, 0), None);
+    }
+}
+
+#[test]
+fn test_checked_helpers_match_unchecked_for_valid_rates() {
+    for &in_rate in TEST_RATES {
+        for &out_rate in TEST_RATES {
+            for n in [0usize, 1, 17, 512, 4096] {
+                assert_eq!(
+                    NamResampler::min_output_samples_checked(n, in_rate, out_rate),
+                    Some(NamResampler::min_output_samples(n, in_rate, out_rate)),
+                );
+                assert_eq!(
+                    NamResampler::max_input_samples_checked(n, in_rate, out_rate),
+                    Some(NamResampler::max_input_samples(n, in_rate, out_rate)),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_checked_helpers_overflow_saturates_for_valid_rates() {
+    assert_eq!(
+        NamResampler::min_output_samples_checked(usize::MAX, 192_000, 4_000),
+        Some(usize::MAX)
+    );
+    assert_eq!(
+        NamResampler::max_input_samples_checked(usize::MAX, 192_000, 4_000),
+        Some(usize::MAX)
+    );
+}
+
+#[test]
+#[should_panic(expected = "min_output_samples: in_rate must be non-zero")]
+fn test_min_output_samples_zero_rate_panics() {
+    let _ = NamResampler::min_output_samples(64, 0, 48_000);
+}
+
+#[test]
+#[should_panic(expected = "max_input_samples: out_rate must be non-zero")]
+fn test_max_input_samples_zero_rate_panics() {
+    let _ = NamResampler::max_input_samples(64, 48_000, 0);
+}
+
 fn read_raw_f32(path: &std::path::Path) -> Vec<f32> {
     let bytes = std::fs::read(path).expect("Failed to read fixture file");
     assert!(

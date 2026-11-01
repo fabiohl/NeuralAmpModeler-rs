@@ -74,6 +74,25 @@ impl DenseLayerDyn {
         })
     }
 
+    /// Returns whether this layer still satisfies the size contract of the
+    /// unchecked GEMV kernels.
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        if self.in_ch == 0 || self.out_ch == 0 {
+            return false;
+        }
+        let Some(min_weights) = self.in_ch.checked_mul(self.out_ch) else {
+            return false;
+        };
+        if self.weights.len() < min_weights {
+            return false;
+        }
+        if self.do_bias && self.bias.len() < self.out_ch {
+            return false;
+        }
+        true
+    }
+
     /// Residual Sum (The Final 'Shortcut'):
     /// This function mixes channels AND adds the original sound
     /// (residual) to the result, all without needing to copy extra data in memory.

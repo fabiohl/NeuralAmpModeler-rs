@@ -94,6 +94,9 @@ pub struct FidelityRecord {
     /// The canonical sink does not emit this field yet; the verify
     /// report may carry it as `"esr_f64"`.
     pub esr_f64: MetricValue,
+    /// Source fixture of `esr_f64`. `proxy:<fixture>` marks a substitute
+    /// measurement that is not a f64 reference for this model.
+    pub f64_oracle_provenance: Option<String>,
 }
 
 /// Canonicalizes one JSON object into a fidelity record, if it is one.
@@ -126,6 +129,10 @@ pub(crate) fn fidelity_from_json(value: &Value) -> Option<FidelityRecord> {
         mse: canon_metric(value.get("mse")),
         mrstft: canon_metric(value.get("mrstft")),
         esr_f64: canon_metric(value.get("esr_f64")),
+        f64_oracle_provenance: value
+            .get("f64_oracle_provenance")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 

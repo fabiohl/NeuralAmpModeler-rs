@@ -17,7 +17,7 @@ pub(crate) fn oracle_a2_forward(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     oracle_a2_forward_internal(model_data, input, config, false)
 }
 
@@ -29,7 +29,7 @@ pub(crate) fn oracle_a2_all_channels(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     oracle_a2_forward_internal(model_data, input, config, true)
 }
 
@@ -42,25 +42,30 @@ fn oracle_a2_forward_internal(
     input: &[f64],
     config: &PrecisionConfig,
     all_channels: bool,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     let num_frames = input.len();
     if num_frames == 0 {
-        return vec![];
+        return Ok(vec![]);
     }
 
     let layers = &model_data.config.layers;
     if layers.is_empty() {
-        return vec![0.0; num_frames];
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "A2 oracle requires at least one layer array",
+        });
     }
 
     // Process condition_dsp sub-model to obtain per-frame condition
     // vectors. The sub-model processes the raw input and produces condition_size
     // samples per frame (the head_size of the condition_dsp's last array).
-    let cond_output: Option<Vec<f64>> = model_data.config.condition_dsp.as_ref().map(|json| {
-        let cond_model: NamModelData =
-            serde_json::from_value(json.clone()).expect("Failed to parse condition_dsp JSON");
-        oracle_condition_dsp_channels(&cond_model, input, config)
-    });
+    let cond_output: Option<Vec<f64>> = match model_data.config.condition_dsp.as_ref() {
+        Some(json) => {
+            let cond_model = parse_condition_dsp(json)?;
+            Some(oracle_condition_dsp_channels(&cond_model, input, config)?)
+        }
+        None => None,
+    };
 
     // Broadcast condition_dsp output if dsp_ch < cond_size_oracle.
     let cond_size_oracle = layers.first().and_then(|l| l.condition_size).unwrap_or(1);
@@ -82,17 +87,11 @@ fn oracle_a2_forward_internal(
     let mut cursor = Cursor::new(&model_data.weights, config.weight_precision);
     let acc_mode = config.accumulation;
 
-    let mut arrays = match build_a2_arrays(model_data, &mut cursor) {
-        Some(arrs) => arrs,
-        None => {
-            let out_channels = if all_channels {
-                layers.last().and_then(|l| l.head_size).unwrap_or(1)
-            } else {
-                1
-            };
-            return vec![0.0; num_frames * out_channels];
-        }
-    };
+    let mut arrays =
+        build_a2_arrays(model_data, &mut cursor).ok_or(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "A2 weight/topology layout is not representable",
+        })?;
 
     let cascade_head_scale = if cursor.remaining() == 1 {
         cursor.read_one_f64()
@@ -102,7 +101,10 @@ fn oracle_a2_forward_internal(
 
     let num_arrays = arrays.len();
     if num_arrays == 0 {
-        return vec![0.0; if all_channels { 0 } else { num_frames }];
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "A2 oracle decoded no layer arrays",
+        });
     }
 
     // Allocate history buffers per array (largest across arrays).
@@ -505,5 +507,5 @@ fn oracle_a2_forward_internal(
         }
     }
 
-    output
+    Ok(output)
 }

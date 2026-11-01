@@ -349,7 +349,7 @@ fn cmd_dashboard(args: &[String]) {
                     "--bin",
                     "nam_freshness",
                     "--",
-                    "artifacts-hard",
+                    "hard-fail",
                 ],
                 &[],
             )],
@@ -1040,6 +1040,12 @@ fn run_dashboard_phase(
     let (status, reason) = if exit_code != 0 {
         if exit_code == 124 {
             ("FAIL", "phase command timed out")
+        } else if phase_id == PROVENANCE_PHASE {
+            if exit_code == 3 || exit_code == 5 {
+                ("FAIL", "generator_drift")
+            } else {
+                ("FAIL", "freshness_failed")
+            }
         } else {
             ("FAIL", "test command failed")
         }
@@ -1329,7 +1335,7 @@ fn join_f64_oracle_esr(metrics: &[String]) -> Vec<String> {
         };
         let mut joined = obj.clone();
         joined.insert("esr_f64".to_string(), esr.clone());
-        let provenance = if family.contains("SlimmableContainer") {
+        let provenance = if ids::f64_oracle_fixture_is_substitute(family) {
             format!("proxy:{fixture}")
         } else {
             fixture.to_string()

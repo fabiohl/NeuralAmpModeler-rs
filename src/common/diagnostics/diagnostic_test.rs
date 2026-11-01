@@ -7,6 +7,12 @@ use crate::common::diagnostics::{
 };
 
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static MARKER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn unique_marker(tag: &str) -> String {
+    let n = MARKER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("diag-{tag}-{n}")
+}
 
 /// Validates the visual formatting and consistency of the error code and its mnemonic.
 #[test]
@@ -271,7 +277,7 @@ fn test_diagnostic_bundle_with_error_matches() {
 /// Verifies that active model name path redaction works properly based on the `full` flag.
 #[test]
 fn test_diagnostic_bundle_redaction() {
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // Populate the active session statics
     if let Ok(mut name) = ACTIVE_MODEL_NAME.write() {
         *name = "/home/user/my_secret_path/model.nam".to_string();
@@ -318,7 +324,7 @@ fn test_diagnostic_bundle_redaction() {
 /// appear in the output.
 #[test]
 fn test_diagnostic_bundle_includes_log_trace_when_logger_initialized() {
-    let _guard = TEST_MUTEX.lock().unwrap();
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
     // Ensure NamLogger is initialized (safe to call multiple times due to OnceLock;
     // log::set_logger may fail harmlessly if already registered by another test).
@@ -327,10 +333,14 @@ fn test_diagnostic_bundle_includes_log_trace_when_logger_initialized() {
         emit_stderr: true,
         buffer_capacity: None,
     });
+    log::set_max_level(log::LevelFilter::Info);
 
-    log::info!("Test log message 1");
-    log::warn!("Test warning with /path/to/file");
-    log::error!("Test error message");
+    let info_marker = unique_marker("info");
+    let warn_marker = unique_marker("warn");
+    let error_marker = unique_marker("error");
+    log::info!("{info_marker}");
+    log::warn!("{warn_marker} with /path/to/file");
+    log::error!("{error_marker}");
 
     let bundle = DiagnosticBundle::capture();
     let rendered = bundle.render();
@@ -342,22 +352,20 @@ fn test_diagnostic_bundle_includes_log_trace_when_logger_initialized() {
 
     // Verify messages reached the buffer directly (snapshot).
     // render_trace(50) may not contain them when other test modules
-    // log concurrently, so we use the full snapshot here.
-    if let Some(buffer) = NamLogger::log_buffer() {
-        let snapshot = buffer.snapshot();
-        let has_info = snapshot
+    // log concurrently, so we use the full snapshot and unique markers.
+    let buffer = NamLogger::log_buffer().expect("logger must be initialized");
+    let snapshot = buffer.snapshot();
+    let has = |level: &str, marker: &str| {
+        snapshot
             .iter()
-            .any(|r| r.level == "INFO" && r.message.contains("Test log message 1"));
-        let has_warn = snapshot
-            .iter()
-            .any(|r| r.level == "WARN" && r.message.contains("Test warning"));
-        let has_error = snapshot
-            .iter()
-            .any(|r| r.level == "ERROR" && r.message.contains("Test error message"));
-        assert!(has_info, "Must have info message in log buffer");
-        assert!(has_warn, "Must have warning in log buffer");
-        assert!(has_error, "Must have error in log buffer");
-    }
+            .any(|r| r.level == level && r.message.contains(marker))
+    };
+    assert!(
+        has("INFO", &info_marker),
+        "Must have info message in log buffer"
+    );
+    assert!(has("WARN", &warn_marker), "Must have warning in log buffer");
+    assert!(has("ERROR", &error_marker), "Must have error in log buffer");
 }
 
 /// Verifies that `redact_text` correctly replaces HOME paths with `~`
@@ -499,17 +507,22 @@ fn test_diagnostic_emit_does_not_pollute_log_buffer_recursively() {
         emit_stderr: false,
         buffer_capacity: None,
     });
+    log::set_max_level(log::LevelFilter::Debug);
 
     let snap = SystemSnapshot::capture();
+    let marker = unique_marker("emit");
     let diag = NamDiagnostic::new(NamErrorCode::BackendFailure, &snap)
-        .message("Backend connection failed")
+        .message(format!("Backend connection failed {marker}"))
         .hint("Restart service");
 
     diag.emit();
 
     if let Some(buf) = NamLogger::log_buffer() {
+        assert!(
+            buf.snapshot().iter().any(|r| r.message.contains(&marker)),
+            "Emitted diagnostic must reach the log buffer"
+        );
         let trace = buf.render_trace(10);
-        assert!(trace.contains("Backend connection failed"));
         assert!(
             !trace.contains("Copy the block above when opening a support ticket."),
             "LogBuffer must not contain the rendered technical support block"

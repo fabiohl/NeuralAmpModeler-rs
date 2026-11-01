@@ -51,6 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\n[Usage]");
                 println!("  cargo run --example load_model -- <path-to-model.nam|.namb>");
                 println!("\nError: Please specify a valid .nam or .namb model file.");
+                println!(
+                    "The published crate does not ship fixtures; pass the model path explicitly."
+                );
                 process::exit(1);
             })
         }

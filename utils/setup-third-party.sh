@@ -32,6 +32,8 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
+rm -f "$LOG_DIR/setup-third-party-status.tsv"
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(setup-third-party); DONE=1; finish; }' EXIT
 
 if ! command -v git >/dev/null 2>&1; then
     die "git binary is required but not found in PATH."
@@ -125,11 +127,11 @@ elif [ -n "${NAM_COMMUNITY_MODELS_SRC:-}" ]; then
     ln -s "$NAM_COMMUNITY_MODELS_SRC" "$COMMUNITY_LINK"
     ok "Linked community_models → $NAM_COMMUNITY_MODELS_SRC"
 else
-    warn "community_models not configured (optional)."
+    warn "community_models not configured (optional)."; gap "community-models-unconfigured"
     echo "  For local non-distributable test models, create a symlink:"
     echo "    ln -s /path/to/your/nam_models $COMMUNITY_LINK"
     echo "  Or re-run with NAM_COMMUNITY_MODELS_SRC=/path/to/your/nam_models"
 fi
 
 ok "third-party environment ready under: $THIRD_PARTY_DIR"
-echo "RESULT: PASS ($((SECONDS - T0))s) fails=none gaps=none"
+DONE=1; finish

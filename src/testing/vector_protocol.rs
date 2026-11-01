@@ -43,7 +43,7 @@ pub enum DspMode {
 pub enum ChannelMode {
     /// Single-channel mono processing.
     Mono,
-    /// Dual-channel independent dual-mono processing.
+    /// Dual-mono processing (two independent inference chains).
     DualMono,
 }
 

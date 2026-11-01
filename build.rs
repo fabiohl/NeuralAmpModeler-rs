@@ -86,6 +86,19 @@ fn check_x86_64_v3() {
 
     if !missing_features.is_empty() {
         let missing_str = missing_features.join(", ");
+        let role_id = if is_primary_build() {
+            "primary"
+        } else {
+            "dependency"
+        };
+        write_contract(&[
+            ("schema", "1"),
+            ("status", "reject"),
+            ("code", "x86-64-v3-missing"),
+            ("role", role_id),
+            ("missing", &missing_str),
+            ("detected", &target_feature),
+        ]);
         // Cargo renders each `cargo:warning=` as a separate one-line warning:
         // `\n` escapes inside a value are not expanded and real newlines are
         // dropped by the line-based stdout parser, so the multi-line fix is
@@ -97,13 +110,14 @@ fn check_x86_64_v3() {
             "NeuralAmpModeler-rs is compiled as a dependency and requires full x86-64-v3 target support."
         };
         let mut msg_lines = vec![
+            format!("NAM_CONTRACT code=x86-64-v3-missing role={role_id}"),
             role.to_string(),
             format!("Missing required feature(s): {missing_str} (detected: {target_feature})."),
             "Set RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\" to compile, or add the \
              following snippet to the .cargo/config.toml of your APPLICATION \
              (Cargo never propagates a dependency's RUSTFLAGS downstream):"
                 .to_string(),
-            "[build]".to_string(),
+            "[target.'cfg(target_arch = \"x86_64\")']".to_string(),
             "rustflags = [\"-Ctarget-cpu=x86-64-v3\"]".to_string(),
         ];
         if !is_primary_build() {
@@ -114,6 +128,37 @@ fn check_x86_64_v3() {
             println!("cargo:warning={line}");
         }
         std::process::exit(1);
+    } else if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let _ = std::fs::remove_file(std::path::Path::new(&out_dir).join("nam-contract.txt"));
+    }
+}
+
+/// Writes the structured rejection artifact consumed by `utils/consumer-smoke.sh`.
+///
+/// Cargo does not emit `build-script-executed` (and therefore no `out_dir`)
+/// when a build script fails, so the smoke locates this file under the fresh,
+/// isolated consumer target directory instead of grepping the human build log.
+/// The format is intentionally stable and line-oriented: one `key=value` pair
+/// per line. A write failure leaves the build failing (the smoke then reports a
+/// missing contract artifact), so this path can never turn a rejection green.
+fn write_contract(fields: &[(&str, &str)]) {
+    let Ok(out_dir) = std::env::var("OUT_DIR") else {
+        println!("cargo:warning=build.rs: cannot resolve OUT_DIR for the contract artifact");
+        return;
+    };
+    let path = std::path::Path::new(&out_dir).join("nam-contract.txt");
+    let mut body = String::new();
+    for (key, value) in fields {
+        body.push_str(key);
+        body.push('=');
+        body.push_str(value);
+        body.push('\n');
+    }
+    if let Err(e) = std::fs::write(&path, body) {
+        println!(
+            "cargo:warning=build.rs: cannot write contract artifact {}: {e}",
+            path.display()
+        );
     }
 }
 

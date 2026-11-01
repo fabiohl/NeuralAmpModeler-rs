@@ -28,7 +28,8 @@ fn test_oracle_a2_multichannel_dispersion() {
     let num_frames = 256;
     let input: Vec<f64> = (0..num_frames).map(|i| (i as f64 * 0.05).sin()).collect();
     let config = PrecisionConfig::default();
-    let out = oracle_condition_dsp_channels(&cond_model, &input, &config);
+    let out = oracle_condition_dsp_channels(&cond_model, &input, &config)
+        .expect("A2 Max condition_dsp must be in the oracle domain");
 
     let num_channels = 8;
     assert_eq!(
@@ -58,4 +59,84 @@ fn test_oracle_a2_multichannel_dispersion() {
         avg_std > 1e-4,
         "Expected inter-channel std dev > 1e-4, got {avg_std:.6e}"
     );
+}
+
+fn load_fixture(name: &str) -> NamModelData {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/models")
+        .join(name);
+    let json =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {name}: {e}"));
+    serde_json::from_str(&json).unwrap_or_else(|e| panic!("failed to parse {name}: {e}"))
+}
+
+#[test]
+fn oracle_domain_accepts_two_array_a1_and_a2() {
+    let a1 = load_fixture("BossWN-standard.nam");
+    assert!(
+        super::oracle_domain(&a1).is_ok(),
+        "two-array A1 must be supported"
+    );
+
+    let a2 = load_fixture("wavenet_a2_lite.nam");
+    assert!(super::oracle_domain(&a2).is_ok(), "A2 must be supported");
+}
+
+#[test]
+fn oracle_domain_rejects_unknown_architecture() {
+    let mut model = load_fixture("BossWN-standard.nam");
+    model.architecture = "SlimmableContainer".to_string();
+    assert!(matches!(
+        super::oracle_domain(&model),
+        Err(OracleError::UnsupportedArchitecture { .. })
+    ));
+}
+
+#[test]
+fn oracle_domain_rejects_container_fixture() {
+    let container = load_fixture("a2_example.nam");
+    assert_eq!(container.architecture, "SlimmableContainer");
+    assert!(matches!(
+        super::oracle_domain(&container),
+        Err(OracleError::UnsupportedArchitecture { .. })
+    ));
+}
+
+#[test]
+fn oracle_domain_rejects_single_array_and_slimmable_wavenet() {
+    let head = load_fixture("wavenet_head_dilation.nam");
+    assert!(matches!(
+        super::oracle_domain(&head),
+        Err(OracleError::UnsupportedTopology { .. })
+    ));
+
+    let slimmable = load_fixture("slimmable_wavenet.nam");
+    assert!(matches!(
+        super::oracle_domain(&slimmable),
+        Err(OracleError::UnsupportedTopology { .. })
+    ));
+}
+
+#[test]
+#[should_panic(expected = "f64 reference oracle")]
+fn oracle_forward_panics_instead_of_returning_silence() {
+    let mut model = load_fixture("BossWN-standard.nam");
+    model.architecture = "SlimmableContainer".to_string();
+    let _ = oracle_forward(&model, &[0.0; 8], &PrecisionConfig::default());
+}
+
+#[test]
+fn oracle_domain_rejects_unsupported_condition_dsp() {
+    let mut model = load_fixture("wavenet_condition_dsp.nam");
+    let condition = model
+        .config
+        .condition_dsp
+        .as_mut()
+        .expect("fixture must embed condition_dsp");
+    condition["architecture"] = serde_json::Value::String("Linear".to_string());
+
+    assert!(matches!(
+        super::oracle_domain(&model),
+        Err(OracleError::UnsupportedTopology { .. })
+    ));
 }

@@ -48,7 +48,7 @@ fn make_random_input_f32(n: usize, seed: u64) -> (Vec<f32>, Vec<f32>) {
 }
 
 #[test]
-#[should_panic(expected = "Radix-4 FFT requires N ≥ 4")]
+#[should_panic(expected = "power-of-four size")]
 fn rejects_n_less_than_4() {
     FftPlannerRadix4::<f32>::new(2);
 }
@@ -322,4 +322,29 @@ fn roundtrip_n64_f64() {
     planner.process_inverse(&mut re, &mut im);
     assert_slice_approx_f64(&re, &re_orig, EPS_F64 * 100.0);
     assert_slice_approx_f64(&im, &im_orig, EPS_F64 * 100.0);
+}
+
+#[test]
+#[should_panic(expected = "power-of-four size")]
+fn rejects_size_eight() {
+    let _ = FftPlannerRadix4::<f32>::new(8);
+}
+
+#[test]
+#[should_panic(expected = "power-of-four size")]
+fn rejects_size_512() {
+    let _ = FftPlannerRadix4::<f32>::new(512);
+}
+
+#[test]
+fn accepts_power_of_four_sizes() {
+    for n in [4, 16, 64] {
+        let planner = FftPlannerRadix4::<f32>::new(n);
+        let mut re = vec![0.0f32; n];
+        let mut im = vec![0.0f32; n];
+        re[0] = 1.0;
+        planner.process(&mut re, &mut im);
+        assert!(re.iter().all(|v| (v - 1.0).abs() < EPS_F32));
+        assert!(im.iter().all(|v| v.abs() < EPS_F32));
+    }
 }

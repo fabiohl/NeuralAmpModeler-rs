@@ -23,7 +23,7 @@ pub(crate) fn oracle_wavenet_forward(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     oracle_wavenet_forward_inner(model_data, input, config, false)
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn oracle_wavenet_all_channels(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     oracle_wavenet_forward_inner(model_data, input, config, true)
 }
 
@@ -40,13 +40,16 @@ fn oracle_wavenet_forward_inner(
     input: &[f64],
     config: &PrecisionConfig,
     _all_channels: bool,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
     let layers = &model_data.config.layers;
     let mut cursor = Cursor::new(&model_data.weights, config.weight_precision);
     let num_frames = input.len();
 
     if layers.len() < 2 {
-        return vec![0.0; num_frames];
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "A1 oracle requires two layer arrays",
+        });
     }
 
     let l0 = &layers[0];
@@ -66,24 +69,26 @@ fn oracle_wavenet_forward_inner(
         // condition_dsp to process (would be infinite recursion).
         None
     } else {
-        model_data.config.condition_dsp.as_ref().map(|json| {
-            let cond_model: NamModelData =
-                serde_json::from_value(json.clone()).expect("Failed to parse condition_dsp JSON");
-            let raw = oracle_condition_dsp_channels(&cond_model, input, config);
-            let cond_size = a0_cond.max(1);
-            if cond_size > 1 && raw.len() == num_frames {
-                let mut broadcasted = vec![0.0f64; num_frames * cond_size];
-                for f in 0..num_frames {
-                    let val = raw[f];
-                    for c in 0..cond_size {
-                        broadcasted[f * cond_size + c] = val;
+        match model_data.config.condition_dsp.as_ref() {
+            Some(json) => {
+                let cond_model = parse_condition_dsp(json)?;
+                let raw = oracle_condition_dsp_channels(&cond_model, input, config)?;
+                let cond_size = a0_cond.max(1);
+                if cond_size > 1 && raw.len() == num_frames {
+                    let mut broadcasted = vec![0.0f64; num_frames * cond_size];
+                    for f in 0..num_frames {
+                        let val = raw[f];
+                        for c in 0..cond_size {
+                            broadcasted[f * cond_size + c] = val;
+                        }
                     }
+                    Some(broadcasted)
+                } else {
+                    Some(raw)
                 }
-                broadcasted
-            } else {
-                raw
             }
-        })
+            None => None,
+        }
     };
 
     let a1_ch = a0_head;
@@ -400,7 +405,7 @@ fn oracle_wavenet_forward_inner(
         _all_channels,
     );
 
-    output
+    Ok(output)
 }
 
 /// Compute WaveNet head finalization.

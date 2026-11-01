@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — 1.1.0
+## [Unreleased]
+
+_The next release is `2.0.0`; rename this heading to `## [2.0.0] - <date>` when it is published._
 
 ### Added
 
+- **Checked resampler capacity helpers:** `NamResampler::min_output_samples_checked`
+  and `max_input_samples_checked` return `None` for a zero rate instead of
+  panicking. The unchecked helpers are unchanged and still panic on zero rate.
 - **`NeonMath` alias:** `pub type NeonMath = Avx2Math` on aarch64. Additive; no existing name changes.
 - **aarch64/NEON backend:** native NEON implementation of the AVX2/FMA/F16C
   intrinsic surface in `src/arch/`, with the same per-lane operation order and
@@ -37,6 +42,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Gate ramp derives from `fade_frames` (S6):** `DynamicHysteresis::update`
+  computes the ramp slope from `GateParams::fade_frames` on each call (one
+  division per block) and clamps the fade counter to the current duration.
+  Output is unchanged for coherent parameters. Mutating `fade_frames` mid-fade
+  can no longer push the gain above unity, and a stale `inv_fade_frames` no
+  longer affects the ramp. `inv_fade_frames` remains a public, informational field.
+- **Staging geometry contract (S6):** `NamModel::process_multichannel` and
+  `process_multichannel_in_place` return `HostFormatContractViolation` (E2304)
+  without touching any plane when a declared channel count exceeds 1024, the
+  planar adapter's staging capacity. Previously such geometry was silently
+  skipped inside the adapter.
+- **WAV IR decoding (S6):** the decoded `f32` buffer is checked for overflow and
+  reserved fallibly after all payload bounds checks; reservation failure is
+  reported as `WavError::TooLong` instead of aborting.
+- **Breaking (S1):** `LinearModel::new_with_topology` now rejects weights/bias
+  below the receptive-field requirement; `restore_buffer_starts` is atomic; and
+  `process`/`prewarm` emit defined silence/no-op for inconsistent state instead
+  of processing it. See `src/models/linear.rs` and the S1 audit notes.
+- **Breaking (testing oracle):** `testing::reference_oracle::oracle_forward` is
+  now fail-closed. Models outside the documented `oracle_domain` (unknown or
+  container architectures, slimmable WaveNet, unsupported head/array shapes)
+  panic with a descriptive `OracleError` instead of returning a zero vector.
+  Use `try_oracle_forward` when the topology is not statically known.
 - **f32 GEMV tail and `out_len == 1`:** the partial output-channel tail no
   longer uses masked AVX2 loads/stores (or their NEON predicate emulation).
   It accumulates four 128-bit lanes plus scalar lanes while keeping the exact
@@ -101,16 +129,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain available because downstream suites use them as a dev-dependency, and
   the externally documented `nam_perf_gate` and `simd_probe` binaries stay in the
   package. The `include` list is now complete (`/src/arch/` was missing and made
-  every verified tarball fail to compile); this ships in 1.1.0.
+  every verified tarball fail to compile); this ships in 2.0.0.
+
+### Migration from 1.0.1
+
+- **Linear topology construction:** `LinearModel::new_with_topology` returns
+  `std::io::Result` and fails when weights or bias are below the receptive-field
+  requirement. Callers that relied on the previous silent acceptance must handle
+  the error.
+- **Reference oracle:** `testing::reference_oracle::oracle_forward` panics for
+  topologies outside `oracle_domain`. Use `try_oracle_forward` for models whose
+  topology is not statically known.
+- **Inconsistent state:** `process` and `prewarm` produce silence or a no-op on
+  inconsistent state. Call `validate_state` (or `is_sound` on the multichannel
+  and WaveNet components) after mutating public fields to detect it explicitly.
+- **Buffer restore:** `restore_buffer_starts` is atomic; a rejected snapshot
+  leaves the model unchanged.
 
 ## [1.0.1] - 2026-10-19
 
 ### API Compatibility
 
 - **100% Backward-Compatible (SemVer Patch Release)**.
-- **Zero breaking changes**: All public structs, traits (`NamModel`), enums (`StaticModel`), functions (`load_and_build_model`, `load_and_build_wav_ir`), and error codes (`NamErrorCode` E1xxx–E5xxx) remain completely unchanged. Downstream crates (`NAM-Plug`, `NAM-Audio-Pipe`) require zero source code changes to upgrade.
+- **Zero breaking changes**: All public structs, traits (`NamModel`), enums (`StaticModel`), functions (`load_and_build_model`, `load_and_build_wav_ir`), and error codes (`NamErrorCode` E1xxx–E5xxx) remain completely unchanged. Downstream crates require zero source code changes to upgrade.
 
-### Added
+### Added [1.0.1]
 
 - **OOM Containment & Memory Protection:**
   - Added [`utils/mem-guard.sh`](utils/mem-guard.sh), a transparent systemd user scope wrapper (`MemoryHigh=5G`, `MemoryMax=6G`, `oom_score_adj=500`) protecting host systems and IDEs against OOM killer termination during heavy release builds and test audits.
@@ -126,7 +169,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Published [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) detailing compiler-rt symbol collision root cause and linker script defenses.
   - Published [`docs/rt-structural-scheduler-spike.md`](docs/rt-structural-scheduler-spike.md) detailing lock-free 3-phase structural swap scheduling and partitioned UPOLS driver mechanics.
 
-### Changed
+### Changed [1.0.1]
 
 - **Internal Core Modularization:**
   - Refactored `src/models/linear/multichannel.rs` into modular sub-units ([`src/models/linear/multichannel/`](src/models/linear/multichannel/): `many_to_many.rs`, `many_to_one.rs`, `one_to_many.rs`, `mode.rs`) with identical re-exports.

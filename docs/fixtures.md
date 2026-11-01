@@ -62,6 +62,43 @@ Model resolution is strictly symmetric between the Rust test harness ([`src/test
 | **3** | `tests/fixtures/models-nondist/<filename>` | —                     | Local non-distributable       |
 | **4** | `tests/fixtures/models/<filename>`         | —                     | Version-controlled repository |
 
+### Distribution Contract (Published Crate)
+
+**Decision (2026-10-31, R-14/T8.10):** fixtures are **not redistributed** in the
+published package. The `include` list in `Cargo.toml` keeps `benches/`,
+`examples/`, `src/testing/` and `docs/`, but excludes `tests/` and
+`third-party/`: the packaged tarball lists 576 files with **zero** entries under
+either directory. Redistribution is rejected because the fixture tree is ~150 MB
+and mixes CC0/permissive models with non-distributable community captures (see
+the provenance registry below). No asset is copied mechanically from
+`third-party/`.
+
+Consumer-facing contract:
+
+* **Examples (`load_model`, `offline_render`):** a model path must be supplied
+  explicitly on the command line. With no path and no local checkout fixture,
+  the example prints its usage and exits with code 1; it never reports success
+  or invents a fallback path.
+* **Benchmarks (`benches/common.rs`):** a repository checkout resolves models
+  under `tests/fixtures/models*` and `third-party/community_models`. An external
+  consumer must point the existing harness variables `NAM_MODELS_DIR` and/or
+  `NAM_FIXTURES_DIR` at a fixture root; an absent file is reported on stderr and
+  the benchmark skips instead of passing silently. `load_and_prewarm_required`
+  panics with the searched path for regression gates that prohibit absence.
+  `inference_bench` and `regression_gate` declare
+  `required-features = ["testing"]` because they import the `testing` module;
+  build them with `cargo bench --features testing --bench <name>`.
+* **Library test utilities (`src/testing/fixtures.rs`, `testing` feature):** the
+  consumer supplies `NAM_MODELS_DIR`, `NAM_THIRD_PARTY_DIR`, and, when needed,
+  the read-only vendor overrides `NAM_CORE_DIR`/`NAM_PLUGIN_DIR`. Required
+  fixtures fail with `MissingModelFixture`; optional ones are SKIP.
+
+**Verification:** `cargo package --list --allow-dirty --locked` (576 files, no
+`tests/`, no `third-party/`), `cargo package --allow-dirty --locked` verification
+PASS, and an isolated consumer extracted under `target/` where
+`cargo run --example load_model` and `--example offline_render` exit 1 with the
+usage message. No publication, tag, or registry change was performed.
+
 ### Skip Semantics & Honest Gating
 
 - **Optional Models:** Non-distributable captures (e.g. `EVH-5150-Lite.nam`) are skipped gracefully (`[STATUS] SKIP_CAPABILITY`) if and only if the file is absent in **all** four search paths.
@@ -219,8 +256,9 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 >
 > Reproduce at any time with `bash utils/render-a2-dumps.sh` (tracked
 > [`utils/namcore-a2-dumps.patch`](../utils/namcore-a2-dumps.patch) instruments
-> the pinned C++ v0.6.0 `NAM/dsp.cpp` and split WaveNet implementation
-> `NAM/wavenet/model.cpp`; CMake `NAM_A2_DUMPS` gate defaults OFF; runtime capture
+> a disposable clone of the pinned C++ v0.6.0 in `target/vendor-a2-dumps/<sha>/`,
+> leaving `third-party/` untouched; it touches `NAM/dsp.cpp` and the split WaveNet
+> implementation `NAM/wavenet/model.cpp`; CMake `NAM_A2_DUMPS` gate defaults OFF; runtime capture
 > needs `NAM_A2_DUMP_DIR`; offline-only). The script regenerates
 > `tests/fixtures/dumps_a2_max/` (gitignored `*.bin`, tracked `manifest.json` +
 > `capture_meta.txt`) and verifies the render reproduces the V1 golden output

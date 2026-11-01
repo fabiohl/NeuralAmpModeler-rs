@@ -951,7 +951,11 @@ pub fn get_calibrated_threshold(
         // Thresholds preserved from pre-fix calibration; now provide ~116 dB margin.
         // Relaxed mrstft_max to 0.45 — free-geometry dynamic path shows
         //   significant spectral drift over 5s v2 sequences despite near-bit-exact SNR.
-        // Measured: SNR=130.4 dB, ESR=1.8e-12, MR-STFT=0.42 (v2 @ 48 kHz, 5s stress)
+        // Short fixture: SNR=130.4 dB, ESR=9.03e-14, MR-STFT=1.66e-5 (v1 @ 48 kHz).
+        // Measured: v2 (5s stress @ 48 kHz, 2026-10-31): SNR=121.2 dB,
+        //   ESR=7.66e-13, MR-STFT=1.26e-4 (test_golden_vectors_v2_wavenet_official).
+        // Both scenarios keep wide headroom; the gate is intentionally not
+        //   tightened without a responsible threshold decision.
         "wavenet_official" => {
             let snr_db = 14.0;
             Some((Some(snr_to_mse(snr_db)), snr_db, Some(3.5e-2), Some(0.45)))

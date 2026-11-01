@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-# consumer-smoke.sh — Verifica contrato de consumidor externo (x86-64-v3 e aarch64). Classe D.
+# consumer-smoke.sh — Contrato de consumidor externo (x86-64-v3/aarch64) por artefato estruturado. Classe D.
 # Uso: utils/consumer-smoke.sh
-# Orçamento: 45
+# Orçamento: 55
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,10 +26,20 @@ rc=0
   for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
     rustup target list --installed | grep -qx "$t" || { echo "ERROR: target $t missing (run: rustup target add $t)" >&2; exit 1; }
   done
-  if env -u RUSTFLAGS cargo check --target x86_64-unknown-linux-gnu > bare.log 2>&1; then
+  if env -u RUSTFLAGS cargo check --target x86_64-unknown-linux-gnu --message-format=json > bare.json 2> bare.log; then
     echo "consumer x86 sem flag: verde (esperado FAIL)" >&2; exit 1
   fi
-  grep -q "compiled as a dependency" bare.log || { echo "consumer x86 sem flag: mensagem de consumidor ausente" >&2; cat bare.log >&2; exit 1; }
+  [ "$(tail -n 1 bare.json)" = '{"reason":"build-finished","success":false}' ] || { echo "consumer x86 sem flag: cargo não reportou build-finished=false" >&2; tail -n 1 bare.json >&2; exit 1; }
+  contract=$(find target -type f -name nam-contract.txt -print -quit)
+  [ -n "$contract" ] || { echo "consumer x86 sem flag: artefato de contrato ausente" >&2; cat bare.log >&2; exit 1; }
+  code= role=
+  while IFS='=' read -r k v; do
+    case "$k" in code) code=$v ;; role) role=$v ;; esac
+  done < "$contract"
+  [ "$code" = x86-64-v3-missing ] && [ "$role" = dependency ] || {
+    echo "consumer x86 sem flag: causa inesperada (code=${code:-?} role=${role:-?})" >&2
+    cat "$contract" bare.log >&2; exit 1
+  }
   for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
     flags=""; [ "$t" = x86_64-unknown-linux-gnu ] && flags="-Ctarget-cpu=x86-64-v3"
     RUSTFLAGS="$flags" cargo check --target "$t" || { echo "consumer $t: FAIL" >&2; exit 1; }
@@ -41,4 +51,3 @@ if [ "$rc" -ne 0 ]; then
 fi
 emit "PHASE: consumer-smoke PASS log=$log"
 finish
-

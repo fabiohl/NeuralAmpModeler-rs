@@ -26,7 +26,9 @@ pub struct GateParams {
     pub hold_frames: usize,
     /// Number of frames (samples) to perform the fade-in/fade-out (smoothing).
     pub fade_frames: usize,
-    /// Pre-computed: `1.0 / fade_frames as f32` to avoid division in the hotpath.
+    /// Pre-computed `1.0 / fade_frames as f32` (`fade_frames` clamped to at least 1), kept for
+    /// inspection and API stability. The FSM derives the ramp slope from `fade_frames` on every
+    /// [`DynamicHysteresis::update`] call, so mutating this field cannot desynchronize the ramp.
     pub inv_fade_frames: f32,
     /// Absolute tolerance between L/R channels for Mono signal detection.
     pub mono_epsilon: f32,
@@ -282,13 +284,24 @@ impl DynamicHysteresis {
         n_samples: usize,
     ) {
         self.ramp_start_multiplier = self.current_multiplier;
+        // Ramp slope from the authoritative `fade_frames`: one division per call (per block),
+        // never per sample. Same expression as `GateParams::new`, so coherent parameters yield
+        // bit-identical multipliers, while direct mutation of `inv_fade_frames` is ignored.
+        let inv_fade = 1.0 / params.fade_frames.max(1) as f32;
+        // A parameter change mid-ramp may leave `fade_counter` above the new duration; clamping
+        // keeps every multiplier inside [0, 1] instead of amplifying the signal.
+        self.fade_counter = self.fade_counter.min(params.fade_frames);
         match self.state {
             GateState::Open => self.update_open(value, threshold_close, params, n_samples),
             GateState::FadingOut => {
-                self.update_fading_out(value, threshold_open, params, n_samples)
+                self.update_fading_out(value, threshold_open, params, inv_fade, n_samples)
             }
-            GateState::Closed => self.update_closed(value, threshold_open, params, n_samples),
-            GateState::FadingIn => self.update_fading_in(value, threshold_close, params, n_samples),
+            GateState::Closed => {
+                self.update_closed(value, threshold_open, params, inv_fade, n_samples)
+            }
+            GateState::FadingIn => {
+                self.update_fading_in(value, threshold_close, params, inv_fade, n_samples)
+            }
         }
     }
 
@@ -338,7 +351,7 @@ impl DynamicHysteresis {
     /// - **Re-opening**: If the signal exceeds `threshold_open` (upper hysteresis threshold)
     ///   mid-fade, the gate immediately aborts closure and reverses into `GateState::FadingIn`.
     /// - **Linear Fade**: Otherwise, `fade_counter` decrements by `n_samples`. The gain multiplier
-    ///   is computed as `fade_counter * inv_fade_frames` (a linear ramp from 1.0 down to 0.0).
+    ///   is computed as `fade_counter * (1 / fade_frames)` (a linear ramp from 1.0 down to 0.0).
     /// - **Closure**: When `fade_counter <= n_samples`, the fade-out completes on the current block,
     ///   transitioning to `GateState::Closed` with multiplier 0.0.
     fn update_fading_out(
@@ -346,13 +359,14 @@ impl DynamicHysteresis {
         value: f32,
         threshold_open: f32,
         params: &GateParams,
+        inv_fade: f32,
         n_samples: usize,
     ) {
         if value >= threshold_open {
             self.state = GateState::FadingIn;
             if self.fade_counter + n_samples < params.fade_frames {
                 self.fade_counter += n_samples;
-                self.current_multiplier = self.fade_counter as f32 * params.inv_fade_frames;
+                self.current_multiplier = self.fade_counter as f32 * inv_fade;
                 self.ramp_samples = n_samples;
             } else {
                 self.ramp_samples = params.fade_frames.saturating_sub(self.fade_counter);
@@ -363,7 +377,7 @@ impl DynamicHysteresis {
             }
         } else if self.fade_counter > n_samples {
             self.fade_counter -= n_samples;
-            self.current_multiplier = self.fade_counter as f32 * params.inv_fade_frames;
+            self.current_multiplier = self.fade_counter as f32 * inv_fade;
             self.ramp_samples = n_samples;
         } else {
             self.ramp_samples = self.fade_counter;
@@ -389,6 +403,7 @@ impl DynamicHysteresis {
         value: f32,
         threshold_open: f32,
         params: &GateParams,
+        inv_fade: f32,
         n_samples: usize,
     ) {
         if value >= threshold_open {
@@ -404,7 +419,7 @@ impl DynamicHysteresis {
                 self.hold_counter = 0;
                 if n_samples < params.fade_frames {
                     self.fade_counter += n_samples;
-                    self.current_multiplier = self.fade_counter as f32 * params.inv_fade_frames;
+                    self.current_multiplier = self.fade_counter as f32 * inv_fade;
                     self.ramp_samples = n_samples;
                 } else {
                     self.ramp_samples = params.fade_frames.saturating_sub(self.fade_counter);
@@ -424,7 +439,7 @@ impl DynamicHysteresis {
     /// - **Closure Abort**: If the signal drops below `threshold_close` (lower hysteresis threshold)
     ///   while opening, the gate immediately aborts opening and reverses into `GateState::FadingOut`.
     /// - **Linear Fade**: Otherwise, `fade_counter` increments by `n_samples`. The multiplier is
-    ///   computed as `fade_counter * inv_fade_frames` (a linear ramp from 0.0 up to 1.0).
+    ///   computed as `fade_counter * (1 / fade_frames)` (a linear ramp from 0.0 up to 1.0).
     /// - **Completion**: When `fade_counter + n_samples >= params.fade_frames`, the gate reaches
     ///   full unity gain, transitioning to `GateState::Open` with multiplier 1.0.
     fn update_fading_in(
@@ -432,13 +447,14 @@ impl DynamicHysteresis {
         value: f32,
         threshold_close: f32,
         params: &GateParams,
+        inv_fade: f32,
         n_samples: usize,
     ) {
         if value < threshold_close {
             self.state = GateState::FadingOut;
             if self.fade_counter > n_samples {
                 self.fade_counter -= n_samples;
-                self.current_multiplier = self.fade_counter as f32 * params.inv_fade_frames;
+                self.current_multiplier = self.fade_counter as f32 * inv_fade;
                 self.ramp_samples = n_samples;
             } else {
                 self.ramp_samples = self.fade_counter;
@@ -448,7 +464,7 @@ impl DynamicHysteresis {
             }
         } else if self.fade_counter + n_samples < params.fade_frames {
             self.fade_counter += n_samples;
-            self.current_multiplier = self.fade_counter as f32 * params.inv_fade_frames;
+            self.current_multiplier = self.fade_counter as f32 * inv_fade;
             self.ramp_samples = n_samples;
         } else {
             self.ramp_samples = params.fade_frames.saturating_sub(self.fade_counter);

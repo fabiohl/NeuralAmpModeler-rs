@@ -167,14 +167,64 @@ impl LinearModel {
     /// internally to match the C++ `nam::Linear` layout (`linear.cpp:136-140, 201-210`).
     ///
     /// # Errors
-    /// Returns `std::io::Error` if memory allocation fails for aligned weights
-    /// or `MirroredBuffer`.
+    /// Returns `std::io::Error` if the topology is invalid, the provided weight
+    /// or bias counts cannot satisfy the declared receptive field, or memory
+    /// allocation fails for aligned weights or `MirroredBuffer`.
+    ///
+    /// # Compatibility
+    /// Declared-bias topologies now require at least `num_biases` values.
+    /// Previously the multichannel constructors broadcast `biases.first()`
+    /// and the mono path defaulted to `0.0`; that silent behavior is rejected
+    /// so every kernel receives the geometry declared by the topology.
     pub fn new_with_topology(
         topo: LinearTopology,
         weights: Vec<f32>,
         biases: Vec<f32>,
     ) -> std::io::Result<Self> {
+        // Release-stable validation of the geometry consumed by the unchecked
+        // FIR/FFT kernels. `validate_weights_count` cannot be used directly:
+        // it expects the on-disk layout (biases included in `weights`), while
+        // this constructor receives kernel weights and biases separately.
+        topo.validate_channels().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Linear topology has invalid channel geometry",
+            )
+        })?;
         let receptive_field = topo.receptive_field;
+        if receptive_field == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Linear receptive_field must be >= 1",
+            ));
+        }
+        let min_weights = receptive_field
+            .checked_mul(topo.num_kernels())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Linear receptive_field * kernels overflows usize",
+                )
+            })?;
+        if weights.len() < min_weights {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Linear weights buffer too small: expected >= {min_weights}, got {}",
+                    weights.len()
+                ),
+            ));
+        }
+        if topo.has_bias && biases.len() < topo.num_biases() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Linear bias buffer too small: expected >= {}, got {}",
+                    topo.num_biases(),
+                    biases.len()
+                ),
+            ));
+        }
         let mode = if topo.in_channels != 1 || topo.out_channels != 1 {
             // Multichannel FFT state will be wired in NC-2.2; default to Direct.
             LinearMode::Direct
@@ -226,6 +276,51 @@ impl LinearModel {
             out_channels: topo.out_channels,
             biases,
             multichannel,
+        })
+    }
+
+    /// Returns whether the model can safely be dispatched to its unchecked
+    /// convolution kernels.
+    ///
+    /// The model fields are public, so a consumer may replace `weights`,
+    /// `history`, `write_pos`, `receptive_field`, `mode` or the FFT state from
+    /// safe Rust. The safe processing entry point consults this predicate
+    /// before dispatching; while it reports `false`, processing produces
+    /// silence instead of reading outside those buffers.
+    pub fn validate_state(&self) -> bool {
+        if self.receptive_field == 0
+            || self.in_channels == 0
+            || self.out_channels == 0
+            || self.weights.len() < self.receptive_field
+        {
+            return false;
+        }
+        if !multichannel::history_is_sound(
+            &self.history,
+            self.write_pos,
+            self.receptive_field,
+            self.double_limit,
+        ) {
+            return false;
+        }
+        match &self.mode {
+            LinearMode::Direct => true,
+            LinearMode::Fft(state) => state.is_sound(self.receptive_field),
+        }
+    }
+
+    /// Returns whether the optional multichannel engine can safely reach its
+    /// unchecked kernels and matches the channel geometry declared by this
+    /// model.
+    ///
+    /// The two geometries must agree: the safe multichannel wrappers size
+    /// their pointer tables from `in_channels`/`out_channels`, while the
+    /// engine dereferences its own counts.
+    pub fn validate_multichannel_state(&self) -> bool {
+        self.multichannel.as_ref().is_none_or(|engine| {
+            engine.in_channels() == self.in_channels
+                && engine.out_channels() == self.out_channels
+                && engine.is_sound()
         })
     }
 

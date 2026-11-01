@@ -174,6 +174,56 @@ impl WaveNetLayerState {
         })
     }
 
+    /// Returns whether this delay line can still be consumed by the unchecked
+    /// kernels for `channels` input channels and a full
+    /// `WAVENET_MAX_NUM_FRAMES` block.
+    ///
+    /// All fields of this type are public, so a safe caller may replace
+    /// `buffer_start`, `receptive_field_size` or the whole `layer_buffer` after
+    /// construction. The kernels read the mirrored view through raw pointers
+    /// and `get_unchecked`, which makes this predicate the release-stable
+    /// gate that the safe model entry points consult before dispatching.
+    #[inline]
+    pub(crate) fn is_sound_for(&self, channels: usize) -> bool {
+        self.start_is_sound(self.buffer_start, channels)
+    }
+
+    /// Immutable variant of [`Self::is_sound_for`] for a candidate start.
+    ///
+    /// Used by the safe `restore_buffer_starts` APIs to validate the whole
+    /// slice before applying any value, keeping restores atomic.
+    #[inline]
+    pub(crate) fn start_is_sound(&self, candidate: usize, channels: usize) -> bool {
+        if channels == 0 || self.receptive_field_size > isize::MAX as usize {
+            return false;
+        }
+        let size = self.layer_buffer.size();
+        if size == 0 || !size.is_multiple_of(channels) {
+            return false;
+        }
+        let frames = size / channels;
+        // `advance_frames` preserves the `buffer_start >= receptive_field`
+        // invariant across chunks (including the wrap path) only with this
+        // margin. Constructors size the buffer with a larger margin; this
+        // release-stable bound also covers replacement `MirroredBuffer`s.
+        let Some(min_frames) = self
+            .receptive_field_size
+            .checked_add(WAVENET_MAX_NUM_FRAMES)
+        else {
+            return false;
+        };
+        if frames < min_frames {
+            return false;
+        }
+        let Some(virtual_frames) = frames.checked_mul(2) else {
+            return false;
+        };
+        let Some(block_end) = candidate.checked_add(WAVENET_MAX_NUM_FRAMES) else {
+            return false;
+        };
+        candidate >= self.receptive_field_size && block_end <= virtual_frames
+    }
+
     /// Fallible clone for activation paths where panic must not cross FFI.
     pub fn try_clone(&self) -> std::io::Result<Self> {
         Ok(Self {

@@ -146,6 +146,56 @@ impl Conv1dDyn {
         })
     }
 
+    /// Returns whether this convolution still satisfies every invariant the
+    /// unchecked SIMD kernels rely on.
+    ///
+    /// The fields are public, so consumers may replace `weights`, `bias`,
+    /// `kernel`, `dilation` or the channel counts after
+    /// [`Self::try_from_parts`]. The safe model entry points consult this
+    /// predicate before dispatching a kernel that reads interleaved weights
+    /// through raw pointers.
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        let width = self.interleave_width;
+        if width != 4 && width != 8 && width != 16 {
+            return false;
+        }
+        if self.in_ch == 0 || self.out_ch == 0 {
+            return false;
+        }
+        if self.kernel == 0 || self.kernel > MAX_KERNEL {
+            return false;
+        }
+        if self.dilation > isize::MAX as usize {
+            return false;
+        }
+        // `num_blocks` is a descriptive field (the kernels derive their own
+        // block count from `out_ch` and `interleave_width`), so it is not
+        // part of the memory-safety contract and is not validated here.
+        let Some(padded_total) = self
+            .out_ch
+            .div_ceil(width)
+            .checked_mul(width)
+            .and_then(|v| v.checked_mul(self.in_ch))
+            .and_then(|v| v.checked_mul(self.kernel))
+        else {
+            return false;
+        };
+        if self.weights.len() < padded_total {
+            return false;
+        }
+        if self.do_bias && self.bias.len() < self.out_ch {
+            return false;
+        }
+        true
+    }
+
+    /// Largest causal lookback in frames required by the taps.
+    #[inline]
+    pub(crate) fn backreach(&self) -> Option<usize> {
+        self.kernel.checked_sub(1)?.checked_mul(self.dilation)
+    }
+
     /// F32-native single-frame convolution (full-precision f32 weights).
     ///
     /// # Safety

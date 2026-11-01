@@ -31,6 +31,28 @@ pub struct LinearManyToOne {
 }
 
 impl LinearManyToOne {
+    /// Returns whether this variant can safely reach its unchecked kernels.
+    pub fn is_sound(&self) -> bool {
+        let rf = self.receptive_field;
+        let in_ch = self.in_channels;
+        if in_ch == 0
+            || self.weights.len() < in_ch
+            || self.histories.len() < in_ch
+            || self.weights.iter().take(in_ch).any(|w| w.len() < rf)
+            || self.histories.iter().take(in_ch).any(|history| {
+                !super::history_is_sound(history, self.write_pos, rf, self.double_limit)
+            })
+        {
+            return false;
+        }
+        match &self.mode {
+            MultichannelMode::Direct => true,
+            MultichannelMode::Fft(states) => {
+                states.len() >= in_ch && states.iter().all(|state| state.is_sound(rf))
+            }
+        }
+    }
+
     /// Constructs a new `LinearManyToOne` instance.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
         let in_channels = topo.in_channels;
@@ -214,7 +236,10 @@ impl LinearManyToOne {
                         let block_start = self.write_pos - 2 * p;
                         for (ch, state) in states.iter_mut().enumerate().take(in_ch) {
                             let block_window = &self.histories[ch][block_start..self.write_pos];
-                            state.process_tail_block(block_window);
+                            // SAFETY: this model validated the whole state at the safe entry point; no
+                            // public field can change under the current `&mut self` borrow,
+                            // and `block_window` has exactly `2P` samples.
+                            unsafe { state.process_tail_block_unchecked(block_window) };
                             state.sample_counter = 0;
                         }
                     }

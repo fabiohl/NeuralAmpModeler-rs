@@ -247,8 +247,10 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// Returns [`crate::common::diagnostics::NamErrorCode::HostFormatContractViolation`]
     /// (`E2304`) — without
     /// touching any pointer — when fewer input or output planes are supplied
-    /// than the model's declared geometry. This is the fail-closed guard that
-    /// removes the previous null-pointer dereference on under-sized plane sets.
+    /// than the model's declared geometry, or when either declared channel
+    /// count exceeds the 1024-channel staging capacity of the planar adapter.
+    /// This is the fail-closed guard that removes the previous null-pointer
+    /// dereference on under-sized plane sets.
     ///
     /// # Real-Time Safety Note
     /// Zero heap allocation when the required channel counts are `<= 16`. For
@@ -262,7 +264,11 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     ) -> Result<usize, crate::common::diagnostics::NamErrorCode> {
         let ni = self.num_input_channels();
         let no = self.num_output_channels();
-        if inputs.len() < ni || outputs.len() < no {
+        if ni > plane_adapter::STAGE_SAMPLES
+            || no > plane_adapter::STAGE_SAMPLES
+            || inputs.len() < ni
+            || outputs.len() < no
+        {
             return Err(crate::common::diagnostics::NamErrorCode::HostFormatContractViolation);
         }
         let frames = inputs[..ni]
@@ -313,7 +319,8 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// # Errors
     /// Returns [`crate::common::diagnostics::NamErrorCode::HostFormatContractViolation`]
     /// (`E2304`) without
-    /// touching any pointer when fewer than `max(in, out)` planes are supplied.
+    /// touching any pointer when fewer than `max(in, out)` planes are supplied
+    /// or when `max(in, out)` exceeds the 1024-channel staging capacity.
     ///
     /// # Real-Time Safety Note
     /// Zero heap allocation when `max(in, out) <= 16`; larger geometries
@@ -325,7 +332,7 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
         let ni = self.num_input_channels();
         let no = self.num_output_channels();
         let required = ni.max(no);
-        if planes.len() < required {
+        if required > plane_adapter::STAGE_SAMPLES || planes.len() < required {
             return Err(crate::common::diagnostics::NamErrorCode::HostFormatContractViolation);
         }
         let frames = planes[..required]
@@ -760,3 +767,7 @@ pub(crate) use static_model::clone_condition_dsp;
 #[cfg(test)]
 #[path = "nam_model_measure_test.rs"]
 mod nam_model_measure_test;
+
+#[cfg(test)]
+#[path = "multichannel_geometry_test.rs"]
+mod multichannel_geometry_test;

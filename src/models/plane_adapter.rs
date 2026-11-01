@@ -86,6 +86,20 @@ pub(crate) unsafe fn run_staged_io(
     if frames == 0 || in_ch == 0 || out_ch == 0 || inputs.is_empty() || outputs.is_empty() {
         return;
     }
+    // Fail-closed for geometries the fixed staging cannot represent: without
+    // this guard a release build would index `in_buf`/`out_buf` past
+    // `STAGE_SAMPLES` when a caller-declared channel count exceeds it.
+    if in_ch > STAGE_SAMPLES
+        || out_ch > STAGE_SAMPLES
+        || in_ch > inputs.len()
+        || out_ch > outputs.len()
+    {
+        debug_assert!(
+            false,
+            "run_staged_io: channel count exceeds staging capacity"
+        );
+        return;
+    }
     debug_assert!(
         in_ch <= STAGE_SAMPLES,
         "run_staged_io: in_ch ({in_ch}) exceeds staging capacity ({STAGE_SAMPLES})"

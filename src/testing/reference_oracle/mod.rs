@@ -50,6 +50,131 @@ pub mod wavenet;
 mod reference_oracle_test;
 
 // =============================================================================
+// Oracle domain
+// =============================================================================
+
+/// A topology that the f64 reference oracle cannot represent faithfully.
+///
+/// The oracle is deliberately fail-closed: an unsupported model is reported as
+/// an error instead of being scored against a zero vector, which would be
+/// indistinguishable from legitimate silence.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OracleError {
+    /// The architecture is not implemented by the f64 oracle.
+    #[error("f64 oracle does not support architecture '{architecture}'")]
+    UnsupportedArchitecture {
+        /// Architecture string read from the model JSON.
+        architecture: String,
+    },
+    /// The architecture is known but this specific topology is outside the
+    /// oracle's documented domain.
+    #[error("f64 oracle does not support {architecture} topology: {reason}")]
+    UnsupportedTopology {
+        /// Architecture family that rejected the topology.
+        architecture: &'static str,
+        /// Human-readable reason for the rejection.
+        reason: &'static str,
+    },
+}
+
+/// Returns whether [`oracle_forward`] can represent `model_data` faithfully.
+///
+/// # Supported domain
+///
+/// - `Linear`, `ConvNet` and `LSTM`: the forward passes implemented in their
+///   respective oracle modules.
+/// - `WaveNet`: exactly two layer arrays for the A1 path, or any A2 topology
+///   recognized by the internal `is_a2_model` detector.
+/// - `condition_dsp` sub-models: `WaveNet`, `LSTM` and `ConvNet` only.
+///
+/// # Explicitly unsupported
+///
+/// - `SlimmableContainer` and any unknown architecture (no f64 reference).
+/// - Slimmable WaveNet layers (the oracle does not perform channel slicing).
+/// - WaveNet with a non-null post-stack `config.head` or a per-array head
+///   convolution (`head_kernel_size`/`head_dilation` other than 1).
+/// - A1 WaveNet with fewer or more than two arrays, because the A1 oracle
+///   evaluates exactly two arrays.
+/// - `Linear` as a `condition_dsp` sub-model.
+pub fn oracle_domain(model_data: &NamModelData) -> Result<(), OracleError> {
+    validate_domain(model_data)
+}
+
+fn validate_domain(model_data: &NamModelData) -> Result<(), OracleError> {
+    match model_data.architecture.as_str() {
+        "WaveNet" => validate_wavenet_domain(model_data),
+        "LSTM" | "ConvNet" | "Linear" => Ok(()),
+        other => Err(OracleError::UnsupportedArchitecture {
+            architecture: other.to_string(),
+        }),
+    }
+}
+
+/// Deserializes an embedded `condition_dsp` model, reporting malformed JSON as
+/// an explicit unsupported topology instead of panicking.
+pub(crate) fn parse_condition_dsp(json: &serde_json::Value) -> Result<NamModelData, OracleError> {
+    serde_json::from_value(json.clone()).map_err(|_| OracleError::UnsupportedTopology {
+        architecture: "WaveNet",
+        reason: "condition_dsp is not a valid embedded model",
+    })
+}
+
+fn validate_wavenet_domain(model_data: &NamModelData) -> Result<(), OracleError> {
+    let layers = &model_data.config.layers;
+    if layers.is_empty() {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "model declares no layer arrays",
+        });
+    }
+    if layers.iter().any(|l| l.slimmable.is_some()) {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "slimmable channel slicing is not implemented by the oracle",
+        });
+    }
+    if let Some(ref head) = model_data.config.head
+        && !head.is_null()
+    {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "post-stack head convolution is not implemented by the oracle",
+        });
+    }
+    if let Some(json) = model_data.config.condition_dsp.as_ref() {
+        let cond_model = parse_condition_dsp(json)?;
+        if cond_model.architecture == "Linear" {
+            return Err(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "condition_dsp does not support the Linear architecture",
+            });
+        }
+        validate_domain(&cond_model)?;
+    }
+
+    if is_a2_model(model_data) {
+        return Ok(());
+    }
+    if layers
+        .iter()
+        .any(|l| l.head_kernel_size.unwrap_or(1) != 1 || l.head_dilation.unwrap_or(1) != 1)
+    {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "per-array head convolution is not implemented by the A1 oracle",
+        });
+    }
+    if layers.len() != 2 {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "A1 oracle supports exactly two layer arrays",
+        });
+    }
+    Ok(())
+}
+
+// =============================================================================
 // Condition DSP multi-channel forward
 // =============================================================================
 
@@ -68,7 +193,8 @@ pub(crate) fn oracle_condition_dsp_channels(
     sub_model: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, OracleError> {
+    validate_domain(sub_model)?;
     match sub_model.architecture.as_str() {
         "WaveNet" => {
             if is_a2_model(sub_model) {
@@ -77,9 +203,15 @@ pub(crate) fn oracle_condition_dsp_channels(
                 oracle_wavenet_all_channels(sub_model, input, config)
             }
         }
-        "LSTM" => oracle_lstm_forward(sub_model, input, config),
-        "ConvNet" => oracle_convnet_forward(sub_model, input, config),
-        _ => vec![0.0; input.len()],
+        "LSTM" => Ok(oracle_lstm_forward(sub_model, input, config)),
+        "ConvNet" => Ok(oracle_convnet_forward(sub_model, input, config)),
+        "Linear" => Err(OracleError::UnsupportedTopology {
+            architecture: "Linear",
+            reason: "condition_dsp does not support the Linear architecture",
+        }),
+        other => Err(OracleError::UnsupportedArchitecture {
+            architecture: other.to_string(),
+        }),
     }
 }
 
@@ -325,11 +457,33 @@ pub fn esr_to_db_f64(esr: f64) -> f64 {
 // Top-level Oracle Dispatcher
 // =============================================================================
 
+/// Computes the f64 reference output for `model_data`.
+///
+/// # Panics
+///
+/// Panics when the model is outside [`oracle_domain`]. The oracle is
+/// fail-closed: refusing loudly is preferable to returning a zero vector that
+/// a caller could mistake for a valid silent reference. Prefer
+/// [`try_oracle_forward`] when the topology is not statically known.
 pub fn oracle_forward(
     model_data: &NamModelData,
     input: &[f64],
     config: &PrecisionConfig,
 ) -> Vec<f64> {
+    try_oracle_forward(model_data, input, config)
+        .unwrap_or_else(|err| panic!("f64 reference oracle: {err}"))
+}
+
+/// Fallible form of [`oracle_forward`].
+///
+/// Returns [`OracleError`] for every topology outside [`oracle_domain`] instead
+/// of producing a zero vector as if it were a valid reference.
+pub fn try_oracle_forward(
+    model_data: &NamModelData,
+    input: &[f64],
+    config: &PrecisionConfig,
+) -> Result<Vec<f64>, OracleError> {
+    validate_domain(model_data)?;
     match model_data.architecture.as_str() {
         "WaveNet" => {
             if is_a2_model(model_data) {
@@ -338,16 +492,31 @@ pub fn oracle_forward(
                 oracle_wavenet_forward(model_data, input, config)
             }
         }
-        "LSTM" => oracle_lstm_forward(model_data, input, config),
-        "ConvNet" => oracle_convnet_forward(model_data, input, config),
-        "Linear" => oracle_linear_forward(model_data, input, config),
-        _ => vec![0.0; input.len()],
+        "LSTM" => Ok(oracle_lstm_forward(model_data, input, config)),
+        "ConvNet" => Ok(oracle_convnet_forward(model_data, input, config)),
+        "Linear" => Ok(oracle_linear_forward(model_data, input, config)),
+        other => Err(OracleError::UnsupportedArchitecture {
+            architecture: other.to_string(),
+        }),
     }
 }
 
 fn is_a2_model(model_data: &NamModelData) -> bool {
     let layers = &model_data.config.layers;
     if layers.is_empty() {
+        return false;
+    }
+    // Slimmable WaveNet models go through the A1 free-geometry path; the A2
+    // fast/dynamic engines do not perform channel slicing.
+    if layers.iter().any(|l| l.slimmable.is_some()) {
+        return false;
+    }
+    // A2 models never use a scalar Tanh activation. A layer with Tanh is an A1
+    // model, regardless of whether it also has condition_dsp.
+    if layers
+        .iter()
+        .any(|l| l.activation.as_deref() == Some("Tanh"))
+    {
         return false;
     }
     // A2 detection requires:
@@ -367,17 +536,12 @@ fn is_a2_model(model_data: &NamModelData) -> bool {
     {
         return false;
     }
-    // Condition_dsp models with Tanh activation route through
-    // the A1 WaveNet oracle path, matching the production builder's is_a2_shape
+    // Condition_dsp models with an A1-style scalar activation route through the
+    // A1 WaveNet oracle path, matching the production builder's is_a2_shape
     // routing. The A2 path would try to read A2-specific weights (FiLM, head1x1)
     // that don't exist in A1-style models. The A1 oracle supports condition_dsp
     // and multi-channel conditioning via oracle_wavenet_forward.
     if model_data.config.condition_dsp.is_some() {
-        for l in layers.iter() {
-            if l.activation.as_deref() == Some("Tanh") {
-                return false;
-            }
-        }
         return true;
     }
     // Multi-array: require A2-specific features to avoid misclassifying

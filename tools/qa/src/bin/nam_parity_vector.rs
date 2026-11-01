@@ -61,6 +61,8 @@ Opções de 'compare':
   <VETOR_REF> <VETOR_TEST>  Caminhos dos vetores a comparar (obrigatórios)
   --json                    Exibe relatório detalhado em formato JSON no stdout
   --report-out <PATH>       Grava relatório JSON em arquivo
+  --max-esr <f64>           Limiar máximo de ESR para aprovação cross-ISA
+  --min-snr-db <f64>        Limiar mínimo de SNR (dB) para aprovação cross-ISA
 
 Opções de 'inspect':
   <VETOR>                   Caminho do arquivo de vetor a inspecionar
@@ -306,10 +308,20 @@ fn cmd_generate(args: &[String]) -> ExitCode {
         {
             "aarch64-apple-darwin".into()
         }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            "x86_64-pc-windows-msvc".into()
+        }
+        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+        {
+            "aarch64-pc-windows-msvc".into()
+        }
         #[cfg(not(any(
             all(target_os = "linux", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "aarch64"),
-            all(target_os = "macos", target_arch = "aarch64")
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "aarch64")
         )))]
         {
             "unknown".into()
@@ -387,6 +399,8 @@ fn cmd_compare(args: &[String]) -> ExitCode {
     let mut paths = Vec::new();
     let mut emit_json = false;
     let mut report_out: Option<PathBuf> = None;
+    let mut max_esr: Option<f64> = None;
+    let mut min_snr_db: Option<f64> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -396,6 +410,30 @@ fn cmd_compare(args: &[String]) -> ExitCode {
                 i += 1;
                 if i < args.len() {
                     report_out = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--max-esr" => {
+                i += 1;
+                if i < args.len() {
+                    match args[i].parse::<f64>() {
+                        Ok(v) => max_esr = Some(v),
+                        Err(e) => {
+                            eprintln!("Erro: valor inválido para --max-esr: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+            }
+            "--min-snr-db" => {
+                i += 1;
+                if i < args.len() {
+                    match args[i].parse::<f64>() {
+                        Ok(v) => min_snr_db = Some(v),
+                        Err(e) => {
+                            eprintln!("Erro: valor inválido para --min-snr-db: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
                 }
             }
             arg if !arg.starts_with("--") => {
@@ -521,9 +559,36 @@ fn cmd_compare(args: &[String]) -> ExitCode {
 
     if !report.is_compatible {
         ExitCode::from(2)
+    } else if let (Some(max_e), Some(min_snr)) = (max_esr, min_snr_db) {
+        let num_ok = report.nan_count_test == 0
+            && report.nan_count_ref == 0
+            && report.subnormal_count_test == 0
+            && report.subnormal_count_ref == 0
+            && report.esr <= max_e
+            && report.snr_db >= min_snr;
+        if num_ok {
+            ExitCode::SUCCESS
+        } else {
+            eprintln!(
+                "FAIL: contrato numérico cross-ISA violado (ESR={:.6e} vs max={:.6e}, SNR={:.2} dB vs min={:.2} dB, NaNs={}/{}, Subnormals={}/{})",
+                report.esr,
+                max_e,
+                report.snr_db,
+                min_snr,
+                report.nan_count_ref,
+                report.nan_count_test,
+                report.subnormal_count_ref,
+                report.subnormal_count_test
+            );
+            ExitCode::from(1)
+        }
     } else if report.bitwise_identical {
         ExitCode::SUCCESS
     } else {
+        eprintln!(
+            "FAIL: vetores divergem bit a bit ({} mismatches em {} amostras, max_abs_diff={:.6e})",
+            report.mismatch_count, report.total_samples_compared, report.max_abs_diff
+        );
         ExitCode::from(1)
     }
 }

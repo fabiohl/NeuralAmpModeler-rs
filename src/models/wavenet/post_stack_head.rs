@@ -27,6 +27,19 @@ pub struct PostStackHead {
 }
 
 impl PostStackHead {
+    /// Returns whether this head still satisfies the unchecked kernel
+    /// contract for `expected_in` input channels.
+    #[inline]
+    pub(crate) fn is_sound(&self, expected_in: usize) -> bool {
+        self.conv.in_ch == expected_in
+            && self.conv.is_sound()
+            && self
+                .conv
+                .backreach()
+                .is_some_and(|back| back <= self.state.receptive_field_size)
+            && self.state.is_sound_for(self.conv.in_ch)
+    }
+
     /// Creates a new `PostStackHead` from the parsed `HeadConfig` and the
     /// input channel count from the last layer array.
     ///

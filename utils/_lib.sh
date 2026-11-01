@@ -43,18 +43,18 @@ ran_tests() {
 }
 
 finish() {
-  local s=PASS sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
+  local s=PASS e=0 sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
   if ! printf '%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
     "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" > "$sf" 2>/dev/null; then
     echo "ERROR: cannot write status carrier $sf" >&2
-    emit "PHASE: carrier FAIL path=$sf"
+    emit "PHASE: carrier FAIL path=$sf" || e=1
     s=FAIL
     [ ${#FAILS[@]} -gt 0 ] || FAILS+=("carrier")
   fi
-  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}"
-  [ "$s" != FAIL ]
+  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}" || e=1
+  [ "$s" != FAIL ] && [ "$e" -eq 0 ]
 }
 
 require_nightly() {
@@ -135,13 +135,11 @@ ensure_namcore_render() {
 }
 
 ensure_qa_bin() {
-  local bin_name="$1" features="${2:-testing}"
-  local build_out
-  build_out=$(cd "$PROJECT_DIR" && cargo build --locked --workspace ${features:+--features "$features"} --bin "$bin_name" --message-format=json-render-diagnostics 2>&1) || {
-    echo "ERROR: cargo build failed for QA binary $bin_name" >&2; return 1
+  local bin_name="$1" features="${2:-testing}" build_log="$PROJECT_DIR/$LOG_DIR/qa-bin-$1.jsonl" exe
+  (cd "$PROJECT_DIR" && cargo build --locked --workspace ${features:+--features "$features"} --bin "$bin_name" --message-format=json-render-diagnostics > "$build_log" 2>&1) || {
+    echo "ERROR: cargo build failed for QA binary $bin_name" >&2; cat "$build_log" >&2 || true; return 1
   }
-  local exe
-  exe=$(printf '%s\n' "$build_out" | grep -F '"reason":"compiler-artifact"' | grep -F "\"name\":\"$bin_name\"" | grep -F '"executable":"' | tail -1 | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
+  exe=$(grep -F '"reason":"compiler-artifact"' "$build_log" | grep -F "\"name\":\"$bin_name\"" | grep -F '"executable":"' | tail -1 | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p')
   [ -n "$exe" ] && [ -x "$exe" ] || { echo "ERROR: executable artifact not found in cargo compiler-artifact stream for $bin_name" >&2; return 1; }
   echo "$exe"
 }

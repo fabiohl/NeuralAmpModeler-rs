@@ -5,7 +5,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NeuralAmpModeler-rs
 
-![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64%20%7C%20aarch64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3%20%7C%20NEON-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust) [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/fabiohl/badge.svg)](https://hub.xerj.org/contributors/fabiohl)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg) ![Rust](https://img.shields.io/badge/Rust-orange.svg) ![Platform](https://img.shields.io/badge/x86__64%20%7C%20aarch64-lightgrey.svg) [![Crates.io](https://img.shields.io/crates/v/NeuralAmpModeler-rs.svg)](https://crates.io/crates/NeuralAmpModeler-rs) [![docs.rs](https://docs.rs/NeuralAmpModeler-rs/badge.svg)](https://docs.rs/NeuralAmpModeler-rs) ![RT-Safe](https://img.shields.io/badge/RT--Safe-Zero--Alloc-brightgreen.svg) ![SIMD](https://img.shields.io/badge/SIMD-AVX2%20x86--64--v3%20%7C%20NEON-blueviolet.svg) ![Models](https://img.shields.io/badge/Models-WaveNet%20A1%20A2%20%7C%20LSTM%20%7C%20ConvNet-success.svg) ![MSRV](https://img.shields.io/badge/MSRV-1.99.0-informational?logo=rust)
 
 **NeuralAmpModeler-rs** is a very high-performance and low-latency real-time neural inference DSP engine written in pure Rust. It provides a production-grade DSP library for loading, building, and executing [Neural Amp Modeler (NAM)](https://www.neuralampmodeler.com/) models — WaveNet (A1/A2), LSTM, ConvNet, and Linear FIR/FFT — alongside speaker cabinet impulse response (.wav) convolution, multi-rate sinc resampling, and polyphase anti-aliasing oversampling.
 
@@ -174,14 +174,14 @@ Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "1.1"
+NeuralAmpModeler-rs = "2.0"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "1.1", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "2.0", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
@@ -290,7 +290,7 @@ NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities,
 
 | Feature              | Default     | Description                                                                                                                                                   | Category                    |
 |:-------------------- |:----------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------- |
-| `dual-mono`          | **Enabled** | Independent per-channel neural inference across the DSP pipeline for stereo/dual-mono signals. Disable for single-channel mono.                               | Production                  |
+| `dual-mono`          | **Enabled** | Independent per-channel neural inference across the DSP pipeline for dual-mono signals. Disable for single-channel mono.                               | Production                  |
 | `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                                                | Diagnostics                 |
 | `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.                                      | Tooling / QA                |
 | `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                                                      | Tooling / Benchmarks        |

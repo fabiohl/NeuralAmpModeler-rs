@@ -358,6 +358,19 @@ pub static F64_ORACLE_FIXTURE_TABLE: &[(&str, &str)] = &[
     ("Quick A2-Full", "wavenet_a2_full.nam"),
 ];
 
+/// Returns whether the f64-oracle fixture for `family` is a **substitute** for
+/// the model actually measured by the fidelity contract.
+///
+/// Container families have no independent f64 reference in the oracle; their
+/// `esr_f64` value comes from an A2 fixture. That value describes the
+/// substitute fixture, not the container, and must never be presented as a
+/// container f64 measurement.
+pub fn f64_oracle_fixture_is_substitute(family: &str) -> bool {
+    family.starts_with("Container ")
+        || family.starts_with("Container File ")
+        || family.starts_with("SlimmableContainer")
+}
+
 /// Family part of a contract fidelity label — everything before the
 /// ` @<rate> Live` suffix (v1 golden, v2 golden and cpp-parity shapes all
 /// end with ` @… Live`). Labels without the suffix resolve to themselves.

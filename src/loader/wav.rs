@@ -220,6 +220,15 @@ const EXTENSIBLE_GUID_TAIL: [u8; 12] = [0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38
 ///
 /// Implements strict little-endian decoding and boundary checking matching upstream
 /// `NeuralAmpModelerCore/NAM/wav.cpp`.
+///
+/// # Memory bound
+///
+/// Every chunk size and the sample payload are validated against `bytes.len()`
+/// before the decoded `f32` buffer is reserved, so that buffer holds
+/// `data_size / bytes_per_sample` values and never exceeds
+/// `4 / bytes_per_sample` times the payload bytes present in `bytes`. The
+/// caller therefore bounds memory by bounding the input slice. Reservation
+/// failure is reported as [`WavError::TooLong`] instead of aborting.
 pub fn parse_wav_ir(bytes: &[u8]) -> Result<WavIrData, WavError> {
     if bytes.len() < 12 {
         return Err(WavError::MissingHeader);
@@ -355,12 +364,23 @@ pub fn parse_wav_ir(bytes: &[u8]) -> Result<WavIrData, WavError> {
     let total_samples = count
         .checked_mul(channels_usize)
         .ok_or(WavError::TooLong(count))?;
-    let mut samples = vec![0.0f32; total_samples];
     let bytes_per_sample = (bits / 8) as usize;
-
-    if data_position + total_samples * bytes_per_sample > bytes.len() {
+    let data_end = total_samples
+        .checked_mul(bytes_per_sample)
+        .and_then(|payload| payload.checked_add(data_position))
+        .ok_or(WavError::TooLong(count))?;
+    if data_end > bytes.len() {
         return Err(WavError::TruncatedPayload);
     }
+
+    if total_samples.checked_mul(size_of::<f32>()).is_none() {
+        return Err(WavError::TooLong(count));
+    }
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(total_samples)
+        .map_err(|_| WavError::TooLong(count))?;
+    samples.resize(total_samples, 0.0f32);
 
     for i in 0..total_samples {
         let frame = i / channels_usize;

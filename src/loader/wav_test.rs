@@ -221,3 +221,37 @@ fn test_invalid_files() {
         Err(WavError::UnsupportedExtensibleSubtype)
     ));
 }
+
+#[test]
+fn test_declared_data_size_beyond_payload_is_rejected_before_decoding() {
+    let mut wav = make_wav(1, 16, &[0, 64, 0, 0], false, 1);
+    let data_pos = wav
+        .windows(4)
+        .position(|w| w == b"data")
+        .expect("data chunk present");
+    wav[data_pos + 4..data_pos + 8].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
+    assert!(matches!(
+        parse_wav_ir(&wav),
+        Err(WavError::ChunkExceedsBounds { .. })
+    ));
+}
+
+#[test]
+fn test_large_stereo_payload_decodes_every_frame() {
+    const FRAMES: usize = 8192;
+    let mut samples = Vec::with_capacity(FRAMES * 4);
+    for frame in 0..FRAMES {
+        let value = ((frame % 1000) as i32 - 500) as i16;
+        samples.extend_from_slice(&value.to_le_bytes());
+        samples.extend_from_slice(&(-value).to_le_bytes());
+    }
+    let wav_data = parse_wav_ir(&make_wav(1, 16, &samples, false, 2))
+        .expect("large valid stereo IR must parse");
+
+    assert_eq!(wav_data.channels, 2);
+    assert_eq!(wav_data.receptive_field, FRAMES);
+    assert_eq!(wav_data.weights.len(), FRAMES * 2);
+    for frame in 0..FRAMES {
+        assert_eq!(wav_data.weights[FRAMES + frame], -wav_data.weights[frame]);
+    }
+}

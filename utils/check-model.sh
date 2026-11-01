@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-# check-model.sh — inspeção de modelos .nam/.namb. Classe D.
+# check-model.sh — inspeção de modelos .nam/.namb. Classe D: stdout é dado de máquina (JSON/--manifest), exceção formal sem RESULT: (docs/testing.md §11.1).
 # Uso: utils/check-model.sh [flags canônicas]
 # Orçamento: 169
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '

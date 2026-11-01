@@ -9,6 +9,7 @@
 //! Further splitting the single-frame kernel would break the locality
 //! of `unsafe` aliasing contracts and plain accumulators.
 
+use super::common::MAX_KERNEL;
 use super::conv_input::{store_4_accums, store_8_accums, store_16_accums};
 use crate::loader::dispatcher::wavenet::layout::select_interleave_width;
 use crate::math::common::{
@@ -87,6 +88,40 @@ impl<const IN: usize, const OUT: usize, const K: usize> Conv1d<IN, OUT, K> {
             do_bias,
             dilation,
         })
+    }
+
+    /// Returns whether this convolution still satisfies the padded-weight
+    /// contract of the unchecked SIMD kernels.
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        if IN == 0 || OUT == 0 || K == 0 || K > MAX_KERNEL {
+            return false;
+        }
+        if self.dilation > isize::MAX as usize {
+            return false;
+        }
+        let width = select_interleave_width(OUT);
+        let num_blocks = OUT.div_ceil(width);
+        let Some(padded_total) = num_blocks
+            .checked_mul(width)
+            .and_then(|v| v.checked_mul(IN))
+            .and_then(|v| v.checked_mul(K))
+        else {
+            return false;
+        };
+        if self.weights.len() < padded_total {
+            return false;
+        }
+        if self.do_bias && self.bias.len() < OUT {
+            return false;
+        }
+        self.backreach().is_some()
+    }
+
+    /// Largest causal lookback in frames required by the taps.
+    #[inline]
+    pub(crate) fn backreach(&self) -> Option<usize> {
+        K.checked_sub(1)?.checked_mul(self.dilation)
     }
 
     /// Processes a single frame applying convolution to the ring buffer,

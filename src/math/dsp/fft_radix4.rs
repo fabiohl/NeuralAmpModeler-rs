@@ -79,14 +79,16 @@ impl<T: FftFloat> FftPlannerRadix4<T> {
     ///
     /// # Panics
     ///
-    /// Panics if `n` is not a power of two, is less than 4.
+    /// Panics if `n` is not a power of four (4, 16, 64, 256, …) or is less
+    /// than 4. Power-of-two sizes that are not powers of four (8, 32, 512, …)
+    /// would need a mixed Radix-2+4 plan, which this prototype does not
+    /// implement; they are rejected instead of producing an incomplete
+    /// transform.
     pub fn new(n: usize) -> Self {
-        assert!(n > 0, "FFT size must be positive");
         assert!(
-            n.is_power_of_two(),
-            "FFT size must be a power of two (Radix-4 requires power of four), got {n}"
+            n >= 4 && n.is_power_of_two() && n.trailing_zeros().is_multiple_of(2),
+            "Radix-4 FFT requires a power-of-four size (4, 16, 64, ...), got {n}"
         );
-        assert!(n >= 4, "Radix-4 FFT requires N ≥ 4, got {n}");
 
         let n_half = n / 2;
         let num_stages_radix4 = (n.ilog2() / 2) as usize;

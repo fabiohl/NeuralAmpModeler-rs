@@ -15,6 +15,16 @@
 //! 3. `tests/fixtures/models-nondist/{name}`
 //! 4. `third-party/community_models/{name}`
 //! 5. `tests/fixtures/models/{name}` (default, may be absent)
+//!
+//! ## Packaged crate
+//!
+//! `tests/` and `third-party/` are not part of the published package. A
+//! consumer must supply fixture roots through `NAM_MODELS_DIR` and/or
+//! `NAM_THIRD_PARTY_DIR` (vendor mirrors may be redirected with
+//! `NAM_CORE_DIR`/`NAM_PLUGIN_DIR` when regenerating or cross-checking
+//! fixtures), or pass absolute paths. Absent optional assets are treated as
+//! SKIP; required ones fail with [`MissingModelFixture`] instead of handing
+//! back a non-existent path.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

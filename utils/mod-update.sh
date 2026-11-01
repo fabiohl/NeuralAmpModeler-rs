@@ -34,7 +34,7 @@ fi
 
 # 2. Upgrade dependencies in Cargo.toml
 phase "Upgrading dependency definitions (Cargo.toml)..."
-if cargo --list | grep -q "upgrade"; then
+if command -v cargo-upgrade >/dev/null 2>&1; then
     cargo upgrade --verbose
 else
     warn "cargo-edit (cargo upgrade) not found. Install with: cargo install cargo-edit"; gap "cargo-upgrade-missing"

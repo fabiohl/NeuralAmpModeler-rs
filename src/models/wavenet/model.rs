@@ -44,6 +44,18 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     pub fn clone_exact(&self) -> Self {
         self.clone()
     }
+    /// Returns whether both layer arrays can safely reach their unchecked
+    /// kernels.
+    ///
+    /// Every field of the arrays and of their layers is public, so a consumer
+    /// can invalidate construction-time invariants from safe Rust. The safe
+    /// entry points ([`Self::process`], [`Self::prewarm`]) consult this
+    /// predicate before dispatching; while it reports `false`, processing
+    /// produces silence instead of dereferencing the corrupted state.
+    pub fn validate_state(&self) -> bool {
+        self.array1.is_sound() && self.array2.is_sound()
+    }
+
     /// Sets the effective number of layers on both arrays for soft-degrade.
     #[inline(always)]
     pub fn set_effective_layers(&mut self, n: usize) {
@@ -69,18 +81,51 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     }
 
     /// Restores the `buffer_start` pointers of both layer arrays from a slice.
+    ///
+    /// Restores are all-or-nothing: every supplied candidate is validated
+    /// against the release-stable delay-line bounds (see
+    /// `WaveNetLayerState::start_is_sound`) before any state is modified. If a
+    /// candidate is invalid, the model is left untouched. `offset` always
+    /// advances for every visited state, so the caller's position contract is
+    /// preserved.
+    ///
+    /// # Compatibility
+    /// Previously every value was applied unconditionally. Restoring a
+    /// corrupt or cross-version snapshot now leaves the model unchanged
+    /// instead of partially rewinding it; callers that need to distinguish
+    /// this case should validate their snapshot before calling.
     #[inline(always)]
     pub fn restore_buffer_starts(&mut self, starts: &[usize], offset: &mut usize) {
+        let first = *offset;
+        let mut cursor = first;
+        let mut valid = true;
+        for state in &self.array1.states {
+            if cursor < starts.len() {
+                valid &= state.start_is_sound(starts[cursor], CH);
+                cursor += 1;
+            }
+        }
+        for state in &self.array2.states {
+            if cursor < starts.len() {
+                valid &= state.start_is_sound(starts[cursor], HEAD);
+                cursor += 1;
+            }
+        }
+        *offset = cursor;
+        if !valid {
+            return;
+        }
+        let mut cursor = first;
         for state in &mut self.array1.states {
-            if *offset < starts.len() {
-                state.buffer_start = starts[*offset];
-                *offset += 1;
+            if cursor < starts.len() {
+                state.buffer_start = starts[cursor];
+                cursor += 1;
             }
         }
         for state in &mut self.array2.states {
-            if *offset < starts.len() {
-                state.buffer_start = starts[*offset];
-                *offset += 1;
+            if cursor < starts.len() {
+                state.buffer_start = starts[cursor];
+                cursor += 1;
             }
         }
     }
@@ -94,6 +139,11 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Production policy is the AVX2 backend; the AVX-512 match arm is not a
     /// promoted product path (see `docs/architecture.md` §1.2).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        if !self.validate_state() {
+            let frames = input.len().min(output.len());
+            output[..frames].fill(0.0);
+            return;
+        }
         // SAFETY: `dispatch_simd!` expands to a call of `process_internal::<M>` selected by
         // `effective_instruction_set()`. The x86-64-v3 baseline (AVX2/FMA) is a compile-time
         // guarantee (`src/lib.rs`): on a pre-v3 host the binary raises SIGILL and no runtime
@@ -172,6 +222,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// policy is AVX2; the AVX-512 arm is not a promoted product path.
     #[cold]
     pub fn prewarm(&mut self) {
+        if !self.validate_state() {
+            return;
+        }
         // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a matching
         // `#[target_feature]` backend `M`; `prewarm_internal` only touches the model's own
         // pre-allocated buffers.
@@ -204,6 +257,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]
     pub unsafe fn prewarm_avx512(&mut self) {
+        if !self.validate_state() {
+            return;
+        }
         // SAFETY: this body runs under `#[target_feature(enable = "avx512f,avx512vl")]` and the fn
         // is documented to require a supported AVX-512 processor, so the `Avx512Math` kernel
         // instructions are available; `prewarm_internal` only touches the model's own
@@ -217,6 +273,9 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
+        if !self.validate_state() {
+            return;
+        }
         // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
         // `Avx2Math` is selected only on such hosts, so its instructions are available;
         // `prewarm_internal` only touches the model's own pre-allocated buffers.

@@ -52,6 +52,19 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         })
     }
 
+    /// Returns whether this layer still satisfies the size contract of the
+    /// unchecked GEMV kernels.
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        if IN == 0 || OUT == 0 {
+            return false;
+        }
+        let Some(min_weights) = IN.checked_mul(OUT) else {
+            return false;
+        };
+        self.weights.len() >= min_weights && (!self.do_bias || self.bias.len() >= OUT)
+    }
+
     /// Full-precision f32 fused residual batch.
     ///
     /// Fuses the 1x1 GEMV with bias and residual addition into a single SIMD

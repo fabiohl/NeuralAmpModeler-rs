@@ -21,7 +21,7 @@ use neural_amp_modeler_rs::loader::nam_json::{
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::lstm::lstm_weight_count;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Generates `num_samples` of a deterministic 440 Hz sine wave at 48 kHz.
 /// Used as the standard excitation signal across inference benches.
@@ -386,10 +386,39 @@ pub fn load_and_prewarm_linear_fft_rf2048() -> neural_amp_modeler_rs::models::St
     *model
 }
 
-/// Resolves the path to a model fixture file, preferring `models-nondist`
-/// or `third-party/community_models` when present and falling back to `tests/fixtures/models`.
+/// Resolves the path to a model fixture file.
+///
+/// The published crate does not ship `tests/` or any model fixture. A consumer
+/// running these benchmarks must provide a fixture root through the existing
+/// harness variables `NAM_MODELS_DIR` and/or `NAM_FIXTURES_DIR`; the repository
+/// checkout falls back to `tests/fixtures/models*` and
+/// `third-party/community_models` when those variables are unset.
+///
+/// Search order:
+/// 1. `$NAM_MODELS_DIR/<filename>`
+/// 2. `$NAM_FIXTURES_DIR/models/<filename>`
+/// 3. `$NAM_FIXTURES_DIR/models-nondist/<filename>`
+/// 4. `tests/fixtures/models-nondist/<filename>`
+/// 5. `$NAM_THIRD_PARTY_DIR/community_models/<filename>` or
+///    `third-party/community_models/<filename>`
+/// 6. `tests/fixtures/models/<filename>`
 pub fn model_path(filename: &str) -> PathBuf {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Ok(dir) = std::env::var("NAM_MODELS_DIR") {
+        let p = PathBuf::from(dir).join(filename);
+        if p.exists() {
+            return p;
+        }
+    }
+    if let Ok(dir) = std::env::var("NAM_FIXTURES_DIR") {
+        let root = PathBuf::from(dir);
+        for sub in ["models", "models-nondist"] {
+            let p = root.join(sub).join(filename);
+            if p.exists() {
+                return p;
+            }
+        }
+    }
     let nondist = base.join("tests/fixtures/models-nondist").join(filename);
     if nondist.exists() {
         return nondist;
@@ -403,12 +432,23 @@ pub fn model_path(filename: &str) -> PathBuf {
     base.join("tests/fixtures/models").join(filename)
 }
 
+/// Reports an absent fixture instead of treating it as a successful skip.
+fn report_missing_fixture(filename: &str, path: &Path) {
+    eprintln!(
+        "[bench] fixture '{filename}' not found at {}; set NAM_MODELS_DIR or \
+         NAM_FIXTURES_DIR to a fixture root (the published crate does not ship \
+         tests/fixtures)",
+        path.display()
+    );
+}
+
 /// Loads and prewarms a model fixture (2048 samples). Returns `None` if the
 /// file is missing or fails to parse — callers should `return` to skip the
-/// benchmark silently when this happens.
+/// benchmark; an absent file is reported on stderr instead of a silent pass.
 pub fn load_and_prewarm(filename: &str) -> Option<neural_amp_modeler_rs::models::StaticModel> {
     let path = model_path(filename);
     if !path.exists() {
+        report_missing_fixture(filename, &path);
         return None;
     }
     let json_data = fs::read_to_string(&path).ok()?;
@@ -425,7 +465,9 @@ pub fn load_and_prewarm_required(filename: &str) -> neural_amp_modeler_rs::model
     let path = model_path(filename);
     if !path.exists() {
         panic!(
-            "Required benchmark model fixture '{}' not found at {:?}",
+            "Required benchmark model fixture '{}' not found at {:?}; set \
+             NAM_MODELS_DIR or NAM_FIXTURES_DIR (the published crate does not \
+             ship tests/fixtures)",
             filename, path
         );
     }
@@ -457,6 +499,10 @@ pub fn load_and_prewarm_required(filename: &str) -> neural_amp_modeler_rs::model
 /// `iter_with_setup`).
 pub fn load_model_data(filename: &str) -> Option<NamModelData> {
     let path = model_path(filename);
+    if !path.exists() {
+        report_missing_fixture(filename, &path);
+        return None;
+    }
     let json_data = fs::read_to_string(&path).ok()?;
     parse_nam_json(&json_data).ok()
 }
