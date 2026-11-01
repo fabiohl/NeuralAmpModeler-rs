@@ -107,13 +107,15 @@ pub struct FreshnessOutcome {
     pub stale: Vec<PathBuf>,
     /// `.nam` model files not registered in the manifest.
     pub orphans: Vec<PathBuf>,
-    /// Generator scripts whose SHA-256 changed.
+    /// Generator scripts whose SHA-256 changed without valid attestation.
     pub generator_drift: Vec<PathBuf>,
+    /// Generator scripts whose SHA-256 changed but are certified via `.golden_attest`.
+    pub attested_generators: Vec<PathBuf>,
     /// Human-readable toolchain drift descriptions.
     pub toolchain_drift: Vec<String>,
     /// True when no artifact is missing, stale, or orphaned.
     pub artifact_integrity_ok: bool,
-    /// True when no generator script drifted.
+    /// True when no generator script drifted without valid attestation.
     pub generator_provenance_ok: bool,
     /// True when the toolchain fingerprint matches the manifest.
     pub toolchain_provenance_ok: bool,
@@ -129,6 +131,146 @@ impl FreshnessOutcome {
     pub fn is_ok(&self) -> bool {
         self.artifact_integrity_ok && self.generator_provenance_ok
     }
+}
+
+/// An entry in `tests/fixtures/.golden_attest` certifying an audited generator change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoldenAttestation {
+    /// SHA-256 of the generator script on disk when attested.
+    pub generator: String,
+    /// Author / identifier who reviewed and certified the change.
+    pub author: String,
+    /// ISO-8601 date of attestation.
+    pub date: String,
+    /// Command or change description.
+    pub command: String,
+    /// Target file scope (e.g. `utils/check-model.sh`).
+    pub scope: Vec<String>,
+    /// Optional justification / rationale.
+    pub reason: Option<String>,
+}
+
+impl GoldenAttestation {
+    /// Parse a single line of `key=value` pairs from `.golden_attest`.
+    pub fn parse_line(line: &str) -> Option<Self> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return None;
+        }
+
+        let mut generator = None;
+        let mut author = None;
+        let mut date = None;
+        let mut command = None;
+        let mut scope = Vec::new();
+        let mut reason = None;
+
+        let mut current_key: Option<&str> = None;
+        let mut in_quote = false;
+        let mut current_token = String::new();
+        let mut tokens = Vec::new();
+
+        for ch in trimmed.chars() {
+            if ch == '"' {
+                in_quote = !in_quote;
+            } else if ch.is_whitespace() && !in_quote {
+                if !current_token.is_empty() {
+                    tokens.push(current_token.clone());
+                    current_token.clear();
+                }
+            } else {
+                current_token.push(ch);
+            }
+        }
+        if !current_token.is_empty() {
+            tokens.push(current_token);
+        }
+
+        for token in tokens {
+            if let Some((k, v)) = token.split_once('=') {
+                let v = v.trim_matches('"');
+                match k {
+                    "generator" => generator = Some(v.to_lowercase()),
+                    "author" => author = Some(v.to_string()),
+                    "date" => date = Some(v.to_string()),
+                    "command" => command = Some(v.to_string()),
+                    "scope" => {
+                        scope = v
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    "reason" => reason = Some(v.to_string()),
+                    _ => {}
+                }
+                current_key = Some(match k {
+                    "author" => "author",
+                    "command" => "command",
+                    "reason" => "reason",
+                    _ => "",
+                });
+            } else if let Some(k) = current_key {
+                match k {
+                    "author" => {
+                        if let Some(a) = author.as_mut() {
+                            a.push(' ');
+                            a.push_str(token.trim_matches('"'));
+                        }
+                    }
+                    "command" => {
+                        if let Some(c) = command.as_mut() {
+                            c.push(' ');
+                            c.push_str(token.trim_matches('"'));
+                        }
+                    }
+                    "reason" => {
+                        if let Some(r) = reason.as_mut() {
+                            r.push(' ');
+                            r.push_str(token.trim_matches('"'));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Some(Self {
+            generator: generator?,
+            author: author?,
+            date: date?,
+            command: command?,
+            scope,
+            reason,
+        })
+    }
+
+    /// Check if this attestation certifies the given generator at `file_path` with `current_sha`.
+    pub fn matches(&self, file_path: &str, current_sha: &str) -> bool {
+        if !self.generator.eq_ignore_ascii_case(current_sha) {
+            return false;
+        }
+        let norm_file = file_path.trim_start_matches("./");
+        self.scope.iter().any(|s| {
+            let norm_s = s.trim_start_matches("./");
+            norm_s == norm_file
+        })
+    }
+}
+
+/// Load and parse all attestation records from `tests/fixtures/.golden_attest`.
+pub fn load_attestations(fixtures_dir: &Path) -> Vec<GoldenAttestation> {
+    let attest_path = fixtures_dir.join(".golden_attest");
+    if !attest_path.exists() {
+        return Vec::new();
+    }
+    let text = match fs::read_to_string(&attest_path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    text.lines()
+        .filter_map(GoldenAttestation::parse_line)
+        .collect()
 }
 
 /// Errors that can occur while running the freshness gate.
@@ -202,11 +344,12 @@ fn check_freshness_manifest(
     let manifest_toolchain = ToolchainFingerprint::from_manifest(&manifest_text);
     let current_toolchain = ToolchainFingerprint::current();
     let toolchain_drift = manifest_toolchain.drift_against(&current_toolchain);
+    let attestations = load_attestations(&fixtures_dir);
 
     let mut missing = Vec::new();
     let mut stale = Vec::new();
     let mut orphans = Vec::new();
-    let mut generator_drift = Vec::new();
+    let mut raw_generators: Vec<(PathBuf, String, String)> = Vec::new();
     let mut registered_models: HashSet<String> = HashSet::new();
 
     enum Section {
@@ -297,9 +440,7 @@ fn check_freshness_manifest(
                 let gen_path = root.join(file_path);
                 if gen_path.exists() {
                     let current_sha = sha256_file(&gen_path)?;
-                    if current_sha != expected_sha {
-                        generator_drift.push(PathBuf::from(file_path));
-                    }
+                    raw_generators.push((PathBuf::from(file_path), expected_sha, current_sha));
                 }
             }
         }
@@ -320,6 +461,25 @@ fn check_freshness_manifest(
     }
 
     let artifact_integrity_ok = missing.is_empty() && stale.is_empty() && orphans.is_empty();
+
+    let mut generator_drift = Vec::new();
+    let mut attested_generators = Vec::new();
+
+    for (path, expected_sha, current_sha) in raw_generators {
+        if current_sha != expected_sha {
+            let file_str = path.to_string_lossy();
+            if artifact_integrity_ok
+                && attestations
+                    .iter()
+                    .any(|a| a.matches(&file_str, &current_sha))
+            {
+                attested_generators.push(path);
+            } else {
+                generator_drift.push(path);
+            }
+        }
+    }
+
     let generator_provenance_ok = generator_drift.is_empty();
     let toolchain_provenance_ok = toolchain_drift.is_empty();
 
@@ -351,6 +511,7 @@ fn check_freshness_manifest(
         stale,
         orphans,
         generator_drift,
+        attested_generators,
         toolchain_drift,
         artifact_integrity_ok,
         generator_provenance_ok,

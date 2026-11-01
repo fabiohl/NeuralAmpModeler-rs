@@ -187,6 +187,14 @@ fn main() {
                     p.display()
                 );
             }
+            for p in &outcome.attested_generators {
+                println!(
+                    "  {}✓ GENERATOR ATTESTED:{} {} — provenance certified via .golden_attest",
+                    s.green,
+                    s.reset,
+                    p.display()
+                );
+            }
             for p in &outcome.generator_drift {
                 println!(
                     "  {}⚠ GENERATOR CHANGED:{} {} — fixtures may be stale; re-run golden_gen_build.sh",
@@ -214,7 +222,11 @@ fn main() {
                     details.push_str("artifact_integrity=OK ");
                 }
                 if outcome.generator_provenance_ok {
-                    details.push_str("generator_provenance=OK ");
+                    if !outcome.attested_generators.is_empty() {
+                        details.push_str("generator_provenance=ATTESTED ");
+                    } else {
+                        details.push_str("generator_provenance=OK ");
+                    }
                 } else {
                     details.push_str("generator_provenance=DRIFT ");
                 }

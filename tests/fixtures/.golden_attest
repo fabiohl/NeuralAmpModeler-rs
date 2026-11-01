@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+#
+# Golden Attestation Manifest (.golden_attest)
+#
+# Records explicit attestations for generator script modifications that have
+# been audited and certified not to affect fixture output (e.g. documentation,
+# script headers, comments, or tooling metadata changes).
+#
+# Entries in this file allow `nam_freshness` to accept generator provenance
+# drift without requiring full golden vector re-generation, provided that all
+# fixture and model artifacts match their recorded SHA-256 digests.
+#
+# Format:
+# generator=<sha256> author=<id> date=<ISO-8601> command=<cmd> scope=<files> [reason=<...>]
+
+generator=7d6c07d5e5e95545d2049e32ba99c587b6cfec65ceeeac41a314de2dcf314367 author="Fabio Lima (PO)" date=2026-10-31 command=manual-edit-header scope=utils/check-model.sh reason="class D formal justification in script header"
