@@ -50,6 +50,8 @@ fn test_all_codes_have_unique_numeric() {
         NamJsonUnsupportedMultiChannel,
         NamJsonUnknownActivation,
         NamJsonSampleRateMismatch,
+        NamJsonValueExceedsLimit,
+        NamJsonValueTooDeep,
         InvalidMetadata,
         NambNonFiniteWeight,
         NambInvalidHeaderField,

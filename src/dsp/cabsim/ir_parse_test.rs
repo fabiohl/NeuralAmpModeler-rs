@@ -129,6 +129,136 @@ fn parse_wav_rejects_truncated_headers() {
     }
 }
 
+/// Builds a mono WAV whose `data` chunk declares `declared_size` bytes while
+/// carrying only `payload`. Used to reproduce truncated/partial RIFF payloads
+/// without external fixtures.
+fn build_wav_with_data(fmt: u16, bits: u16, declared_size: u32, payload: &[u8]) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"RIFF");
+    data.extend_from_slice(&0u32.to_le_bytes()); // patched below
+    data.extend_from_slice(b"WAVE");
+
+    let block_align = (bits / 8).max(1);
+    data.extend_from_slice(b"fmt ");
+    data.extend_from_slice(&16u32.to_le_bytes());
+    data.extend_from_slice(&fmt.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes()); // mono
+    data.extend_from_slice(&48000u32.to_le_bytes());
+    data.extend_from_slice(&(48000u32 * block_align as u32).to_le_bytes());
+    data.extend_from_slice(&block_align.to_le_bytes());
+    data.extend_from_slice(&bits.to_le_bytes());
+
+    data.extend_from_slice(b"data");
+    data.extend_from_slice(&declared_size.to_le_bytes());
+    data.extend_from_slice(payload);
+
+    let total = (data.len() - 8) as u32;
+    data[4..8].copy_from_slice(&total.to_le_bytes());
+    data
+}
+
+/// A `data` chunk that declares more bytes than the file carries must be
+/// rejected before any sample conversion, for every supported format. Before
+/// the fix the readers silently clamped to the available bytes and returned a
+/// shorter IR as if the file were valid.
+#[test]
+fn truncated_data_payload_rejected_for_all_formats() {
+    let cases: [(u16, u16, &[u8], u32); 4] = [
+        (WAV_FORMAT_PCM, 16, &[0x00, 0x40], 8),
+        (WAV_FORMAT_PCM, 24, &[0x00, 0x00, 0x40], 6),
+        (WAV_FORMAT_PCM, 32, &[0x00, 0x00, 0x00, 0x40], 8),
+        (WAV_FORMAT_IEEE_FLOAT, 32, &[0x00, 0x00, 0x00, 0x3F], 8),
+    ];
+
+    for (fmt, bits, payload, declared) in cases {
+        let wav = build_wav_with_data(fmt, bits, declared, payload);
+        let err = parse_wav(&wav)
+            .expect_err("truncated data payload must not be accepted as a shorter IR");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("data"),
+            "error must identify the data chunk: {err}"
+        );
+    }
+}
+
+/// A payload whose declared size is not a whole number of samples (partial
+/// trailing sample) must be rejected instead of silently dropping the bytes.
+#[test]
+fn partial_trailing_sample_rejected_for_all_formats() {
+    let cases: [(u16, u16, &[u8]); 4] = [
+        (WAV_FORMAT_PCM, 16, &[0x00, 0x40, 0x11]),
+        (WAV_FORMAT_PCM, 24, &[0x00, 0x00, 0x40, 0x11]),
+        (WAV_FORMAT_PCM, 32, &[0x00, 0x00, 0x00, 0x40, 0x11]),
+        (WAV_FORMAT_IEEE_FLOAT, 32, &[0x00, 0x00, 0x00, 0x3F, 0x11]),
+    ];
+
+    for (fmt, bits, payload) in cases {
+        let wav = build_wav_with_data(fmt, bits, payload.len() as u32, payload);
+        let err = parse_wav(&wav).expect_err("partial trailing sample must be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("multiple") || err.to_string().contains("aligned"),
+            "error must report sample alignment: {err}"
+        );
+    }
+}
+
+/// An empty `data` payload remains an error (no audio samples), and must never
+/// be reported as a successfully loaded zero-length IR.
+#[test]
+fn empty_data_payload_rejected() {
+    let wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 0, &[]);
+    let err = parse_wav(&wav).expect_err("empty data payload must be rejected");
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+}
+
+/// Valid mono payloads for every supported format keep their exact sample
+/// values after the bounds/alignment validation.
+#[test]
+fn valid_data_payload_preserved_for_all_formats() {
+    let cases: [(u16, u16, &[u8]); 4] = [
+        (WAV_FORMAT_PCM, 16, &[0x00, 0x40]),
+        (WAV_FORMAT_PCM, 24, &[0x00, 0x00, 0x40]),
+        (WAV_FORMAT_PCM, 32, &[0x00, 0x00, 0x00, 0x40]),
+        (WAV_FORMAT_IEEE_FLOAT, 32, &[0x00, 0x00, 0x00, 0x3F]),
+    ];
+
+    for (fmt, bits, payload) in cases {
+        let wav = build_wav_with_data(fmt, bits, payload.len() as u32, payload);
+        let (samples, rate) = parse_wav(&wav).expect("valid mono payload must parse");
+        assert_eq!(rate, 48000);
+        assert_eq!(samples.len(), 1, "fmt={fmt}, bits={bits}");
+        assert!(
+            (samples[0] - 0.5).abs() < 1e-4,
+            "fmt={fmt}, bits={bits}: unexpected sample {}",
+            samples[0]
+        );
+    }
+}
+
+/// A final odd-sized `data` chunk without the RIFF pad byte is still accepted:
+/// the padding is optional at EOF and must not reject otherwise valid audio.
+#[test]
+fn odd_sized_data_chunk_without_padding_accepted() {
+    let payload = [0x00u8, 0x00, 0x40]; // one PCM24 sample = 3 bytes
+    let wav = build_wav_with_data(WAV_FORMAT_PCM, 24, payload.len() as u32, &payload);
+    let (samples, rate) = parse_wav(&wav).expect("unpadded final data chunk must parse");
+    assert_eq!(rate, 48000);
+    assert_eq!(samples.len(), 1);
+}
+
+/// A `fmt ` chunk that declares more bytes than the file carries must be
+/// rejected instead of reading a partially materialized header.
+#[test]
+fn fmt_chunk_declared_larger_than_file_rejected() {
+    let mut wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 2, &[0x00, 0x40]);
+    // RIFF(12) + "fmt "(4) → declared size lives at bytes 16..20.
+    wav[16..20].copy_from_slice(&64u32.to_le_bytes());
+    let err = parse_wav(&wav).expect_err("truncated fmt payload must be rejected");
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+}
+
 /// Mock reader that yields pre-configured chunks to simulate deterministic stream mutation.
 struct MockStream {
     chunks: Vec<Vec<u8>>,

@@ -15,9 +15,85 @@ use std::path::Path;
 /// Default sysfs CPU base directory on Linux hosts.
 pub const DEFAULT_SYSFS_CPU_DIR: &str = "/sys/devices/system/cpu";
 
+/// Largest CPU index accepted by [`try_parse_cpu_list`].
+///
+/// On Linux this matches `CPU_SETSIZE`, the exclusive bound enforced by the
+/// engine's affinity pinning. Other platforms have no sysfs CPU lists; the
+/// same bound is kept as a conservative budget.
+#[cfg(target_os = "linux")]
+const MAX_CPU_LIST_ENTRIES: usize = libc::CPU_SETSIZE as usize;
+#[cfg(not(target_os = "linux"))]
+const MAX_CPU_LIST_ENTRIES: usize = 1024;
+
+/// Longest accepted input for [`try_parse_cpu_list`] (64 KiB).
+const MAX_CPU_LIST_INPUT_BYTES: usize = 64 * 1024;
+
+/// Why a CPU list could not be expanded within budget.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CpuListError {
+    /// The input string exceeds the accepted length.
+    InputTooLong {
+        /// Observed length in bytes.
+        len: usize,
+        /// Accepted maximum.
+        limit: usize,
+    },
+    /// A CPU id cannot be represented in a Linux affinity mask.
+    CpuIndexOutOfRange {
+        /// Offending id.
+        cpu: usize,
+        /// Exclusive upper bound.
+        limit: usize,
+    },
+    /// The list expands to more entries than the budget allows.
+    TooManyCpus {
+        /// Maximum number of expanded entries.
+        limit: usize,
+    },
+}
+
+impl std::fmt::Display for CpuListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InputTooLong { len, limit } => {
+                write!(f, "CPU list input too long ({len} > {limit} bytes)")
+            }
+            Self::CpuIndexOutOfRange { cpu, limit } => {
+                write!(f, "CPU id {cpu} is outside [0, {limit})")
+            }
+            Self::TooManyCpus { limit } => {
+                write!(f, "CPU list expands to more than {limit} entries")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CpuListError {}
+
 /// Parses standard Linux CPU list syntax (e.g. "0", "1-3", "0-3,7,9-10")
 /// into a sorted, unique vector of CPU indices.
+///
+/// Oversized input, ids outside `[0, CPU_SETSIZE)` and lists that expand past
+/// the budget yield an empty vector rather than a partial selection; use
+/// [`try_parse_cpu_list`] to distinguish the failure.
 pub fn parse_cpu_list(text: &str) -> Vec<usize> {
+    try_parse_cpu_list(text).unwrap_or_default()
+}
+
+/// Parses standard Linux CPU list syntax under an explicit resource budget.
+///
+/// Malformed parts are skipped (the previous tolerant behavior). Budget
+/// violations are reported as [`CpuListError`] and never return a partial
+/// expansion. Counts overlapping ranges cumulatively, so a repeated list
+/// cannot bypass the entry budget before deduplication.
+pub fn try_parse_cpu_list(text: &str) -> Result<Vec<usize>, CpuListError> {
+    if text.len() > MAX_CPU_LIST_INPUT_BYTES {
+        return Err(CpuListError::InputTooLong {
+            len: text.len(),
+            limit: MAX_CPU_LIST_INPUT_BYTES,
+        });
+    }
     let mut cpus = Vec::new();
     for part in text.split(',') {
         let trimmed = part.trim();
@@ -25,20 +101,46 @@ pub fn parse_cpu_list(text: &str) -> Vec<usize> {
             continue;
         }
         if let Some((start_s, end_s)) = trimmed.split_once('-') {
-            if let (Ok(start), Ok(end)) = (
+            let (Ok(start), Ok(end)) = (
                 start_s.trim().parse::<usize>(),
                 end_s.trim().parse::<usize>(),
-            ) && start <= end
-            {
-                cpus.extend(start..=end);
+            ) else {
+                continue;
+            };
+            if start > end {
+                continue;
             }
+            if end >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::CpuIndexOutOfRange {
+                    cpu: end,
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            let span = end - start + 1;
+            if span > MAX_CPU_LIST_ENTRIES - cpus.len() {
+                return Err(CpuListError::TooManyCpus {
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            cpus.extend(start..=end);
         } else if let Ok(cpu) = trimmed.parse::<usize>() {
+            if cpu >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::CpuIndexOutOfRange {
+                    cpu,
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            if cpus.len() >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::TooManyCpus {
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
             cpus.push(cpu);
         }
     }
     cpus.sort_unstable();
     cpus.dedup();
-    cpus
+    Ok(cpus)
 }
 
 /// Checks whether a given CPU index is currently online according to sysfs.
@@ -135,7 +237,17 @@ pub fn resolve_bench_core_with_affinity(
     // 2. Inspect sysfs isolated cpus
     let isolated_file = sysfs.join("isolated");
     if let Ok(content) = fs::read_to_string(&isolated_file) {
-        let candidates = parse_cpu_list(&content);
+        let candidates = match try_parse_cpu_list(&content) {
+            Ok(cpus) => cpus,
+            Err(error) => {
+                log::warn!(
+                    "Ignoring unbounded isolated CPU list from {} ({error}); the isolation \
+                     hint is treated as unavailable.",
+                    isolated_file.display()
+                );
+                Vec::new()
+            }
+        };
         for c in candidates {
             let is_allowed = allowed.is_empty() || allowed.contains(&c);
             if is_allowed && is_cpu_online(sysfs, c) {
@@ -176,4 +288,43 @@ pub fn resolve_bench_core_with_affinity(
 
     // 4. Sem afinidade (GAP)
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cpu_list_preserves_valid_lists() {
+        assert_eq!(parse_cpu_list("0-3,7,9-10"), vec![0, 1, 2, 3, 7, 9, 10]);
+        assert_eq!(parse_cpu_list("3,2,1,0"), vec![0, 1, 2, 3]);
+        assert_eq!(parse_cpu_list("1,1,2,2"), vec![1, 2]);
+        assert_eq!(parse_cpu_list(""), Vec::<usize>::new());
+        assert_eq!(parse_cpu_list("5-1"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn parse_cpu_list_is_bounded() {
+        assert_eq!(parse_cpu_list("0-1023").len(), 1024);
+        assert!(matches!(
+            try_parse_cpu_list("0-1024"),
+            Err(CpuListError::CpuIndexOutOfRange { cpu: 1024, .. })
+        ));
+        assert!(matches!(
+            try_parse_cpu_list("0-600,0-600"),
+            Err(CpuListError::TooManyCpus { .. })
+        ));
+        assert!(parse_cpu_list("0-10000000000").is_empty());
+        assert!(parse_cpu_list(&usize::MAX.to_string()).is_empty());
+    }
+
+    #[test]
+    fn parse_cpu_list_rejects_long_input_before_expanding() {
+        let long = format!("0{}", " ".repeat(64 * 1024));
+        assert!(matches!(
+            try_parse_cpu_list(&long),
+            Err(CpuListError::InputTooLong { .. })
+        ));
+        assert!(parse_cpu_list(&long).is_empty());
+    }
 }

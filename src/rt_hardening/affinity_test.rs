@@ -299,3 +299,42 @@ fn test_fixture_incomplete_sysfs_conservative_fallback() {
         _ => panic!("Expected conservative heuristic on incomplete sysfs"),
     }
 }
+
+#[test]
+fn test_parse_cpu_list_rejects_oversized_range_without_expanding() {
+    assert_eq!(parse_cpu_list("0-10000000000"), Vec::<usize>::new());
+    assert!(matches!(
+        try_parse_cpu_list("0-10000000000"),
+        Err(CpuListError::CpuIndexOutOfRange { .. })
+    ));
+}
+
+#[test]
+fn test_parse_cpu_list_budget_boundaries() {
+    assert_eq!(parse_cpu_list("0-1023").len(), 1024);
+    assert!(matches!(
+        try_parse_cpu_list("0-1024"),
+        Err(CpuListError::CpuIndexOutOfRange { cpu: 1024, .. })
+    ));
+    assert!(matches!(
+        try_parse_cpu_list("0-600,0-600"),
+        Err(CpuListError::TooManyCpus { .. })
+    ));
+    assert_eq!(parse_cpu_list(&usize::MAX.to_string()), Vec::<usize>::new());
+}
+
+#[test]
+fn test_parse_cpu_list_skips_malformed_without_fabricating() {
+    assert_eq!(parse_cpu_list("a-b,x-5,1-"), Vec::<usize>::new());
+    assert_eq!(parse_cpu_list("0,5-1,2"), vec![0, 2]);
+}
+
+#[test]
+fn test_parse_cpu_list_rejects_long_input_before_expanding() {
+    let long = format!("0{}", " ".repeat(MAX_CPU_LIST_INPUT_BYTES));
+    assert!(matches!(
+        try_parse_cpu_list(&long),
+        Err(CpuListError::InputTooLong { .. })
+    ));
+    assert_eq!(parse_cpu_list(&long), Vec::<usize>::new());
+}

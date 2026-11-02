@@ -111,6 +111,11 @@ pub enum NamErrorCode {
     NamJsonUnknownActivation,
     /// JSON `condition_dsp` sample rate disagrees with its parent WaveNet.
     NamJsonSampleRateMismatch,
+    /// JSON generic-value materialization exceeded the document-wide budget
+    /// before the over-budget payload was fully allocated.
+    NamJsonValueExceedsLimit,
+    /// JSON generic-value materialization exceeded the structural depth limit.
+    NamJsonValueTooDeep,
     /// Model metadata float is non-finite or outside the plausible range
     /// (`input_level_dbu`, `output_level_dbu`, `loudness`, `head_scale`).
     InvalidMetadata,
@@ -268,6 +273,8 @@ impl NamErrorCode {
             Self::NamJsonUnsupportedMultiChannel => "E1218",
             Self::NamJsonUnknownActivation => "E1221",
             Self::NamJsonSampleRateMismatch => "E1315",
+            Self::NamJsonValueExceedsLimit => "E1222",
+            Self::NamJsonValueTooDeep => "E1223",
             Self::InvalidMetadata => "E1219",
             Self::NamJsonInvalidEnvelope => "E1220",
             Self::NambNonFiniteWeight => "E1212",
@@ -353,6 +360,10 @@ impl NamErrorCode {
             Self::NamJsonSampleRateMismatch => {
                 "condition_dsp sample rate disagrees with the parent WaveNet model"
             }
+            Self::NamJsonValueExceedsLimit => {
+                "JSON payload exceeds the document-wide materialization budget"
+            }
+            Self::NamJsonValueTooDeep => "JSON payload is nested too deeply",
             Self::InvalidMetadata => {
                 "Model metadata float is non-finite or outside the plausible range"
             }
@@ -453,6 +464,8 @@ impl NamErrorCode {
             Self::NamJsonUnsupportedMultiChannel => "NAM_JSON_UNSUPPORTED_MULTI_CHANNEL",
             Self::NamJsonUnknownActivation => "NAM_JSON_UNKNOWN_ACTIVATION",
             Self::NamJsonSampleRateMismatch => "NAM_JSON_SAMPLE_RATE_MISMATCH",
+            Self::NamJsonValueExceedsLimit => "NAM_JSON_VALUE_EXCEEDS_LIMIT",
+            Self::NamJsonValueTooDeep => "NAM_JSON_VALUE_TOO_DEEP",
             Self::InvalidMetadata => "INVALID_METADATA",
             Self::NambNonFiniteWeight => "NAMB_NON_FINITE_WEIGHT",
             Self::NambInvalidHeaderField => "NAMB_INVALID_HEADER_FIELD",

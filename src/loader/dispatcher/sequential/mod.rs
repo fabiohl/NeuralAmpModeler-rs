@@ -52,7 +52,7 @@ pub(crate) fn build_sequential(data: &NamModelData) -> anyhow::Result<Box<Static
         // (mirrors `nam::get_dsp` on the child JSON). deserialize via the
         // strict serde path so weight caps, finiteness and the -1.0 unknown
         // marker all apply.
-        let child_data: NamModelData = serde_json::from_value(raw_child.clone())?;
+        let child_data: NamModelData = serde::Deserialize::deserialize(raw_child)?;
         if let Err(e) = validate_model_data(&child_data) {
             warn!(
                 "[Dispatcher] Sequential child[{}] rejected by model validation: {}",

@@ -7,6 +7,9 @@
 //! custom serde visitors — preventing DoS/memory exhaustion before any
 //! semantic or topology-level validation runs.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use serde::{Deserialize, Deserializer};
 
 use super::super::error::JsonError;
@@ -33,14 +36,110 @@ const MAX_TRAINING_DEPTH: usize = 16;
 /// Maximum number of submodels in a SlimmableContainer.
 pub(crate) const MAX_SUBMODELS: usize = 8;
 
+/// Aggregate cost ceiling for JSON materialized as `serde_json::Value`
+/// (metadata, raw layers, `head`, `condition_dsp`, submodel/sequential
+/// envelopes).
+///
+/// A1: the root `weights` array is no longer materialized as a generic JSON
+/// tree — it is streamed straight into `Vec<f32>` under [`MAX_WEIGHTS`]. The
+/// remaining `Value` fields share one per-document budget so nested models
+/// cannot amplify memory before the typed error is raised. Cost is a
+/// conservative estimate of in-memory footprint (see [`BudgetedValueVisitor`]),
+/// so the ceiling is compared against estimated bytes, not text bytes.
+pub(crate) const MAX_JSON_VALUE_COST: usize = 256 * 1024 * 1024;
+
+/// Maximum structural depth accepted while materializing a `serde_json::Value`.
+pub(crate) const MAX_JSON_VALUE_DEPTH: usize = 64;
+
+/// Shared, per-document budget for `serde_json::Value` materialization.
+///
+/// Parsing is off-RT and single-threaded per call, so the active budget lives
+/// in a thread-local slot installed by `parse_nam_json` (mirroring the typed
+/// error side channel). Deserializers invoked outside an active parse (for
+/// example `serde_json::from_value` in the dispatcher, operating on a Value
+/// that was already budgeted) create a fresh local budget.
+pub(crate) struct JsonBudget {
+    max: usize,
+    used: Cell<usize>,
+}
+
+impl JsonBudget {
+    fn new(max: usize) -> Rc<Self> {
+        Rc::new(Self {
+            max,
+            used: Cell::new(0),
+        })
+    }
+
+    fn charge(&self, units: usize) -> Result<(), serde_json::Error> {
+        let new = self.used.get().saturating_add(units);
+        if new > self.max {
+            log::warn!(
+                "[Loader] Invalid field rejected: field='json_value_budget', cost={}, max={}",
+                new,
+                self.max
+            );
+            record_last_typed_parse_error(JsonError::JsonValueExceedsLimit {
+                cost: new,
+                max: self.max,
+            });
+            return Err(serde::de::Error::custom(JsonError::JsonValueExceedsLimit {
+                cost: new,
+                max: self.max,
+            }));
+        }
+        self.used.set(new);
+        Ok(())
+    }
+}
+
+thread_local! {
+    static ACTIVE_JSON_BUDGET: RefCell<Option<Rc<JsonBudget>>> = const { RefCell::new(None) };
+}
+
+/// Restores the previous thread-local budget when dropped.
+pub(crate) struct JsonBudgetGuard {
+    previous: Option<Rc<JsonBudget>>,
+}
+
+impl Drop for JsonBudgetGuard {
+    fn drop(&mut self) {
+        ACTIVE_JSON_BUDGET.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+/// Installs a fresh per-document budget. The returned guard restores the
+/// previous slot on drop (supports the nested `.namb` metadata-JSON path).
+pub(crate) fn install_json_budget(max: usize) -> JsonBudgetGuard {
+    let budget = JsonBudget::new(max);
+    let previous = ACTIVE_JSON_BUDGET.with(|slot| slot.borrow_mut().replace(budget));
+    JsonBudgetGuard { previous }
+}
+
+fn active_budget() -> Rc<JsonBudget> {
+    ACTIVE_JSON_BUDGET
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(|| JsonBudget::new(MAX_JSON_VALUE_COST))
+}
+
+/// Temporarily removes the active budget so a value that was already
+/// materialized under it can be converted to a typed struct without charging
+/// the same nodes twice. The returned guard restores the previous budget.
+pub(crate) fn suspend_json_budget() -> JsonBudgetGuard {
+    let previous = ACTIVE_JSON_BUDGET.with(|slot| slot.borrow_mut().take());
+    JsonBudgetGuard { previous }
+}
+
 // ── Custom serde visitors ──
 
 /// Custom visitor for `Vec<f32>` that aborts upon exceeding MAX_WEIGHTS floats.
-#[cfg(not(test))]
-struct WeightsVisitor;
+///
+/// Kept for the visitor-level product tests; production parsing streams the
+/// root array through [`collect_weights`] directly.
 #[cfg(test)]
 pub(crate) struct WeightsVisitor;
 
+#[cfg(test)]
 impl<'de> serde::de::Visitor<'de> for WeightsVisitor {
     type Value = Vec<f32>;
 
@@ -48,62 +147,309 @@ impl<'de> serde::de::Visitor<'de> for WeightsVisitor {
         formatter.write_str("a sequence of f32 floats within the size limit")
     }
 
-    fn visit_seq<A>(self, mut seq: A) -> Result<Vec<f32>, A::Error>
+    fn visit_seq<A>(self, seq: A) -> Result<Vec<f32>, A::Error>
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let mut weights = Vec::new();
-        let mut index: usize = 0;
-        loop {
-            match seq.next_element::<f32>() {
-                Ok(Some(val)) => {
-                    if !val.is_finite() {
-                        // Structured rejection diagnostic for off-RT triage.
-                        // `offset_bytes` is the byte offset of the offending slot
-                        // within the weights section (index × 4), matching the
-                        // coordinate system used by the `.namb` binary weights.
-                        log::warn!(
-                            "[Loader] Invalid field rejected: field='weights[{}]', value={:?}, offset_bytes={}",
-                            index,
-                            val,
-                            index * 4
-                        );
-                        record_last_typed_parse_error(JsonError::WeightNotFinite {
-                            index,
-                            value: val,
-                        });
-                        return Err(serde::de::Error::custom(JsonError::WeightNotFinite {
-                            index,
-                            value: val,
-                        }));
-                    }
-                    if weights.len() >= MAX_WEIGHTS {
-                        record_last_typed_parse_error(JsonError::WeightsExceedLimit {
-                            got: weights.len() + 1,
-                            max: MAX_WEIGHTS,
-                        });
-                        return Err(serde::de::Error::custom(JsonError::WeightsExceedLimit {
-                            got: weights.len() + 1,
-                            max: MAX_WEIGHTS,
-                        }));
-                    }
-                    weights.push(val);
-                    index += 1;
-                }
-                Ok(None) => break,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(weights)
+        collect_weights(seq)
     }
 }
 
+/// Streams a JSON float sequence into `Vec<f32>` while enforcing
+/// [`MAX_WEIGHTS`] and finiteness **during** deserialization.
+///
+/// Shared by [`WeightsVisitor`] and the root-model envelope visitor so the
+/// root `weights` array is never materialized as a generic JSON tree (A1).
+pub(crate) fn collect_weights<'de, A>(mut seq: A) -> Result<Vec<f32>, A::Error>
+where
+    A: serde::de::SeqAccess<'de>,
+{
+    let mut weights = Vec::new();
+    let mut index: usize = 0;
+    loop {
+        match seq.next_element::<f32>() {
+            Ok(Some(val)) => {
+                if !val.is_finite() {
+                    // Structured rejection diagnostic for off-RT triage.
+                    // `offset_bytes` is the byte offset of the offending slot
+                    // within the weights section (index × 4), matching the
+                    // coordinate system used by the `.namb` binary weights.
+                    log::warn!(
+                        "[Loader] Invalid field rejected: field='weights[{}]', value={:?}, offset_bytes={}",
+                        index,
+                        val,
+                        index * 4
+                    );
+                    record_last_typed_parse_error(JsonError::WeightNotFinite { index, value: val });
+                    return Err(serde::de::Error::custom(JsonError::WeightNotFinite {
+                        index,
+                        value: val,
+                    }));
+                }
+                if weights.len() >= MAX_WEIGHTS {
+                    record_last_typed_parse_error(JsonError::WeightsExceedLimit {
+                        got: weights.len() + 1,
+                        max: MAX_WEIGHTS,
+                    });
+                    return Err(serde::de::Error::custom(JsonError::WeightsExceedLimit {
+                        got: weights.len() + 1,
+                        max: MAX_WEIGHTS,
+                    }));
+                }
+                weights.push(val);
+                index += 1;
+            }
+            Ok(None) => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(weights)
+}
+
 /// Custom deserializer for `weights: Vec<f32>` with cap at MAX_WEIGHTS.
+#[cfg(test)]
 pub(crate) fn deserialize_weights<'de, D>(deserializer: D) -> Result<Vec<f32>, D::Error>
 where
     D: Deserializer<'de>,
 {
     deserializer.deserialize_seq(WeightsVisitor)
+}
+
+/// Budgeted generic JSON tree visitor.
+///
+/// Unlike [`LimitedValueVisitor`] (which guards only `metadata.training` with
+/// its own 1 MiB ceiling), this visitor draws from the document-wide
+/// [`JsonBudget`] so every `serde_json::Value` field shares one aggregate
+/// ceiling. Cost estimates approximate the in-memory `Value` footprint
+/// (`Number`/tag/map-entry overhead), not the source text.
+pub(crate) struct BudgetedValueVisitor {
+    budget: Rc<JsonBudget>,
+    depth: usize,
+}
+
+impl BudgetedValueVisitor {
+    fn root() -> Self {
+        Self {
+            budget: active_budget(),
+            depth: 0,
+        }
+    }
+
+    fn check_depth<E>(&self) -> Result<(), E>
+    where
+        E: serde::de::Error,
+    {
+        if self.depth > MAX_JSON_VALUE_DEPTH {
+            record_last_typed_parse_error(JsonError::JsonValueTooDeep {
+                depth: self.depth,
+                max_depth: MAX_JSON_VALUE_DEPTH,
+            });
+            return Err(serde::de::Error::custom(JsonError::JsonValueTooDeep {
+                depth: self.depth,
+                max_depth: MAX_JSON_VALUE_DEPTH,
+            }));
+        }
+        Ok(())
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for BudgetedValueVisitor {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON value within the document budget")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget.charge(8).map_err(E::custom)?;
+        Ok(serde_json::Value::Bool(v))
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget.charge(16).map_err(E::custom)?;
+        Ok(serde_json::Value::Number(serde_json::Number::from(v)))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget.charge(16).map_err(E::custom)?;
+        Ok(serde_json::Value::Number(serde_json::Number::from(v)))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget.charge(16).map_err(E::custom)?;
+        Ok(serde_json::Value::Number(
+            serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
+        ))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget
+            .charge(v.len().saturating_add(16))
+            .map_err(E::custom)?;
+        Ok(serde_json::Value::String(v.to_string()))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget
+            .charge(v.len().saturating_add(16))
+            .map_err(E::custom)?;
+        Ok(serde_json::Value::String(v))
+    }
+
+    fn visit_unit<E>(self) -> Result<serde_json::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.budget.charge(8).map_err(E::custom)?;
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<serde_json::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        self.check_depth::<A::Error>()?;
+        self.budget.charge(16).map_err(serde::de::Error::custom)?;
+        let mut arr = Vec::new();
+        loop {
+            match seq.next_element_seed(BudgetedValueSeed::child(&self)) {
+                Ok(Some(val)) => {
+                    self.budget.charge(8).map_err(serde::de::Error::custom)?;
+                    arr.push(val);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(serde_json::Value::Array(arr))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<serde_json::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        self.check_depth::<A::Error>()?;
+        self.budget.charge(16).map_err(serde::de::Error::custom)?;
+        let mut obj = serde_json::Map::new();
+        loop {
+            match map.next_key::<String>() {
+                Ok(Some(key)) => {
+                    self.budget
+                        .charge(key.len().saturating_add(24))
+                        .map_err(serde::de::Error::custom)?;
+                    let val: serde_json::Value =
+                        map.next_value_seed(BudgetedValueSeed::child(&self))?;
+                    obj.insert(key, val);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(serde_json::Value::Object(obj))
+    }
+}
+
+/// `DeserializeSeed` wrapper so children share the parent's budget/depth.
+pub(crate) struct BudgetedValueSeed {
+    budget: Rc<JsonBudget>,
+    depth: usize,
+}
+
+impl BudgetedValueSeed {
+    pub(crate) fn root() -> Self {
+        Self {
+            budget: active_budget(),
+            depth: 0,
+        }
+    }
+
+    fn child(parent: &BudgetedValueVisitor) -> Self {
+        Self {
+            budget: Rc::clone(&parent.budget),
+            depth: parent.depth + 1,
+        }
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for BudgetedValueSeed {
+    type Value = serde_json::Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(BudgetedValueVisitor {
+            budget: self.budget,
+            depth: self.depth,
+        })
+    }
+}
+
+/// Custom deserializer for bounded `Option<serde_json::Value>` fields.
+/// `null`/absent becomes `None` (matching derived `Option<Value>` semantics).
+pub(crate) fn deserialize_bounded_value_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoundedOptionVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for BoundedOptionVisitor {
+        type Value = Option<serde_json::Value>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("an optional JSON value within the document budget")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value = deserializer.deserialize_any(BudgetedValueVisitor::root())?;
+            Ok(Some(value))
+        }
+    }
+
+    deserializer.deserialize_option(BoundedOptionVisitor)
+}
+
+/// Custom deserializer for bounded `Value` fields that preserve explicit
+/// `null` as `Some(Value::Null)` (used by `config.head`).
+pub(crate) fn deserialize_bounded_value_present<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = deserializer.deserialize_any(BudgetedValueVisitor::root())?;
+    Ok(Some(value))
 }
 
 /// JSON tree visitor for `metadata.training` with depth and size limits.
@@ -471,8 +817,10 @@ impl<'de> serde::de::Visitor<'de> for ModelsOptionVisitor {
 /// Custom deserializer for `sample_rate: Option<f32>`.
 ///
 /// RFC 7.1: `sample_rate = -1.0` is the NAMcore C++ sentinel for "unknown"
-/// (see `get_dsp.cpp`). All finite ≤ 0.0 values are treated as "unknown" (`None`)
-/// — matching C++ lenience. NaN and ±Inf are rejected with `InvalidSampleRate`.
+/// (see `get_dsp.cpp`). All finite ≤ 0.0 values are treated as "unknown" (`None`)
+/// — matching C++ lenience. NaN and ±Inf are rejected with `InvalidSampleRate`,
+/// as are positive values that are not integers exactly representable as `u32`
+/// (DEC-01d); the original literal is validated as `f64` before reducing to `f32`.
 pub(crate) fn deserialize_sample_rate<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
 where
     D: Deserializer<'de>,
@@ -504,30 +852,37 @@ where
         where
             D: serde::Deserializer<'de>,
         {
-            let val = f32::deserialize(deserializer)?;
-            if !val.is_finite() {
-                // Structured rejection diagnostic for off-RT triage.
-                // `sample_rate` is a top-level scalar field, so it has no
-                // per-element offset within a section — `offset_bytes=0`
-                // signals "document-level field" (no array slot index).
-                log::warn!(
-                    "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes={}",
-                    val,
-                    0
-                );
-                record_last_typed_parse_error(JsonError::InvalidSampleRate {
-                    value: val,
-                    reason: "must be finite",
-                });
-                return Err(serde::de::Error::custom(JsonError::InvalidSampleRate {
-                    value: val,
-                    reason: "must be finite",
-                }));
+            // Read the original number as f64 so the value can be validated
+            // before the lossy reduction to f32 (A3).
+            let num = f64::deserialize(deserializer)?;
+            match crate::loader::sample_rate::declared_rate_from_f64(num) {
+                Ok(rate) => Ok(rate),
+                Err(_) => {
+                    let val = num as f32;
+                    let reason = if num.is_finite() {
+                        "must be a positive integer exactly representable as u32"
+                    } else {
+                        "must be finite"
+                    };
+                    // Structured rejection diagnostic for off-RT triage.
+                    // `sample_rate` is a top-level scalar field, so it has no
+                    // per-element offset within a section — `offset_bytes=0`
+                    // signals "document-level field" (no array slot index).
+                    log::warn!(
+                        "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes={}",
+                        val,
+                        0
+                    );
+                    record_last_typed_parse_error(JsonError::InvalidSampleRate {
+                        value: val,
+                        reason,
+                    });
+                    Err(serde::de::Error::custom(JsonError::InvalidSampleRate {
+                        value: val,
+                        reason,
+                    }))
+                }
             }
-            if val <= 0.0 {
-                return Ok(None);
-            }
-            Ok(Some(val))
         }
     }
 

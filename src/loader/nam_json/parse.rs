@@ -5,31 +5,49 @@
 
 use super::data::{JsonError, NamModelData};
 use super::validation::{
-    MAX_HIDDEN_SIZE, MAX_LAYERS, clear_last_typed_parse_error, take_last_typed_parse_error,
-    validate_envelope,
+    MAX_HIDDEN_SIZE, MAX_JSON_VALUE_COST, MAX_LAYERS, clear_last_typed_parse_error,
+    install_json_budget, take_last_typed_parse_error,
 };
 
-/// Raw universal deserialization of the JSON string via `serde_json`.
+/// Parses a `.nam` JSON document with the default document-wide budget.
 ///
-/// First parses the string as a generic JSON value and enforces envelope
-/// structure ([`validate_envelope`]) before attempting heavyweight tensor/weight
-/// deserialization.
+/// The document is deserialized **in one streaming pass** into
+/// [`NamModelData`]: the root `weights` array goes straight into `Vec<f32>`
+/// under `MAX_WEIGHTS`, so the generic JSON
+/// tree is never materialized for it (A1). Remaining `serde_json::Value`
+/// payloads (layer raw objects, `condition_dsp`, `head`, submodel/sequential
+/// envelopes) share one aggregate budget
+/// (`MAX_JSON_VALUE_COST`) and are rejected with typed errors before the
+/// over-budget portion is fully materialized.
 ///
-/// After deserialization, performs post-parse OOM-safety validation of the
-/// declared topology: layer count must not exceed [`MAX_LAYERS`] and
-/// `hidden_size` must not exceed [`MAX_HIDDEN_SIZE`]. Returns
-/// `JsonError::UnsupportedTopology` immediately if limits are breached.
+/// Envelope validation is performed by the root visitor while streaming, so
+/// missing/typed-null/wrong-type required fields still yield
+/// [`JsonError::InvalidEnvelope`]. Because validation is single-pass, error
+/// precedence follows document order: the first offending token/field wins,
+/// and missing required fields are reported after the map is exhausted. This
+/// differs from the previous two-phase parser, where envelope errors always
+/// preceded field-level errors.
 ///
 /// Typed-error preservation: serde visitors reject hostile fields with
-/// typed `JsonError` variants (e.g. `WeightNotFinite`, `InvalidSampleRate`),
-/// but `serde_json::Error` only preserves their `Display` string. On failure
-/// the typed variant recorded by the visitor is recovered so callers can map
-/// the exact `NamErrorCode` instead of falling back to `JsonError::Serde`.
+/// typed `JsonError` variants (e.g. `WeightNotFinite`, `InvalidSampleRate`,
+/// `JsonValueExceedsLimit`), but `serde_json::Error` only preserves their
+/// `Display` string. On failure the typed variant recorded by the visitor is
+/// recovered so callers can map the exact `NamErrorCode`.
 pub fn parse_nam_json(json_str: &str) -> Result<NamModelData, JsonError> {
+    parse_nam_json_with_budget(json_str, MAX_JSON_VALUE_COST)
+}
+
+/// Internal entry point with an explicit `Value`-materialization budget.
+///
+/// Used by product tests to exercise the guard on small inputs without
+/// building large documents or relying on OOM.
+pub(crate) fn parse_nam_json_with_budget(
+    json_str: &str,
+    max_value_cost: usize,
+) -> Result<NamModelData, JsonError> {
     clear_last_typed_parse_error();
-    let val: serde_json::Value = serde_json::from_str(json_str).map_err(JsonError::Serde)?;
-    validate_envelope(&val)?;
-    let data: NamModelData = match serde_json::from_value(val) {
+    let _budget = install_json_budget(max_value_cost);
+    let data: NamModelData = match serde_json::from_str(json_str) {
         Ok(data) => data,
         Err(e) => {
             return Err(take_last_typed_parse_error().unwrap_or(JsonError::Serde(e)));

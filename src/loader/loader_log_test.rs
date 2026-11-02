@@ -13,7 +13,7 @@
 //!    correct (specific, non-generic) ones.
 
 use crate::common::diagnostics::{LoggerConfig, NamLogger, SystemSnapshot};
-use crate::loader::nam_json::{NamConfig, NamModelData, WeightsLayout};
+use crate::loader::nam_json::{JsonError, NamConfig, NamModelData, WeightsLayout};
 use crate::loader::namb_encoder::encode_namb;
 use crate::loader::{LoadError, LoadOptions, load_and_build_model};
 use std::path::PathBuf;
@@ -170,8 +170,8 @@ fn test_json_non_finite_sample_rate_rejected_with_structured_log() {
 
     let err = res.expect_err("non-finite sample_rate must be rejected");
     assert!(
-        matches!(err, LoadError::UnsupportedArchitecture(_)),
-        "expected LoadError::UnsupportedArchitecture, got: {err:?}"
+        matches!(err, LoadError::Json(JsonError::InvalidSampleRate { .. })),
+        "expected LoadError::Json(InvalidSampleRate), got: {err:?}"
     );
 
     let snap = log_snapshot();

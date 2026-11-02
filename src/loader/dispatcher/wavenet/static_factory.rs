@@ -564,7 +564,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     let condition_dsp = if let Some(ref cond_dsp_json) = data.config.condition_dsp
         && !cond_dsp_json.is_null()
     {
-        let cond_dsp_data: NamModelData = serde_json::from_value(cond_dsp_json.clone())?;
+        let cond_dsp_data: NamModelData = serde::Deserialize::deserialize(cond_dsp_json)?;
         // The nested sub-model never went through `parse_nam_json`, so the
         // root version-range/topology validation must be re-applied here
         // before the sub-model is built.

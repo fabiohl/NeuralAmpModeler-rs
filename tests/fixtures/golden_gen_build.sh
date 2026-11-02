@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # golden_gen_build.sh — Builds render tool and generates all golden vectors. Classe D.
 # Uso: tests/fixtures/golden_gen_build.sh
-# Orçamento: 850
+# Orçamento: 900
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 

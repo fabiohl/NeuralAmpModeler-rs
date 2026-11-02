@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # quality-dashboard.sh — Quality dashboard and contract verification. Classe A.
 # Uso: utils/quality-dashboard.sh [--check [<contrato>] [--fidelity-only] | --save]
-# Orçamento: 15
+# Orçamento: 30
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."

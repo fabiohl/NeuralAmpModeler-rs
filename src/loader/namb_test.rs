@@ -36,6 +36,55 @@ mod tests {
         data
     }
 
+    /// Rebuilds a v1 file with a patched header sample rate. CRC32 for v1
+    /// covers only the weights section, so the header patch stays valid.
+    fn build_valid_namb_v1_with_rate(rate: f32) -> Vec<u8> {
+        let mut data = build_valid_namb_v1(&[0.1, -0.2]);
+        // SAFETY: `build_valid_namb_v1` returns `header_size + 2*4` bytes, so
+        // the cast pointer is aligned to `NambHeader` and valid for one write;
+        // `data` outlives the borrow.
+        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+        header.sample_rate = rate;
+        data
+    }
+
+    /// Regression (A3): a fractional NAMB header rate used to convert to zero
+    /// downstream. The binary parser must reject it at its own boundary,
+    /// preserving the NAMB-specific error semantics.
+    #[test]
+    fn test_fractional_sample_rate_rejected() {
+        let data = build_valid_namb_v1_with_rate(0.5);
+        let err = parse_namb_typed(&data).expect_err("fractional header rate must be rejected");
+        assert!(
+            matches!(
+                err,
+                NambError::InvalidHeaderField {
+                    field: "sample_rate",
+                    ..
+                }
+            ),
+            "expected InvalidHeaderField(sample_rate), got: {err:?}"
+        );
+    }
+
+    /// Regression (A3): a header rate beyond the `u32` contract (2^32) is
+    /// rejected instead of saturating at `u32::MAX`.
+    #[test]
+    fn test_above_u32_sample_rate_rejected() {
+        let data = build_valid_namb_v1_with_rate(4_294_967_296.0);
+        let err = parse_namb_typed(&data).expect_err("2^32 header rate must be rejected");
+        assert!(
+            matches!(
+                err,
+                NambError::InvalidHeaderField {
+                    field: "sample_rate",
+                    ..
+                }
+            ),
+            "expected InvalidHeaderField(sample_rate), got: {err:?}"
+        );
+    }
+
     #[test]
     fn test_parse_namb_v1() -> Result<()> {
         // Tests whether the loader can correctly read a basic v1 file.

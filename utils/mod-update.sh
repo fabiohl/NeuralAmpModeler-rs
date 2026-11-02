@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # mod-update.sh — atualiza toolchain, dependências e lockfile. Classe D.
 # Uso: utils/mod-update.sh [flags canônicas]
-# Orçamento: 49
+# Orçamento: 70
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 #
 # Supply chain update utility for NeuralAmpModeler-rs.

@@ -10,15 +10,15 @@
 //! forbids opening the counters, the set reports a typed unavailability reason
 //! instead of a misleading zero.
 
-const PERF_EVENT_IOC_ENABLE: libc::c_ulong = 0x2400;
-const PERF_EVENT_IOC_DISABLE: libc::c_ulong = 0x2401;
-const PERF_EVENT_IOC_RESET: libc::c_ulong = 0x2403;
+// `libc::Ioctl` is `c_ulong` on glibc and `c_int` on musl/Android; the request
+// constants must use the target's own type or the call fails to compile there.
+const PERF_EVENT_IOC_ENABLE: libc::Ioctl = 0x2400;
+const PERF_EVENT_IOC_DISABLE: libc::Ioctl = 0x2401;
+const PERF_EVENT_IOC_RESET: libc::Ioctl = 0x2403;
 const PERF_FLAG_FD_CLOEXEC: u64 = 0x8;
 const PERF_TYPE_HARDWARE: u32 = 0;
 const PERF_COUNT_HW_CPU_CYCLES: u64 = 0;
 const PERF_COUNT_HW_INSTRUCTIONS: u64 = 1;
-// __NR_perf_event_open on x86-64 Linux (not exported by libc).
-const NR_PERF_EVENT_OPEN: libc::c_long = 298;
 
 /// Linux `perf_event_attr` (first 112 bytes — enough for type/size/config and
 /// the `disabled`/`exclude_kernel`/`exclude_hv` control flags).
@@ -75,10 +75,12 @@ impl Pmc {
     fn open(name: &'static str, config: u64) -> Self {
         let attr = PerfEventAttr::hardware(config);
         // SAFETY: `attr` is a fully initialized value of the correct layout;
-        // the syscall only reads it and returns an fd (or -1).
+        // the syscall only reads it and returns an fd (or -1). The syscall
+        // number comes from libc so every supported Linux architecture uses
+        // its own ABI instead of a hard-coded x86-64 value.
         let fd = unsafe {
             libc::syscall(
-                NR_PERF_EVENT_OPEN,
+                libc::SYS_perf_event_open,
                 &raw const attr,
                 0,  // pid: current thread
                 -1, // cpu: any (harness pins the CPU)
@@ -101,18 +103,22 @@ impl Pmc {
         }
     }
 
-    fn ioctl(&self, request: libc::c_ulong) {
-        if let Some(fd) = self.fd {
-            // SAFETY: `fd` is a valid perf fd owned by this counter.
-            unsafe {
-                libc::ioctl(fd, request, 0);
-            }
+    fn ioctl(&self, request: libc::Ioctl) -> Result<(), std::io::Error> {
+        let Some(fd) = self.fd else {
+            return Ok(());
+        };
+        // SAFETY: `fd` is a valid perf fd owned by this counter.
+        let rc = unsafe { libc::ioctl(fd, request, 0) };
+        if rc < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
         }
     }
 
-    fn read(&self) -> u64 {
+    fn read(&self) -> Result<u64, std::io::Error> {
         let Some(fd) = self.fd else {
-            return 0;
+            return Err(std::io::Error::from(std::io::ErrorKind::NotConnected));
         };
         let mut val: u64 = 0;
         // SAFETY: `fd` is a valid perf fd and `val` is a writable u64 large
@@ -124,10 +130,16 @@ impl Pmc {
                 std::mem::size_of::<u64>(),
             )
         };
-        if n != std::mem::size_of::<u64>() as isize {
-            return 0;
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
         }
-        val
+        if n != std::mem::size_of::<u64>() as isize {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("short perf counter read ({n} bytes)"),
+            ));
+        }
+        Ok(val)
     }
 }
 
@@ -146,6 +158,9 @@ impl Drop for Pmc {
 pub struct PmuCounters {
     cycles: Pmc,
     instructions: Pmc,
+    /// First `ioctl`/`read` failure after opening, recorded so a failed counter
+    /// is never mistaken for a valid `(0, 0)` sample.
+    runtime_reason: std::sync::Mutex<Option<String>>,
 }
 
 impl PmuCounters {
@@ -154,33 +169,79 @@ impl PmuCounters {
         Self {
             cycles: Pmc::open("cycles", PERF_COUNT_HW_CPU_CYCLES),
             instructions: Pmc::open("instructions", PERF_COUNT_HW_INSTRUCTIONS),
+            runtime_reason: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn lock_runtime_reason(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.runtime_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn record_error(&self, source: &str, error: &std::io::Error) {
+        let mut slot = self.lock_runtime_reason();
+        if slot.is_none() {
+            *slot = Some(format!("{source}:{error}"));
         }
     }
 
     /// Resets and enables both counters.
+    ///
+    /// A failed reset/enable is recorded and makes [`Self::cycles_instructions`]
+    /// return `None` until the next successful [`Self::start`].
     pub fn start(&self) {
+        *self.lock_runtime_reason() = None;
         for pmc in [&self.cycles, &self.instructions] {
-            pmc.ioctl(PERF_EVENT_IOC_RESET);
-            pmc.ioctl(PERF_EVENT_IOC_ENABLE);
+            if let Err(error) = pmc.ioctl(PERF_EVENT_IOC_RESET) {
+                self.record_error(pmc.name, &error);
+            }
+            if let Err(error) = pmc.ioctl(PERF_EVENT_IOC_ENABLE) {
+                self.record_error(pmc.name, &error);
+            }
         }
     }
 
     /// Disables both counters.
+    ///
+    /// A failed disable is recorded because the measurement can no longer be
+    /// trusted; the counters remain conservative (unavailable) afterwards.
     pub fn stop(&self) {
         for pmc in [&self.cycles, &self.instructions] {
-            pmc.ioctl(PERF_EVENT_IOC_DISABLE);
+            if let Err(error) = pmc.ioctl(PERF_EVENT_IOC_DISABLE) {
+                self.record_error(pmc.name, &error);
+            }
         }
     }
 
     /// Reads `(cycles, instructions)`.
     ///
-    /// Returns `None` when either counter could not be opened (typed reason
-    /// retrievable via [`Self::unavailable_reason`]).
+    /// Returns `None` when either counter could not be opened, a reset/enable
+    /// or read failed, or a read was short (typed reason retrievable via
+    /// [`Self::unavailable_reason`]). A genuinely zero counter is still
+    /// returned as `Some((0, 0))`.
     pub fn cycles_instructions(&self) -> Option<(u64, u64)> {
         if self.cycles.fd.is_none() || self.instructions.fd.is_none() {
             return None;
         }
-        Some((self.cycles.read(), self.instructions.read()))
+        if self.lock_runtime_reason().is_some() {
+            return None;
+        }
+        let cycles = match self.cycles.read() {
+            Ok(value) => value,
+            Err(error) => {
+                self.record_error(self.cycles.name, &error);
+                return None;
+            }
+        };
+        let instructions = match self.instructions.read() {
+            Ok(value) => value,
+            Err(error) => {
+                self.record_error(self.instructions.name, &error);
+                return None;
+            }
+        };
+        Some((cycles, instructions))
     }
 
     /// Human-readable reason the counters are unavailable (empty when available).
@@ -190,6 +251,9 @@ impl PmuCounters {
             if let Some(reason) = &pmc.reason {
                 parts.push(format!("{}:{}", pmc.name, reason));
             }
+        }
+        if let Some(reason) = self.lock_runtime_reason().as_ref() {
+            parts.push(format!("runtime:{reason}"));
         }
         parts.join(",")
     }
@@ -201,5 +265,23 @@ impl PmuCounters {
             return None;
         }
         Some(instructions as f64 / cycles as f64)
+    }
+
+    /// Builds a counter pair over caller-owned raw fds (tests only).
+    #[cfg(test)]
+    pub(super) fn from_raw_fds(cycles_fd: i32, instructions_fd: i32) -> Self {
+        Self {
+            cycles: Pmc {
+                name: "cycles",
+                fd: Some(cycles_fd),
+                reason: None,
+            },
+            instructions: Pmc {
+                name: "instructions",
+                fd: Some(instructions_fd),
+                reason: None,
+            },
+            runtime_reason: std::sync::Mutex::new(None),
+        }
     }
 }

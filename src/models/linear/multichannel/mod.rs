@@ -70,6 +70,33 @@ pub(crate) fn history_is_sound(
     double_limit == total && write_pos >= receptive_field && write_pos < total
 }
 
+/// Validates the channel geometry and the kernel buffer consumed by a specialized
+/// multichannel engine before any slice, history allocation or kernel access.
+///
+/// The buffer must hold `num_kernels * receptive_field` taps in kernel-major order.
+pub(crate) fn validate_kernel_layout(
+    topo: &LinearTopology,
+    weights: &[f32],
+) -> std::io::Result<()> {
+    let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidInput, msg);
+    topo.validate_channels()
+        .map_err(|_| invalid("Unsupported Linear multichannel geometry".to_owned()))?;
+    let rf = topo.receptive_field;
+    if rf == 0 {
+        return Err(invalid("Linear receptive_field must be >= 1".to_owned()));
+    }
+    let min_weights = rf
+        .checked_mul(topo.num_kernels())
+        .ok_or_else(|| invalid("Linear receptive_field * kernels overflows usize".to_owned()))?;
+    if weights.len() < min_weights {
+        return Err(invalid(format!(
+            "Linear weights buffer too small: expected >= {min_weights}, got {}",
+            weights.len()
+        )));
+    }
+    Ok(())
+}
+
 /// Unified multichannel dispatcher enum for the Linear model.
 pub enum LinearMultichannel {
     /// 1 -> N multichannel model.
@@ -112,6 +139,11 @@ impl LinearMultichannel {
     }
 
     /// Constructs a specialized multichannel Linear model according to `topo`.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for non-multichannel or unsupported channel geometry,
+    /// zero `receptive_field`, channel counts above `MAX_LINEAR_CHANNELS`, and kernel
+    /// buffers shorter than `num_kernels * receptive_field` or whose span overflows `usize`.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
         let in_ch = topo.in_channels;
         let out_ch = topo.out_channels;

@@ -4,6 +4,7 @@
 //! N -> N multichannel Linear model (N inputs, N outputs, 1 single shared kernel).
 
 use super::mode::MultichannelMode;
+use super::validate_kernel_layout;
 use crate::dsp::mirror_buf::MirroredBuffer;
 use crate::loader::nam_json::{LinearImplementation, LinearTopology};
 use crate::math::common::{AlignedVec, SimdMath};
@@ -55,6 +56,13 @@ impl LinearManyToManyShared {
 
     /// Constructs a new `LinearManyToManyShared` instance.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
+        validate_kernel_layout(&topo, weights)?;
+        if !(topo.in_channels == topo.out_channels) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Linear N->N engine requires equal input and output channels",
+            ));
+        }
         let channels = topo.in_channels;
         let rf = topo.receptive_field;
 

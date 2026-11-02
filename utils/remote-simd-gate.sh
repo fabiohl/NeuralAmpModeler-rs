@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # remote-simd-gate.sh — remote AVX-512 parity and benchmarking tool. Classe D.
 # Uso: utils/remote-simd-gate.sh [flags canônicas]
-# Orçamento: 80
+# Orçamento: 110
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 USE_SDE=0; CHECK_ONLY=0; SKIP_BENCH=0; RECEIPT_OUT="target/logs/remote-simd-receipt.jsonl"
 mkdir -p "$LOG_DIR"
-trap 'emit "RESULT: FAIL ($((SECONDS - T0))s) fails=${PHASE_NAME:-simd-gate} gaps=${GAPS[*]:-none}"' ERR
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-simd-gate}"); emit "PHASE: ${PHASE_NAME:-simd-gate} FAIL rc=$rc log=${log_parity:-none}"; finish || true; exit 1' ERR
 
 while [ $# -gt 0 ]; do
   case "$1" in

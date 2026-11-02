@@ -119,6 +119,8 @@ impl LoadError {
                 JsonError::TrainingTooLarge { .. } => NamErrorCode::NamJsonTrainingTooLarge,
                 JsonError::SubmodelsExceedLimit { .. } => NamErrorCode::NamJsonSubmodelsExceedLimit,
                 JsonError::SubmodelsTooDeep { .. } => NamErrorCode::NamJsonSubmodelsTooDeep,
+                JsonError::JsonValueExceedsLimit { .. } => NamErrorCode::NamJsonValueExceedsLimit,
+                JsonError::JsonValueTooDeep { .. } => NamErrorCode::NamJsonValueTooDeep,
                 JsonError::WeightNotFinite { .. } => NamErrorCode::NamJsonWeightNotFinite,
                 JsonError::InvalidSampleRate { .. } => NamErrorCode::NamJsonInvalidSampleRate,
                 JsonError::UnsupportedTopology { .. } => NamErrorCode::NamJsonUnsupportedTopology,

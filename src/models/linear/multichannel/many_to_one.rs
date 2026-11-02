@@ -4,6 +4,7 @@
 //! N -> 1 multichannel Linear model (N inputs, 1 output channel, N independent kernels).
 
 use super::mode::MultichannelMode;
+use super::validate_kernel_layout;
 use crate::dsp::mirror_buf::MirroredBuffer;
 use crate::loader::nam_json::{LinearImplementation, LinearTopology};
 use crate::math::common::{AlignedVec, SimdMath};
@@ -55,6 +56,13 @@ impl LinearManyToOne {
 
     /// Constructs a new `LinearManyToOne` instance.
     pub fn new(topo: LinearTopology, weights: &[f32], biases: &[f32]) -> std::io::Result<Self> {
+        validate_kernel_layout(&topo, weights)?;
+        if !(topo.out_channels == 1) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Linear N->1 engine requires exactly one output channel",
+            ));
+        }
         let in_channels = topo.in_channels;
         let rf = topo.receptive_field;
 

@@ -165,11 +165,14 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
         ));
     }
 
-    let (fmt_offset, _fmt_size) = find_chunk(data, &FMT_ID, 12).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "IR WAV: 'fmt ' chunk not found")
+    let (fmt_offset, fmt_size) = find_chunk(data, &FMT_ID, 12).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "IR WAV: 'fmt ' chunk not found or truncated",
+        )
     })?;
 
-    if fmt_offset + 16 > data.len() {
+    if fmt_size < 16 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "IR WAV: 'fmt ' chunk too small",
@@ -187,7 +190,7 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
     let bits_per_sample = u16::from_le_bytes([data[fmt_offset + 14], data[fmt_offset + 15]]);
 
     let audio_format = if raw_audio_format == WAV_FORMAT_EXTENSIBLE {
-        if fmt_offset + 26 > data.len() {
+        if fmt_size < 26 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "IR WAV: 'fmt ' chunk too small for extensible format",
@@ -232,7 +235,21 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
             ));
         }
     };
-    let num_samples = data_size as usize / bytes_per_sample;
+
+    // `find_chunk` guarantees the declared payload fits in the file. A payload
+    // that is not a whole number of samples is a malformed stream, not audio
+    // to be silently dropped.
+    let payload_len = data_size as usize;
+    if !payload_len.is_multiple_of(bytes_per_sample) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "IR WAV: 'data' chunk size {} is not a multiple of {} bytes per sample",
+                payload_len, bytes_per_sample
+            ),
+        ));
+    }
+    let num_samples = payload_len / bytes_per_sample;
     if num_samples > MAX_IR_LENGTH {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -303,8 +320,12 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
 /// Locates a RIFF chunk by its 4-byte ID, starting search at `start_offset`.
 ///
 /// Returns `Some((data_offset, data_size))` where `data_offset` points to the
-/// chunk's payload, or `None` if not found or if the scan exceeded
-/// [`MAX_CHUNKS_SCANNED`] iterations (junk-chunk DoS guard — F-20).
+/// chunk's payload, or `None` if not found, if the scan exceeded
+/// [`MAX_CHUNKS_SCANNED`] iterations (junk-chunk DoS guard — F-20), or if the
+/// matched chunk declares a payload that does not fit in `data`.
+///
+/// Every offset and size is combined with checked arithmetic: a malformed
+/// header can never wrap around into a valid-looking offset.
 pub(crate) fn find_chunk(
     data: &[u8],
     chunk_id: &[u8; 4],
@@ -312,26 +333,37 @@ pub(crate) fn find_chunk(
 ) -> Option<(usize, u32)> {
     let mut pos = start_offset;
     let mut scanned = 0usize;
-    while pos + 8 <= data.len() {
+    loop {
         if scanned >= MAX_CHUNKS_SCANNED {
+            return None;
+        }
+        let header_end = pos.checked_add(8)?;
+        if header_end > data.len() {
             return None;
         }
         scanned += 1;
         let id = &data[pos..pos + 4];
         let size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
         if id == chunk_id {
-            return Some((pos + 8, size));
+            let payload_end = header_end.checked_add(size as usize)?;
+            if payload_end > data.len() {
+                return None;
+            }
+            return Some((header_end, size));
         }
-        let padded_size = (size as usize + 1) & !1;
-        pos = pos.saturating_add(8 + padded_size);
+        let padded_size = (size as usize).checked_add(1)? & !1;
+        pos = header_end.checked_add(padded_size)?;
     }
-    None
 }
 
 /// Locates the "data" chunk in a WAV file, returning (offset, size_in_bytes).
 pub(crate) fn find_data_chunk(data: &[u8]) -> io::Result<(usize, u32)> {
-    find_chunk(data, &DATA_ID, 12)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "IR WAV: 'data' chunk not found"))
+    find_chunk(data, &DATA_ID, 12).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "IR WAV: 'data' chunk not found or truncated",
+        )
+    })
 }
 
 /// Validates samples are finite and flushes denormals (subnormals) to zero.

@@ -518,6 +518,32 @@ container rate are **not** rejected upstream (the first known rate governs).
 | 48000 Hz       | 44100 Hz        | ∅               | **REJECTED** (`E1309`)        | **REJECTED** (submodel vs container) |
 | 48000 Hz       | ∅               | ∅               | **48000 Hz**                  | 48000 Hz                             |
 
+#### DEC-01d Decision Record — Representable Sample Rate Contract (Stricter Rust Rule)
+
+`LoadedModelPair.sample_rate` is a `u32`, while `.nam` JSON and the `.namb`
+header carry floating-point rates. The Rust loader therefore requires every
+*known* declared/resolved rate to be a positive integer that is exactly
+representable in both `f32` and `u32`
+(`src/loader/sample_rate.rs::rate_is_representable_u32`).
+
+- **Rejected (fail closed):** positive fractional rates (`0.5`, `44100.5`),
+  values above `u32::MAX`, values that round to `2^32` in `f32` (including
+  `u32::MAX as f32`), and integers that are not exactly representable in
+  `f32` (for example `16_777_217`). JSON validates the original literal as
+  `f64` before reducing it to `f32`; `.namb` validates the header `f32`.
+- **Preserved:** non-finite JSON values stay rejected; finite non-positive JSON
+  values (including the `-1.0` sentinel) remain "unknown" (`None`), while a
+  non-positive `.namb` header rate remains an `InvalidHeaderField` error.
+- **Divergence from C++:** NAMcore accepts a fractional `double` sample rate.
+  The Rust public contract cannot carry it without truncating (`0.5 → 0`) or
+  saturating; rejecting it is the explicit, typed decision
+  (`E1214 NAM_JSON_INVALID_SAMPLE_RATE`) instead of silent corruption.
+- **Error mapping:** a declared `InvalidSampleRate` — at the root or inside
+  `config.models`/`config.submodels` — now surfaces as
+  `LoadError::Json(JsonError::InvalidSampleRate)` (code `E1214`) rather than
+  `LoadError::UnsupportedArchitecture` or `ModelBuildFailed`. The `.namb`
+  origin keeps its `NambInvalidHeaderField` classification.
+
 ### 5.2 FastLUTActivation (Not Ported)
 
 C++ provides an optional `FastLUTActivation` class (`NAM/activations.h:374-428`) for hardware lacking fast `expf`.

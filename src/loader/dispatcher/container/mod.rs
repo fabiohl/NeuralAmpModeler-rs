@@ -7,8 +7,7 @@
 //! Each submodel is a full independent `.nam` model, recursively built
 //! via the main dispatcher. Recursion depth is capped to prevent DoS.
 
-use crate::loader::nam_json::JsonError;
-use crate::loader::nam_json::NamModelData;
+use crate::loader::nam_json::{JsonError, NamModelData, validate_model_data};
 use crate::models::StaticModel;
 use crate::models::container::ContainerModel;
 use anyhow::Context;
@@ -79,12 +78,20 @@ pub(crate) fn build_container_inner(
             .with_context(|| format!("SlimmableContainer: submodel[{}] missing 'model'", i))?;
 
         let inner_data: NamModelData =
-            serde_json::from_value(model_json.clone()).with_context(|| {
+            serde::Deserialize::deserialize(model_json).with_context(|| {
                 format!(
                     "SlimmableContainer: submodel[{}] failed to parse as a valid .nam model",
                     i
                 )
             })?;
+
+        // Submodels never pass through `parse_nam_json`: apply the same version
+        // range and topology limits as the root and Sequential children before
+        // building (NAMCore `container.cpp:163` → `get_dsp`, `get_dsp.cpp:146`).
+        validate_model_data(&inner_data).map_err(|e| {
+            warn!("[Dispatcher] Container submodel[{i}] rejected by model validation: {e}");
+            anyhow::Error::from(e)
+        })?;
 
         // Recursive declared rate: a nested Sequential/Container child
         // propagates its own children's rate instead of materializing 48 kHz.
@@ -113,7 +120,17 @@ pub(crate) fn build_container_inner(
                 warn!("[Dispatcher] Container sample-rate resolution rejected: {e}");
                 anyhow::Error::from(e)
             })?;
-    let container_sr = resolved.unwrap_or(48000.0) as u32;
+    let container_sr = crate::loader::sample_rate::rate_to_u32(resolved.unwrap_or(48000.0))
+        .ok_or_else(|| {
+            let value = resolved.unwrap_or(48000.0);
+            warn!(
+                "[Dispatcher] Container sample-rate resolution rejected: {value} is not a positive integer representable as u32"
+            );
+            anyhow::Error::from(JsonError::InvalidSampleRate {
+                value,
+                reason: "container sample rate must be a positive integer representable as u32",
+            })
+        })?;
 
     let container = ContainerModel::new_with_prewarm(submodels, container_sr, prewarm)
         .context("Container: failed to create ContainerModel")?;
@@ -126,8 +143,69 @@ mod tests {
     use crate::common::diagnostics::SystemSnapshot;
     use crate::loader::LoadOptions;
     use crate::loader::load_and_build_model;
+    use crate::loader::nam_json::{JsonError, MAX_LAYERS, parse_nam_json};
     use crate::models::StaticModel;
     use crate::testing::fixtures::model_path;
+
+    fn container_with_submodel(model: &str) -> String {
+        format!(
+            r#"{{"version":"0.7.0","architecture":"SlimmableContainer","config":{{"submodels":[{{"max_value":1.0,"model":{model}}}]}},"weights":[],"sample_rate":48000}}"#
+        )
+    }
+
+    fn linear_submodel(version: &str) -> String {
+        format!(
+            r#"{{"version":"{version}","architecture":"Linear","config":{{"receptive_field":1,"bias":false}},"weights":[0.5],"sample_rate":48000}}"#
+        )
+    }
+
+    #[test]
+    fn test_container_submodel_valid_version_builds() {
+        let data = parse_nam_json(&container_with_submodel(&linear_submodel("0.5.0")))
+            .expect("root container must parse");
+        assert!(
+            super::build_container(&data, false).is_ok(),
+            "submodel 0.5.0 inside the supported range must build"
+        );
+    }
+
+    #[test]
+    fn test_container_submodel_version_below_range_rejected() {
+        let data = parse_nam_json(&container_with_submodel(&linear_submodel("0.4.0")))
+            .expect("root container must parse");
+        let err = super::build_container(&data, false)
+            .err()
+            .expect("submodel 0.4.0 must be rejected before build_model");
+        assert!(
+            matches!(
+                err.downcast_ref::<JsonError>(),
+                Some(JsonError::UnsupportedVersion { .. })
+            ),
+            "submodel version error must stay typed as JsonError::UnsupportedVersion: {err}"
+        );
+    }
+
+    #[test]
+    fn test_container_submodel_topology_above_limit_rejected() {
+        let layers = std::iter::repeat_n("{}", MAX_LAYERS + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        let wavenet = format!(
+            r#"{{"version":"0.5.0","architecture":"WaveNet","config":{{"layers":[{layers}]}},"weights":[],"sample_rate":48000}}"#
+        );
+        let data =
+            parse_nam_json(&container_with_submodel(&wavenet)).expect("root container must parse");
+        let err = super::build_container(&data, false)
+            .err()
+            .expect("submodel above MAX_LAYERS must be rejected before build_model");
+        assert!(
+            matches!(
+                err.downcast_ref::<JsonError>(),
+                Some(JsonError::UnsupportedTopology { .. })
+            ),
+            "submodel topology error must stay typed as JsonError::UnsupportedTopology: {err}"
+        );
+    }
 
     #[test]
     fn test_container_builds_slimmable_with_relu_submodel() {

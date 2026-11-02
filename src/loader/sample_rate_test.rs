@@ -81,6 +81,87 @@ fn container_envelope(rate: Option<f32>, child_a: &str, child_b: &str) -> String
     )
 }
 
+/// Regression (A3): rates declared inside `config.models` (Sequential) are
+/// read from raw JSON and bypass the root deserializer. They must follow the
+/// same representable-rate policy instead of propagating `0.5` downstream.
+#[test]
+fn nested_fractional_rate_rejected() {
+    let json = sequential_envelope(None, &linear_node(Some(0.5)));
+    let data = parse_nam_json(&json).expect("parse sequential envelope");
+    assert_eq!(
+        effective_known_rate(&data),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+}
+
+/// Regression (A3): the same policy applies to container submodels.
+#[test]
+fn container_fractional_rate_rejected() {
+    let json = rate_less_container(&linear_node(Some(0.5)), &linear_node(Some(48000.0)));
+    let data = parse_nam_json(&json).expect("parse container envelope");
+    assert_eq!(
+        effective_known_rate(&data),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+}
+
+/// Table-driven check of the representable-rate contract shared by JSON,
+/// NAMB, nested models, and containers.
+#[test]
+fn representable_rate_policy_table() {
+    let accepted = [
+        (1.0f32, 1u32),
+        (44_100.0, 44_100),
+        (48_000.0, 48_000),
+        (96_000.0, 96_000),
+        (192_000.0, 192_000),
+        (16_777_216.0, 16_777_216),
+        (4_294_967_040.0, 4_294_967_040),
+    ];
+    for (rate, expected) in accepted {
+        assert_eq!(
+            rate_to_u32(rate),
+            Some(expected),
+            "rate {rate} must be accepted"
+        );
+    }
+
+    for rejected in [0.0f32, 0.5, 1.5, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            rate_to_u32(rejected),
+            None,
+            "rate {rejected} must be rejected"
+        );
+    }
+    // 2^32 is the first f32 above u32::MAX and must not saturate.
+    assert_eq!(rate_to_u32(4_294_967_296.0), None);
+}
+
+/// The `f64` policy used by the JSON deserializer validates the original
+/// literal before reducing it to `f32`.
+#[test]
+fn declared_rate_f64_policy_table() {
+    assert_eq!(declared_rate_from_f64(48_000.0), Ok(Some(48_000.0)));
+    assert_eq!(declared_rate_from_f64(0.0), Ok(None));
+    assert_eq!(declared_rate_from_f64(-1.0), Ok(None));
+    assert_eq!(
+        declared_rate_from_f64(0.5),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+    assert_eq!(
+        declared_rate_from_f64(16_777_217.0),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+    assert_eq!(
+        declared_rate_from_f64(4_294_967_296.0),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+    assert_eq!(
+        declared_rate_from_f64(f64::INFINITY),
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    );
+}
+
 /// DEC-01c: a rate-less container must reject a child-vs-child known-rate
 /// conflict (stricter than C++ `container.cpp:35-46`, which never
 /// cross-checks submodels).

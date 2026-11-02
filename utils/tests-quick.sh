@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-quick.sh — Execução da disciplina rápida de testes. Classe A.
 # Uso: utils/tests-quick.sh
-# Orçamento: 41
+# Orçamento: 60
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -83,6 +83,18 @@ jobs:
             --out target/parity-vectors/x86_64-linux/BossLSTM-1x16.bin \
             --sample-rate 48000 \
             --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/wavenet_a2_lite.nam \
+            --signal v1 \
+            --out target/parity-vectors/x86_64-linux/wavenet_a2_lite.bin \
+            --sample-rate 48000 \
+            --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/convnet_nobn.nam \
+            --signal v1 \
+            --out target/parity-vectors/x86_64-linux/convnet_nobn.bin \
+            --sample-rate 48000 \
+            --block-size 64
       - name: Upload parity vectors (x86_64-linux)
         uses: actions/upload-artifact@v4
         with:
@@ -153,6 +165,18 @@ jobs:
             --model tests/fixtures/models/BossLSTM-1x16.nam \
             --signal v1 \
             --out target/parity-vectors/${{ matrix.name }}/BossLSTM-1x16.bin \
+            --sample-rate 48000 \
+            --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/wavenet_a2_lite.nam \
+            --signal v1 \
+            --out target/parity-vectors/${{ matrix.name }}/wavenet_a2_lite.bin \
+            --sample-rate 48000 \
+            --block-size 64
+          ./target/release/nam_parity_vector generate \
+            --model tests/fixtures/models/convnet_nobn.nam \
+            --signal v1 \
+            --out target/parity-vectors/${{ matrix.name }}/convnet_nobn.bin \
             --sample-rate 48000 \
             --block-size 64
       - name: Upload parity vectors (${{ matrix.name }})
@@ -328,13 +352,20 @@ jobs:
           path: target/parity-vectors/linux-arm64
       - name: Cross-platform parity verification
         run: |
+          set -euo pipefail
+          . utils/_lib.sh
+          STATUS_NAME=cross-platform-parity
+          PHASE_NAME=cross-platform-parity; phase "$PHASE_NAME"
           mkdir -p target/logs/parity
-          MODELS=("BossWN-standard.bin" "BossLSTM-1x16.bin")
+
+          MODELS=("BossWN-standard.bin" "BossLSTM-1x16.bin" "wavenet_a2_lite.bin" "convnet_nobn.bin")
           PLATFORMS=("x86_64-linux" "linux-arm64" "macos-arm64")
           for m in "${MODELS[@]}"; do
             for p in "${PLATFORMS[@]}"; do
               if [ ! -f "target/parity-vectors/$p/$m" ]; then
-                echo "PHASE: cross-platform-parity GAP platform_vector_missing=$p/$m"
+                FAILS+=("vector-missing-$p-$m")
+                emit "PHASE: cross-platform-parity FAIL reason=vector_missing platform=$p model=$m"
+                finish || true
                 exit 1
               fi
             done
@@ -343,36 +374,53 @@ jobs:
           # Pairwise comparison: x86_64 vs linux-arm64 (cross-ISA: calibrated numerical envelope)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing x86_64-linux vs linux-arm64 ($m) ---"
+            rc=0
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/x86_64-linux/$m" \
               "target/parity-vectors/linux-arm64/$m" \
               --max-esr 1e-6 --min-snr-db 100.0 \
-              --report-out "target/logs/parity/report-x86-vs-linux-arm64-$m.json"
+              --report-out "target/logs/parity/report-x86-vs-linux-arm64-$m.json" 2>&1 | tee "target/logs/parity/compare-x86-vs-linux-arm64-$m.log" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              FAILS+=("compare-x86-vs-linux-arm64-$m")
+            fi
           done
 
           # Pairwise comparison: x86_64 vs macos-arm64 (cross-ISA: calibrated numerical envelope)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing x86_64-linux vs macos-arm64 ($m) ---"
+            rc=0
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/x86_64-linux/$m" \
               "target/parity-vectors/macos-arm64/$m" \
               --max-esr 1e-6 --min-snr-db 100.0 \
-              --report-out "target/logs/parity/report-x86-vs-macos-arm64-$m.json"
+              --report-out "target/logs/parity/report-x86-vs-macos-arm64-$m.json" 2>&1 | tee "target/logs/parity/compare-x86-vs-macos-arm64-$m.log" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              FAILS+=("compare-x86-vs-macos-arm64-$m")
+            fi
           done
 
           # Pairwise comparison: linux-arm64 vs macos-arm64 (intra-ISA NEON: strict bitwise identity)
           for m in "${MODELS[@]}"; do
             echo "--- Comparing linux-arm64 vs macos-arm64 ($m) ---"
+            rc=0
             ./target/release/nam_parity_vector compare \
               "target/parity-vectors/linux-arm64/$m" \
               "target/parity-vectors/macos-arm64/$m" \
-              --report-out "target/logs/parity/report-linux-arm64-vs-macos-arm64-$m.json"
+              --report-out "target/logs/parity/report-linux-arm64-vs-macos-arm64-$m.json" 2>&1 | tee "target/logs/parity/compare-linux-arm64-vs-macos-arm64-$m.log" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              FAILS+=("compare-linux-arm64-vs-macos-arm64-$m")
+            fi
           done
 
-          echo "AVX-512 status: GAP (opt-in research feature; physical AVX-512 hardware absent on standard CI runners)"
-          mkdir -p target/logs
-          echo "PHASE: cross-platform-parity PASS log=target/logs/parity" > target/logs/summary.txt
-          echo "RESULT: PASS (0s) fails=none gaps=none" >> target/logs/summary.txt
+          gap "avx512-hardware-absent"
+          if [ ${#FAILS[@]} -gt 0 ]; then
+            emit "PHASE: cross-platform-parity FAIL rc=1 log=target/logs/parity"
+            finish || true
+            exit 1
+          else
+            emit "PHASE: cross-platform-parity PASS log=target/logs/parity"
+            finish || exit 1
+          fi
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
@@ -385,4 +433,11 @@ jobs:
         with:
           name: parity-comparison-reports
           path: target/logs/parity/**
+          retention-days: 14
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-cross-platform-parity
+          path: target/logs/**
           retention-days: 14

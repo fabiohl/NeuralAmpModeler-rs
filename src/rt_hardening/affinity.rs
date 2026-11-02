@@ -13,9 +13,83 @@
 
 use std::collections::HashMap;
 
+/// Largest CPU index accepted by [`try_parse_cpu_list`].
+///
+/// Every consumer of this parser ultimately builds a `cpu_set_t` affinity
+/// mask, and [`crate::rt_hardening::thread::pin_thread`] rejects indices
+/// outside `[0, CPU_SETSIZE)`. Bounding the parser to that same range keeps
+/// parsed targets applicable instead of returning unreachable CPUs.
+const MAX_CPU_LIST_ENTRIES: usize = libc::CPU_SETSIZE as usize;
+
+/// Longest accepted input for [`try_parse_cpu_list`] (64 KiB).
+const MAX_CPU_LIST_INPUT_BYTES: usize = 64 * 1024;
+
+/// Why a CPU list could not be expanded within budget.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CpuListError {
+    /// The input string exceeds the accepted length.
+    InputTooLong {
+        /// Observed length in bytes.
+        len: usize,
+        /// Accepted maximum.
+        limit: usize,
+    },
+    /// A CPU id cannot be represented in a Linux affinity mask.
+    CpuIndexOutOfRange {
+        /// Offending id.
+        cpu: usize,
+        /// Exclusive upper bound.
+        limit: usize,
+    },
+    /// The list expands to more entries than the budget allows.
+    TooManyCpus {
+        /// Maximum number of expanded entries.
+        limit: usize,
+    },
+}
+
+impl std::fmt::Display for CpuListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InputTooLong { len, limit } => {
+                write!(f, "CPU list input too long ({len} > {limit} bytes)")
+            }
+            Self::CpuIndexOutOfRange { cpu, limit } => {
+                write!(f, "CPU id {cpu} is outside [0, {limit})")
+            }
+            Self::TooManyCpus { limit } => {
+                write!(f, "CPU list expands to more than {limit} entries")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CpuListError {}
+
 /// Parses standard Linux CPU list syntax (e.g. "0-3,7,9-10") into a sorted,
 /// unique vector of CPU indices.
+///
+/// Oversized input, ids outside `[0, CPU_SETSIZE)` and lists that expand past
+/// the budget yield an empty vector rather than a partial selection; use
+/// [`try_parse_cpu_list`] to distinguish the failure.
 pub fn parse_cpu_list(text: &str) -> Vec<usize> {
+    try_parse_cpu_list(text).unwrap_or_default()
+}
+
+/// Parses standard Linux CPU list syntax under an explicit resource budget.
+///
+/// Malformed parts are skipped (the previous tolerant behavior). Budget
+/// violations are reported as [`CpuListError`] and never return a partial
+/// expansion. Counts overlapping ranges cumulatively, so a repeated list
+/// cannot bypass the entry budget before deduplication.
+pub fn try_parse_cpu_list(text: &str) -> Result<Vec<usize>, CpuListError> {
+    if text.len() > MAX_CPU_LIST_INPUT_BYTES {
+        return Err(CpuListError::InputTooLong {
+            len: text.len(),
+            limit: MAX_CPU_LIST_INPUT_BYTES,
+        });
+    }
     let mut cpus = Vec::new();
     for part in text.split(',') {
         let trimmed = part.trim();
@@ -23,20 +97,46 @@ pub fn parse_cpu_list(text: &str) -> Vec<usize> {
             continue;
         }
         if let Some((start_s, end_s)) = trimmed.split_once('-') {
-            if let (Ok(start), Ok(end)) = (
+            let (Ok(start), Ok(end)) = (
                 start_s.trim().parse::<usize>(),
                 end_s.trim().parse::<usize>(),
-            ) && start <= end
-            {
-                cpus.extend(start..=end);
+            ) else {
+                continue;
+            };
+            if start > end {
+                continue;
             }
+            if end >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::CpuIndexOutOfRange {
+                    cpu: end,
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            let span = end - start + 1;
+            if span > MAX_CPU_LIST_ENTRIES - cpus.len() {
+                return Err(CpuListError::TooManyCpus {
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            cpus.extend(start..=end);
         } else if let Ok(cpu) = trimmed.parse::<usize>() {
+            if cpu >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::CpuIndexOutOfRange {
+                    cpu,
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
+            if cpus.len() >= MAX_CPU_LIST_ENTRIES {
+                return Err(CpuListError::TooManyCpus {
+                    limit: MAX_CPU_LIST_ENTRIES,
+                });
+            }
             cpus.push(cpu);
         }
     }
     cpus.sort_unstable();
     cpus.dedup();
-    cpus
+    Ok(cpus)
 }
 
 /// Parses a `/proc/interrupts` table from a reader, returning total numeric
@@ -305,6 +405,21 @@ pub struct CpuSelectionReceipt {
     pub topology: Vec<CpuCoreTopology>,
 }
 
+/// Parses a sysfs CPU list, downgrading a budget violation to an empty set
+/// with an observable warning instead of a dangerous partial selection.
+fn bounded_cpu_list(text: &str, path: &str) -> Vec<usize> {
+    match try_parse_cpu_list(text) {
+        Ok(cpus) => cpus,
+        Err(error) => {
+            log::warn!(
+                "Ignoring unbounded CPU list from {path} ({error}); the corresponding \
+                 isolation hint is treated as unavailable."
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Selects the optimal CPU core given an explicit request and a topology source.
 pub fn select_cpu_with_source<S: SysfsTopologySource>(
     requested_cpu: Option<usize>,
@@ -312,12 +427,12 @@ pub fn select_cpu_with_source<S: SysfsTopologySource>(
 ) -> CpuSelectionReceipt {
     let isolated_set = source
         .read_sysfs_string("/sys/devices/system/cpu/isolated")
-        .map(|s| parse_cpu_list(&s))
+        .map(|s| bounded_cpu_list(&s, "/sys/devices/system/cpu/isolated"))
         .unwrap_or_default();
 
     let nohz_set = source
         .read_sysfs_string("/sys/devices/system/cpu/nohz_full")
-        .map(|s| parse_cpu_list(&s))
+        .map(|s| bounded_cpu_list(&s, "/sys/devices/system/cpu/nohz_full"))
         .unwrap_or_default();
 
     let irqs = source.get_irq_counts();

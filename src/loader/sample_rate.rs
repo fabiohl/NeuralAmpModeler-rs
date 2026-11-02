@@ -39,6 +39,47 @@ struct StructuralBudget {
     total_sequential_children: usize,
 }
 
+/// Returns whether `rate` is losslessly representable by the public
+/// [`LoadedModelPair::sample_rate`](crate::loader::LoadedModelPair) `u32`
+/// contract.
+///
+/// Positive fractional values are rejected instead of truncated (0.5 would
+/// silently become 0), values above `u32::MAX` are rejected instead of
+/// saturated, and a `f32` that rounds to 2^32 is rejected because it exceeds
+/// the `u32` range.
+pub(crate) fn rate_is_representable_u32(rate: f32) -> bool {
+    rate.is_finite() && rate >= 1.0 && rate.fract() == 0.0 && (rate as f64) <= u32::MAX as f64
+}
+
+/// Converts a validated rate to `u32`, or returns `None` when the value cannot
+/// be represented exactly (see [`rate_is_representable_u32`]).
+pub(crate) fn rate_to_u32(rate: f32) -> Option<u32> {
+    rate_is_representable_u32(rate).then_some(rate as u32)
+}
+
+/// Applies the sample-rate contract to a JSON number parsed as `f64`.
+///
+/// The original literal is validated *before* the lossy reduction to `f32`,
+/// so integers that are not exactly representable in `f32` (for example
+/// 16_777_217) are rejected instead of silently rounded.
+///
+/// Non-finite values are rejected, non-positive values map to "unknown"
+/// (`None`), matching the existing JSON lenience.
+pub(crate) fn declared_rate_from_f64(num: f64) -> Result<Option<f32>, NamErrorCode> {
+    if !num.is_finite() {
+        return Err(NamErrorCode::NamJsonInvalidSampleRate);
+    }
+    if num <= 0.0 {
+        return Ok(None);
+    }
+    let rate = num as f32;
+    if rate_is_representable_u32(rate) && rate as f64 == num {
+        Ok(Some(rate))
+    } else {
+        Err(NamErrorCode::NamJsonInvalidSampleRate)
+    }
+}
+
 /// Reduces a child's resolved rate into the running `resolved` accumulator.
 ///
 /// Follows DEC-01 / DEC-01c:
@@ -70,21 +111,30 @@ fn reduce_rate(resolved: &mut Option<f32>, child_rate: Option<f32>) -> Result<()
 /// Follows C++ NAMcore lenience and RFC 7.1:
 /// - Missing or null `sample_rate` returns `Ok(None)`.
 /// - Any finite value <= 0.0 (including the `-1.0` C++ sentinel) returns `Ok(None)`.
-/// - A finite positive number returns `Ok(Some(num))`.
-/// - Non-finite numbers or non-number types return `Err(NamErrorCode::NamJsonInvalidSampleRate)`.
+/// - A finite positive number returns `Ok(Some(num))` only when it is a
+///   positive integer exactly representable as `u32`/`f32`.
+/// - Non-finite numbers, non-number types, fractional values, and values
+///   outside the `u32`/exact-`f32` contract return
+///   `Err(NamErrorCode::NamJsonInvalidSampleRate)`.
 fn read_declared_rate(val: &Value) -> Result<Option<f32>, NamErrorCode> {
     match val.get("sample_rate") {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => {
-            let num = match v.as_f64() {
-                Some(n) => n as f32,
-                None => return Err(NamErrorCode::NamJsonInvalidSampleRate),
-            };
-            if !num.is_finite() {
-                return Err(NamErrorCode::NamJsonInvalidSampleRate);
-            }
-            if num <= 0.0 { Ok(None) } else { Ok(Some(num)) }
-        }
+        Some(v) => match v.as_f64() {
+            Some(num) => match declared_rate_from_f64(num) {
+                Ok(rate) => Ok(rate),
+                Err(code) => {
+                    // Preserve the offending original value for off-RT triage;
+                    // the typed code alone cannot carry it through the
+                    // structural recursion.
+                    log::warn!(
+                        "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes=0",
+                        num
+                    );
+                    Err(code)
+                }
+            },
+            None => Err(NamErrorCode::NamJsonInvalidSampleRate),
+        },
     }
 }
 

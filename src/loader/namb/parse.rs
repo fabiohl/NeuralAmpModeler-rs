@@ -188,6 +188,18 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
             reason: "must be > 0.0",
         });
     }
+    if !crate::loader::sample_rate::rate_is_representable_u32(sample_rate_header) {
+        log::warn!(
+            "[Loader] Invalid field rejected: field='sample_rate', value={:?}, offset_bytes={}",
+            sample_rate_header,
+            std::mem::offset_of!(NambHeader, sample_rate)
+        );
+        return Err(NambError::InvalidHeaderField {
+            field: "sample_rate",
+            value: sample_rate_header,
+            reason: "must be a positive integer representable as u32",
+        });
+    }
     if !input_level_header.is_finite() {
         log::warn!(
             "[Loader] Invalid field rejected: field='input_level_dbu', value={:?}, offset_bytes={}",

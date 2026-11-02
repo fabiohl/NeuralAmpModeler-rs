@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
-use neural_amp_modeler_rs::math::common::effective_instruction_set;
+use neural_amp_modeler_rs::math::common::{SIMD_MATH, effective_instruction_set};
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::testing::stress::{
     generate_stress_signal_v1, generate_stress_signal_v2,
@@ -328,7 +328,11 @@ fn cmd_generate(args: &[String]) -> ExitCode {
         }
     });
 
-    let instruction_set = format!("{:?}", effective_instruction_set());
+    let instruction_set = if cfg!(target_arch = "aarch64") {
+        SIMD_MATH.name.to_string()
+    } else {
+        format!("{:?}", effective_instruction_set())
+    };
 
     let header = ParityVectorHeader {
         magic: PARITY_VECTOR_MAGIC,

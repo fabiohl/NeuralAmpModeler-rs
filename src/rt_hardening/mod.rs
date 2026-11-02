@@ -45,10 +45,10 @@ mod timebase;
 
 #[cfg(target_os = "linux")]
 pub use affinity::{
-    CpuCoreTopology, CpuSelectionReason, CpuSelectionReceipt, SysfsTopologySource,
+    CpuCoreTopology, CpuListError, CpuSelectionReason, CpuSelectionReceipt, SysfsTopologySource,
     SystemSysfsSource, get_allowed_cpus, parse_cpu_list, parse_interrupts_per_cpu,
     parse_proc_interrupts, select_cpu_with_source, select_optimal_cpu,
-    select_optimal_cpu_with_receipt,
+    select_optimal_cpu_with_receipt, try_parse_cpu_list,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{

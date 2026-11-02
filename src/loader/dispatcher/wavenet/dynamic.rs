@@ -316,7 +316,7 @@ fn build_wavenet_dynamic_inner(
             );
         }
 
-        let cond_dsp_data: NamModelData = serde_json::from_value(cond_dsp_json.clone())?;
+        let cond_dsp_data: NamModelData = serde::Deserialize::deserialize(cond_dsp_json)?;
 
         // The nested sub-model never went through `parse_nam_json`, so the
         // root version-range/topology validation must be re-applied here

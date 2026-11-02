@@ -1311,3 +1311,225 @@ fn test_multichannel_channel_mismatch_yields_defined_silence() {
     assert_eq!(frames, 8);
     assert!(output.iter().all(|&s| s == 0.0));
 }
+
+// ── Direct multichannel constructor boundary (A2 / T1.1) ──
+
+fn multichannel_topo(
+    in_channels: usize,
+    out_channels: usize,
+    receptive_field: usize,
+    implementation: LinearImplementation,
+) -> LinearTopology {
+    LinearTopology {
+        in_channels,
+        out_channels,
+        receptive_field,
+        has_bias: false,
+        implementation,
+    }
+}
+
+#[test]
+fn test_multichannel_ctor_rejects_short_kernel_buffer() {
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch, kernels) in [(1, 2, 2), (2, 1, 2), (2, 2, 1)] {
+            let topo = multichannel_topo(in_ch, out_ch, 512, implementation);
+            let err = LinearMultichannel::new(topo, &[], &[])
+                .err()
+                .expect("empty kernel buffer must be rejected, not sliced");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+            let short = vec![0.0f32; 512 * kernels - 1];
+            let err = LinearMultichannel::new(topo, &short, &[])
+                .err()
+                .expect("buffer shorter than num_kernels * receptive_field must be rejected");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+}
+
+#[test]
+fn test_multichannel_ctor_rejects_zero_receptive_field() {
+    for (in_ch, out_ch) in [(1, 2), (2, 1), (2, 2)] {
+        let topo = multichannel_topo(in_ch, out_ch, 0, LinearImplementation::Direct);
+        let err = LinearMultichannel::new(topo, &[], &[])
+            .err()
+            .expect("receptive_field=0 must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+}
+
+#[test]
+fn test_multichannel_ctor_rejects_overflowing_kernel_span() {
+    let topo = multichannel_topo(1, 2, usize::MAX / 2 + 1, LinearImplementation::Direct);
+    let err = LinearMultichannel::new(topo, &[0.0f32; 4], &[])
+        .err()
+        .expect("receptive_field * kernels overflowing usize must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    let topo = multichannel_topo(2, 2, usize::MAX, LinearImplementation::Direct);
+    let err = LinearMultichannel::new(topo, &[0.0f32; 4], &[])
+        .err()
+        .expect("N->N span of usize::MAX taps must be rejected before allocation");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_multichannel_ctor_rejects_channels_above_limit() {
+    let channels = crate::loader::nam_json::MAX_LINEAR_CHANNELS + 1;
+    let topo = multichannel_topo(channels, channels, 4, LinearImplementation::Direct);
+    let err = LinearMultichannel::new(topo, &[0.0f32; 4], &[])
+        .err()
+        .expect("channel count above MAX_LINEAR_CHANNELS must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_multichannel_ctor_rejects_mono_and_zero_channels() {
+    for (in_ch, out_ch) in [(1, 1), (0, 1), (1, 0), (0, 0)] {
+        let topo = multichannel_topo(in_ch, out_ch, 4, LinearImplementation::Direct);
+        let err = LinearMultichannel::new(topo, &[0.0f32; 4], &[])
+            .err()
+            .expect("non-multichannel or zero-channel geometry must be rejected");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+}
+
+#[test]
+fn test_multichannel_ctor_accepts_valid_geometries() {
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch, kernels) in [(1, 2, 2), (2, 1, 2), (2, 2, 1)] {
+            let taps = 512;
+            let weights = vec![0.1f32; kernels * taps];
+            let topo = multichannel_topo(in_ch, out_ch, taps, implementation);
+            let engine = LinearMultichannel::new(topo, &weights, &[0.0, 0.0])
+                .expect("valid multichannel geometry with exact kernel span must be accepted");
+            assert_eq!(engine.in_channels(), in_ch);
+            assert_eq!(engine.out_channels(), out_ch);
+            assert!(engine.is_sound());
+        }
+    }
+}
+
+fn multichannel_reference(
+    in_ch: usize,
+    out_ch: usize,
+    rf: usize,
+    weights: &[f32],
+    biases: &[f32],
+    inputs: &[Vec<f32>],
+) -> Vec<Vec<f32>> {
+    let frames = inputs[0].len();
+    (0..out_ch)
+        .map(|o| {
+            let bias = if biases.is_empty() {
+                0.0
+            } else {
+                biases[o.min(biases.len() - 1)]
+            };
+            (0..frames)
+                .map(|n| {
+                    let mut acc = bias;
+                    let contributions: Vec<(usize, usize)> = match (in_ch, out_ch) {
+                        (1, _) => vec![(0, o)],
+                        (_, 1) => (0..in_ch).map(|i| (i, i)).collect(),
+                        _ => vec![(o, 0)],
+                    };
+                    for (input, kernel) in contributions {
+                        for t in 0..rf.min(n + 1) {
+                            acc += weights[kernel * rf + t] * inputs[input][n - t];
+                        }
+                    }
+                    acc
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn test_multichannel_bias_layouts_match_reference() {
+    let rf = 512;
+    let frames = 1400;
+    for implementation in [LinearImplementation::Direct, LinearImplementation::Fft] {
+        for (in_ch, out_ch, biases) in [
+            (1, 2, vec![]),
+            (1, 2, vec![0.25f32, -0.5]),
+            (2, 1, vec![0.125f32]),
+            (2, 2, vec![-0.75f32]),
+            (2, 2, vec![]),
+        ] {
+            let kernels = if in_ch == out_ch {
+                1
+            } else {
+                in_ch.max(out_ch)
+            };
+            let weights: Vec<f32> = (0..kernels * rf)
+                .map(|idx| {
+                    let (k, t) = (idx / rf, idx % rf);
+                    0.001 * (k as f32 + 1.0) * ((t % 7) as f32 - 3.0)
+                })
+                .collect();
+            let inputs: Vec<Vec<f32>> = (0..in_ch)
+                .map(|c| {
+                    (0..frames)
+                        .map(|n| 0.5 * (0.017 * n as f32 + c as f32).sin())
+                        .collect()
+                })
+                .collect();
+            let expected = multichannel_reference(in_ch, out_ch, rf, &weights, &biases, &inputs);
+
+            let topo = LinearTopology {
+                in_channels: in_ch,
+                out_channels: out_ch,
+                receptive_field: rf,
+                has_bias: !biases.is_empty(),
+                implementation,
+            };
+            let mut model =
+                LinearModel::new_with_topology(topo, weights.clone(), biases.clone()).unwrap();
+            model.set_prewarm_on_reset(false);
+            assert!(model.multichannel.is_some());
+
+            let mut outputs: Vec<Vec<f32>> = vec![vec![0.0f32; frames]; out_ch];
+            let in_refs: Vec<&[f32]> = inputs.iter().map(Vec::as_slice).collect();
+            let mut out_refs: Vec<&mut [f32]> = outputs.iter_mut().map(Vec::as_mut_slice).collect();
+            let processed =
+                NamModel::process_multichannel(&mut model, &in_refs, &mut out_refs).unwrap();
+            assert_eq!(processed, frames);
+
+            for (o, (got, want)) in outputs.iter().zip(&expected).enumerate() {
+                for (n, (g, w)) in got.iter().zip(want).enumerate() {
+                    assert!(
+                        (g - w).abs() < 1e-4,
+                        "{implementation:?} {in_ch}->{out_ch} bias={biases:?}: \
+                         out[{o}][{n}]={g} expected {w}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_multichannel_direct_bias_fallbacks_are_preserved() {
+    let n_to_n = multichannel_topo(2, 2, 4, LinearImplementation::Direct);
+    match LinearMultichannel::new(n_to_n, &[0.0; 4], &[0.5]).unwrap() {
+        LinearMultichannel::ManyToManyShared(m) => assert_eq!(m.biases, vec![0.5, 0.5]),
+        _ => panic!("N->N geometry must select the shared-kernel engine"),
+    }
+    match LinearMultichannel::new(n_to_n, &[0.0; 4], &[]).unwrap() {
+        LinearMultichannel::ManyToManyShared(m) => assert_eq!(m.biases, vec![0.0, 0.0]),
+        _ => panic!("N->N geometry must select the shared-kernel engine"),
+    }
+
+    let one_to_n = multichannel_topo(1, 2, 4, LinearImplementation::Direct);
+    match LinearMultichannel::new(one_to_n, &[0.0; 8], &[0.1, 0.2, 0.3]).unwrap() {
+        LinearMultichannel::OneToMany(m) => assert_eq!(m.biases, vec![0.1, 0.2]),
+        _ => panic!("1->N geometry must select the one-to-many engine"),
+    }
+    match LinearMultichannel::new(one_to_n, &[0.0; 8], &[0.5]).unwrap() {
+        LinearMultichannel::OneToMany(m) => assert_eq!(m.biases, vec![0.5, 0.5]),
+        _ => panic!("1->N geometry must select the one-to-many engine"),
+    }
+}

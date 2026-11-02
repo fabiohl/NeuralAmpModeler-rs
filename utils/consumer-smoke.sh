@@ -3,20 +3,21 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # consumer-smoke.sh — Contrato de consumidor externo (x86-64-v3/aarch64) por artefato estruturado. Classe D.
 # Uso: utils/consumer-smoke.sh
-# Orçamento: 55
+# Orçamento: 80
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/consumer-smoke.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
-trap 'emit "RESULT: FAIL ($((SECONDS - T0))s) fails=${PHASE_NAME:-consumer-smoke} gaps=none"' ERR
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-consumer-smoke}"); emit "PHASE: ${PHASE_NAME:-consumer-smoke} FAIL rc=$rc log=${log:-none}"; finish || true; exit 1' ERR
 
 PHASE_NAME=consumer-smoke; phase consumer-smoke
 log="$LOG_DIR/consumer-smoke.log"
 d=$(mktemp -d "${TMPDIR:-/tmp}/nam-consumer-XXXXXX")
 trap 'rm -rf "$d"' EXIT
-mkdir -p "$d/src" && : > "$d/src/lib.rs"
+mkdir -p "$d/src"
+printf 'use neural_amp_modeler_rs::prelude::*;\npub fn smoke() { let _ = ProcessingParams::default(); let _ = NamErrorCode::FileNotFound; }\n' > "$d/src/lib.rs"
 printf '[package]\nname = "nam-consumer"\nversion = "0.0.0"\nedition = "2024"\n\n[dependencies]\nNeuralAmpModeler-rs = { path = "%s" }\n' "$PWD" > "$d/Cargo.toml"
 rc=0
 (

@@ -9,6 +9,7 @@ use crate::loader::nam_json::{NamModelData, TopologyError};
 use crate::loader::{dispatcher, nam_json, namb};
 use crate::models::NamModel;
 use log::{debug, error, info};
+use std::borrow::Cow;
 use std::path::Path;
 
 use super::error::LoadError;
@@ -156,7 +157,7 @@ pub fn load_and_build_model(
 
     let bytes = read_and_validate_model_bytes(path, &path_str)?;
     let file_size = bytes.len();
-    let model_data = parse_model_bytes(&bytes, &path_str, format)?;
+    let model_data = parse_model_bytes(Cow::Owned(bytes), &path_str, format)?;
     build_model_pair_from_data(model_data, file_size, &path_str, dual_mono, options)
 }
 
@@ -195,7 +196,7 @@ pub fn load_and_build_wav_ir(
 
     let bytes = read_and_validate_model_bytes(path, &path_str)?;
     let file_size = bytes.len();
-    let model_data = parse_model_bytes(&bytes, &path_str, ModelFormat::Wav)?;
+    let model_data = parse_model_bytes(Cow::Owned(bytes), &path_str, ModelFormat::Wav)?;
     build_model_pair_from_data(model_data, file_size, &path_str, dual_mono, options)
 }
 
@@ -310,7 +311,7 @@ pub fn load_and_build_model_from_bytes_named(
     } else {
         ModelFormat::Nam
     };
-    let model_data = parse_model_bytes(bytes, source_label, format)?;
+    let model_data = parse_model_bytes(Cow::Borrowed(bytes), source_label, format)?;
     build_model_pair_from_data(model_data, bytes.len(), source_label, dual_mono, options)
 }
 
@@ -390,7 +391,7 @@ pub fn load_and_build_wav_ir_from_bytes_named(
         return Err(LoadError::ModelTooLarge);
     }
 
-    let model_data = parse_model_bytes(bytes, source_label, ModelFormat::Wav)?;
+    let model_data = parse_model_bytes(Cow::Borrowed(bytes), source_label, ModelFormat::Wav)?;
     build_model_pair_from_data(model_data, bytes.len(), source_label, dual_mono, options)
 }
 
@@ -402,14 +403,14 @@ enum ModelFormat {
 }
 
 fn parse_model_bytes(
-    bytes: &[u8],
+    bytes: Cow<'_, [u8]>,
     source_label: &str,
     format: ModelFormat,
 ) -> Result<NamModelData, LoadError> {
     let file_size = bytes.len();
     match format {
         ModelFormat::Wav => {
-            let wav_data = super::wav::parse_wav_ir(bytes).map_err(|e| {
+            let wav_data = super::wav::parse_wav_ir(&bytes).map_err(|e| {
                 let code = e.error_code();
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
@@ -421,7 +422,7 @@ fn parse_model_bytes(
             Ok(super::wav::wav_ir_to_model_data(wav_data))
         }
         ModelFormat::Namb => {
-            let data = namb::parse_namb_typed(bytes).map_err(|e| {
+            let data = namb::parse_namb_typed(&bytes).map_err(|e| {
                 let code = match &e {
                     namb::NambError::Truncated { .. } => NamErrorCode::NambTruncated,
                     namb::NambError::InvalidMagic(_) => NamErrorCode::NambInvalidMagic,
@@ -453,7 +454,7 @@ fn parse_model_bytes(
             Ok(data)
         }
         ModelFormat::Nam => {
-            let json = String::from_utf8(bytes.to_vec()).map_err(|e| {
+            let json = String::from_utf8(bytes.into_owned()).map_err(|e| {
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  file contains invalid UTF-8 (utf8_error: {}). Only UTF-8 encoded \
@@ -484,6 +485,12 @@ fn parse_model_bytes(
                     }
                     nam_json::JsonError::SubmodelsTooDeep { .. } => {
                         NamErrorCode::NamJsonSubmodelsTooDeep
+                    }
+                    nam_json::JsonError::JsonValueExceedsLimit { .. } => {
+                        NamErrorCode::NamJsonValueExceedsLimit
+                    }
+                    nam_json::JsonError::JsonValueTooDeep { .. } => {
+                        NamErrorCode::NamJsonValueTooDeep
                     }
                     nam_json::JsonError::SequentialChildrenExceedLimit { .. } => {
                         NamErrorCode::SequentialChildrenExceedLimit
@@ -518,7 +525,8 @@ fn parse_model_bytes(
                 match e {
                     nam_json::JsonError::InvalidEnvelope { .. } => LoadError::Json(e),
                     nam_json::JsonError::WeightsExceedLimit { .. }
-                    | nam_json::JsonError::TrainingTooLarge { .. } => LoadError::ModelTooLarge,
+                    | nam_json::JsonError::TrainingTooLarge { .. }
+                    | nam_json::JsonError::JsonValueExceedsLimit { .. } => LoadError::ModelTooLarge,
                     nam_json::JsonError::WeightNotFinite { .. } => LoadError::NonFiniteWeights,
                     nam_json::JsonError::UnsupportedTopology { .. }
                     | nam_json::JsonError::UnsupportedVersion { .. }
@@ -529,15 +537,14 @@ fn parse_model_bytes(
                     | nam_json::JsonError::SequentialChildrenExceedLimit { .. } => {
                         LoadError::UnsupportedArchitecture(e.to_string())
                     }
+                    nam_json::JsonError::JsonValueTooDeep { .. } => LoadError::Json(e),
                     nam_json::JsonError::InvalidVersionFormat { raw } => {
                         LoadError::UnsupportedArchitecture(format!(
                             "Invalid version format: {}",
                             raw
                         ))
                     }
-                    nam_json::JsonError::InvalidSampleRate { .. } => {
-                        LoadError::UnsupportedArchitecture(e.to_string())
-                    }
+                    nam_json::JsonError::InvalidSampleRate { .. } => LoadError::Json(e),
                     nam_json::JsonError::Serde(_) => LoadError::Json(e),
                 }
             })?;
@@ -565,7 +572,15 @@ fn build_model_pair_from_data(
                  sample-rate provenance resolution failed (detail: {}).",
                 source_label, file_size, e, e
             );
-            LoadError::ModelBuildFailed(e.to_string())
+            if e == NamErrorCode::NamJsonInvalidSampleRate {
+                nam_json::JsonError::InvalidSampleRate {
+                    value: model_data.sample_rate.unwrap_or(0.0),
+                    reason: "nested declared sample rate must be a positive integer exactly representable as u32",
+                }
+                .into()
+            } else {
+                LoadError::ModelBuildFailed(e.to_string())
+            }
         })?;
     let model_sample_rate = resolved_sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
     info!(
@@ -595,7 +610,23 @@ fn build_model_pair_from_data(
 
     let input_db_adj = DEFAULT_INPUT_LEVEL_DBU - in_level;
     let output_db_adj = DEFAULT_LOUDNESS_DB - loudness;
-    let nam_rate = model_sample_rate as u32;
+    // Fail closed instead of truncating/saturating: the public contract is
+    // `sample_rate: u32`, so a fractional or out-of-range resolved rate must
+    // never reach consumers as 0 or `u32::MAX`.
+    let nam_rate = crate::loader::sample_rate::rate_to_u32(model_sample_rate).ok_or_else(|| {
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             resolved sample rate {:?} is not a positive integer representable as u32.",
+            source_label,
+            file_size,
+            NamErrorCode::NamJsonInvalidSampleRate,
+            model_sample_rate
+        );
+        LoadError::Json(nam_json::JsonError::InvalidSampleRate {
+            value: model_sample_rate,
+            reason: "resolved sample rate must be a positive integer representable as u32",
+        })
+    })?;
 
     let lut = crate::math::dsp::gain_lut::get_gain_lut();
     let input_mult_adj = lut.db_to_linear(input_db_adj);
@@ -637,6 +668,12 @@ fn build_model_pair_from_data(
                     }
                 } else if code == NamErrorCode::WeightCountMismatch {
                     LoadError::DimensionMismatch(e.to_string())
+                } else if code == NamErrorCode::NamJsonInvalidSampleRate {
+                    nam_json::JsonError::InvalidSampleRate {
+                        value: model_data.sample_rate.unwrap_or(0.0),
+                        reason: "nested declared sample rate must be a positive integer exactly representable as u32",
+                    }
+                    .into()
                 } else {
                     LoadError::ModelBuildFailed(e.to_string())
                 }

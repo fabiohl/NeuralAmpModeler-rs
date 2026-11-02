@@ -3,14 +3,14 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # lints.sh — Análise estática, formatação e conformidade textual. Classe A.
 # Uso: utils/lints.sh
-# Orçamento: 100
+# Orçamento: 130
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
-trap 'emit "RESULT: FAIL ($((SECONDS - T0))s) fails=${PHASE_NAME:-step} gaps=none"' ERR
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-step}"); emit "PHASE: ${PHASE_NAME:-step} FAIL rc=$rc log=${LOG_DIR}/lints-${PHASE_NAME:-step}.log"; finish || true; exit 1' ERR
 
 run_step() {
   local name=$1; shift; PHASE_NAME=$name; phase "$name"

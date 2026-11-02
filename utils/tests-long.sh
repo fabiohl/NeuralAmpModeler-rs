@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-long.sh — long-duration audit, stress, and verification suite. Classe B.
 # Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
-# Orçamento: 296
+# Orçamento: 330
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -o pipefail
 cd "$(dirname "$0")/.."

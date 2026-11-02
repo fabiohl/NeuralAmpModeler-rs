@@ -578,3 +578,186 @@ fn test_validate_envelope_accepts_valid() {
 
     assert!(validate_envelope(&valid).is_ok());
 }
+
+// — A1: document-wide Value budget (single-pass streaming) ————————————
+
+/// Builds a minimal valid LSTM envelope with an arbitrary `condition_dsp`.
+fn envelope_with_condition(condition: &str) -> String {
+    format!(
+        r#"{{"version":"0.5.4","architecture":"LSTM","config":{{"layers":[],"condition_dsp":{condition}}},"weights":[]}}"#
+    )
+}
+
+#[test]
+fn test_value_budget_rejects_oversized_condition_before_materializing_all() {
+    use super::parse::parse_nam_json_with_budget;
+
+    // 400 numbers: a full materialization would cost ~6.4k units.
+    let numbers = (0..400)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = envelope_with_condition(&format!(r#"{{"blob":[{numbers}]}}"#));
+
+    match parse_nam_json_with_budget(&json, 256) {
+        Err(crate::loader::nam_json::JsonError::JsonValueExceedsLimit { cost, max }) => {
+            assert_eq!(max, 256);
+            // Rejection happens as soon as the running cost crosses the budget,
+            // not after collecting the whole 400-element array.
+            assert!(cost > 256, "cost {cost} should exceed budget");
+            assert!(
+                cost < 400 * 16,
+                "cost {cost} should be far below full materialization"
+            );
+        }
+        other => panic!("expected JsonValueExceedsLimit, got: {other:?}"),
+    }
+
+    // The same document is accepted when the budget is large enough.
+    assert!(parse_nam_json_with_budget(&json, 16 * 1024).is_ok());
+}
+
+#[test]
+fn test_value_budget_rejects_excessive_nesting() {
+    use super::parse::parse_nam_json_with_budget;
+
+    // 70 nested arrays exceed MAX_JSON_VALUE_DEPTH (64).
+    let mut nested = String::new();
+    for _ in 0..70 {
+        nested.push('[');
+    }
+    nested.push('1');
+    for _ in 0..70 {
+        nested.push(']');
+    }
+    let json = envelope_with_condition(&nested);
+
+    match parse_nam_json_with_budget(&json, 1024 * 1024) {
+        Err(crate::loader::nam_json::JsonError::JsonValueTooDeep { depth, max_depth }) => {
+            assert!(depth > max_depth);
+            assert_eq!(max_depth, super::validation::MAX_JSON_VALUE_DEPTH);
+        }
+        other => panic!("expected JsonValueTooDeep, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_root_weights_are_not_charged_to_value_budget() {
+    use super::parse::parse_nam_json_with_budget;
+
+    // The root `weights` array streams into `Vec<f32>`; it must not consume the
+    // `Value` budget, so a tiny budget still parses a sizeable weights array.
+    let weights = (0..500)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"version":"0.5.4","architecture":"LSTM","config":{{"layers":[]}},"weights":[{weights}]}}"#
+    );
+    let data = parse_nam_json_with_budget(&json, 128).expect("weights bypass the Value budget");
+    assert_eq!(data.weights.len(), 500);
+}
+
+#[test]
+fn test_nested_submodel_weights_are_charged_to_value_budget() {
+    use super::parse::parse_nam_json_with_budget;
+
+    let weights = (0..400)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"version":"0.5.4","architecture":"SlimmableContainer","config":{{"submodels":[{{"max_value":1.0,"model":{{"weights":[{weights}]}}}}]}},"weights":[]}}"#
+    );
+
+    match parse_nam_json_with_budget(&json, 256) {
+        Err(crate::loader::nam_json::JsonError::JsonValueExceedsLimit { .. }) => {}
+        other => panic!("expected JsonValueExceedsLimit, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_unknown_root_fields_are_discarded_without_charging_budget() {
+    use super::parse::parse_nam_json_with_budget;
+
+    let filler = (0..400)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"version":"0.5.4","architecture":"LSTM","config":{{"layers":[]}},"weights":[],"forward_compat_extra":[{filler}]}}"#
+    );
+    assert!(
+        parse_nam_json_with_budget(&json, 128).is_ok(),
+        "unknown fields must be skipped, not materialized"
+    );
+}
+
+#[test]
+fn test_duplicate_root_keys_keep_last_value_like_two_phase_parser() {
+    use super::parse::parse_nam_json;
+
+    let json = r#"{
+        "version": "0.5.4",
+        "version": "0.5.5",
+        "architecture": "LSTM",
+        "architecture": "WaveNet",
+        "config": {"layers": []},
+        "config": {"layers": []},
+        "weights": [1.0],
+        "weights": [2.0, 3.0]
+    }"#;
+    let data = parse_nam_json(json).expect("duplicate keys keep the last value");
+    assert_eq!(data.version.as_deref(), Some("0.5.5"));
+    assert_eq!(data.architecture, "WaveNet");
+    assert_eq!(data.weights, vec![2.0, 3.0]);
+}
+
+#[test]
+fn test_streaming_parser_preserves_invalid_envelope_classification() {
+    use super::parse::parse_nam_json;
+
+    let cases = [
+        ("[1,2,3]", "object"),
+        (
+            r#"{"architecture":"LSTM","config":{},"weights":[]}"#,
+            "version",
+        ),
+        (
+            r#"{"version":null,"architecture":"LSTM","config":{},"weights":[]}"#,
+            "null",
+        ),
+        (
+            r#"{"version":42,"architecture":"LSTM","config":{},"weights":[]}"#,
+            "string",
+        ),
+        (
+            r#"{"version":"0.5.4","config":{},"weights":[]}"#,
+            "architecture",
+        ),
+        (
+            r#"{"version":"0.5.4","architecture":"LSTM","weights":[]}"#,
+            "config",
+        ),
+        (
+            r#"{"version":"0.5.4","architecture":"LSTM","config":{},"weights":null}"#,
+            "weights",
+        ),
+        (
+            r#"{"version":"0.5.4","architecture":"LSTM","config":{},"weights":{}}"#,
+            "weights",
+        ),
+    ];
+
+    for (json, needle) in cases {
+        match parse_nam_json(json) {
+            Err(crate::loader::nam_json::JsonError::InvalidEnvelope { reason }) => {
+                assert!(
+                    reason.contains(needle),
+                    "reason {reason:?} should mention {needle:?}"
+                );
+            }
+            other => panic!("expected InvalidEnvelope for {json}, got: {other:?}"),
+        }
+    }
+}

@@ -42,6 +42,21 @@ pub enum JsonError {
         /// Maximum allowed depth.
         max_depth: usize,
     },
+    /// The document-wide `serde_json::Value` materialization budget was
+    /// exceeded before the over-budget payload was fully materialized (A1).
+    JsonValueExceedsLimit {
+        /// Estimated cost at the point of rejection.
+        cost: usize,
+        /// Maximum allowed cost.
+        max: usize,
+    },
+    /// A `serde_json::Value` field exceeded the structural depth ceiling.
+    JsonValueTooDeep {
+        /// Depth found.
+        depth: usize,
+        /// Maximum allowed depth.
+        max_depth: usize,
+    },
     /// A weight value is non-finite (NaN, +Inf, or -Inf).
     WeightNotFinite {
         /// Index (0-based) of the non-finite float in the weights array.
@@ -49,7 +64,8 @@ pub enum JsonError {
         /// The non-finite value.
         value: f32,
     },
-    /// The sample rate is invalid (non-finite or <= 0.0).
+    /// The sample rate is invalid (non-finite, or a positive value that is not
+    /// an integer exactly representable as `u32`).
     InvalidSampleRate {
         /// The invalid sample rate value.
         value: f32,
@@ -237,6 +253,20 @@ impl std::fmt::Display for JsonError {
                 write!(
                     f,
                     "container nesting too deep (depth {}, max is {})",
+                    depth, max_depth
+                )
+            }
+            Self::JsonValueExceedsLimit { cost, max } => {
+                write!(
+                    f,
+                    "JSON value budget exceeded while deserializing ({} units, max is {})",
+                    cost, max
+                )
+            }
+            Self::JsonValueTooDeep { depth, max_depth } => {
+                write!(
+                    f,
+                    "JSON value too deeply nested (depth {}, max is {})",
                     depth, max_depth
                 )
             }

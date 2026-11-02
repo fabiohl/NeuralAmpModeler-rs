@@ -5,11 +5,13 @@
 //!
 //! Contains the structs that model the neural model file.
 
+use serde::de::DeserializeSeed;
 use serde::{Deserialize, Serialize};
 
 use super::validation::{
-    MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, deserialize_models,
-    deserialize_sample_rate, deserialize_submodels, deserialize_training, deserialize_weights,
+    MAX_HEAD_CHANNELS, MAX_HEAD_KERNEL_SIZE, MAX_HEAD_OUT_CHANNELS, deserialize_bounded_value_opt,
+    deserialize_bounded_value_present, deserialize_models, deserialize_sample_rate,
+    deserialize_submodels, deserialize_training,
 };
 
 /// Slimmable configuration extracted from per-layer metadata.
@@ -185,10 +187,13 @@ impl<'de> Deserialize<'de> for NamLayerConfig {
     where
         D: serde::Deserializer<'de>,
     {
-        let raw_value = serde_json::Value::deserialize(deserializer)?;
+        // A1: the raw layer payload is materialized under the document-wide
+        // `Value` budget instead of an unbounded generic tree.
+        let raw_value = super::validation::schema::BudgetedValueSeed::root()
+            .deserialize(deserializer)
+            .map_err(serde::de::Error::custom)?;
         let helper: NamLayerConfigHelper =
-            serde_json::from_value(raw_value.clone()).map_err(serde::de::Error::custom)?;
-
+            serde::Deserialize::deserialize(&raw_value).map_err(serde::de::Error::custom)?;
         let activation = match helper.activation {
             Some(serde_json::Value::String(s)) => Some(s),
             Some(serde_json::Value::Array(_)) => None,
@@ -371,6 +376,7 @@ pub struct NamConfig {
     /// `null` in JSON becomes `Some(Value::Null)` (head present but empty).
     /// Absent in JSON becomes `None`.
     /// Non-null values contain the head configuration object.
+    #[serde(default, deserialize_with = "deserialize_bounded_value_present")]
     pub head: Option<serde_json::Value>,
     /// Fine scale over the network summation (WaveNet / ConvNet).
     pub head_scale: Option<f32>,
@@ -410,7 +416,11 @@ pub struct NamConfig {
     /// before the main model's layer arrays are processed. The sub-model's
     /// output channels serve as the condition input for the main model's layers
     /// (C++ `_process_condition()` mirror, wavenet/model.cpp:692-722).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_bounded_value_opt"
+    )]
     pub condition_dsp: Option<serde_json::Value>,
     /// Linear convolution implementation mode ("Auto", "Direct", "Fft").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -426,7 +436,11 @@ pub struct NamConfig {
     pub conv_batchnorm: Option<bool>,
     /// ConvNet C++ flat format: per-block activation specification at the
     /// config root level (bare name string or tagged object).
-    #[serde(default, rename = "activation")]
+    #[serde(
+        default,
+        rename = "activation",
+        deserialize_with = "deserialize_bounded_value_opt"
+    )]
     pub conv_activation: Option<serde_json::Value>,
 }
 
@@ -540,7 +554,7 @@ impl NamConfig {
 /// Construct with [`Self::new`] or [`Self::default`]. Direct struct literals
 /// are not available outside this crate.
 #[non_exhaustive]
-#[derive(Deserialize, Serialize, Debug, Clone, Default)]
+#[derive(Serialize, Debug, Clone, Default)]
 pub struct NamModelData {
     /// Version in the JSON header (e.g. "0.5.4")
     pub version: Option<String>,
@@ -549,16 +563,236 @@ pub struct NamModelData {
     /// Structural configuration of hyperparameters
     pub config: NamConfig,
     /// The huge Float32 tensors flattened in SoA format.
-    #[serde(deserialize_with = "deserialize_weights")]
     pub weights: Vec<f32>,
     /// Original sample rate projected by the modeling (always ideal reference 48 kHz).
-    #[serde(default, deserialize_with = "deserialize_sample_rate")]
     pub sample_rate: Option<f32>,
     /// Extra physical-acoustic properties associated.
     pub metadata: Option<NamMetadata>,
     /// Weight layout (used only in the .namb v2+ binary format).
     #[serde(skip)]
     pub weights_layout: WeightsLayout,
+}
+
+impl<'de> Deserialize<'de> for NamModelData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NamModelDataVisitor)
+    }
+}
+
+/// Builds an `InvalidEnvelope` error and records it in the typed side channel
+/// so `parse_nam_json` can recover the precise variant instead of `Serde`.
+fn envelope_error<E: serde::de::Error>(reason: &str) -> E {
+    use super::validation::record_last_typed_parse_error;
+
+    record_last_typed_parse_error(super::error::JsonError::InvalidEnvelope {
+        reason: reason.to_string(),
+    });
+    E::custom(super::error::JsonError::InvalidEnvelope {
+        reason: reason.to_string(),
+    })
+}
+
+/// Converts an already-budgeted `Value` into a typed struct without charging
+/// the same nodes against the document budget again (A1).
+fn from_budgeted_value<T, E>(value: serde_json::Value) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: serde::de::Error,
+{
+    let _suspended = super::validation::schema::suspend_json_budget();
+    serde_json::from_value(value).map_err(E::custom)
+}
+
+/// Streams the root `weights` array directly into `Vec<f32>`; a non-array is
+/// reported as an envelope violation (matching the previous two-phase parser),
+/// while element-level errors keep their typed `JsonError` variants.
+struct WeightsFieldVisitor;
+
+impl<'de> serde::de::Visitor<'de> for WeightsFieldVisitor {
+    type Value = Vec<f32>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON array of weights")
+    }
+
+    fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        super::validation::schema::collect_weights(seq)
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Err(envelope_error("field 'weights' cannot be null"))
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(envelope_error("field 'weights' must be a JSON array"))
+    }
+}
+
+struct WeightsSeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for WeightsSeed {
+    type Value = Vec<f32>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(WeightsFieldVisitor)
+    }
+}
+
+struct SampleRateSeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for SampleRateSeed {
+    type Value = Option<f32>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserialize_sample_rate(deserializer)
+    }
+}
+
+struct NamModelDataVisitor;
+
+impl<'de> serde::de::Visitor<'de> for NamModelDataVisitor {
+    type Value = NamModelData;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a .nam model envelope object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut version: Option<String> = None;
+        let mut architecture: Option<String> = None;
+        let mut config: Option<NamConfig> = None;
+        let mut weights: Option<Vec<f32>> = None;
+        let mut sample_rate: Option<f32> = None;
+        let mut metadata: Option<NamMetadata> = None;
+
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "version" => {
+                    let value =
+                        map.next_value_seed(super::validation::schema::BudgetedValueSeed::root())?;
+                    match value {
+                        serde_json::Value::String(s) => version = Some(s),
+                        serde_json::Value::Null => {
+                            return Err(envelope_error("field 'version' cannot be null"));
+                        }
+                        _ => {
+                            return Err(envelope_error("field 'version' must be a JSON string"));
+                        }
+                    }
+                }
+                "architecture" => {
+                    let value =
+                        map.next_value_seed(super::validation::schema::BudgetedValueSeed::root())?;
+                    match value {
+                        serde_json::Value::String(s) => architecture = Some(s),
+                        serde_json::Value::Null => {
+                            return Err(envelope_error("field 'architecture' cannot be null"));
+                        }
+                        _ => {
+                            return Err(envelope_error(
+                                "field 'architecture' must be a JSON string",
+                            ));
+                        }
+                    }
+                }
+                "config" => {
+                    let value =
+                        map.next_value_seed(super::validation::schema::BudgetedValueSeed::root())?;
+                    if !value.is_object() {
+                        return Err(envelope_error("field 'config' must be a JSON object"));
+                    }
+                    config = Some(from_budgeted_value(value)?);
+                }
+                "weights" => {
+                    weights = Some(map.next_value_seed(WeightsSeed)?);
+                }
+                "sample_rate" => {
+                    sample_rate = map.next_value_seed(SampleRateSeed)?;
+                }
+                "metadata" => {
+                    metadata = map.next_value::<Option<NamMetadata>>()?;
+                }
+                // Forward-compatible: unknown fields (including the serialized
+                // `weights_layout` skip slot) are discarded without allocating.
+                _ => {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+
+        let version = version.ok_or_else(|| envelope_error("missing required field 'version'"))?;
+        let architecture =
+            architecture.ok_or_else(|| envelope_error("missing required field 'architecture'"))?;
+        let config = config.ok_or_else(|| envelope_error("missing required field 'config'"))?;
+        let weights = weights.ok_or_else(|| envelope_error("missing required field 'weights'"))?;
+
+        Ok(NamModelData {
+            version: Some(version),
+            architecture,
+            config,
+            weights,
+            sample_rate,
+            metadata,
+            weights_layout: WeightsLayout::default(),
+        })
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_string<E: serde::de::Error>(self, _: String) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(envelope_error("model envelope must be a JSON object"))
+    }
 }
 
 impl NamModelData {

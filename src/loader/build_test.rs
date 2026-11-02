@@ -5,7 +5,7 @@
 mod tests {
     use crate::common::diagnostics::SystemSnapshot;
     use crate::loader::{
-        LoadError, LoadOptions, MetadataError, load_and_build_model,
+        JsonError, LoadError, LoadOptions, MetadataError, load_and_build_model,
         load_and_build_model_from_bytes, load_and_build_model_from_bytes_named,
         load_and_build_wav_ir, load_and_build_wav_ir_from_bytes,
         load_and_build_wav_ir_from_bytes_named,
@@ -36,6 +36,109 @@ mod tests {
         ));
         std::fs::write(&path, hostile).expect("temp file must be writable");
         path
+    }
+
+    /// Writes a variant of `wavenet.nam` with a replacement `sample_rate`
+    /// literal and returns the temp path (parallel-safe by `tag`).
+    fn write_sample_rate_variant(tag: &str, rate_literal: &str) -> PathBuf {
+        let src = model_path("wavenet.nam");
+        let content = std::fs::read_to_string(&src).expect("fixture must be readable");
+        let original = "\"sample_rate\": 48000}";
+        assert!(
+            content.contains(original),
+            "fixture does not contain the expected sample_rate snippet"
+        );
+        let replaced = format!("\"sample_rate\": {rate_literal}}}");
+        let path = std::env::temp_dir().join(format!(
+            "nam_sample_rate_{}_{}.nam",
+            std::process::id(),
+            tag
+        ));
+        std::fs::write(&path, content.replace(original, &replaced))
+            .expect("temp file must be writable");
+        path
+    }
+
+    /// Regression (A3): a positive fractional rate such as `0.5` used to reach
+    /// `LoadedModelPair.sample_rate` as `0` through the truncating `as u32`
+    /// cast. It must now be rejected with the typed sample-rate error.
+    #[test]
+    fn test_fractional_sample_rate_rejected_not_truncated_to_zero() {
+        let sys = SystemSnapshot::capture();
+        let path = write_sample_rate_variant("fractional", "0.5");
+        let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        std::fs::remove_file(&path).ok();
+
+        let err = res.expect_err("sample_rate=0.5 must be rejected, not truncated to zero");
+        assert_eq!(
+            err.code(),
+            crate::common::diagnostics::NamErrorCode::NamJsonInvalidSampleRate
+        );
+        assert!(
+            matches!(err, LoadError::Json(JsonError::InvalidSampleRate { .. })),
+            "expected LoadError::Json(InvalidSampleRate), got: {err:?}"
+        );
+    }
+
+    /// Regression (A3): values that a `u32` cannot represent (fractional,
+    /// beyond `u32::MAX`, or not exactly representable as `f32`) must fail
+    /// closed instead of saturating.
+    #[test]
+    fn test_unrepresentable_sample_rates_rejected() {
+        for (tag, literal) in [
+            ("not_f32_exact", "16777217"),
+            ("above_u32_max", "4294967296"),
+            ("saturating_float", "1e39"),
+        ] {
+            let sys = SystemSnapshot::capture();
+            let path = write_sample_rate_variant(tag, literal);
+            let res = load_and_build_model(&path, &sys, false, LoadOptions::default());
+            std::fs::remove_file(&path).ok();
+
+            let err = res.expect_err("unrepresentable sample rate must fail closed");
+            assert_eq!(
+                err.code(),
+                crate::common::diagnostics::NamErrorCode::NamJsonInvalidSampleRate,
+                "rate literal {literal} produced the wrong code"
+            );
+        }
+    }
+
+    /// Conventional integer rates remain valid and are preserved exactly.
+    #[test]
+    fn test_representable_sample_rate_preserved() {
+        for (tag, rate) in [("44k", 44100u32), ("96k", 96000), ("192k", 192000)] {
+            let sys = SystemSnapshot::capture();
+            let path = write_sample_rate_variant(tag, &rate.to_string());
+            let pair = load_and_build_model(&path, &sys, false, LoadOptions::default())
+                .expect("conventional sample rate must load");
+            std::fs::remove_file(&path).ok();
+            assert_eq!(pair.sample_rate, rate);
+        }
+    }
+
+    /// Regression: a fractional rate declared inside `config.models` is
+    /// rejected during provenance resolution and must keep the same public
+    /// classification as a root declaration (`LoadError::Json`, E1214).
+    #[test]
+    fn test_nested_fractional_sample_rate_maps_to_json_error() {
+        let child = r#"{"version":"0.7.0","architecture":"Linear","config":{"receptive_field":1,"bias":false},"weights":[1.0],"sample_rate":0.5}"#;
+        let json = format!(
+            r#"{{"version":"0.7.0","architecture":"Sequential","config":{{"models":[{child}]}},"weights":[]}}"#
+        );
+        let sys = SystemSnapshot::capture();
+        let err =
+            load_and_build_model_from_bytes(json.as_bytes(), &sys, false, LoadOptions::default())
+                .expect_err("nested fractional sample_rate must be rejected");
+
+        assert_eq!(
+            err.code(),
+            crate::common::diagnostics::NamErrorCode::NamJsonInvalidSampleRate
+        );
+        assert!(
+            matches!(err, LoadError::Json(JsonError::InvalidSampleRate { .. })),
+            "expected LoadError::Json(InvalidSampleRate), got: {err:?}"
+        );
     }
 
     /// Acceptance: JSON with `input_level_dbu: 1e999` returns a typed `Err`.
@@ -308,6 +411,50 @@ mod tests {
         let res_garbage =
             load_and_build_model_from_bytes(garbage, &sys, false, LoadOptions::default());
         assert!(res_garbage.is_err(), "garbage bytes must fail load");
+    }
+
+    #[test]
+    fn test_container_submodel_below_version_range_rejected_at_boundary() {
+        let content = std::fs::read_to_string(model_path("slimmable_container.nam"))
+            .expect("fixture must be readable");
+        let hostile = content.replacen("\"version\": \"0.5.4\"", "\"version\": \"0.4.0\"", 1);
+        assert_ne!(hostile, content, "fixture must contain a 0.5.4 submodel");
+        let sys = SystemSnapshot::capture();
+        let result = load_and_build_model_from_bytes(
+            hostile.as_bytes(),
+            &sys,
+            false,
+            LoadOptions::default(),
+        );
+        assert!(
+            result.is_err(),
+            "container with a 0.4.0 submodel must be rejected before build"
+        );
+    }
+
+    #[test]
+    fn test_invalid_utf8_nam_file_returns_typed_invalid_utf8() {
+        let path =
+            std::env::temp_dir().join(format!("nam_invalid_utf8_{}.nam", std::process::id()));
+        std::fs::write(&path, [b'{', 0xff, 0xfe, b'}']).expect("temp file must be writable");
+        let sys = SystemSnapshot::capture();
+        let result = load_and_build_model(&path, &sys, false, LoadOptions::default());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            matches!(result, Err(LoadError::InvalidUtf8(_))),
+            "invalid UTF-8 .nam file must return LoadError::InvalidUtf8"
+        );
+    }
+
+    #[test]
+    fn test_invalid_utf8_nam_bytes_returns_typed_invalid_utf8() {
+        let sys = SystemSnapshot::capture();
+        let payload: [u8; 4] = [b'{', 0xff, 0xfe, b'}'];
+        let result = load_and_build_model_from_bytes(&payload, &sys, false, LoadOptions::default());
+        assert!(
+            matches!(result, Err(LoadError::InvalidUtf8(_))),
+            "invalid UTF-8 .nam bytes must return LoadError::InvalidUtf8"
+        );
     }
 
     fn create_test_wav_bytes(channels: u16, sample_rate: u32, samples: &[f32]) -> Vec<u8> {
