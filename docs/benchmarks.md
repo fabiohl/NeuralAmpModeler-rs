@@ -1049,7 +1049,7 @@ values are the mean of the two round medians (`median.point_estimate`).
 
 - Positive percentages are regressions; negative percentages are improvements.
 - The fused residual benches live in `benches/math_bench.rs`; the paths named
-  in the sprint note (`benches/gemv_bench.rs`, `benches/gemv/kernels.rs`,
+  in the optimization note (`benches/gemv_bench.rs`, `benches/gemv/kernels.rs`,
   `benches/conv1d_hotpath_bench.rs`) have no `num_frames` dimension and were
   not applicable (same path correction already recorded as C4 for S06).
 - The 4x4 pair tile is extracted into an inlined raw-pointer helper (`fused_gemm_residual_pair_const`), and the single-frame tail macro (`gemm_batch_frame_loop_pair_avx2!`) is emitted once using raw pointer arithmetic after the entry bounds assertions, eliminating redundant per-frame slice bounds checks (`slice_index_fail`) when `f` merges after the conditional pair block. The 12x12 pair tile (`fused_gemm_residual_pair_12x12`) uses a 6-register raw-pointer signature and is dispatched inside the main loop when `f + 2 == num_frames`, allowing LLVM to compile the call as a tail jump (`jmp`) and preserving leaf red-zone stack allocation (`subq $200, %rsp`).
@@ -1107,7 +1107,7 @@ This procedure verifies the code generated for the hot kernels. It does not rewr
 them. Inspection is performed by a human reviewer: no script and no automated `grep`
 gate decides pass/fail. Run it after any
 change to a kernel under `src/math/`, `src/models/` or `src/arch/`, and before
-declaring a kernel sprint closed.
+declaring a kernel optimization cycle closed.
 
 ### 12.1 Procedure
 

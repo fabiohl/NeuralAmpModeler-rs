@@ -289,6 +289,9 @@ A `GAP` is never recorded as `PASS`: it is written to the receipt as `SKIPPED` (
 
 The performance gate decides baseline presence in Rust, before the benchmark pre-compilation (A2): non-strict missing baseline exits `3` (`GAP perf-baseline-missing`), strict missing baseline exits `4` (`FAILED` with `reason: MISSING_BASELINE`). `tests-long.sh` maps both codes and no longer inspects `.performance-baselines/` itself. The summary therefore reports `PERF: NOT_VERIFIED` and `PERF_REGRESSION: NOT_RUN` in a clone without a baseline, instead of a false regression.
 
+> [!NOTE]
+> **Performance Baselines and `git clean`:** The `.performance-baselines/` directory is gitignored and stores local machine-specific calibration fingerprints. Running `git clean -fdx` (with `-x`) wipes all untracked and ignored directories, removing the baseline fingerprint and triggering `GAP perf-baseline-missing` on subsequent long test runs. To clear build artifacts without destroying local baselines, prefer `cargo clean` or `git clean -fd` (without `-x`), or re-bootstrap via `nam_perf_gate run --bootstrap-baseline`.
+
 ### 5.3 Sequential Execution Phases
 
 1. **`catch-all` (`phase1`):** `cargo test --release --features testing --no-fail-fast -- --include-ignored`. Pinned targets are not compiled because `pinned` is not enabled, so no manual `SKIP` list exists. The single runtime exception is the documented D-02 path: when the optional C++ oracle is absent in non-strict mode, only `cpp_parity::live_cross_validation` is omitted, `d02_live_cross_validation_oracle_probe` reports the typed skip, and the run records `GAP skip-capability:<n>`. This is the broad numerical matrix: live C++ parity, multi-sample-rate V2 goldens, cross-ISA checks, defense/invariant tests, the `libm_export_guard`, and the proptest sweeps.
@@ -554,7 +557,7 @@ The dashboard counts executed tests from the canonical libtest `test result: ok.
 
 The `third_party` phase verifies provenance, not mere presence: `NeuralAmpModelerCore` and `NeuralAmpModelerPlugin` must be git checkouts at the commits pinned in `variables.env` (`NAM_CORE_COMMIT`, `NAM_PLUGIN_COMMIT`), with a clean `git status --porcelain`, and the core submodules (`Dependencies/eigen`, `Dependencies/AudioDSPTools`) initialized at their recorded commits. A dirty tree, wrong commit, or uninitialized core submodule is recorded as `FAIL` with a typed reason (`third_party_core_commit_mismatch:<head>`, `third_party_core_dirty`, `third_party_core_submodule:<line>`, …), which makes the fidelity domain fail closed. A missing core mirror stays `SKIP_CAPABILITY` (`third_party_absent`); a missing plugin mirror is `SKIP_CAPABILITY` (`third_party_plugin_absent`) so environments that only need the core render keep working.
 
-The contract schema is enforced via typed serde structures in `src/testing/qa/`. During the `reference_oracle_f64` measurement phase, `nam_quality` executes both the non-ignored `reference_oracle_f64::` suite and the ignored `reference_oracle_f64::test_summary_table` target (`--include-ignored --exact`), ensuring `ESR_F64` metrics are emitted for the summary models (`Linear`, `ConvNet`, `A2Full`, `A2Lite`) as well as the canonicalWaveNet/LSTM tiers.
+The contract schema is enforced via typed serde structures in `src/testing/qa/`. During the `reference_oracle_f64` measurement phase, `nam_quality` executes both the non-ignored `reference_oracle_f64::` suite and the ignored `reference_oracle_f64::test_summary_table` target (`--include-ignored --exact`), ensuring `ESR_F64` metrics are emitted for the summary models (`Linear`, `ConvNet`, `A2Full`, `A2Lite`) as well as the canonical WaveNet/LSTM tiers. During verification, `ids::resolve_fidelity_alias` maps legacy or quick-report labels (such as `Quick ConvNet @48000 Live` $\rightarrow$ `ConvNet Test @48000 Live`) to ensure complete contract parity.
 
 ### 10.2 Tolerance Envelopes
 
@@ -799,7 +802,7 @@ Execution times measured on standard development hardware (16-core, SSD):
 
 | Discipline / Script | Measured Duration | Budget Ceiling | Notes |
 | :------------------- | :----------------- | :-------------- | :----- |
-| `utils/lints.sh` | ~3s (warm cache, 2026-10-27) to ~75s (clean build) | $\le 2$ min | Covers fmt, check and clippy (four configurations), cross-target clippy, doc, SPDX, policies, and script budget. |
+| `utils/lints.sh` | ~3s (warm cache) to ~145s (cold clean build post-clean, 2026-11-02) | $\le 2.5$ min (clean) / $\le 30$ s (warm) | Covers fmt, check and clippy (four configurations), cross-target clippy (aarch64), doc, SPDX, policies, and script budget. |
 | `utils/tests-quick.sh` | ~16–87s (16–22s warm incremental; 64–87s cold, 2026-10-27…30) | $\le 5$ min | Covers golden-artifact freshness plus the full non-ignored test suite in the debug profile. |
 | `utils/tests-long.sh` | ~10–13 min (625–749 s measured, 2026-10-27…30) | $\le 15$ min | Exhaustive catch-all (including ignored tests), soak, ISA/codegen, heap audit, RT deadline/jitter, Loom, and the perf gate. |
 | `utils/quality-dashboard.sh` | ~134–164 s (fidelity-only; 2026-10-30) | $\le 3$ min | Evaluates full audio fidelity (ESR, SNR, MR-STFT) and latency envelope contracts. |

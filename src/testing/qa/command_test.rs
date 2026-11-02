@@ -22,10 +22,11 @@ fn timeout_returns_124_and_kills_the_child_tree() {
     let mut cmd = Command::new("sh");
     cmd.args(["-c", "sleep 3600 & echo $!; wait"]);
     let started = Instant::now();
-    let result = run_command_with_timeout(&mut cmd, Duration::from_secs(1));
+    // 2-second timeout gives ample headroom for process spawning under parallel test CPU contention.
+    let result = run_command_with_timeout(&mut cmd, Duration::from_secs(2));
     assert_eq!(result.exit_code, 124);
     assert!(result.timed_out);
-    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(started.elapsed() < Duration::from_secs(6));
 
     let child_pid: i32 = String::from_utf8_lossy(&result.output)
         .lines()

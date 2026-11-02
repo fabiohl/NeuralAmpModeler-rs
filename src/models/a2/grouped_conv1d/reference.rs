@@ -23,19 +23,26 @@ pub fn grouped_conv1d_single_frame_ref(
     frame_idx: usize,
     out_frame: &mut [f32],
 ) {
+    // In grouped convolution, input and output channels are split into G disjoint groups.
+    // Each group g processes its slice of inputs independently to compute its slice of outputs.
     let in_per_group = in_ch / groups;
     let out_per_group = out_ch / groups;
+    // Weights are stored in interleaved blocks of 4 output channels to match SIMD layout.
     let num_blocks_per_group = out_per_group.div_ceil(4);
 
+    // Initialize output frame with bias if enabled, or clear to zero.
     for out_c in 0..out_ch {
         out_frame[out_c] = if do_bias { bias[out_c] } else { 0.0 };
     }
 
+    // Iterate through each group independently.
     for g in 0..groups {
         let group_in_start = g * in_per_group;
         let group_out_start = g * out_per_group;
 
+        // Process output channels in 4-wide SIMD-compatible blocks.
         for b in 0..num_blocks_per_group {
+            // Convolve across FIR kernel taps with dilation.
             for k in 0..kernel {
                 let taps_back = kernel - 1 - k;
                 let col = frame_idx.wrapping_sub(dilation * taps_back);
@@ -43,6 +50,7 @@ pub fn grouped_conv1d_single_frame_ref(
 
                 let wk_group_base = g * (num_blocks_per_group * kernel * in_per_group * 4);
 
+                // Accumulate across each input channel in the current group.
                 for ic in 0..in_per_group {
                     let hv = layer_buffer[src_base + group_in_start + ic];
                     let w_base = wk_group_base
@@ -50,12 +58,14 @@ pub fn grouped_conv1d_single_frame_ref(
                         + k * (in_per_group * 4)
                         + ic * 4;
 
+                    // Load 4 weights corresponding to the current 4-wide output block.
                     let w0 = weights[w_base] as f64;
                     let w1 = weights[w_base + 1] as f64;
                     let w2 = weights[w_base + 2] as f64;
                     let w3 = weights[w_base + 3] as f64;
                     let hv64 = hv as f64;
 
+                    // Perform double-precision (f64) multiply-accumulate to establish the ideal numerical baseline.
                     {
                         let out0 = group_out_start + b * 4;
                         if out0 < out_ch {

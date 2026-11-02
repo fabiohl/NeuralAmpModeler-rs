@@ -37,6 +37,11 @@ fn process_model_core(
     is_crossfading_wavenet: bool,
 ) {
     if lstm_passthrough {
+        // Path 1: Adaptive Passthrough.
+        // When dynamic compute control activates fallback mode (e.g. CPU overload protection
+        // for heavy LSTM models), inference is bypassed cleanly by streaming input directly
+        // to output. This maintains continuity and prevents thread overruns or audio glitches.
+        //
         // SAFETY: each copy length is the minimum of the source and destination
         // lengths, so the copies of initialized `f32` values stay in bounds; input
         // and output buffers are distinct, so the regions cannot overlap.
@@ -53,6 +58,14 @@ fn process_model_core(
             );
         }
     } else if is_crossfading_wavenet {
+        // Path 2: WaveNet Dynamic Adaptive Crossfading.
+        // During dynamic compute scaling (Full -> Reduced -> Minimal), WaveNet layer
+        // counts change on-the-fly. To prevent clicks and transients, we execute a dual-pass:
+        // 1. Compute audio with previous effective layer count into main output (`m_out`).
+        // 2. Rewind delay buffer ring pointers to keep state consistent across the block.
+        // 3. Compute audio with new effective layer count into `scratch`.
+        // 4. Blend the two outputs smoothly using SIMD interpolation (`crossfade_blend_mono_simd`).
+
         let old_eff_l = ctx
             .active_model_l
             .as_ref()
@@ -98,6 +111,7 @@ fn process_model_core(
             let mut backup_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
             let mut offset = 0;
 
+            // Step 2a: Snapshot internal delay buffer pointers before the first pass.
             if let Some(m) = ctx.active_model_l.as_ref() {
                 m.backup_buffer_starts(&mut backup_starts, &mut offset);
             }
@@ -105,6 +119,7 @@ fn process_model_core(
                 m.backup_buffer_starts(&mut backup_starts, &mut offset);
             }
 
+            // Step 2b: Configure and process first pass with old effective layers.
             if let Some(m) = ctx.active_model_l.as_mut() {
                 m.set_effective_layers(old_eff_l);
             }
@@ -122,6 +137,7 @@ fn process_model_core(
                 *ctx.process_mono,
             );
 
+            // Step 2c: Restore delay buffer pointers to the pre-pass state.
             let mut offset_restore = 0;
             if let Some(m) = ctx.active_model_l.as_mut() {
                 m.restore_buffer_starts(&backup_starts, &mut offset_restore);
@@ -130,6 +146,7 @@ fn process_model_core(
                 m.restore_buffer_starts(&backup_starts, &mut offset_restore);
             }
 
+            // Step 2d: Configure and process second pass with new effective layers.
             if let Some(m) = ctx.active_model_l.as_mut() {
                 m.set_effective_layers(new_eff_l);
             }
@@ -149,12 +166,14 @@ fn process_model_core(
                 *ctx.process_mono,
             );
 
+            // Step 2e: SIMD crossfade blend between old (`m_out`) and new (`scratch`) buffers.
             let t = ctx.adaptive.current_crossfade_multiplier();
             crossfade_blend_mono_simd(m_out_l, scr_l, t);
             if !*ctx.process_mono {
                 crossfade_blend_mono_simd(m_out_r, scr_r, t);
             }
         } else {
+            // Layer counts are unchanged; evaluate standard path with oversampling.
             model_process_stereo_with_os(
                 ctx.os_l,
                 ctx.os_r,
@@ -173,6 +192,7 @@ fn process_model_core(
             );
         }
     } else {
+        // Path 3: Standard Inference with optional oversampling.
         model_process_stereo_with_os(
             ctx.os_l,
             ctx.os_r,

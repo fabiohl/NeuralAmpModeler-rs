@@ -60,6 +60,8 @@ impl ConvNetTopology {
             ConvNetFormat::FlatCpp => {
                 let batchnorm = self.batchnorm.unwrap_or(false);
                 let groups = self.groups;
+
+                // 1. Accumulate weights for each convolutional block in the feed-forward stack.
                 for i in 0..self.num_blocks {
                     let in_ch = if i == 0 {
                         self.in_channels
@@ -68,6 +70,8 @@ impl ConvNetTopology {
                     };
                     let out_ch = self.channels[i];
                     let kernel = self.kernel_sizes[i];
+
+                    // Grouped convolution splits channels across groups.
                     let out_per_group = out_ch / groups;
                     let in_per_group = in_ch / groups;
                     let conv_weights = groups
@@ -78,7 +82,10 @@ impl ConvNetTopology {
                     count = count
                         .checked_add(conv_weights)
                         .ok_or(NamErrorCode::WeightCountMismatch)?;
+
                     if batchnorm {
+                        // BatchNorm1D parameters: 4 channel vectors (scale gamma, shift beta,
+                        // running mean, running variance) = 4 * out_ch, plus 1 scalar epsilon = 4 * out_ch + 1.
                         let bn_count = (4usize)
                             .checked_mul(out_ch)
                             .and_then(|v| v.checked_add(1))
@@ -87,11 +94,14 @@ impl ConvNetTopology {
                             .checked_add(bn_count)
                             .ok_or(NamErrorCode::WeightCountMismatch)?;
                     } else {
+                        // Un-normalized Conv1D has standard per-channel additive bias.
                         count = count
                             .checked_add(out_ch)
                             .ok_or(NamErrorCode::WeightCountMismatch)?;
                     }
                 }
+
+                // 2. Head projection: final Conv1D/Linear mapping from last block channels to out_channels.
                 let last_out_ch = *self.channels.last().unwrap_or(&self.in_channels);
                 let head_out_ch = self.out_channels;
                 let head_weights = last_out_ch
@@ -100,6 +110,7 @@ impl ConvNetTopology {
                 count = count
                     .checked_add(head_weights)
                     .ok_or(NamErrorCode::WeightCountMismatch)?;
+                // Add head output channel bias terms.
                 count = count
                     .checked_add(head_out_ch)
                     .ok_or(NamErrorCode::WeightCountMismatch)?;

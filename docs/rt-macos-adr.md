@@ -5,7 +5,7 @@
 - **Feature:** `rt-hardening`
 - **Targets:** `aarch64-apple-darwin` (supported); `x86_64-apple-darwin` remains
   unsupported per DEC-01.
-- **Related:** `src/rt_hardening/`, `docs/architecture.md` §2, Sprint S09 (T09.1–T09.4).
+- **Related:** `src/rt_hardening/`, `docs/architecture.md` §2.
 
 ## Context
 
@@ -130,4 +130,4 @@ the workgroup object itself.
 
 - `G-L` lints, `G-T` targeted tests, `G-C` cross-check for
   `aarch64-apple-darwin`, `G-DOC` docs/rustdoc, `G-HW` jitter on M-series
-  (operator), and `G-Q` quick suite once at sprint closure.
+  (operator), and `G-Q` quick suite once for milestone acceptance.

@@ -396,6 +396,7 @@ Comprehensive architectural specifications and engineering guides are available 
 | [`docs/research-references.md`](docs/research-references.md)                                   | Scientific literature, DSP bibliography, and neural audio modeling research    |
 | [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) | Symbol collision postmortem: compiler-rt `__expf` vs dynamic `libm.so`         |
 | [`docs/rt-structural-scheduler-spike.md`](docs/rt-structural-scheduler-spike.md)               | Research spike: lock-free scheduler topology and real-time execution bounds    |
+| [`docs/rt-macos-adr.md`](docs/rt-macos-adr.md)                                                 | Architecture Decision Record: Real-time host hardening on macOS (Apple Silicon)|
 | [`docs/quality-contract.json`](docs/quality-contract.json)                                     | Regression baseline thresholds: audio fidelity and benchmark SLA envelopes     |
 
 ---

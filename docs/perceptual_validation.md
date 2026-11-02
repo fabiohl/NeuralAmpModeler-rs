@@ -172,7 +172,7 @@ Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_c
 | **WaveNet Dyn Free-Shape (CH=7→4)**          | 90.0         | $1.0 \times 10^{-11}$ | 0.18                 | Low head_scale ($\sim -65\text{ LUFS}$)             |
 | **WaveNet A2-Full (CH=8)**                   | 105.0        | $3.0 \times 10^{-11}$ | 0.05                 | Native f32 weights ($129.5\text{ dB}$ measured)     |
 | **WaveNet A2-Lite (CH=3)**                   | 105.0        | $3.5 \times 10^{-11}$ | 0.05                 | Native f32 weights ($132.2\text{ dB}$ measured)     |
-| **WaveNet A2-FiLM-Lite (CH=3)**              | 114.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active                                  |
+| **WaveNet A2-FiLM-Lite (CH=3)**              | 114.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($125.1\text{ dB}$ measured, $\text{ESR} \approx 3.06 \times 10^{-13}$) |
 | **WaveNet A2-FiLM-Full (CH=8)**              | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($138.8\text{ dB}$ measured)     |
 | **WaveNet A2-FiLM Chaos Stress**             | 120.0        | $1.0 \times 10^{-12}$ | $5.0 \times 10^{-5}$ | Chaos fixture ($139.0\text{ dB}$ measured)          |
 | **WaveNet A2-FiLM InputMixinPre**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Single-slot FiLM ($134.4\text{ dB}$ measured)       |
@@ -187,7 +187,7 @@ Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_c
 | **LSTM Synthetic (1×10, 2×24, 3×8)**         | 110.0        | $5.0 \times 10^{-12}$ | $5.0 \times 10^{-4}$ | Uncatalogued geometries                             |
 | **ConvNet Test**                             | 120.0        | $1.0 \times 10^{-12}$ | $1.0 \times 10^{-4}$ | C++ render parity ($143.8\text{ dB}$ measured)      |
 | **ConvNet Variants (nobn, relu, silu)**      | 115.0        | $1.0 \times 10^{-11}$ | $5.0 \times 10^{-4}$ | Activation & normalization variants                 |
-| **Linear FFT (RF=320..8192)**                | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Partitioned FFT FIR ($>137\text{ dB}$)              |
+| **Linear FFT (RF=320..8192)**                | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Partitioned FFT FIR ($>139.6\text{ dB}$ measured, $\text{ESR} \le 1.08 \times 10^{-14}$ at RF=2048) |
 | **Linear No Bias**                           | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Zero-bias FIR ($144.1\text{ dB}$)                   |
 | **Nondist Models (APP-EVH, BD-2, Marshall)** | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | External production captures                        |
 

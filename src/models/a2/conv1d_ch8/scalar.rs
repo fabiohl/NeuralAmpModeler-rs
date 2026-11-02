@@ -20,14 +20,20 @@ pub fn conv1d_ch8_single_frame_ref(
     debug_assert!(out_frame.len() >= 8);
     debug_assert!(weights.len() >= kernel * 64);
 
+    // Initialize output frame with convolution bias.
     out_frame[..8].copy_from_slice(&bias[..8]);
 
+    // Convolve over each tap of the causal FIR kernel.
     for k in 0..kernel {
+        // Each tap contains Cin x Cout = 8 x 8 = 64 float weights.
         let wk_base = k * 64;
+        // Causal dilation step: tap k=0 looks back `(kernel - 1) * dilation` frames,
+        // while tap k=kernel-1 corresponds to the most recent frame (`taps_back = 0`).
         let taps_back = kernel - 1 - k;
         let col = frame_idx.wrapping_sub(dilation * taps_back);
         let src_base = col * 8;
 
+        // Multiply-accumulate 8 input channels into 8 output channels (matrix-vector product).
         for inp in 0..8 {
             let hv = layer_buffer[src_base + inp];
             let w_base = wk_base + inp * 8;
@@ -95,6 +101,7 @@ pub fn layer_forward_ch8_scalar_ref(
     debug_assert!(num_frames <= MAX_KERNEL_FRAMES);
     let mut z_buf = [0.0f32; MAX_KERNEL_FRAMES * 8];
 
+    // Stage 1: Dilated 1D convolution over circular history buffer.
     conv1d_ch8_block_ref(
         conv_weights,
         conv_bias,
@@ -106,24 +113,31 @@ pub fn layer_forward_ch8_scalar_ref(
         &mut z_buf[..num_frames * ch],
     );
 
+    // Stage 2 & 3: Input conditioning mix-in, activation, and head accumulation.
     for f in 0..num_frames {
         let off = f * ch;
         for c in 0..ch {
+            // Apply conditioning scalar broadcast (gain mix-in).
             z_buf[off + c] += mixin_w[c] * input_cond[f];
+            // Non-linear activation: LeakyReLU (A2 architecture standard with negative slope 0.01).
             if z_buf[off + c] < 0.0 {
                 z_buf[off + c] *= A2_LEAKY_SLOPE;
             }
         }
+        // Accumulate into the head buffer (skip connections across all WaveNet/A2 layers).
         let head_off = (head_col + f) * ch;
         if is_first {
+            // First layer initializes the head accumulator buffer.
             head_accum[head_off..head_off + ch].copy_from_slice(&z_buf[off..off + ch]);
         } else {
+            // Subsequent layers sum into the head accumulator.
             for c in 0..ch {
                 head_accum[head_off + c] += z_buf[off + c];
             }
         }
     }
 
+    // Stage 4: 1x1 linear layer projection and residual connection for the next layer.
     if !is_last {
         for f in 0..num_frames {
             let off = f * ch;
@@ -132,6 +146,7 @@ pub fn layer_forward_ch8_scalar_ref(
                 for u in 0..ch {
                     sum += l1x1_w[u * ch + c] * z_buf[off + u];
                 }
+                // Add residual to pass down the layer cascade.
                 layer_in[off + c] += sum;
             }
         }

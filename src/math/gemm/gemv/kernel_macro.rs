@@ -30,6 +30,8 @@ macro_rules! gemv_kernel {
         $fmadd_ps:expr,
         $store_ps:expr
     ) => {
+        // 8 independent vector accumulators to saturate hardware execution ports
+        // and hide pipelined FMA instruction latency (typically 4-5 CPU clock cycles).
         let mut acc0 = if $is_fused {
             let mut acc = $load_out($out_c);
             if $do_bias {
@@ -53,6 +55,9 @@ macro_rules! gemv_kernel {
 
         let mut in_c = 0;
         let in_len = $in_frame.len();
+
+        // Unroll by 8 input channels per iteration.
+        // Broadcast each input sample across vector lanes, multiply by weight row, and accumulate.
         while in_c + 8 <= in_len {
             let vs0 = _mm256_set1_ps(*$in_frame.get_unchecked(in_c));
             let vs1 = _mm256_set1_ps(*$in_frame.get_unchecked(in_c + 1));
@@ -91,6 +96,7 @@ macro_rules! gemv_kernel {
             in_c += 8;
         }
 
+        // Binary tree reduction: sum 8 accumulators into acc0 with minimal critical dependency path (log2(8) = 3 steps).
         acc0 = $add_ps(acc0, acc1);
         acc2 = $add_ps(acc2, acc3);
         acc4 = $add_ps(acc4, acc5);
@@ -99,6 +105,7 @@ macro_rules! gemv_kernel {
         acc4 = $add_ps(acc4, acc6);
         acc0 = $add_ps(acc0, acc4);
 
+        // Tail loop: process any remaining input channels (when in_len is not a multiple of 8).
         while in_c < in_len {
             let vs = _mm256_set1_ps(*$in_frame.get_unchecked(in_c));
             let weight_ptr = $weights.as_ptr().add(in_c * $out_len + $out_c);
@@ -128,6 +135,8 @@ macro_rules! gemv_kernel {
         $fmadd_ps:expr,
         $store_ps:expr
     ) => {
+        // 8 independent vector accumulators (512-bit width) to saturate AVX-512 FMA execution units
+        // and eliminate pipeline dependency stalls.
         let mut acc0 = if $is_fused {
             let mut acc = $load_out($out_c);
             if $do_bias {
@@ -151,6 +160,8 @@ macro_rules! gemv_kernel {
 
         let mut in_c = 0;
         let in_len = $in_frame.len();
+
+        // 8-way unrolled AVX-512 multiply-accumulate across input channels.
         while in_c + 8 <= in_len {
             let vs0 = _mm512_set1_ps(*$in_frame.get_unchecked(in_c));
             let vs1 = _mm512_set1_ps(*$in_frame.get_unchecked(in_c + 1));
@@ -189,6 +200,7 @@ macro_rules! gemv_kernel {
             in_c += 8;
         }
 
+        // Binary tree reduction: 8 vector accumulators -> acc0 (3 reduction cycles).
         acc0 = $add_ps(acc0, acc1);
         acc2 = $add_ps(acc2, acc3);
         acc4 = $add_ps(acc4, acc5);
@@ -197,6 +209,7 @@ macro_rules! gemv_kernel {
         acc4 = $add_ps(acc4, acc6);
         acc0 = $add_ps(acc0, acc4);
 
+        // Tail loop for remaining channels.
         while in_c < in_len {
             let vs = _mm512_set1_ps(*$in_frame.get_unchecked(in_c));
             let weight_ptr = $weights.as_ptr().add(in_c * $out_len + $out_c);

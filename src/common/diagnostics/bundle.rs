@@ -154,6 +154,8 @@ impl DiagnosticBundle {
     /// Renders the support block as a formatted string.
     pub fn render(&self) -> String {
         let separator = "────────────────────────────────────────────────";
+
+        // Section 1: Header Banner (engine version, error code, and mnemonic description).
         let mut block = if let Some(ref err) = self.error {
             format!(
                 "──── NeuralAmpModeler-rs Diagnostic {separator}\n\
@@ -170,7 +172,9 @@ impl DiagnosticBundle {
             )
         };
 
-        // Contextual parameters
+        // Section 2: Contextual Error Parameters.
+        // Formats parameters as key=value pairs, redacting absolute paths (e.g. $HOME -> ~)
+        // unless unredacted output (`self.full == true`) was explicitly requested.
         if let Some(err) = self.error.as_ref().filter(|e| !e.params.is_empty()) {
             let param_line: String = err
                 .params
@@ -192,7 +196,8 @@ impl DiagnosticBundle {
             block.push('\n');
         }
 
-        // Runtime State
+        // Section 3: Runtime State and Telemetry.
+        // Captures active model metadata, sample rate, memory usage, RT priorities, and latency percentiles.
         let model_name = self
             .runtime
             .model

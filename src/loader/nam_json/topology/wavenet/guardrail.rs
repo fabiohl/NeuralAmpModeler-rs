@@ -65,13 +65,13 @@ pub fn validate_a1_guardrail(layers: &[NamLayerConfig]) -> Result<(), String> {
             if !active {
                 return Err(format!(
                     "Layer {i} has layer1x1.active=false — not supported in the Rust A1 \
-                     engine (PO backlog)."
+                     engine."
                 ));
             }
             if groups != 1 {
                 return Err(format!(
                     "Layer {i} has layer1x1.groups={groups} — not supported in the Rust A1 \
-                     engine (PO backlog)."
+                     engine."
                 ));
             }
         }

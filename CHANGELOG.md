@@ -156,15 +156,15 @@ _The next release is `2.0.0`; rename this heading to `## [2.0.0] - <date>` when 
 ### Added [1.0.1]
 
 - **OOM Containment & Memory Protection:**
-  - Added [`utils/mem-guard.sh`](utils/mem-guard.sh), a transparent systemd user scope wrapper (`MemoryHigh=5G`, `MemoryMax=6G`, `oom_score_adj=500`) protecting host systems and IDEs against OOM killer termination during heavy release builds and test audits.
+  - Added `utils/mem-guard.sh`, a transparent systemd user scope wrapper (`MemoryHigh=5G`, `MemoryMax=6G`, `oom_score_adj=500`) protecting host systems and IDEs against OOM killer termination during heavy release builds and test audits.
 - **Hierarchical Benchmark Governance:**
   - Added support for nested, hierarchical Criterion benchmark groups (e.g., `PIPE_Host/Full_Load_64_samp`) in [`src/bin/nam_perf_gate.rs`](src/bin/nam_perf_gate.rs) and [`src/testing/qa/baseline_store.rs`](src/testing/qa/baseline_store.rs).
   - Added fail-closed validation and structured diagnostics when baselines are absent.
 - **Baseline Fingerprint Reproducibility:**
   - Extended baseline environment fingerprint schema in [`src/testing/qa/fingerprint.rs`](src/testing/qa/fingerprint.rs) with `git_dirty` and `cargo_lock_sha256` flags.
 - **Automated Regression Guard Scenarios:**
-  - Added Scenario 5 (deterministic CPU core selection with mock sysfs) and Scenario 6 (benchmark binary selection prioritizing `nam_benches` and intruder fail-fast detection) to [`tests/scripts/test_regression_guard.sh`](tests/scripts/test_regression_guard.sh).
-  - Integrated fail-fast Criterion smoke test (`--list`) before thermal cooldown in [`utils/tests-performance-regression.sh`](utils/tests-performance-regression.sh).
+  - Added Scenario 5 (deterministic CPU core selection with mock sysfs) and Scenario 6 (benchmark binary selection prioritizing `nam_benches` and intruder fail-fast detection) to `tests/scripts/test_regression_guard.sh`.
+  - Integrated fail-fast Criterion smoke test (`--list`) before thermal cooldown in `utils/tests-performance-regression.sh`.
 - **Technical Documentation:**
   - Published [`docs/postmortem-libm-symbol-interposition.md`](docs/postmortem-libm-symbol-interposition.md) detailing compiler-rt symbol collision root cause and linker script defenses.
   - Published [`docs/rt-structural-scheduler-spike.md`](docs/rt-structural-scheduler-spike.md) detailing lock-free 3-phase structural swap scheduling and partitioned UPOLS driver mechanics.
@@ -192,7 +192,7 @@ _The next release is `2.0.0`; rename this heading to `## [2.0.0] - <date>` when 
 - **Bounded Dashboard Commands:**
   - Dashboard phases now enforce their wall-clock deadline by killing the whole child process group and draining captured pipes, so a hung `cargo test` cannot leave orphaned test binaries behind.
 - **Deterministic Benchmark Binary Extraction:**
-  - Fixed benchmark binary resolution in [`utils/_lib_core.sh`](utils/_lib_core.sh) to deterministically select the primary benchmark harness via `jq`, preventing trailing binary mismatches.
+  - Fixed benchmark binary resolution in `utils/_lib_core.sh` to deterministically select the primary benchmark harness via `jq`, preventing trailing binary mismatches.
 - **Quality Dashboard Log Diagnostics:**
   - Preserved failure diagnostics in `target/logs/regression_gate.log` and handled missing Criterion estimate objects gracefully in [`utils/quality-dashboard.sh`](utils/quality-dashboard.sh).
 - **Golden Regeneration Diagnostics:**

@@ -71,7 +71,7 @@ link targets (its tests, bins, examples and dynamic-library outputs). It does no
 propagate to the final binary of a downstream crate. A consumer that links a
 same-named libm shadow from another dependency is **not** protected by this
 crate and must apply an equivalent version script in its own build. No public
-helper exists for this; one is recorded as backlog if demand appears.
+helper exists for this; one can be provided as a future enhancement if demand appears.
 
 ## 2. Why this was hard to find
 

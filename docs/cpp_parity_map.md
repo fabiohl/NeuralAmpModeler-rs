@@ -289,7 +289,7 @@ The A1 path rejects configurations declaring A2 features at topology parsing tim
 
 Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
 
-**`layer1x1` provenance (F-09, T2.3).** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine (PO backlog)"`.
+**`layer1x1` provenance (F-09, T2.3).** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine"`.
 
 ### 3.5 Measured Interop Metrics
 
@@ -610,7 +610,7 @@ Multi-model crossfade orchestrator ([`src/models/container.rs`](../src/models/co
 - Bundles multiple sub-models for dynamic compute scaling.
 - **Crossfading:** Executes smooth 32 ms linear crossfades during dynamic compute tier transitions, ensuring click-free handoffs.
 - **Nested Rate Provenance (DEC-01b):** Resolves sample rates across nested submodels without false 48 kHz conflicts ([§5.1.1](#dec-01b-decision-record--nested-rate-provenance-container--pair--condition_dsp)).
-- **Prewarm PO Backlog Candidate:** `ContainerModel::assemble` prewarms all submodels unconditionally upon construction; aligning this behavior with `LoadOptions.prewarm` is tracked in the PO backlog.
+- **Prewarm Alignment Candidate:** `ContainerModel::assemble` prewarms all submodels unconditionally upon construction; aligning this behavior with `LoadOptions.prewarm` is tracked as a future enhancement candidate.
 - Tested on official bundled capture `a2_example.nam` (CH 3→6): $\text{ESR} = 7.28 \times 10^{-14}$ vs. NAMcore ($\text{SNR} = 131.4\text{ dB}$).
 
 ### 6.4 Impulse Response CabSim
@@ -722,7 +722,7 @@ upstream rejection outcomes:
 | **Sequential Rate (DEC-01)**    | Option A: ignores unknown rates inside Sequential resolution; defaults to 48 kHz if all absent.                    | Full upstream interop for multi-rate child chains ([§5.1](#dec-01-decision-record--missing-sample-rate-in-sequential-models)).                                    |
 | **Linear FFT Threshold**        | `FFT_AUTO_THRESHOLD = 256` in Rust vs `Direct <= 1024` in C++ (`linear.cpp:27-35`).                                | Intentional cost divergence: partitioned FFT reduces peak CPU load; identical numerical output.                                                                   |
 | **Container Crossfade**         | 32 ms linear crossfade on quality transitions.                                                                     | Click-free dynamic compute downgrades/upgrades.                                                                                                                   |
-| **Nested Prewarm (DEC-01b)**    | Saturating sum of child prewarm counts across Sequential/Container.                                                | Identical transient settling at engine boundaries. Prewarm alignment to `LoadOptions` is candidate for PO backlog.                                                |
+| **Nested Prewarm (DEC-01b)**    | Saturating sum of child prewarm counts across Sequential/Container.                                                | Identical transient settling at engine boundaries. Prewarm alignment to `LoadOptions` is tracked as a future enhancement candidate. |
 
 ### 7.3 🟠 Test Infrastructure Boundaries
 

@@ -14,4 +14,4 @@
 # Format:
 # generator=<sha256> author=<id> date=<ISO-8601> command=<cmd> scope=<files> [reason=<...>]
 
-generator=7d6c07d5e5e95545d2049e32ba99c587b6cfec65ceeeac41a314de2dcf314367 author="Fabio Lima (PO)" date=2026-10-31 command=manual-edit-header scope=utils/check-model.sh reason="class D formal justification in script header"
+generator=7d6c07d5e5e95545d2049e32ba99c587b6cfec65ceeeac41a314de2dcf314367 author="Fabio Lima" date=2026-10-31 command=manual-edit-header scope=utils/check-model.sh reason="class D formal justification in script header"
