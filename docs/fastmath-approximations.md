@@ -14,21 +14,22 @@ Technical specification, numerical error bounds, and hardware implementation gui
 
 ## 1. Activation Precision Architecture
 
-NeuralAmpModeler-rs provides runtime-selectable activation precision via the [`ActivationPrecision`](../src/math/activations/mod.rs) enum (`Standard` vs `Fast`). Precision selection is isolated per thread via Thread-Local Storage (`ACTIVE_MODEL_PRECISION`), preventing cross-stream state pollution in multi-instance DAW environments.
+NeuralAmpModeler-rs provides runtime-selectable activation precision via the [`ActivationPrecision`](../src/math/activations/mod.rs) enum (`Standard` vs `Fast`). Precision selection is isolated per thread via Thread-Local Storage (`ACTIVE_MODEL_PRECISION`), preventing cross-stream state pollution in multi-instance audio host environments.
 
 Thread-local state is managed through:
 
-- [`set_activation_tls(mode)`](../src/math/activations/mod.rs): Sets precision for the calling thread.
-- [`clear_activation_tls()`](../src/math/activations/mod.rs): Clears the override, reverting to `Standard`.
-- [`set_thread_local_activation_precision(mode)`](../src/math/activations/mod.rs): RAII helper returning an [`ActivationPrecisionGuard`](../src/math/activations/mod.rs) that restores previous state on drop.
-- [`activation_precision()`](../src/math/activations/mod.rs): Queries current precision, defaulting to `Standard` when unset.
+- [`set_activation_tls(mode)`](../src/math/activations/mod.rs): Sets the precision override for the calling thread.
+- [`clear_activation_tls()`](../src/math/activations/mod.rs): Clears the thread-local override, reverting to `Standard`.
+- [`set_thread_local_activation_precision(mode: Option<ActivationPrecision>)`](../src/math/activations/mod.rs): RAII helper returning an [`ActivationPrecisionGuard`](../src/math/activations/mod.rs) that resets the thread-local override to `None` (`Standard`) on drop.
+- [`thread_local_activation_precision()`](../src/math/activations/mod.rs): Queries the raw thread-local override (`Option<ActivationPrecision>`), returning `None` when unset.
+- [`activation_precision()`](../src/math/activations/mod.rs): Queries the effective precision for the calling thread, defaulting to `Standard` when unset.
 
 ### Precision Modes Summary
 
-| Precision Mode | Tanh Kernel                            | Sigmoid Kernel                         | SiLU Kernel ($x \cdot \sigma(x)$)                                                                                                 | Max Absolute Error (vs `f32` ref)                                                | Throughput (256 elem, AVX2)       | Status                                      |
-|:-------------- |:-------------------------------------- |:-------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------:|:---------------------------------:|:------------------------------------------- |
-| **`Standard`** | Degree-6 Taylor minimax exp ($e^{2x}$) | Degree-6 Taylor minimax exp ($e^{-x}$) | Polynomial exp sigmoid ([`silu_poly_slice_avx2`](../src/math/activations/silu.rs) / [`silu_hf`](../src/math/activations/silu.rs)) | $\le 2.4 \times 10^{-7}$ ($\tanh$) $\le 2.1 \times 10^{-7}$ ($\sigma$)           | ~110 ns                           | **Universal Default** across all models     |
-| **`Fast`**     | Padé [5,4] rational approximant        | Degree-17 Lawson minimax polynomial    | Minimax sigmoid multiplication ([`silu_slice_avx2`](../src/math/activations/silu.rs) / [`silu`](../src/math/activations/silu.rs)) | $\approx 2.32 \times 10^{-3}$ ($\tanh$) $\approx 4.09 \times 10^{-4}$ ($\sigma$) | **~54 ns** (dual) ~63 ns (single) | Opt-in via `--activation fast` / host param |
+| Precision Mode | Tanh Kernel                                       | Sigmoid Kernel                         | SiLU Kernel ($x \cdot \sigma(x)$)                                                                                                 | Max Absolute Error (vs `f32` ref)                                                | Throughput (256 elem, AVX2)       | Status                                      |
+|:-------------- |:------------------------------------------------- |:-------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------:|:---------------------------------:|:------------------------------------------- |
+| **`Standard`** | Degree-6 Taylor minimax exp ($u = e^x, u^2$)      | Degree-6 Taylor minimax exp ($e^{-x}$) | Polynomial exp sigmoid ([`silu_poly_slice_avx2`](../src/math/activations/silu.rs) / [`silu_hf`](../src/math/activations/silu.rs)) | $\le 2.4 \times 10^{-7}$ ($\tanh$) $\le 2.1 \times 10^{-7}$ ($\sigma$)           | ~110 ns                           | **Universal Default** across all models     |
+| **`Fast`**     | Padé [5,4] rational approximant                   | Degree-17 Lawson minimax polynomial    | Minimax sigmoid multiplication ([`silu_slice_avx2`](../src/math/activations/silu.rs) / [`silu`](../src/math/activations/silu.rs)) | $\approx 2.32 \times 10^{-3}$ ($\tanh$) $\approx 4.09 \times 10^{-4}$ ($\sigma$) | **~54 ns** (dual) ~63 ns (single) | Opt-in via `--activation fast` / host param |
 
 ```text
                               ┌──────────────────────────────────┐
@@ -52,8 +53,8 @@ Thread-local state is managed through:
 
 Standard mode uses range-reduced polynomial exponential kernels with integer exponent reconstruction. It provides near-machine-epsilon precision ($\le 2.4 \times 10^{-7}$), eliminating clamp discontinuities and numerical drift:
 
-- **Tanh:** $\text{tanh}(x) = \frac{e^{2x} - 1}{e^{2x} + 1}$, with single hardware division `_mm256_div_ps`.
-- **Sigmoid:** $\sigma(x) = \frac{1}{1 + e^{-x}}$, with single hardware division `_mm256_div_ps`.
+- **Tanh:** Evaluates $u = e^x$ over $x \in [-20, 20]$, squares $u^2 = e^{2x}$, and computes $\text{tanh}(x) = \frac{u^2 - 1}{u^2 + 1}$ with a single hardware division (`_mm256_div_ps`) and output clamping to $[-1, 1]$.
+- **Sigmoid:** $\sigma(x) = \frac{1}{1 + e^{-x}}$, with a single hardware division (`_mm256_div_ps`).
 - **SiLU:** $\text{silu}(x) = x \cdot \sigma(x)$, evaluated via [`silu_poly_slice_avx2`](../src/math/activations/silu.rs) / [`silu_poly_slice_avx512`](../src/math/activations/silu.rs) and scalar [`silu_hf`](../src/math/activations/silu.rs).
 - **Implementation:** [`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs), [`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs), and [`src/math/activations/silu.rs`](../src/math/activations/silu.rs).
 
@@ -69,7 +70,7 @@ Fast mode targets severely CPU-constrained setups or ultra-low buffer sizes:
 > [!WARNING]
 > **Recurrent State Drift in LSTMs under Fast Mode:** Fast mode approximations are bounded over compact intervals ($[-4, 4]$ for $\tanh$, $[-8, 8]$ for $\sigma$) with residual errors around $10^{-3}$. In recurrent architectures (LSTM), activation errors accumulate feedback-wise in the cell state $c_t$ and hidden state $h_t$ over thousands of consecutive samples. This causes audible tone degradation (Standard mode achieves an average **+89.5 dB SNR gain** over Fast mode in LSTM models). Fast mode is recommended primarily for feed-forward architectures (WaveNet, ConvNet); LSTM models should remain on Standard mode. Detailed topology-specific SNR measurements are catalogued in [`audio_fidelity_map.md §2`](audio_fidelity_map.md#2-activation-precision-standard-exact-grade-vs-fast-padé).
 
-**Measured Audibility Policy (F-08).** Under the canonical paired-prewarm protocol (`24 000 + 256` @ 48 kHz) against the f64 ideal oracle (`test_s4_lstm_pade_activation_cost`, `tests/parity/reference_oracle_f64.rs`), forcing `Fast` in LSTM yields `ESR 4.9e-4 … 3.0e-2` / `SNR 15.3 … 33.1 dB`, whereas `Standard` stays at the f64 agreement floor (`ESR ≤ 5.5e-12` / `SNR ≥ 112.6 dB`), an average **+91.8 dB** gain — consistent with the +89.5 dB figure above. On the most excitable case (`BossLSTM-1×16` × stress_v2) the Padé MR-STFT (`5.06e-1`) sits ~4 orders of magnitude above the LSTM MR-STFT ceilings (`baseline × 10`), and the ESR (`2.97e-2`) crosses the `1e-2` auditory boundary. **Policy verdict: accepted by parity** — `Standard` (exact-grade) is the production default and satisfies the NAMCore parity contract; `Fast` remains an explicit opt-in for feed-forward architectures only. Full table and reading: [`perceptual_validation.md §6.1`](perceptual_validation.md#61--measured-audibility-cost-of-fast-padé-in-lstm).
+**Measured Audibility Policy.** Under the canonical paired-prewarm protocol (`24 000 + 256` @ 48 kHz) against the `f64` ideal oracle (`test_s4_lstm_pade_activation_cost` in [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs)), forcing `Fast` in LSTM yields `ESR 4.9e-4 … 3.0e-2` / `SNR 15.3 … 33.1 dB`, whereas `Standard` stays at the `f64` agreement floor (`ESR ≤ 5.5e-12` / `SNR ≥ 112.6 dB`), an average **+91.8 dB** gain — consistent with the +89.5 dB figure above. On the most excitable case (`BossLSTM-1×16` × `stress_v2`), the Padé MR-STFT (`5.06e-1`) sits roughly four orders of magnitude above the LSTM MR-STFT ceilings (`baseline × 10`), and the ESR (`2.97e-2`) crosses the `1e-2` auditory boundary. **Policy verdict: accepted by parity** — `Standard` (exact-grade) is the production default and satisfies the NAMCore parity contract; `Fast` remains an explicit opt-in for feed-forward architectures only. Full table and analysis: [`perceptual_validation.md §6.1`](perceptual_validation.md#61--measured-audibility-cost-of-fast-padé-in-lstm).
 
 ### 1.3 Interaction with Oversampling & Topology Dispatch
 
@@ -104,12 +105,12 @@ Coefficients (`POLY_EXP_C*`, `POLY_LOG2_E`, `POLY_LN2`) are defined in [`src/mat
 #### Kernel Implementations
 
 1. **Tanh ([`src/math/activations/tanh/high_fidelity.rs`](../src/math/activations/tanh/high_fidelity.rs)):**
-   Sets $y = 2x$ clamped to $[-20, 20]$, evaluates $e^{2x}$, and executes a single division:
-   $$\text{tanh}(x) = \frac{e^{2x} - 1}{e^{2x} + 1}$$
+   Clamps $x$ to $[-20, 20]$ (`POLY_ACTIVATION_CLAMP`), evaluates $u = e^x$ via the range-reduced degree-6 Taylor polynomial exp kernel (`simd_exp_poly_avx2` / `scalar_exp_poly_inner`), squares $u$ to form $u^2 = e^{2x}$, executes a single division, and clamps the output to $[-1, 1]$:
+   $$\text{tanh}(x) = \frac{u^2 - 1}{u^2 + 1}, \quad u = e^x$$
    Max absolute error $\le 2.4 \times 10^{-7}$ across $[-20, 20]$.
 
 2. **Sigmoid ([`src/math/activations/sigmoid/high_fidelity.rs`](../src/math/activations/sigmoid/high_fidelity.rs)):**
-   Sets $y = -x$ clamped to $[-20, 20]$, evaluates $e^{-x}$, and executes a single division:
+   Clamps $y = -x$ to $[-20, 20]$, evaluates $e^{-x}$ via `simd_exp_poly_avx2` / `scalar_exp_poly_inner`, executes a single division, and clamps the output to $[0, 1]$:
    $$\sigma(x) = \frac{1}{1 + e^{-x}}$$
    Max absolute error $\le 2.1 \times 10^{-7}$ across $[-20, 20]$.
 
@@ -132,10 +133,10 @@ The input is clamped to $[-4, 4]$ and the output is clamped to $[-1, 1]$.
 
 Implemented in [`src/math/activations/tanh/production.rs`](../src/math/activations/tanh/production.rs):
 
-- `simd_tanh_avx2(x: __m256) -> __m256`: 8 floats, AVX2 + FMA.
+- `simd_tanh_avx2(x: __m256) -> __m256`: 8 floats per vector (`AVX2 + FMA` on `x86_64`; paired 128-bit `NEON` registers via [`crate::arch::simd`](../src/arch/mod.rs) on `aarch64`).
 - `simd_tanh_dual_avx2(x1, x2: __m256) -> (__m256, __m256)`: 16 floats simultaneously. Constants are broadcast once and shared between lanes, reducing register spills and improving memory throughput.
 - `simd_tanh_avx512(x: __m512) -> __m512`: 16 floats, AVX-512 (behind `#[cfg(feature = "avx512")]`).
-- `scalar_pade_tanh(x: f32) -> f32`: Remainder processing using `mul_add`.
+- `scalar_pade_tanh(x: f32) -> f32`: Remainder processing using `mul_add` with subnormal flushing (`flush_subnormal`).
 
 #### Hardware Division (`_mm256_div_ps`) vs Newton-Raphson
 
@@ -244,12 +245,12 @@ Hot-path multiply-accumulate operations must use explicit IEEE 754 FMA (`mul_add
 
 Denormals-Are-Zero (DAZ) and Flush-To-Zero (FTZ) flags are enforced at the DSP boundary:
 
-- Helper function `set_daz_ftz()` in [`src/math/common/ops.rs`](../src/math/common/ops.rs) sets bits 6 (DAZ) and 15 (FTZ) in the SSE `MXCSR` register.
-- Reasserted at the entry of audio processing in [`src/dsp/pipeline/capture.rs`](../src/dsp/pipeline/capture.rs) (`capture_dsp_pipeline`) via a fixed `stmxcsr`/`ldmxcsr` pair outside sample loops.
+- Helper function `set_daz_ftz()` in [`src/math/common/ops.rs`](../src/math/common/ops.rs) sets bits 6 (DAZ) and 15 (FTZ, `0x8040`) in the SSE `MXCSR` register via `stmxcsr`/`ldmxcsr` on `x86_64`, and sets bit 24 (`FZ`, `1 << 24`) in the `FPCR` register via `mrs`/`msr fpcr` on `aarch64`. Scalar remainder tails also apply `flush_subnormal()` to clamp IEEE 754 subnormals (`|x| < f32::MIN_POSITIVE`) to signed zero.
+- Reasserted at the entry of audio processing in [`src/dsp/pipeline/capture.rs`](../src/dsp/pipeline/capture.rs) (`capture_dsp_pipeline`) outside sample loops.
 
 ### 4.5 Architectural Evaluation of Rust 1.99 Inline SIMD Operands via `asm!` (`xmm`)
 
-Rust 1.99 stabilized 128-bit operands (`i128`/`u128`) in `core::arch::asm!` bound to vector registers (`inout(xmm_reg)` / `in(xmm_reg)`). In accordance with Architectural Epic E (derived from Finding F-02), an exhaustive codegen audit and empirical benchmark were conducted across the core DSP hot-path kernels (`dot_product_4x_f32_avx2`, `head_process_ch8_avx2`, `head_process_ch3_sse`, and `grouped_conv1d_single_frame_simd`).
+Rust 1.99 stabilized 128-bit operands (`i128`/`u128`) in `core::arch::asm!` bound to vector registers (`inout(xmm_reg)` / `in(xmm_reg)`). An exhaustive codegen audit and empirical benchmark were conducted across the core DSP hot-path kernels (`dot_product_4x_f32_avx2`, `head_process_ch8_avx2`, `head_process_ch3_sse`, and `grouped_conv1d_single_frame_simd`).
 
 #### 1. Machine Code & Register Allocation Audit
 

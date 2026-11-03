@@ -41,10 +41,14 @@ NeuralAmpModeler-rs/
 │   ├── models/                    # Version-controlled models (.nam, mocks)
 │   ├── models-nondist/            # Local non-distributable models (gitignored)
 │   ├── f64_anchors/               # Ground-truth f64 reference vectors
-│   ├── qa/                        # QA report fixtures (e.g. report_gate_not_verified.jsonl)
+│   ├── qa/                        # QA report & CPU classification fixtures (report*.jsonl, cpuinfo_*.txt)
+│   ├── state_compat/              # Serialized state compatibility fixtures
 │   ├── dumps_a2_max/              # Forensic A2-Max intermediate activations (manifest.json, capture_meta.txt)
 │   ├── scripts/                   # Specialized Python/NumPy reference generators
 │   ├── .golden_manifest.sha256    # SHA-256 freshness integrity manifest
+│   ├── .golden_attest             # Audited generator provenance attestation manifest
+│   ├── render_ir.cpp              # C++ AudioDSPTools ImpulseResponse renderer
+│   ├── render_multichannel.cpp    # C++ multichannel & in-place NAMCore renderer
 │   ├── golden_*.bin               # Pre-committed golden vectors (v1 and v2)
 │   └── stress_signal*.wav         # Deterministic multi-component stimulus signals
 └── third-party/
@@ -64,40 +68,14 @@ Model resolution is strictly symmetric between the Rust test harness ([`src/test
 
 ### Distribution Contract (Published Crate)
 
-**Decision (2026-10-31, R-14/T8.10):** fixtures are **not redistributed** in the
-published package. The `include` list in `Cargo.toml` keeps `benches/`,
-`examples/`, `src/testing/` and `docs/`, but excludes `tests/` and
-`third-party/`: the packaged tarball lists 576 files with **zero** entries under
-either directory. Redistribution is rejected because the fixture tree is ~150 MB
-and mixes CC0/permissive models with non-distributable community captures (see
-the provenance registry below). No asset is copied mechanically from
-`third-party/`.
+Fixtures are **not redistributed** in the published crate package. The `include` list in [`Cargo.toml`](../Cargo.toml) retains `benches/`, `examples/`, `src/testing/`, and `docs/`, while excluding `tests/` and `third-party/` so that zero entries under either directory appear in the packaged archive (`cargo package --list`). Redistribution is omitted because the full fixture tree (~150 MB) combines CC0/permissive models with non-distributable community captures (see the provenance registry below). No asset is copied mechanically from `third-party/`.
 
 Consumer-facing contract:
 
-* **Examples (`load_model`, `offline_render`):** a model path must be supplied
-  explicitly on the command line. With no path and no local checkout fixture,
-  the example prints its usage and exits with code 1; it never reports success
-  or invents a fallback path.
-* **Benchmarks (`benches/common.rs`):** a repository checkout resolves models
-  under `tests/fixtures/models*` and `third-party/community_models`. An external
-  consumer must point the existing harness variables `NAM_MODELS_DIR` and/or
-  `NAM_FIXTURES_DIR` at a fixture root; an absent file is reported on stderr and
-  the benchmark skips instead of passing silently. `load_and_prewarm_required`
-  panics with the searched path for regression gates that prohibit absence.
-  `inference_bench` and `regression_gate` declare
-  `required-features = ["testing"]` because they import the `testing` module;
-  build them with `cargo bench --features testing --bench <name>`.
-* **Library test utilities (`src/testing/fixtures.rs`, `testing` feature):** the
-  consumer supplies `NAM_MODELS_DIR`, `NAM_THIRD_PARTY_DIR`, and, when needed,
-  the read-only vendor overrides `NAM_CORE_DIR`/`NAM_PLUGIN_DIR`. Required
-  fixtures fail with `MissingModelFixture`; optional ones are SKIP.
-
-**Verification:** `cargo package --list --allow-dirty --locked` (576 files, no
-`tests/`, no `third-party/`), `cargo package --allow-dirty --locked` verification
-PASS, and an isolated consumer extracted under `target/` where
-`cargo run --example load_model` and `--example offline_render` exit 1 with the
-usage message. No publication, tag, or registry change was performed.
+- **Examples (`load_model`, `offline_render`):** A model path must be supplied explicitly on the command line. With no path and no local checkout fixture, the example prints its usage and exits with code `1`; it never reports success or invents a fallback path.
+- **Benchmarks (`benches/common.rs`):** A repository checkout resolves models under `tests/fixtures/models*` and `third-party/community_models`. An external consumer must point the harness variables `NAM_MODELS_DIR` and/or `NAM_FIXTURES_DIR` at a fixture root; an absent file is reported on `stderr` and the benchmark skips instead of passing silently. `load_and_prewarm_required` panics with the searched path for regression gates that prohibit absence. `inference_bench` and `regression_gate` declare `required-features = ["testing"]` because they import the `testing` module; build them with `cargo bench --features testing --bench <name>`.
+- **Library test utilities ([`src/testing/fixtures.rs`](../src/testing/fixtures.rs), `testing` feature):** The consumer supplies `NAM_MODELS_DIR`, `NAM_THIRD_PARTY_DIR`, and, when needed, the read-only vendor overrides `NAM_CORE_DIR` and `NAM_PLUGIN_DIR`. Required fixtures fail with `MissingModelFixture`; optional ones emit a typed skip.
+- **Packaging verification:** Validated continuously by [`utils/consumer-smoke.sh`](../utils/consumer-smoke.sh) via `cargo package --list` and isolated consumer extraction under `target/`.
 
 ### Skip Semantics & Honest Gating
 
@@ -144,7 +122,7 @@ The single source of truth for model identities and architectural categorization
 | `wavenet_a2_film_full.nam`              | Synthetic      | WaveNet A2 (CH=8, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`           | FiLM dynamic path parity against generic WaveNet reference.             |
 | `wavenet_a2_film_lite.nam`              | Synthetic      | WaveNet A2 (CH=3, 4 FiLM slots)      | Apache-2.0 / `generate_a2_fixtures.py`           | FiLM dynamic path parity against generic WaveNet reference.             |
 | `wavenet_a2_film_chaos_stress.nam`      | Synthetic      | WaveNet A2 (CH=3, non-identity FiLM) | Apache-2.0 / `generate_a2_fixtures.py`           | High-variance FiLM routing and dimension stress probe.                  |
-| `wavenet_a2_film_input_mixin_pre.nam`   | Synthetic      | WaveNet A2 (CH=3, slot 2 FiLM only)  | Apache-2.0 / `generate_a2_fixtures.py`           | Regression fixture for Bug C1 (input_mixin_pre channel dimensions).     |
+| `wavenet_a2_film_input_mixin_pre.nam`   | Synthetic      | WaveNet A2 (CH=3, slot 2 FiLM only)  | Apache-2.0 / `generate_a2_fixtures.py`           | Regression fixture for `input_mixin_pre` channel dimensions.            |
 | `a2_example.nam`                        | Synthetic      | SlimmableContainer (A2 submodels)    | Apache-2.0 / `generate_a2_fixtures.py`           | Container routing and submodel swapping for A2 architectures.           |
 | `a2_dynamic_gated_ch8.nam`              | Synthetic      | WaveNet A2 (CH=8, dynamic gating)    | Apache-2.0 / `generate_a2_fixtures.py`           | Dynamic gating inference engine validation.                             |
 | `a2_dynamic_blended_ch3.nam`            | Synthetic      | WaveNet A2 (CH=3, dynamic blending)  | Apache-2.0 / `generate_a2_fixtures.py`           | Dynamic blending inference engine validation.                           |
@@ -155,16 +133,14 @@ The single source of truth for model identities and architectural categorization
 | `linear_test.nam`                       | Synthetic      | Linear (RF=4, direct FIR)            | Apache-2.0 / deterministic                       | Direct FIR time-domain dot-product parity.                              |
 | `linear_nobias.nam`                     | Synthetic      | Linear (RF=4, bias=0.0)              | Apache-2.0 / `generate_fixtures.py`              | Zero-bias linear inference validation.                                  |
 | `linear_fft_rf{320,2048,4096,8192}.nam` | Synthetic      | Linear FFT (RF 320 to 8192)          | Apache-2.0 / deterministic                       | Partitioned frequency-domain convolution cross-validation.              |
-
-> **Oracle Provenance Note on Containers (R-21):** The container model `a2_example.nam` (CH=8) validates structural decoding and submodel extraction. In numerical f64-oracle tests (`src/testing/qa/ids.rs:318-326`), the baseline label `SlimmableContainer A2 Example (CH=3→6)` is evaluated against the `wavenet_a2_lite.nam` fixture (identical baseline $1.82 \times 10^{-14}$), as `a2_example.nam` does not have an independent f64 oracle measurement.
 | `lstm_dyn_test.nam`                     | Synthetic      | LSTM Dynamic (1 layer, H=7)          | Apache-2.0 / `generate_b1_2_fixtures.py`         | Uncatalogued hidden size routing to dynamic LSTM path.                  |
 | `lstm_1x10.nam`                         | Synthetic      | LSTM (1 layer, H=10)                 | Apache-2.0 / `generate_fixtures.py`              | LSTM hidden dimension boundary validation.                              |
 | `lstm_2x24.nam`                         | Synthetic      | LSTM (2 layers, H=24)                | Apache-2.0 / `generate_fixtures.py`              | Multi-layer LSTM scaling validation.                                    |
 | `lstm_3x8.nam`                          | Synthetic      | LSTM (3 layers, H=8)                 | Apache-2.0 / `generate_fixtures.py`              | 3-layer recurrent topology validation.                                  |
 | `wavenet_dyn_free.nam`                  | Synthetic      | WaveNetDyn (CH=7/4, free geom)       | Apache-2.0 / `generate_b1_2_fixtures.py`         | Dynamic WaveNet path with non-power-of-two channel geometries.          |
-| `keras_unsupported.json`                | Mock           | Legacy Keras / H5 dictionary         | Apache-2.0 / clean structure                     | Verifies graceful rejection of unsupported legacy formats (F13).        |
+| `keras_unsupported.json`                | Mock           | Legacy Keras / H5 dictionary         | Apache-2.0 / clean structure                     | Verifies graceful rejection of unsupported legacy formats.              |
 | `mock_a2.nam`                           | Mock           | Zero weights / ReLU config           | Apache-2.0 / clean structure                     | Verifies audio thread error transition (`RT_STATUS_MODEL_LOAD_FAILED`). |
-| `wavenet_a1_secondary_act.nam`          | Mock           | WaveNet A1 (non-null secondary)      | Apache-2.0 / `generate_fixtures.py`              | Verifies rejection of unsupported secondary activations (F1/F5).        |
+| `wavenet_a1_secondary_act.nam`          | Mock           | WaveNet A1 (non-null secondary)      | Apache-2.0 / `generate_fixtures.py`              | Verifies rejection of unsupported secondary activations.                |
 | `slimmable_container.nam`               | Mock           | Container (LSTM + WaveNet + Nano)    | Apache-2.0 / clean structure                     | Validates heterogeneous topology routing across submodels.              |
 | `linear_1x2.nam`                        | Synthetic      | Multichannel Linear (1->2, RF=8)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 1-to-2 direct FIR time-domain parity.               |
 | `linear_2x1.nam`                        | Synthetic      | Multichannel Linear (2->1, RF=8)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Multichannel Linear 2-to-1 direct FIR time-domain parity.               |
@@ -181,10 +157,12 @@ The single source of truth for model identities and architectural categorization
 | `sequential_double_lstm.nam`            | Synthetic      | Sequential (LSTM into LSTM, 48k)     | Apache-2.0 / `generate_namcore_v060_fixtures.py` | Recurrent multi-stage pipeline validation.                              |
 | `wavenet_head_dilation.nam`             | Synthetic      | WaveNet (head_dilation=2, K=3)       | Apache-2.0 / `generate_namcore_v060_fixtures.py` | WaveNet non-unit head dilation inference validation.                    |
 
+> **Oracle Provenance Note on Containers:** The container model `a2_example.nam` (CH=8) validates structural decoding and submodel extraction. In numerical `f64`-oracle tests ([`src/testing/qa/ids.rs`](../src/testing/qa/ids.rs)), the baseline label `SlimmableContainer A2 Example (CH=3→6)` is evaluated against the `wavenet_a2_lite.nam` fixture (identical baseline $1.82 \times 10^{-14}$), as `a2_example.nam` does not have an independent `f64` oracle measurement.
+
 ### Tracked Known Gaps & Specific Guardrails
 
-1. **`wavenet_a2_max.nam` (KB-A2-MAX retired — Fase 3, 2026-10-08):**
-   - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB) and triple parity closed against double-precision f64 oracle (Case A, SNR > 136 dB across all pairs). Former fail-closed guard TR1.1 retired; active CI gate. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
+1. **`wavenet_a2_max.nam`:**
+   - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB) and triple parity closed against the double-precision `f64` oracle (Case A, SNR > 136 dB across all pairs). Active CI gate. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
 2. **`wavenet_condition_lstm.nam` (Concordant Rejection — LSTM `condition_dsp`):**
    - WaveNet outer model with an embedded LSTM `condition_dsp` (rejection probe).
    - Rejected by both oracles, so no golden can be generated: Rust refuses LSTM-as-`condition_dsp` fail-closed by policy; C++ NAMCore rejects at construction because layer `condition_size` (3) $\neq$ condition DSP output channels (1, the default `out_channels`). Tracked via `skip_reason` in [`src/testing/catalog.rs`](../src/testing/catalog.rs) and the stable receipt id `known_gap:condition_lstm_rejected_by_both`; tests skip gracefully when the golden is absent. Analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §7.5.
@@ -244,15 +222,13 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
    - Committed vectors: `golden_cabsim_cpp_short.bin` (64), `golden_cabsim_cpp_medium.bin` (512), `golden_cabsim_cpp_long.bin` (8192).
    - *Engine Constraint:* C++ `dsp::ImpulseResponse` hard-caps IR length at 8192 samples (`mMaxLength`). Tests exceeding 8192 samples are evaluated exclusively against the inline direct convolution oracle.
 
-### A2-Max Intermediate C++ Anchors (Retired — Reproducible Forensic Record)
+### A2-Max Intermediate C++ Anchors (Reproducible Forensic Record)
 
-> The four raw little-endian f32 tensors (`dump_array0.bin`, `dump_rechannel.bin`,
-> `dump_condition_dsp.bin`, `dump_film.bin`, 712 KB total) were removed from git
-> after KB-A2-MAX retirement: their value is forensic/historical, not gating —
-> production f32 × C++ golden verifies at SNR 135.90 dB (V1) / 135.97 dB (V2)
-> (see `docs/cpp_parity_map.md` §4.3), and the Axis-B structural guard
-> (`test_structural_tests_contain_no_bin_references`) forbids `.bin` references
-> in Phase 1 modules. Removal also resolves that guard violation by deletion.
+> The four raw little-endian `f32` tensors (`dump_array0.bin`, `dump_rechannel.bin`,
+> `dump_condition_dsp.bin`, `dump_film.bin`, 712 KB total) are excluded from git
+> because their role is forensic rather than gating — production `f32` × C++ golden
+> verifies at SNR 135.90 dB (V1) / 135.97 dB (V2) (see [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3),
+> and structural tests prohibit `.bin` references in Phase 1 modules.
 >
 > Reproduce at any time with `bash utils/render-a2-dumps.sh` (tracked
 > [`utils/namcore-a2-dumps.patch`](../utils/namcore-a2-dumps.patch) instruments
@@ -264,8 +240,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 > `capture_meta.txt`) and verifies the render reproduces the V1 golden output
 > byte-identically.
 >
-> Last captured identities (SHA-256, 2026-10-07) for forensic verification of
-> regenerated dumps:
+> Reference SHA-256 digests for forensic verification of regenerated dumps:
 >
 > | File                     | SHA-256                                                            |
 > |:------------------------ |:------------------------------------------------------------------ |
@@ -275,7 +250,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 > | `dump_film.bin`          | `b30a14a1aa1cd6d91d6331f54013f9cdc0fd0b4b518abfbf107329546a4d1587` |
 >
 > Shapes: `[2048, 3]` (24576 B), `[2048, 4]` (32768 B), `[2048, 8]` (65536 B),
-> `[2048, 72]` (589824 B); frame-major f32 little-endian; stimulus is the
+> `[2048, 72]` (589824 B); frame-major `f32` little-endian; stimulus is the
 > 2048-frame, 48 kHz V1 input; frame zero is the first real input sample after
 > the normal C++ reset/prewarm. FiLM slots ordered by layer, then `conv_pre`,
 > `conv_post`, `input_mixin_pre`, `input_mixin_post`, `activation_pre`,
@@ -283,7 +258,7 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 > 8 channels; other 14 have 4; exact per-frame offsets in regenerated
 > `manifest.json`).
 >
-> Phase-1 input identities (SHA-256, 2026-10-07):
+> Reference input identities (SHA-256):
 >
 > | Asset                       | SHA-256                                                            |
 > |:--------------------------- |:------------------------------------------------------------------ |
@@ -295,14 +270,14 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 
 - Generated by [`tests/fixtures/scripts/validate_oracle_f64.py`](../tests/fixtures/scripts/validate_oracle_f64.py) using an independent 64-bit floating-point NumPy implementation.
 - Evaluates 256-sample chirp inputs across WaveNet, A2, A2+FiLM, ConvNet, and LSTM architectures.
-- Consumed by [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs) to verify that the Rust f64 oracle achieves ESR < 1e-12 against ground truth before decomposing f32 numerical error budgets.
-- **Residual floor is arithmetic, not a clamp.** The `.bin` payloads are genuine f64 (`[u32 count][f64 × count]`); both the NumPy script and the Rust oracle load weights as f32 and compute in f64, and `compute_esr_f64` has no clamp. The recurring `ESR ≈ 5.00e-16` (`-153 dB`) reported for `wavenet_official`, the A2 Lite/Blended/FiLM/Gated paths and `condition_lstm` is a reproducible ~`1.6e-9` absolute rounding residual between the two independent f64 implementations on those paths; the remaining topologies (`convnet` `5.23e-33`, `condition_dsp` `3.18e-32`, `a2_generic` `5.79e-32`, `lstm` `3.49e-30`) agree to the f64 agreement floor, proving the harness can match near-exactly and the `5.00e-16` is path-specific. It is ≥3 orders of magnitude below the `< 1e-12` gate and is recorded per model as `// Measured:` in the consuming tests. Anchors are **not** regenerated: they are already f64, and regenerating without a C++ golden would be circular (regeneration policy in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.5.1).
+- Consumed by [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs) to verify that the Rust `f64` oracle achieves $\text{ESR} < 10^{-12}$ against ground truth before decomposing `f32` numerical error budgets.
+- **Residual floor is arithmetic, not a clamp.** The `.bin` payloads are genuine `f64` (`[u32 count][f64 × count]`); both the NumPy script and the Rust oracle load weights as `f32` and compute in `f64`, and `compute_esr_f64` has no clamp. The recurring `ESR ≈ 5.00e-16` (`-153 dB`) reported for `wavenet_official`, the A2 Lite/Blended/FiLM/Gated paths, and `condition_lstm` is a reproducible ~`1.6e-9` absolute rounding residual between the two independent `f64` implementations on those paths; the remaining topologies (`convnet` `5.23e-33`, `condition_dsp` `3.18e-32`, `a2_generic` `5.79e-32`, `lstm` `3.49e-30`) agree to the `f64` agreement floor, proving the harness can match near-exactly and the `5.00e-16` is path-specific. It is ≥3 orders of magnitude below the `< 1e-12` gate and is recorded per model as `// Measured:` in the consuming tests. Anchors are **not** regenerated: they are already `f64`, and regenerating without a C++ golden would be circular (regeneration policy in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.5.1).
 
 ### Resampler Reference Vectors
 
-- Generated by [`tests/fixtures/generate_resampler_reference.py`](../tests/fixtures/generate_resampler_reference.py) using `libsoxr` via ffmpeg (33-bit precision, Chebyshev passband).
+- Generated by [`tests/fixtures/generate_resampler_reference.py`](../tests/fixtures/generate_resampler_reference.py) using `libsoxr` via `ffmpeg` (33-bit precision, Chebyshev passband).
 - Files: `resampler_input_{rate}.f32` (10 log-spaced tones) and `resampler_ref_{from}_to_{to}.f32`.
-- Covers conversions across 44100 Hz, 48000 Hz, and 96000 Hz. Verified by Goertzel tone analysis in [`src/dsp/resampler_test.rs`](../src/dsp/resampler_test.rs).
+- Covers conversions across 44100 Hz, 48000 Hz, and 96000 Hz. Verified by Goertzel tone analysis in [`src/dsp/resampler_test.rs`](../src/dsp/resampler_test.rs) and cross-validated in [`tests/parity/resampler_parity.rs`](../tests/parity/resampler_parity.rs).
 
 ### EBU Tech 3341 / R 128 Compliance Sequences
 
@@ -320,7 +295,9 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 
 ### QA & Gate Acceptance Fixtures (`tests/fixtures/qa/`)
 
-- **`report_gate_not_verified.jsonl`:** Committed synthetic QA report fixture used by `tests/scripts/test_regression_guard.sh` (removido) (Scenario 2b). Freezes the acceptance scenario where all functional fidelity phases pass while the performance benchmark phase is `NOT_VERIFIED`. Used to test `nam_quality verify` fail-closed verification and prove PERF-006 domain separation (`FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED`, exit code 1).
+- **`report.jsonl` & `render_plain.golden`:** Canonical QA telemetry report and rendered plain-text output fixture used by [`src/testing/qa/`](../src/testing/qa/mod.rs) to verify deterministic dashboard rendering.
+- **`report_gate_not_verified.jsonl`:** Synthetic QA report fixture freezing the acceptance scenario where all functional fidelity phases pass while the performance benchmark phase is `NOT_VERIFIED`. Used to validate fail-closed contract verification (`FIDELITY: OK`, `PERFORMANCE: NOT_VERIFIED`, and `CONTRACT VIOLATED` with exit code `1`) in [`src/testing/qa/verify.rs`](../src/testing/qa/verify.rs).
+- **`cpuinfo_avx512.txt`, `cpuinfo_avx2_only.txt`, `cpuinfo_no_avx2.txt`:** Synthetic `/proc/cpuinfo` snapshots exercising host ISA detection and hardware classification in [`src/testing/qa/env.rs`](../src/testing/qa/env.rs) and [`src/testing/isa_guard.rs`](../src/testing/isa_guard.rs).
 
 ---
 
@@ -328,19 +305,23 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 
 ### Generator Scripts Catalog
 
-| Script                                             | Primary Outputs                                                                               | Prerequisites                                               |
-|:-------------------------------------------------- |:--------------------------------------------------------------------------------------------- |:----------------------------------------------------------- |
-| `tests/fixtures/golden_gen_build.sh`               | Orchestrates vendor checkout, C++ build, stimulus generation, and golden rendering            | `cmake`, C++20 (`g++`/`clang++`), `cargo`, `python3`, `git` |
-| `tests/fixtures/generate_a2_fixtures.py`           | Synthetic A2, FiLM, container, and dynamic gating `.nam` models                               | `python3`                                                   |
-| `tests/fixtures/generate_b1_2_fixtures.py`         | Dynamic ConvNet, WaveNetDyn, and LstmDyn `.nam` models                                        | `python3`                                                   |
-| `tests/fixtures/generate_fixtures.py`              | Hidden-size LSTMs, ConvNet activation variants, linear `.nam` models                          | `python3`                                                   |
-| `tests/fixtures/generate_namcore_v060_fixtures.py` | Multichannel Linear (1->2, 2->1, 2->2), Sequential pipelines, and head dilation `.nam` models | `python3`                                                   |
-| `tests/fixtures/generate_ebu_sequences.py`         | EBU R 128 / Tech 3341 compliance WAV signals                                                  | `python3`                                                   |
-| `tests/fixtures/generate_resampler_reference.py`   | Polyphase multitone input and reference output buffers (`.f32`)                               | `python3`, `ffmpeg` (with `libsoxr`)                        |
-| `tests/fixtures/scripts/gen_mrstft_golden.py`      | `mrstft_golden.bin`                                                                           | `python3`, `numpy`                                          |
-| `tests/fixtures/scripts/validate_oracle_f64.py`    | `f64_anchors/*.bin`                                                                           | `python3`, `numpy`, C++20                                   |
-| `tools/qa/src/bin/gen_stress.rs`                            | `stress_signal.wav`, `stress_signal_v2_{sr}.wav`                                              | `cargo`                                                     |
-| `tools/qa/src/bin/wav_to_golden.rs`                         | Converts rendered WAVs and stimuli into `.golden.bin`                                         | `cargo`                                                     |
+| Script / Binary                                     | Primary Outputs                                                                               | Prerequisites                                               |
+|:--------------------------------------------------- |:--------------------------------------------------------------------------------------------- |:----------------------------------------------------------- |
+| `tests/fixtures/golden_gen_build.sh`                | Orchestrates vendor checkout, C++ build, stimulus generation, and golden rendering            | `cmake`, C++20 (`g++`/`clang++`), `cargo`, `python3`, `git` |
+| `tests/fixtures/render_ir.cpp`                      | C++ `dsp::ImpulseResponse` renderer for `golden_cabsim_cpp_*.bin`                             | C++20 (`g++`/`clang++`), `AudioDSPTools`                    |
+| `tests/fixtures/render_multichannel.cpp`            | C++ multichannel & in-place NAMCore renderer for live parity tests                            | C++20 (`g++`/`clang++`), `NeuralAmpModelerCore`             |
+| `tests/fixtures/generate_a2_fixtures.py`            | Synthetic A2, FiLM, container, and dynamic gating `.nam` models                               | `python3`                                                   |
+| `tests/fixtures/generate_b1_2_fixtures.py`          | Dynamic ConvNet, WaveNetDyn, and LstmDyn `.nam` models                                        | `python3`                                                   |
+| `tests/fixtures/generate_fixtures.py`               | Hidden-size LSTMs, ConvNet activation variants, linear `.nam` models                          | `python3`                                                   |
+| `tests/fixtures/generate_namcore_v060_fixtures.py`  | Multichannel Linear (1->2, 2->1, 2->2), Sequential pipelines, and head dilation `.nam` models | `python3`                                                   |
+| `tests/fixtures/generate_ebu_sequences.py`          | EBU R 128 / Tech 3341 compliance WAV signals                                                  | `python3`                                                   |
+| `tests/fixtures/generate_resampler_reference.py`    | Polyphase multitone input and reference output buffers (`.f32`)                               | `python3`, `ffmpeg` (with `libsoxr`)                        |
+| `tests/fixtures/scripts/gen_mrstft_golden.py`       | `mrstft_golden.bin`                                                                           | `python3`, `numpy`                                          |
+| `tests/fixtures/scripts/validate_oracle_f64.py`     | `f64_anchors/*.bin`                                                                           | `python3`, `numpy`, C++20                                   |
+| `tools/qa/src/bin/gen_stress.rs`                    | `stress_signal.wav`, `stress_signal_v2_{sr}.wav`                                              | `cargo`                                                     |
+| `tools/qa/src/bin/wav_to_golden.rs`                 | Converts rendered WAVs and stimuli into `.golden.bin`                                         | `cargo`                                                     |
+| `tools/qa/src/bin/nam_golden_catalog.rs`            | Emits canonical golden catalog entries consumed by `golden_gen_build.sh`                      | `cargo`                                                     |
+| `tools/qa/src/bin/nam_freshness.rs`                 | Verifies `.golden_manifest.sha256` and `.golden_attest` integrity                             | `cargo`                                                     |
 
 ### Full Regeneration Walkthrough
 
@@ -350,20 +331,27 @@ To perform a clean, reproducible regeneration of all golden vectors from scratch
 # 1. Ensure vendor mirrors match variables.env pins:
 ./utils/setup-third-party.sh
 
-# 2. Run the 13-phase orchestrator (builds C++ renderers, generates models & goldens):
+# 2. Run the 14-phase orchestrator (builds C++ renderers, generates models & goldens):
 ./tests/fixtures/golden_gen_build.sh
 ```
 
-### Freshness Manifest Enforcement
+### Freshness Manifest & Provenance Attestation
 
-The freshness manifest [`tests/fixtures/.golden_manifest.sha256`](../tests/fixtures/.golden_manifest.sha256) tracks the exact SHA-256 hashes of every `.nam` model and its corresponding `.golden.bin` file:
+The freshness manifest [`tests/fixtures/.golden_manifest.sha256`](../tests/fixtures/.golden_manifest.sha256) records the SHA-256 digests and provenance metadata of the entire fixture supply chain across three structured sections:
 
-```text
-<sha256_model> <sha256_golden> <model_filename> <golden_filename>
-```
+1. **Catalog Section (`4`-column model + golden pairs):**
 
-- **Automated Gate:** Verified fail-closed in Phase 2 of [`utils/tests-quick.sh`](../utils/tests-quick.sh) and by [`src/testing/freshness.rs`](../src/testing/freshness.rs).
-- **Anti-Staleness Guarantee:** Modifying any model file without regenerating its golden vector fails the build, preventing silent model drift.
+   ```text
+   <sha256_model> <sha256_golden> <model_filename> <golden_filename>
+   ```
+
+   Annotated with `# TOOLCHAIN:` headers (`cxx`, `cmake`, `glibc`, `os`, `cxx-flags`), `# EXPECTED:` count directives, and `# MODEL-REGISTRY:` reverse-check entries for every `.nam` file in `tests/fixtures/models/`.
+2. **`FIXTURES` Section (`2`-column non-golden fixture digests):** Tracks stimulus WAVs, resampler reference vectors, EBU sequences, `f64` anchors, and `mrstft_golden.bin`.
+3. **`GENERATORS` Section (`2`-column generator digests):** Tracks all shell, C++, Python, and Rust generator sources listed in the table above.
+
+- **Automated Gate:** Enforced fail-closed in **Phase 1 (`freshness`)** of [`utils/tests-quick.sh`](../utils/tests-quick.sh) via `cargo run --quiet --locked -p nam-qa --bin nam_freshness -- artifacts-hard` (implemented in [`src/testing/freshness.rs`](../src/testing/freshness.rs) and [`tools/qa/src/bin/nam_freshness.rs`](../tools/qa/src/bin/nam_freshness.rs)).
+- **Audited Generator Attestation ([`tests/fixtures/.golden_attest`](../tests/fixtures/.golden_attest)):** When a generator script undergoes an audited non-behavioral edit (such as header standardization or comment updates) while all generated artifact digests remain unchanged, [`GoldenAttestation`](../src/testing/freshness.rs) records the `manifest_sha256 -> current_sha256` transition with a mandatory rationale, certifying `generator_provenance=ATTESTED` without requiring a redundant full C++ golden rebuild.
+- **Anti-Staleness Guarantee:** Any unattested generator modification, orphaned `.nam` file, or model/golden SHA-256 mismatch fails the freshness gate immediately.
 
 ### Gate Calibration & Anti-Placebo Rules
 
@@ -374,4 +362,4 @@ Numerical acceptance gates are defined exclusively in code:
   1. No self-goldens (comparing output against itself).
   2. No neutralized thresholds (SNR ≤ 0 dB, ESR ≥ 1.0, or unbound MSE without rigid SNR/ESR compensation).
   3. No uncalibrated heuristic fallbacks.
-- **Continuous Enforcement:** Meta-tests in [`tests/models/threshold_calibration.rs`](../tests/models/threshold_calibration.rs) (`test_all_golden_models_have_calibrated_thresholds`, `test_all_calibrated_entries_have_measurement_comments`, `test_all_thresholds_anti_placebo`) verify at test time that every golden entry has an active, documented measurement comment (`// Measured: SNR=..., ESR=...`) and non-placebo threshold boundaries.
+- **Continuous Enforcement:** Calibration invariant tests in [`tests/models/threshold_calibration.rs`](../tests/models/threshold_calibration.rs) (`test_all_golden_models_have_calibrated_thresholds`, `test_all_calibrated_entries_have_measurement_comments`, `test_all_thresholds_anti_placebo`) verify that every golden entry carries an empirical measurement comment (`// Measured: SNR=..., ESR=...`) and non-placebo threshold boundaries.

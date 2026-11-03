@@ -206,7 +206,9 @@ pub fn load_and_build_wav_ir(
 /// or models residing in memory buffers without touching the filesystem.
 ///
 /// Automatically detects format:
-/// - If the byte slice starts with `b"NAMB"`, it is parsed as binary `.namb`.
+/// - If the byte slice starts with `b"RIFF"` (WAVE container), it is parsed as WAV IR.
+/// - If the byte slice starts with `.namb` magic bytes (`b"BMAN"` / `0x4E414D42` little-endian, or `b"NAMB"`),
+///   it is parsed as binary `.namb`.
 /// - Otherwise, it is parsed as UTF-8 JSON `.nam`.
 ///
 /// Returns `Ok(pair)` guaranteeing that `pair.model_l` is non-null (`Some`) and
@@ -252,8 +254,9 @@ pub fn load_and_build_model_from_bytes(
 /// diagnostic support bundles (`DiagnosticBundle`).
 ///
 /// Format detection:
-/// - If `source_label` ends with `".namb"` (case-insensitive) or the byte slice starts with `b"NAMB"`,
-///   it is parsed as binary `.namb`.
+/// - If `source_label` ends with `".wav"` or the byte slice starts with `b"RIFF"` WAVE, it is parsed as WAV IR.
+/// - If `source_label` ends with `".namb"` (case-insensitive) or the byte slice starts with `.namb`
+///   magic bytes (`b"BMAN"` / `0x4E414D42` little-endian, or `b"NAMB"`), it is parsed as binary `.namb`.
 /// - Otherwise, it is parsed as UTF-8 JSON `.nam`.
 ///
 /// # Examples
@@ -306,7 +309,10 @@ pub fn load_and_build_model_from_bytes_named(
         || (bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WAVE");
     let format = if is_wav {
         ModelFormat::Wav
-    } else if lower_label.ends_with(".namb") || bytes.starts_with(b"NAMB") {
+    } else if lower_label.ends_with(".namb")
+        || bytes.starts_with(b"BMAN")
+        || bytes.starts_with(b"NAMB")
+    {
         ModelFormat::Namb
     } else {
         ModelFormat::Nam

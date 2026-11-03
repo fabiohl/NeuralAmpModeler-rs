@@ -5,34 +5,37 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # NAMB Binary Format Specification
 
-Specification of the `.namb` binary format for optimized distribution of NAM (Neural Amp Modeler) models.
+Specification of the `.namb` binary format for optimized distribution of NAM (Neural Amp Modeler) models. The decoder is [`parse_namb_typed`](../src/loader/namb/parse.rs) and the encoder is [`encode_namb`](../src/loader/namb_encoder.rs); this document describes the format both implement (versions `1` and `2`).
 
 ## 1. Header (80 bytes, packed)
 
 The header is a `#[repr(C, packed)]` struct — **without implicit padding**. All multi-byte integers are in **little-endian** format.
 
-| Offset | Size | Field              | Type      | Description                                                                                               |
-|:------ |:---- |:------------------ |:--------- |:--------------------------------------------------------------------------------------------------------- |
-| 0x00   | 4    | `magic`            | `u32`     | Magic number `0x4E414D42` ("NAMB" in ASCII LE). Different values are rejected with `InvalidMagic`.        |
-| 0x04   | 2    | `version`          | `u16`     | Format version: `1` = legacy, `2` = pre-transposed                                                        |
-| 0x06   | 1    | `layout_type`      | `u8`      | Weight layout (active for `version >= 2`): `0` = Original, `1` = GateMajorLstm, `2` = Interleaved4WaveNet |
-| 0x07   | 1    | `flags`            | `u8`      | Bitmask of feature flags (see §2)                                                                         |
-| 0x08   | 4    | `reserved_v2`      | `[u8;4]`  | Reserved for future expansion                                                                             |
-| 0x0C   | 4    | `weights_offset`   | `u32`     | Offset of the start of the weights block from the beginning of the file. Must be `>= 0x50` (80).          |
-| 0x10   | 8    | `reserved1`        | `[u32;2]` | Reserved for future expansion                                                                             |
-| 0x18   | 4    | `crc32`            | `u32`     | IEEE 802.3 CRC32 of the file (see §6 for range details). Semantics vary by version.                       |
-| 0x1C   | 4    | `reserved2`        | `u32`     | Reserved for future expansion                                                                             |
-| 0x20   | 32   | `version_str`      | `[u8;32]` | Informational version string, null-terminated (e.g., `"NAMB v2 (GateMajorLstm)\0"`).                      |
-| 0x40   | 4    | `sample_rate`      | `f32`     | Default sample rate (e.g., `48000.0`)                                                                     |
-| 0x44   | 4    | `input_level_dbu`  | `f32`     | Input level in dBu (e.g., `12.0`)                                                                         |
-| 0x48   | 4    | `output_level_dbu` | `f32`     | Output level in dBu (e.g., `-6.0`)                                                                        |
-| 0x4C   | 4    | `reserved3`        | `[u32;1]` | Reserved for future expansion                                                                             |
+| Offset | Size | Field              | Type      | Description                                                                                                                                             |
+|:------ |:---- |:------------------ |:--------- |:------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x00   | 4    | `magic`            | `u32`     | Magic number `0x4E414D42`, stored little-endian (file bytes `42 4D 41 4E`). Other values are rejected with `InvalidMagic`.                              |
+| 0x04   | 2    | `version`          | `u16`     | Format version: `1` = legacy, `2` = pre-transposed. Other values are rejected.                                                                          |
+| 0x06   | 1    | `layout_type`      | `u8`      | Weight layout (active for `version >= 2`): `0` = Original, `1` = GateMajorLstm, `2` = Interleaved4WaveNet                                               |
+| 0x07   | 1    | `flags`            | `u8`      | Bitmask of feature flags (see §2)                                                                                                                       |
+| 0x08   | 4    | `reserved_v2`      | `[u8;4]`  | Reserved for future expansion                                                                                                                           |
+| 0x0C   | 4    | `weights_offset`   | `u32`     | Offset of the start of the weights block from the beginning of the file. Must be `>= 0x50` (80) and `<=` the file length.                               |
+| 0x10   | 8    | `reserved1`        | `[u32;2]` | Reserved for future expansion                                                                                                                           |
+| 0x18   | 4    | `crc32`            | `u32`     | IEEE 802.3 CRC32 of the file (see §6 for range details). Semantics vary by version.                                                                     |
+| 0x1C   | 4    | `reserved2`        | `u32`     | Reserved for future expansion                                                                                                                           |
+| 0x20   | 32   | `version_str`      | `[u8;32]` | Informational version string, zero-padded (the encoder writes `"NAMB v{version} ({layout})"`, truncated to 32 bytes). Never interpreted by the decoder. |
+| 0x40   | 4    | `sample_rate`      | `f32`     | Model sample rate in Hz (e.g., `48000.0`). Validated, see §1.4.                                                                                         |
+| 0x44   | 4    | `input_level_dbu`  | `f32`     | Input level in dBu (e.g., `12.0`). Must be finite.                                                                                                      |
+| 0x48   | 4    | `output_level_dbu` | `f32`     | Output level in dBu (e.g., `-6.0`). Must be finite.                                                                                                     |
+| 0x4C   | 4    | `reserved3`        | `[u32;1]` | Reserved for future expansion                                                                                                                           |
 
 **Total header size: 80 bytes (0x50).**
 
 ### 1.1 Magic number
 
-The canonical value is `0x4E414D42` (bytes `42 4D 41 4E` = `"NAMB"` in little-endian). Any other value is rejected with `NambError::InvalidMagic` (E1202). The encoder **always** writes `0x4E414D42`.
+The canonical value is `0x4E414D42`: the ASCII letters `N A M B` read as a big-endian integer. Because the header is little-endian, the first four bytes of a `.namb` file are `42 4D 41 4E` (ASCII `BMAN`). Any other value is rejected with `NambError::InvalidMagic` (E1202). The encoder **always** writes `0x4E414D42`.
+
+> [!NOTE]
+> Format detection in `load_and_build_model_from_bytes` inspects the initial bytes against the little-endian magic sequence `42 4D 41 4E` (ASCII `BMAN`), the big-endian `b"NAMB"` fallback, or the `.namb` label suffix, guaranteeing transparent auto-detection for both memory buffers and labeled files.
 
 ### 1.2 Versioning
 
@@ -57,6 +60,18 @@ It copies the header by value using `std::ptr::read_unaligned`, validating:
 - Magic signature (`0x4E414D42`);
 - Supported version compliance (`version ∈ {1, 2}`);
 - Full safety and zero heap allocation even when the source buffer begins at an odd memory address.
+
+### 1.4 Header Field Validation
+
+After the structural checks of `parse_namb_typed` (weights offset, CRC, weights block), the decoder validates the numeric header fields and rejects violations with `NambError::InvalidHeaderField { field, value, reason }` (E1213):
+
+| Field              | Requirement                                                     |
+|:------------------ |:--------------------------------------------------------------- |
+| `sample_rate`      | Finite, `> 0.0`, and a positive integer representable as `u32`. |
+| `input_level_dbu`  | Finite.                                                         |
+| `output_level_dbu` | Finite.                                                         |
+
+The header values override the corresponding fields of the metadata JSON (§4.1) after parsing.
 
 ## 2. Flags
 
@@ -203,9 +218,9 @@ For block b in 0..num_blocks-1:
 
 ### 4.1 Metadata JSON (optional)
 
-UTF-8 between offset 80 (0x50) and `weights_offset`. If `weights_offset > 80`, the intermediate bytes contain the JSON serialization of `NamModelData` **excluding the `weights` field** (serialized via `serde_json`).
+UTF-8 between offset 80 (0x50) and `weights_offset`. If `weights_offset > 80`, the intermediate bytes contain the JSON serialization of `NamModelData` **excluding the `weights` field** (serialized via `serde_json`). The encoder always writes this section.
 
-The JSON is null-terminated; null bytes after the terminator are ignored. If the JSON is empty or `weights_offset == 80`, the decoder synthesizes a fallback configuration (WaveNet Standard).
+The decoder accepts an optional null terminator: bytes from the first null onward are ignored (the encoder does not write one). The text is parsed by the same `.nam` JSON parser as plain `.nam` files, so its structural limits apply. If the effective JSON is empty or `weights_offset == 80`, the decoder synthesizes the fallback configuration of [`make_fallback_model_data`](../src/loader/namb/fallback.rs): a two-array WaveNet Standard (`channels = 16`, `head_size = 8`, `kernel_size = 3`, dilations `1, 2, 4, ..., 512`, `Tanh`, `head_scale = 0.02`) with `Original` layout.
 
 The header size is exposed as the public constant `NAMB_HEADER_LEN` (in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)), derived from `std::mem::size_of::<NambHeader>()`; consumers must use it instead of hardcoding `80`. The host-neutral `loader::peek_metadata(path, max_bytes)` API reads only this section — streaming past (never materializing) the weights block in §4.2 — and is the canonical way to show model name/author/gear in preset browsers and CLIs.
 
@@ -213,7 +228,7 @@ The header size is exposed as the public constant `NAMB_HEADER_LEN` (in [`src/lo
 
 Contiguous array of little-endian `f32` starting from `weights_offset` to the end of the file. Each `f32` occupies 4 bytes. The number of floats is `(file_len - weights_offset) / 4`.
 
-Residual bytes that do not complete a 4-byte `f32` boundary (1–3 trailing bytes) are **rejected** with `NambError::Truncated { got, need }`, where `got` is the actual file size and `need` is the minimum size required to form a complete `f32`.
+Residual bytes that do not complete a 4-byte `f32` boundary (1–3 trailing bytes) are **rejected** with `NambError::Truncated { got, need }`, where `got` is the actual file size and `need` is the file size rounded up to the next complete `f32`. A block with more than `MAX_FLOAT_COUNT` floats (`MAX_MODEL_BYTES / 4` = 67,108,864) is rejected with `NambError::WeightsTooLarge`. Every value must be finite; the first `NaN` or infinity is rejected with `NambError::NonFiniteWeight { index, value }`.
 
 The `f32` values are read via `f32::from_le_bytes()` in 4-byte chunks. There is no alignment or padding within the block — it is a pure contiguous stream.
 
@@ -258,8 +273,10 @@ The `f32` values are read via `f32::from_le_bytes()` in 4-byte chunks. There is 
 
 ### 6.4 Encoder Behavior
 
-- v1: `flags = 0`, CRC always calculated and written.
-- v2+: `flags = FLAG_HAS_CRC32` (0x01), CRC always calculated and written.
+- v1: `flags = 0`, CRC always calculated over the weights block and written.
+- v2+: `flags = FLAG_HAS_CRC32` (0x01), CRC always calculated over the whole file (excluding the CRC slot) and written.
+- `layout_type` is written from the requested layout for every version, but v1 decoders ignore it and always read `Original`; a v1 file must therefore be encoded with the `Original` layout.
+- `sample_rate` falls back to `48000.0`, `input_level_dbu` to `12.0` and `output_level_dbu` to `-6.0` when the model data carries no value.
 
 ## 7. Hexadecimal Examples
 
@@ -268,7 +285,7 @@ The `f32` values are read via `f32::from_le_bytes()` in 4-byte chunks. There is 
 ```text
 Offset  Hex                                           Decoding
 ------  --------------------------------------------  ------------------------------
-0x00    42 4D 41 4E                                   magic = "NAMB" (0x4E414D42) LE
+0x00    42 4D 41 4E                                   magic = 0x4E414D42 (LE; ASCII "BMAN")
 0x04    02 00                                         version = 2
 0x06    00                                            layout_type = Original (0)
 0x07    01                                            flags = FLAG_HAS_CRC32 (0x01)
@@ -277,7 +294,7 @@ Offset  Hex                                           Decoding
 0x10    00 00 00 00 00 00 00 00                       reserved1
 0x18    XX XX XX XX                                   crc32 (calculated)
 0x1C    00 00 00 00                                   reserved2
-0x20    4E 41 4D 42 20 76 32 20 28 4F 72 69 67 69     version_str = "NAMB v2 (Original)\0..."
+0x20    4E 41 4D 42 20 76 32 20 28 4F 72 69 67 69     version_str = "NAMB v2 (Original)" + zero padding
         6E 61 6C 29 00 00 00 00 00 00 00 00 00 00
         00 00 00 00 00 00
 0x40    00 80 3B 47                                   sample_rate = 48000.0 (f32 LE: 0x473B8000)
@@ -355,25 +372,29 @@ Interleaved4WaveNet (Layout=2): [BLOCK][K][IN][LANE] = 48 f32
 
 NAMB parsing uses typed errors via `thiserror` for precise diagnostics. The `loader` module converts `NambError` into `LoadError::Namb` and maps it to the corresponding `NamErrorCode` via `LoadError::code()` (defined in [`src/loader/error.rs`](../src/loader/error.rs)), while `src/loader/build.rs` logs structured error diagnostics:
 
-| Variant                                         | Code (API / Log) | Mnemonic (API / Log)                   | Condition                                                                |
-|:----------------------------------------------- |:---------------- |:-------------------------------------- |:------------------------------------------------------------------------ |
-| `Truncated { got, need }`                       | E1204            | `NAMB_TRUNCATED`                       | File < 80 bytes or trailing bytes do not complete 4-byte float boundary  |
-| `InvalidMagic(u32)`                             | E1202            | `NAMB_INVALID_MAGIC`                   | Magic is not `0x4E414D42`                                                |
-| `InvalidVersion(u16)`                           | E1203            | `NAMB_UNSUPPORTED_VERSION`             | Version is not 1 or 2                                                    |
-| `WeightsOffsetOutOfBounds { offset, file_len }` | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `TRUNC`  | `weights_offset` exceeds file size                                       |
-| `InvalidWeightsOffset { offset, header_size }`  | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `TRUNC`  | `weights_offset` < 80 (less than header size)                            |
-| `CrcMismatch { got, expected }`                 | E1201            | `NAMB_CRC32_MISMATCH`                  | Calculated CRC ≠ header CRC                                              |
-| `CrcMissing { version }`                        | E1205            | `NAMB_CRC32_MISSING`                   | File v2+ without `FLAG_HAS_CRC32` set                                    |
-| `CrcMissingV1`                                  | E1205            | `NAMB_CRC32_MISSING`                   | Legacy v1 file with `crc32 == 0` sentinel rejected by integrity policy   |
-| `WeightsTooLarge { got, max }`                  | E1304            | `MODEL_TOO_LARGE`                      | Float count exceeds `MAX_MODEL_BYTES / 4` (67,108,864 floats)            |
-| `NonFiniteWeight { index, value }`              | E1212            | `NAMB_NON_FINITE_WEIGHT`               | Non-finite weight float (`NaN`, `+Inf`, `-Inf`) in binary weight section |
-| `InvalidHeaderField { field, value, reason }`   | E1213            | `NAMB_INVALID_HEADER_FIELD`            | Non-finite or invalid float in header metadata fields                    |
-| `MetadataNotUtf8 { offset, len }`               | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `BUILD_FAIL`  | Metadata section between header and weights is not valid UTF-8           |
-| `MetadataJson(JsonError)`                       | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `BUILD_FAIL`  | Metadata section failed to parse as valid `.nam` JSON model              |
+| Variant                                         | Code (API / Log) | Mnemonic (API / Log)                           | Condition                                                                         |
+|:----------------------------------------------- |:---------------- |:---------------------------------------------- |:--------------------------------------------------------------------------------- |
+| `Truncated { got, need }`                       | E1204            | `NAMB_TRUNCATED`                               | File < 80 bytes or trailing bytes do not complete 4-byte float boundary           |
+| `InvalidMagic(u32)`                             | E1202            | `NAMB_INVALID_MAGIC`                           | Magic is not `0x4E414D42`                                                         |
+| `InvalidVersion(u16)`                           | E1203            | `NAMB_UNSUPPORTED_VERSION`                     | Version is not 1 or 2                                                             |
+| `WeightsOffsetOutOfBounds { offset, file_len }` | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `NAMB_TRUNCATED` | `weights_offset` exceeds file size                                                |
+| `InvalidWeightsOffset { offset, header_size }`  | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `NAMB_TRUNCATED` | `weights_offset` < 80 (less than header size)                                     |
+| `CrcMismatch { got, expected }`                 | E1201            | `NAMB_CRC32_MISMATCH`                          | Calculated CRC ≠ header CRC                                                       |
+| `CrcMissing { version }`                        | E1205            | `NAMB_CRC32_MISSING`                           | File v2+ without `FLAG_HAS_CRC32` set                                             |
+| `CrcMissingV1`                                  | E1205            | `NAMB_CRC32_MISSING`                           | Legacy v1 file with `crc32 == 0` sentinel rejected by integrity policy            |
+| `WeightsTooLarge { got, max }`                  | E1304            | `MODEL_TOO_LARGE`                              | Float count exceeds `MAX_FLOAT_COUNT` (`MAX_MODEL_BYTES / 4` = 67,108,864 floats) |
+| `NonFiniteWeight { index, value }`              | E1212            | `NAMB_NON_FINITE_WEIGHT`                       | Non-finite weight float (`NaN`, `+Inf`, `-Inf`) in binary weight section          |
+| `InvalidHeaderField { field, value, reason }`   | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | Invalid `sample_rate` or non-finite level in the header (§1.4)                    |
+| `MetadataNotUtf8 { offset, len }`               | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `MODEL_BUILD_FAILED`  | Metadata section between header and weights is not valid UTF-8                    |
+| `MetadataJson(JsonError)`                       | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `MODEL_BUILD_FAILED`  | Metadata section failed to parse as valid `.nam` JSON model                       |
 
-*Note: For `MetadataNotUtf8` and `MetadataJson`, programmatic inspection via `LoadError::code()` returns `NamErrorCode::NamJsonParseError` (`E1200`), while loader failure diagnostics in `src/loader/build.rs:441` log `NamErrorCode::ModelBuildFailed` (`E1303`). `E1210` in `error_codes.rs` is reserved for `NamJsonSubmodelsTooDeep`.*
+*Note: The "API" code is returned by `LoadError::code()`; the "Log" code is the one recorded by the loader failure diagnostics in [`src/loader/build.rs`](../src/loader/build.rs). They differ for the two weights-offset errors (E1213 vs. E1204) and for the two metadata errors (E1200 vs. E1303). `E1210` in `error_codes.rs` is `NamJsonSubmodelsTooDeep`, not a NAMB code.*
 
-Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are rejected with `NamErrorCode::ModelTooLarge` (E1304).
+Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are rejected by the loader before parsing with `NamErrorCode::ModelTooLarge` (E1304).
+
+### 8.1 Decoder Validation Order
+
+`parse_namb_typed` evaluates the checks in this order and returns the first failure: header length, magic, and version (`NambHeader::from_slice`); `weights_offset` bounds; metadata UTF-8 and JSON; CRC presence (`CrcMissing` for v2+, `CrcMissingV1` for v1); CRC value; trailing-byte alignment and float-count limit; finiteness of every weight; header numeric fields (§1.4).
 
 ## 9. Evolution and Compatibility Policy
 
@@ -381,34 +402,34 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 
 - **v1**: maintained for reading legacy files. Strict integrity policy: files with sentinel `crc32 == 0` are rejected (`CrcMissingV1`), requiring a valid CRC32 calculated over weights. In v1 headers, the byte at offset `0x07` is treated as reserved (part of `reserved_v2`) and must not be interpreted as feature flags (e.g. even if it is non-zero, it does not enable feature flags). This ensures forward-compatibility and prevents false interpretation of flags in legacy files.
 - **v2**: `FLAG_HAS_CRC32` mandatory. `layout_type` active.
-- **Interleaved-4 zero padding**: transparent change. NAMB v2 models produced before the fix remain valid (only affects geometries where `CO % 4 != 0`, which do not exist in the current catalog). Documented as an implicit bump without a version change.
+- **Interleaved-4 zero padding**: transparent change. NAMB v2 models produced before the padding was introduced remain valid (it only affects geometries where `CO % 4 != 0`, which do not exist in the current catalog). It did not change the format version.
 
 ### 9.2 Future Expansion
 
-- **New `layout_type`**: values `3..=255` are reserved for future layouts. Unknown values are treated as `Original` by the decoder.
+- **New `layout_type`**: values `3..=255` are reserved for future layouts. The decoder currently treats unknown values as `Original`, so a file using a future layout would be mis-decoded rather than rejected; a new layout must therefore be introduced together with a new `version`.
 - **New flags**: bits `1..=4` are reserved for specific extensions (INT8, INT4, AMX, SVE2) and bits `5..=7` of the `flags` field are reserved for general future use. They must be `0` in current files. Future decoders can define new bits with fallbacks to current behavior when not set.
 - **`reserved_*` fields**: must be `0`. Reserved for adding fields without breaking binary header compatibility.
 - **New versions**: versions `>= 3` are reserved for structural changes that require revising the header format or weights block.
 
 ## 10. Reference Constants
 
-| Constant            | Value                   | Location                                                                          |
-|:------------------- |:----------------------- |:--------------------------------------------------------------------------------- |
-| `FLAG_HAS_CRC32`    | `0x01` (u8)             | [`src/loader/namb/header.rs:77`](../src/loader/namb/header.rs#L77)                |
-| `NAMB_HEADER_LEN`   | `80` bytes (0x50)       | [`src/loader/namb/header.rs:84`](../src/loader/namb/header.rs#L84)                |
-| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | [`src/loader/loaded_model_pair.rs:16`](../src/loader/loaded_model_pair.rs#L16)    |
-| CRC polynomial      | `0xEDB88320`            | [`src/loader/namb/header.rs:15`](../src/loader/namb/header.rs#L15)                |
-| CRC init            | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24`](../src/loader/namb/header.rs#L24)                |
-| CRC xorout          | `0xFFFFFFFF`            | [`src/loader/namb/header.rs:24,46`](../src/loader/namb/header.rs#L24)             |
-| Magic LE            | `0x4E414D42`            | [`src/loader/namb/header.rs:91`](../src/loader/namb/header.rs#L91)                |
-| Default sample rate | `48000.0` (f32)         | [`src/loader/loaded_model_pair.rs:14`](../src/loader/loaded_model_pair.rs#L14)    |
-| Default input dBu   | `12.0` (f32)            | [`src/loader/loaded_model_pair.rs:10`](../src/loader/loaded_model_pair.rs#L10)    |
-| Default output dBu  | `-6.0` (f32)            | [`src/loader/namb_encoder.rs:86`](../src/loader/namb_encoder.rs#L86)              |
-| Default loudness    | `-18.0` (f32)           | [`src/loader/loaded_model_pair.rs:12`](../src/loader/loaded_model_pair.rs#L12)    |
+| Constant            | Value                   | Symbol / Location                                                                                    |
+|:------------------- |:----------------------- |:---------------------------------------------------------------------------------------------------- |
+| `FLAG_HAS_CRC32`    | `0x01` (u8)             | `FLAG_HAS_CRC32` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                      |
+| `NAMB_HEADER_LEN`   | `80` bytes (0x50)       | `NAMB_HEADER_LEN` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                     |
+| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | `MAX_MODEL_BYTES` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)         |
+| `MAX_FLOAT_COUNT`   | `67_108_864` floats     | `MAX_FLOAT_COUNT` in [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs)                           |
+| CRC polynomial      | `0xEDB88320`            | `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                   |
+| CRC init / xorout   | `0xFFFFFFFF`            | `crc32_ieee`, `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)     |
+| Magic               | `0x4E414D42`            | `NambHeader::validate` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                |
+| Default sample rate | `48000.0` (f32)         | `DEFAULT_SAMPLE_RATE` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)     |
+| Default input dBu   | `12.0` (f32)            | `DEFAULT_INPUT_LEVEL_DBU` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs) |
+| Default output dBu  | `-6.0` (f32)            | Literal fallback in `encode_namb`, [`src/loader/namb_encoder.rs`](../src/loader/namb_encoder.rs)     |
+| Default loudness    | `-18.0` (f32)           | `DEFAULT_LOUDNESS_DB` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)     |
 
 ## 11. References
 
-- NAMB Decoder: [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs)
+- NAMB Decoder: [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs), [`parse.rs`](../src/loader/namb/parse.rs), [`header.rs`](../src/loader/namb/header.rs), [`fallback.rs`](../src/loader/namb/fallback.rs)
 - NAMB Encoder: [`src/loader/namb_encoder.rs`](../src/loader/namb_encoder.rs)
 - Metadata Peek: [`src/loader/peek.rs`](../src/loader/peek.rs)
 - Layout Definitions: [`src/loader/nam_json/model.rs`](../src/loader/nam_json/model.rs) (`WeightsLayout`)

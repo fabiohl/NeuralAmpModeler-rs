@@ -51,15 +51,15 @@ This audit targets **numerical and architectural semantics**. NeuralAmpModeler-r
 
 ### 0.3 Architecture Audit Status
 
-| Architecture         | Status                                                                                                                                                                                                                     | Reference Section                 |
-|:-------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------- |
-| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore; multi-I/O dynamic path                                                                                                            | [§2](#2-lstm-architecture)        |
-| **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards                                                                                                                    | [§3](#3-wavenet-a1-architecture)  |
-| **WaveNet A2**       | ✅ Fully Verified — Dynamic/Fast paths and feature fixture `wavenet_a2_max.nam` (KB-A2-Max) parity closed vs NAMcore/f64                                                                                                   | [§4](#4-wavenet-a2-architecture)  |
-| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore; multi-channel/groups verified)                                                                                                  | [§6](#6-other-architectures)      |
-| **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated (v0.6.0 multi-channel tracked)                                                                                                    | [§6](#6-other-architectures)      |
-| **SlimmableWavenet** | ✅ Verified — Dynamic channel slicing per-array, union breakpoints, and `render --slim` live C++ parity verified                                                                                                           | [§6](#6-other-architectures)      |
-| **Sequential**       | ✅ Fully Verified — Whole-chain live cross-validation vs C++ render (mono-interior/exterior composites, 44.1–192 kHz sweeps), f64 composition oracle, single-prewarm transient identity + detection-power control (NC-3.4) | [§6](#66-sequential-namcore-v060) |
+| Architecture         | Status                                                                                                                                                                                                            | Reference Section                 |
+|:-------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------- |
+| **LSTM**             | ✅ Fully Verified — Native f32 weights, bit-exact / sub-1e-11 interop parity vs NAMcore; multi-I/O dynamic path                                                                                                   | [§2](#2-lstm-architecture)        |
+| **WaveNet A1**       | ✅ Fully Verified — Const-generic fast path & dynamic fallback pass golden gates; fail-closed A2 guards                                                                                                           | [§3](#3-wavenet-a1-architecture)  |
+| **WaveNet A2**       | ✅ Fully Verified — Dynamic/Fast paths and feature fixture `wavenet_a2_max.nam` (KB-A2-Max) parity closed vs NAMcore/f64                                                                                          | [§4](#4-wavenet-a2-architecture)  |
+| **ConvNet**          | ✅ Identical — Full initialization and arithmetic parity (silence prewarm matches NAMcore; multi-channel/groups verified)                                                                                         | [§6](#6-other-architectures)      |
+| **Linear / CabSim**  | ✅ Verified — Affine linear models, `SlimmableContainer`, and FIR CabSim cross-validated (v0.6.0 multi-channel tracked)                                                                                           | [§6](#6-other-architectures)      |
+| **SlimmableWavenet** | ✅ Verified — Dynamic channel slicing per-array, union breakpoints, and `render --slim` live C++ parity verified                                                                                                  | [§6](#6-other-architectures)      |
+| **Sequential**       | ✅ Fully Verified — Whole-chain live cross-validation vs C++ render (mono-interior/exterior composites, 44.1–192 kHz sweeps), f64 composition oracle, single-prewarm transient identity + detection-power control | [§6](#66-sequential-namcore-v060) |
 
 ---
 
@@ -140,14 +140,14 @@ Gate ordering in memory is fixed to **I, F, G, O** at strides `0, H, 2H, 3H` (`l
 
 ### 2.2 Structural Implementation Mapping
 
-| C++ Reference (`NeuralAmpModelerCore/`)                            | Rust Implementation (`src/`)                                           | Verdict                                                     |
-|:------------------------------------------------------------------ |:---------------------------------------------------------------------- |:----------------------------------------------------------- |
-| `LSTMCell::process_` gate math (`lstm.cpp:31-66`)                  | `math/lstm/gates.rs` + `models/lstm/layer_kernels.rs`                  | ✅ Exact match in gate ordering and arithmetic formulations |
-| Row-major gate weights `[4H × (I+H)]` (`lstm.cpp:19-21`)           | `LstmLayer::input_hidden_weights` loaded via `read_lstm_weights_into`  | ✅ Byte-for-byte layout correspondence                      |
-| Bias `[4H]`, init hidden `[H]`, init cell `[H]` (`lstm.cpp:22-28`) | `read_lstm_layer` sequentially parses bias, hidden-init, and cell-init | ✅ Exact sequential match                                   |
-| 2-layer chain (`lstm.cpp:151-153`)                                 | `LstmModel2` software-pipelined chain (`model2.rs`)                    | ✅ Bit-exact sequential stacking, optimized for ILP         |
-| Linear head projection (`lstm.cpp:161-164`)                        | `dot_product(..) + head_bias` with Kahan summation compensation        | ✅ Exact match (reduces floating-point accumulation drift)  |
-| Prewarm length: `0.5 × sample_rate` (`lstm.cpp:125-132`)           | `prewarm_samples()` computes identical `(0.5 * sr) as usize`           | ✅ Exact formula match                                      |
+| C++ Reference (`NeuralAmpModelerCore/`)                            | Rust Implementation (`src/`)                                           | Verdict                                                                                                                                                  |
+|:------------------------------------------------------------------ |:---------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LSTMCell::process_` gate math (`lstm.cpp:31-66`)                  | `math/lstm/gates.rs` + `models/lstm/layer_kernels.rs`                  | ✅ Exact match in gate ordering and arithmetic formulations                                                                                              |
+| Row-major gate weights `[4H × (I+H)]` (`lstm.cpp:19-21`)           | `LstmLayer::input_hidden_weights` loaded via `read_lstm_weights_into`  | ✅ Byte-for-byte layout correspondence                                                                                                                   |
+| Bias `[4H]`, init hidden `[H]`, init cell `[H]` (`lstm.cpp:22-28`) | `read_lstm_layer` sequentially parses bias, hidden-init, and cell-init | ✅ Exact sequential match                                                                                                                                |
+| 2-layer chain (`lstm.cpp:151-153`)                                 | `LstmModel2` software-pipelined chain (`model2.rs`)                    | ✅ Bit-exact sequential stacking, optimized for ILP                                                                                                      |
+| Linear head projection (`lstm.cpp:161-164`)                        | `dot_product(..) + head_bias` with Kahan summation compensation        | ✅ Exact match (reduces floating-point accumulation drift)                                                                                               |
+| Prewarm length: `0.5 × sample_rate` (`lstm.cpp:125-132`)           | `prewarm_samples()` computes identical `(0.5 * sr) as usize`           | ✅ Exact formula match                                                                                                                                   |
 | Reset prewarm opt-out (`dsp.cpp:130-139`)                          | `NamModel::reset()` respects `prewarm_on_reset()` (default `true`)     | ⚠️ Deliberate divergence (DEC-03): prewarm policy matches, but a Rust reset always clears LSTM state while C++ without prewarm retains file-loaded state |
 
 ### 2.3 Weight Storage & Layout
@@ -183,7 +183,7 @@ In Standard mode (universal default), activation functions execute exact polynom
 
 Canonical const-generic static profiles (`LstmModel1`, `LstmModel2`) are monomorphic mono paths optimized for single-channel guitar/bass workflows. Multi-channel LSTM topologies (`in_channels > 1` or `out_channels > 1`) route to `LstmModelDyn` in the dynamic loader path.
 
-**Provenance & Fail-Closed Bounds (DEC-LSTM-01, T5.3):**
+**Provenance & Fail-Closed Bounds (DEC-LSTM-01):**
 
 - **Channel Bounds:** `in_channels` and `out_channels` are strictly bounded by `MAX_LSTM_IO_CHANNELS` (512, aligned with `MAX_LINEAR_CHANNELS` to prevent DoS/OOM on hostile dimensions). Zero channels (`in_channels == 0` or `out_channels == 0`) or channels exceeding 512 are rejected immediately with `NamErrorCode::InvalidFeatureTopology` (`E1316`).
 - **`input_size` Handling:** If `input_size` is omitted in the model config, Rust resiliently infers `input_size = in_channels.unwrap_or(1)` for backwards compatibility with synthetic and community models (DEC-LSTM-01). When explicitly provided, `input_size` must strictly match `in_channels` and be $\le 512$; any discrepancy or zero value fails closed with `E1316`.
@@ -289,7 +289,7 @@ The A1 path rejects configurations declaring A2 features at topology parsing tim
 
 Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
 
-**`layer1x1` provenance (F-09, T2.3).** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine"`.
+**`layer1x1` provenance.** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine"`.
 
 ### 3.5 Measured Interop Metrics
 
@@ -360,18 +360,18 @@ Measured against NAMcore at 48 kHz:
 | WaveNet A2 Dynamic Gated (CH8)   | 2.56e-14        | 1.34e-14          | 135.9    | 8.78e-06 | ✅ Bit-exact floor |
 | WaveNet A2 Dynamic Blended (CH3) | 5.35e-14        | 2.65e-14          | 132.7    | 9.97e-06 | ✅ Bit-exact floor |
 
-### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified (2026-10-08)
+### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified
 
 **Status:** Resolved. Former fail-closed guard (`reject_wavenet_a2_max_class`) retired.
 
-Production f32 × C++ golden (Phase 2, reconfirmed Phase 3) + f64 oracle (T2.1.1, 2026-10-08):
+Production f32 × C++ golden + f64 oracle:
 
-| Evaluation Pair              | Metric                                                       | Status                                    |
-|:---------------------------- |:------------------------------------------------------------ |:----------------------------------------- |
-| **Rust f32 × C++ Golden V1** | **SNR = 135.90 dB** (ESR ≈ 2.57e-14, n=2048)                 | ✅ Parity verified (Gate 1, ≥ 90 dB)      |
-| **Rust f32 × C++ Golden V2** | **SNR = 135.97 dB** (ESR ≈ 2.53e-14, 48 kHz)                 | ✅ Parity verified (Gate 1, ≥ 90 dB)      |
-| **Rust f32 × f64 Oracle**    | **SNR = 136.65 dB** (ESR ≈ 2.16e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
-| **f64 Oracle × C++ Golden**  | **SNR = 137.01 dB** (ESR ≈ 1.99e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A (T2.1.1) |
+| Evaluation Pair              | Metric                                                       | Status                               |
+|:---------------------------- |:------------------------------------------------------------ |:------------------------------------ |
+| **Rust f32 × C++ Golden V1** | **SNR = 135.90 dB** (ESR ≈ 2.57e-14, n=2048)                 | ✅ Parity verified (Gate 1, ≥ 90 dB) |
+| **Rust f32 × C++ Golden V2** | **SNR = 135.97 dB** (ESR ≈ 2.53e-14, 48 kHz)                 | ✅ Parity verified (Gate 1, ≥ 90 dB) |
+| **Rust f32 × f64 Oracle**    | **SNR = 136.65 dB** (ESR ≈ 2.16e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A     |
+| **f64 Oracle × C++ Golden**  | **SNR = 137.01 dB** (ESR ≈ 1.99e-14, n=2048, prewarm-paired) | ✅ Triple parity closed — Case A     |
 
 Root causes fixed (see §4.3.2 historical record below):
 secondary-activation parser, grouped-FiLM scale/shift rows, last-layer
@@ -410,7 +410,7 @@ Evidence: `test_h0_triple_decomposition --ignored` (all three legs ≥ 90 dB).
 > Speculative modifications to Rust production code without ground-truth
 > intermediate tensor dumps were halted at the time.
 >
-> **Outcome:** the four Phase 2 production fixes (secondary-activation parser,
+> **Outcome:** the four production fixes (secondary-activation parser,
 > grouped-FiLM scale/shift rows, last-layer residual in cascade, head-seed ring
 > position) closed Case D — production f32 × C++ golden now verifies at
 > **SNR 135.90 dB (V1)** / **135.97 dB (V2)** (table in §4.3 above). Case D is
@@ -646,7 +646,7 @@ Upstream v0.6.0 introduced the `"Sequential"` serial pipeline model architecture
 
 #### 6.6.1 Live C++ v0.6.0 Cross-Validation & Single-Prewarm Proof
 
-The `tests/parity/sequential_cpp_parity.rs` module cross-validates whole chains against the C++ `render` tool at engine level and against the double-precision composition oracle, on committed deterministic fixtures (`tests/fixtures/models/sequential_*.nam`, NC-3.4 batch). The f64 oracle mirrors the C++ `get_dsp` recursion: each child is re-parsed as a standalone envelope, nested `Sequential` children recurse, `Linear` children route through `oracle_linear_multichannel` (channel planes), and neural children route through the shared f64 kernels; the chain-wide stabilization budget (`model.prewarm_samples()`, the exact mirror of the C++ saturating child sum) is replayed as the same zero-feed the engines execute inside `Reset`, and the pre-signal slice is dropped. The **single-prewarm invariant** is validated on the initial transient — the first 256 frames of the real signal, not just steady state — with a positive control proving the gate has detection power: a no-warm chain (prewarm disabled) drifts the transient six orders of magnitude above the warmed floor (2.291e-3 vs 7.451e-9, double-LSTM fixture).
+The `tests/parity/sequential_cpp_parity.rs` module cross-validates whole chains against the C++ `render` tool at engine level and against the double-precision composition oracle, on committed deterministic fixtures (`tests/fixtures/models/sequential_*.nam`). The f64 oracle mirrors the C++ `get_dsp` recursion: each child is re-parsed as a standalone envelope, nested `Sequential` children recurse, `Linear` children route through `oracle_linear_multichannel` (channel planes), and neural children route through the shared f64 kernels; the chain-wide stabilization budget (`model.prewarm_samples()`, the exact mirror of the C++ saturating child sum) is replayed as the same zero-feed the engines execute inside `Reset`, and the pre-signal slice is dropped. The **single-prewarm invariant** is validated on the initial transient — the first 256 frames of the real signal, not just steady state — with a positive control proving the gate has detection power: a no-warm chain (prewarm disabled) drifts the transient six orders of magnitude above the warmed floor (2.291e-3 vs 7.451e-9, double-LSTM fixture).
 
 Block-schedule invariance (fixed 64-frame wheel mirroring `render.cpp` vs irregular 1..=64 chunking) is asserted bit-equal on every run.
 
@@ -702,7 +702,7 @@ upstream rejection outcomes:
 
 ## 7. Known-Broken & Policy Ledger
 
-### 7.1 ✅ Retired KB-A2-MAX (Phase 3, 2026-10-08)
+### 7.1 ✅ Retired KB-A2-MAX
 
 | Item / Model         | Symptom (historical)                                                | Status                                                                    |
 |:-------------------- |:------------------------------------------------------------------- |:------------------------------------------------------------------------- |
@@ -722,13 +722,13 @@ upstream rejection outcomes:
 | **Sequential Rate (DEC-01)**    | Option A: ignores unknown rates inside Sequential resolution; defaults to 48 kHz if all absent.                    | Full upstream interop for multi-rate child chains ([§5.1](#dec-01-decision-record--missing-sample-rate-in-sequential-models)).                                    |
 | **Linear FFT Threshold**        | `FFT_AUTO_THRESHOLD = 256` in Rust vs `Direct <= 1024` in C++ (`linear.cpp:27-35`).                                | Intentional cost divergence: partitioned FFT reduces peak CPU load; identical numerical output.                                                                   |
 | **Container Crossfade**         | 32 ms linear crossfade on quality transitions.                                                                     | Click-free dynamic compute downgrades/upgrades.                                                                                                                   |
-| **Nested Prewarm (DEC-01b)**    | Saturating sum of child prewarm counts across Sequential/Container.                                                | Identical transient settling at engine boundaries. Prewarm alignment to `LoadOptions` is tracked as a future enhancement candidate. |
+| **Nested Prewarm (DEC-01b)**    | Saturating sum of child prewarm counts across Sequential/Container.                                                | Identical transient settling at engine boundaries. Prewarm alignment to `LoadOptions` is tracked as a future enhancement candidate.                               |
 
 ### 7.3 🟠 Test Infrastructure Boundaries
 
 - **Live Parity Enforcement:** All non-ignored `quick_parity_*` tests require `require_completed()`, failing hard on missing compilers or crashed render tools.
 - **Fixture Resolution:** `golden_gen_build.sh` mirrors `tests/common/io_helpers.rs::model_path`, searching standard system paths, environment overrides, and non-distributable community directories.
-- **Multichannel Render Oracle Fallback:** The upstream C++ `render` CLI supports mono input only and outputs channel 0 only. For multichannel **exterior** models ($1 \to N$, $N \to 1$, $N \to N$), live `render` cannot serve as oracle; the double-precision (f64) mathematical reference oracle and algebraic invariants from C++ `test_linear.cpp` serve as co-equal oracles. Chains whose **exterior** is mono but whose interior stages cross channel boundaries ($1 \to 2 \to 1$, `sequential_multichannel.nam`) remain fully dispatchable by live `render` and are cross-validated there (NC-3.4: ESR = 3.749e-15, SNR = 144.3 dB at 48 kHz).
+- **Multichannel Render Oracle Fallback:** The upstream C++ `render` CLI supports mono input only and outputs channel 0 only. For multichannel **exterior** models ($1 \to N$, $N \to 1$, $N \to N$), live `render` cannot serve as oracle; the double-precision (f64) mathematical reference oracle and algebraic invariants from C++ `test_linear.cpp` serve as co-equal oracles. Chains whose **exterior** is mono but whose interior stages cross channel boundaries ($1 \to 2 \to 1$, `sequential_multichannel.nam`) remain fully dispatchable by live `render` and are cross-validated there (ESR = 3.749e-15, SNR = 144.3 dB at 48 kHz).
 
 ### 7.4 🟡 Policy Rejections & Defensive Gaps
 

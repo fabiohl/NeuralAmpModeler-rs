@@ -167,7 +167,7 @@ graph TD
 
 #### Multi-Array Head Cascade Rule
 
-For multi-array WaveNet architectures, the head accumulator of the second layer array (`array2`) is seeded directly with the projected skip-connection output of `array1` rather than starting from zero. This preserves exact parity with the reference C++ implementation (`out = head_scale * array2.head_outputs`). See [`src/models/wavenet/model.rs`](../src/models/wavenet/model.rs) and [docs/cpp_parity_map.md](cpp_parity_map.md) §4.6.
+For multi-array WaveNet architectures, the head accumulator of the second layer array (`array2`) is seeded directly with the projected skip-connection output of `array1` rather than starting from zero. This preserves exact parity with the reference C++ implementation (`out = head_scale * array2.head_outputs`). See [`src/models/wavenet/model.rs`](../src/models/wavenet/model.rs) and [docs/cpp_parity_map.md](cpp_parity_map.md) (§3.2, §4.3).
 
 ---
 
@@ -208,10 +208,10 @@ LSTM keeps its state through `reset_states` rather than a dedicated
 **Decision (DEC-03):** keep the Rust clean-reset behaviour — a reset must clear
 all temporal state — and do not replicate the C++ no-prewarm `_xh`/`_c`
 retention unless explicitly required for strict legacy parity. While DEC-03
-stands, LSTM is excluded from the T3.1 reset-freshness matrix, because a Rust
+stands, LSTM is excluded from the reset-freshness matrix, because a Rust
 reset-without-prewarm on an LSTM is deliberately **not** bit-equivalent to a
 C++ reset-without-prewarm. If strict parity is later required, gate
-`reset_states` behind the active prewarm flag and re-enable the 1×1×1 F-11
+`reset_states` behind the active prewarm flag and re-enable the 1×1×1
 oracle test.
 
 ---
@@ -430,16 +430,16 @@ NeuralAmpModeler-rs tracks callback latency distributions via atomic, lock-free 
 
 NeuralAmpModeler-rs separates the host-agnostic DSP core into distinct architectural layers:
 
-| Layer            | Path                | Responsibility                                                                                                                   |
-|:---------------- |:------------------- |:-------------------------------------------------------------------------------------------------------------------------------- |
-| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.                                          |
-| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.                                     |
-| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.                                 |
-| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.                                            |
-| **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute.                               |
-| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.                                  |
-| **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlockall`/workgroups). |
-| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).                                    |
+| Layer            | Path                | Responsibility                                                                                                                       |
+|:---------------- |:------------------- |:------------------------------------------------------------------------------------------------------------------------------------ |
+| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.                                              |
+| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.                                         |
+| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.                                     |
+| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.                                                |
+| **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute.                                   |
+| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.                                      |
+| **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlock_region`/workgroups). |
+| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).                                        |
 
 ```mermaid
 graph TD
@@ -467,7 +467,7 @@ graph TD
 | **`heap-audit`**         | No      | Activates allocation-tracking hooks for automated zero-allocation hot-path validation.                                                                                                 |
 | **`fft-radix4-planner`** | No      | Exposes Radix-4 DIT FFT execution planning benchmark routines.                                                                                                                         |
 | **`avx512`**             | No      | Compiles research/benchmarking AVX-512 upward dispatch kernels (omitted from default binaries).                                                                                        |
-| **`rt-hardening`**       | No      | Enables real-time process hardening (Linux `mlockall`/`SCHED_FIFO`/core pinning/PM-QoS; macOS QoS/time constraint/`mlockall`/Audio Workgroups).                                        |
+| **`rt-hardening`**       | No      | Enables real-time process hardening (Linux `mlockall`/`SCHED_FIFO`/core pinning/PM-QoS; macOS QoS/time constraint/`mlock_region`/Audio Workgroups).                                    |
 | **`on-demand`**          | No      | Developer-only fixture generation and profiling harnesses (never enabled by CI or QA runners).                                                                                         |
 
 ---
@@ -576,7 +576,7 @@ and is the single source of truth for all boundary code.
   `head_size > 1` carries it as the trailing weight and folds it into the
   per-channel head scale, so both paths scale identically.
 
-#### Breaking changes (0.6.x)
+#### Multichannel & Topology API Evolution (NAMCore v0.6 Parity)
 
 - **Multichannel Contract:** `NamModel::process_multichannel` / `process_multichannel_in_place` now return
   `Result<usize, NamErrorCode>` instead of `()`; under-sized plane sets return

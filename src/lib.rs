@@ -106,27 +106,27 @@
 //!
 //! ## Feature flags
 //!
-//! | Feature | Default | Description |
-//! |:------- |:------- |:----------- |
-//! | `dual-mono` | **Enabled** | Independent per-channel neural inference for dual-mono signals. Disable for lean single-channel mode. |
-//! | `heap-audit` | Disabled | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants. |
-//! | `testing` | Disabled | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles. |
-//! | `fft-radix4-planner` | Disabled | Radix-4 DIT FFT execution planning routines and benchmarks. |
-//! | `rt-hardening` | Disabled | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity; macOS: QoS, time constraint, `mlockall`, Audio Workgroups; DAZ/FTZ). |
-//! | `avx512` | Disabled | Experimental AVX-512 kernels and dispatch for research and cross-ISA validation. |
+//! | Feature              | Default     | Description                                                                                                                                               |
+//! |:-------------------- |:----------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+//! | `dual-mono`          | **Enabled** | Independent per-channel neural inference for dual-mono signals. Disable for lean single-channel mode.                                                     |
+//! | `heap-audit`         | Disabled    | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants.                                                                   |
+//! | `testing`            | Disabled    | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles.                                                            |
+//! | `fft-radix4-planner` | Disabled    | Radix-4 DIT FFT execution planning routines and benchmarks.                                                                                               |
+//! | `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity; macOS: QoS, time constraint, `mlock_region`, Audio Workgroups; DAZ/FTZ). |
+//! | `avx512`             | Disabled    | Experimental AVX-512 kernels and dispatch for research and cross-ISA validation.                                                                          |
 //!
 //! ## Module map
 //!
-//! | Module | Purpose |
-//! |:------ |:------- |
-//! | [`loader`] | `.nam` (JSON) and `.namb` (binary) model parsing and construction. |
-//! | [`math`] | SIMD math primitives, activation approximations, GEMV/FFT kernels. |
-//! | [`models`] | Neural network architectures and [`StaticModel`](crate::models::StaticModel) dispatch. |
-//! | [`dsp`] | Resampler, noise gate, oversampling, and cabinet simulation. |
-//! | [`common`] | Telemetry, diagnostics, panic hooks, and lock-free SPSC channels. |
-//! | [`prelude`] | Convenience re-exports for the common inference and DSP pipeline. |
-//! | `testing` | Off-RT test utilities and perceptual metrics (feature `testing`). |
-//! | `rt_hardening` | Real-time host hardening (feature `rt-hardening`, Linux and macOS). |
+//! | Module         | Purpose                                                                                |
+//! |:-------------- |:-------------------------------------------------------------------------------------- |
+//! | [`loader`]     | `.nam` (JSON) and `.namb` (binary) model parsing and construction.                     |
+//! | [`math`]       | SIMD math primitives, activation approximations, GEMV/FFT kernels.                     |
+//! | [`models`]     | Neural network architectures and [`StaticModel`](crate::models::StaticModel) dispatch. |
+//! | [`dsp`]        | Resampler, noise gate, oversampling, and cabinet simulation.                           |
+//! | [`common`]     | Telemetry, diagnostics, panic hooks, and lock-free SPSC channels.                      |
+//! | [`prelude`]    | Convenience re-exports for the common inference and DSP pipeline.                      |
+//! | `testing`      | Off-RT test utilities and perceptual metrics (feature `testing`).                      |
+//! | `rt_hardening` | Real-time host hardening (feature `rt-hardening`, Linux and macOS).                    |
 //!
 //! ## Platform support
 //!

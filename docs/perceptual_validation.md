@@ -49,14 +49,14 @@ Where $r_i$ is the reference sample and $t_i$ is the test sample.
 - **DC Offset Masking & Diagnostic DC-Free ESR:** When a golden vector contains a pronounced DC offset (notably `golden_wavenet_a2_max.bin` with mean $\mu \approx 8.19$ and standard deviation $\sigma \approx 2.45$), over $90\%$ of total signal energy ($P_{\text{sig}} \approx 73$) resides in the DC constant. In such cases, standard raw ESR is dominated by the constant term and can mask divergence in the dynamic AC components. To maintain diagnostic rigor, the test harness evaluates both raw ESR and DC-free ESR ($\text{ESR}_{\text{dc-free}}$ after mean removal from reference and test vectors). For `wavenet_a2_max`, raw ESR is $2.57 \times 10^{-14}$ while DC-free ESR is $3.08 \times 10^{-13}$ (~12× ratio, still $\approx -125\text{ dB}$, confirming that both AC and DC components remain at the float32 numerical noise floor). The DC-free metric serves as an informational diagnostic and does not replace the raw ESR parity gate.
 - **Limitation:** ESR is a global time-domain metric. It cannot separate harmonic generation from inharmonic aliasing artifacts (Sato & Smith, DAFx 2025) and correlates non-linearly with human loudness perception (Wright & Välimäki, ICASSP 2020). For this reason, NeuralAmpModeler-rs supplements ESR with spectral metrics (MR-STFT, ASR).
 
-| ESR (Linear)                | ESR (dB)                       | Practical Interpretation                                                             |
-|:--------------------------- |:------------------------------ |:------------------------------------------------------------------------------------ |
+| ESR (Linear)                | ESR (dB)                       | Practical Interpretation                                                                         |
+|:--------------------------- |:------------------------------ |:------------------------------------------------------------------------------------------------ |
 | $0.0$                       | $-\infty\text{ dB}$            | Zero squared numerical error (ESR = 0.0); bitwise identity requires bitwise sample verification. |
-| $< 10^{-11}$                | $< -110\text{ dB}$             | Float32 numerical noise floor (near-lossless floating-point precision across ISAs).          |
-| $\sim 10^{-7}$ to $10^{-5}$ | $-70\text{ to } -50\text{ dB}$ | High implementation agreement (floating-point summation noise).   |
-| $\sim 3.3 \times 10^{-3}$   | $-24.8\text{ dB}$              | Tone3000 median error for WaveNet A2-Full vs analog hardware.     |
-| $\sim 6.2 \times 10^{-3}$   | $-22.1\text{ dB}$              | Tone3000 median error for WaveNet A1-Standard vs analog hardware. |
-| $\ge 1.0$                   | $\ge 0\text{ dB}$              | Complete signal divergence (placebo boundary).                    |
+| $< 10^{-11}$                | $< -110\text{ dB}$             | Float32 numerical noise floor (near-lossless floating-point precision across ISAs).              |
+| $\sim 10^{-7}$ to $10^{-5}$ | $-70\text{ to } -50\text{ dB}$ | High implementation agreement (floating-point summation noise).                                  |
+| $\sim 3.3 \times 10^{-3}$   | $-24.8\text{ dB}$              | Tone3000 median error for WaveNet A2-Full vs analog hardware.                                    |
+| $\sim 6.2 \times 10^{-3}$   | $-22.1\text{ dB}$              | Tone3000 median error for WaveNet A1-Standard vs analog hardware.                                |
+| $\ge 1.0$                   | $\ge 0\text{ dB}$              | Complete signal divergence (placebo boundary).                                                   |
 
 ---
 
@@ -160,47 +160,52 @@ Validation thresholds dynamically adapt across model architectures, sequence len
 
 Defined in [`tests/common/validation.rs`](../tests/common/validation.rs) (`get_calibrated_threshold`). Measured with 2048-sample v1 stress signal at 48 kHz.
 
-| Model / Architecture                         | Min SNR (dB) | Max ESR               | Max MR-STFT          | Verification Scope & Notes                          |
-|:-------------------------------------------- |:------------:|:---------------------:|:--------------------:|:--------------------------------------------------- |
-| **WaveNet Standard (CH=16)**                 | 105.0        | $3.0 \times 10^{-11}$ | 0.05                 | Near-bit-exact ($>134\text{ dB}$ measured)          |
-| **WaveNet Feather (CH=8)**                   | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | Near-bit-exact ($>133\text{ dB}$ measured)          |
-| **WaveNet Nano (CH=4)**                      | 95.0         | $3.0 \times 10^{-10}$ | 0.05                 | Near-bit-exact ($>132\text{ dB}$ measured)          |
-| **WaveNet Lite / EVH-5150-Lite (CH=12)**     | 105.0        | $3.5 \times 10^{-11}$ | 0.05                 | Near-bit-exact ($>122\text{ dB}$ measured)          |
-| **WaveNet A1 Standard (Official)**           | 85.0         | $3.0 \times 10^{-9}$  | 0.05                 | Live parity fixture                                 |
-| **WaveNet Official (CH=3 dynamic path)**     | 14.0         | $3.5 \times 10^{-2}$  | 0.45                 | Free-geometry dynamic path ($130.4\text{ dB}$ SNR)  |
-| **WaveNet Condition DSP (CH=3)**             | 100.0        | $1.0 \times 10^{-10}$ | 0.35                 | Sub-model dynamic path ($139.5\text{ dB}$ SNR)      |
-| **WaveNet Dyn Free-Shape (CH=7→4)**          | 90.0         | $1.0 \times 10^{-11}$ | 0.18                 | Low head_scale ($\sim -65\text{ LUFS}$)             |
-| **WaveNet A2-Full (CH=8)**                   | 105.0        | $3.0 \times 10^{-11}$ | 0.05                 | Native f32 weights ($129.5\text{ dB}$ measured)     |
-| **WaveNet A2-Lite (CH=3)**                   | 105.0        | $3.5 \times 10^{-11}$ | 0.05                 | Native f32 weights ($132.2\text{ dB}$ measured)     |
-| **WaveNet A2-FiLM-Lite (CH=3)**              | 114.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($125.1\text{ dB}$ measured, $\text{ESR} \approx 3.06 \times 10^{-13}$) |
-| **WaveNet A2-FiLM-Full (CH=8)**              | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($138.8\text{ dB}$ measured)     |
-| **WaveNet A2-FiLM Chaos Stress**             | 120.0        | $1.0 \times 10^{-12}$ | $5.0 \times 10^{-5}$ | Chaos fixture ($139.0\text{ dB}$ measured)          |
-| **WaveNet A2-FiLM InputMixinPre**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Single-slot FiLM ($134.4\text{ dB}$ measured)       |
-| **WaveNet A2 Dynamic Gated CH=8**            | 85.0         | $1.0 \times 10^{-9}$  | 0.05                 | Dynamic Gating + LeakyReLU                          |
-| **WaveNet A2 Dynamic Blended CH=3**          | 110.0        | $1.0 \times 10^{-12}$ | 0.05                 | Dynamic Blending + Tanh gate                        |
-| **WaveNet A2 Max (CH=4, cond=8)**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Generic WaveNet + FiLM ($135.9\text{ dB}$ measured) |
-| **SlimmableContainer A2 Example**            | 120.0        | $3.5 \times 10^{-12}$ | 0.08                 | Multi-submodel container                            |
-| **LSTM 1×16**                                | 93.0         | $1.5 \times 10^{-9}$  | 0.20                 | Standard exact activations ($108.5\text{ dB}$)      |
-| **LSTM 2×8**                                 | 93.0         | $1.7 \times 10^{-9}$  | 0.12                 | Standard exact activations ($107.8\text{ dB}$)      |
-| **LSTM Official (H=3)**                      | 105.0        | $9.0 \times 10^{-11}$ | 0.22                 | Standard exact activations ($120.8\text{ dB}$)      |
-| **LSTM-Dyn 1×7**                             | 80.0         | $3.5 \times 10^{-9}$  | 0.10                 | Dynamic path topology ($144.3\text{ dB}$)           |
-| **LSTM Synthetic (1×10, 2×24, 3×8)**         | 110.0        | $5.0 \times 10^{-12}$ | $5.0 \times 10^{-4}$ | Uncatalogued geometries                             |
-| **ConvNet Test**                             | 120.0        | $1.0 \times 10^{-12}$ | $1.0 \times 10^{-4}$ | C++ render parity ($143.8\text{ dB}$ measured)      |
-| **ConvNet Variants (nobn, relu, silu)**      | 115.0        | $1.0 \times 10^{-11}$ | $5.0 \times 10^{-4}$ | Activation & normalization variants                 |
+| Model / Architecture                         | Min SNR (dB) | Max ESR               | Max MR-STFT          | Verification Scope & Notes                                                                          |
+|:-------------------------------------------- |:------------:|:---------------------:|:--------------------:|:--------------------------------------------------------------------------------------------------- |
+| **WaveNet Standard (CH=16)**                 | 105.0        | $3.0 \times 10^{-11}$ | 0.05                 | Near-bit-exact ($>134\text{ dB}$ measured)                                                          |
+| **WaveNet Feather (CH=8)**                   | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | Near-bit-exact ($>133\text{ dB}$ measured)                                                          |
+| **WaveNet Nano (CH=4)**                      | 95.0         | $3.0 \times 10^{-10}$ | 0.05                 | Near-bit-exact ($>132\text{ dB}$ measured)                                                          |
+| **WaveNet Lite / EVH-5150-Lite (CH=12)**     | 105.0        | $3.5 \times 10^{-11}$ | 0.05                 | Near-bit-exact ($>122\text{ dB}$ measured)                                                          |
+| **WaveNet A1 Standard (Official)**           | 85.0         | $3.0 \times 10^{-9}$  | 0.05                 | Live parity fixture                                                                                 |
+| **WaveNet Official (CH=3 dynamic path)**     | 14.0         | $3.5 \times 10^{-2}$  | 0.45                 | Free-geometry dynamic path ($130.4\text{ dB}$ SNR)                                                  |
+| **WaveNet Condition DSP (CH=3)**             | 100.0        | $1.0 \times 10^{-10}$ | 0.35                 | Sub-model dynamic path ($139.5\text{ dB}$ SNR)                                                      |
+| **WaveNet Dyn Free-Shape (CH=7→4)**          | 90.0         | $1.0 \times 10^{-11}$ | 0.18                 | Low head_scale ($\sim -65\text{ LUFS}$)                                                             |
+| **WaveNet A2-Full (CH=8)**                   | 105.0        | $3.0 \times 10^{-11}$ | 0.05                 | Native f32 weights ($129.5\text{ dB}$ measured)                                                     |
+| **WaveNet A2-Lite (CH=3)**                   | 105.0        | $3.5 \times 10^{-11}$ | 0.05                 | Native f32 weights ($132.2\text{ dB}$ measured)                                                     |
+| **WaveNet A2-FiLM-Lite (CH=3)**              | 114.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($125.1\text{ dB}$ measured, $\text{ESR} \approx 3.06 \times 10^{-13}$)          |
+| **WaveNet A2-FiLM-Full (CH=8)**              | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Native FiLM active ($138.8\text{ dB}$ measured)                                                     |
+| **WaveNet A2-FiLM Chaos Stress**             | 120.0        | $1.0 \times 10^{-12}$ | $5.0 \times 10^{-5}$ | Chaos fixture ($139.0\text{ dB}$ measured)                                                          |
+| **WaveNet A2-FiLM InputMixinPre**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Single-slot FiLM ($134.4\text{ dB}$ measured)                                                       |
+| **WaveNet A2 Dynamic Gated CH=8**            | 85.0         | $1.0 \times 10^{-9}$  | 0.05                 | Dynamic Gating + LeakyReLU                                                                          |
+| **WaveNet A2 Dynamic Blended CH=3**          | 110.0        | $1.0 \times 10^{-12}$ | 0.05                 | Dynamic Blending + Tanh gate                                                                        |
+| **WaveNet A2 Max (CH=4, cond=8)**            | 120.0        | $1.0 \times 10^{-11}$ | $1.0 \times 10^{-4}$ | Generic WaveNet + FiLM ($135.9\text{ dB}$ measured)                                                 |
+| **SlimmableContainer A2 Example**            | 120.0        | $3.5 \times 10^{-12}$ | 0.08                 | Multi-submodel container                                                                            |
+| **LSTM 1×16**                                | 93.0         | $1.5 \times 10^{-9}$  | 0.20                 | Standard exact activations ($108.5\text{ dB}$)                                                      |
+| **LSTM 2×8**                                 | 93.0         | $1.7 \times 10^{-9}$  | 0.12                 | Standard exact activations ($107.8\text{ dB}$)                                                      |
+| **LSTM Official (H=3)**                      | 105.0        | $9.0 \times 10^{-11}$ | 0.22                 | Standard exact activations ($120.8\text{ dB}$)                                                      |
+| **LSTM-Dyn 1×7**                             | 80.0         | $3.5 \times 10^{-9}$  | 0.10                 | Dynamic path topology ($144.3\text{ dB}$)                                                           |
+| **LSTM Synthetic (1×10, 2×24, 3×8)**         | 110.0        | $5.0 \times 10^{-12}$ | $5.0 \times 10^{-4}$ | Uncatalogued geometries                                                                             |
+| **ConvNet Test**                             | 120.0        | $1.0 \times 10^{-12}$ | $1.0 \times 10^{-4}$ | C++ render parity ($143.8\text{ dB}$ measured)                                                      |
+| **ConvNet Variants (nobn, relu, silu)**      | 115.0        | $1.0 \times 10^{-11}$ | $5.0 \times 10^{-4}$ | Activation & normalization variants                                                                 |
 | **Linear FFT (RF=320..8192)**                | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Partitioned FFT FIR ($>139.6\text{ dB}$ measured, $\text{ESR} \le 1.08 \times 10^{-14}$ at RF=2048) |
-| **Linear No Bias**                           | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Zero-bias FIR ($144.1\text{ dB}$)                   |
-| **Nondist Models (APP-EVH, BD-2, Marshall)** | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | External production captures                        |
+| **Linear No Bias**                           | 125.0        | $1.0 \times 10^{-10}$ | 0.12                 | Zero-bias FIR ($144.1\text{ dB}$)                                                                   |
+| **Nondist Models (APP-EVH, BD-2, Marshall)** | 100.0        | $1.0 \times 10^{-10}$ | 0.05                 | External production captures                                                                        |
 
-**Uncalibrated Fallback Formulas (`topology_thresholds` & `live_parity_thresholds` in `tests/common/validation.rs`):**
+**Uncalibrated Fallback Formulas (`topology_thresholds` & `live_parity_thresholds` in [`tests/common/validation.rs`](../tests/common/validation.rs)):**
 
+- **Shared Channel-Dependent WaveNet Fallback (`wavenet_thresholds`):**
+  - $\text{CH} = 4$: $\text{SNR} = 95.0\text{ dB}, \text{ESR} = 3.0 \times 10^{-10}, \text{MR-STFT} = 0.05$.
+  - $\text{CH} \in \{8, 12\}$: $\text{SNR} = 100.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.05$.
+  - $\text{CH} = 16$: $\text{SNR} = 85.0\text{ dB}, \text{ESR} = 3.0 \times 10^{-9}, \text{MR-STFT} = 0.05$.
+  - $\text{CH} = 3$ or other: $\text{SNR} = 40.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-3}, \text{MR-STFT} = 0.05$.
 - **Golden Vector Suites (`topology_thresholds`):**
-  - WaveNet: computed via channel-dependent tables ($16\text{ CH} \implies \text{SNR}=105\text{ dB}$).
-  - LSTM: $\text{SNR} = \text{clamp}(30.0 - \text{complexity} \times 0.65, 12.0, 30.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$.
+  - WaveNet: delegated to `wavenet_thresholds(channels)`.
+  - LSTM: $\text{SNR} = \text{clamp}(30.0 - \text{complexity} \times 0.65, 12.0, 30.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$, $\text{MR-STFT} = 0.25$.
   - Linear: $\text{SNR} = 135.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.12$.
   - ConvNet: $\text{SNR} = 140.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-10}, \text{MR-STFT} = 0.05$.
 - **Live C++ Cross-Validation Suites (`live_parity_thresholds`):**
-  - Uses empirical floors reflecting live runtime execution:
-  - LSTM: $\text{SNR} = \text{clamp}(85.0 - \text{complexity} \times 1.0, 45.0, 75.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$.
+  - WaveNet & Linear: identical to `topology_thresholds`.
+  - LSTM: $\text{SNR} = \text{clamp}(85.0 - \text{complexity} \times 1.0, 45.0, 75.0)$, $\text{ESR} = 2.0 \times 10^{-\text{SNR}/10}$, $\text{MR-STFT} = 0.25$.
   - ConvNet: $\text{SNR} = 35.0\text{ dB}, \text{ESR} = 1.0 \times 10^{-4}, \text{MR-STFT} = 0.03$.
 
 ---
@@ -238,9 +243,10 @@ const ABSOLUTE_ESR_CAP_FILM_HF: f64        = 0.15;
 const ABSOLUTE_SNR_FLOOR: f64              = 5.0;
 const ABSOLUTE_MRSTFT_CAP: f64             = 0.95;
 const ABSOLUTE_MRSTFT_CAP_FILM: f64        = 1.20;
+const FILM_V2_MRSTFT_FLOOR: f64            = 3.0e-2;  // v2 multi-SR FiLM floor
 ```
 
-If `max_esr > esr_cap`, `max_esr` is clamped to `esr_cap` and `mse_limit` is proportionally tightened. `min_snr_db` is bounded below by `ABSOLUTE_SNR_FLOOR` ($5.0\text{ dB}$).
+If `max_esr > esr_cap`, `max_esr` is clamped to `esr_cap` and `mse_limit` is proportionally tightened (bounded below by `calibrated_mse`). `min_snr_db` is bounded below by `ABSOLUTE_SNR_FLOOR` ($5.0\text{ dB}$). For FiLM topologies on the 5-second v2 stress signal, `mrstft_max` is raised to at least `FILM_V2_MRSTFT_FLOOR` ($3.0 \times 10^{-2}$) to accommodate inherent per-frame modulation spectral drift against NAMCore's Eigen fallback while remaining well below `ABSOLUTE_MRSTFT_CAP_FILM` ($1.20$).
 
 ---
 
@@ -292,21 +298,22 @@ Recurrent (LSTM):
 
 **Module:** [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)
 
-The f64 reference oracle computes double-precision forward passes for WaveNet, LSTM, ConvNet, and A2 topologies using exact transcendental functions (`f64::tanh`, `f64::exp`) and Kahan/Neumaier compensated accumulation.
+The `f64` reference oracle computes double-precision forward passes for WaveNet, LSTM, ConvNet, Linear (including multichannel FIR via `oracle_linear_multichannel`), and WaveNet A2 (FiLM, Gated, Blended) topologies using exact transcendental functions (`f64::tanh`, `f64::exp`) and Kahan/Neumaier compensated accumulation. Domain coverage is enforced fail-closed via `oracle_domain` and `try_oracle_forward` (`OracleError`), preventing silent fallback on unsupported container or sub-model configurations.
 
-### 5.1 Five-Axis Error Decomposition Pipeline
+### 5.1 Error Source Decomposition Pipeline
 
-`run_decomposition()` evaluates the model across 5 configurations to isolate individual error sources:
+`run_decomposition()` evaluates the model across six configurations (`DecompositionResult`) to isolate individual error sources:
 
-| Field              | Error Source Isolated                                                       |
-|:------------------ |:--------------------------------------------------------------------------- |
-| `esr_f32_vs_f64`   | Total error: production f32 pipeline vs ideal f64 reference.                |
-| `esr_quant_f16c`   | Error introduced if weights were truncated to f16c.                         |
-| `esr_quant_bf16`   | Error introduced if weights were truncated to bfloat16.                     |
-| `esr_activation`   | Error from Padé/minimax activation approximations vs exact transcendentals. |
-| `esr_accumulation` | Error from f32 FMA summation vs compensated double-precision accumulation.  |
+| Field              | Error Source Isolated                                                                                       |
+|:------------------ |:----------------------------------------------------------------------------------------------------------- |
+| `esr_f32_vs_f64`   | Total error: production `f32` pipeline vs ideal `f64` reference.                                            |
+| `esr_quant_f16c`   | Error introduced if weights were truncated to IEEE 754 `f16` (`WeightPrecision::F16C`).                     |
+| `esr_quant_bf16`   | Error introduced if weights were truncated to `bfloat16` (`WeightPrecision::BF16`).                         |
+| `esr_activation`   | Error from Padé/minimax activation approximations (`ActivationMode::PadeMinimax`) vs exact transcendentals. |
+| `esr_accumulation` | Error from `f32` FMA summation (`AccumulationMode::F32Fma`) vs compensated `f64` accumulation.              |
+| `esr_combined`     | Simulated combined approximation (`WeightPrecision::F16C` + `ActivationMode::PadeMinimax` + `F32Plain`).    |
 
-### 5.2 Steady-State Prewarm vs. Cold-Start Transients & Empirical Characterization (T6.3)
+### 5.2 Steady-State Prewarm vs. Cold-Start Transients & Empirical Characterization
 
 In early error decomposition telemetry, cold-start runs (evaluating only 256 samples without prewarm) reported an elevated discrepancy of $\text{ESR} \approx 0.0506$ ($5.06 \times 10^{-2}$) for `BossLSTM-1x16`. Empirical characterization isolates the three distinct regimes governing this behavior:
 
@@ -342,7 +349,7 @@ The table below records empirical measurements across window lengths $N \in \{25
 
 #### 5.2.2 Correlation with Sequential Parity Positive Control
 
-This transient effect directly mirrors the positive control in `tests/parity/sequential_parity.rs` (detailed in [`cpp_parity_map.md §6.6`](cpp_parity_map.md#66-sequential-namcore-v060)). When prewarming was deliberately omitted on a double-LSTM serial chain (`sequential_double_lstm.nam`), the un-warmed initial window exhibited a transient divergence of:
+This transient effect directly mirrors the positive control in [`tests/parity/sequential_cpp_parity.rs`](../tests/parity/sequential_cpp_parity.rs) (detailed in [`cpp_parity_map.md §6.6`](cpp_parity_map.md#66-sequential-namcore-v060)). When prewarming was deliberately omitted on a double-LSTM serial chain (`sequential_double_lstm.nam`), the un-warmed initial window exhibited a transient divergence of:
 $$\text{max abs diff} = 2.291 \times 10^{-3} \quad (\text{positive defect control})$$
 which completely collapsed to zero abs diff ($\text{ESR} = 1.023 \times 10^{-14}$, $\text{SNR} = 139.9\text{ dB}$) once the 48,000-sample prewarm budget was applied.
 
@@ -392,33 +399,33 @@ Under `ActivationPrecision::Standard` (exact-grade polynomial exp activations, u
 
 *Average SNR gain with `Standard` activations across LSTM models: **$+89.5\text{ dB}$**.*
 
-### LSTM: NAMCore × f64 — Oracle Map (F-08)
+### LSTM: NAMCore × f64 — Oracle Map
 
-The LSTM telemetry contains measurements that look contradictory unless the **oracle** and the **activation mode** of each test are read explicitly. The production f32 engine defaults to `Standard` (exact-grade) activations; the decomposition tests deliberately force `Fast` (Padé [5,4]) to isolate the approximation cost; the C++ NAMCore reference shares the same approximation families as `Fast`.
+The LSTM telemetry contains measurements that look contradictory unless the **oracle** and the **activation mode** of each test are read explicitly. The production `f32` engine defaults to `Standard` (exact-grade) activations; the decomposition tests deliberately force `Fast` (Padé [5,4]) to isolate the approximation cost; the C++ NAMCore reference shares the same approximation families as `Fast` when `Fast` is simulated.
 
-| Test (`tests/parity/reference_oracle_f64.rs`) | Model                          | Oracle activation                | Production activation | Prewarm        | Measurement window           | Measured ESR                                                                                     |
-|:--------------------------------------------- |:------------------------------ |:-------------------------------- |:--------------------- |:-------------- |:---------------------------- |:------------------------------------------------------------------------------------------------ |
-| `test_oracle_lstm`                            | LSTM Official (H=3)            | exact f64                        | `Standard` (exact)    | 24 000 + 256   | last 256                     | `2.71e-12` ($-115.7\text{ dB}$)                                                                  |
-| `test_oracle_warmup_paired_lstm`              | LSTM Official (H=3)            | Padé (`combined`: F16C+Padé+F32) | `Standard` (exact)    | 24 000 + 256   | full 24 256 **and** last 256 | `2.63e-3` → `2.72e-3` (**REFUTED**: prewarm does not close it)                                   |
-| `test_combined_simulation_lstm`               | LSTM Official (H=3)            | Padé vs exact                    | `Standard` (exact)    | 24 000 + 256   | last 256                     | `2.66e-3` (Padé↔exact), `2.72e-3` (Padé↔prod)                                                    |
-| `test_decomposition_lstm`                     | LSTM Official (H=3)            | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `2.59e-3` (activation term `2.6e-3` dominates)                                                   |
-| `test_decomposition_boss_lstm_1x16`           | BossLSTM-1×16                  | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `5.06e-2` (activation term `4.81e-2` dominates)                                                  |
-| `test_decomposition_boss_lstm_2x8`            | BossLSTM-2×8                   | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `1.73e-3` (activation term `1.74e-3` dominates)                                                  |
-| goldens "vs NAMCore" (dashboard)              | BossLSTM-1×16 / 2×8 / Official | C++ NAMCore f32                  | `Standard`            | golden spec    | golden                       | `8.51e-12` ($110.7\text{ dB}$) / `1.00e-11` ($110.0\text{ dB}$) / `7.86e-13` ($121.0\text{ dB}$) |
-| dashboard "vs Ideal (f64)"                    | BossLSTM-1×16                  | exact f64                        | `Standard`            | 24 000         | `// Measured` row            | `9.08e-13` ($110.4\text{ dB}$)                                                                   |
+| Test ([`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs)) | Model                          | Oracle activation                | Production activation | Prewarm        | Measurement window           | Measured ESR                                                                                     |
+|:---------------------------------------------------------------------------------------- |:------------------------------ |:-------------------------------- |:--------------------- |:-------------- |:---------------------------- |:------------------------------------------------------------------------------------------------ |
+| `test_oracle_lstm`                                                                       | LSTM Official (H=3)            | exact f64                        | `Standard` (exact)    | 24 000 + 256   | last 256                     | `2.71e-12` ($-115.7\text{ dB}$)                                                                  |
+| `test_oracle_warmup_paired_lstm`                                                         | LSTM Official (H=3)            | Padé (`combined`: F16C+Padé+F32) | `Standard` (exact)    | 24 000 + 256   | full 24 256 **and** last 256 | `2.63e-3` → `2.72e-3` (**REFUTED**: prewarm does not close it)                                   |
+| `test_combined_simulation_lstm`                                                          | LSTM Official (H=3)            | Padé vs exact                    | `Standard` (exact)    | 24 000 + 256   | last 256                     | `2.66e-3` (Padé↔exact), `2.72e-3` (Padé↔prod)                                                    |
+| `test_decomposition_lstm`                                                                | LSTM Official (H=3)            | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `2.59e-3` (activation term `2.6e-3` dominates)                                                   |
+| `test_decomposition_boss_lstm_1x16`                                                      | BossLSTM-1×16                  | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `5.06e-2` (activation term `4.81e-2` dominates)                                                  |
+| `test_decomposition_boss_lstm_2x8`                                                       | BossLSTM-2×8                   | exact                            | `Fast` (Padé)         | 24 000 + 4 096 | last 4 096                   | `1.73e-3` (activation term `1.74e-3` dominates)                                                  |
+| goldens "vs NAMCore" (dashboard)                                                         | BossLSTM-1×16 / 2×8 / Official | C++ NAMCore f32                  | `Standard`            | golden spec    | golden                       | `8.51e-12` ($110.7\text{ dB}$) / `1.00e-11` ($110.0\text{ dB}$) / `7.86e-13` ($121.0\text{ dB}$) |
+| dashboard "vs Ideal (f64)"                                                               | BossLSTM-1×16                  | exact f64                        | `Standard`            | 24 000         | `// Measured` row            | `9.08e-13` ($110.4\text{ dB}$)                                                                   |
 
 **Why $\approx 110\text{ dB}$ (NAMCore) and $\approx -13\text{ dB}$ (f64) coexist:** they are measurements of *different oracle pairs*, not a single contradictory number.
 
-- **NAMCore parity ($\approx 110\text{ dB}$).** Production f32 is compared to the C++ NAMCore render, which is built on the *same* approximation families (Padé activation, F16C-like weight paths). The approximation is therefore cancelled on both sides, leaving only rounding/accumulation residue — the parity contract is satisfied by construction.
+- **NAMCore parity ($\approx 110\text{ dB}$).** Production `f32` in `Standard` mode is compared to the C++ NAMCore render, which also uses exact-grade activations (`std::tanh`/`std::exp`). Both engines share the same exact activation curves, leaving only `f32` rounding and accumulation residue — the parity contract is satisfied by construction.
 - **vs f64 ideal, `Standard` activations ($\approx 110\text{ dB}$, dashboard "vs Ideal (f64)").** With exact-grade activations on both sides the same rounding floor is exposed; this is the number the fidelity table reports.
-- **vs f64 ideal, `Fast` activations ($\approx -13\text{ to } -28\text{ dB}$, decomposition).** When production is forced to `Fast`, the Padé $\tanh/\sigma$ approximation is compared against the exact transcendentals; its isolated cost is `2.6e-3` (H=3), `1.7e-3` (2×8) and `5.06e-2` (1×16) in ESR, entirely dominated by the `activation` term. This is the deliberate cost of the parity-preserving approximation — **not** a transient (the paired-prewarm verdict is `REFUTED`) and **not** a NAMCore parity regression. The audibility consequence is quantified in §6.1 below.
+- **vs f64 ideal, `Fast` activations ($\approx -13\text{ to } -28\text{ dB}$, decomposition).** When production is forced to `Fast`, the Padé $\tanh/\sigma$ approximation is compared against exact transcendentals; its isolated cost is `2.6e-3` (H=3), `1.7e-3` (2×8), and `5.06e-2` (1×16) in ESR, entirely dominated by the `activation` term. This is the isolated cost of the `Fast` approximation — **not** a transient (the paired-prewarm verdict is `REFUTED`) and **not** a NAMCore parity regression. The audibility consequence is quantified in §6.1 below.
 
-#### 6.1 — Measured audibility cost of `Fast` (Padé) in LSTM
+#### 6.1 — Measured Audibility Cost of `Fast` (Padé) in LSTM
 
-`test_s4_lstm_pade_activation_cost` (`tests/parity/reference_oracle_f64.rs`) quantifies the isolated cost of forcing `ActivationPrecision::Fast` in recurrent models under the **canonical paired-prewarm protocol** (`24 000 + 256` @ 48 kHz) against the f64 ideal oracle (exact activations, F64 weights, Neumaier accumulation). Two stimuli are measured: `stress_v2` (the multi-segment guitar program: single note, power chord, palm mutes, harmonics, chord decay) and an analytic swept sine. **No external musical/real DI fixture exists in `tests/fixtures/`**, so `stress_v2` supplies the musical material; the swept sine is the analytic reference shared with the other paired-prewarm tests. ESR/SNR are measured on the trailing 256 samples; MR-STFT on the trailing 4 096-sample steady-state window. `Color`/`Verdict` mirror the dashboard legend (`esr_color_class` / `esr_verdict_short` in [`src/testing/qa/render.rs`](../src/testing/qa/render.rs)).
+`test_s4_lstm_pade_activation_cost` ([`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs)) quantifies the isolated cost of forcing `ActivationPrecision::Fast` in recurrent models under the **canonical paired-prewarm protocol** (`24 000 + 256` @ 48 kHz) against the `f64` ideal oracle (exact activations, `f64` weights, Neumaier accumulation). Two stimuli are measured: `stress_v2` (the multi-segment guitar program: single note, power chord, palm mutes, harmonics, chord decay) and an analytic swept sine. **No external musical/real DI fixture exists in `tests/fixtures/`**, so `stress_v2` supplies the musical material; the swept sine is the analytic reference shared with the other paired-prewarm tests. ESR/SNR are measured on the trailing 256 samples; MR-STFT on the trailing 4 096-sample steady-state window. `Color`/`Verdict` mirror the dashboard legend (`esr_color_class` / `esr_verdict_short` in [`src/testing/qa/render.rs`](../src/testing/qa/render.rs)).
 
 ```text
-// Measured: 2026-10-15, `cargo test --test parity test_s4_lstm_pade_activation_cost`.
+// Measured: `cargo test --test models test_s4_lstm_pade_activation_cost`
 ```
 
 | Model               | Signal     | Production activation | ESR         | SNR (dB) | MR-STFT    | Color  | Verdict            |
@@ -442,7 +449,7 @@ The LSTM telemetry contains measurements that look contradictory unless the **or
 - **`Fast` (Padé) is *not* transparent in recurrent models.** The Padé residual feeds back through $c_t$/$h_t$, so every `Fast` row lands in the `yellow` band (`ESR ≥ 4.9e-4`). The most excitable case (`BossLSTM-1×16` × `stress_v2`) crosses the `1e-2` auditory boundary: `ESR = 2.97e-2`, `SNR = 15.3 dB`, `MR-STFT = 5.06e-1` — roughly **four orders of magnitude** above the LSTM MR-STFT baselines/ceilings (`baseline × 10` policy multiplier). The remaining rows (`2×8`, `Official`) are `A/B SCIENTIFIC`: measurable, subtle, but not transparent.
 - **Legend note.** The dashboard `esr_color_class` treats the entire `[1e-5, 1e-1)` interval as `yellow`; the auditory boundary used by `esr_verdict_short` sits one decade lower, at `1e-2`. The empirical mapping above reports both, clarifying that the `A/B SCIENTIFIC` verdict corresponds to the $< 10^{-2}$ auditory threshold rather than the broader color band.
 
-The accept/opt-in policy (F-08) confirms that `Standard` (exact-grade) remains the production default (*accepted by parity*), satisfying the NAMCore parity contract while keeping `Fast` as an explicit opt-in for feed-forward architectures.
+The accept/opt-in policy confirms that `Standard` (exact-grade) remains the production default (*accepted by parity*), satisfying the NAMCore parity contract while keeping `Fast` as an explicit opt-in for feed-forward architectures.
 
 ---
 
@@ -466,9 +473,9 @@ Computes all verification metrics simultaneously in a single pass under an atomi
 | **Anchor SNR**      | SNR vs $3.5\text{ kHz}$ 1-pole low-pass                 | Baseline degradation check                                 |
 | **Fidelity Margin** | $\text{SNR} - \text{SNR}_{\text{anchor}}$               | $> 8.0\text{ dB}$ target                                   |
 
-When `NAM_METRICS_JSONL` is set, metrics are appended as structured JSONL lines for dashboard consumption.
+Metrics and auxiliary oracle records (`report_f64_table`, `report_f64_decomp`, `report_activation`, `report_isa`, `report_heap_alloc`) are appended as structured JSONL lines to the path resolved by `append_metric_line()`: thread-local override (`MetricJsonlGuard` / `METRIC_JSONL_PATH`), process environment variable `NAM_METRICS_JSONL`, or default fallback `target/logs/fidelity-metrics.jsonl`.
 
-- **Zero & Sub-Epsilon Invariant (B1):** Metrics that diverge to infinity on bit-identical vectors (SNR, PSNR, Equivalent Bits) check for exact zero (`noise_power == 0.0` or `mse == 0.0`) rather than machine epsilon (`f64::EPSILON`). Sub-epsilon error power ($\sim 10^{-16}$, e.g. 5–6 ULPs drift across samples as seen in `convnet_silu`) produces finite logarithmic metrics ($10 \cdot \log_{10}(P_{\text{sig}} / P_{\text{noise}})$) rather than artifactual `+∞` / `null`. Only bit-identical comparisons produce `SNR = +∞`, `PSNR = +∞`, and `Equivalent Bits = +∞` (serialized as `null` in JSONL). In addition, `ESR` and `ESR_dB` check for exact zero, returning `0.0` and `-\infty` respectively if and only if `noise_power == 0.0`.
+- **Zero & Sub-Epsilon Invariant:** Metrics that diverge to infinity on bit-identical vectors (SNR, PSNR, Equivalent Bits) check for exact zero (`noise_power == 0.0` or `mse == 0.0`) rather than machine epsilon (`f64::EPSILON`). Sub-epsilon error power ($\sim 10^{-16}$, e.g. 5–6 ULPs drift across samples as seen in `convnet_silu`) produces finite logarithmic metrics ($10 \cdot \log_{10}(P_{\text{sig}} / P_{\text{noise}})$) rather than artifactual `+∞` / `null`. Only bit-identical comparisons produce `SNR = +∞`, `PSNR = +∞`, and `Equivalent Bits = +∞`, where positive-infinite `snr_db` serializes as JSON `null` (`json_snr_db`). In addition, `ESR` and `ESR_dB` check for exact zero, returning `0.0` and `-\infty` respectively if and only if `noise_power == 0.0` (non-finite values in general metric fields serialize as explicit string sentinels `"inf"`, `"-inf"`, or `"nan"` via `json_metric`).
 
 ---
 
@@ -482,7 +489,7 @@ All thresholds in [`tests/models/threshold_calibration.rs`](../tests/models/thre
 4. **Rule 4 — Linked Relaxation:** Loosening any threshold requires linking to an independent measurement justifying the change.
 5. **Rule 5 — Error Budget Sanity Check:** Summed modeled error sources must match total measured error within a $10\times$ window ($\sum \Delta\text{ESR}(\text{sources}) \approx \text{ESR}_{\text{total}}$). Two discrepant regimes are explained with uncolored notices — simulated F16C quantization inflating `combined` above the measured total, and receptive-field buffer fill-in transients under cold start (§5.2.4); any other discrepancy raises a yellow `Rule 5 violated` alert.
 6. **Rule 6 — Non-Circular Independence:** Reference oracles must execute on separate code paths. Modifying an oracle requires re-verifying independence against production paths.
-7. **Rule 7 — Fix Code, Never Scope:** When an tightened gate fails, fix the underlying DSP code or document the physical limitation. Never silently drop failing inputs.
+7. **Rule 7 — Fix Code, Never Scope:** When a tightened gate fails, fix the underlying DSP code or document the physical limitation. Never silently drop failing inputs.
 
 ---
 
@@ -491,17 +498,17 @@ All thresholds in [`tests/models/threshold_calibration.rs`](../tests/models/thre
 | Metric / Tool         | Core Implementation                                                                                      | Verification Tests                                                                                                                                       |
 |:--------------------- |:-------------------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **ESR (f32)**         | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)                                      | [`tests/common/metrics.rs`](../tests/common/metrics.rs)                                                                                                  |
-| **ESR (f64)**         | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)                          | [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs)                                                                        |
+| **ESR (f64)**         | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)                          | [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs)                                                                        |
 | **MR-STFT**           | [`src/testing/perceptual/esr.rs`](../src/testing/perceptual/esr.rs)                                      | [`tests/common/validation.rs`](../tests/common/validation.rs), [`tests/parity/parity_primitives.rs`](../tests/parity/parity_primitives.rs)               |
 | **ASR**               | [`src/testing/aliasing.rs`](../src/testing/aliasing.rs)                                                  | [`src/testing/aliasing_test.rs`](../src/testing/aliasing_test.rs), [`tests/models/spectral_fidelity.rs`](../tests/models/spectral_fidelity.rs)           |
 | **Farina FR+THD**     | [`src/testing/spectral/farina.rs`](../src/testing/spectral/farina.rs)                                    | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs)                                                                                        |
 | **THD+N / IMD**       | [`src/testing/spectral/thd.rs`](../src/testing/spectral/thd.rs)                                          | [`src/testing/spectral_test.rs`](../src/testing/spectral_test.rs)                                                                                        |
 | **LUFS / LRA / dBTP** | [`src/testing/perceptual/mod.rs`](../src/testing/perceptual/mod.rs)                                      | [`src/testing/perceptual_test.rs`](../src/testing/perceptual_test.rs), [`tests/models/ebu_lufs_compliance.rs`](../tests/models/ebu_lufs_compliance.rs)   |
-| **f64 Oracle**        | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)                          | [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs)                                                                        |
+| **f64 Oracle**        | [`src/testing/reference_oracle/mod.rs`](../src/testing/reference_oracle/mod.rs)                          | [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs)                                                                        |
 | **Fidelity Report**   | [`tests/common/validation.rs`](../tests/common/validation.rs)                                            | [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs), [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs)                     |
-| **ISA Parity**        | [`src/math/common/dispatch/detect.rs`](../src/math/common/dispatch/detect.rs)                            | [`tests/parity/isa_parity.rs`](../tests/parity/isa_parity.rs)                                                                                            |
+| **ISA Parity**        | [`src/math/common/dispatch/detect.rs`](../src/math/common/dispatch/detect.rs)                            | [`tests/models/isa_parity.rs`](../tests/models/isa_parity.rs)                                                                                            |
 | **Stress Signals**    | [`src/testing/stress.rs`](../src/testing/stress.rs)                                                      | [`src/testing/stress_test.rs`](../src/testing/stress_test.rs)                                                                                            |
-| **Observed Drift**    | [`docs/audio_fidelity_map.md §12`](audio_fidelity_map.md#12-fidelity-drift-analysis--contract-bisection) | [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs), [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs) |
+| **Observed Drift**    | [`docs/audio_fidelity_map.md §12`](audio_fidelity_map.md#12-fidelity-drift-analysis--contract-bisection) | [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs), [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs) |
 
 Fixture hashes and model version pins are catalogued in [`docs/fixtures.md`](fixtures.md).
 

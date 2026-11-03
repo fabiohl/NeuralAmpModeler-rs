@@ -3,7 +3,7 @@ SPDX-License-Identifier: Apache-2.0
 Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 -->
 
-# Audio Fidelity Map — Off-Spec DSP Design Decisions
+# Audio Fidelity Map - Off-Spec DSP Design Decisions
 
 This document catalogues all architectural and DSP engineering decisions in `NeuralAmpModeler-rs` that operate **outside the minimal NAM model specification** and influence audio fidelity, real-time (RT) safety, computational overhead, or latency.
 
@@ -20,7 +20,7 @@ The upstream `.nam` and `.namb` specifications define only: network topology (Wa
 | **3** | **LSTM State Precision**    | ❌    | ✅ Yes                           | ❌ No              | Interop ESR $\sim 10^{-11} \text{ to } 10^{-13}$ vs NAMCore; tracks f64 oracle to $\sim 10^{-12} \text{ to } 10^{-13}$.     | ✅ Active          |
 | **4** | **Polyphase Resampler**     | ❌    | ✅ When $f_s \neq 48\text{ kHz}$ | ❌ No              | 64-tap minimum-phase sinc FIR; passband ripple $< 0.05\text{ dB}$; stopband attenuation $\ge 105\text{ dB}$. 48 kHz bypass. | ✅ Active          |
 | **5** | **Neural Oversampling**     | ❌    | ❌ Off by default                | ✅ Host / CLI      | Multi-stage Kaiser half-band FIR; suppresses aliasing; adds 12/24 samples latency; recurrent time-constant shift in LSTMs.  | ✅ Active          |
-| **6** | **Denormal Prevention**     | ❌    | ✅ Yes                           | ❌ No              | Symmetrical $\pm 10^{-11}$ dither offset ($-220\text{ dBFS}$) + hardware MXCSR FTZ/DAZ; zero CPU microcode stalls.          | ✅ Active          |
+| **6** | **Denormal Prevention**     | ❌    | ✅ Yes                           | ❌ No              | Symmetrical $\pm 10^{-11}$ dither offset ($-220\text{ dBFS}$) + hardware MXCSR/FPCR FTZ/DAZ; zero CPU microcode stalls.     | ✅ Active          |
 | **7** | **Adaptive Compute**        | ❌    | ✅ Default (Auto)                | ✅ `--slim` / Host | Graceful fallback FSM (Full → Reduced → Minimal) under CPU spikes to prevent xruns.                                         | ✅ Active          |
 | **8** | **CabSim UPOLS Partitions** | ❌    | ✅ Host policy                   | ✅ Host / CLI      | Uniform-partitioned overlap-save FIR; zero frequency distortion; trades latency ($P$ samples) vs FFT event rate ($f_s/P$).  | ✅ Active          |
 
@@ -78,8 +78,8 @@ Standard exact activations and neural stage oversampling operate synergistically
 
 **Measured Interop Parity:** Under `ActivationPrecision::Standard`, recurrent state drift between NeuralAmpModeler-rs and reference NAMCore is eliminated across all catalogued LSTM models:
 
-| Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                          |
-|:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:------------------------------- |
+| Model                   | ESR vs NAMCore (Standard)  | SNR vs NAMCore    | ESR vs Ideal (f64 Oracle)  | Status                           |
+|:----------------------- |:--------------------------:|:-----------------:|:--------------------------:|:-------------------------------- |
 | **BossLSTM-1×16**       | **$8.51 \times 10^{-12}$** | $110.7\text{ dB}$ | **$9.08 \times 10^{-13}$** | ✅ Noise-floor interop (< 1e-11) |
 | **BossLSTM-2×8**        | **$1.00 \times 10^{-11}$** | $110.0\text{ dB}$ | **$5.78 \times 10^{-13}$** | ✅ Noise-floor interop (< 1e-11) |
 | **Official lstm (H=3)** | **$7.86 \times 10^{-13}$** | $121.0\text{ dB}$ | **$2.71 \times 10^{-12}$** | ✅ Noise-floor interop (< 1e-11) |
@@ -123,9 +123,9 @@ The following dynamic models and container architectures serve as permanent regr
 
 A 32-tap resampler variant was evaluated and rejected: while saving $\sim 40\text{ ns}$ per 64-sample block ($< 0.1\%$ total pipeline execution time), 32 taps caused passband SNR to collapse from $\ge 100\text{ dB}$ down to $\sim 24\text{ dB}$. The 64-tap configuration is a permanent invariant.
 
-### 4.1 Linear & FIR CabSim Rate Adaptation Policy (Decision DEC-02)
+### 4.1 Linear & FIR CabSim Rate Adaptation Policy
 
-Upstream NAMcore v0.6.0 introduced impulse response tap resampling via cubic Hermite interpolation (`_resample_impulse_response`, `linear.cpp:46–72`) during `Linear::Reset()`. NeuralAmpModeler-rs intentionally diverges (**DEC-02 (a)**) by retaining stored impulse response taps untouched and delegating sample-rate conversion to the streaming audio pipeline via `NamResampler`:
+Upstream NAMCore v0.6.0 introduced impulse response tap resampling via cubic Hermite interpolation (`_resample_impulse_response`, `linear.cpp:46–72`) during `Linear::Reset()`. NeuralAmpModeler-rs intentionally diverges by retaining stored impulse response taps untouched and delegating sample-rate conversion to the streaming audio pipeline via `NamResampler`:
 
 - **Measured Fidelity Gap:**
   - Resampling an IR from 44.1 kHz to 48.0 kHz using cubic Hermite interpolation limits time-domain convolution SNR to **$33.34\text{ dB}$** (256 taps, $\text{ESR} = 4.63 \times 10^{-4}$) and **$31.34\text{ dB}$** (2048 taps, $\text{ESR} = 7.34 \times 10^{-4}$).
@@ -140,13 +140,13 @@ Upstream NAMcore v0.6.0 introduced impulse response tap resampling via cubic Her
 
 Every layer in the DSP pipeline is covered by structural invariance tests validating mathematical boundary conditions:
 
-| Domain               | Invariant                                         | Verified By                                                                             | Failure Mode Prevented                |
-|:-------------------- |:------------------------------------------------- |:--------------------------------------------------------------------------------------- |:------------------------------------- |
-| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`tests/models/block_invariance_test.rs`](../tests/models/block_invariance_test.rs)     | Receptive-field phase drift           |
-| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models/reset_matrix_test.rs`](../tests/models/reset_matrix_test.rs)             | Historical state contamination        |
-| **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                           | RT audio clicks / priority inversions |
-| **Denormal Armor**   | Zero subnormal execution penalty                  | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                                   | Microcode exception CPU stalls        |
-| **Allocation Guard** | Zero heap allocations on audio callback           | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                                 | OS allocator lock RT deadline breach  |
+| Domain               | Invariant                                         | Verified By                                                                         | Failure Mode Prevented                |
+|:-------------------- |:------------------------------------------------- |:----------------------------------------------------------------------------------- |:------------------------------------- |
+| **Buffer Tracking**  | Block-size invariance (32+32 vs 64 bit-identical) | [`tests/models/block_invariance_test.rs`](../tests/models/block_invariance_test.rs) | Receptive-field phase drift           |
+| **State Reset**      | Reset idempotency ($A = B$ on identical input)    | [`tests/models/reset_matrix_test.rs`](../tests/models/reset_matrix_test.rs)         | Historical state contamination        |
+| **SPSC Hot-Swap**    | Seamless model swap during active audio           | [`tests/perf_soak.rs`](../tests/perf_soak.rs)                                       | RT audio clicks / priority inversions |
+| **Denormal Armor**   | Zero subnormal execution penalty                  | [`src/math/common/ops.rs`](../src/math/common/ops.rs)                               | Microcode exception CPU stalls        |
+| **Allocation Guard** | Zero heap allocations on audio callback           | [`tests/rt_constraints.rs`](../tests/rt_constraints.rs)                             | OS allocator lock RT deadline breach  |
 
 ---
 
@@ -175,15 +175,16 @@ ADAA requires analytical antiderivatives per activation function, conflicting wi
 
 ## 7. Denormal Prevention: Dither + Hardware FTZ/DAZ
 
-**Architecture:** Two complementary defenses prevent subnormal (denormal) floating-point numbers from entering neural network state buffers, avoiding 10–100× microcode execution stalls on x86 processors:
+**Architecture:** Two complementary defenses prevent subnormal (denormal) floating-point numbers from entering neural network state buffers, avoiding 10–100× microcode execution stalls on `x86_64` and `aarch64` processors:
 
-1. **Deterministic Symmetrical Dither:** A constant offset `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is injected into input samples before inference and subtracted after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)). Because the neural network represents a non-linear transfer function $f$, $f(x + d) - d \neq f(x)$; subtraction does not yield mathematical bit-exact cancellation. However, the $-220\text{ dBFS}$ offset sits more than 70 dB below the $f32$ floating-point machine epsilon ($\sim -144\text{ dBFS}$), maintaining effective noise-floor neutrality while keeping subnormal values flushed from arithmetic pipelines.
-2. **Hardware FTZ/DAZ (MXCSR Register):** Configures SSE2 MXCSR control register flags:
-   - **FTZ (Flush-To-Zero):** Output subnormals flush to positive zero.
-   - **DAZ (Denormals-Are-Zero):** Input subnormals are treated as zero.
-     Reasserted at the entry of every audio buffer callback to defend against host environments that fail to configure or reset MXCSR.
+1. **Deterministic Symmetrical Dither:** A constant offset `DENORMAL_DITHER_OFFSET = 1.0e-11` ($-220\text{ dBFS}$) is injected into input samples before inference and subtracted after inference ([`src/dsp/pipeline/stages/input.rs`](../src/dsp/pipeline/stages/input.rs), [`src/dsp/pipeline/stages/output.rs`](../src/dsp/pipeline/stages/output.rs)). Because the neural network represents a non-linear transfer function $f$, $f(x + d) - d \neq f(x)$; subtraction does not yield mathematical bit-exact cancellation. However, the $-220\text{ dBFS}$ offset sits more than 70 dB below the `f32` floating-point machine epsilon ($\sim -144\text{ dBFS}$), maintaining effective noise-floor neutrality while keeping subnormal values flushed from arithmetic pipelines.
+2. **Hardware FTZ/DAZ (`MXCSR` / `FPCR` Registers):** Configures hardware subnormal flushing across supported target architectures:
+   - **`x86_64` (`SSE2 MXCSR`):** Sets bits 6 (DAZ, Denormals-Are-Zero) and 15 (FTZ, Flush-To-Zero; `0x8040`) via `stmxcsr`/`ldmxcsr`.
+   - **`aarch64` (`FPCR`):** Sets bit 24 (`FZ`, `1 << 24`) via `mrs`/`msr fpcr`.
+   - **Scalar Remainder Tails:** Scalar activation and math helpers invoke `flush_subnormal()` to clamp values with $|x| < \text{f32::MIN\_POSITIVE}$ to signed zero.
+     Hardware flags are reasserted at the entry of every audio buffer callback ([`src/dsp/pipeline/capture.rs`](../src/dsp/pipeline/capture.rs)) to defend against host environments that reset floating-point control registers between callbacks.
 
-**Implementation:** [`src/math/common/ops.rs`](../src/math/common/ops.rs) (`set_daz_ftz`).
+**Implementation:** [`src/math/common/ops.rs`](../src/math/common/ops.rs) (`set_daz_ftz`, `flush_subnormal`).
 
 ---
 
@@ -222,7 +223,7 @@ Empirical measurements on x86-64-v3 (AVX2/FMA) for standard guitar cabinet IRs (
 | **32**          | **0.67 ms**      | 64                | 64              | 1500 Hz              | ~1.20 µs            | ~1.2%             | Ultra-low latency monitoring (IEM) |
 | **64**          | **1.33 ms**      | 32                | 128             | 750 Hz               | ~1.22 µs            | ~0.6%             | Live tracking standard             |
 | **128**         | **2.67 ms**      | 16                | 256             | 375 Hz               | ~3.50 µs            | ~0.35%            | **Universal production default**   |
-| **256**         | **5.33 ms**      | 8                 | 512             | 187.5 Hz             | ~12.58 µs           | ~0.2%             | Complex DAW multi-track mixing     |
+| **256**         | **5.33 ms**      | 8                 | 512             | 187.5 Hz             | ~12.58 µs           | ~0.2%             | Complex multi-track mixing         |
 | **512**         | **10.67 ms**     | 4                 | 1024            | 93.75 Hz             | ~26.00 µs           | ~0.1%             | Offline export / mastering         |
 
 Partition construction and FFT pre-computation occur strictly off-RT during loader initialization (~19.6 µs for 2048 taps).
@@ -250,13 +251,13 @@ Partition sizing in UPOLS has **zero impact on audio fidelity**:
 
 All fidelity and performance thresholds are governed by the automated verification pipeline:
 
-| Governance Layer                    | Verification Mechanism                                                                   | Test Suite & Gate                |
-|:----------------------------------- |:---------------------------------------------------------------------------------------- |:-------------------------------- |
-| **Layer 0 — Golden Generation**     | `tests/fixtures/golden_gen_build.sh` + pinned reference commit (`0b3d3c9`, tag `v0.6.0`) | Contract generation              |
-| **Layer 1 — Pre-committed Goldens** | `tests/models/golden_vectors.rs` — validates Rust output vs binary goldens               | `utils/tests-quick.sh` (Phase 2) |
-| **Layer 2 — Live Parity**           | `tests/parity/cpp_parity.rs` — cross-engine C++ execution                                | `utils/tests-long.sh`            |
+| Governance Layer                    | Verification Mechanism                                                                                         | Test Suite & Gate                                                  |
+|:----------------------------------- |:-------------------------------------------------------------------------------------------------------------- |:------------------------------------------------------------------ |
+| **Layer 0 — Golden Generation**     | [`tests/fixtures/golden_gen_build.sh`](../tests/fixtures/golden_gen_build.sh) + pinned reference (`v0.6.0`)    | Contract & fixture generation                                      |
+| **Layer 1 — Pre-committed Goldens** | [`tests/models/golden_vectors.rs`](../tests/models/golden_vectors.rs) — validates Rust output vs `.golden.bin` | [`utils/tests-quick.sh`](../utils/tests-quick.sh) (`PHASE: tests`) |
+| **Layer 2 — Live Parity**           | [`tests/parity/cpp_parity.rs`](../tests/parity/cpp_parity.rs) — cross-engine C++ execution                     | [`utils/tests-long.sh`](../utils/tests-long.sh)                    |
 
-The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforced as a hard gate by `utils/tests-quick.sh`. Regression baselines are recorded in [`docs/quality-contract.json`](quality-contract.json).
+The golden freshness manifest [`tests/fixtures/.golden_manifest.sha256`](../tests/fixtures/.golden_manifest.sha256) (along with audited generator attestations in [`tests/fixtures/.golden_attest`](../tests/fixtures/.golden_attest)) is enforced as a hard gate in Phase 1 (`PHASE: freshness`) of [`utils/tests-quick.sh`](../utils/tests-quick.sh) via `nam_freshness` ([`src/testing/freshness.rs`](../src/testing/freshness.rs)). Regression baselines are recorded in [`docs/quality-contract.json`](quality-contract.json).
 
 ---
 
@@ -274,25 +275,26 @@ The golden freshness manifest `tests/fixtures/.golden_manifest.sha256` is enforc
 
 ### 12.1 Observed Fidelity Drift
 
-Following the identification of baseline discrepancies in the Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)), a systematic bisection audit was conducted across the commit history between the reference contract date (2026-09-19) and current HEAD (`d059088`). The audit isolates real algorithmic regressions from benign compiler code-generation differences (FMA contraction/reassociation) and upstream dependency updates (NAMCore v0.6.0).
+To distinguish genuine algorithmic changes from benign compiler code-generation shifts (FMA contraction/reassociation) and upstream reference updates (NAMCore v0.6.0), Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)) baselines are audited across both reference axes (`NAMCore` and `f64` oracle).
 
-#### Fidelity Drift Matrix (`modelo × commit × ESR_NAMCore × ESR_f64`)
+#### Fidelity Drift Matrix (`model × commit × ESR_NAMCore × ESR_f64`)
 
-| Model | Reference Commit | Bisected / Active Commit | Contract ESR (NAMCore) | Measured ESR (NAMCore) | Contract ESR (f64 Oracle) | Measured ESR (f64 Oracle) | Δ ESR (NAMCore) | Root Cause Hypothesis & Mechanism | Classification |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- | :---: |
-| **`wavenet-a2-dyn-gated`** | `58e2d02` | `bfdb21e` | $5.03 \times 10^{-11}$ | **$2.56 \times 10^{-14}$** | $1.00 \times 10^{-10}$ | **$1.34 \times 10^{-14}$** | **−99.95%** (~4 orders) | **Algorithmic Fix (F-PERF-05):** Single-channel condition broadcast bug fixed in `bfdb21e` (`for c in 0..cond_size`). Fixtures untouched. | **Legitimate Improvement** |
-| **`convnet-nobn`** | `58e2d02` / `fb24067` | `0e0d09e` / `d059088` | $3.17 \times 10^{-14}$ | **$8.77 \times 10^{-14}$** | N/A | N/A | $+177\%$ ($+5.6 \times 10^{-14}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` LLVM FMA contraction reordered un-normalized direct convolutions. Still $< 10^{-13}$. | **Expected / Compiler Noise** |
-| **`bosswn-nano`** | `58e2d02` | `0e0d09e` / `d059088` | $6.43 \times 10^{-14}$ | **$8.70 \times 10^{-14}$** | $3.05 \times 10^{-14}$ | **$3.05 \times 10^{-14}$** | $+35\%$ ($+2.3 \times 10^{-14}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` 4-channel AVX2 loop scheduling. **f64 oracle strictly identical** ($3.05 \times 10^{-14}$), proving zero DSP engine divergence. | **Expected / Compiler Noise** |
-| **`evh-5150-lite`** (optional) | `58e2d02` | `0e0d09e` / `d059088` | $7.87 \times 10^{-13}$ | **$1.46 \times 10^{-12}$** | $2.64 \times 10^{-13}$ | **$2.64 \times 10^{-13}$** | $+86\%$ ($+6.7 \times 10^{-13}$) | **Compiler Codegen (H2):** `rustc 1.98.1` $\to$ `1.99.0` FMA reordering on 12-channel padded convolutions. **f64 oracle strictly identical** ($2.64 \times 10^{-13}$). | **Expected / Compiler Noise** |
-| **`linear-fft-rf4096`** | `58e2d02` | `829b3d3` | $1.62 \times 10^{-14}$ | **$2.14 \times 10^{-14}$** | N/A | N/A | $+32\%$ ($+5.2 \times 10^{-15}$) | **Upstream Golden Regen (H1, H3):** Pinned NAMCore upgraded to v0.6.0 (`829b3d3`); Eigen FFT summation reordering shifted golden binary. Still at float32 noise floor. | **Expected / Pinned Golden Update** |
-| **`linear-fft-rf8192`** | `58e2d02` | `829b3d3` | $1.69 \times 10^{-14}$ | **$2.85 \times 10^{-14}$** | N/A | N/A | $+69\%$ ($+1.16 \times 10^{-14}$) | **Upstream Golden Regen (H1, H3):** Same as rf4096: NAMCore v0.6.0 golden regeneration in commit `829b3d3`. | **Expected / Pinned Golden Update** |
+| Model                          | Reference Commit      | Bisected / Active Commit | Contract ESR (NAMCore) | Measured ESR (NAMCore)     | Contract ESR (f64 Oracle) | Measured ESR (f64 Oracle)  | Δ ESR (NAMCore)                   | Root Cause Mechanism                                                                                                                                                                  | Classification                      |
+|:------------------------------ |:---------------------:|:------------------------:|:----------------------:|:--------------------------:|:-------------------------:|:--------------------------:|:---------------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:-----------------------------------:|
+| **`wavenet-a2-dyn-gated`**     | `58e2d02`             | `bfdb21e`                | $5.03 \times 10^{-11}$ | **$2.56 \times 10^{-14}$** | $1.00 \times 10^{-10}$    | **$1.34 \times 10^{-14}$** | **−99.95%** (~4 orders)           | **Algorithmic Fix:** Single-channel condition broadcast bug fixed in `bfdb21e` (`for c in 0..cond_size`). Fixtures untouched.                                                         | **Legitimate Improvement**          |
+| **`convnet-nobn`**             | `58e2d02` / `fb24067` | `0e0d09e` / `d059088`    | $3.17 \times 10^{-14}$ | **$8.77 \times 10^{-14}$** | N/A                       | N/A                        | $+177\%$ ($+5.6 \times 10^{-14}$) | **Compiler Codegen:** `rustc 1.98.1` $\to$ `1.99.0` LLVM FMA contraction reordered un-normalized direct convolutions. Still $< 10^{-13}$.                                             | **Expected / Compiler Noise**       |
+| **`bosswn-nano`**              | `58e2d02`             | `0e0d09e` / `d059088`    | $6.43 \times 10^{-14}$ | **$8.70 \times 10^{-14}$** | $3.05 \times 10^{-14}$    | **$3.05 \times 10^{-14}$** | $+35\%$ ($+2.3 \times 10^{-14}$)  | **Compiler Codegen:** `rustc 1.98.1` $\to$ `1.99.0` 4-channel AVX2 loop scheduling. **`f64` oracle strictly identical** ($3.05 \times 10^{-14}$), proving zero DSP engine divergence. | **Expected / Compiler Noise**       |
+| **`evh-5150-lite`** (optional) | `58e2d02`             | `0e0d09e` / `d059088`    | $7.87 \times 10^{-13}$ | **$1.46 \times 10^{-12}$** | $2.64 \times 10^{-13}$    | **$2.64 \times 10^{-13}$** | $+86\%$ ($+6.7 \times 10^{-13}$)  | **Compiler Codegen:** `rustc 1.98.1` $\to$ `1.99.0` FMA reordering on 12-channel padded convolutions. **`f64` oracle strictly identical** ($2.64 \times 10^{-13}$).                   | **Expected / Compiler Noise**       |
+| **`linear-fft-rf4096`**        | `58e2d02`             | `829b3d3`                | $1.62 \times 10^{-14}$ | **$2.14 \times 10^{-14}$** | N/A                       | N/A                        | $+32\%$ ($+5.2 \times 10^{-15}$)  | **Upstream Golden Regen:** Pinned NAMCore upgraded to v0.6.0 (`829b3d3`); Eigen FFT summation reordering shifted golden binary. Still at float32 noise floor.                         | **Expected / Pinned Golden Update** |
+| **`linear-fft-rf8192`**        | `58e2d02`             | `829b3d3`                | $1.69 \times 10^{-14}$ | **$2.85 \times 10^{-14}$** | N/A                       | N/A                        | $+69\%$ ($+1.16 \times 10^{-14}$) | **Upstream Golden Regen:** Same as `rf4096`: NAMCore v0.6.0 golden regeneration in commit `829b3d3`.                                                                                  | **Expected / Pinned Golden Update** |
 
 ### 12.2 Confirmation of the `wavenet-a2-dyn-gated` Fidelity Improvement
 
 1. **Identification of Root Cause Commit:**
-   Forensic commit inspection and bisection pinpoint commit `bfdb21e` ("*feat: add condition broadcast tests and optimize SIMD GEMM kernels for A2 and WaveNet models*", 2026-09-21) as the exact revision that shifted ESR from $5.03 \times 10^{-11}$ down to $2.56 \times 10^{-14}$.
+   Forensic commit inspection and bisection pinpoint commit `bfdb21e` ("*feat: add condition broadcast tests and optimize SIMD GEMM kernels for A2 and WaveNet models*") as the exact revision that shifted ESR from $5.03 \times 10^{-11}$ down to $2.56 \times 10^{-14}$.
+
 2. **Algorithmic Defect & Fix:**
-   In `src/models/a2/model/dynamic/process.rs` (lines 117–124), the single-channel condition broadcast path (`dsp_ch == 1`) contained an off-by-one loop initialization:
+   In [`src/models/a2/model/dynamic/process.rs`](../src/models/a2/model/dynamic/process.rs), the single-channel condition broadcast path (`dsp_ch == 1`) contained an off-by-one loop initialization:
 
    ```rust
    // Prior to bfdb21e (Defective):
@@ -313,15 +315,19 @@ Following the identification of baseline discrepancies in the Quality Dashboard 
    ```
 
    Prior to `bfdb21e`, channel 0 of the broadcast condition vector was unassigned for all frames $f \ge 1$, retaining stale memory or uninitialized samples during dynamic gated layer evaluation.
+
 3. **Absence of Golden Vector Replacement Artifacts:**
-   Both `tests/fixtures/models/a2_dynamic_gated_ch8.nam` and `tests/fixtures/golden_a2_dynamic_gated_ch8.bin` have remained bit-identical and untouched since commit `4356666`. The golden vector was **not** regenerated or replaced.
+   Both `tests/fixtures/models/a2_dynamic_gated_ch8.nam` and `tests/fixtures/golden_a2_dynamic_gated_ch8.bin` remained bit-identical and untouched since commit `4356666`. The golden vector was **not** regenerated or replaced.
+
 4. **Dual Oracle Corroboration:**
    The improvement was corroborated simultaneously across both reference axes:
+
    - **Parity Reference (NAMCore f32):** ESR dropped from $5.03 \times 10^{-11}$ to $2.56 \times 10^{-14}$ ($\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$).
-   - **Absolute Reference (f64 Oracle):** ESR vs the double-precision f64 oracle dropped from $\sim 1.0 \times 10^{-10}$ to $1.34 \times 10^{-14}$.
-   This simultaneous convergence against independent C++ and 64-bit mathematical implementations definitively proves that the shift represents a genuine bug fix in the dynamic A2 inference engine.
+   - **Absolute Reference (f64 Oracle):** ESR vs the double-precision `f64` oracle dropped from $\sim 1.0 \times 10^{-10}$ to $1.34 \times 10^{-14}$.
+     This simultaneous convergence against independent C++ and 64-bit mathematical implementations proves that the shift represents a genuine bug fix in the dynamic A2 inference engine.
+
 5. **Contract Action & Baseline Renewal:**
-   The baseline in [`docs/quality-contract.json`](quality-contract.json) was formally renewed and committed at $2.56 \times 10^{-14}$ (with $1.34 \times 10^{-14}$ vs f64, $\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$), cementing the tighter envelope and preventing regressions up to the former $5.03 \times 10^{-11}$ floor.
+   The baseline in [`docs/quality-contract.json`](quality-contract.json) was renewed at $2.56 \times 10^{-14}$ (with $1.34 \times 10^{-14}$ vs `f64`, $\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$), cementing the tighter envelope and preventing regressions up to the former $5.03 \times 10^{-11}$ floor.
 
 ---
 

@@ -7,8 +7,8 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 This document describes two core architectural components of the `NeuralAmpModeler-rs` engine:
 
-1. **Generic RT Structural-Swap Scheduler** ([`src/common/spsc/swap.rs`](../src/common/spsc/swap.rs)): Coordinates safe, lock-free, zero-allocation updates of heavy heap resources on the audio thread.
-2. **Partitioned-Convolution Driver** ([`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs)): Decouples algorithmic impulse response (IR) latency from audio host block sizes without multiplying memory copies.
+1. **Generic RT Structural-Swap Scheduler** ([`src/common/spsc/swap.rs`](../src/common/spsc/swap.rs)): coordinates safe, lock-free, zero-allocation installation of heavy heap resources on the audio thread.
+2. **Partitioned-Convolution Driver** ([`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs)): decouples the algorithmic impulse-response (IR) latency from the host block size, using a single FIFO sweep per block.
 
 ---
 
@@ -21,21 +21,21 @@ In an audio engine, parameters change at different computational costs:
 - **Scalar parameters** (e.g., input gain, output volume): Updated by changing a few numbers directly in memory.
 - **Structural resources** (e.g., neural models, cab-sim impulse responses, resamplers, oversampling engines, complete preset state): Require pre-allocated heap objects (tens of kilobytes to several megabytes).
 
-Updating a structural resource during audio playback is a **structural swap**. In real-time audio, this presents two strict requirements:
+Replacing a structural resource during audio playback is a **structural swap**. In real-time audio it carries two strict requirements:
 
-1. **Zero allocation and zero deallocation on the audio thread**: Freeing memory (`drop`) invokes system heap allocators, which can block on locks or kernel calls and cause audible glitches ("xruns"). Retired resources must be deferred to an off-real-time garbage collection (GC) thread.
-2. **Deterministic execution time**: Replacing multiple large resources in a single audio callback could exceed the audio deadline (e.g., ~333 µs at 16 samples buffer size). The audio engine must budget how many structural changes are allowed per callback.
+1. **Zero allocation and zero deallocation on the audio thread**: freeing memory (`drop`) invokes the system heap allocator, which can block on locks or kernel calls and cause audible glitches ("xruns"). Retired resources must be handed to an off-real-time garbage-collection (GC) thread.
+2. **Deterministic execution time**: installing several large resources in one audio callback could exceed the deadline (for example, about 333 µs for a 16-sample buffer at 48 kHz). The engine must budget how many structural changes are allowed per callback.
 
-The **RT Structural-Swap Scheduler** provides a single, canonical protocol for all resource swaps across any host architecture.
+The **RT Structural-Swap Scheduler** provides a single, canonical protocol for all resource swaps, independent of the host architecture.
 
 ### 1.2 What is the Partitioned-Convolution Problem?
 
 Cabinet simulation uses **Uniformly Partitioned Overlap-Save (UPOLS)** convolution. In UPOLS, the impulse response is divided into small partitions of size $P$:
 
-- Algorithmic latency is determined by partition size ($P$ samples).
-- If an adapter requires the block size to equal the partition size, the latency is pinned to the host's buffer size. A large host buffer (e.g., 512 samples) forces high latency, and changing host buffer sizes requires rebuilding the convolution engine.
+- Algorithmic latency is determined by the partition size ($P$ samples).
+- If an adapter requires the host block size to equal the partition size, the latency is pinned to the host buffer size: a large host buffer (for example, 512 samples) forces high latency, and changing the host buffer size requires rebuilding the convolution engine.
 
-The **Partitioned-Convolution Driver** solves this by internally batching sub-partitions in a single FIFO sweep, allowing fixed, low-latency partitions regardless of host buffer size.
+The **Partitioned-Convolution Driver** removes that coupling by chunking each host block internally in a single FIFO sweep, so a fixed, low-latency partition works with any host buffer size.
 
 ---
 
@@ -58,8 +58,8 @@ Each audio callback processes incoming commands in three sequential phases:
                    │
                    ▼
 ┌──────────────────────────────────────┐
-│ Phase 1: Bounded Drain & Coalescing  │ ◄── Reads up to pops_per_callback
-│ - Pop payloads from ring buffer      │     commands from SPSC ring
+│ Phase 1: Bounded Drain & Coalescing  │ ◄── Examines up to pops_per_callback
+│ - Classify the ring head (peek)      │     payloads from the SPSC ring
 │ - Apply light scalar values inline   │
 │ - Coalesce same-key structural items │
 └──────────────────┬───────────────────┘
@@ -73,34 +73,39 @@ Each audio callback processes incoming commands in three sequential phases:
                    │
                    ▼
 ┌──────────────────────────────────────┐
-│ After Drain                          │ ◄── Flushes pending local state
-│ - Flush pending scalar locals        │
+│ After Drain                          │ ◄── RtSwapHandler::after_drain
+│ - Flush pending handler-local state  │
 └──────────────────────────────────────┘
 ```
 
 #### Phase 0: Deferred Resolution
 
-If the previous callback parked a structural command (because its swap budget was exhausted), that parked command is resolved first:
+If a previous callback parked a structural payload (because its swap budget was exhausted), that payload is causally before everything still in the ring and is resolved first:
 
-- **Stale check**: If the generation counter indicates the command was superseded while waiting, it is discarded to the GC sink.
-- **Coalescing check**: If the head of the command ring has the same coalesce key, the older parked command is superseded and discarded.
-- **Budget apply**: If budget is available, the parked command is installed immediately. If budget is still unavailable, it remains parked for another callback.
+- **Stale check**: if the handler's generation check reports that the payload no longer matches the current request, it is discarded through the handler (to the GC sink) without being counted as superseded.
+- **Coalescing check**: if the head of the ring carries the same coalesce key, the parked payload is superseded and discarded, and `RT_STATUS_STRUCTURAL_SUPERSEDED` is raised.
+- **Budget apply**: if budget is available, the payload is installed and the budget is consumed. Otherwise it stays parked for another callback and `RT_STATUS_STRUCTURAL_DEFERRED` is raised.
 
 #### Phase 1: Bounded Drain & Coalescing
 
-The audio thread pops up to `SwapTunables::pops_per_callback` commands from the lock-free ring:
+The audio thread examines up to `SwapTunables::pops_per_callback` payloads from the lock-free ring, classifying each head before detaching it:
 
-- **Scalar commands**: Applied immediately inline.
-- **Stale commands**: Discarded directly to the GC sink.
-- **Structural commands**: If multiple commands target the same resource (e.g., rapid preset changes), intermediate commands are discarded (`latest-wins`), and only the most recent candidate is kept.
-- **Budget stop**: If the structural budget is already exhausted, further structural commands are parked, preserving FIFO order.
+- **Stale payloads**: popped and discarded through the handler (to the GC sink).
+- **Scalar payloads**: applied immediately inline, never parked and never coalesced by the scheduler.
+- **Structural payloads with the same coalesce key as the pending candidate**: the older candidate is discarded (`latest-wins`, `RT_STATUS_STRUCTURAL_SUPERSEDED`) at no budget cost.
+- **Structural payloads with a different key**: the pending candidate is installed first and consumes budget, so at most one candidate is ever held and FIFO order across keys is preserved.
+- **Budget stop**: if the structural budget is exhausted, the structural head stays queued in the ring (FIFO intact), `RT_STATUS_STRUCTURAL_DEFERRED` is raised, and the drain stops.
+
+At the end of the phase, the drain raises `RT_STATUS_PARAM_QUEUE_BACKLOG` when the ring is still non-empty and `SwapTunables::backlog_flag` is set; otherwise it raises `RT_STATUS_SPSC_DRAIN_TRUNCATED` when the pop cap was reached with a non-empty ring.
 
 #### Phase 2: Budgeted Apply or Park
 
-If a structural candidate was selected in Phase 1:
+If Phase 1 left a structural candidate:
 
-- If `budget.can_apply()` is true, the payload is installed, the old resource is retired to the GC sink, and the budget is consumed.
-- If the budget is exhausted, the payload is stored in the drain's `deferred` slot to be resolved in Phase 0 of the next callback.
+- If `budget.can_apply()` is true, the payload is installed (the handler retires the replaced resource to the GC sink) and the budget is consumed.
+- If the budget is exhausted, the payload is stored in the drain's single `deferred` slot, the ring's last pop is rolled back so that a sequence acknowledgment never covers it, and Phase 0 of the next callback resolves it.
+
+After the three phases, `RtSwapHandler::after_drain` runs once, letting the handler flush pending local state (for example, batched scalar values).
 
 ---
 
@@ -108,17 +113,18 @@ If a structural candidate was selected in Phase 1:
 
 The scheduler is defined in [`src/common/spsc/swap.rs`](../src/common/spsc/swap.rs):
 
-| Type                | Role                                                                                                                                                                              |
-|:------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`SwapTunables`**  | Configuration struct (pop caps, structural apply limits, backlog reporting flags). Set once at initialization.                                                                    |
-| **`SwapBudget`**    | Per-callback counter tracking allowed structural swaps (`can_apply`, `consume`, `used`, `applied`, `limit`). Can be shared across multiple drains within the same audio callback. |
-| **`GcSink`**        | Safe wrapper around the 3-tier GC cascade (SPSC channel $\to$ parking lot $\to$ overflow buffer) plus optional parking-lot dirty latch. Never drops memory on the audio thread.   |
-| **`SwapRing`**      | Trait abstracting the lock-free consumer ring (`pop`, `peek`, `is_empty`, `occupied`). Includes sequence acknowledgment hooks (`advance_resolved`, `rollback_last_pop`).          |
-| **`RtSwapHandler`** | Trait defining payload behavior: structural classification, coalescing key, generation checking, `install`, and `discard`.                                                        |
-| **`RtSwapDrain`**   | The coordinator struct owning the ring consumer and the single deferred slot (`drain`, `into_parts`, `ring_occupied`). Executes Phases 0–2.                                       |
+| Type                | Role                                                                                                                                                                                                                                   |
+|:------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`SwapTunables`**  | Configuration struct (`pops_per_callback`, `swaps_per_callback`, `backlog_flag`). Set once at construction; never mutated on the RT path.                                                                                              |
+| **`SwapBudget`**    | Per-callback counter tracking allowed structural swaps (`can_apply`, `consume`, `used`, `applied`, `limit`). Can be shared across multiple drains within the same audio callback.                                                      |
+| **`GcSink`**        | Bundle of the 3-tier GC cascade (SPSC channel $\to$ 16-slot parking lot $\to$ overflow buffer) plus an optional parking-lot dirty latch. Never drops memory on the audio thread.                                                       |
+| **`SwapRing`**      | Trait abstracting the lock-free consumer ring (`pop`, `peek`, `is_empty`, `occupied`), implemented for `rtrb::Consumer<Box<P>>`. Includes sequence acknowledgment hooks (`advance_resolved`, `rollback_last_pop`) with no-op defaults. |
+| **`RtSwapHandler`** | Trait defining payload behavior: structural classification, coalescing key, optional generation checking, `install`, `discard`, and the `after_drain` hook.                                                                            |
+| **`RtSwapDrain`**   | The coordinator struct owning the ring consumer and the single deferred slot (`drain`, `into_parts`, `has_deferred`, `ring_occupied`). Executes Phases 0–2.                                                                            |
 
 ```rust
-// Simplified structure of the scheduler API in common::spsc::swap
+// Simplified signatures of the scheduler API in common::spsc::swap
+// (documentation comments omitted; see the source for the full contracts)
 
 pub struct SwapTunables {
     pub pops_per_callback: usize,
@@ -187,15 +193,17 @@ impl<R: SwapRing> RtSwapDrain<R> {
 ### 2.3 Operational Invariants & Guarantees
 
 1. **Zero Real-Time Allocation or Deallocation**:
-   All buffers are pre-allocated. Replaced or discarded objects are moved into `GcSink`, where they are routed off the audio thread for safe reclamation.
+   All buffers are pre-allocated. Replaced, stale, or superseded objects are moved into `GcSink`, where they are routed off the audio thread for reclamation. A payload parked in the deferred slot stays owned by the slot.
 2. **Latest-Wins Coalescing**:
-   Commands sharing the same `coalesce_key` collapse so only the latest configuration is applied. Commands with `coalesce_key == None` (such as atomic preset restore sequences) are strictly preserved in FIFO order.
+   Commands sharing the same `coalesce_key` collapse so only the latest configuration is applied, never across different keys. Commands with `coalesce_key == None` (such as atomic preset-restore sequences) are never superseded and keep FIFO order.
 3. **Budget Enforcement**:
-   At most `swaps_per_callback` structural operations occur in an audio callback, preventing audio deadline overruns.
+   At most `swaps_per_callback` structural applies occur per audio callback across all drains sharing the same `&mut SwapBudget`, preventing deadline overruns.
 4. **Gapless Monotonic Acknowledgment**:
-   When sequence numbers are used, parking an unapplied payload calls `rollback_last_pop()`. The command is only acknowledged via `advance_resolved()` when actually installed or discarded in Phase 0.
+   With sequence-acknowledged rings, parking an unapplied payload calls `rollback_last_pop()`. The command is acknowledged via `advance_resolved()` only when it is actually installed or discarded in Phase 0. An acknowledgment never covers a parked command.
 5. **Lock-Free and Non-Blocking**:
-   The hot path contains no mutexes, system calls, logging macros (`log::*`), or dynamic allocations.
+   The hot path contains no mutexes, system calls, logging macros (`log::*`), `unwrap`/`expect`, or dynamic allocations, and no dynamic dispatch: every generic parameter monomorphizes.
+6. **Telemetry Through `RtStatusFlags`**:
+   Deferrals and supersessions raise `RT_STATUS_STRUCTURAL_DEFERRED` and `RT_STATUS_STRUCTURAL_SUPERSEDED` and increment monotonic counters (`Relaxed`); backlog and truncation are reported as described in Phase 1.
 
 ---
 
@@ -203,11 +211,13 @@ impl<R: SwapRing> RtSwapDrain<R> {
 
 The scheduler supports different host architecture patterns through configuration:
 
-| Topology Pattern        | Typical Use Case                                                        | Configuration (`SwapTunables`)                                  | Handler Strategy                                                      |
-|:----------------------- |:----------------------------------------------------------------------- |:--------------------------------------------------------------- |:--------------------------------------------------------------------- |
-| **Dedicated Rings**     | Standalone hosts with per-resource channels (model, cab-sim, resampler) | Small pop cap (e.g., 8); shared `SwapBudget` across all drains. | Generation-stamped checks (`current_generation`).                     |
-| **Single Mixed Ring**   | Audio plugin hosts with one command stream (scalars + models)           | Larger pop cap (e.g., 64); `backlog_flag = false`.              | Kind-based `coalesce_key`; light scalars applied inline.              |
-| **Sequence-Acked Ring** | Hosts requiring explicit completion tracking for parameter automation   | Standard pop cap; ring implements sequence hooks.               | `advance_resolved` on apply/discard; `rollback_last_pop` on deferral. |
+| Topology Pattern        | Typical Use Case                                                      | Configuration (`SwapTunables`)                                  | Handler Strategy                                                      |
+|:----------------------- |:--------------------------------------------------------------------- |:--------------------------------------------------------------- |:--------------------------------------------------------------------- |
+| **Dedicated Rings**     | Hosts with per-resource channels (model, cab-sim, resampler)          | Small pop cap (e.g., 8); shared `SwapBudget` across all drains. | Generation-stamped checks (`current_generation`).                     |
+| **Single Mixed Ring**   | Hosts with one command stream (scalars + models)                      | Larger pop cap (e.g., 64); scalar-style `backlog_flag`.         | Kind-based `coalesce_key`; light scalars applied inline.              |
+| **Sequence-Acked Ring** | Hosts requiring explicit completion tracking for parameter automation | Standard pop cap; ring implements sequence hooks.               | `advance_resolved` on apply/discard; `rollback_last_pop` on deferral. |
+
+Every knob is an explicit configuration value: pop caps and budgets are never averaged or unified across consumers.
 
 ---
 
@@ -217,10 +227,10 @@ The scheduler supports different host architecture patterns through configuratio
 
 Traditional convolution adapters required the audio block size to match the partition size ($N = P$). This created significant drawbacks:
 
-- When a host negotiated a 512-sample buffer, algorithmic latency jumped to 512 samples (~10.7 ms at 48 kHz).
+- When a host negotiated a 512-sample buffer, algorithmic latency jumped to 512 samples (about 10.7 ms at 48 kHz).
 - Whenever the host changed quantum sizes, the cab-sim engine had to be re-initialized.
 
-The **Partitioned-Convolution Driver** decouples the engine's internal partition size from the host's block size. The partition size is chosen when building the impulse response based on latency requirements (e.g., 64 or 128 samples). The host can then pass blocks of any size ($N < P$, $N = P$, or $N > P$).
+The **Partitioned-Convolution Driver** decouples the engine's partition size from the host block size. The partition size is an installation-time policy chosen when the impulse response is built, based on latency requirements (for example, 64 or 128 samples). The algorithmic latency is exactly one partition (`latency_samples()`), whatever the block sizes. The host can pass blocks of any size ($N < P$, $N = P$, or $N > P$) to `process_block`.
 
 ```text
 Host Audio Block (e.g., 512 samples)
@@ -241,28 +251,28 @@ Host Audio Block (e.g., 512 samples)
 The driver is implemented in [`src/dsp/cabsim/adapter.rs`](../src/dsp/cabsim/adapter.rs):
 
 - **`CabSimAdapter::process_block`**:
-  Processes an arbitrary-sized block of audio in place for a single channel. It splits the block into exact partition chunks, runs the UPOLS convolution, and handles partial sample remainders via internal FIFOs.
+  Processes a block of any size in place for a single channel. It splits the block into exact partition chunks, runs the UPOLS convolution, and carries the partial remainder in the internal FIFOs. It has no partition cap and never raises `RT_STATUS_CABSIM_CONTRACT_VIOLATION`; its output is bit-identical to feeding `process_in_place` with partition-capped windows.
 - **`CabSimAdapter::process_in_place`**:
-  Direct in-place processing for buffers bounded by partition size (`samples.len() <= partition_size`), bypassing the remainder FIFO when block size is known to match or sub-divide the partition.
+  In-place processing for sub-blocks bounded by the partition size (`samples.len() <= partition_size`). A longer slice is clamped to the partition size and raises `RT_STATUS_CABSIM_CONTRACT_VIOLATION` instead of panicking.
 - **`CabSimAdapter::process_variable`**:
-  Variable-size sub-block processing from input slice to distinct output slice.
+  Sub-block processing from an input slice to a distinct, non-overlapping output slice, with the same partition cap and contract-violation handling as `process_in_place`.
 - **`CabSimPair::process_block_stereo`**:
   Runs two independent `CabSimAdapter` instances for Left and Right channels across arbitrary buffer sizes. Crucially, each channel maintains separate FIFO buffers and frequency-delay-line (FDL) states to prevent stereo crosstalk.
 - **`CabSimPair::process_in_place_stereo`**:
   Stereo in-place processing for buffers bounded by partition size.
 - **`CabSimAdapter::drain_tail` / `CabSimPair::drain_tail_stereo`**:
-  When input audio stops (e.g., noise gate closure or silence), the impulse response naturally decays ("rings out"). The `drain_tail` methods feed zero-input blocks to flush the remaining reverberant energy without requiring manual padding by the host.
+  When input audio stops (for example, noise-gate closure or silence), the impulse response decays ("rings out"). The `drain_tail` methods feed zero-input windows to flush the remaining energy without manual padding by the host. They accept an output slice of any size and chunk it internally.
 - **Tail Budget Management**:
-  Methods `tail_samples(&self) -> usize`, `rearm_tail(&mut self)`, and `remaining_tail_samples(&self) -> usize` track the exact sample budget required to flush active FDL states.
+  `tail_samples()`, `rearm_tail()`, and `remaining_tail_samples()` track the sample budget required to flush the active FDL state. The total tail is the IR length in whole partitions plus one extra partition for the adapter's input accumulator. `rearm_tail` is called per host block, never per internal chunk.
 
 ```rust
 // Key signatures in dsp::cabsim::adapter
 
 impl CabSimAdapter {
-    /// In-place block processing for arbitrary buffer sizes.
+    /// In-place block processing for arbitrary buffer sizes (no partition cap).
     pub fn process_block(&mut self, input_output: &mut [f32], rt_status: Option<&RtStatusFlags>);
 
-    /// In-place processing capped at partition size.
+    /// In-place processing capped at partition size (clamps and flags a violation).
     pub fn process_in_place(&mut self, samples: &mut [f32], rt_status: Option<&RtStatusFlags>);
 
     /// Variable sub-block processing between separate input and output slices.
@@ -326,9 +336,11 @@ The internal execution flow of `process_block` operates as follows:
    - Executes UPOLS forward FFT, complex multiply-accumulate across partitions, and inverse FFT.
    - Delivers processed samples back into the slice.
 2. **Remainder Processing**:
-   Any trailing samples ($< P$) are accumulated into the FIFO. If accumulated samples reach partition size, UPOLS executes; otherwise, they remain buffered until the next audio callback.
+   Any trailing samples ($< P$) are accumulated into the input FIFO. When the accumulated samples reach the partition size, UPOLS executes; otherwise they stay buffered until the next callback.
 3. **Shift-to-Front Compaction**:
-   Output FIFOs are pre-allocated to $2 \times P$ samples. When unconsumed samples remain, they are compacted to the front using efficient SIMD memory moves (`copy_within`), guaranteeing that memory never overflows.
+   Both the input and output FIFOs are pre-allocated to $2 \times P$ samples. Before each partition is rendered, unconsumed samples are compacted to the front with `copy_within`, so the write region never overflows the queue. The engine renders directly into the output FIFO, with no intermediate scratch partition.
+4. **Constant Latency**:
+   The output queue starts with one partition of silence, so the delay is exactly $P$ samples for any sequence of block sizes.
 
 ---
 
@@ -342,7 +354,7 @@ Choosing partition size $P$ represents a trade-off between algorithmic latency a
 | **Balanced (Default)** | 128 samples                 | 2.67 ms            | Standard studio recording, live performance |
 | **High Efficiency**    | 256 or 512 samples          | 5.33 ms – 10.67 ms | Mixing, mastering, high track counts        |
 
-For mathematical details and performance curves, refer to [`docs/audio_fidelity_map.md`](audio_fidelity_map.md) (§9).
+For the mathematical formulation and measured CPU cost per partition size, see [`audio_fidelity_map.md`](audio_fidelity_map.md) §9.
 
 ---
 
@@ -351,18 +363,20 @@ For mathematical details and performance curves, refer to [`docs/audio_fidelity_
 Both components are verified by dedicated unit and integration test suites:
 
 - **Structural-Swap Scheduler Verification** ([`src/common/spsc/swap_test.rs`](../src/common/spsc/swap_test.rs)):
-  - **Budget adherence**: Verifies that when multiple structural commands arrive, exactly one is executed and the rest are deferred.
+  - **Budget adherence**: Verifies that with a budget of one, exactly one structural payload is applied per callback and the rest are deferred.
   - **Coalescing**: Confirms that superseded commands are routed to `GcSink` without leak.
   - **FIFO restoration**: Confirms non-coalescible payloads retain causal ordering.
-  - **Zero RT allocations**: Validated via `#[cfg(feature = "heap-audit")]` tracking zero allocations on the audio path.
+  - **Staleness**: Confirms that stale-generation payloads are discarded without being installed.
+  - **Pop cap**: Confirms that the pop cap truncates the drain and raises the corresponding flag.
+  - **Zero RT allocations**: Validated by a heap-audit lane (feature `heap-audit`) proving that the drain path allocates nothing.
   - **Sequence consistency**: Validates that rollback and advance hooks keep sequence counters gapless.
 - **Partitioned-Convolution Driver Verification** ([`src/dsp/cabsim/adapter_test.rs`](../src/dsp/cabsim/adapter_test.rs)):
-  - **Blocking invariance**: Verifies that processing audio in arbitrary chunks (e.g., 16, 64, 333 samples) produces output bit-identical to fixed partition processing.
-  - **Parity verification**: Output matches both the C++ NAMCore reference and 64-bit float mathematical oracles.
-  - **Tail flushing**: Validates smooth decay to true zero without audible discontinuities or contract violation flags.
+  - **Blocking invariance**: Verifies that processing audio in arbitrary chunks (for example, 16, 64, or 333 samples) produces output bit-identical to fixed-partition processing, and that the impulse delay is constant for any blocking.
+  - **Contract handling**: Verifies that `process_block` never raises the contract-violation flag.
+  - **Tail flushing**: Validates that the ring-out terminates, matches the fixed-partition path, and is block-agnostic, without contract-violation flags.
 - **Integration & RT Hardening Verification**:
   - **Heap audit**: [`tests/rt_constraints/cabsim_heap_audit.rs`](../tests/rt_constraints/cabsim_heap_audit.rs) validates zero dynamic heap allocations during steady-state convolution.
-  - **C++ Reference Parity**: [`tests/parity/cabsim_cpp_parity.rs`](../tests/parity/cabsim_cpp_parity.rs) verifies bit-level equivalence with C++ `NeuralAmpModelerPlugin` / `AudioDSPTools` across short, medium, and long impulse responses.
+  - **C++ Reference Parity**: [`tests/parity/cabsim_cpp_parity.rs`](../tests/parity/cabsim_cpp_parity.rs) compares the cab-sim output against the C++ reference implementation across short, medium, and long impulse responses, gated by an ESR threshold documented in the test header.
   - **Golden Vectors**: [`tests/models/cabsim_golden.rs`](../tests/models/cabsim_golden.rs) verifies regression immunity against locked golden vectors.
   - **Stereo Invariance**: [`tests/cabsim_stereo.rs`](../tests/cabsim_stereo.rs) validates channel isolation, zero crosstalk, and multi-rate host quantum support.
 
@@ -370,7 +384,7 @@ Both components are verified by dedicated unit and integration test suites:
 
 ## 5. Companion Documents
 
-- [architecture.md](architecture.md): High-level system architecture and memory management (§2.1 & §2.2).
+- [architecture.md](architecture.md): High-level system architecture, GC cascade (§2.1), and structural swap scheduler (§2.2).
 - [audio_fidelity_map.md](audio_fidelity_map.md): Mathematical formulations and UPOLS trade-off analysis (§9).
 - [testing.md](testing.md): Verification tiers, test execution rules, and parity oracles.
 - [functional-tests.md](functional-tests.md): Functional test specifications and verification procedures.

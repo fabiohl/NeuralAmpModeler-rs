@@ -25,10 +25,6 @@
 //!     drained.
 //! *   **Zero-alloc hot path** — all buffers are pre-allocated in
 //!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
-//! *   **Zero-alloc hot path** — all buffers are pre-allocated in
-//!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
-//! *   **Zero-alloc hot path** — all buffers are pre-allocated in
-//!     [`new()`](crate::dsp::cabsim::adapter::CabSimAdapter::new).
 //! *   **In-place processing** — [`process_in_place()`](crate::dsp::cabsim::adapter::CabSimAdapter::process_in_place)
 //!     reads and writes the same buffer, eliminating the destination copy
 //!     on the audio callback.

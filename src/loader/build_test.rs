@@ -397,6 +397,13 @@ mod tests {
 
         assert!(pair.model_l.is_some());
         assert_eq!(pair.architecture, "WaveNet");
+
+        // Also verify format auto-detection directly from raw bytes without a .namb label
+        let pair_unnamed =
+            load_and_build_model_from_bytes(&namb_bytes, &sys, false, LoadOptions::default())
+                .expect("namb auto-detection from raw bytes must succeed");
+        assert!(pair_unnamed.model_l.is_some());
+        assert_eq!(pair_unnamed.architecture, "WaveNet");
     }
 
     #[test]
