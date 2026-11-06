@@ -35,7 +35,7 @@
 #
 # For regression checks, see the activation test and ELF verification
 # checklist in docs/postmortem-libm-symbol-interposition.md §3–4.
-{
+NAM_LIBM_SHADOW {
   local:
     /* f64 */
     acos; acosh; asin; asinh; atan; atan2; atanh; cbrt; ceil; copysign;

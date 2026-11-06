@@ -11,7 +11,7 @@ use neural_amp_modeler_rs::math::common::{InstructionSet, effective_instruction_
 
 #[test]
 fn contract_default_build_never_dispatches_avx512() {
-    #[cfg(not(feature = "avx512"))]
+    #[cfg(not(nam_avx512))]
     {
         // Even if the physical CPU supports AVX-512, the default engine dispatch
         // is contractually restricted to AVX2 (x86-64-v3 baseline).
@@ -23,7 +23,7 @@ fn contract_default_build_never_dispatches_avx512() {
         );
     }
 
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         // When explicitly compiled with --features avx512, select AVX-512
         // only if physical hardware provides the complete F+VL+BW+DQ matrix.
@@ -38,7 +38,7 @@ fn contract_default_build_never_dispatches_avx512() {
 
 #[test]
 fn contract_simd_math_initialized_off_rt() {
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     {
         // Under opt-in avx512, SIMD_MATH LazyLock is accessible off-RT (R-03).
         let config = *neural_amp_modeler_rs::math::common::SIMD_MATH;

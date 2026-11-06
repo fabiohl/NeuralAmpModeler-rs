@@ -4,8 +4,10 @@
 //! Test skip reporting utility.
 //!
 //! Centralizes logging of skipped test capabilities or missing fixtures into
-//! `target/logs/skips.jsonl` (for aggregation into GAP status in CI and quick test runner)
-//! and stderr (`[STATUS] SKIP_CAPABILITY ...`).
+//! `target/logs/skips-<NAM_RUN_ID>.jsonl` when the harness exports a run id
+//! (falling back to `target/logs/skips.jsonl` for isolated runs), for aggregation
+//! into GAP status in CI and quick test runner, and stderr
+//! (`[STATUS] SKIP_CAPABILITY ...`).
 //!
 //! Panics when `NAM_REQUIRE_CPP_ORACLE=1` and the skip is related to the C++ oracle / render tool.
 
@@ -36,7 +38,7 @@ fn is_optional_reason(reason: &str) -> bool {
         || reason.starts_with("community_model_absent:")
 }
 
-/// Appends a skip record to `target/logs/skips.jsonl` and emits standard diagnostic output.
+/// Appends a skip record to the per-run skip log and emits standard diagnostic output.
 ///
 /// If `NAM_REQUIRE_CPP_ORACLE=1` and the test/reason involves the C++ oracle or render tool,
 /// this immediately panics to fail closed.
@@ -68,9 +70,12 @@ pub fn report_skip(test: &str, reason: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let log_dir = manifest_dir.join("target/logs");
     let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join("skips.jsonl");
 
     let run_id = std::env::var("NAM_RUN_ID").ok();
+    let log_path = match run_id.as_deref() {
+        Some(id) if !id.is_empty() => log_dir.join(format!("skips-{id}.jsonl")),
+        _ => log_dir.join("skips.jsonl"),
+    };
     let pid = std::process::id();
     let record = SkipRecord {
         run_id: run_id.as_deref(),

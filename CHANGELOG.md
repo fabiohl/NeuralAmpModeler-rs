@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed [Unreleased]
+
+- **`--all-targets --all-features` on aarch64:** AVX-512 tests and benchmarks now gate on the `nam_avx512` cfg emitted by `build.rs` instead of the raw `avx512` feature, so `cargo check --all-targets --all-features` succeeds on non-`x86_64` targets. The obsolete `compile_error!` that rejected `avx512` on non-`x86_64` was removed; the `build.rs` gate still keeps the AVX-512 modules out of those builds.
+
+- **QA summary isolation:** `utils/_lib.sh` is now side-effect free when sourced, and `emit` no longer appends to `target/logs/summary.txt` when a child process runs with `lib_quiet=1`. A failed summary append records `EMIT_RC` and forces `FAIL (fails=emit)` instead of silently reporting `PASS`.
+
+- **Deterministic log initialization in CI:** The `msrv` and `cross-platform-parity` jobs now call `lib_init` before their first `phase`/`emit`, so `target/logs` is created on a cold cache and `summary.txt` is truncated per run instead of publishing stale lines from a warm cache.
+
 ## [2.0.0] - 2026-11-03
 
 The engine now runs natively on **`aarch64`**, both Apple Silicon macOS and Linux. Its NEON backend matches the x86_64 path numerically. This release also makes several public entry points fail closed and trims the published package down to production binaries. Read **Breaking Changes** before you upgrade from 1.x.

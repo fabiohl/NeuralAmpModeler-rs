@@ -67,7 +67,7 @@ use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
 use neural_amp_modeler_rs::math::activations::ActivationPrecision;
 use neural_amp_modeler_rs::math::common::InstructionSet;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use neural_amp_modeler_rs::math::common::has_full_avx512;
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::testing::isa_guard::IsaGuard;
@@ -90,24 +90,24 @@ macro_rules! skip_if_unsupported {
         let unsupported_reason: Option<&'static str> = match $isa {
             InstructionSet::Avx2 => None,
             InstructionSet::Avx512 => {
-                #[cfg(feature = "avx512")]
+                #[cfg(nam_avx512)]
                 {
                     (!has_full_avx512()).then_some("avx512_cpu_unsupported")
                 }
-                #[cfg(not(feature = "avx512"))]
+                #[cfg(not(nam_avx512))]
                 {
                     Some("avx512_not_compiled")
                 }
             }
             InstructionSet::Avx512VnniBf16 => {
-                #[cfg(feature = "avx512")]
+                #[cfg(nam_avx512)]
                 {
                     (!has_full_avx512()
                         || !is_x86_feature_detected!("avx512bf16")
                         || !is_x86_feature_detected!("avx512vnni"))
                     .then_some("vnni_bf16_cpu_unsupported")
                 }
-                #[cfg(not(feature = "avx512"))]
+                #[cfg(not(nam_avx512))]
                 {
                     Some("vnni_bf16_not_compiled")
                 }
@@ -286,7 +286,7 @@ fn run_under_isa_hf(
 /// ESR parity within the given budget.
 ///
 /// Reports the SIMD-vs-reference ESR floor for diagnostics (P-8 / P-4).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn assert_isa_parity(
     output_ref: &[f32],
     output_test: &[f32],
@@ -353,7 +353,7 @@ fn assert_isa_parity(
 
 /// Convenience: runs cross-ISA comparison for one model at 48 kHz
 /// in `ActivationPrecision::Standard` (exact-grade) mode.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn check_isa_parity_for_model_hf(
     model_filename: &str,
     golden_name: &str,
@@ -386,7 +386,7 @@ fn check_isa_parity_for_model_hf(
 }
 
 /// Convenience: runs cross-ISA comparison for one model at 48 kHz.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 fn check_isa_parity_for_model(
     model_filename: &str,
     golden_name: &str,
@@ -524,16 +524,16 @@ fn assert_isa_hf_self_consistency(
 // specific calibration in a CI runner with AVX-512 support.
 
 /// Default cross-ISA ESR budget for WaveNet models (conservative).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 const WN_ESR_BUDGET: f64 = 1e-3;
 
 /// Default cross-ISA ESR budget for LSTM models (recurrent accumulation
 /// amplifies minor ISA differences — more generous budget).
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 const LSTM_ESR_BUDGET: f64 = 1e-2;
 
 /// Default cross-ISA ESR budget for A2 models.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 const A2_ESR_BUDGET: f64 = 1e-3;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -628,7 +628,7 @@ fn isa_self_consistency_a2_lite_avx2() {
 // Cross-ISA parity tests — AVX2 (ref) vs AVX-512 (ignored by default)
 // ══════════════════════════════════════════════════════════════════════
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_standard_avx2_vs_avx512() {
@@ -643,7 +643,7 @@ fn isa_parity_wavenet_standard_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_feather_avx2_vs_avx512() {
@@ -658,7 +658,7 @@ fn isa_parity_wavenet_feather_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_wavenet_nano_avx2_vs_avx512() {
@@ -673,7 +673,7 @@ fn isa_parity_wavenet_nano_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_lstm_1x16_avx2_vs_avx512() {
@@ -688,7 +688,7 @@ fn isa_parity_lstm_1x16_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_lstm_2x8_avx2_vs_avx512() {
@@ -703,7 +703,7 @@ fn isa_parity_lstm_2x8_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_a2_full_avx2_vs_avx512() {
@@ -718,7 +718,7 @@ fn isa_parity_a2_full_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_a2_lite_avx2_vs_avx512() {
@@ -737,7 +737,7 @@ fn isa_parity_a2_lite_avx2_vs_avx512() {
 // Cross-ISA parity tests — AVX2 (ref) vs VNNI+BF16 (ignored by default)
 // ══════════════════════════════════════════════════════════════════════
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA legada (requer AVX-512 VNNI+BF16)"]
 #[expect(deprecated)]
@@ -755,7 +755,7 @@ fn isa_parity_wavenet_standard_avx2_vs_vnnibf16() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA legada (requer AVX-512 VNNI+BF16)"]
 #[expect(deprecated)]
@@ -826,14 +826,14 @@ fn isa_hf_self_consistency_lstm_2x8_avx2() {
 // comparable to or better than standard mode.
 
 /// HF cross-ISA ESR budget for LSTM models.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 const LSTM_HF_ESR_BUDGET: f64 = 1e-2;
 
 /// HF cross-ISA ESR budget for WaveNet models.
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 const WN_HF_ESR_BUDGET: f64 = 1e-3;
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_lstm_1x16_avx2_vs_avx512() {
@@ -848,7 +848,7 @@ fn isa_parity_hf_lstm_1x16_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_lstm_2x8_avx2_vs_avx512() {
@@ -863,7 +863,7 @@ fn isa_parity_hf_lstm_2x8_avx2_vs_avx512() {
     );
 }
 
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 #[test]
 #[ignore = "long: paridade ISA (requer hardware AVX-512)"]
 fn isa_parity_hf_wavenet_standard_avx2_vs_avx512() {

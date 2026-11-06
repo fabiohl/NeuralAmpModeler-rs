@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
+lib_init
 trap 'rc=$?; FAILS+=("${PHASE_NAME:-step}"); emit "PHASE: ${PHASE_NAME:-step} FAIL rc=$rc log=${LOG_DIR}/lints-${PHASE_NAME:-step}.log"; finish || true; exit 1' ERR
 
 run_step() {

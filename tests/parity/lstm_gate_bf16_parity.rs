@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-#![cfg(feature = "avx512")]
+#![cfg(nam_avx512)]
 
 use neural_amp_modeler_rs::math::common::gemv_4gate_bf16_fallback;
 use neural_amp_modeler_rs::math::gemm::gemv_4gate_bf16_avx512;

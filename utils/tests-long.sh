@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-long.sh — long-duration audit, stress, and verification suite. Classe B.
 # Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
-# Orçamento: 330
+# Orçamento: 330         # inclui recibo .partial por run id, telemetria por rodada e publish atômico (S3-T2)
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -o pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ STRICT=0
 ONLY_PHASES=()
 SCRIPT_NAME="long"
 LOG_DIR="target/logs"
-RECEIPT_OUT="$LOG_DIR/long-audit-receipt.jsonl"
+RECEIPT_FINAL="$LOG_DIR/long-audit-receipt.jsonl"
 LONG_ROOT="target/long"
 export CARGO_TARGET_DIR="$LONG_ROOT/release"
 
@@ -61,9 +61,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+lib_init
+RECEIPT_OUT="$LOG_DIR/long-audit-receipt.${NAM_RUN_ID}.partial.jsonl"
+SKIPS="$LOG_DIR/skips-${NAM_RUN_ID}.jsonl"
+export NAM_METRICS_JSONL="$LOG_DIR/fidelity-metrics-${NAM_RUN_ID}.jsonl"
+: > "$NAM_METRICS_JSONL"
 if [ ${#ONLY_PHASES[@]} -eq 0 ]; then rm -rf "$LONG_ROOT"; fi
-mkdir -p "$LOG_DIR"
-rm -f "$RECEIPT_OUT" "$LOG_DIR/skips.jsonl"; xtrace_side_channel "$LOG_DIR/long-xtrace.log"
+rm -f "$RECEIPT_OUT"; xtrace_side_channel "$LOG_DIR/long-xtrace.log"
 
 ensure_long_receipt_bin || {
   echo "ERROR: nam_long_receipt binary could not be built" >&2
@@ -168,7 +172,7 @@ exec_phase() {
 # --- Preflight 1: render ---
 run_preflight_render() {
   local render_bin rc=0 smoke
-  render_bin=$(run_cmd bash utils/ensure_namcore_render.sh 2>/dev/null | tail -n 1) || rc=$?
+  render_bin=$(run_cmd env lib_quiet=1 bash utils/ensure_namcore_render.sh 2>/dev/null | tail -n 1) || rc=$?
   [ "$rc" -eq 3 ] && { echo "NAMCore mirror missing in third-party"; return 3; }
   [ "$rc" -ne 0 ] && return "$rc"; [ -x "$render_bin" ] || return 6
   smoke=$("$render_bin" 2>&1) || rc=$?
@@ -182,7 +186,7 @@ run_preflight_catalog() { run_cmd cargo test --release --features testing --test
 exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
-run_preflight_package() { run_cmd cargo package --locked --allow-dirty && run_cmd bash utils/consumer-smoke.sh; }
+run_preflight_package() { run_cmd cargo package --locked --allow-dirty && run_cmd env lib_quiet=1 bash utils/consumer-smoke.sh; }
 exec_phase "preflight-package" "preflight-package" 600 0 run_preflight_package
 
 # --- Preflight 4: freshness ---
@@ -196,13 +200,12 @@ exec_phase "preflight-simd-probe" "preflight-simd-probe" 60 0 run_preflight_simd
 # --- Phase 1: catch-all ---
 run_phase_catch_all() {
   local a=() rc=0
-  rm -f "$LOG_DIR/fidelity-metrics.jsonl"
   [ "$STRICT" -eq 0 ] && [[ " ${GAPS[*]} " == *" preflight-render:"* ]] && a+=(--skip cpp_parity::live_cross_validation)
   run_cmd cargo test --release --features testing --no-fail-fast -- --include-ignored "${a[@]}" || rc=$?
-  if [ -s "$LOG_DIR/skips.jsonl" ]; then
+  if [ -s "$SKIPS" ]; then
     local total optional blocking
-    total=$(wc -l < "$LOG_DIR/skips.jsonl")
-    optional=$(grep -c '"optional":true' "$LOG_DIR/skips.jsonl" 2>/dev/null || true)
+    total=$(wc -l < "$SKIPS")
+    optional=$(grep -c '"optional":true' "$SKIPS" 2>/dev/null || true)
     optional=${optional:-0}
     blocking=$((total - optional))
     [ "$blocking" -gt 0 ] && PHASE_GAP="skip-capability:$blocking"
@@ -276,21 +279,32 @@ exec_phase "phase8" "perf" 600 0 run_phase_perf
 
 ONLY_ARGS=()
 if [ ${#ONLY_PHASES[@]} -gt 0 ]; then
+  SCOPE=partial
   joined_only=$(IFS=,; echo "${ONLY_PHASES[*]}")
   ONLY_ARGS=(--only "$joined_only")
 fi
 
 echo "Emitting suite summary to receipt..."
-"$LONG_RECEIPT_BIN" summary "${ONLY_ARGS[@]}" --out "$RECEIPT_OUT" || {
+RECEIPT_READY=0
+if "$LONG_RECEIPT_BIN" summary "${ONLY_ARGS[@]}" --out "$RECEIPT_OUT"; then
+  VALIDATE_ARGS=()
+  [ "$STRICT" -eq 1 ] && VALIDATE_ARGS+=("--strict")
+  if "$LONG_RECEIPT_BIN" validate "${VALIDATE_ARGS[@]}" "${ONLY_ARGS[@]}" --out "$RECEIPT_OUT"; then
+    RECEIPT_READY=1
+  else
+    rc=$?
+    if [ "$rc" -ne 4 ]; then FAILS+=("receipt-validation"); emit "PHASE: receipt-validation FAIL"; fi
+  fi
+else
   FAILS+=("receipt-summary")
   emit "PHASE: receipt-summary FAIL"
-}
-
-VALIDATE_ARGS=()
-[ "$STRICT" -eq 1 ] && VALIDATE_ARGS+=("--strict")
-"$LONG_RECEIPT_BIN" validate "${VALIDATE_ARGS[@]}" "${ONLY_ARGS[@]}" --out "$RECEIPT_OUT" || {
-  rc=$?
-  if [ "$rc" -ne 4 ]; then FAILS+=("receipt-validation"); emit "PHASE: receipt-validation FAIL"; fi
-}
+fi
+if [ "$RECEIPT_READY" -eq 1 ] && [ ${#ONLY_PHASES[@]} -eq 0 ]; then
+  if mv -f "$RECEIPT_OUT" "$RECEIPT_FINAL"; then
+    emit "PHASE: receipt-publish PASS log=$RECEIPT_FINAL"
+  else
+    FAILS+=("receipt-publish"); emit "PHASE: receipt-publish FAIL"
+  fi
+fi
 
 finish

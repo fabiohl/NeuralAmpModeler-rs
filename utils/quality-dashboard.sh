@@ -8,6 +8,8 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
+case "${1:-}" in -h|--help) echo "Uso: utils/quality-dashboard.sh [--check [<contrato>] [--fidelity-only] | --save]"; exit 0 ;; esac
+lib_init
 rc=0; "$(ensure_qa_bin nam_quality testing)" dashboard "$@" || rc=$?
 [ "$rc" -eq 0 ] || FAILS+=(quality)
 frc=0; finish || frc=$?

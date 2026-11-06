@@ -11,7 +11,7 @@
 use neural_amp_modeler_rs::math::activations::sigmoid::simd_sigmoid_avx2;
 use neural_amp_modeler_rs::math::activations::tanh::simd_tanh_avx2;
 use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx2;
-#[cfg(feature = "avx512")]
+#[cfg(nam_avx512)]
 use neural_amp_modeler_rs::math::gemm::dot_basic::dot_product_avx512;
 use proptest::prelude::*;
 
@@ -154,7 +154,7 @@ proptest! {
     }
 
         /// Validates the AVX-512 dot product (when available in hardware).
-    #[cfg(feature = "avx512")]
+    #[cfg(nam_avx512)]
     #[test]
     #[ignore = "long: proptest de math SIMD"]
     fn prop_dot_product_avx512_vs_scalar((vec_a, vec_b) in vec_pair_strategy()) {

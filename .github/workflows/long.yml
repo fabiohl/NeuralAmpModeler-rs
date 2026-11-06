@@ -38,13 +38,14 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin && rustc --version
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Record provenance
@@ -65,15 +66,28 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Release build gate
+        env:
+          CARGO_TARGET_DIR: target/long/release
+        run: cargo build --locked --release --workspace
       - name: Setup third-party (C++ oracle)
         run: ./utils/setup-third-party.sh
       - name: Long QA Suite
+        env:
+          PHASES_INPUT: ${{ inputs.phases }}
+          STRICT_INPUT: ${{ inputs.strict }}
         run: |
           STRICT_FLAG=""
-          if [ "${{ inputs.strict }}" = "true" ]; then
+          if [ "$STRICT_INPUT" = "true" ]; then
             STRICT_FLAG="--strict"
           fi
-          ./utils/tests-long.sh $STRICT_FLAG --only "${{ inputs.phases }}"
+          # Operator input is transported through the environment, never
+          # interpolated into the shell command line. An empty list falls back
+          # to the documented hosted-safe default instead of selecting nothing.
+          if [ -z "$PHASES_INPUT" ]; then
+            PHASES_INPUT='preflight-render,preflight-catalog,preflight-package,preflight-freshness,phase1,phase2,phase3,phase4,phase7'
+          fi
+          ./utils/tests-long.sh $STRICT_FLAG --only "$PHASES_INPUT"
       - name: Quality Dashboard (fidelity + parity)
         if: always()
         run: ./utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only
@@ -84,11 +98,11 @@ jobs:
           title: Long QA Suite (${{ inputs.ref || github.ref }} @ ${{ steps.provenance.outputs.sha }})
       - name: Upload logs and receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: long-logs-receipts
           path: |
             target/logs/**
             target/long/**/*.jsonl
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14

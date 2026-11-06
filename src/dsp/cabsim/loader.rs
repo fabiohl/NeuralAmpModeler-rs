@@ -65,7 +65,23 @@ impl CabSimIr {
             target_rate,
             normalize
         );
-        let (samples, original_rate) = ir_parse::parse_wav(&data)?;
+        Self::load_from_memory(&data, target_rate, normalize)
+    }
+
+    /// Loads a mono WAV impulse response directly from in-memory `data`.
+    ///
+    /// # Parameters
+    /// - `data`: byte slice containing raw `.wav` data.
+    /// - `target_rate`: desired sample rate after resampling. If 0, no resampling.
+    /// - `normalize`: if true, normalize samples so peak amplitude = 1.0.
+    #[cold]
+    pub fn load_from_memory(
+        data: &[u8],
+        target_rate: u32,
+        normalize: bool,
+    ) -> io::Result<Box<Self>> {
+        let file_size_bytes = data.len();
+        let (samples, original_rate) = ir_parse::parse_wav(data)?;
 
         let mut samples = if target_rate != 0 && target_rate != original_rate {
             info!(

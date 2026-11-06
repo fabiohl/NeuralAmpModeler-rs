@@ -13,7 +13,7 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
-rm -f "target/logs/miri-audit-status.tsv"
+lib_init
 trap 'rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ -n "${DONE:-}" ] || { FAILS+=(miri-audit); DONE=1; finish; }' EXIT
 
 LOG_DIR="target/logs"

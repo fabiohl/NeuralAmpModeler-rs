@@ -2,23 +2,47 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # _lib.sh — helpers locais de NeuralAmpModeler-rs. Sem cópia pinada, sem hash.
-# Orçamento: 180
+# Orçamento: 189          # wc -l + 10: lib_init com marcador RUN: de rodada local
 
-LOG_DIR=target/logs; [ -d "$LOG_DIR" ] || { command -v mkdir >/dev/null 2>&1 && mkdir -p "$LOG_DIR"; } || true
-export NAM_RUN_ID="${NAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
-[ "$(cat "$LOG_DIR/.summary-run" 2>/dev/null)" = "$NAM_RUN_ID" ] || { : > "$LOG_DIR/summary.txt"; printf '%s\n' "$NAM_RUN_ID" > "$LOG_DIR/.summary-run"; }
-T0=$SECONDS; FAILS=(); GAPS=(); STRICT=0
+LOG_DIR=target/logs
+NAM_RUN_ID="${NAM_RUN_ID:-}"
+T0=$SECONDS; FAILS=(); GAPS=(); STRICT=0; EMIT_RC=0; SCOPE="${SCOPE:-full}"
 SCRIPT_NAME="$(basename "${0%.sh}")"; STATUS_NAME="$SCRIPT_NAME"
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$LIB_DIR")"; cd "$PROJECT_DIR"
+PROJECT_DIR="$(dirname "$LIB_DIR")"
 THIRD_PARTY_DIR="$PROJECT_DIR/third-party"
 CORE_DIR="$THIRD_PARTY_DIR/NeuralAmpModelerCore"
 SETUP_THIRD_PARTY_SH="$PROJECT_DIR/utils/setup-third-party.sh"
 
 warn() { echo "WARN: $*" >&2; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
-emit() { echo "$*"; printf '%s\n' "$*" >> "$LOG_DIR/summary.txt"; }
+
+# lib_init — único ponto que cria target/logs, trunca summary.txt e remove o
+# carrier obsoleto. Deve ser chamado depois do parsing de -h/--help (§5, §9.46).
+# NAM_RUN_ID pré-exportado (CI/topo) trunca summary.txt quando .summary-run difere;
+# id gerado localmente não trunca: acumula e emite a linha RUN: <id>.
+# lib_quiet=1 (filho dentro de fase do pai) inibe summary/marker, mas ainda
+# remove o carrier do próprio filho para que um crash nunca deixe veredito velho.
+lib_init() {
+  mkdir -p "$LOG_DIR" || die "cannot create $LOG_DIR"
+  local fresh=0
+  if [ -z "$NAM_RUN_ID" ]; then NAM_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"; fresh=1; fi
+  export NAM_RUN_ID
+  rm -f "$LOG_DIR/${STATUS_NAME}-status.tsv"
+  if [ "${lib_quiet:-}" = "1" ]; then return 0; fi
+  if [ "$(cat "$LOG_DIR/.summary-run" 2>/dev/null)" != "$NAM_RUN_ID" ]; then
+    if [ "$fresh" = 0 ]; then : > "$LOG_DIR/summary.txt" || die "cannot reset $LOG_DIR/summary.txt"; fi
+    printf '%s\n' "$NAM_RUN_ID" > "$LOG_DIR/.summary-run" || die "cannot write $LOG_DIR/.summary-run"
+  fi
+  if [ "$fresh" = 1 ]; then emit "RUN: $NAM_RUN_ID"; fi
+}
+
+emit() {
+  printf '%s\n' "$*"
+  [ "${lib_quiet:-}" = "1" ] || printf '%s\n' "$*" >> "$LOG_DIR/summary.txt" 2>/dev/null \
+    || { echo "ERROR: cannot append summary.txt" >&2; EMIT_RC=1; }
+}
 ok()   { echo "OK: $*"; }
 
 phase() { emit "PHASE: $1"; }
@@ -46,14 +70,17 @@ finish() {
   local s=PASS e=0 sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
-  if ! printf '%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
-    "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" > "$sf" 2>/dev/null; then
+  [ "$EMIT_RC" -ne 0 ] && { FAILS+=("emit"); s=FAIL; }
+  if ! printf '%s\t%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
+    "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" "scope=${SCOPE:-full}" > "$sf" 2>/dev/null; then
     echo "ERROR: cannot write status carrier $sf" >&2
-    emit "PHASE: carrier FAIL path=$sf" || e=1
+    emit "PHASE: carrier FAIL path=$sf"
     s=FAIL
     [ ${#FAILS[@]} -gt 0 ] || FAILS+=("carrier")
+    e=1
   fi
-  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none}" || e=1
+  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none} scope=${SCOPE:-full}"
+  [ "$EMIT_RC" -ne 0 ] && e=1
   [ "$s" != FAIL ] && [ "$e" -eq 0 ]
 }
 
@@ -84,7 +111,7 @@ ensure_third_party() {
     && [ -n "$(ls -A "$CORE_DIR/Dependencies/AudioDSPTools" 2>/dev/null)" ] && return 0
   [ -f "$SETUP_THIRD_PARTY_SH" ] || { warn "setup-third-party.sh missing"; return 1; }
   echo "→ third-party mirrors missing — running utils/setup-third-party.sh..."
-  bash "$SETUP_THIRD_PARTY_SH" || return 1
+  lib_quiet=1 bash "$SETUP_THIRD_PARTY_SH" || return 1
   [ -d "$CORE_DIR" ] && return 0
   [ "$mode" = "hard" ] && { echo "ERROR: NeuralAmpModelerCore missing" >&2; return 1; }
   return 1

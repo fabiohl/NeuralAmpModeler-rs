@@ -13,7 +13,7 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
-rm -f "$LOG_DIR/render-a2-dumps-status.tsv"
+lib_init
 trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(render-a2-dumps); DONE=1; finish; }' EXIT
 vernier() { set +x; FAILS+=(render-a2-dumps); DONE=1; finish || true; die "$*"; }
 

@@ -57,9 +57,10 @@ fn main() {
 }
 
 /// Emits `nam_avx512` only when the `avx512` feature is enabled for an x86_64
-/// target. The AVX-512 modules gate on this cfg, so aarch64 documentation builds
-/// (docs.rs `all-features`) compile without them. Runs before the `DOCS_RS`
-/// early return so docs.rs builds see the same gate.
+/// target. The AVX-512 modules, tests, and benchmarks gate on this cfg, so
+/// aarch64 `--all-features` and documentation builds (docs.rs `all-features`)
+/// compile without them. Runs before the `DOCS_RS` early return so docs.rs
+/// builds see the same gate.
 fn emit_avx512_cfg() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_AVX512");
     let x86_64 = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "x86_64");

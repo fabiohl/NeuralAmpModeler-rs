@@ -32,7 +32,7 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
-rm -f "$LOG_DIR/setup-third-party-status.tsv"
+lib_init
 trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(setup-third-party); DONE=1; finish; }' EXIT
 
 if ! command -v git >/dev/null 2>&1; then

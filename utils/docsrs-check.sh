@@ -14,6 +14,7 @@ esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
+lib_init
 PHASE_NAME=docsrs; phase docsrs
 require_nightly
 

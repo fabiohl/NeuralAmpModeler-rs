@@ -21,6 +21,7 @@ case "$#:${1:-}" in
 esac
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
+lib_init
 
 echo "NeuralAmpModeler-rs Supply Chain Update Pipeline"
 

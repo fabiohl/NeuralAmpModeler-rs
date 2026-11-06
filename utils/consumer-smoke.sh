@@ -10,7 +10,8 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/consumer-smoke.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-consumer-smoke}"); emit "PHASE: ${PHASE_NAME:-consumer-smoke} FAIL rc=$rc log=${log:-none}"; finish || true; exit 1' ERR
+lib_init
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-consumer-smoke}"); emit "PHASE: ${PHASE_NAME:-consumer-smoke} FAIL rc=$rc log=${log:-$LOG_DIR/consumer-smoke.log}"; finish || true; exit 1' ERR
 
 PHASE_NAME=consumer-smoke; phase consumer-smoke
 log="$LOG_DIR/consumer-smoke.log"

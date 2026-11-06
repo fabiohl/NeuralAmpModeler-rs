@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+# actionlint configuration: declares runner image labels that are not yet in
+# actionlint's built-in list, so workflow validation stays clean.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

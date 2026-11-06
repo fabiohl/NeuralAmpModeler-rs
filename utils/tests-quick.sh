@@ -10,8 +10,10 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/tests-quick.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-step}"); emit "PHASE: ${PHASE_NAME:-step} FAIL rc=$rc log=${PHASE_LOG:-none}"; finish || true; exit 1' ERR
-rm -f "$LOG_DIR/skips.jsonl" "$LOG_DIR/tests-quick-status.tsv"
+lib_init
+PHASE_NAME=init; PHASE_LOG="$LOG_DIR/quick-init.log"
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-step}"); emit "PHASE: ${PHASE_NAME:-step} FAIL rc=$rc log=${PHASE_LOG:-$LOG_DIR/quick-step.log}"; finish || true; exit 1' ERR
+SKIPS="$LOG_DIR/skips-${NAM_RUN_ID}.jsonl"
 
 PHASE_NAME=freshness; phase freshness
 log_fresh="$LOG_DIR/quick-freshness.log"; rc_fresh=0; PHASE_LOG="$log_fresh"
@@ -33,8 +35,8 @@ else
   FAILS+=("tests"); emit "PHASE: tests FAIL rc=$rc_tests log=$log_tests"; finish || true; exit 1
 fi
 
-if [ -s "$LOG_DIR/skips.jsonl" ]; then
-  blocking=$(grep -vc '"optional":true' "$LOG_DIR/skips.jsonl" 2>/dev/null || true)
+if [ -s "$SKIPS" ]; then
+  blocking=$(grep -vc '"optional":true' "$SKIPS" 2>/dev/null || true)
   [ "${blocking:-0}" -gt 0 ] && gap "skip-capability:$blocking"
 fi
 

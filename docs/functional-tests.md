@@ -174,7 +174,7 @@ The quick suite is the primary automated gate for local development (~16–87s m
 # Standard local verification (skips missing optional vendor fixtures gracefully)
 ./utils/tests-quick.sh
 
-# Missing required capabilities and fixtures are recorded in target/logs/skips.jsonl
+# Missing required capabilities and fixtures are recorded in target/logs/skips-<NAM_RUN_ID>.jsonl
 # as a GAP (skip-capability:<n>); optional skips (models_nondist* / community_model_absent*)
 # are flagged with "optional":true and do not fail --strict. Strict mode belongs to the long suite:
 # ./utils/tests-long.sh --strict
@@ -185,7 +185,7 @@ The quick suite is the primary automated gate for local development (~16–87s m
 
 **Expected Outcome:**
 
-- Local runs: `RESULT: PASS` or `RESULT: PASS_WITH_GAPS` with exit status 0 (a `skip-capability:<n>` gap is derived only from blocking records of `target/logs/skips.jsonl`; optional non-distributable model skips are recorded with `"optional":true` and do not create a blocking gap); a failed phase yields `RESULT: FAIL` and exit status 1. Freshness, test/compilation, zero-test and unexpected-error paths all terminate through `finish`, producing exactly one `RESULT`, the phase `FAIL` with its log path, and the current `target/logs/tests-quick-status.tsv` carrier (a stale carrier is removed at start, and a carrier write failure fails the run).
+- Local runs: `RESULT: PASS` or `RESULT: PASS_WITH_GAPS` with exit status 0 (a `skip-capability:<n>` gap is derived only from blocking records of the current run's `target/logs/skips-<NAM_RUN_ID>.jsonl`, or `target/logs/skips.jsonl` when no run id is exported; optional non-distributable model skips are recorded with `"optional":true` and do not create a blocking gap); a failed phase yields `RESULT: FAIL` and exit status 1. Freshness, test/compilation, zero-test and unexpected-error paths all terminate through `finish`, producing exactly one `RESULT`, the phase `FAIL` with its log path, and the current `target/logs/tests-quick-status.tsv` carrier (a stale carrier is removed at start, and a carrier write failure fails the run).
 - The quick suite emits no receipt. Release certification requires `utils/tests-long.sh --strict` with zero gaps and exit status 0 (the quick suite has no strict flag).
 
 ---
@@ -206,11 +206,11 @@ The long audit suite provides exhaustive pre-release validation (~10–13 minute
 
 - **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log` with shell xtrace routed to `target/logs/long-xtrace.log` by `xtrace_side_channel` (`utils/_lib.sh`), so the phase log contains command output only.
 
-- **Numeric telemetry:** `target/logs/fidelity-metrics.jsonl` carries ESR/SNR/MR-STFT/MSE rows from the fidelity helpers and `heap_alloc` totals (`scenario`, `allocations`) from `phase4`; it is truncated before `phase1` and never gates a phase.
+- **Numeric telemetry:** `target/logs/fidelity-metrics-<NAM_RUN_ID>.jsonl` (exported as `NAM_METRICS_JSONL`) carries ESR/SNR/MR-STFT/MSE rows from the fidelity helpers and `heap_alloc` totals (`scenario`, `allocations`) from `phase4`; it is truncated before `phase1`, isolated per run, and never gates a phase. `target/logs/fidelity-metrics.jsonl` remains only as the fixed fallback for isolated consumers.
 
 - **Quality verdict:** `utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only` checks fidelity without the performance baseline. The full `--check` remains receipt 5 for release certification.
 
-- **Typed discipline verdicts:** each discipline that uses `_lib.sh` writes `target/logs/<script>-status.tsv` containing four tab-separated columns (`<discipline>\t<verdict>\t<gaps>\t<fails>`), where internal gap and failure lists are comma-separated.
+- **Typed discipline verdicts:** each discipline that uses `_lib.sh` writes `target/logs/<script>-status.tsv` containing five tab-separated columns (`<discipline>\t<verdict>\t<gaps>\t<fails>\t<scope=full|scope=partial>`), where internal gap and failure lists are comma-separated. A partial selection (`--only`) records `scope=partial` without counting as a GAP.
 
 - **Receipt Validation:**
 
@@ -227,12 +227,13 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 | File Path                                        | Generating Component / Phase               | Diagnostic Contents                                                                                                                                                                                                  |
 |:------------------------------------------------ |:------------------------------------------ |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`target/logs/summary.txt`**                    | `emit` in `utils/_lib.sh`                  | Canonical `PHASE:` and `RESULT:` stream accumulated across top-level discipline invocations.                                                                                                                         |
-| **`target/logs/<script>-status.tsv`**            | `finish` in `utils/_lib.sh`                | Typed four-column tab-separated discipline carrier (`<discipline>\t<verdict>\t<gaps>\t<fails>`); internal lists are comma-separated.                                                                                 |
+| **`target/logs/<script>-status.tsv`**            | `finish` in `utils/_lib.sh`                | Typed five-column tab-separated discipline carrier (`<discipline>\t<verdict>\t<gaps>\t<fails>\t<scope=full|scope=partial>`); internal lists are comma-separated.                                                    |
 | **`target/logs/lints-<phase>.log`**              | `utils/lints.sh`                           | Per-phase static quality gate logs (`fmt`, `spdx`, `check`, `clippy`, `doc`, `policies`).                                                                                                                            |
 | **`target/logs/quick-freshness.log`**            | `tests-quick.sh` (`freshness`)             | `nam_freshness artifacts-hard` output and generator-drift diagnostics.                                                                                                                                               |
 | **`target/logs/quick-tests.log`**                | `tests-quick.sh` (`tests`)                 | Full non-ignored `cargo test --features testing,pinned` output (Debug profile).                                                                                                                                      |
-| **`target/logs/skips.jsonl`**                    | `tests-quick.sh` / test harness            | Typed `report_skip` records (missing C++ oracle, distributable fixtures, non-distributable/community models); blocking records aggregate into `skip-capability:<n>` gaps, optional ones are flagged `optional:true`. |
-| **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)                    | Machine-readable structured audit receipt (per-phase JSON entries).                                                                                                                                                  |
+| **`target/logs/skips-<NAM_RUN_ID>.jsonl`**       | `tests-quick.sh` / test harness            | Per-run typed `report_skip` records (missing C++ oracle, distributable fixtures, non-distributable/community models); blocking records aggregate into `skip-capability:<n>` gaps, optional ones are flagged `optional:true`. `target/logs/skips.jsonl` is the fallback when no run id is exported. |
+| **`target/logs/long-audit-receipt.<NAM_RUN_ID>.partial.jsonl`** | `tests-long.sh` (staging)      | Run-scoped staging receipt; published to the canonical name only after `summary`+`validate` succeed on a full run. |
+| **`target/logs/long-audit-receipt.jsonl`**       | `tests-long.sh` (Final)                    | Machine-readable structured audit receipt (per-phase JSON entries), published atomically only by a successful full run.                                                                                             |
 | **`target/logs/long-preflight-render.log`**      | `tests-long.sh` (`preflight-render`)       | C++ reference render build/validation diagnostics.                                                                                                                                                                   |
 | **`target/logs/long-preflight-catalog.log`**     | `tests-long.sh` (`preflight-catalog`)      | Fixture catalog discovery, SHA-256 manifest checks, and missing fixture diagnostics.                                                                                                                                 |
 | **`target/logs/long-preflight-package.log`**     | `tests-long.sh` (`preflight-package`)      | Output of `cargo package --locked` (packaging and verify build).                                                                                                                                                     |
@@ -245,7 +246,7 @@ All test runners persist execution logs under `target/logs/` (and `target/debug-
 | **`target/logs/long-soak.log`**                  | `tests-long.sh` (`soak`)                   | Numerical soak logs, SPSC queue sweeps, and endurance metrics.                                                                                                                                                       |
 | **`target/logs/long-isa-codegen.log`**           | `tests-long.sh` (`isa-codegen`)            | `simd_probe` output and `isa_contract` checks.                                                                                                                                                                       |
 | **`target/logs/long-heap-audit.log`**            | `tests-long.sh` (`heap-audit`)             | `CountingAllocator` memory interceptor reports verifying zero allocations on RT thread.                                                                                                                              |
-| **`target/logs/fidelity-metrics.jsonl`**         | `tests-long.sh` (`catch-all`/`heap-audit`) | Numeric telemetry: fidelity rows (ESR/SNR/MR-STFT/MSE) and `heap_alloc` totals per scenario; truncated before `phase1`, never a gate.                                                                                |
+| **`target/logs/fidelity-metrics-<NAM_RUN_ID>.jsonl`** | `tests-long.sh` (`catch-all`/`heap-audit`) | Per-run numeric telemetry: fidelity rows (ESR/SNR/MR-STFT/MSE) and `heap_alloc` totals per scenario; truncated before `phase1`, never a gate. `fidelity-metrics.jsonl` remains the fixed fallback.                   |
 | **`target/logs/quality_report.jsonl`**           | `nam_quality dashboard` (quality phase)    | Typed per-phase quality report (`freshness`, `third_party`, fidelity phases, performance). `observed_records` counts executed test cases for test-backed phases and measured metrics for measurement phases.         |
 | **`target/logs/fidelity_metrics.jsonl`**         | `nam_quality dashboard` (quality phase)    | Quality fidelity metrics (ESR/SNR/MR-STFT/MSE) consumed by `nam_quality ingest`; the underscore distinguishes it from the long-suite `fidelity-metrics.jsonl` (hyphen).                                              |
 | **`target/logs/long-xtrace.log`**                | `tests-long.sh` (manual runs)              | Shell xtrace side-channel for long phases.                                                                                                                                                                           |
@@ -353,7 +354,7 @@ To maintain strict hygiene across public checkouts, the fixture catalog (`src/te
 
 - **`RequiredLocal`:** Standard models committed to repository git history (`tests/fixtures/models/*.nam`). Their absence hard-fails the preflight gate.
 - **`OptionalExternal`:** Proprietary community models (`EVH-5150-Lite.nam`, `APP-EVH-Stealth100-Dialled-xSTD.nam`, `Boss BD-2 H2O Mod T-12_00 G-12_00.nam`, `SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam`). When absent in clean developer clones, `catalog_preflight` gracefully classifies them as `MISSING-OPTIONAL` / `SKIP-CAPABILITY`, allowing `catalog_preflight` to pass cleanly with exit code 0 (`PASS`).
-- **Typed skip evidence:** tests that need an absent optional model (`nondist_validation`, `nam_infer_test::test_community_models_inference`) call `neural_amp_modeler_rs::testing::report_skip` with reasons `models_nondist_absent`, `models_nondist_empty`, or `community_model_absent:<file>`. The record lands in `target/logs/skips.jsonl`; blocking records become a `skip-capability:<n>` gap, while the three documented optional reasons are non-blocking under the long `--strict` and remain counted in the receipt. A missing model is never a silent `PASS`.
+- **Typed skip evidence:** tests that need an absent optional model (`nondist_validation`, `nam_infer_test::test_community_models_inference`) call `neural_amp_modeler_rs::testing::report_skip` with reasons `models_nondist_absent`, `models_nondist_empty`, or `community_model_absent:<file>`. The record lands in the current run's `target/logs/skips-<NAM_RUN_ID>.jsonl` (or `target/logs/skips.jsonl` without a run id); blocking records become a `skip-capability:<n>` gap, while the three documented optional reasons are non-blocking under the long `--strict` and remain counted in the receipt. A missing model is never a silent `PASS`.
 
 ---
 
@@ -366,7 +367,7 @@ A build is certified for release only when **all five mandatory receipts** are p
 | #   | Receipt / Carrier Artifact                                                | Generating Command                                              | Execution Flags / Env                    | Blocking Criteria                                                                                                                                                              |
 |:---:|:------------------------------------------------------------------------- |:--------------------------------------------------------------- |:---------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1   | `target/logs/lints-status.tsv`                                            | `utils/lints.sh`                                                | Canonical execution                      | Exit 0; `RESULT: PASS (<N>s) fails=none gaps=none`; zero compiler/clippy/rustdoc warnings; SPDX and anti-pattern policies green.                                               |
-| 2   | `target/logs/tests-quick-status.tsv`                                      | `utils/tests-quick.sh`                                          | Canonical execution                      | Exit 0; `RESULT: PASS (<N>s) fails=none gaps=none`; zero blocking gaps in `target/logs/skips.jsonl`.                                                                           |
+| 2   | `target/logs/tests-quick-status.tsv`                                      | `utils/tests-quick.sh`                                          | Canonical execution                      | Exit 0; `RESULT: PASS (<N>s) fails=none gaps=none`; zero blocking gaps in the current run's `target/logs/skips-<NAM_RUN_ID>.jsonl`.                                          |
 | 3   | `target/logs/long-audit-receipt.jsonl`                                    | `utils/tests-long.sh --strict`                                  | `--strict`                               | Exit 0; `RESULT: PASS (<N>s) fails=none gaps=none`; `gaps: []`; receipt validated via `nam_long_receipt validate --strict`.                                                    |
 | 4   | `target/logs/regression_phase_receipt.jsonl`                              | `nam_perf_gate run --check docs/quality-contract.json`          | Pre-approved baseline (see §5.2)         | Exit 0; machine regression verdict `PASSED` (`nam_perf_gate verdict` over Criterion `change/estimates.json`) against a pre-approved baseline.                                  |
 | 5   | `docs/quality-contract.json` + `target/logs/quality-dashboard-status.tsv` | `utils/quality-dashboard.sh --check docs/quality-contract.json` | `docs/quality-contract.json` (committed) | Exit 0; `RESULT: PASS (<N>s) fails=none gaps=none`; all audio fidelity envelopes (ESR/SNR/MR-STFT) and `f64`-oracle checks satisfied; `regression_gate` is not `NOT_VERIFIED`. |
@@ -381,6 +382,34 @@ A build is certified for release only when **all five mandatory receipts** are p
 - **Distinct Producer Commit:** The performance baseline must be generated and approved on an earlier reference commit. Running `--check` immediately after `--bootstrap-baseline` on the same commit being certified only demonstrates self-consistency, not the absence of regressions.
 - **Controlled Hardware:** Baselines must be generated on isolated machines with the CPU governor set to `performance` and background contention eliminated.
 - **Intentional Updates Only:** Baselines and contracts are updated only when performance shifts or algorithmic changes are intentional, verified, and documented.
+
+#### Step-by-Step Operator Baseline Procedure
+
+1. **Host & Isolation Pre-Check:**
+   Ensure isolated cores are online and the CPU governor is set to `performance`:
+   ```bash
+   cat /sys/devices/system/cpu/isolated          # must return isolated cores, e.g., 8-9
+   cat /sys/devices/system/cpu/cpu8/cpufreq/scaling_governor  # must be 'performance'
+   ```
+2. **Checkout Approved Reference Commit:**
+   Switch to the clean, approved reference commit (distinct from the release candidate):
+   ```bash
+   git checkout <approved-reference-sha>
+   git status --porcelain                        # must be empty
+   ```
+3. **Bootstrap Baseline:**
+   Run the performance gate to establish the baseline fingerprint:
+   ```bash
+   cargo run --locked --release --features testing --bin nam_perf_gate -- run --bootstrap-baseline
+   ```
+   Verify that `.performance-baselines/baseline-fingerprint.json` is generated.
+4. **Self-Consistency Check:**
+   Validate that the baseline passes self-consistency on the reference commit:
+   ```bash
+   cargo run --locked --release --features testing --bin nam_perf_gate -- run --check docs/quality-contract.json
+   ```
+5. **Record Reference SHA:**
+   Record the reference commit SHA, machine topology, and baseline date in `.agents/NOTAS.txt` and the release certification record (§6).
 
 ### 5.3 Human Certification Checklist
 

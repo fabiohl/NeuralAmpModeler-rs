@@ -10,8 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 USE_SDE=0; CHECK_ONLY=0; SKIP_BENCH=0; RECEIPT_OUT="target/logs/remote-simd-receipt.jsonl"
-mkdir -p "$LOG_DIR"
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-simd-gate}"); emit "PHASE: ${PHASE_NAME:-simd-gate} FAIL rc=$rc log=${log_parity:-none}"; finish || true; exit 1' ERR
+trap 'rc=$?; FAILS+=("${PHASE_NAME:-simd-gate}"); emit "PHASE: ${PHASE_NAME:-simd-gate} FAIL rc=$rc log=${log_parity:-$LOG_DIR/remote-simd-gate-${PHASE_NAME:-step}.log}"; finish || true; exit 1' ERR
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -24,6 +23,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+lib_init
 PHASE_NAME=preflight; phase preflight
 log_probe="$LOG_DIR/remote-simd-probe.log"
 if [ "$USE_SDE" -eq 1 ]; then

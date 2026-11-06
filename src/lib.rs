@@ -171,9 +171,6 @@ compile_error!(
      Compile with RUSTFLAGS=\"-Ctarget-cpu=x86-64-v3\""
 );
 
-#[cfg(all(feature = "avx512", not(target_arch = "x86_64"), not(docsrs)))]
-compile_error!("the `avx512` feature is only available on x86_64");
-
 /// Architecture-neutral SIMD intrinsic surface (x86_64 native, aarch64 NEON).
 /// Public (hidden) under `testing` so integration tests and benches can build
 /// `__m256` values for the crate's SIMD functions on either architecture.

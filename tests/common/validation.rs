@@ -188,10 +188,11 @@ fn json_snr_db(snr: f64) -> serde_json::Value {
 }
 
 /// Appends one JSONL line to the metric sink — thread-local override first,
-/// process env `NAM_METRICS_JSONL` fallback, then the fixed long-suite sink
-/// `target/logs/fidelity-metrics.jsonl` (D-05 = (b): a fixed path, no new
-/// environment variable). Serialized under [`REPORT_LOCK`] so concurrent
-/// reporters never interleave partial lines.
+/// process env `NAM_METRICS_JSONL` (exported by `tests-long.sh` as the
+/// run-scoped `target/logs/fidelity-metrics-<NAM_RUN_ID>.jsonl`), then the
+/// fixed fallback `target/logs/fidelity-metrics.jsonl` for isolated consumers.
+/// Serialized under [`REPORT_LOCK`] so concurrent reporters never interleave
+/// partial lines.
 ///
 /// Shared by the fidelity sink of `report_dsp_fidelity*`, by the secondary
 /// oracle sinks (`report_f64_table`, `report_f64_decomp`, `report_activation`,
