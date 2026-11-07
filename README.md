@@ -70,6 +70,7 @@ The crate is host-agnostic, standalone, and general-purpose: its public API does
 | Dependency                     | Minimum Requirement                                                | Purpose                                                    |
 |:------------------------------ |:------------------------------------------------------------------ |:---------------------------------------------------------- |
 | **CPU Architecture**           | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels                                |
+| **Linux kernel**               | 6.3 or newer (`MFD_NOEXEC_SEAL`)                                   | `memfd_create` for delay-line buffers. Kernel 6.1 returns `EINVAL`. |
 | **Rust Toolchain**             | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                                        |
 | **Linker (consumers)**         | A C toolchain for the target (e.g. `gcc`/`clang`)                  | Linking the crate; no CMake needed                         |
 | **Build Tools (contributors)** | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4           | C++ parity oracles, fixtures and the `./utils/` QA scripts |
@@ -86,6 +87,8 @@ NeuralAmpModeler-rs officially supports:
 
 1. **`x86_64` (Linux)** with the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`).
 2. **`aarch64` (macOS Apple Silicon, Linux)** with native **NEON** vectorization.
+
+On Linux, delay-line buffers are created with `memfd_create` and `MFD_NOEXEC_SEAL` in `src/math/common/huge_alloc.rs`. That flag exists from kernel 6.3. Kernel 6.1 rejects it with `EINVAL`, and model load fails with `Invalid argument (os error 22)`. Debian 12 ships kernel 6.1.
 
 `x86_64-apple-darwin` (Intel Macs) is **not supported and not validated**: macOS
 support is Apple Silicon (`aarch64-apple-darwin`) only.
