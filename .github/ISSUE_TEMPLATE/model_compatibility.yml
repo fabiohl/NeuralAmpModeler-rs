@@ -95,7 +95,9 @@ body:
     attributes:
       label: Confirmation
       options:
-        - label: I have verified that the file is not corrupted (e.g. valid file size, valid JSON if .nam).
+        - label: I checked that the file exists and is not empty.
           required: true
-        - label: I tested with the latest release / `main` branch of `NeuralAmpModeler-rs`.
-          required: true
+        - label: I verified that the file is not corrupted (e.g. valid file size, valid JSON if .nam).
+          required: false
+        - label: I tested with the latest release / `main` branch of `NeuralAmpModeler-rs` (if feasible).
+          required: false

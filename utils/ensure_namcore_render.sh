@@ -6,22 +6,24 @@
 # Orçamento: 32          # +5: lib_init/finish com RESULT em stderr (S3-T4)
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
     1:-h|1:--help) echo "Usage: utils/ensure_namcore_render.sh"; exit 0 ;;
-    *) echo "Usage: utils/ensure_namcore_render.sh" >&2; exit 2 ;;
+    *) usage_fail "ensure_namcore_render.sh não aceita argumentos ($*)" >&2 ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 
 T0=$SECONDS
 lib_init >&2
+phase render >&2
 if path=$(ensure_namcore_render "$@"); then
+    emit "PHASE: render PASS" >&2
     printf '%s\n' "$path"
     finish >&2 || exit 1
 else
     rc=$?
-    FAILS+=(render)
+    FAILS+=(render); emit "PHASE: render FAIL rc=$rc" >&2
     finish >&2 || true
     exit "$rc"
 fi

@@ -17,6 +17,17 @@ RECEIPT_FINAL="$LOG_DIR/long-audit-receipt.jsonl"
 LONG_ROOT="target/long"
 export CARGO_TARGET_DIR="$LONG_ROOT/release"
 
+PARANOID_ORIG=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)
+restore_paranoid() {
+  if [ -n "${PARANOID_ORIG:-}" ] && [ "$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null)" != "$PARANOID_ORIG" ]; then
+    sudo -n sysctl -q -w kernel.perf_event_paranoid="$PARANOID_ORIG" 2>/dev/null || true
+  fi
+}
+trap restore_paranoid EXIT
+if [ "${PARANOID_ORIG:-2}" -gt 1 ]; then
+  sudo -n sysctl -q -w kernel.perf_event_paranoid=1 2>/dev/null || true
+fi
+
 usage() {
   cat <<'EOF'
 Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
@@ -38,45 +49,40 @@ Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
 EOF
 }
 
+VALID_PHASES=(
+  preflight-render preflight-catalog preflight-package preflight-freshness preflight-simd-probe
+  phase1 catch-all phase2 soak phase3 isa-codegen phase4 heap-audit
+  phase5 rt-deadline phase6 rt-jitter phase7 loom phase8 perf
+)
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --strict)
-      STRICT=1
-      export NAM_REQUIRE_CPP_ORACLE=1
-      export NAM_RT_STRICT=1
-      shift
-      ;;
+      STRICT=1; export NAM_REQUIRE_CPP_ORACLE=1 NAM_RT_STRICT=1; shift ;;
     --only)
-      IFS=',' read -r -a ONLY_PHASES <<< "${2:?--only requires a list}"
-      shift 2
-      ;;
+      [ $# -ge 2 ] && [ -n "$2" ] || usage_fail "tests-long.sh: --only requer argumento"
+      IFS=',' read -r -a ONLY_PHASES <<< "$2"; shift 2 ;;
     -h|--help)
-      usage
-      exit 0
-      ;;
+      usage; exit 0 ;;
     *)
-      echo "Unknown option: $1" >&2
-      exit 2
-      ;;
+      usage_fail "tests-long.sh: flag não reconhecida '$1'" ;;
   esac
 done
 
+for p in ${ONLY_PHASES[@]+"${ONLY_PHASES[@]}"}; do
+  [[ " ${VALID_PHASES[*]} " == *" $p "* ]] || usage_fail "tests-long.sh: fase desconhecida '$p'"
+done
+
 lib_init
+if [ ${#ONLY_PHASES[@]} -gt 0 ]; then
+  emit "PHASE: phase-selection PASS only-subset:$(IFS=+; echo "${ONLY_PHASES[*]}")"
+fi
 RECEIPT_OUT="$LOG_DIR/long-audit-receipt.${NAM_RUN_ID}.partial.jsonl"
 SKIPS="$LOG_DIR/skips-${NAM_RUN_ID}.jsonl"
 export NAM_METRICS_JSONL="$LOG_DIR/fidelity-metrics-${NAM_RUN_ID}.jsonl"
 : > "$NAM_METRICS_JSONL"
 if [ ${#ONLY_PHASES[@]} -eq 0 ]; then rm -rf "$LONG_ROOT"; fi
 rm -f "$RECEIPT_OUT"; xtrace_side_channel "$LOG_DIR/long-xtrace.log"
-
-ensure_long_receipt_bin || {
-  echo "ERROR: nam_long_receipt binary could not be built" >&2
-  exit 1
-}
-PERF_GATE_BIN=$(ensure_qa_bin nam_perf_gate testing) || {
-  echo "ERROR: nam_perf_gate binary could not be built" >&2
-  exit 1
-}
 
 is_phase_selected() {
   local pid="$1" pname="$2" o
@@ -86,6 +92,17 @@ is_phase_selected() {
   done
   return 1
 }
+
+ensure_long_receipt_bin || {
+  echo "ERROR: nam_long_receipt binary could not be built" >&2
+  FAILS+=("qa-bins"); emit "PHASE: qa-bins FAIL"; finish || true; exit 1
+}
+if is_phase_selected phase5 rt-deadline || is_phase_selected phase6 rt-jitter || is_phase_selected phase8 perf; then
+  PERF_GATE_BIN=$(ensure_qa_bin nam_perf_gate testing) || {
+    echo "ERROR: nam_perf_gate binary could not be built" >&2
+    FAILS+=("qa-bins"); emit "PHASE: qa-bins FAIL"; finish || true; exit 1
+  }
+fi
 
 record_receipt() {
   local pid="$1" pname="$2" status="$3" dur_ms="$4" log_file="${5:-}" reason="${6:-}"
@@ -123,7 +140,6 @@ exec_phase() {
   local pid="$1" pname="$2" to_s="$3" req_tests="$4"; shift 4
   local log="$LOG_DIR/long-$pname.log"
   if ! is_phase_selected "$pid" "$pname"; then
-    emit "PHASE: $pname SKIPPED"
     record_receipt "$pid" "$pname" "SKIPPED" 0
     return 0
   fi
@@ -140,9 +156,9 @@ exec_phase() {
   [ "$dur_ms" -lt 0 ] && dur_ms=0
   local status="PASSED"
   if [ "$rc" -eq 3 ] && [ "$pid" = "phase8" ]; then
-    status="SKIPPED"; GAPS+=("$pname:perf-baseline-missing"); emit "PHASE: $pname GAP perf-baseline-missing"
+    status="SKIP_CAPABILITY"; GAPS+=("$pname:perf-baseline-missing"); emit "PHASE: $pname GAP perf-baseline-missing"
   elif [ "$rc" -eq 3 ] && [ "$pid" = "preflight-render" ] && [ "$STRICT" -eq 0 ]; then
-    status="SKIPPED"
+    status="SKIP_CAPABILITY"
     GAPS+=("$pname:optional-dependency-missing")
     emit "PHASE: $pname GAP optional-dependency-missing"
   elif [ "$rc" -ne 0 ] || { [ "$req_tests" -eq 1 ] && ! ran_tests "$log"; }; then
@@ -160,7 +176,7 @@ exec_phase() {
       echo "--- [FAIL LOG: $pname (rc=$rc)] ---" >&2; tail -n 120 "$log" >&2 || true; echo "--- [END LOG: $pname] ---" >&2
     fi
   elif [ -n "$PHASE_GAP" ]; then
-    status="SKIPPED"; [ "${PHASE_GAP%%:*}" = "skip-capability" ] && status="SKIP_CAPABILITY"
+    status="SKIP_CAPABILITY"
     GAPS+=("$pname:$PHASE_GAP")
     emit "PHASE: $pname GAP $PHASE_GAP"
   else
@@ -182,7 +198,7 @@ run_preflight_render() {
 exec_phase "preflight-render" "preflight-render" 300 0 run_preflight_render
 
 # --- Preflight 2: catalog ---
-run_preflight_catalog() { run_cmd cargo test --release --features testing --test models catalog_preflight -- --nocapture; }
+run_preflight_catalog() { run_cmd cargo test --locked --release --features testing --test models catalog_preflight -- --nocapture; }
 exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
@@ -194,14 +210,14 @@ run_preflight_freshness() { run_cmd cargo run --quiet --locked -p nam-qa --bin n
 exec_phase "preflight-freshness" "preflight-freshness" 60 0 run_preflight_freshness
 
 # --- Preflight 5: simd-probe ---
-run_preflight_simd_probe() { run_cmd cargo run --quiet --bin simd_probe; }
+run_preflight_simd_probe() { run_cmd cargo run --quiet --locked --release --bin simd_probe; }
 exec_phase "preflight-simd-probe" "preflight-simd-probe" 60 0 run_preflight_simd_probe
 
 # --- Phase 1: catch-all ---
 run_phase_catch_all() {
   local a=() rc=0
   [ "$STRICT" -eq 0 ] && [[ " ${GAPS[*]} " == *" preflight-render:"* ]] && a+=(--skip cpp_parity::live_cross_validation)
-  run_cmd cargo test --release --features testing --no-fail-fast -- --include-ignored "${a[@]}" || rc=$?
+  run_cmd cargo test --locked --release --features testing --no-fail-fast -- --include-ignored "${a[@]}" || rc=$?
   if [ -s "$SKIPS" ]; then
     local total optional blocking
     total=$(wc -l < "$SKIPS")
@@ -216,14 +232,14 @@ exec_phase "phase1" "catch-all" 600 1 run_phase_catch_all
 
 # --- Phase 2: soak ---
 run_phase_soak() {
-  run_cmd cargo test --release --features testing,pinned --test soak_pinned -- --include-ignored --test-threads=1
+  run_cmd cargo test --locked --release --features testing,pinned --test soak_pinned -- --include-ignored --test-threads=1
 }
 exec_phase "phase2" "soak" 600 1 run_phase_soak
 
 # --- Phase 3: isa-codegen ---
 run_phase_isa_codegen() {
-  run_cmd cargo run --quiet --bin simd_probe || return 1
-  run_cmd cargo test --release --features testing --test isa_contract -- --nocapture || return 1
+  run_cmd cargo run --quiet --locked --release --bin simd_probe || return 1
+  run_cmd cargo test --locked --release --features testing --test isa_contract -- --nocapture || return 1
   return 0
 }
 exec_phase "phase3" "isa-codegen" 300 1 run_phase_isa_codegen
@@ -231,7 +247,7 @@ exec_phase "phase3" "isa-codegen" 300 1 run_phase_isa_codegen
 # --- Phase 4: heap-audit (alvos e filtro: ver docs/testing.md; perfil próprio) ---
 run_phase_heap_audit() {
   export CARGO_TARGET_DIR="$LONG_ROOT/heap-audit"
-  run_cmd cargo test --release --features testing,heap-audit --test rt_constraints --test cabsim_stereo \
+  run_cmd cargo test --locked --release --features testing,heap-audit --test rt_constraints --test cabsim_stereo \
     --test models -- --include-ignored heap_audit
 }
 exec_phase "phase4" "heap-audit" 300 1 run_phase_heap_audit
@@ -242,7 +258,7 @@ run_phase_rt_deadline() {
   local core; core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
   [ "$core" = "GAP" ] && { PHASE_GAP=no-bench-core; [ "$STRICT" -eq 1 ] && return 1; return 0; }
   export NAM_BENCH_CORE="$core"
-  run_cmd cargo test --release --features testing,pinned --test rt_pinned rt_deadline:: -- --include-ignored --nocapture
+  run_cmd cargo test --locked --release --features testing,pinned --test rt_pinned rt_deadline:: -- --include-ignored --nocapture
 }
 exec_phase "phase5" "rt-deadline" 300 1 run_phase_rt_deadline
 
@@ -253,14 +269,14 @@ run_phase_rt_jitter() {
     local core; core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
     if [ "$core" = "GAP" ]; then PHASE_GAP=no-bench-core; [ "$STRICT" -eq 1 ] && return 1; else export NAM_BENCH_CORE="$core"; fi
   fi
-  run_cmd cargo test --release --features testing,pinned --test rt_pinned rt_jitter:: -- --include-ignored --nocapture
+  run_cmd cargo test --locked --release --features testing,pinned --test rt_pinned rt_jitter:: -- --include-ignored --nocapture
 }
 exec_phase "phase6" "rt-jitter" 300 1 run_phase_rt_jitter
 
 # --- Phase 7: loom ---
 run_phase_loom() {
   export CARGO_TARGET_DIR="$LONG_ROOT/loom"
-  (unset RUSTFLAGS; run_cmd cargo test --release --test loom_tests --config "target.'cfg(target_arch = \"x86_64\")'.rustflags=['--cfg','loom']" -- --nocapture)
+  (unset RUSTFLAGS; run_cmd cargo test --locked --release --test loom_tests --config "target.'cfg(target_arch = \"x86_64\")'.rustflags=['--cfg','loom']" -- --nocapture)
 }
 exec_phase "phase7" "loom" 600 1 run_phase_loom
 

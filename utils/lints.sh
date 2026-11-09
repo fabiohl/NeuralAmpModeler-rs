@@ -9,17 +9,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
+case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) usage_fail "lints.sh não aceita argumentos ($*)" ;; esac
 lib_init
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-step}"); emit "PHASE: ${PHASE_NAME:-step} FAIL rc=$rc log=${LOG_DIR}/lints-${PHASE_NAME:-step}.log"; finish || true; exit 1' ERR
-
-run_step() {
-  local name=$1; shift; PHASE_NAME=$name; phase "$name"
-  local log="$LOG_DIR/lints-$name.log" rc
-  set +e; ( set -e; "$@" ) 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}; set -e
-  [ "$rc" -eq 0 ] || { FAILS+=("$name"); emit "PHASE: $name FAIL rc=$rc log=$log"; finish || true; exit 1; }
-  emit "PHASE: $name PASS log=$log"
-}
+trap 'trap_fail $?' ERR
 
 phase_fmt() {
   if [ "${CI:-}" = "true" ]; then cargo fmt --all -- --check; else cargo fmt --all && git diff --stat; fi
@@ -48,20 +40,26 @@ phase_clippy() {
 }
 run_step clippy phase_clippy
 
-phase_clippy_aarch64() {
-  rustup target list --installed | grep -qx aarch64-unknown-linux-gnu || {
-    echo "ERROR: target aarch64-unknown-linux-gnu missing (run: rustup target add aarch64-unknown-linux-gnu)" >&2; exit 1;
-  }
-  cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
-}
-run_step clippy-aarch64 phase_clippy_aarch64
+PHASE_NAME=clippy-aarch64
+HOST_ARCH="$(rustc -vV | sed -n 's/^host: //p')"
+if [ "$HOST_ARCH" = aarch64-unknown-linux-gnu ]; then
+  if rustup target list --installed | grep -qx x86_64-unknown-linux-gnu; then
+    run_step clippy-aarch64 cargo clippy --locked --lib --target x86_64-unknown-linux-gnu -- -D warnings
+  else
+    gap "clippy-aarch64:native-host-x86-target-not-installed"
+  fi
+elif ! rustup target list --installed | grep -qx aarch64-unknown-linux-gnu; then
+  gap "clippy-aarch64:target-not-installed"
+else
+  run_step clippy-aarch64 cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
+fi
 
 phase_doc() { RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features; }
 run_step doc phase_doc
 
 phase_spdx() {
   local files f rc missing=()
-  files=$(git ls-files 'src/*.rs' 'tests/*.rs' 'benches/*.rs' 'examples/*.rs' 'utils/*.sh' 'tests/*.sh' 'tests/fixtures/*.py' 'build.rs' 'Cargo.toml') || { echo "ERROR: git ls-files failed" >&2; exit 1; }
+  files=$(git ls-files '*.rs' '*.sh' '*.py' 'build.rs' 'Cargo.toml') || { echo "ERROR: git ls-files failed" >&2; exit 1; }
   [ -n "$files" ] || { echo "ERROR: SPDX enumeration returned no files" >&2; exit 1; }
   while IFS= read -r f; do
     rc=0; grep -qE "SPDX-License-Identifier: (Apache-2\.0|MIT)" "$f" || rc=$?

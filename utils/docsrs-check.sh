@@ -6,17 +6,18 @@
 # Orçamento: 80
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
   0:) ;;
   1:-h|1:--help) echo "Usage: utils/docsrs-check.sh"; exit 0 ;;
-  *) echo "Usage: utils/docsrs-check.sh" >&2; exit 2 ;;
+  *) usage_fail "docsrs-check.sh não aceita argumentos ($*)" ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 
 lib_init
 PHASE_NAME=docsrs; phase docsrs
 require_nightly
+trap 'trap_fail $?' ERR
 
 docsrs_feature_scope=$(awk '
   /^\[/ { sec = ($0 == "[package.metadata.docs.rs]"); next }

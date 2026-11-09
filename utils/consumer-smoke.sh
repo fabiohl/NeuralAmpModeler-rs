@@ -9,9 +9,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/consumer-smoke.sh"; exit 0 ;; *) echo "RESULT: FAIL (uso)"; exit 2 ;; esac
+case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/consumer-smoke.sh"; exit 0 ;; *) usage_fail "consumer-smoke.sh não aceita argumentos ($*)" ;; esac
 lib_init
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-consumer-smoke}"); emit "PHASE: ${PHASE_NAME:-consumer-smoke} FAIL rc=$rc log=${log:-$LOG_DIR/consumer-smoke.log}"; finish || true; exit 1' ERR
+trap 'trap_fail $?' ERR
 
 PHASE_NAME=consumer-smoke; phase consumer-smoke
 log="$LOG_DIR/consumer-smoke.log"

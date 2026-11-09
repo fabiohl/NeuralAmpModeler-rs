@@ -48,18 +48,17 @@ body:
   - type: textarea
     id: benchmark_data
     attributes:
-      label: Benchmark / Profiling Data
-      description: Provide benchmark measurements, `cargo bench` output, `nam_perf_gate` logs, or `perf stat` cycle counters.
+      label: Benchmark / Profiling Data (Optional)
+      description: Provide benchmark measurements, `cargo bench` output, DAW CPU meter numbers, or `perf stat` counters if available.
       placeholder: |
         - Baseline Throughput / Time: e.g. WaveNet Standard: 12.4 us / 64 samples
         - Measured Throughput / Time: e.g. WaveNet Standard: 28.1 us / 64 samples (2.26x slower)
-        - Regression Gate output: `cargo bench --bench regression_gate`
-        - Quality Contract comparison: `utils/quality-dashboard.sh --check docs/quality-contract.json`
-        - Receipt / Log excerpt: (from target/logs/regression_phase_receipt.jsonl or criterion reports)
-        - Cycles per Sample / IPC: ...
+        - Or observed CPU %: e.g. 45% in host DAW at 64 samples
+        - Regression Gate output (if ran): `cargo bench --bench regression_gate`
+        - Quality Contract comparison (if ran): `utils/quality-dashboard.sh --check docs/quality-contract.json`
       render: shell
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: rt_safety_context
@@ -93,9 +92,9 @@ body:
     attributes:
       label: Verification
       options:
-        - label: I verified that the benchmark was compiled in release mode (`--release`).
-          required: true
-        - label: I ensured the system was idle and CPU frequency throttling was minimized.
-          required: true
-        - label: I confirmed the baseline configuration in `.cargo/config.toml` (target `x86-64-v3`).
-          required: true
+        - label: I verified that the code/benchmark was tested in release mode (`--release`).
+          required: false
+        - label: I ensured the system was relatively idle during measurements.
+          required: false
+        - label: I checked the baseline CPU target configuration (`x86-64-v3` or native).
+          required: false

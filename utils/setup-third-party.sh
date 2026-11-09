@@ -25,15 +25,15 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 # Overrides: NAM_COMMUNITY_MODELS_SRC (absolute path to link as community_models).
 
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
     1:-h|1:--help) echo "Usage: utils/setup-third-party.sh"; exit 0 ;;
-    *) echo "Usage: utils/setup-third-party.sh" >&2; exit 2 ;;
+    *) usage_fail "setup-third-party.sh não aceita argumentos ($*)" ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 lib_init
-trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(setup-third-party); DONE=1; finish; }' EXIT
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ "${FINISHED:-0}" = 1 ] || [ -n "${DONE:-}" ] || { FAILS+=(setup-third-party); DONE=1; finish; }' EXIT
 
 if ! command -v git >/dev/null 2>&1; then
     die "git binary is required but not found in PATH."

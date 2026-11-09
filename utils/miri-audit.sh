@@ -6,15 +6,15 @@
 # Orçamento: 100
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
     1:-h|1:--help) echo "Usage: utils/miri-audit.sh"; exit 0 ;;
-    *) echo "Usage: utils/miri-audit.sh" >&2; exit 2 ;;
+    *) usage_fail "miri-audit.sh não aceita argumentos ($*)" ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 lib_init
-trap 'rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ -n "${DONE:-}" ] || { FAILS+=(miri-audit); DONE=1; finish; }' EXIT
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ "${FINISHED:-0}" = 1 ] || [ -n "${DONE:-}" ] || { FAILS+=(miri-audit); DONE=1; finish; }' EXIT
 
 LOG_DIR="target/logs"
 mkdir -p "$LOG_DIR"

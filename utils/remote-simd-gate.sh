@@ -10,20 +10,20 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
 USE_SDE=0; CHECK_ONLY=0; SKIP_BENCH=0; RECEIPT_OUT="target/logs/remote-simd-receipt.jsonl"
-trap 'rc=$?; FAILS+=("${PHASE_NAME:-simd-gate}"); emit "PHASE: ${PHASE_NAME:-simd-gate} FAIL rc=$rc log=${log_parity:-$LOG_DIR/remote-simd-gate-${PHASE_NAME:-step}.log}"; finish || true; exit 1' ERR
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --sde) USE_SDE=1; SKIP_BENCH=1; shift ;;
     --check-only) CHECK_ONLY=1; shift ;;
     --skip-bench) SKIP_BENCH=1; shift ;;
-    --out) RECEIPT_OUT="${2:?--out requires a file}"; shift 2 ;;
+    --out) [ $# -ge 2 ] && [ -n "$2" ] || usage_fail "remote-simd-gate.sh: --out requer argumento"; RECEIPT_OUT="$2"; shift 2 ;;
     -h|--help) echo "Uso: utils/remote-simd-gate.sh [--sde] [--check-only] [--skip-bench] [--out <file>]"; exit 0 ;;
-    *) echo "RESULT: FAIL (uso)"; exit 2 ;;
+    *) usage_fail "remote-simd-gate.sh: flag não reconhecida '$1'" ;;
   esac
 done
 
 lib_init
+trap 'trap_fail $?' ERR
 PHASE_NAME=preflight; phase preflight
 log_probe="$LOG_DIR/remote-simd-probe.log"
 if [ "$USE_SDE" -eq 1 ]; then

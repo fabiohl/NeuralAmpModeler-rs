@@ -14,14 +14,15 @@ set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 # prepared by utils/setup-third-party.sh (not this script).
 
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
     1:-h|1:--help) echo "Usage: utils/mod-update.sh"; exit 0 ;;
-    *) echo "Usage: utils/mod-update.sh" >&2; exit 2 ;;
+    *) usage_fail "mod-update.sh não aceita argumentos ($*)" ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 lib_init
+trap 'trap_fail $?' ERR
 
 echo "NeuralAmpModeler-rs Supply Chain Update Pipeline"
 

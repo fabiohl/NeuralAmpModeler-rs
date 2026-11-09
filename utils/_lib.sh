@@ -6,7 +6,7 @@
 
 LOG_DIR=target/logs
 NAM_RUN_ID="${NAM_RUN_ID:-}"
-T0=$SECONDS; FAILS=(); GAPS=(); STRICT=0; EMIT_RC=0; SCOPE="${SCOPE:-full}"
+T0=$SECONDS; FAILS=(); GAPS=(); STRICT=0; EMIT_RC=0; FINISHED=0; PHASE_NAME=""; SCOPE="${SCOPE:-full}"
 SCRIPT_NAME="$(basename "${0%.sh}")"; STATUS_NAME="$SCRIPT_NAME"
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,25 +17,22 @@ SETUP_THIRD_PARTY_SH="$PROJECT_DIR/utils/setup-third-party.sh"
 
 warn() { echo "WARN: $*" >&2; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
+usage_fail() { printf 'RESULT: FAIL (0s) fails=uso gaps=none (%s)\n' "$1"; exit 2; }
 
-# lib_init — único ponto que cria target/logs, trunca summary.txt e remove o
-# carrier obsoleto. Deve ser chamado depois do parsing de -h/--help (§5, §9.46).
-# NAM_RUN_ID pré-exportado (CI/topo) trunca summary.txt quando .summary-run difere;
-# id gerado localmente não trunca: acumula e emite a linha RUN: <id>.
-# lib_quiet=1 (filho dentro de fase do pai) inibe summary/marker, mas ainda
-# remove o carrier do próprio filho para que um crash nunca deixe veredito velho.
+# lib_init — único ponto que cria target/logs, trunca summary.txt e remove o carrier obsoleto (§5, §9.46).
 lib_init() {
   mkdir -p "$LOG_DIR" || die "cannot create $LOG_DIR"
   local fresh=0
   if [ -z "$NAM_RUN_ID" ]; then NAM_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"; fresh=1; fi
   export NAM_RUN_ID
   rm -f "$LOG_DIR/${STATUS_NAME}-status.tsv"
-  if [ "${lib_quiet:-}" = "1" ]; then return 0; fi
+  [ "${lib_quiet:-}" = "1" ] && return 0
   if [ "$(cat "$LOG_DIR/.summary-run" 2>/dev/null)" != "$NAM_RUN_ID" ]; then
-    if [ "$fresh" = 0 ]; then : > "$LOG_DIR/summary.txt" || die "cannot reset $LOG_DIR/summary.txt"; fi
+    [ "$fresh" = 0 ] && { : > "$LOG_DIR/summary.txt" || die "cannot reset $LOG_DIR/summary.txt"; }
     printf '%s\n' "$NAM_RUN_ID" > "$LOG_DIR/.summary-run" || die "cannot write $LOG_DIR/.summary-run"
   fi
-  if [ "$fresh" = 1 ]; then emit "RUN: $NAM_RUN_ID"; fi
+  [ "$fresh" = 1 ] && emit "RUN: $NAM_RUN_ID"
+  return 0
 }
 
 emit() {
@@ -43,59 +40,76 @@ emit() {
   [ "${lib_quiet:-}" = "1" ] || printf '%s\n' "$*" >> "$LOG_DIR/summary.txt" 2>/dev/null \
     || { echo "ERROR: cannot append summary.txt" >&2; EMIT_RC=1; }
 }
-ok()   { echo "OK: $*"; }
+ok()    { echo "OK: $*"; }
+phase() { PHASE_NAME="$1"; emit "PHASE: $1"; }
+gap()   { local m; for m in "${GAPS[@]}"; do [ "$m" = "$1" ] && return 0; done; GAPS+=("$1"); emit "PHASE: ${PHASE_NAME:-$1} GAP $1"; }
 
-phase() { emit "PHASE: $1"; }
-gap()   { GAPS+=("$1"); emit "PHASE: $1 GAP"; }
-
-xtrace_side_channel() {
-  [ -n "${BASH_XTRACEFD:-}" ] && return 0
-  exec 8>"$1"; export BASH_XTRACEFD=8
+run_step() {
+  local - name="$1"; shift
+  local log="$LOG_DIR/${SCRIPT_NAME}-${name}.log" rc=0 trc=0
+  PHASE_NAME="$name"; emit "PHASE: $name"; set +e
+  (set -e; "$@") 2>&1 | tee "$log"; rc=${PIPESTATUS[0]} trc=${PIPESTATUS[1]}; set -e
+  if [ "$trc" -ne 0 ]; then FAILS+=("log-$name"); emit "PHASE: $name FAIL rc=$trc log=$log (tee)"; return 0; fi
+  if [ "$rc" -eq 0 ]; then emit "PHASE: $name PASS"
+  else FAILS+=("$name"); emit "PHASE: $name FAIL rc=$rc log=$log"; fi
 }
 
+trap_fail() {
+  local rc="${1:-1}"
+  [ "${FINISHED:-0}" = 1 ] && return 0
+  FAILS+=("${PHASE_NAME:-abort}"); emit "PHASE: ${PHASE_NAME:-abort} FAIL rc=$rc"
+  finish || true; exit "$rc"
+}
+
+xtrace_side_channel() { [ -n "${BASH_XTRACEFD:-}" ] && return 0; exec 8>"$1"; export BASH_XTRACEFD=8; }
+
 ran_tests() {
-  local - log="$1" clean n_run n_start n_res n_fail n_pass
-  set +x
+  local - log="$1" clean n_run n_start n_res n_fail n_pass; set +x
   clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" 2>/dev/null || true)
   n_run=$(grep -c -E '^\s*(Running|Doc-tests)\b' <<<"$clean" || true)
   n_start=$(grep -c -E '^\s*running [0-9]+ tests?' <<<"$clean" || true)
   n_res=$(grep -c -E '^test result: (ok|FAILED)\.' <<<"$clean" || true)
   n_fail=$(grep -c 'test result: FAILED' <<<"$clean" || true)
   n_pass=$(grep -c -E 'test result: ok\. [1-9][0-9]* passed' <<<"$clean" || true)
-  [ "$n_run" -gt 0 ] && [ "$n_res" -ge "$n_run" ] && [ "$n_start" -eq "$n_res" ] \
-    && [ "$n_fail" -eq 0 ] && [ "$n_pass" -gt 0 ]
+  [ "$n_run" -gt 0 ] && [ "$n_res" -ge "$n_run" ] && [ "$n_start" -eq "$n_res" ] && [ "$n_fail" -eq 0 ] && [ "$n_pass" -gt 0 ]
+}
+
+carrier_write() {
+  local s="$1" sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
+    "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" "scope=${SCOPE:-full}" > "$sf" 2>/dev/null
 }
 
 finish() {
-  local s=PASS e=0 sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv"
+  FINISHED=1
+  local s=PASS e=0 sf="$LOG_DIR/${STATUS_NAME:-$SCRIPT_NAME}-status.tsv" f_csv g_csv line
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
   [ "$EMIT_RC" -ne 0 ] && { FAILS+=("emit"); s=FAIL; }
-  if ! printf '%s\t%s\t%s\t%s\t%s\n' "${STATUS_NAME:-$SCRIPT_NAME}" "$s" \
-    "$(IFS=,; echo "${GAPS[*]:-none}")" "$(IFS=,; echo "${FAILS[*]:-none}")" "scope=${SCOPE:-full}" > "$sf" 2>/dev/null; then
-    echo "ERROR: cannot write status carrier $sf" >&2
-    emit "PHASE: carrier FAIL path=$sf"
-    s=FAIL
-    [ ${#FAILS[@]} -gt 0 ] || FAILS+=("carrier")
-    e=1
+  if ! carrier_write "$s"; then
+    echo "ERROR: cannot write status carrier $sf" >&2; emit "PHASE: carrier FAIL path=$sf"
+    FAILS+=("carrier"); s=FAIL; e=1
   fi
-  emit "RESULT: $s ($((SECONDS - T0))s) fails=${FAILS[*]:-none} gaps=${GAPS[*]:-none} scope=${SCOPE:-full}"
-  [ "$EMIT_RC" -ne 0 ] && e=1
+  f_csv="$(IFS=,; echo "${FAILS[*]:-none}")"; g_csv="$(IFS=,; echo "${GAPS[*]:-none}")"
+  line="RESULT: $s ($((SECONDS - T0))s) fails=$f_csv gaps=$g_csv scope=${SCOPE:-full}"
+  if [ "${lib_quiet:-}" != "1" ] && ! printf '%s\n' "$line" >> "$LOG_DIR/summary.txt" 2>/dev/null; then
+    echo "ERROR: cannot append summary.txt" >&2; EMIT_RC=1; e=1; FAILS+=("emit"); s=FAIL
+    f_csv="$(IFS=,; echo "${FAILS[*]:-none}")"; carrier_write "$s" || true
+    line="RESULT: $s ($((SECONDS - T0))s) fails=$f_csv gaps=$g_csv scope=${SCOPE:-full}"
+  fi
+  printf '%s\n' "$line"
   [ "$s" != FAIL ] && [ "$e" -eq 0 ]
 }
 
 require_nightly() {
   local comp="${1:-}"
   command -v rustup >/dev/null 2>&1 || { echo "GAP: rustup not found" >&2; exit 2; }
-  rustup toolchain list 2>/dev/null | grep -q "nightly" || {
-    echo "GAP: no nightly toolchain installed" >&2; exit 2;
-  }
+  rustup toolchain list 2>/dev/null | grep -q "nightly" || { echo "GAP: no nightly toolchain installed" >&2; exit 2; }
   if [ -n "$comp" ]; then
-    cargo +nightly "$comp" --version >/dev/null 2>&1 || {
-      echo "GAP: $comp component missing on nightly" >&2; exit 2;
-    }
+    cargo +nightly "$comp" --version >/dev/null 2>&1 || { echo "GAP: $comp component missing on nightly" >&2; exit 2; }
   fi
 }
+
 assert_ran_tests() {
   local log="$1" min="${2:-1}" clean passed
   ran_tests "$log" || return 1
@@ -103,8 +117,6 @@ assert_ran_tests() {
   passed=$(awk '/test result: ok\./ { p+=$4 } END { print p+0 }' <<<"$clean")
   [ "$passed" -ge "$min" ]
 }
-
-
 ensure_third_party() {
   local mode="${1:-soft}"
   [ -d "$CORE_DIR/.git" ] && [ -n "$(ls -A "$CORE_DIR/Dependencies/eigen" 2>/dev/null)" ] \
@@ -118,42 +130,29 @@ ensure_third_party() {
 }
 
 ensure_namcore_render() {
-  local build_dir="$PROJECT_DIR/build/namcore_render"
-  local logs_dir="$PROJECT_DIR/target/logs"
-  local build_type="Release"
-  local flags="-w -fno-fast-math -ffp-contract=off"
-  local jobs="${NAM_RENDER_JOBS:-$(nproc 2>/dev/null || echo 2)}"
-  local bin="" config_file="$build_dir/.build_config" prov_file="$build_dir/.build_provenance"
+  local build_dir="$PROJECT_DIR/build/namcore_render" logs_dir="$PROJECT_DIR/target/logs" build_type="Release"
+  local flags="-w -fno-fast-math -ffp-contract=off" jobs="${NAM_RENDER_JOBS:-$(nproc 2>/dev/null || echo 2)}"
+  local bin="" config_file="$PROJECT_DIR/build/namcore_render/.build_config" prov_file="$PROJECT_DIR/build/namcore_render/.build_provenance"
   command -v cmake >/dev/null 2>&1 || { warn "cmake not found"; return 2; }
   local cxx="${CXX:-}"
-  if [ -z "$cxx" ]; then
-    command -v g++ >/dev/null 2>&1 && cxx=g++ || { command -v clang++ >/dev/null 2>&1 && cxx=clang++; } || true
-  fi
+  if [ -z "$cxx" ]; then command -v g++ >/dev/null 2>&1 && cxx=g++ || { command -v clang++ >/dev/null 2>&1 && cxx=clang++; } || true; fi
   [ -n "$cxx" ] && command -v "$cxx" >/dev/null 2>&1 || { warn "no C++ compiler found"; return 1; }
   [ -d "$CORE_DIR" ] || { warn "NAMCore missing at $CORE_DIR"; return 3; }
-  for cand in tools/render Release/render Debug/render; do
-    [ -x "$build_dir/$cand" ] && bin="$build_dir/$cand" && break
-  done
+  for cand in tools/render Release/render Debug/render; do [ -x "$build_dir/$cand" ] && bin="$build_dir/$cand" && break; done
   local core_commit plugin_commit cxx_ver cmake_ver
   core_commit=$(git -C "$CORE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
   plugin_commit=$(git -C "$THIRD_PARTY_DIR/NeuralAmpModelerPlugin" rev-parse HEAD 2>/dev/null || echo absent)
-  cxx_ver=$("$cxx" --version 2>/dev/null | head -n 1)
-  cmake_ver=$(cmake --version 2>/dev/null | head -n 1)
+  cxx_ver=$("$cxx" --version 2>/dev/null | head -n 1); cmake_ver=$(cmake --version 2>/dev/null | head -n 1)
   local fingerprint="$cxx:$build_type:$flags:std=20:a2=ON:core=$core_commit:plugin=$plugin_commit:cc=$cxx_ver:cmake=$cmake_ver"
-  if [ -n "$bin" ] && [ -f "$config_file" ] && [ "$(cat "$config_file" 2>/dev/null)" = "$fingerprint" ]; then
-    echo "$bin"; return 0
-  fi
-  rm -rf "$build_dir"
-  mkdir -p "$build_dir" "$logs_dir"
+  if [ -n "$bin" ] && [ -f "$config_file" ] && [ "$(cat "$config_file" 2>/dev/null)" = "$fingerprint" ]; then echo "$bin"; return 0; fi
+  rm -rf "$build_dir"; mkdir -p "$build_dir" "$logs_dir"
   echo "→ compiling C++ NAMCore render ($cxx, $build_type, -j$jobs)" >&2
   cmake -S "$CORE_DIR" -B "$build_dir" -DCMAKE_BUILD_TYPE="$build_type" \
     -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_FLAGS="$flags" \
     -DNAM_ENABLE_A2_FAST=ON > "$logs_dir/cmake-configure.log" 2>&1 || return 4
   cmake --build "$build_dir" --target render -j"$jobs" > "$logs_dir/cmake-build.log" 2>&1 || return 5
   bin=""
-  for cand in tools/render Release/render Debug/render; do
-    [ -x "$build_dir/$cand" ] && bin="$build_dir/$cand" && break
-  done
+  for cand in tools/render Release/render Debug/render; do [ -x "$build_dir/$cand" ] && bin="$build_dir/$cand" && break; done
   [ -z "$bin" ] && return 6
   echo "$fingerprint" > "$config_file"
   printf 'core_commit=%s\nplugin_commit=%s\ncompiler=%s\ncompiler_version=%s\ncmake=%s\nflags=%s\n' \

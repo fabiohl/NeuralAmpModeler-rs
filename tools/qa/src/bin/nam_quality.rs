@@ -749,11 +749,20 @@ fn cmd_dashboard(args: &[String]) {
     }
 
     // ── Ingest report ──
+    let target_root = env::var("CARGO_TARGET_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "target".to_string());
+    let default_criterion_dir = format!("{target_root}/criterion");
+    let criterion_candidate = flags
+        .get("criterion-dir")
+        .unwrap_or(default_criterion_dir.as_str());
     let criterion_available = {
-        let mut ok = Path::new("target/criterion").is_dir();
+        let mut ok = Path::new(criterion_candidate).is_dir();
         if ok {
             for bench in ids::RT_BENCH_TABLE {
-                let est = Path::new("target/criterion")
+                let est = Path::new(criterion_candidate)
                     .join(bench.bench_label)
                     .join("new")
                     .join("estimates.json");
@@ -767,14 +776,17 @@ fn cmd_dashboard(args: &[String]) {
     };
 
     let criterion_dir = if criterion_available && (perf_passed || fidelity_only) {
-        flags.get("criterion-dir").or(Some("target/criterion"))
+        Some(criterion_candidate)
     } else {
         None
     };
 
     // The build script exports the canonical micro-bench batch size here; feed
     // it to ingest so latency normalization never depends on a hard-coded copy.
-    let bench_constants_env = if Path::new("target/bench_constants.env").is_file() {
+    let target_bench_constants = format!("{target_root}/bench_constants.env");
+    let bench_constants_env = if Path::new(&target_bench_constants).is_file() {
+        Some(target_bench_constants.as_str())
+    } else if Path::new("target/bench_constants.env").is_file() {
         Some("target/bench_constants.env")
     } else {
         None

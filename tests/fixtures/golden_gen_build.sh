@@ -71,8 +71,6 @@ set -euo pipefail
 # These files must be committed so that the Rust golden vector tests
 # run without C++ recompilation.
 
-set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/build/namcore_render"
@@ -85,7 +83,13 @@ mkdir -p "$LOGS_DIR"
 # THIRD_PARTY_DIR, NAM_CORE_DIR, NAM_PLUGIN_DIR, VARIABLES_ENV).
 PHASE_TOTAL=14
 source "$PROJECT_ROOT/utils/_lib.sh"
+case "$#:${1:-}" in
+    0:) ;;
+    1:-h|1:--help) echo "Usage: tests/fixtures/golden_gen_build.sh"; exit 0 ;;
+    *) usage_fail "golden_gen_build.sh não aceita argumentos ($*)" ;;
+esac
 lib_init
+trap 'trap_fail $?' ERR
 NAM_CORE_DIR="${NAM_CORE_DIR:-$CORE_DIR}"
 NAM_PLUGIN_DIR="${NAM_PLUGIN_DIR:-$THIRD_PARTY_DIR/NeuralAmpModelerPlugin}"
 
@@ -846,5 +850,6 @@ MANIFEST="$MANIFEST_TARGET"
 
 echo ""
 echo "Commit these files so that the Rust golden vector tests work."
-echo "v2 files are large (~18 MB per model across 5 SRs). Git LFS or strategic" 
+echo "v2 files are large (~18 MB per model across 5 SRs). Git LFS or strategic"
 echo "subset selection is recommended for repo size management."
+finish

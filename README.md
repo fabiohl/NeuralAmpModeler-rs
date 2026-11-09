@@ -47,7 +47,7 @@ The crate is host-agnostic, standalone, and general-purpose: its public API does
 | **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                          | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                         |
 | **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32              | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                  |
 | **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware FTZ/DAZ (MXCSR / FPCR.FZ)                     | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)              |
-| **Comprehensive QA Suite**       | 2,600+ unit/integration tests, heap audit, soak, proptest, and Criterion benchmarks           | Enterprise-grade software stability and strict regression protection                                                                         |
+| **Comprehensive QA Suite**       | 2,553 executed unit/integration tests (soak, heap audit, Loom, proptest) + Criterion benchmarks | Enterprise-grade software stability and strict regression protection                                                                         |
 
 ---
 
@@ -110,8 +110,8 @@ repository.
 
 ```bash
 sudo apt update && sudo apt install -y build-essential pkg-config cmake
-# Required by utils/lints.sh for the aarch64 cross-target check:
-rustup target add aarch64-unknown-linux-gnu
+# Required by utils/lints.sh for the cross-target check (aarch64 on x86_64 hosts; x86_64 on aarch64 hosts):
+rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
 ```
 
 **macOS (Homebrew):**

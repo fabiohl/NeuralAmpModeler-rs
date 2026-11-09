@@ -89,7 +89,7 @@ while [[ $# -gt 0 ]]; do
             INSPECT_FLAGS+=("$1")
             shift
             ;;
-        -d|--dir|--directory)
+        -d|--dir)
             if [[ $# -lt 2 || "$2" == --* ]]; then
                 echo "Error: Option '$1' requires a directory argument." >&2
                 echo "Run 'utils/check-model.sh --help' for usage." >&2
@@ -98,7 +98,7 @@ while [[ $# -gt 0 ]]; do
             DIRS_TO_SCAN+=("$2")
             shift 2
             ;;
-        -d=*|--dir=*|--directory=*)
+        -d=*|--dir=*)
             DIR_VAL="${1#*=}"
             if [[ -z "$DIR_VAL" ]]; then
                 echo "Error: Option '${1%%=*}' requires a directory argument." >&2

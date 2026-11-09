@@ -11,7 +11,7 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 Fixes #
 
 ## Subsystem & Scope
-<!-- Check all that apply -->
+<!-- Check all that apply. For documentation, packaging, or off-RT tooling changes, technical checklists below may be marked N/A. -->
 - [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`, `src/models/sequential.rs`, `src/models/container.rs`)
 - [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`, `src/math/conv/`)
 - [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/adaptive.rs`, `src/dsp/oversample.rs`, `src/dsp/gate.rs`)
@@ -24,8 +24,9 @@ Fixes #
 ---
 
 ## Real-Time Audio Safety Checklist (RT-Safe)
-<!-- The audio thread runs at high priority with strict sub-millisecond deadlines. RT safety is non-negotiable. -->
+<!-- Applicable if modifying audio processing paths. Skip or mark N/A for non-RT, documentation, or tooling PRs. -->
 
+- [ ] **N/A**: This PR does not touch the real-time audio hot-path.
 - [ ] **Zero Dynamic Heap Allocations in Audio Path**: The audio path (`process()`, inner DSP stages, inference loops) makes zero calls to the heap allocator (`malloc`, `Box`, `Vec`, `String`, `Arc::new()`, `format!()`). Any resource swap happens off-RT via SPSC GC rings.
 - [ ] **Lock-Free & Non-Blocking**: No mutexes, RwLocks, synchronization primitives, or thread-parking mechanisms exist in the audio thread.
 - [ ] **Zero Blocking I/O & File Operations**: No filesystem access, network I/O, or synchronous standard output (`println!`, `eprintln!`) on the audio thread.
@@ -39,8 +40,9 @@ Fixes #
 ---
 
 ## SIMD & Mathematical Vectorization Checklist (target: x86-64-v3)
-<!-- The engine enforces an x86-64-v3 (AVX2, FMA, BMI2) mandatory minimum baseline in .cargo/config.toml. -->
+<!-- Applicable if modifying math kernels, activations, or neural inference. Skip or mark N/A otherwise. -->
 
+- [ ] **N/A**: This PR does not touch SIMD kernels, math approximations, or vectorization.
 - [ ] **Unconditional x86-64-v3 Baseline**: No runtime `is_x86_feature_detected!("avx2")` checks or scalar fallback branches on the primary execution path.
 - [ ] **Data Alignment**: 64-byte memory alignment is preserved for SIMD buffers and weight matrices (`AlignedVec`).
 - [ ] **Instruction-Level Parallelism (ILP)**: Inner products utilize multiple accumulators to saturate FMA execution ports.
@@ -49,9 +51,10 @@ Fixes #
 ---
 
 ## Numerical Parity, Oracles & Testing Checklist
-<!-- Both the C++ NAMCore Parity oracle and the f64 Numerical Oracle must be satisfied. -->
+<!-- Both the C++ NAMCore Parity oracle and the f64 Numerical Oracle are validated automatically in GitHub CI. -->
 
-- [ ] **C++ NAMCore Parity**: Parity tests (`tests/parity/cpp_parity.rs`) pass within calibrated SNR/ESR/MSE/MR-STFT thresholds.
+- [ ] **N/A**: This PR does not touch DSP models, weights, or loaders.
+- [ ] **C++ NAMCore Parity**: Parity tests (`tests/parity/cpp_parity.rs`) pass within calibrated SNR/ESR/MSE/MR-STFT thresholds (validated locally or by GitHub CI `cpp-parity` job).
 - [ ] **f64 Numerical Oracle**: Ideal numerical behavior is maintained against the reference implementation (`tests/parity/reference_oracle_f64.rs`) without unexpected float drift.
 - [ ] **Block-Invariance & Meta-Coherence**: Block slicing equivalence (`tests/models/block_invariance_test.rs`) and metadata coherence suites (`tests/models/meta_coherence.rs`) pass.
 - [ ] **Quality Contract Compliance**: If quality thresholds are affected, measurement comments are provided and `docs/quality-contract.json` is validated via `utils/quality-dashboard.sh --check docs/quality-contract.json`.
@@ -59,28 +62,37 @@ Fixes #
 
 ---
 
-## Pre-Submission Verification Suite (Mandatory)
-<!-- Run these verification scripts from the crate root before opening or marking PR ready for review: -->
+## Verification & Quality Gates (Local & GitHub CI)
+<!--
+Responsible Verification Model:
+- Fast Local Feedback: Run cargo check and targeted tests for quick local iteration.
+- GitHub CI Automation: The full cross-platform matrix (x86_64, Linux ARM64, macOS ARM64, MSRV 1.99.0, C++ parity oracle, and consumer smoke tests) runs automatically in CI on every push and PR.
+- Friendly Tip for Contributors: If you don't have C++ compilers, CMake, or ARM hardware locally, open a DRAFT PR and let GitHub Actions run the full verification matrix for you!
+-->
 
-### 1. One-Time Setup (Prerequisites for Parity Oracles)
+### 1. Recommended Local Checks (Fast Feedback)
 
 ```bash
-utils/setup-third-party.sh         # Fetch/update pinned C++ NAMCore and Plugin mirrors
-tests/fixtures/golden_gen_build.sh # Build the C++ NAMCore reference render binary
+# Fast check during local development:
+cargo check --locked --all-targets
+
+# Targeted test for changed components (example):
+cargo test --lib <module>
 ```
 
-### 2. Recommended Verification Commands
+### 2. Optional Full Local Suite (If environment allows)
 
 ```bash
-# Static analysis:
+# Static analysis (8 phases, fmt, clippy -D warnings, policies, budget):
 utils/lints.sh
 
-# Agile test suite:
+# Agile QA test suite (debug mode, non-ignored targets):
 utils/tests-quick.sh
 ```
 
-- [ ] **`utils/lints.sh` Passed**: All eight phases and the four documented check/Clippy configurations passed.
-- [ ] **`utils/tests-quick.sh` Passed**: Executed once as final validation; all golden vectors, C++ parity gates, and proptest parser fuzzers pass without regressions.
+- [ ] **Targeted Local Checks Passed**: Code compiles cleanly without warnings (`cargo check --all-targets`) and unit tests for modified components pass.
+- [ ] **Full Local Suite Executed (Optional)**: Successfully ran `utils/lints.sh` and/or `utils/tests-quick.sh` (or deferring full matrix to GitHub CI via Draft PR).
+- [ ] **Automated GitHub CI**: All checks pass on GitHub Actions (x86_64 Linux lints/quick, native ARM64 Linux/macOS, MSRV 1.99.0, C++ parity oracle, consumer smoke tests).
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 
   ```text

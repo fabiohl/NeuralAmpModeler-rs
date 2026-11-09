@@ -148,92 +148,93 @@ fn render_bin() -> PathBuf {
 }
 
 fn ensure_render_compiled() -> bool {
-    // Serialize the C++ render build across parallel test threads. All
+    // Serialize and cache the C++ render build across parallel test threads. All
     // `live_cross_validation_*` tests share the same CMake build directory
-    // (`build/namcore_render`); on a cold run they would otherwise race to
-    // invoke `cmake` concurrently, corrupting the CMake cache and producing
-    // spurious "CMAKE_CXX_COMPILER not set" failures. The first thread builds;
-    // the rest wait and then find the binary already present.
-    use std::sync::Mutex;
-    static BUILD_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    fn skip_or_abort(msg: &str) -> bool {
-        neural_amp_modeler_rs::testing::report_skip("cpp_parity", "render_tool_unavailable");
-        eprintln!("{msg}");
-        false
-    }
-
-    let bin = render_bin();
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let nam_core = nam_core_dir();
-    // A cached binary with no source mirror to re-validate against stays usable.
-    if bin.exists() && !nam_core.exists() {
-        return true;
-    }
-
-    if !nam_core.exists() {
-        return skip_or_abort(&format!(
-            "NeuralAmpModelerCore not found at {nam_core:?}.\n\
-             Run './tests/fixtures/golden_gen_build.sh' to set up mirrors and generate golden vectors."
-        ));
-    }
-
-    for sub in &["Dependencies/eigen", "Dependencies/AudioDSPTools"] {
-        let sub_path = nam_core.join(sub);
-        if sub_path.exists() && fs::read_dir(&sub_path).map_or(true, |mut d| d.next().is_none()) {
-            let status = Command::new("git")
-                .args(["submodule", "update", "--init", sub])
-                .current_dir(&nam_core)
-                .status();
-            if status.is_ok_and(|s| !s.success()) {
-                eprintln!("WARN: failed to initialize submodule {sub}");
-            }
+    // (`build/namcore_render`); caching the verified outcome in `OnceLock`
+    // avoids re-spawning `utils/ensure_namcore_render.sh` on every test case.
+    use std::sync::OnceLock;
+    static RENDER_READY: OnceLock<bool> = OnceLock::new();
+    *RENDER_READY.get_or_init(|| {
+        fn skip_or_abort(msg: &str) -> bool {
+            eprintln!("{msg}");
+            false
         }
-    }
 
-    // Single unified build entry point: all C++ render builds in the
-    // repo (quick/long runners, golden generation, this fallback) delegate to
-    // utils/ensure_namcore_render.sh, which is idempotent and logs to
-    // target/logs/cmake-{configure,build}.log.
-    let helper = project_root.join("utils/ensure_namcore_render.sh");
-    if !helper.exists() {
-        return skip_or_abort(&format!(
-            "unified render build helper not found: {helper:?}"
-        ));
-    }
+        let bin = render_bin();
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let nam_core = nam_core_dir();
+        // A cached binary with no source mirror to re-validate against stays usable.
+        if bin.exists() && !nam_core.exists() {
+            return true;
+        }
 
-    if !bin.exists() {
-        eprintln!("Compiling render tool (utils/ensure_namcore_render.sh)...");
-    }
-
-    let output = Command::new("bash")
-        .arg(&helper)
-        .current_dir(&project_root)
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
+        if !nam_core.exists() {
             return skip_or_abort(&format!(
-                "utils/ensure_namcore_render.sh failed (exit {:?}): {}",
-                o.status.code(),
-                stderr.trim()
+                "NeuralAmpModelerCore not found at {nam_core:?}.\n\
+                 Run './tests/fixtures/golden_gen_build.sh' to set up mirrors and generate golden vectors."
             ));
         }
-        Err(e) => {
-            return skip_or_abort(&format!("failed to run {}: {e}", helper.display()));
+
+        for sub in &["Dependencies/eigen", "Dependencies/AudioDSPTools"] {
+            let sub_path = nam_core.join(sub);
+            if sub_path.exists()
+                && fs::read_dir(&sub_path).map_or(true, |mut d| d.next().is_none())
+            {
+                let status = Command::new("git")
+                    .args(["submodule", "update", "--init", sub])
+                    .current_dir(&nam_core)
+                    .status();
+                if status.is_ok_and(|s| !s.success()) {
+                    eprintln!("WARN: failed to initialize submodule {sub}");
+                }
+            }
         }
-    }
 
-    if !render_bin().exists() {
-        return skip_or_abort(&format!(
-            "Render binary not found after build — expected at {bin:?}"
-        ));
-    }
+        // Single unified build entry point: all C++ render builds in the
+        // repo (quick/long runners, golden generation, this fallback) delegate to
+        // utils/ensure_namcore_render.sh, which is idempotent and logs to
+        // target/logs/cmake-{configure,build}.log. Pass `lib_quiet=1` so child
+        // invocations never emit spurious `RESULT:` lines to `target/logs/summary.txt`.
+        let helper = project_root.join("utils/ensure_namcore_render.sh");
+        if !helper.exists() {
+            return skip_or_abort(&format!(
+                "unified render build helper not found: {helper:?}"
+            ));
+        }
 
-    true
+        if !bin.exists() {
+            eprintln!("Compiling render tool (utils/ensure_namcore_render.sh)...");
+        }
+
+        let output = Command::new("bash")
+            .arg(&helper)
+            .env("lib_quiet", "1")
+            .current_dir(&project_root)
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                return skip_or_abort(&format!(
+                    "utils/ensure_namcore_render.sh failed (exit {:?}): {}",
+                    o.status.code(),
+                    stderr.trim()
+                ));
+            }
+            Err(e) => {
+                return skip_or_abort(&format!("failed to run {}: {e}", helper.display()));
+            }
+        }
+
+        if !render_bin().exists() {
+            return skip_or_abort(&format!(
+                "Render binary not found after build — expected at {bin:?}"
+            ));
+        }
+
+        true
+    })
 }
 
 fn run_render_comparison(
@@ -267,7 +268,10 @@ fn run_render_comparison(
     let model_data = parse_nam_json(&json_data).expect("JSON parser failed");
 
     if !ensure_render_compiled() {
-        eprintln!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("cpp_parity::run_render_comparison::{golden_name}"),
+            "render_tool_unavailable",
+        );
         return ParityOutcome::SkippedToolNotAvailable;
     }
 
@@ -1182,7 +1186,12 @@ fn live_cross_validation_a2_example_slimmable() {
 #[test]
 #[ignore = "long: probe for the optional C++ oracle (D-02)"]
 fn d02_live_cross_validation_oracle_probe() {
-    let _ = ensure_render_compiled();
+    if !ensure_render_compiled() {
+        neural_amp_modeler_rs::testing::report_skip(
+            "cpp_parity::d02_live_cross_validation_oracle_probe",
+            "render_tool_unavailable",
+        );
+    }
 }
 
 // --- v2 (multi-SR, comprehensive) ---
@@ -1859,7 +1868,10 @@ fn live_cross_validation_nondist_models() {
     let temp_dir = project_root.join("tests/fixtures/.temp_live");
     fs::create_dir_all(&temp_dir).ok();
     if !ensure_render_compiled() {
-        println!("[STATUS] SKIP_CAPABILITY reason=\"render_tool_unavailable\"");
+        neural_amp_modeler_rs::testing::report_skip(
+            "cpp_parity::live_cross_validation_nondist_models",
+            "render_tool_unavailable",
+        );
         println!("C++ render tool not available, skipping nondist cross-validation.");
         return;
     }
@@ -1943,103 +1955,105 @@ fn render_multichannel_fingerprint(
 }
 
 fn ensure_render_multichannel_compiled() -> bool {
-    use std::sync::Mutex;
-    static MC_BUILD_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = MC_BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if !ensure_render_compiled() {
-        return false;
-    }
-    let mc_bin = render_multichannel_bin();
+    use std::sync::OnceLock;
+    static MC_RENDER_READY: OnceLock<bool> = OnceLock::new();
+    *MC_RENDER_READY.get_or_init(|| {
+        if !ensure_render_compiled() {
+            return false;
+        }
+        let mc_bin = render_multichannel_bin();
 
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let nam_core = nam_core_dir();
-    let mc_cpp = project_root.join("tests/fixtures/render_multichannel.cpp");
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let nam_core = nam_core_dir();
+        let mc_cpp = project_root.join("tests/fixtures/render_multichannel.cpp");
 
-    fn collect_objs(dir: &std::path::Path) -> Vec<PathBuf> {
-        let mut res = Vec::new();
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    res.extend(collect_objs(&p));
-                } else if p.extension().and_then(|e| e.to_str()) == Some("o")
-                    && p.file_name().and_then(|n| n.to_str()) != Some("render.cpp.o")
-                {
-                    res.push(p);
+        fn collect_objs(dir: &std::path::Path) -> Vec<PathBuf> {
+            let mut res = Vec::new();
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        res.extend(collect_objs(&p));
+                    } else if p.extension().and_then(|e| e.to_str()) == Some("o")
+                        && p.file_name().and_then(|n| n.to_str()) != Some("render.cpp.o")
+                    {
+                        res.push(p);
+                    }
                 }
             }
+            res
         }
-        res
-    }
 
-    let obj_dir = project_root
-        .join(BUILD_DIR)
-        .join("tools/CMakeFiles/render.dir");
-    let mut obj_files = collect_objs(&obj_dir);
-    obj_files.sort();
-    if obj_files.is_empty() {
-        neural_amp_modeler_rs::testing::report_skip(
-            "cpp_parity::ensure_render_multichannel_compiled",
-            "namcore_objs_not_found",
-        );
-        return false;
-    }
-
-    let cxx = std::env::var("CXX").unwrap_or_else(|_| {
-        let available = |name: &str| {
-            Command::new(name)
-                .arg("--version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        };
-        if available("g++") {
-            "g++".to_string()
-        } else {
-            "clang++".to_string()
-        }
-    });
-    let mc_config = project_root
-        .join(BUILD_DIR)
-        .join(".render_multichannel_config");
-    let fingerprint = render_multichannel_fingerprint(&mc_cpp, &obj_files, &cxx);
-    if mc_bin.exists() && fs::read_to_string(&mc_config).is_ok_and(|s| s.trim() == fingerprint) {
-        return true;
-    }
-
-    let mut cmd = Command::new(&cxx);
-    cmd.arg("-std=c++20")
-        .arg("-O3")
-        .arg("-I")
-        .arg(&nam_core)
-        .arg("-I")
-        .arg(nam_core.join("Dependencies/eigen"))
-        .arg("-I")
-        .arg(nam_core.join("Dependencies/AudioDSPTools"))
-        .arg("-I")
-        .arg(nam_core.join("Dependencies/nlohmann"))
-        .arg(&mc_cpp);
-    for obj in &obj_files {
-        cmd.arg(obj);
-    }
-    cmd.arg("-o").arg(&mc_bin);
-
-    match cmd.output() {
-        Ok(out) if out.status.success() && mc_bin.exists() => {
-            let _ = fs::write(&mc_config, format!("{fingerprint}\n"));
-            true
-        }
-        Ok(out) => {
-            eprintln!(
-                "Failed to compile render_multichannel: {}",
-                String::from_utf8_lossy(&out.stderr)
+        let obj_dir = project_root
+            .join(BUILD_DIR)
+            .join("tools/CMakeFiles/render.dir");
+        let mut obj_files = collect_objs(&obj_dir);
+        obj_files.sort();
+        if obj_files.is_empty() {
+            neural_amp_modeler_rs::testing::report_skip(
+                "cpp_parity::ensure_render_multichannel_compiled",
+                "namcore_objs_not_found",
             );
-            false
+            return false;
         }
-        Err(e) => {
-            eprintln!("Failed to run C++ compiler for render_multichannel: {e}");
-            false
+
+        let cxx = std::env::var("CXX").unwrap_or_else(|_| {
+            let available = |name: &str| {
+                Command::new(name)
+                    .arg("--version")
+                    .output()
+                    .is_ok_and(|o| o.status.success())
+            };
+            if available("g++") {
+                "g++".to_string()
+            } else {
+                "clang++".to_string()
+            }
+        });
+        let mc_config = project_root
+            .join(BUILD_DIR)
+            .join(".render_multichannel_config");
+        let fingerprint = render_multichannel_fingerprint(&mc_cpp, &obj_files, &cxx);
+        if mc_bin.exists() && fs::read_to_string(&mc_config).is_ok_and(|s| s.trim() == fingerprint)
+        {
+            return true;
         }
-    }
+
+        let mut cmd = Command::new(&cxx);
+        cmd.arg("-std=c++20")
+            .arg("-O3")
+            .arg("-I")
+            .arg(&nam_core)
+            .arg("-I")
+            .arg(nam_core.join("Dependencies/eigen"))
+            .arg("-I")
+            .arg(nam_core.join("Dependencies/AudioDSPTools"))
+            .arg("-I")
+            .arg(nam_core.join("Dependencies/nlohmann"))
+            .arg(&mc_cpp);
+        for obj in &obj_files {
+            cmd.arg(obj);
+        }
+        cmd.arg("-o").arg(&mc_bin);
+
+        match cmd.output() {
+            Ok(out) if out.status.success() && mc_bin.exists() => {
+                let _ = fs::write(&mc_config, format!("{fingerprint}\n"));
+                true
+            }
+            Ok(out) => {
+                eprintln!(
+                    "Failed to compile render_multichannel: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!("Failed to run C++ compiler for render_multichannel: {e}");
+                false
+            }
+        }
+    })
 }
 
 fn write_multichannel_bin(path: &std::path::Path, channels: &[Vec<f32>]) -> std::io::Result<()> {
@@ -2841,6 +2855,11 @@ fn test_wav_ir_cross_rate_mismatch_parity() {
         assert!(
             !output.status.success(),
             "C++ render tool must reject mismatched sample rates (DEC-02)"
+        );
+    } else {
+        neural_amp_modeler_rs::testing::report_skip(
+            "cpp_parity::test_wav_ir_cross_rate_mismatch_parity",
+            "render_tool_unavailable",
         );
     }
 

@@ -27,6 +27,12 @@ runs:
           echo "$NOTE" >> "$GITHUB_STEP_SUMMARY"
         fi
         if [ -f target/logs/summary.txt ]; then
+          verdicts=$(grep '^RESULT:' target/logs/summary.txt || true)
+          if [ -n "$verdicts" ]; then
+            printf '%s\n' "$verdicts" | while IFS= read -r v; do
+              echo "**$v**" >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           cat target/logs/summary.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

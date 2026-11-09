@@ -35,6 +35,13 @@ jobs:
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustup target add aarch64-unknown-linux-gnu && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -65,6 +72,13 @@ jobs:
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -141,6 +155,13 @@ jobs:
       # Runner images can ship an older preinstalled stable; the crate needs rust-version 1.99.
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -153,8 +174,11 @@ jobs:
             echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
           fi
       # Linux ARM64 runs the full canonical discipline (fmt, check/clippy matrix,
-      # cross-aarch64, doc, policies, budget); macOS keeps the native clippy gate
+      # cross-x86_64, doc, policies, budget); macOS keeps the native clippy gate
       # because the full lint matrix exceeds its job budget.
+      - name: Install cross target (Linux ARM64)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-gnu
       - name: Lints (Linux ARM64)
         if: runner.os == 'Linux'
         run: ${QA_BASH:-bash} ./utils/lints.sh
@@ -213,29 +237,41 @@ jobs:
           retention-days: 14
 
   # MSRV job: validates compilation with rust-version from Cargo.toml (1.99.0).
+  # rust-toolchain.toml pins `stable`, so RUSTUP_TOOLCHAIN is required to override it;
+  # `rustup default` alone would be silently ignored by the toolchain file.
   msrv:
     name: msrv (1.99.0)
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install MSRV toolchain
-        run: rustup toolchain install 1.99.0 --no-self-update --profile minimal && rustup default 1.99.0
+        run: rustup toolchain install 1.99.0 --no-self-update --profile minimal && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s toolchain=msrv-1.99.0 rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Cargo check (MSRV)
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           . utils/_lib.sh
           STATUS_NAME=msrv
           lib_init
+          trap 'trap_fail $?' ERR
           PHASE_NAME=msrv; phase msrv
           set +e
-          cargo check --locked --all-targets --features testing 2>&1 | tee "$LOG_DIR/msrv.log"
+          cargo check --locked --workspace --all-targets --features testing 2>&1 | tee "$LOG_DIR/msrv.log"
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
@@ -261,6 +297,7 @@ jobs:
             target/logs/msrv.log
             target/logs/summary.txt
             target/logs/msrv-status.tsv
+            target/logs/ci-provenance.log
           retention-days: 14
           if-no-files-found: warn
 
@@ -281,9 +318,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
       - name: Setup third-party (C++ oracle)
-        run: ./utils/setup-third-party.sh
+        run: lib_quiet=1 ./utils/setup-third-party.sh
       - name: Build C++ NAMCore render binary
-        run: ./utils/ensure_namcore_render.sh
+        run: lib_quiet=1 ./utils/ensure_namcore_render.sh
       - name: Quick QA suite (require C++ oracle)
         env:
           NAM_REQUIRE_CPP_ORACLE: '1'
@@ -321,6 +358,13 @@ jobs:
           persist-credentials: false
       - name: Update Rust toolchain and targets
         run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}

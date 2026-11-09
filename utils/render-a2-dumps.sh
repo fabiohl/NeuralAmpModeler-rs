@@ -6,15 +6,15 @@
 # Orçamento: 120
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -euo pipefail
+cd "$(dirname "$0")/.."
+. utils/_lib.sh
 case "$#:${1:-}" in
   0:) ;;
   1:-h|1:--help) echo "Usage: utils/render-a2-dumps.sh"; exit 0 ;;
-  *) echo "Usage: utils/render-a2-dumps.sh" >&2; exit 2 ;;
+  *) usage_fail "render-a2-dumps.sh não aceita argumentos ($*)" ;;
 esac
-cd "$(dirname "$0")/.."
-. utils/_lib.sh
 lib_init
-trap 'rc=$?; [ "$rc" -eq 0 ] || [ -n "${DONE:-}" ] || { FAILS+=(render-a2-dumps); DONE=1; finish; }' EXIT
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ "${FINISHED:-0}" = 1 ] || [ -n "${DONE:-}" ] || { FAILS+=(render-a2-dumps); DONE=1; finish; }' EXIT
 vernier() { set +x; FAILS+=(render-a2-dumps); DONE=1; finish || true; die "$*"; }
 
 PROJECT_ROOT="$PWD"

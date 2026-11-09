@@ -97,8 +97,8 @@ body:
   - type: textarea
     id: dsp_configuration
     attributes:
-      label: DSP & Audio Configuration
-      description: Specify audio sampling rate, block size, oversampling mode, and precision.
+      label: DSP & Audio Configuration (If Applicable)
+      description: Specify audio sampling rate, block size, oversampling mode, and precision (optional if not related to audio playback).
       placeholder: |
         - Sample Rate: 48000 Hz (or 44100 / 88200 / 96000 / 176400 / 192000 Hz)
         - Block / Buffer Size: 64 samples (or 16 / 32 / 64 / 128 / 256 / 512 / 1024)
@@ -106,7 +106,7 @@ body:
         - Activation Precision: Standard (Exact) / Fast (Padé approximation)
         - Quality Mode: Live (zero-latency) / Offline (HQ deterministic)
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: description
@@ -182,9 +182,9 @@ body:
       options:
         - label: I have searched existing issues to ensure this is not a duplicate.
           required: true
-        - label: I have verified this issue on the latest `main` branch or latest release.
-          required: true
-        - label: I have tested the build in release mode (`cargo build --release`).
-          required: true
+        - label: I have verified this issue on the latest `main` branch or latest release (if feasible).
+          required: false
+        - label: I tested the build in release mode (`cargo build --release`, recommended for runtime/performance reports).
+          required: false
         - label: This issue pertains directly to the `NeuralAmpModeler-rs` engine core (and not downstream application-specific wrappers).
           required: true

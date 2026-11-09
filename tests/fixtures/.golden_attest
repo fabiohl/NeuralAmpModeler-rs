@@ -14,5 +14,5 @@
 # Format:
 # generator=<sha256> author=<id> date=<ISO-8601> command=<cmd> scope=<files> [reason=<...>]
 
-generator=7d6c07d5e5e95545d2049e32ba99c587b6cfec65ceeeac41a314de2dcf314367 author="Fabio Lima" date=2026-10-31 command=manual-edit-header scope=utils/check-model.sh reason="class D formal justification in script header"
-generator=83b10529f9d4401b265e314c271ca7ecbbd9a8c56892e061db211c93ffc7a151 author="Fabio Lima" date=2026-11-06 command=manual-edit-script-lifecycle scope=tests/fixtures/golden_gen_build.sh reason="add lib_init after sourcing utils/_lib.sh; no fixture output change"
+generator=b9c4d1353435f3f71ffebe03a89f6db7fcfb03b2faab7797d250e142c9fa1687 author="Fabio Lima" date=2026-11-08 command=manual-edit-cli-flags scope=utils/check-model.sh reason="remove undocumented --directory alias; no fixture output change"
+generator=61a20786eac3d13001c699db600dcfe19eb581a3d826540de38604acc55493e9 author="Fabio Lima" date=2026-11-08 command=manual-edit-script-lifecycle scope=tests/fixtures/golden_gen_build.sh reason="pair lib_init with finish and usage_fail; no fixture output change"
