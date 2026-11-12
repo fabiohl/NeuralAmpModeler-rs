@@ -577,9 +577,10 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// [`prewarm_complete`](Self::prewarm_complete)) — the same split pass as
     /// [`reset`](Self::reset), which the engine proves bit-exact against the
     /// integral reset. The restored state is therefore the **zero/prewarm
-    /// equivalent** state, which for families with `prewarm_samples() == 0`
-    /// (e.g. `Linear`) still advances their canonical cursor by the single
-    /// zeroed stabilization sample, and does not restore an in-flight
+    /// equivalent** state, which for families whose split pass arms a single
+    /// zeroed accounting unit (e.g. `Linear`, whose `prewarm_samples()` reports
+    /// `receptive_field` for `Sequential` composition) still advances their canonical
+    /// cursor by the single zeroed stabilization sample, and does not restore an in-flight
     /// `Container` crossfade transition. Callers that need the exact state of a
     /// separately constructed instance must not rely on a bit-for-bit match for
     /// those families. The excitation/output buffers are allocated here, off-RT.

@@ -300,6 +300,7 @@ fn run_sequential_mono_parity(
     use_v2: bool,
     limits: &SequentialParityLimits,
     check_no_warm_positive_control: bool,
+    v060_linear_prewarm_skip: usize,
 ) {
     let model_status = FIXTURE_CATALOG.check(fixture_filename);
     assert!(
@@ -412,27 +413,44 @@ fn run_sequential_mono_parity(
     let oracle_f32 = oracle_chain_with_warm(children, chain_prewarm_samples, &signal, &cfg);
 
     // ── Metrics ──────────────────────────────────────────────────────────
-    let esr_rust_cpp = common::metrics::compute_esr(&cpp_output, &rust_out_blocks);
-    let snr_rust_cpp =
-        neural_amp_modeler_rs::testing::perceptual::compute_snr_db(&cpp_output, &rust_out_blocks);
+    let skip = v060_linear_prewarm_skip.min(frames_tot);
+    let esr_rust_cpp = common::metrics::compute_esr(&cpp_output[skip..], &rust_out_blocks[skip..]);
+    let snr_rust_cpp = neural_amp_modeler_rs::testing::perceptual::compute_snr_db(
+        &cpp_output[skip..],
+        &rust_out_blocks[skip..],
+    );
     let esr_rust_oracle = common::metrics::compute_esr(&oracle_f32, &rust_out_blocks);
     let snr_rust_oracle =
         neural_amp_modeler_rs::testing::perceptual::compute_snr_db(&oracle_f32, &rust_out_blocks);
-    let esr_cpp_oracle = common::metrics::compute_esr(&oracle_f32, &cpp_output);
-    let snr_cpp_oracle =
-        neural_amp_modeler_rs::testing::perceptual::compute_snr_db(&oracle_f32, &cpp_output);
+    let esr_cpp_oracle = common::metrics::compute_esr(&oracle_f32[skip..], &cpp_output[skip..]);
+    let snr_cpp_oracle = neural_amp_modeler_rs::testing::perceptual::compute_snr_db(
+        &oracle_f32[skip..],
+        &cpp_output[skip..],
+    );
 
-    // Transient window (post-prewarm onset, first real frames)
+    // Transient window (post-prewarm onset, first real frames; skips known
+    // NAMCore v0.6.0 pre-PR#352 `Linear::GetPrewarmSamples() == 0` window when set).
     let win = TRANSIENT_FRAMES.min(frames_tot);
-    let max_diff_transient = rust_out_blocks[..win]
+    let max_diff_transient = rust_out_blocks[skip..win]
         .iter()
-        .zip(cpp_output[..win].iter())
+        .zip(cpp_output[skip..win].iter())
         .map(|(&a, &b)| (a - b).abs() as f64)
         .fold(0.0f64, f64::max);
     let snr_transient = neural_amp_modeler_rs::testing::perceptual::compute_snr_db(
-        &cpp_output[..win],
-        &rust_out_blocks[..win],
+        &cpp_output[skip..win],
+        &rust_out_blocks[skip..win],
     );
+    if skip > 0 {
+        let full_max_diff = rust_out_blocks[..skip]
+            .iter()
+            .zip(cpp_output[..skip].iter())
+            .map(|(&a, &b)| (a - b).abs() as f64)
+            .fold(0.0f64, f64::max);
+        println!(
+            "[{label} @ {sample_rate} Hz] GAP (pinned NAMCore v0.6.0 pre-PR#352): \
+             first {skip} frames max_diff={full_max_diff:.3e} (Rust matches f64 & PR#352)"
+        );
+    }
 
     println!(
         "[{label} @ {sample_rate} Hz] Rust vs C++: ESR={esr_rust_cpp:.3e}, SNR={snr_rust_cpp:.1} dB | \
@@ -539,6 +557,7 @@ fn test_sequential_linear2_multi_sr_cpp_parity() {
             true,
             &MONO_LINEAR_LIMITS,
             false,
+            3,
         );
     }
 }
@@ -559,6 +578,7 @@ fn test_sequential_linear_chain_48k_cpp_parity() {
         false,
         &MONO_LINEAR_LIMITS,
         false,
+        3,
     );
 }
 
@@ -579,6 +599,7 @@ fn test_sequential_nested_48k_cpp_parity() {
         false,
         &MONO_LINEAR_LIMITS,
         false,
+        3,
     );
 }
 
@@ -605,6 +626,7 @@ fn test_sequential_multichannel_interior_48k_cpp_parity() {
         false,
         &MONO_LINEAR_LIMITS,
         false,
+        7,
     );
 }
 
@@ -630,6 +652,7 @@ fn test_sequential_linear_wavenet_multi_sr_cpp_parity() {
             true,
             &MONO_WAVENET_LIMITS,
             false,
+            0,
         );
     }
 }
@@ -658,6 +681,7 @@ fn test_sequential_double_lstm_single_prewarm_cpp_parity() {
         true,
         &MONO_LSTM_CHAIN_LIMITS,
         true,
+        0,
     );
 }
 

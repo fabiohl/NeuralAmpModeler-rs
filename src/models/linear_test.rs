@@ -341,9 +341,15 @@ fn test_linear_reset() {
 }
 
 #[test]
-fn test_linear_prewarm_samples_zero() {
-    let model = LinearModel::new(vec![1.0; 16], 0.0, LinearImplementation::default()).unwrap();
-    assert_eq!(model.prewarm_samples(), 0);
+fn test_linear_prewarm_samples_matches_receptive_field() {
+    for (rf, imp) in [
+        (16, LinearImplementation::Direct),
+        (320, LinearImplementation::Fft),
+        (512, LinearImplementation::Auto),
+    ] {
+        let model = LinearModel::new(vec![1.0; rf], 0.0, imp).unwrap();
+        assert_eq!(model.prewarm_samples(), rf);
+    }
 }
 
 // ── Numerical equivalence: Direct vs FFT (f32 precision tolerance) ──
@@ -1531,5 +1537,84 @@ fn test_multichannel_direct_bias_fallbacks_are_preserved() {
     match LinearMultichannel::new(one_to_n, &[0.0; 8], &[0.5]).unwrap() {
         LinearMultichannel::OneToMany(m) => assert_eq!(m.biases, vec![0.5, 0.5]),
         _ => panic!("1->N geometry must select the one-to-many engine"),
+    }
+}
+
+#[test]
+fn test_linear_prewarm_clears_dirty_state_direct_and_fft_with_bias() {
+    // Mirrors NAMCore PR #352 `test_prewarm_clears_convolution_state`:
+    // Direct (RF=17) and FFT (RF=320), with bias, 1->1, 2->2, 1->2, 2->1,
+    // dirty history, then `prewarm()` / `reset()` / `prewarm_reset()`,
+    // verifying exact analytical impulse response + bias on the first block.
+    for (rf, imp) in [
+        (17usize, LinearImplementation::Direct),
+        (320usize, LinearImplementation::Fft),
+    ] {
+        for (in_ch, out_ch) in [(1usize, 1usize), (2, 2), (1, 2), (2, 1)] {
+            let paths = in_ch.max(out_ch);
+            let kernels = if in_ch == out_ch { 1 } else { paths };
+            let mut weights = vec![0.0f32; rf * kernels];
+            for k in 0..kernels {
+                weights[k * rf] = 0.25 * (k + 1) as f32;
+                weights[k * rf + rf / 2] = -0.125 * (k + 1) as f32;
+                weights[k * rf + rf - 1] = 0.5 * (k + 1) as f32;
+            }
+            let bias_count = if in_ch == out_ch { 1 } else { out_ch };
+            let biases: Vec<f32> = (0..bias_count).map(|c| 0.0625 * (c + 1) as f32).collect();
+            let topo = multichannel_topo(in_ch, out_ch, rf, imp);
+            let mut model = LinearModel::new_with_topology(topo, weights.clone(), biases.clone())
+                .expect("linear model");
+            assert_eq!(model.prewarm_samples(), rf);
+
+            // Dirty the state across multiple blocks (exceeding FFT partition size).
+            let dirty_len = rf + 513;
+            let dirty_in: Vec<Vec<f32>> = (0..in_ch)
+                .map(|ch| vec![(ch + 1) as f32 * 0.7; dirty_len])
+                .collect();
+            let mut dirty_out: Vec<Vec<f32>> =
+                (0..out_ch).map(|_| vec![0.0f32; dirty_len]).collect();
+            let in_ptrs: Vec<*const f32> = dirty_in.iter().map(|v| v.as_ptr()).collect();
+            let out_ptrs: Vec<*mut f32> = dirty_out.iter_mut().map(|v| v.as_mut_ptr()).collect();
+            // SAFETY: pointers are valid for `dirty_len` frames.
+            unsafe { model.process_raw(in_ptrs.as_ptr(), out_ptrs.as_ptr(), dirty_len) };
+
+            // Clear via `NamModel::prewarm(0)` (must clear directly, regardless of arg).
+            NamModel::prewarm(&mut model, 0);
+
+            let probe_len = rf + 64;
+            let mut probe_in: Vec<Vec<f32>> = (0..in_ch).map(|_| vec![0.0f32; probe_len]).collect();
+            for (ch, ch_in) in probe_in.iter_mut().enumerate() {
+                ch_in[0] = (ch + 1) as f32;
+            }
+            let mut probe_out: Vec<Vec<f32>> =
+                (0..out_ch).map(|_| vec![0.0f32; probe_len]).collect();
+            let p_in_ptrs: Vec<*const f32> = probe_in.iter().map(|v| v.as_ptr()).collect();
+            let p_out_ptrs: Vec<*mut f32> = probe_out.iter_mut().map(|v| v.as_mut_ptr()).collect();
+            // SAFETY: pointers are valid for `probe_len` frames.
+            unsafe { model.process_raw(p_in_ptrs.as_ptr(), p_out_ptrs.as_ptr(), probe_len) };
+
+            for ch in 0..out_ch {
+                let expected_bias = if in_ch == out_ch {
+                    biases[0]
+                } else {
+                    biases[ch]
+                };
+                for (i, &got) in probe_out[ch].iter().enumerate() {
+                    let mut expected = expected_bias;
+                    for path in 0..paths {
+                        let path_out = if out_ch == 1 { 0 } else { path };
+                        if path_out == ch && i < rf {
+                            let gain = if in_ch == 1 { 1.0 } else { (path + 1) as f32 };
+                            let k_idx = if kernels == 1 { 0 } else { path };
+                            expected += gain * weights[k_idx * rf + i];
+                        }
+                    }
+                    assert!(
+                        (got - expected).abs() < 1e-5,
+                        "imp={imp:?} {in_ch}->{out_ch} ch={ch} sample={i}: got={got}, expected={expected}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -2968,8 +2968,8 @@ fn test_sequential_dispatch_builds_valid_chain() {
     assert_eq!(model.num_output_channels(), 1);
     assert_eq!(
         model.prewarm_samples(),
-        0,
-        "two RF=1 Linear stages stabilize in zero samples"
+        2,
+        "two RF=1 Linear stages sum receptive fields (1 + 1)"
     );
     model.set_max_buffer_size(64).expect("scratch negotiation");
     model.reset(48000, 64).expect("reset");

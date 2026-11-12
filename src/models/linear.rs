@@ -480,8 +480,16 @@ impl NamModel for LinearModel {
         Ok(())
     }
 
+    /// Returns the receptive field depth in samples, matching NAMCore PR #352
+    /// (`Linear::GetPrewarmSamples()`).
+    ///
+    /// Standalone `LinearModel::prewarm()` and `reset()` still clear history
+    /// and FFT state directly in O(ring) without feeding zeros; returning
+    /// `receptive_field` ensures `Sequential` chains containing a `Linear`
+    /// stage after a DC/bias-producing stage feed enough stabilization frames
+    /// to fill the FIR delay line with the upstream steady-state output.
     fn prewarm_samples(&self) -> usize {
-        0
+        self.receptive_field
     }
 
     fn prewarm_on_reset(&self) -> bool {

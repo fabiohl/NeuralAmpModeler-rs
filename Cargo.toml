@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false

@@ -210,7 +210,11 @@ mod audit_tests {
         let stages = vec![lstm_stage(), linear_stage(1, 1, &[0.5, -0.25])];
         let mut chain =
             SequentialModel::new(stages, vec![None, None], Some(48000.0)).expect("chain");
-        assert_eq!(chain.prewarm_samples(), 24000usize, "LSTM child budget");
+        assert_eq!(
+            chain.prewarm_samples(),
+            24002usize,
+            "LSTM + Linear RF budget"
+        );
 
         // Warmup (off-guard): arms the split flow and passes the first steps.
         chain.prewarm_reset();

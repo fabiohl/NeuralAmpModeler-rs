@@ -305,15 +305,15 @@ fn test_saturating_prewarm_sum() {
 
 #[test]
 fn test_sequential_prewarm_samples_is_child_sum() {
-    // Linear children report 0; an LSTM child reports 0.5 * expected rate
+    // Linear children report receptive_field; an LSTM child reports 0.5 * expected rate
     // (24000 at the LSTM's default 48000 Hz).
     let stages = vec![lstm_stage(), linear_stage(1, 1, 0.0, &[1.0, 0.0])];
     let chain = SequentialModel::new(stages, vec![None, None], None).expect("chain builds");
-    assert_eq!(chain.prewarm_samples(), 24000usize);
+    assert_eq!(chain.prewarm_samples(), 24002usize);
 
-    // Linear-only chains stabilize in zero samples.
+    // Two Linear stages (RF=2 and RF=1) sum to 3.
     let chain = chain_two_linears(&[1.0, 0.5], &[-2.0]).expect("chain builds");
-    assert_eq!(chain.prewarm_samples(), 0);
+    assert_eq!(chain.prewarm_samples(), 3);
 }
 
 #[test]
@@ -565,7 +565,7 @@ fn test_split_vs_integral_bit_exact() {
 
     let mut split = build();
     split.prewarm_reset();
-    assert_eq!(split.prewarm_samples(), 24000usize);
+    assert_eq!(split.prewarm_samples(), 24002usize);
     assert!(!split.prewarm_complete(), "stabilization armed");
 
     // Drain with a rotating step rhythm that exercises sub-chunking, larger
@@ -599,4 +599,57 @@ fn sample_through(model: &mut SequentialModel, frame: f32) -> f32 {
     let mut out = [0.0f32];
     model.process(&stream, &mut out);
     out[0]
+}
+
+#[test]
+fn test_sequential_linear_prewarm_stabilizes_upstream_bias_first_block() {
+    // Stage 0 emits a steady-state DC bias of 0.25 on silence; Stage 1 is a
+    // 16-tap averaging FIR (weights = 1/16). Without Stage 1's receptive field
+    // in `prewarm_samples()`, the first 15 samples after `reset()` suffer a
+    // ramp-up transient instead of outputting the steady-state 0.25.
+    for (rf, imp) in [
+        (16usize, LinearImplementation::Direct),
+        (320usize, LinearImplementation::Fft),
+    ] {
+        let s0 = StaticModel::Linear(Box::new(
+            LinearModel::new(vec![1.0], 0.25, LinearImplementation::Direct).unwrap(),
+        ));
+        let w1 = vec![1.0 / rf as f32; rf];
+        let s1 = StaticModel::Linear(Box::new(LinearModel::new(w1, 0.0, imp).unwrap()));
+        let mut integral =
+            SequentialModel::new(vec![s0, s1], vec![None, None], None).expect("chain builds");
+        assert_eq!(integral.prewarm_samples(), 1 + rf);
+
+        integral.reset(48000, 64).expect("reset");
+        let zeros = [0.0f32; 64];
+        let mut out_integral = [0.0f32; 64];
+        integral.process(&zeros, &mut out_integral);
+
+        for (i, &y) in out_integral.iter().enumerate() {
+            assert!(
+                (y - 0.25).abs() < 1e-5,
+                "rf={rf} sample {i}: expected steady-state 0.25, got {y}"
+            );
+        }
+
+        // Split flow (`prewarm_reset` + `prewarm_step`) must match bit-identically.
+        let s0_b = StaticModel::Linear(Box::new(
+            LinearModel::new(vec![1.0], 0.25, LinearImplementation::Direct).unwrap(),
+        ));
+        let w1_b = vec![1.0 / rf as f32; rf];
+        let s1_b = StaticModel::Linear(Box::new(LinearModel::new(w1_b, 0.0, imp).unwrap()));
+        let mut split =
+            SequentialModel::new(vec![s0_b, s1_b], vec![None, None], None).expect("chain builds");
+        split.set_max_buffer_size(64).expect("buf");
+        split.prewarm_reset();
+        while !split.prewarm_complete() {
+            split.prewarm_step(17);
+        }
+        let mut out_split = [0.0f32; 64];
+        split.process(&zeros, &mut out_split);
+        assert_eq!(
+            out_integral, out_split,
+            "rf={rf}: split vs integral first block must be bit-identical"
+        );
+    }
 }
