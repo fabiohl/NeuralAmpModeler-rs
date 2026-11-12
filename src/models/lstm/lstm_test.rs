@@ -87,11 +87,9 @@ mod tests {
         for i in 0..32 {
             model.layer.bias[i] = 0.1;
         }
-        for k in 0..4 {
-            for j in 0..9 {
-                for i in 0..8 {
-                    model.layer.input_hidden_weights[k][j][i] = 0.05;
-                }
+        for gate in &mut model.layer.input_hidden_weights[..4] {
+            for row in &mut gate[..9] {
+                row[..8].fill(0.05);
             }
         }
 
@@ -138,16 +136,12 @@ mod tests {
             for i in 0..32 {
                 model.layer.bias[i] = 0.1;
             }
-            for k in 0..4 {
-                for j in 0..9 {
-                    for i in 0..8 {
-                        model.layer.input_hidden_weights[k][j][i] = 0.05;
-                    }
+            for gate in &mut model.layer.input_hidden_weights[..4] {
+                for row in &mut gate[..9] {
+                    row[..8].fill(0.05);
                 }
             }
-            for i in 0..8 {
-                model.head_weights_f32[i] = 0.5;
-            }
+            model.head_weights_f32[..8].fill(0.5);
 
             let mut out = [0.0f32; 64];
             for chunk in 0..(64 / block_size) {

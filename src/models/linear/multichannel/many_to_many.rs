@@ -165,12 +165,12 @@ impl LinearManyToManyShared {
                 let weights_ptr = self.weights.as_ptr();
                 for i in 0..n {
                     // 1. Read all input channels into history (in-place safe)
-                    for ch in 0..chs {
+                    for (ch, hist) in self.histories.iter_mut().enumerate().take(chs) {
                         // SAFETY: ch < channels and input points to valid array of channel pointers.
                         let in_ptr = unsafe { *input.add(ch) };
                         // SAFETY: in_ptr points to at least num_frames samples and i < num_frames.
                         let s = unsafe { *in_ptr.add(i) };
-                        self.histories[ch][self.write_pos] = s;
+                        hist[self.write_pos] = s;
                     }
                     self.write_pos += 1;
                     if self.write_pos >= self.double_limit {
@@ -204,12 +204,12 @@ impl LinearManyToManyShared {
                 // SAFETY: self.weights has length rf >= p, so rf - p is within bounds.
                 let head_weights_ptr = unsafe { self.weights.as_ptr().add(rf - p) };
                 for i in 0..n {
-                    for ch in 0..chs {
+                    for (ch, hist) in self.histories.iter_mut().enumerate().take(chs) {
                         // SAFETY: ch < channels and input points to valid array of channel pointers.
                         let in_ptr = unsafe { *input.add(ch) };
                         // SAFETY: in_ptr points to at least num_frames samples and i < num_frames.
                         let s = unsafe { *in_ptr.add(i) };
-                        self.histories[ch][self.write_pos] = s;
+                        hist[self.write_pos] = s;
                     }
                     self.write_pos += 1;
                     if self.write_pos >= self.double_limit {

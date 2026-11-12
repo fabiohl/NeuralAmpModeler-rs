@@ -60,8 +60,8 @@ rtrb = "0.4.1"
 # .nam (JSON) model deserialization.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# SHA-256 for portable asset identity.
-sha2 = "0.11"
+# SHA-256 for portable asset identity (used by `testing`, examples, and tests).
+sha2 = { version = "0.11", optional = true }
 # Logging facade (zero overhead when disabled).
 log = "0.4.35"
 # Lean error signaling for off-RT threads.
@@ -71,6 +71,7 @@ anyhow = "1.0.104"
 NeuralAmpModeler-rs = { path = ".", features = ["testing"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11"
 # Statistical benchmarking.
 criterion = { version = "0.8.2", default-features = false }
 # Property-based testing for FastMath kernels and parser fuzzing.
@@ -161,7 +162,7 @@ default = ["dual-mono"]
 # activates lean single-inference mode (half CPU cost, mono copied to R).
 dual-mono = []
 # Exposes off-RT test utilities, audio signal generators, and perceptual metrics.
-testing = []
+testing = ["dep:sha2"]
 # Harness for the pinned phases of tests-long (rt-deadline, rt-jitter, soak).
 # Not public API; enable only from utils/tests-long.sh and utils/tests-quick.sh.
 pinned = []

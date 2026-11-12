@@ -203,8 +203,8 @@ impl AtomicHistogram {
     /// Returns the minimum observed value (real lower edge of the lowest non-empty bin).
     /// Returns 0 when empty or when the lowest non-empty bin is bin 0 ([0, 64) ns).
     pub fn get_min(&self) -> u64 {
-        for i in 0..32 {
-            if self.bins[i].load(Ordering::Relaxed) > 0 {
+        for (i, bin) in self.bins.iter().enumerate() {
+            if bin.load(Ordering::Relaxed) > 0 {
                 return if i == 0 { 0 } else { 1u64 << (i + 5) };
             }
         }
@@ -371,8 +371,8 @@ impl LatencyHistogram {
 
     /// Returns the lower edge of the lowest non-empty sub-bin; 0 when empty.
     pub fn get_min(&self) -> u64 {
-        for i in 0..LATENCY_BIN_COUNT {
-            if self.bins[i].load(Ordering::Relaxed) > 0 {
+        for (i, bin) in self.bins.iter().enumerate() {
+            if bin.load(Ordering::Relaxed) > 0 {
                 return latency_bin_lower_edge(i);
             }
         }

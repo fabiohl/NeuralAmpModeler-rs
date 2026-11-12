@@ -168,12 +168,12 @@ impl LinearManyToOne {
             MultichannelMode::Direct => {
                 for i in 0..n {
                     // 1. Read all input channels into history ring buffers (in-place safe)
-                    for ch in 0..in_ch {
+                    for (ch, hist) in self.histories.iter_mut().enumerate().take(in_ch) {
                         // SAFETY: ch < in_channels and input points to valid array of channel pointers.
                         let in_ptr = unsafe { *input.add(ch) };
                         // SAFETY: in_ptr points to at least num_frames valid samples.
                         let s = unsafe { *in_ptr.add(i) };
-                        self.histories[ch][self.write_pos] = s;
+                        hist[self.write_pos] = s;
                     }
                     self.write_pos += 1;
                     if self.write_pos >= self.double_limit {
@@ -210,12 +210,12 @@ impl LinearManyToOne {
             MultichannelMode::Fft(states) => {
                 let p = states[0].p;
                 for i in 0..n {
-                    for ch in 0..in_ch {
+                    for (ch, hist) in self.histories.iter_mut().enumerate().take(in_ch) {
                         // SAFETY: ch < in_channels and input points to valid array of channel pointers.
                         let in_ptr = unsafe { *input.add(ch) };
                         // SAFETY: in_ptr points to at least num_frames samples and i < num_frames.
                         let s = unsafe { *in_ptr.add(i) };
-                        self.histories[ch][self.write_pos] = s;
+                        hist[self.write_pos] = s;
                     }
                     self.write_pos += 1;
                     if self.write_pos >= self.double_limit {

@@ -355,17 +355,17 @@ fn test_lstm_noise_soak() {
     let mut model = LstmModel2::<16, 17, 32, 64>::new();
     let mut pcg = SimplePcg::new(1337);
 
-    for gate in 0..4 {
-        for ih in 0..17 {
-            for h in 0..16 {
-                model.layer1.input_hidden_weights.0[gate][ih][h] = pcg.next_f32() * 0.1 - 0.05;
+    for gate in &mut model.layer1.input_hidden_weights.0[..4] {
+        for row in &mut gate[..17] {
+            for w in &mut row[..16] {
+                *w = pcg.next_f32() * 0.1 - 0.05;
             }
         }
     }
-    for gate in 0..4 {
-        for ih in 0..32 {
-            for h in 0..16 {
-                model.layer2.input_hidden_weights.0[gate][ih][h] = pcg.next_f32() * 0.1 - 0.05;
+    for gate in &mut model.layer2.input_hidden_weights.0[..4] {
+        for row in &mut gate[..32] {
+            for w in &mut row[..16] {
+                *w = pcg.next_f32() * 0.1 - 0.05;
             }
         }
     }
@@ -374,8 +374,8 @@ fn test_lstm_noise_soak() {
         model.layer2.bias.0[i] = pcg.next_f32() * 0.1 - 0.05;
     }
     model.head_bias = pcg.next_f32() * 0.1;
-    for i in 0..16 {
-        model.head_weights_f32[i] = pcg.next_f32() * 0.1 - 0.05;
+    for w in &mut model.head_weights_f32[..16] {
+        *w = pcg.next_f32() * 0.1 - 0.05;
     }
 
     let mut input = vec![0.0f32; 64];

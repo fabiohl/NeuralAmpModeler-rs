@@ -91,13 +91,7 @@ pub(crate) fn oracle_lstm_forward(
     let _orig_cell: Vec<Vec<f64>> = ll.iter().map(|l| l.cell.clone()).collect();
     let _orig_hidden: Vec<Vec<f64>> = ll.iter().map(|l| l.hidden.clone()).collect();
 
-    #[expect(
-        clippy::needless_range_loop,
-        reason = "Range loop required for explicit SIMD lane indexing not expressible via iterator"
-    )]
-    for f in 0..num_frames {
-        let x = input[f];
-
+    for (&x, out) in input.iter().zip(output.iter_mut()) {
         // Process layers sequentially: each layer's output hidden state
         // becomes the next layer's input. LSTM is recurrent — state
         // carries forward across frames, not reset.
@@ -153,7 +147,7 @@ pub(crate) fn oracle_lstm_forward(
         for i in 0..h {
             y = mul_add_f64(last_h[i], head_w[i], y, acc_mode);
         }
-        output[f] = y;
+        *out = y;
     }
 
     output
