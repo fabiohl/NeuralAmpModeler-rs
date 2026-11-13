@@ -521,6 +521,73 @@ allocation, and `prewarm_step(k)` performs exactly `⌈k / 64⌉` full `process`
 calls. There is no smaller-chunk penalty to reclaim — A2 already feeds the
 largest internal block (64 frames, `WAVENET_MAX_NUM_FRAMES`).
 
+### Pre-Warm State Cache Characterization (S11 / DEC-05)
+
+S11 evaluated whether a cached post-prewarm state (the C++ `WaveNet` mechanism
+at `NAM/conv1d.cpp:151-161` and `NAM/wavenet/model.cpp:740-777`) should be
+ported. The reproducible workload is
+[`benches/prewarm_cache_bench.rs`](../benches/prewarm_cache_bench.rs); it
+measures a **warm reset** (`reset()` = clear phase + integral stabilization),
+the split path (`prewarm_reset` + `prewarm_step(1024)` until converged), the
+integral stabilization alone, and the clear phase alone.
+
+Method: `cargo bench --no-run` under the host cgroup guard, then the binary run
+directly pinned to `$NAM_BENCH_CORE` (no cgroup, no concurrent build) with
+Criterion `--warm-up-time 0.5 --measurement-time 2 --sample-size 15`. Medians:
+
+| Fixture | `prewarm_samples` | Integral `reset` | Split (1024) | Stabilization only | Clear phase |
+|:---|---:|---:|---:|---:|---:|
+| `BossWN-standard.nam` (A1) | 4092 | 41.5 µs | 39.7 µs | 5.86 µs | 35.3 µs |
+| `wavenet_a2_full.nam` | 6346 | 1.879 ms | 1.907 ms | 1.883 ms | 5.49 µs |
+| `wavenet_a2_lite.nam` | 6346 | 1.380 ms | 1.369 ms | 1.392 ms | 2.06 µs |
+| `lstm_2x24.nam` | 24000 | 8.987 ms | 9.207 ms | 0.780 ms (2048 samples) | no-op¹ |
+| `linear_fft_rf2048.nam` | 2048 | 1.074 µs | 592 ns | 536 ns | no-op¹ |
+| `convnet_relu.nam` | 64 | 12.60 µs | 12.67 µs | 8.29 µs | 4.31 µs |
+| `wavenet_post_head_multistage.nam` | 10 | 2.96 µs | 3.00 µs | 764.6 ns | 2.18 µs |
+
+¹ LSTM and Linear do not override `clear_state`; their reset zero phase lives in
+`reset_states`/`prewarm_reset`. The LSTM stabilization-only column uses the
+standalone `prewarm(2048)` bench ID; the canonical 24000-sample budget is the
+`reset`/split column.
+
+Standalone cold-start `build + prewarm` benches (fresh model memory) remain the
+authority for activation latency: `Prewarm_WaveNet_Standard` ≈ 189 µs,
+`Prewarm_A2Full_CH8` ≈ 2.17 ms, `Prewarm_A2Lite_CH3` ≈ 1.57 ms on the same
+host. They are not directly comparable to the warm-reset columns.
+
+**Decision (DEC-05): do not adopt a pre-warm state cache.** The measurements
+show where a cache *could* help and why it is not justified now:
+
+* **A1 WaveNet:** Rust performs a one-shot stationary backfill
+  (`src/models/wavenet/layer_array.rs:159`,
+  `src/models/wavenet/layer_array_dyn.rs:211`) instead of replaying the
+  zero-feed that the C++ cache accelerates. Warm stabilization is 5.9 µs and
+  the clear phase (35.3 µs) dominates the reset; a cache saves no meaningful
+  reset latency.
+* **A2 and LSTM:** stabilization is measurable (1.4–1.9 ms and 9.0 ms), but an
+  exact cache would have to snapshot the full post-prewarm state, not just a
+  per-convolution last sample: A2's layer rings plus head accumulator are
+  ≈ 224 KB (CH=8) / ≈ 100 KB (CH=3) of `f32` state per instance, doubling
+  temporal state, while LSTM's canonical feed starts from file-loaded
+  `_xh`/`_c` at load but from cleared state after `reset` (DEC-03). A
+  transparent restore would therefore need provenance tracking and would change
+  the documented `prewarm_reset` contract (it currently always arms pending
+  work, which consumers and split-equivalence tests rely on).
+* **Consumer path:** `NAM-Plug` already amortizes stabilization through the
+  split primitives and holds the dry path until convergence
+  (consumer `clap/processor/mod.rs` reset/prewarm drain), preserving a bit-exact
+  split-vs-integral result. A cache would add invalidation surface (weights,
+  rate, geometry, precision) for a latency win the consumer already abstracts.
+* **Evidence gate:** these are indicative local Criterion numbers on the
+  reference host; the calibrated long/RT gates remain operator-run, so
+  promoting a cache as a verified gain would require a dedicated performance
+  owner and baseline.
+
+Revisit only with an explicit consumer opt-in API, snapshot capture restricted
+to canonical zero-state feeds, invalidation hooks, a bit-exact equality oracle
+against integral/split, a per-instance memory budget, and calibrated-host
+evidence.
+
 ### IR CabSim Frequency-Domain Convolution (UPOLS)
 
 The cabinet simulator uses Uniform-Partitioned Overlap-Save (UPOLS) convolution:

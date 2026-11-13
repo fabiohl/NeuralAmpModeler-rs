@@ -129,6 +129,10 @@ name = "linear"
 harness = false
 
 [[bench]]
+name = "prewarm_cache_bench"
+harness = false
+
+[[bench]]
 name = "regression_gate"
 harness = false
 # Uses `testing::ForceAvx2Guard`; same packaged-manifest rationale as above.

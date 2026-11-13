@@ -214,6 +214,25 @@ C++ reset-without-prewarm. If strict parity is later required, gate
 `reset_states` behind the active prewarm flag and re-enable the 1×1×1
 oracle test.
 
+### 1.8 Pre-Warm State Cache (DEC-05)
+
+The C++ reference caches the last written input sample of every WaveNet
+convolution after the first stabilization and restores the delay lines from that
+cache on later prewarms (`NAM/conv1d.cpp:151-161`,
+`NAM/wavenet/model.cpp:740-777`). This avoids replaying the zero-feed, which is
+the dominant cost there.
+
+**Decision (DEC-05): do not port the cache.** Rust's WaveNet A1 already replaces
+the zero-feed with a one-shot stationary backfill (`PREWARM` path in
+[`src/models/wavenet/layer_array.rs`](../src/models/wavenet/layer_array.rs) and
+[`src/models/wavenet/layer_array_dyn.rs`](../src/models/wavenet/layer_array_dyn.rs)),
+so there is no expensive replay to skip; the clear phase dominates a warm reset.
+The families with meaningful stabilization cost (A2: ≈ 1.4–1.9 ms; LSTM: ≈
+9.0 ms at 48 kHz) would require a full-state snapshot and provenance-aware
+invalidation, and the split `prewarm_reset`/`prewarm_step` contract already
+amortizes that work without changing audio bits. Measurements, memory bounds and
+the revisit criteria are recorded in [benchmarks.md](benchmarks.md#pre-warm-state-cache-characterization-s11--dec-05).
+
 ---
 
 ## 2. Real-Time Safety & Concurrency Architecture
