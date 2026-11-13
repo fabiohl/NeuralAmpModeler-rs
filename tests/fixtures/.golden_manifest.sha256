@@ -219,7 +219,7 @@ b4ed110bd69e6beb07776935f34c47d9cccee23f3b3e484545000fdd9f7b5cf0 f64_anchors/wav
 # If a generator hash differs from the committed SHA, its fixtures may be
 # stale — re-generate with: ./tests/fixtures/golden_gen_build.sh
 # =============================================================================
-3fd801b4f4a5011958cd91548d6a920cefba81ba4883d0f88fbcf6e160aac94a tests/fixtures/golden_gen_build.sh
+ee699bfa2479065ebd9f5c55a73b09b6ad6c25c91589ea18de72a20d00340b47 tests/fixtures/golden_gen_build.sh
 eddd9a12759bfe37336ffc173dd3ef85aa684d5f9ad73955c8da8d12a8ea333a tests/fixtures/render_ir.cpp
 af7ce84416cda7e1f53aeeca4f47605dad961cc17e3c5221424b2fb585025dc5 tests/fixtures/generate_a2_fixtures.py
 21692b8837ec3e802125cc5c315033a8a0b596b7876bdb624a4c3ebfc1f38943 tests/fixtures/generate_namcore_v060_fixtures.py
@@ -227,10 +227,11 @@ d327e77e4cf62c910a46555637b4f5bcb16361347e5d9c3e91fa4492313dd252 tests/fixtures/
 e5c7a96fbad9ce68f41a4f0deb060b85aa7fc944586fa16504281b569f000e95 tests/fixtures/generate_ebu_sequences.py
 3bff0cf2f561fd4dbaa008aa426a810e0daa5e4e102b21f410000a2837ebdeae tests/fixtures/generate_resampler_reference.py
 188bf29fa1397f9fb6383e9db0b2c1a276d5b59f7039a44cbfb30b3f94836ea7 tests/fixtures/scripts/gen_mrstft_golden.py
-7ceb96acd350982e93c8e51673e753ab04a34add7c6f522870461924f4f1d3f0 tests/fixtures/scripts/validate_oracle_f64.py
+e52b72b97c5c716184cf2e5a5dae7a5b7873ea0e1b86415b6ca5c5807523923f tests/fixtures/scripts/validate_oracle_f64.py
+4aa28d41b2fd6d67dd927af96e0722a86af423817ec21b1b8c87f84983b40c93 tests/fixtures/generate_post_stack_head_fixtures.py
 efb9f2c4cb5e7b077622143abb1cab8e8b3c3b4c18fe37d10ca385bd8e34b43b tools/qa/src/bin/gen_stress.rs
 aa4634f154b343323407fb66f651d54fe8ef0dc6cc57100fb4c33f4a2e6cb25d tools/qa/src/bin/wav_to_golden.rs
-790c29707762a6419b5b4b6b1485f32f76852c193d62f4ed08fd6df93c9032a3 utils/check-model.sh
+b9c4d1353435f3f71ffebe03a89f6db7fcfb03b2faab7797d250e142c9fa1687 utils/check-model.sh
 
 # =============================================================================
 # MODEL-REGISTRY — every .nam model in the CATALOG (reverse-check reference)
@@ -303,3 +304,6 @@ aa4634f154b343323407fb66f651d54fe8ef0dc6cc57100fb4c33f4a2e6cb25d tools/qa/src/bi
 # MODEL-REGISTRY: sequential_sr_mixed_unknown.nam
 # MODEL-REGISTRY: sequential_sr_conflict.nam
 # MODEL-REGISTRY: wavenet_head_dilation.nam
+# MODEL-REGISTRY: wavenet_post_head_k13.nam
+# MODEL-REGISTRY: wavenet_post_head_multistage.nam
+# MODEL-REGISTRY: wavenet_post_head_single_k3.nam

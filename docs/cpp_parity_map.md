@@ -818,9 +818,40 @@ A parent WaveNet conditioned on 3 channels cannot consume a 1-channel condition 
   `[STATUS] KNOWN_GAP id="condition_lstm_rejected_by_both" reason="Concordant rejection by both loaders"`
   The gap stays declared in receipts — it is never promoted to a silent pass.
 
-### Audit follow-up: WaveNet post-stack and secondary activation (2026-11-12)
+### Audit follow-up: WaveNet post-stack head — resolved (S09/P14, 2026-11-13)
 
-Static comparison against the pinned v0.6.0 identifies unresolved parity risks outside the fixture evidence above. The C++ post-stack head uses `kernel_sizes`, applies activation before each convolution, consumes head weights before `head_scale`, and scales its input before the head (`NAM/wavenet/model.cpp:21-44,86-100,664-673,855-866`). The Rust dynamic head parses a singular `kernel_size`, applies convolution before activation, consumes `head_scale` before head weights, and scales the head output (`src/loader/nam_json/model.rs:468-493`, `src/models/wavenet/post_stack_head.rs:220-239`, `src/loader/dispatcher/wavenet/dynamic.rs:269-297`, `src/models/wavenet/model_dyn.rs:464-480`). The f64 oracle explicitly excludes non-null post-stack heads (`src/testing/reference_oracle/mod.rs:91-98`). These observations are source-level, not a new differential rendering result; full loader routing, supported input domain and impact require a valid C++ fixture and independent oracle before claiming a reproduced audio defect.
+The static divergence reported on 2026-11-12 was reproduced with valid NAMCore
+fixtures and then corrected. Canonical NAMCore exports (`config.head.kernel_sizes`
+array) now follow `NAM/wavenet/model.cpp:21-44,86-100,664-673,855-866` exactly:
+
+- one Conv1D per stage, every stage with an implicit bias;
+- `channels` is the intermediate width for non-final stages and `out_channels`
+  the final width;
+- the activation is applied **before** each convolution;
+- weight stream order is layer arrays → head stage weights/biases → `head_scale`;
+- `head_scale` multiplies the layer-array head outputs **before** the head;
+- receptive field is `1 + Σ(kernel_i - 1)`, resolved once by
+  `HeadConfig::receptive_field()` and consumed by the topology, metadata and
+  prewarm paths.
+
+The Rust-only legacy contract (`config.head.kernel_size`, no `kernel_sizes`) is
+preserved unchanged and remains identifiable: singular kernel, optional bias,
+convolution then activation, `head_scale` applied after the head, and the
+historical `head_scale`-then-head weight order. ConvNet rejects
+`head.kernel_sizes` fail-closed because that array is a WaveNet NAMCore
+contract, not a ConvNet Layers-format field.
+
+Evidence: `tests/models/post_stack_head_parity_test.rs` drives three committed
+fixtures (`wavenet_post_head_k13`, `..._single_k3`, `..._multistage`) through
+(a) the production f32 engine vs a NumPy f64 anchor, (b) the Rust f64 oracle vs
+the same anchor, and (c) the pinned live `namcore_render`. Measured ESR floors:
+engine/f64 `≤ 3.9e-14`, Rust oracle/NumPy `≤ 1.9e-32`, C++/Rust `≤ 5.1e-15`
+(≥ 133 dB SNR). Fixtures cover one/multiple stages, intermediate widths distinct
+from the final output, non-linear activations and negative `head_scale`; block
+invariance and reset/repeatability are also asserted. Before the new fixtures,
+zero existing local fixture/example/community models used a config-level
+post-stack head, so enabling the canonical contract changed no previously
+accepted model's semantics.
 
 End-to-end WaveNet parsing and validation gaps previously noted here are now resolved: secondary activations, `PReLU` bare/scalar/vector forms and channel-dimension validation (`src/loader/nam_json/activation_parser.rs`, `src/models/a2/model/dynamic/mod.rs`), gating precedence (`gating_mode > gated`), FiLM `{}`/`false`/type validation (`src/models/a2/model/set_weights.rs`), and `condition_dsp` parent/output channel validation (`src/loader/dispatcher/wavenet/dynamic.rs`, `src/loader/dispatcher/wavenet/static_factory.rs`) enforce fail-closed semantics with live C++ `namcore_render` and `f64` oracle parity verified in [`tests/models/wavenet_parsing_parity_test.rs`](../tests/models/wavenet_parsing_parity_test.rs). No thresholds, pins or golden data were changed.
 

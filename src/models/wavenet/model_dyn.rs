@@ -112,9 +112,10 @@ pub struct WaveNetModelDyn {
     pub condition_dsp_output: AlignedVec<f32>,
     /// Optional post-stack head sub-object (Conv1D + activation).
     ///
-    /// Processes the signal after the last layer array and before `head_scale`.
-    /// When `None`, the output of the last array is used directly (standard behavior).
-    /// Mirrors the `_Head` structure in NAMCore's `convnet.h:108-118`.
+    /// Processes the signal after the last layer array. Canonical NAMCore
+    /// heads receive `head_scale * head_outputs` (scale before the head);
+    /// the legacy Rust-only head is applied before `head_scale` (scale after
+    /// the head). When `None`, the last array output is scaled directly.
     pub post_stack_head: Option<PostStackHead>,
     /// Scratch buffer for post-stack head output.
     ///
@@ -464,20 +465,36 @@ impl WaveNetModelDyn {
             if let Some(ref mut head_proc) = self.post_stack_head {
                 let out_ch = head_proc.out_channels();
                 let scratch = &mut self.head_output_scratch[0..num_frames * out_ch];
-                // SAFETY: `process_block` is an `unsafe fn` documented to require
-                // `input.len() == num_frames * in_ch` and `output.len() == num_frames * out_ch`;
-                // `last_head` has `num_frames * head_dim` and `scratch` has `num_frames * out_ch`
-                // (both indexed above), and the head's ring buffer was sized by its constructor.
-                unsafe {
-                    head_proc.process_block(last_head, scratch, num_frames);
-                }
                 let out_start = pos * out_ch;
                 let out_slice = &mut output[out_start..out_start + num_frames * out_ch];
-                // SAFETY: `scratch` and `out_slice` both have exactly `num_frames * out_ch` f32s,
-                // are non-null/`f32`-aligned, and refer to distinct buffers (no overlap).
-                // `M` is supported by the CPU via runtime dispatch.
-                unsafe {
-                    M::copy_with_scale(scratch, out_slice, self.head_scale);
+                if head_proc.is_canonical() {
+                    // NAMCore applies head_scale to the layer-array head
+                    // outputs before the post-stack head
+                    // (`NAM/wavenet/model.cpp:855-866`).
+                    // SAFETY: `last_head` has `num_frames * head_dim`, `out_slice`
+                    // has `num_frames * out_ch`, and the head's internal
+                    // scratch/ring buffers were sized by its constructor.
+                    unsafe {
+                        crate::math::common::dispatch_simd!(
+                            head_proc,
+                            process_block_scaled,
+                            last_head,
+                            self.head_scale,
+                            out_slice,
+                            num_frames
+                        );
+                    }
+                } else {
+                    // SAFETY: `last_head` has `num_frames * head_dim` and
+                    // `scratch` has `num_frames * out_ch` (both indexed above).
+                    unsafe {
+                        head_proc.process_block(last_head, scratch, num_frames);
+                    }
+                    // SAFETY: both slices have exactly `num_frames * out_ch`
+                    // f32s and refer to distinct buffers.
+                    unsafe {
+                        M::copy_with_scale(scratch, out_slice, self.head_scale);
+                    }
                 }
             } else {
                 let out_start = pos * head_dim;

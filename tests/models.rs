@@ -67,6 +67,8 @@ mod ebu_lufs_compliance;
 mod hostile_models_test;
 #[path = "models/loader_stderr_hygiene.rs"]
 mod loader_stderr_hygiene;
+#[path = "models/post_stack_head_parity_test.rs"]
+mod post_stack_head_parity_test;
 #[path = "models/reset_matrix_test.rs"]
 mod reset_matrix_test;
 #[path = "models/wavenet_clone_exact_test.rs"]

@@ -120,8 +120,7 @@ impl FreeWavenetGeometry {
             rf += layer_rf + head_rf;
         }
         if let Some(ref post) = self.post_stack_head {
-            let post_k = post.kernel_size.unwrap_or(1);
-            rf += post_k.saturating_sub(1);
+            rf += post.receptive_field() - 1;
         }
         rf
     }

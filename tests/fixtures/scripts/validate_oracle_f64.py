@@ -148,6 +148,36 @@ def wavenet_forward_all_channels(model: dict, x: np.ndarray) -> np.ndarray:
     return _wavenet_core(model, x, all_channels=True)
 
 
+def _apply_head_activation(spec, values: np.ndarray) -> np.ndarray:
+    """Apply a post-stack head activation independently of the Rust parser."""
+    if spec is None:
+        spec = "Tanh"
+    if isinstance(spec, str):
+        if spec in ("Tanh", "FastTanh"):
+            return np.tanh(values)
+        if spec == "ReLU":
+            return np.maximum(values, 0.0)
+        if spec == "Sigmoid":
+            return 1.0 / (1.0 + np.exp(-values))
+        if spec == "SiLU":
+            return values / (1.0 + np.exp(-values))
+        if spec in ("HardTanh", "Hardtanh"):
+            return np.clip(values, -1.0, 1.0)
+        if spec == "Softsign":
+            return values / (1.0 + np.abs(values))
+        raise ValueError(f"unsupported post-stack head activation: {spec}")
+    if isinstance(spec, dict) and spec.get("type") == "PReLU":
+        slopes = spec.get("negative_slopes")
+        if isinstance(slopes, list) and len(slopes) == 1:
+            slope = float(slopes[0])
+        elif "negative_slope" in spec:
+            slope = float(spec["negative_slope"])
+        else:
+            raise ValueError("oracle PReLU head activation supports a scalar slope only")
+        return np.where(values >= 0.0, values, values * slope)
+    raise ValueError(f"unsupported post-stack head activation object: {spec}")
+
+
 def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarray:
     """WaveNet forward pass in NumPy f64.
 
@@ -254,13 +284,81 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
             cursor += head_ch
         a_head_b.append(hb)
 
-    # head_scale is the LAST weight in the WaveNet weight stream.
-    # The JSON config's head_scale field is metadata and may differ
-    # from the weight-stream value (e.g. test-script-generated models
-    # where random weights overwrite the config default). Production
-    # engines always use the weight-stream value.
-    head_scale = np.float64(weights[cursor])
-    cursor += 1
+    # Optional post-stack head. Canonical NAMCore heads (`kernel_sizes`
+    # array) consume stage weights before the final `head_scale` scalar and
+    # apply the activation before every convolution. The legacy Rust-only
+    # single-stage head (`kernel_size`) keeps the historical
+    # `head_scale`-then-head weight order and applies activation after the
+    # convolution.
+    head_cfg = config.get("head")
+    post_head = None
+    if head_cfg:
+        if not isinstance(head_cfg, dict):
+            raise ValueError("post-stack head must be a JSON object")
+        if "kernel_sizes" in head_cfg and "kernel_size" in head_cfg:
+            raise ValueError("post-stack head declares both kernel_size and kernel_sizes")
+        canonical = "kernel_sizes" in head_cfg
+        if canonical:
+            kernels = [int(k) for k in head_cfg["kernel_sizes"]]
+            if not kernels:
+                raise ValueError("head.kernel_sizes must be non-empty")
+            channels = int(head_cfg["channels"])
+            out_channels = int(head_cfg["out_channels"])
+            do_bias = True
+        else:
+            kernels = [int(head_cfg.get("kernel_size", 3))]
+            channels = head_cfg.get("channels", a_head[-1])
+            channels = int(channels)
+            out_channels = int(head_cfg.get("out_channels", 1))
+            do_bias = bool(head_cfg.get("bias", False))
+
+        widths = []
+        in_ch = a_head[-1] if canonical else channels
+        for i, k in enumerate(kernels):
+            out_ch = out_channels if i == len(kernels) - 1 else channels
+            widths.append((in_ch, out_ch, k))
+            in_ch = out_ch
+
+        act_spec = head_cfg.get("activation")
+        stages = [{"weights": None, "bias": None, **dict(zip(("in_ch", "out_ch", "kernel"), w))}
+                  for w in widths]
+
+        def read_head_stage(stage):
+            in_ch, out_ch, k = stage["in_ch"], stage["out_ch"], stage["kernel"]
+            n = out_ch * in_ch * k
+            stage["weights"] = weights[cursor:cursor + n].reshape(out_ch, in_ch, k)
+            cursor_local = n
+            if do_bias:
+                stage["bias"] = weights[cursor + cursor_local:cursor + cursor_local + out_ch]
+                cursor_local += out_ch
+            else:
+                stage["bias"] = np.zeros(out_ch, dtype=np.float64)
+            return cursor_local
+
+        if canonical:
+            for stage in stages:
+                cursor += read_head_stage(stage)
+            head_scale = np.float64(weights[cursor])
+            cursor += 1
+        else:
+            head_scale = np.float64(weights[cursor])
+            cursor += 1
+            cursor += read_head_stage(stages[0])
+
+        post_head = {
+            "canonical": canonical,
+            "activation": act_spec,
+            "stages": stages,
+            "scale": head_scale,
+        }
+    else:
+        # head_scale is the LAST weight in the WaveNet weight stream.
+        # The JSON config's head_scale field is metadata and may differ
+        # from the weight-stream value (e.g. test-script-generated models
+        # where random weights overwrite the config default). Production
+        # engines always use the weight-stream value.
+        head_scale = np.float64(weights[cursor])
+        cursor += 1
 
     # Per-layer history buffers (matches production and the Rust oracle).
     # A single shared buffer is INCORRECT for dilated convolutions: with
@@ -357,13 +455,46 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
         proj = ha @ a_head_w[ai].T + a_head_b[ai]
         head_proj_out.append(proj)
 
+    if post_head is None:
+        if all_channels:
+            output = head_proj_out[-1] * head_scale
+            # Interleaved: [ch0_f0, ch1_f0, ..., chN_f0, ch0_f1, ...]
+            return output.ravel(order='C')
+        else:
+            output = head_proj_out[-1][:, 0] * head_scale
+            return output
+
+    # Independent post-stack head forward pass.
+    cur = np.asarray(head_proj_out[-1], dtype=np.float64)
+    act = post_head["activation"]
+    canonical = post_head["canonical"]
+    if canonical:
+        cur = cur * post_head["scale"]
+    for stage in post_head["stages"]:
+        if canonical:
+            cur = _apply_head_activation(act, cur)
+        in_ch, out_ch, k = stage["in_ch"], stage["out_ch"], stage["kernel"]
+        w = stage["weights"]
+        b = stage["bias"]
+        out = np.zeros((num_frames, out_ch), dtype=np.float64)
+        for f in range(num_frames):
+            for oc in range(out_ch):
+                acc = np.float64(b[oc]) if b is not None else np.float64(0.0)
+                for kt in range(k):
+                    src = f - (k - 1 - kt)
+                    if src < 0:
+                        continue
+                    acc += np.dot(cur[src, :in_ch], w[oc, :in_ch, kt])
+                out[f, oc] = acc
+        cur = out
+        if not canonical:
+            cur = _apply_head_activation(act, cur)
+    if not canonical:
+        cur = cur * post_head["scale"]
+
     if all_channels:
-        output = head_proj_out[-1] * head_scale
-        # Interleaved: [ch0_f0, ch1_f0, ..., chN_f0, ch0_f1, ...]
-        return output.ravel(order='C')
-    else:
-        output = head_proj_out[-1][:, 0] * head_scale
-        return output
+        return cur.ravel(order='C')
+    return cur[:, 0]
 
 
 # ── LSTM f64 model ─────────────────────────────────────────────────────────

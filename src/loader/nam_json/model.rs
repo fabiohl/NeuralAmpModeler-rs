@@ -368,8 +368,56 @@ pub struct HeadConfig {
     /// Activation specification (bare name string or tagged object, mirroring the
     /// C++ `ActivationConfig::from_json` contract).
     pub activation: Option<serde_json::Value>,
-    /// Kernel size for the head Conv1D.
+    /// Rust-only single-stage kernel size (legacy head format).
+    ///
+    /// Mutually exclusive with [`Self::kernel_sizes`]. When only this field is
+    /// present the head keeps the historical NeuralAmpModeler-rs semantics:
+    /// optional bias, convolution first and activation after, `head_scale`
+    /// applied after the head. This format is not emitted by NAMCore.
     pub kernel_size: Option<usize>,
+    /// Canonical NAMCore post-stack head kernel sizes (one per stage).
+    ///
+    /// Presence of this array selects the C++-compatible semantics
+    /// (`NAM/wavenet/model.cpp:21-44,664-673,855-866`): one Conv1D per stage
+    /// with an implicit bias, an intermediate width of [`Self::channels`] for
+    /// every non-final stage, the activation applied **before** each
+    /// convolution, and `head_scale` applied to the layer-array head outputs
+    /// **before** entering the head. The weight stream order is therefore
+    /// layer arrays → head stage weights/biases → `head_scale`.
+    pub kernel_sizes: Option<Vec<usize>>,
+}
+
+impl HeadConfig {
+    /// Returns whether this configuration uses the canonical NAMCore
+    /// multi-stage post-stack head contract (`head.kernel_sizes` array).
+    #[inline]
+    pub fn is_canonical(&self) -> bool {
+        self.kernel_sizes.is_some()
+    }
+
+    /// Resolves the kernel sizes of every head stage.
+    ///
+    /// Canonical configurations use [`Self::kernel_sizes`] verbatim; the
+    /// legacy Rust-only format resolves to a single stage using
+    /// [`Self::kernel_size`] (default `3`, matching the historical builder).
+    pub fn resolved_kernel_sizes(&self) -> Vec<usize> {
+        match self.kernel_sizes {
+            Some(ref ks) => ks.clone(),
+            None => vec![self.kernel_size.unwrap_or(3)],
+        }
+    }
+
+    /// Receptive field of the post-stack head: `1 + Σ(kernel_i - 1)`.
+    ///
+    /// Matches `nam::wavenet::detail::Head::receptive_field()` in NAMCore. For
+    /// a single stage this is the kernel size, preserving the legacy value.
+    pub fn receptive_field(&self) -> usize {
+        1 + self
+            .resolved_kernel_sizes()
+            .iter()
+            .map(|k| k.saturating_sub(1))
+            .sum::<usize>()
+    }
 }
 
 /// The internal configuration of the architecture node in the JSON.
@@ -509,12 +557,25 @@ impl NamConfig {
             .get("kernel_size")
             .and_then(|v| v.as_u64())
             .and_then(|v| usize::try_from(v).ok());
+        // Preserve malformed arrays as an empty vector so `validate_head`
+        // rejects them fail-closed instead of silently dropping entries.
+        let kernel_sizes = val.get("kernel_sizes").map(|raw| {
+            raw.as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|v| v.as_u64().and_then(|v| usize::try_from(v).ok()))
+                        .collect::<Option<Vec<usize>>>()
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default()
+        });
         Some(HeadConfig {
             channels,
             bias,
             out_channels,
             activation,
             kernel_size,
+            kernel_sizes,
         })
     }
 
@@ -539,13 +600,33 @@ impl NamConfig {
         &self,
         in_channels: usize,
     ) -> Result<Option<HeadConfig>, serde_json::Error> {
-        let Some(head) = self.parse_head() else {
+        let Some(raw_head) = self.head.as_ref() else {
             return Ok(None);
+        };
+        if raw_head.is_null() {
+            return Ok(None);
+        }
+        if !raw_head.is_object() {
+            return Err(serde::de::Error::custom(
+                "head must be a JSON object (or null) — fail-closed topology rejection",
+            ));
+        }
+        let Some(head) = self.parse_head() else {
+            return Err(serde::de::Error::custom(
+                "head could not be parsed — fail-closed topology rejection",
+            ));
         };
         // Unspecified fields resolve to builder defaults that are known-small.
         let channels = head.channels.unwrap_or(in_channels);
         let out_channels = head.out_channels.unwrap_or(1);
-        let kernel_size = head.kernel_size.unwrap_or(3);
+        if head.kernel_size.is_some() && head.kernel_sizes.is_some() {
+            log::warn!(
+                "head declares both kernel_size and kernel_sizes — ambiguous post-stack head contract"
+            );
+            return Err(serde::de::Error::custom(
+                "head declares both kernel_size and kernel_sizes — ambiguous post-stack head contract",
+            ));
+        }
         if channels > MAX_HEAD_CHANNELS {
             log::warn!(
                 "head.channels ({channels}) exceeds maximum {MAX_HEAD_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
@@ -562,13 +643,32 @@ impl NamConfig {
                 "head.out_channels ({out_channels}) exceeds maximum {MAX_HEAD_OUT_CHANNELS} — OOM/DoS protection (hostile JSON rejection)"
             )));
         }
-        if kernel_size == 0 || kernel_size > MAX_HEAD_KERNEL_SIZE {
-            log::warn!(
-                "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
-            );
-            return Err(serde::de::Error::custom(format!(
-                "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
-            )));
+        if let Some(ref kernels) = head.kernel_sizes {
+            if kernels.is_empty() {
+                return Err(serde::de::Error::custom(
+                    "head.kernel_sizes must be non-empty (NAMCore requires at least one head stage)",
+                ));
+            }
+            for &kernel in kernels {
+                if kernel == 0 || kernel > MAX_HEAD_KERNEL_SIZE {
+                    log::warn!(
+                        "head.kernel_sizes entry ({kernel}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+                    );
+                    return Err(serde::de::Error::custom(format!(
+                        "head.kernel_sizes entry ({kernel}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+                    )));
+                }
+            }
+        } else {
+            let kernel_size = head.kernel_size.unwrap_or(3);
+            if kernel_size == 0 || kernel_size > MAX_HEAD_KERNEL_SIZE {
+                log::warn!(
+                    "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "head.kernel_size ({kernel_size}) is outside 1..={MAX_HEAD_KERNEL_SIZE} — hostile JSON rejection"
+                )));
+            }
         }
         Ok(Some(head))
     }

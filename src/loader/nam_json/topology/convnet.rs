@@ -418,6 +418,14 @@ pub fn get_convnet_topology(data: &NamModelData) -> Result<Option<ConvNetTopolog
             });
         }
     };
+    if head.as_ref().is_some_and(HeadConfig::is_canonical) {
+        return Err(TopologyError {
+            code: NamErrorCode::InvalidModelTopology,
+            reason: "ConvNet post-stack head supports only the Rust-only single-stage \
+                     kernel_size format; head.kernel_sizes is a WaveNet NAMCore contract"
+                .to_string(),
+        });
+    }
 
     Ok(Some(ConvNetTopology {
         num_blocks: layers.len(),

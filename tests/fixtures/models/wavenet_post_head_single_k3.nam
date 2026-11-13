@@ -1,0 +1,105 @@
+{
+  "version": "0.6.0",
+  "architecture": "WaveNet",
+  "config": {
+    "layers": [
+      {
+        "input_size": 1,
+        "condition_size": 1,
+        "head_size": 2,
+        "channels": 2,
+        "kernel_size": 2,
+        "dilations": [
+          1
+        ],
+        "activation": "Tanh",
+        "gated": false,
+        "head_bias": false
+      },
+      {
+        "input_size": 2,
+        "condition_size": 1,
+        "head_size": 1,
+        "channels": 2,
+        "kernel_size": 2,
+        "dilations": [
+          1
+        ],
+        "activation": "Tanh",
+        "gated": false,
+        "head_bias": true
+      }
+    ],
+    "head": {
+      "channels": 3,
+      "out_channels": 1,
+      "kernel_sizes": [
+        3
+      ],
+      "activation": "ReLU",
+      "bias": true
+    },
+    "head_scale": 0.6
+  },
+  "weights": [
+    0.11649,
+    0.035264,
+    -0.023878,
+    -0.104161,
+    0.101331,
+    0.043206,
+    0.007636,
+    -0.07274,
+    0.004758,
+    0.002963,
+    0.062115,
+    0.02361,
+    0.044321,
+    -0.008124,
+    0.072744,
+    0.038761,
+    -0.078862,
+    -0.047429,
+    0.054,
+    0.061338,
+    -0.054665,
+    -0.069485,
+    0.081432,
+    -0.075159,
+    0.086103,
+    -0.010491,
+    -0.082284,
+    -0.009594,
+    -0.0488,
+    0.025387,
+    0.018114,
+    -0.034072,
+    0.034156,
+    -0.024176,
+    -0.056375,
+    -0.104474,
+    0.011752,
+    -0.114773,
+    0.04307,
+    0.111612,
+    -0.064785,
+    -0.116651,
+    0.115296,
+    -0.073525,
+    0.061203,
+    -0.032995,
+    0.028924,
+    -0.00647,
+    0.0071,
+    -0.053233,
+    -0.098969,
+    -0.105118,
+    -0.058004,
+    0.6
+  ],
+  "metadata": {
+    "name": "wavenet_post_head_single_k3",
+    "modeled_by": "generate_post_stack_head_fixtures.py"
+  },
+  "sample_rate": 48000.0
+}

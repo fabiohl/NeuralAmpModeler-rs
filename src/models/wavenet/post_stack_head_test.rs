@@ -44,14 +44,15 @@ fn test_construction_defaults() {
         out_channels: None,
         activation: None,
         kernel_size: None,
+        kernel_sizes: None,
     };
 
     let head = PostStackHead::from_config(&config, 8).expect("should build head");
     assert_eq!(head.in_channels(), 8);
     assert_eq!(head.out_channels(), 1);
     assert_eq!(head.receptive_field(), 3);
-    assert!(!head.conv.do_bias);
-    assert_eq!(head.activation, ActivationType::Tanh);
+    assert!(!head.stages[0].conv.do_bias);
+    assert_eq!(head.stages[0].activation, ActivationType::Tanh);
 }
 
 #[test]
@@ -62,14 +63,15 @@ fn test_construction_explicit() {
         out_channels: Some(2),
         activation: Some(serde_json::json!("ReLU")),
         kernel_size: Some(5),
+        kernel_sizes: None,
     };
 
     let head = PostStackHead::from_config(&config, 8).expect("should build head");
     assert_eq!(head.in_channels(), 16);
     assert_eq!(head.out_channels(), 2);
     assert_eq!(head.receptive_field(), 5);
-    assert!(head.conv.do_bias);
-    assert_eq!(head.activation, ActivationType::ReLU);
+    assert!(head.stages[0].conv.do_bias);
+    assert_eq!(head.stages[0].activation, ActivationType::ReLU);
 }
 
 /// Builds a PostStackHead with identity weights (in_ch=1, out_ch=1, kernel=1).
@@ -89,19 +91,24 @@ fn build_identity_head() -> PostStackHead {
         AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
 
     PostStackHead {
-        conv: Conv1dDyn {
-            weights,
-            bias,
-            do_bias: false,
-            dilation: 1,
-            in_ch,
-            out_ch,
-            num_blocks,
-            interleave_width: 4,
-            kernel,
-        },
-        activation: ActivationType::Tanh,
-        state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        stages: vec![HeadStage {
+            conv: Conv1dDyn {
+                weights,
+                bias,
+                do_bias: false,
+                dilation: 1,
+                in_ch,
+                out_ch,
+                num_blocks,
+                interleave_width: 4,
+                kernel,
+            },
+            activation: ActivationType::Tanh,
+            state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        }],
+        canonical: false,
+        scratch: AlignedVec::new(0, 0.0f32).expect("empty scratch"),
+        max_stage_out: out_ch,
     }
 }
 
@@ -204,19 +211,24 @@ fn test_process_with_weights_and_activation() {
         AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
 
     let mut head = PostStackHead {
-        conv: Conv1dDyn {
-            weights,
-            bias,
-            do_bias: false,
-            dilation: 1,
-            in_ch,
-            out_ch,
-            num_blocks,
-            interleave_width: 4,
-            kernel,
-        },
-        activation: ActivationType::Tanh,
-        state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        stages: vec![HeadStage {
+            conv: Conv1dDyn {
+                weights,
+                bias,
+                do_bias: false,
+                dilation: 1,
+                in_ch,
+                out_ch,
+                num_blocks,
+                interleave_width: 4,
+                kernel,
+            },
+            activation: ActivationType::Tanh,
+            state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        }],
+        canonical: false,
+        scratch: AlignedVec::new(0, 0.0f32).expect("empty scratch"),
+        max_stage_out: out_ch,
     };
 
     // Frame 0: k=0 reads buf[-2]=0, k=1 reads buf[-1]=0, k=2 reads buf[+0]=1.0
@@ -253,6 +265,7 @@ fn test_set_weights_and_bias() {
         out_channels: Some(1),
         activation: None,
         kernel_size: Some(1),
+        kernel_sizes: None,
     };
 
     let mut head = PostStackHead::from_config(&config, 1).expect("create head");
@@ -303,19 +316,24 @@ fn test_multi_channel_in_out() {
         AlignedVec::new(out_ch, 0.0f32).expect("allocation should succeed for test-sized buffers");
 
     let mut head = PostStackHead {
-        conv: Conv1dDyn {
-            weights,
-            bias,
-            do_bias: false,
-            dilation: 1,
-            in_ch,
-            out_ch,
-            num_blocks,
-            interleave_width: 4,
-            kernel,
-        },
-        activation: ActivationType::Tanh,
-        state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        stages: vec![HeadStage {
+            conv: Conv1dDyn {
+                weights,
+                bias,
+                do_bias: false,
+                dilation: 1,
+                in_ch,
+                out_ch,
+                num_blocks,
+                interleave_width: 4,
+                kernel,
+            },
+            activation: ActivationType::Tanh,
+            state: WaveNetLayerState::new(in_ch, kernel, 0).expect("create state"),
+        }],
+        canonical: false,
+        scratch: AlignedVec::new(0, 0.0f32).expect("empty scratch"),
+        max_stage_out: out_ch,
     };
 
     // Frame 0: in=[A=1.0, B=0.5]

@@ -129,6 +129,7 @@ fn build_minimal_model_with_head() -> WaveNetModelDyn {
         out_channels: Some(1),
         activation: Some(serde_json::json!("ReLU")),
         kernel_size: Some(1),
+        kernel_sizes: None,
     };
     let mut post_stack_head =
         PostStackHead::from_config(&head_config, 1).expect("create post-stack head");
@@ -265,7 +266,7 @@ fn test_post_stack_head_prewarm_no_nan() {
     model.prewarm();
 
     let head = model.post_stack_head.as_ref().unwrap();
-    for &v in head.state.layer_buffer.iter() {
+    for &v in head.stages[0].state.layer_buffer.iter() {
         assert!(v.is_finite(), "NaN/Inf in head state after prewarm");
     }
 }
@@ -295,6 +296,7 @@ fn test_post_stack_head_prewarm_samples_includes_kernel() {
         out_channels: Some(1),
         activation: Some(serde_json::json!("Tanh")),
         kernel_size: Some(3),
+        kernel_sizes: None,
     };
     let mut head_k3 = PostStackHead::from_config(&head_config_k3, 1).expect("create kernel=3 head");
     // Populate weights to avoid zero-data
@@ -422,6 +424,7 @@ fn test_post_stack_head_multi_array_determinism() {
             out_channels: Some(1),
             activation: Some(serde_json::json!("Tanh")),
             kernel_size: Some(1),
+            kernel_sizes: None,
         };
         let mut post = PostStackHead::from_config(&head_config, 1).expect("create post-stack head");
         post.set_weights(&[1.0f32, 0.0, 0.0, 0.0]);

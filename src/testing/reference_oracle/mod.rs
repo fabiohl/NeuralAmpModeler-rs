@@ -38,7 +38,9 @@ pub(crate) use a2::{oracle_a2_all_channels, oracle_a2_forward};
 pub(crate) use convnet::oracle_convnet_forward;
 pub use linear::{oracle_linear_forward, oracle_linear_multichannel};
 pub(crate) use lstm::oracle_lstm_forward;
-pub(crate) use wavenet::{oracle_wavenet_all_channels, oracle_wavenet_forward};
+pub(crate) use wavenet::{
+    oracle_wavenet_all_channels, oracle_wavenet_forward, validate_oracle_post_head,
+};
 pub mod a2;
 pub mod convnet;
 pub mod linear;
@@ -85,15 +87,17 @@ pub enum OracleError {
 /// - `Linear`, `ConvNet` and `LSTM`: the forward passes implemented in their
 ///   respective oracle modules.
 /// - `WaveNet`: exactly two layer arrays for the A1 path, or any A2 topology
-///   recognized by the internal `is_a2_model` detector.
+///   recognized by the internal `is_a2_model` detector. A post-stack
+///   `config.head` (canonical NAMCore `kernel_sizes` or the Rust-only singular
+///   `kernel_size`) is evaluated by an independent f64 implementation.
 /// - `condition_dsp` sub-models: `WaveNet`, `LSTM` and `ConvNet` only.
 ///
-/// # Explicitly unsupported
+/// ## Explicitly unsupported
 ///
 /// - `SlimmableContainer` and any unknown architecture (no f64 reference).
 /// - Slimmable WaveNet layers (the oracle does not perform channel slicing).
-/// - WaveNet with a non-null post-stack `config.head` or a per-array head
-///   convolution (`head_kernel_size`/`head_dilation` other than 1).
+/// - Per-array head convolutions (`head_kernel_size`/`head_dilation` other
+///   than 1) on the A1 path.
 /// - A1 WaveNet with fewer or more than two arrays, because the A1 oracle
 ///   evaluates exactly two arrays.
 /// - `Linear` as a `condition_dsp` sub-model.
@@ -137,10 +141,7 @@ fn validate_wavenet_domain(model_data: &NamModelData) -> Result<(), OracleError>
     if let Some(ref head) = model_data.config.head
         && !head.is_null()
     {
-        return Err(OracleError::UnsupportedTopology {
-            architecture: "WaveNet",
-            reason: "post-stack head convolution is not implemented by the oracle",
-        });
+        validate_oracle_post_head(head)?;
     }
     if let Some(json) = model_data.config.condition_dsp.as_ref() {
         let cond_model = parse_condition_dsp(json)?;

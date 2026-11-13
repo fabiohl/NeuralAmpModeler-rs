@@ -217,6 +217,7 @@ fn test_post_stack_head_integration() {
         out_channels: Some(1),
         activation: Some(serde_json::json!("Tanh")),
         kernel_size: Some(1),
+        kernel_sizes: None,
     };
     let head = PostStackHead::from_config(&head_config, 1).expect("head");
 
@@ -263,6 +264,7 @@ fn test_prewarm_with_head() {
         out_channels: Some(1),
         activation: None,
         kernel_size: Some(1),
+        kernel_sizes: None,
     };
     let head = PostStackHead::from_config(&head_config, 1).expect("head");
 

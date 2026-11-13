@@ -288,37 +288,64 @@ fn build_wavenet_dynamic_inner(
         arrays.push(array);
     }
 
-    let head_scale = cursor.read_f32_finite()?;
+    // Canonical NAMCore post-stack heads consume their stage weights before
+    // the final `head_scale` scalar (`NAM/wavenet/model.cpp:664-673`). The
+    // legacy Rust-only single-stage head has the historical reversed order
+    // (`head_scale` then head weights) and is preserved verbatim.
+    let mut deferred_head_scale: Option<f32> = None;
 
     let post_stack_head = if let Some(ref head_config) = geom.post_stack_head {
         let in_ch = *geom.head_sizes.last().unwrap_or(&1);
         let mut head = PostStackHead::from_config(head_config, in_ch)?;
 
-        let ch = head.in_channels();
-        let out_ch = head.out_channels();
-        let kernel = head.conv.kernel;
-        let num_blocks = out_ch.div_ceil(4);
-        let padded_total = checked_arith::checked_conv_padded_total(num_blocks, 4, ch, kernel)?;
-
-        if cursor.is_interleaved4() {
-            let raw = cursor.read_slice(padded_total)?;
-            head.set_weights(raw);
-        } else {
-            let total = checked_arith::checked_conv_total(out_ch, ch, kernel)?;
-            let raw = cursor.read_slice(total)?;
-            let mut interleaved = AlignedVec::new(padded_total, 0.0f32)?;
-            layout::transpose_conv1d_interleaved_4wide(raw, &mut interleaved, ch, out_ch, kernel);
-            head.set_weights(&interleaved);
+        if !head.is_canonical() {
+            deferred_head_scale = Some(cursor.read_f32_finite()?);
         }
 
-        if head.conv.do_bias {
-            let bias_raw = cursor.read_slice(out_ch)?;
-            head.set_bias(bias_raw);
+        for i in 0..head.stages.len() {
+            let (stage_in, stage_out, kernel, do_bias) = {
+                let conv = &head.stages[i].conv;
+                (conv.in_ch, conv.out_ch, conv.kernel, conv.do_bias)
+            };
+            let num_blocks = stage_out.div_ceil(4);
+            let padded_total =
+                checked_arith::checked_conv_padded_total(num_blocks, 4, stage_in, kernel)?;
+
+            if cursor.is_interleaved4() {
+                let raw = cursor.read_slice(padded_total)?;
+                head.set_stage_weights(i, raw);
+            } else {
+                let total = checked_arith::checked_conv_total(stage_out, stage_in, kernel)?;
+                let raw = cursor.read_slice(total)?;
+                let mut interleaved = AlignedVec::new(padded_total, 0.0f32)?;
+                layout::transpose_conv1d_interleaved_4wide(
+                    raw,
+                    &mut interleaved,
+                    stage_in,
+                    stage_out,
+                    kernel,
+                );
+                head.set_stage_weights(i, &interleaved);
+            }
+
+            if do_bias {
+                let bias_raw = cursor.read_slice(stage_out)?;
+                head.set_stage_bias(i, bias_raw);
+            }
+        }
+
+        if head.is_canonical() {
+            deferred_head_scale = Some(cursor.read_f32_finite()?);
         }
 
         Some(head)
     } else {
         None
+    };
+
+    let head_scale = match deferred_head_scale {
+        Some(scale) => scale,
+        None => cursor.read_f32_finite()?,
     };
 
     cursor.verify_exhausted()?;

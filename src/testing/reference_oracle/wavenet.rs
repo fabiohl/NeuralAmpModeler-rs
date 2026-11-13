@@ -19,6 +19,334 @@ use crate::loader::nam_json::model::NamModelData;
 
 use super::*;
 
+/// Maximum kernel accepted by the independent post-stack head oracle.
+const ORACLE_MAX_HEAD_KERNEL: usize = 16;
+
+/// Activation subset implemented independently for the post-stack head.
+#[derive(Clone, Copy, Debug)]
+enum OracleHeadActivation {
+    Tanh,
+    ReLU,
+    Sigmoid,
+    SiLU,
+    HardTanh,
+    Softsign,
+    PReLU(f64),
+}
+
+impl OracleHeadActivation {
+    #[inline]
+    fn apply(self, x: f64) -> f64 {
+        match self {
+            Self::Tanh => x.tanh(),
+            Self::ReLU => x.max(0.0),
+            Self::Sigmoid => 1.0 / (1.0 + (-x).exp()),
+            Self::SiLU => x / (1.0 + (-x).exp()),
+            Self::HardTanh => x.clamp(-1.0, 1.0),
+            Self::Softsign => x / (1.0 + x.abs()),
+            Self::PReLU(slope) => {
+                if x >= 0.0 {
+                    x
+                } else {
+                    x * slope
+                }
+            }
+        }
+    }
+}
+
+/// One stage of the independent f64 post-stack head.
+struct OracleHeadStage {
+    in_ch: usize,
+    out_ch: usize,
+    kernel: usize,
+    do_bias: bool,
+    weights: Vec<f64>,
+    bias: Vec<f64>,
+}
+
+/// Independent f64 post-stack head description.
+struct OracleHeadSpec {
+    canonical: bool,
+    activation: OracleHeadActivation,
+    stages: Vec<OracleHeadStage>,
+}
+
+/// Parses and validates the post-stack `head` object without reusing the
+/// production `HeadConfig` interpretation.
+fn parse_oracle_post_head(head: &serde_json::Value) -> Result<OracleHeadSpec, OracleError> {
+    let obj = head.as_object().ok_or(OracleError::UnsupportedTopology {
+        architecture: "WaveNet",
+        reason: "post-stack head must be a JSON object",
+    })?;
+
+    let kernel_sizes = obj.get("kernel_sizes");
+    let kernel_size = obj.get("kernel_size");
+    if kernel_sizes.is_some() && kernel_size.is_some() {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "post-stack head declares both kernel_size and kernel_sizes",
+        });
+    }
+
+    let canonical = kernel_sizes.is_some();
+    let kernels: Vec<usize> = if let Some(ks) = kernel_sizes {
+        let arr = ks.as_array().ok_or(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "head.kernel_sizes must be an array",
+        })?;
+        if arr.is_empty() {
+            return Err(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "head.kernel_sizes must be non-empty",
+            });
+        }
+        let mut out = Vec::with_capacity(arr.len());
+        for v in arr {
+            let k = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or(
+                OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "head.kernel_sizes entries must be positive integers",
+                },
+            )?;
+            if k == 0 || k > ORACLE_MAX_HEAD_KERNEL {
+                return Err(OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "head.kernel_sizes entry outside 1..=16",
+                });
+            }
+            out.push(k);
+        }
+        out
+    } else {
+        let k = match kernel_size {
+            Some(v) => v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or(
+                OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "head.kernel_size must be a positive integer",
+                },
+            )?,
+            None => 3,
+        };
+        if k == 0 || k > ORACLE_MAX_HEAD_KERNEL {
+            return Err(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "head.kernel_size outside 1..=16",
+            });
+        }
+        vec![k]
+    };
+
+    let channels = if canonical {
+        obj.get("channels")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "canonical head.channels is required",
+            })?
+    } else {
+        match obj.get("channels") {
+            Some(v) => v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or(
+                OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "head.channels must be a positive integer",
+                },
+            )?,
+            None => 0,
+        }
+    };
+    let out_channels = if canonical {
+        obj.get("out_channels")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok())
+            .ok_or(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "canonical head.out_channels is required",
+            })?
+    } else {
+        match obj.get("out_channels") {
+            Some(v) => v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or(
+                OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "head.out_channels must be a positive integer",
+                },
+            )?,
+            None => 1,
+        }
+    };
+    if out_channels == 0 || (canonical && channels == 0) {
+        return Err(OracleError::UnsupportedTopology {
+            architecture: "WaveNet",
+            reason: "head channel counts must be positive",
+        });
+    }
+
+    let do_bias = if canonical {
+        true
+    } else {
+        obj.get("bias").and_then(|v| v.as_bool()).unwrap_or(false)
+    };
+
+    let activation = parse_oracle_head_activation(obj.get("activation"))?;
+
+    // Stage widths: canonical uses `channels` for every non-final stage and
+    // `out_channels` for the last. The legacy single stage historically used
+    // `channels` as its input width (filled in by the caller once the layer
+    // array is known).
+    let mut stages = Vec::with_capacity(kernels.len());
+    for (i, &kernel) in kernels.iter().enumerate() {
+        let stage_out = if i + 1 == kernels.len() {
+            out_channels
+        } else {
+            channels
+        };
+        stages.push(OracleHeadStage {
+            in_ch: if canonical { 0 } else { channels },
+            out_ch: stage_out,
+            kernel,
+            do_bias,
+            weights: Vec::new(),
+            bias: Vec::new(),
+        });
+    }
+
+    Ok(OracleHeadSpec {
+        canonical,
+        activation,
+        stages,
+    })
+}
+
+fn parse_oracle_head_activation(
+    value: Option<&serde_json::Value>,
+) -> Result<OracleHeadActivation, OracleError> {
+    let Some(value) = value else {
+        return Ok(OracleHeadActivation::Tanh);
+    };
+    if let Some(name) = value.as_str() {
+        return match name {
+            "Tanh" | "FastTanh" => Ok(OracleHeadActivation::Tanh),
+            "ReLU" => Ok(OracleHeadActivation::ReLU),
+            "Sigmoid" => Ok(OracleHeadActivation::Sigmoid),
+            "SiLU" => Ok(OracleHeadActivation::SiLU),
+            "HardTanh" | "Hardtanh" => Ok(OracleHeadActivation::HardTanh),
+            "Softsign" => Ok(OracleHeadActivation::Softsign),
+            _ => Err(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "unsupported post-stack head activation",
+            }),
+        };
+    }
+    let obj = value.as_object().ok_or(OracleError::UnsupportedTopology {
+        architecture: "WaveNet",
+        reason: "unsupported post-stack head activation object",
+    })?;
+    if obj.get("type").and_then(|v| v.as_str()) == Some("PReLU") {
+        let slope = obj
+            .get("negative_slopes")
+            .and_then(|v| v.as_array())
+            .filter(|v| v.len() == 1)
+            .and_then(|v| v[0].as_f64())
+            .or_else(|| obj.get("negative_slope").and_then(|v| v.as_f64()))
+            .ok_or(OracleError::UnsupportedTopology {
+                architecture: "WaveNet",
+                reason: "oracle PReLU head activation supports a scalar slope only",
+            })?;
+        return Ok(OracleHeadActivation::PReLU(slope));
+    }
+    Err(OracleError::UnsupportedTopology {
+        architecture: "WaveNet",
+        reason: "unsupported post-stack head activation object",
+    })
+}
+
+/// Validates a non-null `config.head` object for the oracle domain.
+pub(crate) fn validate_oracle_post_head(head: &serde_json::Value) -> Result<(), OracleError> {
+    parse_oracle_post_head(head).map(|_| ())
+}
+
+impl OracleHeadSpec {
+    /// Reads stage weights in NAMCore order: per stage `[out][in][kernel]`
+    /// followed by `out` bias values.
+    fn read_weights(&mut self, cursor: &mut Cursor<'_>) {
+        for stage in &mut self.stages {
+            let conv_len = stage.in_ch * stage.out_ch * stage.kernel;
+            stage.weights = cursor.read_f64(conv_len);
+            if stage.do_bias {
+                stage.bias = cursor.read_f64(stage.out_ch);
+            }
+        }
+    }
+
+    /// Runs the head over interleaved `[frame][in_ch]` input.
+    ///
+    /// `input_scale` is applied before the first stage for canonical heads
+    /// (NAMCore scales the layer-array head outputs before the head), or after
+    /// the single legacy stage.
+    fn forward(
+        &self,
+        input: &[f64],
+        num_frames: usize,
+        input_scale: f64,
+        acc_mode: AccumulationMode,
+    ) -> Vec<f64> {
+        let mut current = input.to_vec();
+        if self.canonical {
+            for value in &mut current {
+                *value = self.activation.apply(*value * input_scale);
+            }
+        }
+
+        for (idx, stage) in self.stages.iter().enumerate() {
+            let mut out = vec![0.0f64; num_frames * stage.out_ch];
+            for f in 0..num_frames {
+                for oc in 0..stage.out_ch {
+                    let mut sum = if stage.do_bias { stage.bias[oc] } else { 0.0 };
+                    let weight_base = oc * stage.in_ch * stage.kernel;
+                    for kt in 0..stage.kernel {
+                        let src = f as isize - (stage.kernel - 1 - kt) as isize;
+                        if src < 0 {
+                            continue;
+                        }
+                        let src = src as usize;
+                        for ic in 0..stage.in_ch {
+                            sum = mul_add_f64(
+                                current[src * stage.in_ch + ic],
+                                stage.weights[weight_base + ic * stage.kernel + kt],
+                                sum,
+                                acc_mode,
+                            );
+                        }
+                    }
+                    out[f * stage.out_ch + oc] = sum;
+                }
+            }
+
+            if !self.canonical {
+                for value in &mut out {
+                    *value = self.activation.apply(*value);
+                }
+            } else if idx + 1 < self.stages.len() {
+                // Activation before the next stage's convolution.
+                for value in &mut out {
+                    *value = self.activation.apply(*value);
+                }
+            } else {
+                // Final canonical stage: no activation after the last conv.
+            }
+            current = out;
+        }
+
+        if !self.canonical {
+            for value in &mut current {
+                *value *= input_scale;
+            }
+        }
+        current
+    }
+}
+
 pub(crate) fn oracle_wavenet_forward(
     model_data: &NamModelData,
     input: &[f64],
@@ -157,13 +485,42 @@ fn oracle_wavenet_forward_inner(
     let a1_head_w = cursor.read_f64(a1_ch * a1_head);
     let a1_head_b = cursor.read_f64(a1_head);
 
-    // head_scale is the LAST weight in the WaveNet weight stream
-    // (C++ model.cpp constructs read it as the final weight after all arrays).
-    // The JSON config's head_scale field is metadata and may not match the
-    // weight-stream value (e.g. models generated by test scripts may write
-    // random weights that overwrite the config default). Production engines
-    // always use the weight-stream value.
-    let head_scale = if cursor.pos < cursor.data.len() {
+    // Independent post-stack head oracle. Canonical NAMCore heads consume
+    // their stage weights before `head_scale`; the legacy Rust-only head keeps
+    // the historical `head_scale`-then-head order.
+    let mut post_head = match model_data.config.head.as_ref() {
+        Some(head) if !head.is_null() => Some(parse_oracle_post_head(head)?),
+        _ => None,
+    };
+    if let Some(spec) = post_head.as_mut() {
+        spec.stages[0].in_ch = if spec.canonical || spec.stages[0].in_ch == 0 {
+            a1_head
+        } else {
+            spec.stages[0].in_ch
+        };
+        for i in 1..spec.stages.len() {
+            spec.stages[i].in_ch = spec.stages[i - 1].out_ch;
+        }
+    }
+
+    let head_scale = if let Some(spec) = post_head.as_mut() {
+        if spec.canonical {
+            spec.read_weights(&mut cursor);
+            if cursor.pos < cursor.data.len() {
+                cursor.read_one_f64()
+            } else {
+                model_data.config.head_scale.unwrap_or(1.0) as f64
+            }
+        } else {
+            let scale = if cursor.pos < cursor.data.len() {
+                cursor.read_one_f64()
+            } else {
+                model_data.config.head_scale.unwrap_or(1.0) as f64
+            };
+            spec.read_weights(&mut cursor);
+            scale
+        }
+    } else if cursor.pos < cursor.data.len() {
         cursor.read_one_f64()
     } else {
         model_data.config.head_scale.unwrap_or(1.0) as f64
@@ -390,20 +747,44 @@ fn oracle_wavenet_forward_inner(
         }
     }
 
-    // Array1 head rechannel → output × head_scale
-    // Use oracle_wavenet_head_final for both mono and all-channels output.
-    oracle_wavenet_head_final(
-        &mut output,
-        &a1_head_accum,
-        &a1_head_w,
-        &a1_head_b,
-        a1_ch,
-        a1_head,
-        head_scale,
-        num_frames,
-        acc_mode,
-        _all_channels,
-    );
+    // Array1 head rechannel → post-stack head (or final output) × head_scale.
+    if let Some(spec) = post_head {
+        // The head consumes every channel of the last array head projection;
+        // head_scale is applied before (canonical) or after (legacy) the head.
+        let mut projection = Vec::new();
+        oracle_wavenet_head_final(
+            &mut projection,
+            &a1_head_accum,
+            &a1_head_w,
+            &a1_head_b,
+            a1_ch,
+            a1_head,
+            1.0,
+            num_frames,
+            acc_mode,
+            true,
+        );
+        let head_out = spec.forward(&projection, num_frames, head_scale, acc_mode);
+        let out_ch = spec.stages.last().map_or(1, |stage| stage.out_ch);
+        if _all_channels {
+            output = head_out;
+        } else {
+            output = (0..num_frames).map(|f| head_out[f * out_ch]).collect();
+        }
+    } else {
+        oracle_wavenet_head_final(
+            &mut output,
+            &a1_head_accum,
+            &a1_head_w,
+            &a1_head_b,
+            a1_ch,
+            a1_head,
+            head_scale,
+            num_frames,
+            acc_mode,
+            _all_channels,
+        );
+    }
 
     Ok(output)
 }

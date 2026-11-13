@@ -368,7 +368,7 @@ fn build_convnet_layers(
 
         let ch = head.in_channels();
         let out_ch = head.out_channels();
-        let kernel = head.conv.kernel;
+        let kernel = head.stages[0].conv.kernel;
         let num_blocks = out_ch.div_ceil(4);
         let padded_total = checked_arith::checked_conv_padded_total(num_blocks, 4, ch, kernel)?;
 
@@ -383,7 +383,7 @@ fn build_convnet_layers(
             head.set_weights(&interleaved);
         }
 
-        if head.conv.do_bias {
+        if head.stages[0].conv.do_bias {
             let bias_raw = cursor.read_slice(out_ch)?;
             head.set_bias(bias_raw);
         }
