@@ -1238,3 +1238,123 @@ Findings from this run:
 * **F-4 (x86, unclassified stack refs):** the gated kernels show 4 and 10 stack vector references (zero-filled tail buffers).
 * **Confirmed:** zero `vgatherd*` and zero `vmaskmov*` in every x86 body; zero `prfm` in every aarch64 body; no call into `cmp`, `blend` or `set1` helpers in any kernel body. The file-wide `bcmp`/`memcmp` calls (x86: 130 total, aarch64: 166 total) belong to other functions, not to these kernels.
 * No aarch64 performance claim follows from this inspection until hardware benchmark receipts on Apple Silicon and Graviton are recorded.
+
+## 13. Resampler Cross-Engine Characterization (S12)
+
+T12.1/T12.2 of the resource-parity epic (P10): independent comparison of the
+production Rust resampler against the C++ plugin's vendor Lanczos container and
+a high-quality reference, with metric separation and frozen baseline. The
+production minimum-phase default did **not** change (T12.2 decision below);
+this section records the evidence.
+
+Methodology and reproduction:
+
+* Comparison axis: `tests/resampler_cross_engine.rs` (long discipline, needs
+  the vendor mirrors + C++ probe). The C++ side is the **real** vendor
+  `dsp::ResamplingContainer<T,1,12>` (`ResamplingContainer.h:84`,
+  `NeuralAmpModeler.h:187`) driven by `tests/resampler_cxx/lanczos_probe.cpp`
+  (compiled on demand by `utils/ensure_lanczos_probe.sh`, receipt in
+  `build/resampler_probe/.build_provenance`). No replicated resampler logic —
+  the probe instantiates the vendor classes directly.
+* Probe provenance (2026-11-13): NAMCore `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`,
+  AudioDSPTools `0827c6c2fc0deced568536142ea86f189e0b98a1`, plugin mirror
+  LanczosResampler.h md5 `692ce8752a3fd220b79209f9c0e3a5e4` (identical in both
+  mirrors), g++ 15.2.0 (Ubuntu), `-O2 -ffp-contract=off -fno-fast-math`.
+* Reference: libsoxr via the fixture set of
+  `tests/fixtures/generate_resampler_reference.py` — host fingerprint:
+  ffmpeg 8.0.1-3ubuntu2, libsoxr 0.1.3 (package 0.1.3-4.1), precision=33,
+  Chebyshev passband. Signals: 10-tone log multitone fixture (2 s, pinned by
+  hash), impulse raster, 0.5 s linear sweep, stress v2 (4.5 s) and the real
+  guitar capture `NeuralAmpModelerCore/example_audio/input.wav` (48 kHz, s24).
+* Host: x86-64-v3 notebook (operator reference host), release profile, no
+  cgroup. All conversions are bit-deterministic, so the fidelity tables are
+  host-independent; CPU medians are operator-owned.
+* Perceptual A/B (P10) requires a human listening panel → **GAP** (typed,
+  `PERCEPTUAL: GAP` line in the test log), per `perceptual_validation.md`.
+
+### 13.1 Metric separation (criteria documented, never swapped)
+
+* **Stopband rejection** (filter design ≥ 105 dB) is measured as image-band /
+  OOB tone rejection. It is *not* the end-to-end SNR.
+* **End-to-end multitone SNR vs. soxr** (per-tone passband amplitudes, the
+  metric of `resampler_test.rs` — gate ≥ 25 dB) is reported separately below.
+* **Full-band aligned SNR** (whole spectrum after integer-lag alignment) is a
+  third axis: it includes transition-band differences between engines.
+* Phase is characterized per engine (delay + wrap-aware residual for the
+  linear-phase engines; minimum-phase is nonlinear by design). A phase
+  difference in isolation does not prove an audible defect.
+
+### 13.2 Passband multitone SNR vs. soxr (dB, higher = better)
+
+| Pair        | Rust min-phase (default) | Rust linear | Lanczos single f64 | Lanczos single f32 |
+|-------------|-------------------------:|------------:|-------------------:|-------------------:|
+| 44.1→48 kHz | 51.5                     | 58.0        | 80.7               | 80.7               |
+| 48→44.1 kHz | 77.6                     | 74.0        | 80.7               | 80.7               |
+| 48→96 kHz   | 79.2                     | 124.0       | 81.5               | 81.5               |
+| 96→48 kHz   | 62.6                     | 97.3        | 71.7               | 71.7               |
+
+The historical "~31 dB" note in `src/dsp/sinc_kernel.rs` predates the current
+bank and is superseded by this S12 measurement (same fixture tones, same soxr
+reference, same metric family; the ≥ 25 dB gate is unchanged and holds with
+≥ 2× margin). Per-tone passband gains stay within ±0.065 dB for min-phase
+(fixtures' worst tone).
+
+### 13.3 Full-band aligned SNR vs. soxr (dB)
+
+| Pair        | min-phase | linear | Lanczos f64 | Lanczos f32 |
+|-------------|----------:|-------:|------------:|------------:|
+| 44.1→48 kHz | 14.8      | 20.5   | 26.9        | 26.9        |
+| 48→44.1 kHz | 10.7      | 12.4   | 26.2        | 26.2        |
+| 48→96 kHz   | 21.0      | 59.3   | 70.4        | 70.4        |
+| 96→48 kHz   | 5.5       | 22.6   | 6.0         | 6.0         |
+
+### 13.4 Phase, pre-ring and aliasing (design axes, reported — no gates)
+
+| Axis (per pair)                      | min-phase (default)            | linear               | Lanczos single f64     |
+|--------------------------------------|--------------------------------|----------------------|------------------------|
+| Impulse peak delay (out-smp)         | 5–16                           | 18–72                | 2–10                   |
+| Impulse worst pre-ring (raster ×8)   | −0.1 … −13.2 dB                | −2.7 … −22.1 dB      | −3.3 … −26.9 dB        |
+| Phase delay (out-smp, passband fit)  | nonlinear by design            | 29.4–34.8 (resid < 0.003 rad) | 0.5–2.0 (resid < 0.001 rad) |
+| Image-band rejection (48→96)         | −87.7 dB                       | −109.2 dB            | (single-stage n/a)     |
+| OOB alias fold (48→44.1, 96→48)      | < f32 floor (−∞ dB)            | < f32 floor          | (single-stage n/a)     |
+| Cross-engine aligned SNR vs min-phase (stress v2) | —                 | 28.3–31.6 dB         | 27.0–28.2 dB           |
+| Real guitar (48k capture) cross-engine SNR        | —                 | 44.6–50.0 dB         | 38.5–44.7 dB           |
+
+### 13.5 CPU cost (median ns per external sample, warm engine, 4 s stress v2 × 40 reps)
+
+| Pair        | Rust in | Rust out | Rust lin-in | Lanczos f64 fwd | Lanczos f64 rev | Container pair f64 | Container pair f32 |
+|-------------|--------:|---------:|------------:|----------------:|----------------:|-------------------:|-------------------:|
+| 44.1→48 kHz | 15      | 16       | 15          | 31              | 25              | 57                 | 70                 |
+| 48→44.1 kHz | 16      | 16       | 16          | 24              | 25              | 53                 | 64                 |
+| 96→48 kHz   | 18      | 11       | 18          | 20              | 19              | 28                 | 42                 |
+| 48→96 kHz   | 11      | 18       | 11          | 18              | 20              | 56                 | 84                 |
+
+(The vendor probe excludes construction/table init from the timed window,
+exactly like the Rust side; both count per emitted external sample.)
+
+### 13.6 T12.2 decision — keep the minimum-phase default (baseline frozen)
+
+* **No substitution.** The Lanczos container scores higher passband multitone
+  SNR vs. soxr on three of four pairs (80–81 dB), but costs 2–4× the CPU of a
+  Rust stage at the pair level, reintroduces symmetric pre-echo, and the
+  full-band aligned axis is mixed (96→48 kHz: Lanczos 6.0 dB vs Rust 5.5 dB).
+* The production min-phase bank holds every existing gate with ≥ 2× margin
+  (multitone SNR ≥ 51.5 dB vs gate 25 dB), stays faster than the vendor
+  container, and keeps the smallest group delay.
+* Perceptual A/B remains a GAP; a future substitution must demonstrate benefit
+  under a human panel plus the audio/performance gates before touching the
+  default.
+
+### 13.7 Anchor independence (f64/cross-rate) — quantified
+
+The cross-rate parity anchors of `cpp_parity.rs:298-332` are resampler-canceled
+by construction (both comparison sides receive bit-identical Rust-resampled
+input; locked bit-exactly by `test_shared_resampler_cancellation_is_bit_exact`).
+The S12 crossed-roundtrip measurements quantify what the anchors would look
+like if the two sides used **independent** resamplers: full-band SNR vs source
+drops to 25.1–28.2 dB (Rust ↔ Lanczos chains) versus 26.1–27.6 dB for the
+shared-Rust chain. I.e., any cross-rate threshold above ~28 dB SNR is
+meaningful only under the shared-resampler design — the resampler-vs-resampler
+delta (~28 dB full-band, §13.3) would otherwise dominate and Rule 7
+("fix code, never scope") would force a resampler change instead of a parity
+finding.

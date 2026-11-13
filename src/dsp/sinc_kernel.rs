@@ -30,13 +30,17 @@
 //!
 //! | Rate Pair    | Passband Ripple | Stopband (design) | Multitone SNR (min-phase) |
 //! |------------- |---------------- |------------------ |-------------------------- |
-//! | 44.1→48 kHz  | < 0.05 dB       | ≥ 105 dB          | ~31 dB (gate ≥ 25 dB)     |
-//! | 48→44.1 kHz  | < 0.02 dB       | ≥ 105 dB          | ~31 dB (gate ≥ 25 dB)     |
-//! | 48→96 kHz    | < 0.02 dB       | ≥ 110 dB          | ~31 dB (gate ≥ 25 dB)     |
-//! | 96→48 kHz    | < 0.02 dB       | ≥ 115 dB          | ~31 dB (gate ≥ 25 dB)     |
+//! | 44.1→48 kHz  | < 0.05 dB       | ≥ 105 dB          | 51.5 dB (gate ≥ 25 dB)    |
+//! | 48→44.1 kHz  | < 0.02 dB       | ≥ 105 dB          | 77.6 dB (gate ≥ 25 dB)    |
+//! | 48→96 kHz    | < 0.02 dB       | ≥ 110 dB          | 79.2 dB (gate ≥ 25 dB)    |
+//! | 96→48 kHz    | < 0.02 dB       | ≥ 115 dB          | 62.6 dB (gate ≥ 25 dB)    |
 //!
-//! The linear-phase variant (`new_linear()`, offline) scores significantly higher on multitone
-//! SNR but reintroduces pre-ringing, so it is not the production default.
+//! The historical "~31 dB" figures were re-measured by the S12 cross-engine
+//! characterization (`docs/benchmarks.md` § 13, `tests/resampler_cross_engine.rs`)
+//! on the same fixture tones and soxr reference; the ≥ 25 dB gate is unchanged.
+//! The linear-phase variant (`new_linear()`, offline) scores significantly higher on
+//! multitone SNR but reintroduces pre-ringing and group delay, so it is not the
+//! production default.
 
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
@@ -58,7 +62,7 @@ pub enum PhaseType {
 /// adjacent-phase linear interpolation contributes negligible error (its own
 /// SNR contribution exceeds 140 dB) and is never the end-to-end bottleneck.
 /// See `TAPS_PER_PHASE` and the module-level table for the *measured*
-/// end-to-end multitone SNR (~31 dB, min-phase, dispersion-limited).
+/// end-to-end multitone SNR (min-phase, dispersion-limited).
 pub const NUM_PHASES: usize = 256;
 
 /// Number of taps per phase in the polyphase bank.
@@ -71,8 +75,9 @@ pub const NUM_PHASES: usize = 256;
 ///
 /// Previously this was 32 taps (~24 dB end-to-end multitone SNR).
 /// Doubling to 64 taps raised the stopband attenuation to ≥ 110 dB (filter
-/// design) and the end-to-end multitone SNR vs. soxr to ~31 dB (min-phase,
-/// per-phase-dispersion limited). The earlier ">120 dB" figure was an
+/// design) and the end-to-end multitone SNR vs. soxr far above the ≥ 25 dB
+/// gate (min-phase, per-phase-dispersion limited — see the module-level
+/// table and `docs/benchmarks.md` § 13). The earlier ">120 dB" figure was an
 /// aspiration for the *filter design* (stopband rejection), not the achieved
 /// end-to-end SNR — see the module-level table and `resampler_test.rs`.
 pub const TAPS_PER_PHASE: usize = 64;
