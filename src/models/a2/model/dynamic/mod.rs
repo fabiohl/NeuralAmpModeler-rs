@@ -313,24 +313,60 @@ impl WaveNetA2Dyn {
             layer_buffer_starts.push(ring_size);
         }
 
+        // Validate PReLU slope dimensions against bottleneck channels before
+        // allocation (C++ ActivationPReLU applies 1 slope per channel, or a
+        // scalar broadcast of length 1; empty or mismatched slope vectors must
+        // fail closed rather than silently identity/cycling).
+        let validate_prelu = |act: &ActivationType,
+                              role: &str,
+                              layer_idx: usize|
+         -> anyhow::Result<()> {
+            if let ActivationType::PReLU { negative_slopes } = act
+                && (negative_slopes.is_empty()
+                    || (negative_slopes.len() != 1 && negative_slopes.len() != bottleneck))
+            {
+                return Err(crate::common::diagnostics::NamErrorCode::InvalidModelTopology.into())
+                    .map_err(|e: anyhow::Error| {
+                        e.context(format!(
+                            "WaveNetA2Dyn::new layer[{layer_idx}] {role} PReLU negative_slopes length ({}) must be 1 or bottleneck ({bottleneck})",
+                            negative_slopes.len()
+                        ))
+                    });
+            }
+            Ok(())
+        };
+
         // Pre-allocate gating/blending configs.
         let mut gating_configs = Vec::with_capacity(num_layers);
         let mut blending_configs = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
+            validate_prelu(&activations[i], "primary", i)?;
             let gc = match gating_modes[i] {
                 GatingMode::Gated => {
-                    let sec = secondary_activations[i]
-                        .clone()
-                        .unwrap_or(ActivationType::Sigmoid);
+                    let sec = secondary_activations[i].clone().ok_or_else(|| {
+                        anyhow::Error::from(
+                            crate::common::diagnostics::NamErrorCode::NamJsonUnknownActivation,
+                        )
+                        .context(format!(
+                            "WaveNetA2Dyn::new layer[{i}] gating_mode=gated missing secondary activation"
+                        ))
+                    })?;
+                    validate_prelu(&sec, "secondary", i)?;
                     Some(GatingActivationConfig::new(activations[i].clone(), sec))
                 }
                 _ => None,
             };
             let bc = match gating_modes[i] {
                 GatingMode::Blended => {
-                    let sec = secondary_activations[i]
-                        .clone()
-                        .unwrap_or(ActivationType::Sigmoid);
+                    let sec = secondary_activations[i].clone().ok_or_else(|| {
+                        anyhow::Error::from(
+                            crate::common::diagnostics::NamErrorCode::NamJsonUnknownActivation,
+                        )
+                        .context(format!(
+                            "WaveNetA2Dyn::new layer[{i}] gating_mode=blended missing secondary activation"
+                        ))
+                    })?;
+                    validate_prelu(&sec, "secondary", i)?;
                     Some(BlendingActivationConfig::new(
                         activations[i].clone(),
                         sec,

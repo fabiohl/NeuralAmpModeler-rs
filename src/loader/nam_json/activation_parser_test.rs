@@ -114,7 +114,7 @@ fn test_parse_gating_modes() {
         ]
     });
 
-    let modes = parse_gating_modes_from_json(&raw, 23);
+    let modes = parse_gating_modes_from_json(&raw, 23).expect("should parse gating modes");
     assert_eq!(modes.len(), 23);
     assert_eq!(modes[0], GatingMode::None);
     assert_eq!(modes[1], GatingMode::Gated);
@@ -127,7 +127,8 @@ fn test_parse_gating_modes() {
 #[test]
 fn test_parse_gating_modes_absent() {
     let raw = serde_json::json!({});
-    let modes = parse_gating_modes_from_json(&raw, 23);
+    let modes =
+        parse_gating_modes_from_json(&raw, 23).expect("absent gating_mode defaults to None");
     assert_eq!(modes.len(), 23);
     for mode in &modes {
         assert_eq!(mode, &GatingMode::None);
@@ -135,13 +136,12 @@ fn test_parse_gating_modes_absent() {
 }
 
 #[test]
-fn test_parse_gating_modes_null() {
+fn test_parse_gating_modes_null_rejected() {
     let raw = serde_json::json!({"gating_mode": null});
-    let modes = parse_gating_modes_from_json(&raw, 23);
-    assert_eq!(modes.len(), 23);
-    for mode in &modes {
-        assert_eq!(mode, &GatingMode::None);
-    }
+    assert_eq!(
+        parse_gating_modes_from_json(&raw, 23),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn test_parse_secondary_activations() {
         ]
     });
 
-    let sec = parse_secondary_activations_from_json(&raw, 23);
+    let sec = parse_secondary_activations_from_json(&raw, 23).expect("should parse secondary");
     assert_eq!(sec.len(), 23);
     assert!(sec[0].is_none());
     assert_eq!(sec[1], Some(ActivationType::Sigmoid));
@@ -169,7 +169,7 @@ fn test_parse_secondary_activations() {
 #[test]
 fn test_parse_secondary_activations_absent() {
     let raw = serde_json::json!({});
-    let sec = parse_secondary_activations_from_json(&raw, 23);
+    let sec = parse_secondary_activations_from_json(&raw, 23).expect("absent secondary is ok");
     assert_eq!(sec.len(), 23);
     for s in &sec {
         assert!(s.is_none());
@@ -180,7 +180,7 @@ fn test_parse_secondary_activations_absent() {
 fn test_parse_a2_max_secondary_activation_forms() {
     let scalar = serde_json::json!({ "secondary_activation": "Hardswish" });
     assert_eq!(
-        parse_secondary_activations_from_json(&scalar, 2),
+        parse_secondary_activations_from_json(&scalar, 2).expect("Hardswish parses"),
         vec![Some(ActivationType::HardSwish); 2]
     );
     let mixed = serde_json::json!({ "secondary_activation": [
@@ -189,7 +189,7 @@ fn test_parse_a2_max_secondary_activation_forms() {
         "ReLU", "Sigmoid"
     ] });
     assert_eq!(
-        parse_secondary_activations_from_json(&mixed, 3),
+        parse_secondary_activations_from_json(&mixed, 3).expect("mixed parses"),
         vec![
             Some(ActivationType::LeakyHardTanh {
                 min_val: 0.0,

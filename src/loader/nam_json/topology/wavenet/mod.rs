@@ -348,7 +348,10 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
 
     // ── Try matching a known catalog SKU (fast-path) ──
     if layers.len() == 2 {
-        let catalog_compatible = !layers[0].gated.unwrap_or(false)
+        let parent_in_ok =
+            data.config.in_channels.unwrap_or(1) == 1 && layers[0].input_size.unwrap_or(1) == 1;
+        let catalog_compatible = parent_in_ok
+            && !layers[0].gated.unwrap_or(false)
             && !layers[1].gated.unwrap_or(false)
             && !layers[0].head_bias.unwrap_or(false)
             && layers[1].head_bias.unwrap_or(false)

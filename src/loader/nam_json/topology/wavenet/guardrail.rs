@@ -76,15 +76,28 @@ pub fn validate_a1_guardrail(layers: &[NamLayerConfig]) -> Result<(), String> {
             }
         }
         for &(key, _) in FILM_KEYS {
-            if raw
-                .get(key)
-                .and_then(|f| f.get("active"))
-                .and_then(|a| a.as_bool())
-                .unwrap_or(false)
-            {
-                return Err(format!(
-                    "Layer {i} has active {key} — A2 feature not supported in WaveNet A1."
-                ));
+            match raw.get(key) {
+                None | Some(serde_json::Value::Bool(false)) => {}
+                Some(serde_json::Value::Object(obj)) => {
+                    let active = match obj.get("active") {
+                        None => true,
+                        Some(v) => v.as_bool().ok_or_else(|| {
+                            format!(
+                                "Layer {i} has FiLM '{key}' with non-boolean 'active' — malformed."
+                            )
+                        })?,
+                    };
+                    if active {
+                        return Err(format!(
+                            "Layer {i} has active {key} — A2 feature not supported in WaveNet A1."
+                        ));
+                    }
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "Layer {i} has invalid FiLM '{key}' ({other}) — expected an object or boolean false."
+                    ));
+                }
             }
         }
         if layer.gated.unwrap_or(false) {

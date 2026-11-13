@@ -247,11 +247,36 @@ pub(crate) fn parse_single_film_config(
     raw: &serde_json::Value,
     key: &str,
 ) -> anyhow::Result<FiLMConfig> {
-    let Some(obj) = raw.get(key).and_then(|v| v.as_object()) else {
-        return Ok(FiLMConfig::default());
+    let obj = match raw.get(key) {
+        None | Some(serde_json::Value::Bool(false)) => {
+            return Ok(FiLMConfig::default());
+        }
+        Some(serde_json::Value::Object(obj)) => obj,
+        Some(other) => {
+            return Err(anyhow::Error::new(
+                crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+            )
+            .context(format!(
+                "FiLM config '{key}': expected an object or boolean false, got {other}"
+            )));
+        }
     };
-    let active = obj.get("active").and_then(|a| a.as_bool()).unwrap_or(false);
-    let shift = obj.get("shift").and_then(|s| s.as_bool()).unwrap_or(true);
+    // C++ NAMCore `_FiLMParams` (`NAM/wavenet/model.cpp:1205-1215`): when a
+    // FiLM object is present, both `active` and `shift` default to `true`.
+    let active = match obj.get("active") {
+        None => true,
+        Some(v) => v.as_bool().ok_or_else(|| {
+            anyhow::Error::new(crate::common::diagnostics::NamErrorCode::InvalidModelTopology)
+                .context(format!("FiLM config '{key}': 'active' must be a boolean"))
+        })?,
+    };
+    let shift = match obj.get("shift") {
+        None => true,
+        Some(v) => v.as_bool().ok_or_else(|| {
+            anyhow::Error::new(crate::common::diagnostics::NamErrorCode::InvalidModelTopology)
+                .context(format!("FiLM config '{key}': 'shift' must be a boolean"))
+        })?,
+    };
 
     let raw_groups = match obj.get("groups") {
         Some(v) => {
@@ -261,13 +286,17 @@ pub(crate) fn parse_single_film_config(
                 log::warn!(
                     "FiLM config '{key}': groups must be >= 1, got {i} (hostile JSON rejection)"
                 );
-                anyhow::bail!(
+                return Err(anyhow::Error::new(
+                    crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+                )
+                .context(format!(
                     "FiLM config '{key}': groups must be >= 1, got {i} (hostile JSON rejection)"
-                );
+                )));
             }
             v.as_u64().ok_or_else(|| {
                 log::warn!("FiLM config '{key}': groups is not a valid unsigned integer (hostile JSON rejection)");
-                anyhow::anyhow!("FiLM config '{key}': groups is not a valid unsigned integer (hostile JSON rejection)")
+                anyhow::Error::new(crate::common::diagnostics::NamErrorCode::InvalidModelTopology)
+                    .context(format!("FiLM config '{key}': groups is not a valid unsigned integer (hostile JSON rejection)"))
             })?
         }
         None => 1,
@@ -276,13 +305,19 @@ pub(crate) fn parse_single_film_config(
         log::warn!(
             "FiLM config '{key}': groups ({raw_groups}) exceeds u32::MAX (hostile JSON rejection)"
         );
-        anyhow::anyhow!(
-            "FiLM config '{key}': groups ({raw_groups}) exceeds u32::MAX (hostile JSON rejection)"
-        )
+        anyhow::Error::new(crate::common::diagnostics::NamErrorCode::InvalidModelTopology)
+            .context(format!(
+                "FiLM config '{key}': groups ({raw_groups}) exceeds u32::MAX (hostile JSON rejection)"
+            ))
     })?;
     if groups == 0 {
         log::warn!("FiLM config '{key}': groups must be >= 1, got 0 (hostile JSON rejection)");
-        anyhow::bail!("FiLM config '{key}': groups must be >= 1, got 0 (hostile JSON rejection)");
+        return Err(anyhow::Error::new(
+            crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+        )
+        .context(format!(
+            "FiLM config '{key}': groups must be >= 1, got 0 (hostile JSON rejection)"
+        )));
     }
 
     Ok(FiLMConfig {

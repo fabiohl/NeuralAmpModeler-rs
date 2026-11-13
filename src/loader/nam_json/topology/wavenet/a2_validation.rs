@@ -111,7 +111,9 @@ pub fn validate_a2_layer_topology(layer: &NamLayerConfig) -> Result<A2TopologyVe
         ));
     }
 
-    // C++ model.cpp:1228-1232: layer1x1_post_film cannot be active when layer1x1.active is false
+    // C++ model.cpp:1228-1232: layer1x1_post_film cannot be active when layer1x1.active is false.
+    // C++ model.cpp:1205-1215: a FiLM object defaults active=true; boolean false disables it;
+    // any non-object, non-false value is malformed.
     let layer1x1_active = layer
         .layer_raw
         .as_ref()
@@ -120,13 +122,24 @@ pub fn validate_a2_layer_topology(layer: &NamLayerConfig) -> Result<A2TopologyVe
         .and_then(|a| a.as_bool())
         .unwrap_or(false);
 
-    let layer1x1_post_film_active = layer
+    let layer1x1_post_film_active = match layer
         .layer_raw
         .as_ref()
         .and_then(|raw| raw.get("layer1x1_post_film"))
-        .and_then(|l| l.get("active"))
-        .and_then(|a| a.as_bool())
-        .unwrap_or(false);
+    {
+        None | Some(serde_json::Value::Bool(false)) => false,
+        Some(serde_json::Value::Object(obj)) => match obj.get("active") {
+            None => true,
+            Some(v) => v.as_bool().ok_or_else(|| {
+                "FiLM config 'layer1x1_post_film': 'active' must be a boolean".to_string()
+            })?,
+        },
+        Some(other) => {
+            return Err(format!(
+                "FiLM config 'layer1x1_post_film': expected an object or boolean false, got {other}"
+            ));
+        }
+    };
 
     if layer1x1_post_film_active && !layer1x1_active {
         return Err(

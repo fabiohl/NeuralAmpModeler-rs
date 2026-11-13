@@ -553,7 +553,14 @@ fn test_wavenet_a2_dyn_bug_b2_l1x1_gating_modes() {
                 },
             ], // activations (identity)
             vec![gating, GatingMode::None],                 // gating_modes
-            vec![None, None],                               // secondary_activations
+            vec![
+                if matches!(gating, GatingMode::Gated | GatingMode::Blended) {
+                    Some(ActivationType::Sigmoid)
+                } else {
+                    None
+                },
+                None,
+            ], // secondary_activations
         )
         .unwrap();
 
@@ -691,7 +698,7 @@ fn test_wavenet_a2_dyn_bug_b3_l1x1_residual_modulation() {
             },
         ], // activations (identity)
         vec![GatingMode::Blended, GatingMode::None],    // gating_modes
-        vec![None, None],                               // secondary_activations
+        vec![Some(ActivationType::Sigmoid), None],      // secondary_activations
     )
     .unwrap();
 
@@ -966,4 +973,89 @@ fn test_wavenet_a2_dyn_head1x1_post_film_modulates_projection() {
         expected_val,
         actual_val
     );
+}
+
+#[test]
+fn test_wavenet_a2_dyn_new_rejects_missing_secondary_activation_on_gated_and_blended() {
+    use crate::common::diagnostics::NamErrorCode;
+    for mode in [GatingMode::Gated, GatingMode::Blended] {
+        let err = WaveNetA2Dyn::new(
+            1,
+            2,
+            2,
+            1,
+            2,
+            2,
+            crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
+            &[1],
+            &[1],
+            vec![ActivationType::ReLU],
+            vec![mode],
+            vec![None],
+        )
+        .err()
+        .expect("missing secondary activation must fail closed");
+        assert_eq!(
+            err.downcast_ref::<NamErrorCode>(),
+            Some(&NamErrorCode::NamJsonUnknownActivation),
+            "Missing secondary activation for {mode:?} must fail closed with E1221"
+        );
+    }
+}
+
+#[test]
+fn test_wavenet_a2_dyn_new_rejects_prelu_slope_dimension_mismatch() {
+    use crate::common::diagnostics::NamErrorCode;
+    // bottleneck=2: slopes length 3 (and 0) must be rejected with InvalidModelTopology.
+    for bad_slopes in [vec![], vec![0.1, 0.2, 0.3]] {
+        let err_primary = WaveNetA2Dyn::new(
+            1,
+            2,
+            2,
+            1,
+            2,
+            2,
+            crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
+            &[1],
+            &[1],
+            vec![ActivationType::PReLU {
+                negative_slopes: bad_slopes.clone(),
+            }],
+            vec![GatingMode::None],
+            vec![None],
+        )
+        .err()
+        .expect("primary PReLU dimension mismatch must fail");
+        assert_eq!(
+            err_primary.downcast_ref::<NamErrorCode>(),
+            Some(&NamErrorCode::InvalidModelTopology),
+            "Primary PReLU with mismatched slopes {:?} must fail with InvalidModelTopology",
+            bad_slopes
+        );
+
+        let err_secondary = WaveNetA2Dyn::new(
+            1,
+            2,
+            2,
+            1,
+            2,
+            2,
+            crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
+            &[1],
+            &[1],
+            vec![ActivationType::ReLU],
+            vec![GatingMode::Gated],
+            vec![Some(ActivationType::PReLU {
+                negative_slopes: bad_slopes.clone(),
+            })],
+        )
+        .err()
+        .expect("secondary PReLU dimension mismatch must fail");
+        assert_eq!(
+            err_secondary.downcast_ref::<NamErrorCode>(),
+            Some(&NamErrorCode::InvalidModelTopology),
+            "Secondary PReLU with mismatched slopes {:?} must fail with InvalidModelTopology",
+            bad_slopes
+        );
+    }
 }

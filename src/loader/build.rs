@@ -653,15 +653,21 @@ fn build_model_pair_from_data(
     let mut model_l =
         dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false)).map_err(
             |e| {
-                let (code, is_topo) = if let Some(topo_err) = e.downcast_ref::<TopologyError>() {
-                    (topo_err.code, true)
-                } else if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
-                    let is_topo = code == NamErrorCode::InvalidModelTopology
-                        || code == NamErrorCode::InvalidFeatureTopology;
-                    (code, is_topo)
-                } else {
-                    (NamErrorCode::ModelBuildFailed, false)
-                };
+                let (code, is_topo) =
+                    if let Some(topo_err) = e.chain().find_map(|c| c.downcast_ref::<TopologyError>()) {
+                        (topo_err.code, true)
+                    } else if let Some(&code) = e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>()) {
+                        let is_topo = matches!(
+                            code,
+                            NamErrorCode::InvalidModelTopology
+                                | NamErrorCode::InvalidFeatureTopology
+                                | NamErrorCode::NamJsonUnknownActivation
+                                | NamErrorCode::NamJsonSampleRateMismatch
+                        );
+                        (code, is_topo)
+                    } else {
+                        (NamErrorCode::ModelBuildFailed, false)
+                    };
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
              failed to build model (L) (detail: {}).",
@@ -731,12 +737,20 @@ fn build_model_pair_from_data(
         let mut model =
             dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false))
                 .map_err(|e| {
-                    let (code, is_topo) = if let Some(topo_err) = e.downcast_ref::<TopologyError>()
+                    let (code, is_topo) = if let Some(topo_err) =
+                        e.chain().find_map(|c| c.downcast_ref::<TopologyError>())
                     {
                         (topo_err.code, true)
-                    } else if let Some(&code) = e.downcast_ref::<NamErrorCode>() {
-                        let is_topo = code == NamErrorCode::InvalidModelTopology
-                            || code == NamErrorCode::InvalidFeatureTopology;
+                    } else if let Some(&code) =
+                        e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>())
+                    {
+                        let is_topo = matches!(
+                            code,
+                            NamErrorCode::InvalidModelTopology
+                                | NamErrorCode::InvalidFeatureTopology
+                                | NamErrorCode::NamJsonUnknownActivation
+                                | NamErrorCode::NamJsonSampleRateMismatch
+                        );
                         (code, is_topo)
                     } else {
                         (NamErrorCode::ModelBuildFailed, false)

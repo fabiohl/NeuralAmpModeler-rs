@@ -7,6 +7,7 @@
 //! only). Contains validation fns, A2 static/dynamic builders, and the A1
 //! topology match.
 
+use crate::common::diagnostics::NamErrorCode;
 use crate::loader::nam_json::{
     A2TopologyResult, NamLayerConfig, NamModelData, TopologyError, WavenetTopologyResult,
     get_wavenet_topology, validate_model_data,
@@ -125,6 +126,25 @@ pub(crate) fn reject_condition_dsp_lstm(cond_dsp_data: &NamModelData) -> anyhow:
 // A2 static fast-path builders
 // =============================================================================
 
+/// Classifies structured topology/weight errors surfaced by `set_weights` /
+/// `load_weights_inner` without breaking their `Result<(), String>` signatures.
+fn classify_a2_weight_error(prefix: &str, err: String) -> anyhow::Error {
+    let msg = format!("{prefix}: {err}");
+    if err.contains("FiLM config") {
+        anyhow::Error::new(NamErrorCode::InvalidModelTopology).context(msg)
+    } else if err.contains("unconsumed")
+        || err.contains("stream exhausted")
+        || err.contains("Insufficient")
+        || err.contains("truncated")
+        || err.contains("weight count")
+        || err.contains("WeightCountMismatch")
+    {
+        anyhow::Error::new(NamErrorCode::WeightCountMismatch).context(msg)
+    } else {
+        anyhow::anyhow!(msg)
+    }
+}
+
 /// Generic helper to build a static WaveNet A2 model with const-generic channels.
 fn build_wavenet_a2_static<const CH: usize>(
     data: &NamModelData,
@@ -143,7 +163,7 @@ fn build_wavenet_a2_static<const CH: usize>(
     model.set_layer_raw(layer_raw);
     model
         .set_weights(&data.weights)
-        .map_err(|e| anyhow::anyhow!("{name} weight load failed: {e}"))?;
+        .map_err(|e| classify_a2_weight_error(&format!("{name} weight load failed"), e))?;
     info!(
         "[Dispatcher] WaveNet {name} built — CH={CH}, layers=23, weights={}",
         data.weights.len()
@@ -291,6 +311,28 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
     let total_weights = data.weights.len();
     let mut weight_pos: usize = 0;
 
+    let declared_parent_in = data.config.in_channels;
+    let l0_in = data.config.layers[0].input_size;
+    if let (Some(p_in), Some(l_in)) = (declared_parent_in, l0_in)
+        && p_in != l_in
+    {
+        return Err(anyhow::Error::new(TopologyError {
+            code: NamErrorCode::InvalidModelTopology,
+            reason: format!(
+                "WaveNet config.in_channels ({p_in}) disagrees with layers[0].input_size ({l_in})"
+            ),
+        }));
+    }
+    let parent_in_channels = declared_parent_in.or(l0_in).unwrap_or(1);
+    if num_arrays > 1 && parent_in_channels != 1 {
+        return Err(anyhow::Error::new(TopologyError {
+            code: NamErrorCode::InvalidModelTopology,
+            reason: format!(
+                "WaveNet A2 multi-array cascade supports mono root input only (got in_channels={parent_in_channels})"
+            ),
+        }));
+    }
+
     // Validate all arrays (F-02/F-03/F-04: topology vectors are checked before
     // any allocation; a hostile layer count must never reach the builder).
     let mut resolved_topos: Vec<crate::loader::nam_json::A2TopologyVectors> =
@@ -306,7 +348,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             );
         }
         let in_ch = if ai == 0 {
-            layer_cfg.input_size.unwrap_or(1)
+            parent_in_channels
         } else {
             data.config.layers[ai - 1].channels.unwrap_or(1)
         };
@@ -361,8 +403,12 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             );
         }
         resolved_topos.push(
-            crate::loader::nam_json::validate_a2_layer_topology(layer_cfg)
-                .map_err(anyhow::Error::msg)?,
+            crate::loader::nam_json::validate_a2_layer_topology(layer_cfg).map_err(|reason| {
+                anyhow::Error::new(TopologyError {
+                    code: NamErrorCode::InvalidModelTopology,
+                    reason,
+                })
+            })?,
         );
     }
 
@@ -374,7 +420,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         let bottleneck = layer_cfg.bottleneck.unwrap_or(channels);
         let head_size = layer_cfg.head_size.unwrap_or(1);
         let input_channels = if ai == 0 {
-            layer_cfg.input_size.unwrap_or(1)
+            parent_in_channels
         } else {
             data.config.layers[ai - 1].channels.unwrap_or(1)
         };
@@ -537,7 +583,9 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
 
         model
             .load_weights_inner(&data.weights, &mut weight_pos, total_weights)
-            .map_err(|e| anyhow::anyhow!("A2-Dynamic array[{ai}] weight load failed: {e}"))?;
+            .map_err(|e| {
+                classify_a2_weight_error(&format!("A2-Dynamic array[{ai}] weight load failed"), e)
+            })?;
 
         arrays.push(model);
     }
@@ -576,20 +624,47 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
             return Err(crate::common::diagnostics::NamErrorCode::NamJsonSampleRateMismatch.into());
         }
         let cond_model = crate::loader::dispatcher::build_model(&cond_dsp_data)?;
+        let cond_in = cond_model.in_channels();
+        if cond_in != parent_in_channels {
+            return Err(anyhow::Error::new(TopologyError {
+                code: NamErrorCode::InvalidModelTopology,
+                reason: format!(
+                    "condition_dsp input channels ({cond_in}) do not match parent WaveNet input channels ({parent_in_channels})"
+                ),
+            }));
+        }
         let cond_out = cond_model.num_output_channels();
-        if cond_out > condition_size {
-            bail!(
-                "condition_dsp output channels ({}) exceed A2 condition_size ({})",
-                cond_out,
-                condition_size
-            );
+        if cond_out == 0 {
+            return Err(anyhow::Error::new(TopologyError {
+                code: NamErrorCode::InvalidModelTopology,
+                reason: "condition_dsp output channels must be >= 1".to_string(),
+            }));
+        }
+        for (ai, arr) in arrays.iter().enumerate() {
+            if cond_out > arr.condition_size {
+                return Err(anyhow::Error::new(TopologyError {
+                    code: NamErrorCode::InvalidModelTopology,
+                    reason: format!(
+                        "condition_dsp output channels ({cond_out}) exceed A2 array[{ai}] condition_size ({})",
+                        arr.condition_size
+                    ),
+                }));
+            }
         }
         info!(
-            "[Dispatcher] A2-Dynamic condition_dsp built — architecture={}, output_channels={}",
-            cond_dsp_data.architecture, cond_out
+            "[Dispatcher] A2-Dynamic condition_dsp built — architecture={}, in_channels={}, output_channels={}",
+            cond_dsp_data.architecture, cond_in, cond_out
         );
         Some(cond_model)
     } else {
+        if num_arrays == 1 && parent_in_channels != condition_size {
+            return Err(anyhow::Error::new(TopologyError {
+                code: NamErrorCode::InvalidModelTopology,
+                reason: format!(
+                    "WaveNet A2 without condition_dsp requires condition_size ({condition_size}) == input_channels ({parent_in_channels})"
+                ),
+            }));
+        }
         None
     };
 

@@ -407,16 +407,26 @@ impl WaveNetA2Cascade {
             if total == 0 || budget == 0 {
                 return total;
             }
-            let nf = budget.min(total).min(WAVENET_MAX_NUM_FRAMES);
-            let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-            let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-            self.process(&zeros[..nf], &mut discard[..nf]);
-            // The chained pass advances each subarray feed by exactly `nf`.
-            for arr in &mut self.arrays {
-                arr.prewarm_advance(nf);
+            let out_ch = self.arrays.last().map(|a| a.head_size.max(1)).unwrap_or(1);
+            if out_ch <= WAVENET_MAX_NUM_FRAMES {
+                let max_frames = (WAVENET_MAX_NUM_FRAMES / out_ch).max(1);
+                let nf = budget.min(total).min(max_frames);
+                let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+                let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+                self.process(&zeros[..nf], &mut discard[..nf * out_ch]);
+                // The chained pass advances each subarray feed by exactly `nf`.
+                for arr in &mut self.arrays {
+                    arr.prewarm_advance(nf);
+                }
+                self.prewarm_pending = self.prewarm_pending.saturating_sub(nf);
+                budget -= nf;
+            } else {
+                for arr in &mut self.arrays {
+                    arr.prewarm_advance(total);
+                }
+                self.prewarm_pending = 0;
+                return 0;
             }
-            self.prewarm_pending = self.prewarm_pending.saturating_sub(nf);
-            budget -= nf;
         }
     }
 

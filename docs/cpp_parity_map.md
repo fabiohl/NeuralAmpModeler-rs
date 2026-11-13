@@ -315,7 +315,8 @@ either measurement.
 
 `condition_dsp` embeds an auxiliary sub-model that modulates the main network:
 
-- **C++ Sizing & Assertions:** `_condition_output` has dimensions `[condition_dsp->NumOutputChannels(), maxBufferSize]` (`model.cpp:656-660`). C++ enforces a construction-time assertion that `layer_array.condition_size == condition_dsp->NumOutputChannels()`, throwing `std::runtime_error` on mismatch.
+- **C++ Sizing & Assertions:** `_condition_output` has dimensions `[condition_dsp->NumOutputChannels(), maxBufferSize]` (`model.cpp:656-660`). C++ enforces construction-time assertions that `condition_dsp->NumInputChannels() == NumInputChannels()` and `layer_array.condition_size == condition_dsp->NumOutputChannels()`, throwing `std::runtime_error` on mismatch.
+- **Parent Input, Layer-0, and Output Channel Validation:** Both the A1/dynamic dispatcher (`src/loader/dispatcher/wavenet/dynamic.rs`) and A2 factory (`src/loader/dispatcher/wavenet/static_factory.rs`) validate `condition_dsp.num_input_channels() == parent_in_channels`, enforce `config.in_channels == layers[0].input_size`, and validate `condition_dsp.num_output_channels() <= array.condition_size` across all layer arrays (while preserving documented P5 output broadcast when `dsp_ch < condition_size`). Unconditioned multi-array A2 cascades validate `condition_size <= parent_in_channels` across arrays and slice conditioning inputs by `condition_size` rather than residual `input_size` (`src/models/a2/model/dynamic/process.rs`).
 - **Python Trainer Constraints:** The upstream trainer (`nam/models/wavenet/_wavenet.py:142-155`) only supports WaveNet as `condition_dsp`; any other architecture raises `NotImplementedError`.
 - **Policy Rejection for LSTM Condition DSP:** Configurations specifying LSTM as `condition_dsp` are rejected fail-closed at load time (`Err("LSTM condition_dsp is not supported")`).
 - **f64 Oracle Independence:** `tests/parity/reference_oracle_f64.rs::test_oracle_vs_python_anchor_condition_lstm` feeds the fixture through the standalone f64 mathematical oracle, which does not pass through the production loader/dispatcher. It uses the fixture purely as an independent numeric reference and does **not** imply the model is loadable by either engine (see [§7.5](#75-concordant-rejection-ledger-known_gapcondition_lstm_rejected_by_both)).
@@ -345,7 +346,7 @@ The specification and conceptual foundation of the WaveNet A2 architecture origi
 - Activation = `LeakyReLU(0.01)`.
 - Zero active FiLM slots, gating disabled, `head1x1` disabled, groups = 1.
 
-Models matching these constraints route to `WaveNetA2<3>` or `WaveNetA2<8>`. Topologies with FiLM, gating, blending, cascade arrays, or non-unity groups route to `WaveNetA2Dyn` or `WaveNetA2Cascade`.
+Models matching these constraints route to `WaveNetA2<3>` or `WaveNetA2<8>`. Topologies with FiLM (including empty-object `{}` slots, which default `active = true, shift = true, groups = 1` per `NAM/wavenet/model.cpp:1205-1215`, vs. `a2_fast.cpp:823` only checking explicit `"active": true`), gating (`gating_mode` `"gated"`/`"blended"`, or legacy `gated: true`), blending, cascade arrays, or non-unity groups route to `WaveNetA2Dyn` or `WaveNetA2Cascade`. Malformed FiLM/gating/activation declarations fail closed (`E1221`/`E1305`) via `src/loader/nam_json/topology/a2.rs` and `src/loader/nam_json/topology/wavenet/a2_validation.rs`.
 
 ### 4.2 Measured Interop Metrics (Fast & Dynamic Paths)
 
@@ -676,15 +677,38 @@ Measured parity (release; 64-frame blocks; v2 stress signal at each rate):
 Rust-only loading semantics tightened to remove silent fallbacks while preserving
 upstream rejection outcomes:
 
-- **Activation parsing is fallible.** `try_parse_activation`
-  (`src/loader/nam_json/activation_parser.rs`) mirrors C++
-  `ActivationConfig::from_json` (`activations.cpp:59-130`): the full 12-name map
-  (including the `Hardtanh`/`Fasttanh` aliases), the documented parameter
-  defaults (`LeakyReLU` slope `0.01`; `LeakyHardtanh` `(-1,1,0.01,0.01)`;
-  `PReLU` scalar/vector/default `0.01`). An unknown name or non-string/object
-  JSON is rejected with `E1221 NAM_JSON_UNKNOWN_ACTIVATION`. The former
-  `_ => Tanh` fallback is retired, so a declared activation is either executed
-  exactly or the model is rejected.
+- **Activation parsing is fallible and fail-closed across primary, secondary, and post-stack heads.**
+  `try_parse_activation`, `parse_secondary_activations_from_json`, and post-stack head
+  activation parsing (`src/loader/nam_json/activation_parser.rs`,
+  `src/models/wavenet/post_stack_head.rs`) mirror C++ `ActivationConfig::from_json`
+  (`activations.cpp:59-130`): the full 12-name map (including `Hardtanh`/`Fasttanh`
+  aliases), documented parameter defaults (`LeakyReLU` slope `0.01`;
+  `LeakyHardtanh` `(-1,1,0.01,0.01)`; `PReLU` bare/scalar/vector with default
+  `0.01`), and channel-dimension validation for `PReLU` vector slopes against
+  layer `channels` / head `out_channels`. Unknown names or non-string/non-object
+  values return `E1221 NAM_JSON_UNKNOWN_ACTIVATION`, wrong-type/length parameters
+  or missing secondary activations on `gated`/`blended` layers return
+  `E1305` (`InvalidModelTopology`), and gated A2 construction
+  (`src/models/a2/model/dynamic/mod.rs`) never silently defaults a missing
+  secondary activation to `Sigmoid`.
+- **WaveNet gating precedence (`gating_mode > gated`).** Mirrors
+  `NAM/wavenet/model.cpp:1049-1064` across A1 guardrail
+  (`src/loader/nam_json/topology/wavenet/guardrail.rs`), A2 fast-path
+  classification (`src/loader/nam_json/topology/a2.rs`), and A2 dynamic weight
+  construction: `"gating_mode"` (`"none"`, `"gated"`, `"blended"`) overrides
+  legacy `"gated"` when present; invalid strings or non-bool/non-string field
+  types reject fail-closed with `E1305` (`InvalidModelTopology`).
+- **FiLM parameter parsing (`src/models/a2/model/set_weights.rs`).** Empty
+  JSON object `{}` defaults `active = true, shift = true, groups = 1` (matching
+  `NAM/wavenet/model.cpp:1205-1215`); `false` disables the slot, whereas
+  `true`, non-bool/non-object slot values, non-positive/non-integer `groups`, or
+  malformed legacy `config.film` values reject fail-closed with `E1305`
+  (`InvalidModelTopology`).
+- **Typed `LoadError::code()` preservation.** `build_model_with_prewarm`
+  (`src/loader/build.rs`) preserves `E1221` (`NamJsonUnknownActivation`),
+  `E1305` (`InvalidModelTopology`), `E1315` (`NamJsonSampleRateMismatch`),
+  and `E1302`/`E1303` (`WeightCountMismatch`) across loader and consumer
+  diagnostics instead of collapsing them into generic build failures.
 - **Per-family activation support.** The A1 static/dynamic engines implement only
   `Tanh`/`ReLU`; other *valid* variants are rejected with
   `E1215 NAM_JSON_UNSUPPORTED_TOPOLOGY` (never approximated). ConvNet and the
@@ -798,7 +822,7 @@ A parent WaveNet conditioned on 3 channels cannot consume a 1-channel condition 
 
 Static comparison against the pinned v0.6.0 identifies unresolved parity risks outside the fixture evidence above. The C++ post-stack head uses `kernel_sizes`, applies activation before each convolution, consumes head weights before `head_scale`, and scales its input before the head (`NAM/wavenet/model.cpp:21-44,86-100,664-673,855-866`). The Rust dynamic head parses a singular `kernel_size`, applies convolution before activation, consumes `head_scale` before head weights, and scales the head output (`src/loader/nam_json/model.rs:468-493`, `src/models/wavenet/post_stack_head.rs:220-239`, `src/loader/dispatcher/wavenet/dynamic.rs:269-297`, `src/models/wavenet/model_dyn.rs:464-480`). The f64 oracle explicitly excludes non-null post-stack heads (`src/testing/reference_oracle/mod.rs:91-98`). These observations are source-level, not a new differential rendering result; full loader routing, supported input domain and impact require a valid C++ fixture and independent oracle before claiming a reproduced audio defect.
 
-The activation guarantee above must not be assumed to cover every secondary activation: `parse_secondary_activations_from_json` uses fallible deserialization followed by `.ok()` (`src/loader/nam_json/activation_parser.rs:248-289`), and gated/blended A2 construction defaults a missing parsed secondary activation to Sigmoid (`src/models/a2/model/dynamic/mod.rs:316-335`). For example, `PReLU` requires `negative_slopes` in the Rust serde variant, while NAMcore accepts default and scalar PReLU parameters (`NAM/activations.cpp:59-113`). Confirm end-to-end loader routing with valid gated fixtures and separate unknown/absent fields before assigning runtime impact. No thresholds, pins or golden data were changed.
+End-to-end WaveNet parsing and validation gaps previously noted here are now resolved: secondary activations, `PReLU` bare/scalar/vector forms and channel-dimension validation (`src/loader/nam_json/activation_parser.rs`, `src/models/a2/model/dynamic/mod.rs`), gating precedence (`gating_mode > gated`), FiLM `{}`/`false`/type validation (`src/models/a2/model/set_weights.rs`), and `condition_dsp` parent/output channel validation (`src/loader/dispatcher/wavenet/dynamic.rs`, `src/loader/dispatcher/wavenet/static_factory.rs`) enforce fail-closed semantics with live C++ `namcore_render` and `f64` oracle parity verified in [`tests/models/wavenet_parsing_parity_test.rs`](../tests/models/wavenet_parsing_parity_test.rs). No thresholds, pins or golden data were changed.
 
 ---
 

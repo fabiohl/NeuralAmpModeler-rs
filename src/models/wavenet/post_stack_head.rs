@@ -90,6 +90,14 @@ impl PostStackHead {
         if kernel > MAX_HEAD_KERNEL_SIZE {
             return Err(NamErrorCode::InvalidModelTopology);
         }
+        if let ActivationType::PReLU {
+            ref negative_slopes,
+        } = activation
+            && (negative_slopes.is_empty()
+                || (negative_slopes.len() != 1 && negative_slopes.len() != out_channels))
+        {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
 
         let num_blocks = out_channels.div_ceil(4);
         // Defense-in-depth (F-RES2-02/F-RES2-03): checked size arithmetic so a

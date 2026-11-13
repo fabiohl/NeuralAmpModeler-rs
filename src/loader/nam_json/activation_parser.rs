@@ -85,6 +85,9 @@ pub(crate) fn try_parse_activation(v: &serde_json::Value) -> Result<ActivationTy
                         slopes
                             .push(e.as_f64().ok_or(NamErrorCode::NamJsonUnknownActivation)? as f32);
                     }
+                    if slopes.is_empty() {
+                        return Err(NamErrorCode::NamJsonUnknownActivation);
+                    }
                     return Ok(ActivationType::PReLU {
                         negative_slopes: slopes,
                     });
@@ -142,8 +145,9 @@ pub fn parse_layer_activations(
             num_layers
         ],
     };
-    let gating_modes = parse_gating_modes_from_json(raw, num_layers);
-    let secondary_activations = parse_secondary_activations_from_json(raw, num_layers);
+    let (gating_modes, used_legacy_gated) = parse_gating_modes_with_source(raw, num_layers)?;
+    let secondary_activations =
+        parse_secondary_activations_for_modes(raw, &gating_modes, used_legacy_gated)?;
 
     Ok(LayerActivationConfig {
         activations,
@@ -199,98 +203,157 @@ pub fn parse_activations_from_json(
     Err(NamErrorCode::NamJsonUnknownActivation)
 }
 
-/// Parses the `gating_mode` JSON array into `Vec<GatingMode>`.
-///
-/// If the field is absent or null, returns a vector of `GatingMode::None`
-/// with length `num_layers`.
-///
-/// Also handles single-string gating mode (e.g. `"gated"`)
-/// used by A2 generic topologies, replicating the value across all layers.
-pub fn parse_gating_modes_from_json(raw: &serde_json::Value, num_layers: usize) -> Vec<GatingMode> {
-    // Single-string gating mode: replicate across all layers (A2 generic).
-    if let Some(s) = raw.get("gating_mode").and_then(|v| v.as_str()) {
-        let mode = match s {
-            "gated" => GatingMode::Gated,
-            "blended" => GatingMode::Blended,
-            _ => GatingMode::None,
-        };
-        return vec![mode; num_layers];
+/// Internal helper returning `(gating_modes, used_legacy_gated)` so
+/// [`parse_layer_activations`] preserves C++ precedence and legacy `gated: true`
+/// behavior (`Sigmoid` secondary activation, ignoring stray `secondary_activation`).
+fn parse_gating_modes_with_source(
+    raw: &serde_json::Value,
+    num_layers: usize,
+) -> Result<(Vec<GatingMode>, bool), NamErrorCode> {
+    if let Some(v) = raw.get("gating_mode") {
+        if let Some(s) = v.as_str() {
+            let mode = match s {
+                "none" => GatingMode::None,
+                "gated" => GatingMode::Gated,
+                "blended" => GatingMode::Blended,
+                _ => return Err(NamErrorCode::InvalidModelTopology),
+            };
+            return Ok((vec![mode; num_layers], false));
+        }
+        if let Some(arr) = v.as_array() {
+            if arr.len() != num_layers {
+                return Err(NamErrorCode::InvalidModelTopology);
+            }
+            let mut out = Vec::with_capacity(num_layers);
+            for entry in arr {
+                let mode = match entry.as_str() {
+                    Some("none") => GatingMode::None,
+                    Some("gated") => GatingMode::Gated,
+                    Some("blended") => GatingMode::Blended,
+                    _ => return Err(NamErrorCode::InvalidModelTopology),
+                };
+                out.push(mode);
+            }
+            return Ok((out, false));
+        }
+        return Err(NamErrorCode::InvalidModelTopology);
     }
 
-    let arr = match raw.get("gating_mode") {
-        None | Some(serde_json::Value::Null) => {
-            return vec![GatingMode::None; num_layers];
-        }
-        Some(v) => match v.as_array() {
-            Some(a) if a.len() == num_layers => a,
-            _ => return vec![GatingMode::None; num_layers],
-        },
-    };
-    let mut out = Vec::with_capacity(num_layers);
-    for entry in arr {
-        let mode = match entry.as_str() {
-            Some("gated") => GatingMode::Gated,
-            Some("blended") => GatingMode::Blended,
-            _ => GatingMode::None,
-        };
-        out.push(mode);
+    match raw.get("gated") {
+        None => Ok((vec![GatingMode::None; num_layers], false)),
+        Some(serde_json::Value::Bool(true)) => Ok((vec![GatingMode::Gated; num_layers], true)),
+        Some(serde_json::Value::Bool(false)) => Ok((vec![GatingMode::None; num_layers], false)),
+        Some(_) => Err(NamErrorCode::InvalidModelTopology),
     }
-    out
 }
 
-/// Parses the `secondary_activation` JSON array into `Vec<Option<ActivationType>>`.
+/// Parses the `gating_mode` (or legacy `gated`) field into `Vec<GatingMode>`.
 ///
-/// If the field is absent or null, returns a vector of `None` with length
-/// `num_layers`. Individual null entries are mapped to `None`.
+/// Follows C++ `WaveNet::parse_config_json` precedence: `gating_mode` overrides
+/// `gated`. Absent fields default to [`GatingMode::None`]. Invalid strings,
+/// non-string elements (including `null`), wrong-length arrays, or non-boolean
+/// `gated` values are rejected fail-closed.
+pub fn parse_gating_modes_from_json(
+    raw: &serde_json::Value,
+    num_layers: usize,
+) -> Result<Vec<GatingMode>, NamErrorCode> {
+    parse_gating_modes_with_source(raw, num_layers).map(|(modes, _)| modes)
+}
+
+/// Context-aware `secondary_activation` resolution for a resolved gating vector.
+fn parse_secondary_activations_for_modes(
+    raw: &serde_json::Value,
+    gating_modes: &[GatingMode],
+    used_legacy_gated: bool,
+) -> Result<Vec<Option<ActivationType>>, NamErrorCode> {
+    let num_layers = gating_modes.len();
+    if used_legacy_gated {
+        return Ok(vec![Some(ActivationType::Sigmoid); num_layers]);
+    }
+
+    let any_active = gating_modes.iter().any(|&m| m != GatingMode::None);
+    if !any_active {
+        if let Some(arr) = raw.get("secondary_activation").and_then(|v| v.as_array())
+            && arr.len() != num_layers
+        {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        return Ok(vec![None; num_layers]);
+    }
+
+    match raw.get("secondary_activation") {
+        None => Ok(gating_modes
+            .iter()
+            .map(|&m| {
+                if m == GatingMode::None {
+                    None
+                } else {
+                    Some(ActivationType::Sigmoid)
+                }
+            })
+            .collect()),
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != num_layers {
+                return Err(NamErrorCode::InvalidModelTopology);
+            }
+            let mut out = Vec::with_capacity(num_layers);
+            for (entry, &mode) in arr.iter().zip(gating_modes.iter()) {
+                if mode == GatingMode::None {
+                    out.push(None);
+                } else {
+                    out.push(Some(try_parse_activation(entry)?));
+                }
+            }
+            Ok(out)
+        }
+        Some(v) => {
+            let parsed = try_parse_activation(v)?;
+            Ok(gating_modes
+                .iter()
+                .map(|&m| {
+                    if m == GatingMode::None {
+                        None
+                    } else {
+                        Some(parsed.clone())
+                    }
+                })
+                .collect())
+        }
+    }
+}
+
+/// Parses the `secondary_activation` JSON field into `Vec<Option<ActivationType>>`.
 ///
-/// Also handles single-object/single-string secondary activation
-/// (e.g. `"Hardswish"`), replicating across all layers.
+/// Supports absent/`null`/`"none"`/`""` (all `None`), per-layer arrays (with `null`
+/// permitted on slots), single-string bare names, and activation config objects
+/// (including `PReLU` bare/scalar/vector) via `try_parse_activation`. Any
+/// unrecognized or malformed entry fails closed with
+/// [`NamErrorCode::NamJsonUnknownActivation`].
 pub fn parse_secondary_activations_from_json(
     raw: &serde_json::Value,
     num_layers: usize,
-) -> Vec<Option<ActivationType>> {
-    let parse = |value: &serde_json::Value| {
-        // ActivationType is internally tagged; NAM also permits a bare name.
-        let tagged = match value.as_str() {
-            Some(name) => serde_json::json!({ "type": name }),
-            None => value.clone(),
-        };
-        serde_json::from_value(tagged).ok()
-    };
-    // Single-value secondary activation (object or string): replicate across all layers.
-    if let Some(v) = raw.get("secondary_activation") {
-        if let Some(s) = v.as_str() {
-            if s.is_empty() || s.eq_ignore_ascii_case("none") {
-                return vec![None; num_layers];
+) -> Result<Vec<Option<ActivationType>>, NamErrorCode> {
+    match raw.get("secondary_activation") {
+        None | Some(serde_json::Value::Null) => Ok(vec![None; num_layers]),
+        Some(serde_json::Value::String(s)) if s.is_empty() || s.eq_ignore_ascii_case("none") => {
+            Ok(vec![None; num_layers])
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != num_layers {
+                return Err(NamErrorCode::NamJsonUnknownActivation);
             }
-            let at = parse(v);
-            return vec![at; num_layers];
+            let mut out = Vec::with_capacity(num_layers);
+            for entry in arr {
+                if entry.is_null() {
+                    out.push(None);
+                } else {
+                    out.push(Some(try_parse_activation(entry)?));
+                }
+            }
+            Ok(out)
         }
-        if v.is_object() {
-            let at = parse(v);
-            return vec![at; num_layers];
-        }
+        Some(v) => Ok(vec![Some(try_parse_activation(v)?); num_layers]),
     }
-
-    let arr = match raw.get("secondary_activation") {
-        None | Some(serde_json::Value::Null) => {
-            return vec![None; num_layers];
-        }
-        Some(v) => match v.as_array() {
-            Some(a) if a.len() == num_layers => a,
-            _ => return vec![None; num_layers],
-        },
-    };
-    let mut out = Vec::with_capacity(num_layers);
-    for entry in arr {
-        if entry.is_null() {
-            out.push(None);
-        } else {
-            let at = parse(entry);
-            out.push(at);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

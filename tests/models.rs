@@ -71,6 +71,8 @@ mod loader_stderr_hygiene;
 mod reset_matrix_test;
 #[path = "models/wavenet_clone_exact_test.rs"]
 mod wavenet_clone_exact_test;
+#[path = "models/wavenet_parsing_parity_test.rs"]
+mod wavenet_parsing_parity_test;
 
 // ── Activation Precision & FSM Submodules ────────────────────────────────────
 #[path = "models/activation_contract_test.rs"]

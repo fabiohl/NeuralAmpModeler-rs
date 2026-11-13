@@ -75,25 +75,20 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
                     has_a2_feature = true;
                     break;
                 }
-                // FiLM slots are A2-specific.
-                for key in &[
-                    "conv_pre_film",
-                    "conv_post_film",
-                    "input_mixin_pre_film",
-                    "input_mixin_post_film",
-                    "activation_pre_film",
-                    "activation_post_film",
-                    "layer1x1_post_film",
-                    "head1x1_post_film",
-                ] {
-                    if raw
-                        .get(key)
-                        .and_then(|v| v.get("active"))
-                        .and_then(|a| a.as_bool())
-                        .unwrap_or(false)
-                    {
-                        has_a2_feature = true;
-                        break;
+                // FiLM slots are A2-specific (object defaults active=true in C++ model.cpp:1209).
+                for &(key, _) in FILM_KEYS {
+                    match raw.get(key) {
+                        None | Some(serde_json::Value::Bool(false)) => {}
+                        Some(serde_json::Value::Object(obj)) => {
+                            if obj.get("active").and_then(|a| a.as_bool()) != Some(false) {
+                                has_a2_feature = true;
+                                break;
+                            }
+                        }
+                        Some(_) => {
+                            has_a2_feature = true;
+                            break;
+                        }
                     }
                 }
                 // Array/object activation is A2-specific (standard WaveNet uses
@@ -210,8 +205,14 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
             return Some(A2TopologyResult::Dynamic);
         }
 
-        // 13. gating_mode: all "none" or absent
+        // 13. gating_mode: all "none" or absent, AND legacy gated != true (a2_fast.cpp:923-925)
         if !check_gating_mode_all_none(raw, A2_NUM_LAYERS) {
+            return Some(A2TopologyResult::Dynamic);
+        }
+        if raw.get("gating_mode").is_none()
+            && (l0.gated == Some(true)
+                || raw.get("gated").is_some_and(|v| v.as_bool() != Some(false)))
+        {
             return Some(A2TopologyResult::Dynamic);
         }
 
@@ -252,6 +253,12 @@ pub fn is_a2_shape(data: &NamModelData) -> Option<A2TopologyResult> {
         if !check_not_slimmable(raw) {
             return Some(A2TopologyResult::Dynamic);
         }
+        // Legacy gated=true without layer_raw still requires Dynamic fallback.
+        if l0.gated == Some(true) {
+            return Some(A2TopologyResult::Dynamic);
+        }
+    } else if l0.gated == Some(true) {
+        return Some(A2TopologyResult::Dynamic);
     }
 
     Some(A2TopologyResult::KnownFastPath(ch))
@@ -293,18 +300,18 @@ fn check_activations_are_leaky_relu(
     true
 }
 
-/// Checks that `gating_mode` is absent, null, or an array of all "none".
+/// Checks that `gating_mode` is absent or an array of all `"none"` (or scalar `"none"`?
+/// Fast-path always expects 23-layer array of `"none"`, matching `a2_fast.cpp`).
+/// Null or invalid types return `false` so Dynamic parses and fails closed.
 fn check_gating_mode_all_none(raw: &serde_json::Value, num_layers: usize) -> bool {
     match raw.get("gating_mode") {
-        None | Some(serde_json::Value::Null) => true,
+        None => true,
         Some(arr) => {
             let elems = match arr.as_array() {
                 Some(a) if a.len() == num_layers => a,
                 _ => return false,
             };
-            elems
-                .iter()
-                .all(|v| v.as_str() == Some("none") || v.is_null())
+            elems.iter().all(|v| v.as_str() == Some("none"))
         }
     }
 }
@@ -359,19 +366,19 @@ fn check_layer_array_head(raw: &serde_json::Value) -> bool {
     obj.get("bias").and_then(|b| b.as_bool()) == Some(true)
 }
 
-/// Checks that all 8 FiLM keys are inactive (absent, null, not an object, or active==false).
+/// Checks that all 8 FiLM keys are explicitly inactive (`absent`, `false`, or object with `active: false`).
+/// Omitted `"active"` in an object defaults to `true` (C++ `model.cpp:1209`) and non-object/non-`false`
+/// values route to `Dynamic` so `parse_single_film_config` can fail closed cleanly.
 fn check_film_all_inactive(raw: &serde_json::Value) -> bool {
     for &(key, _) in FILM_KEYS {
         match raw.get(key) {
-            None | Some(serde_json::Value::Null) => continue,
-            Some(v) => match v.as_object() {
-                Some(obj) => {
-                    if obj.get("active").and_then(|a| a.as_bool()) == Some(true) {
-                        return false;
-                    }
+            None | Some(serde_json::Value::Bool(false)) => continue,
+            Some(serde_json::Value::Object(obj)) => {
+                if obj.get("active") != Some(&serde_json::Value::Bool(false)) {
+                    return false;
                 }
-                None => continue,
-            },
+            }
+            Some(_) => return false,
         }
     }
     true

@@ -133,8 +133,11 @@ pub(crate) fn a2_read_activation(
 
 pub(crate) fn a2_read_secondary_activation(raw: &serde_json::Value, li: usize) -> ActivationConfig {
     // Single-value secondary activation (object or string): same value for all layers.
-    // Mirrors production `parse_secondary_activations_from_json` (string → {"type": name}).
     // Empty string / "none" means absent → Sigmoid default (unused when gating is None).
+    if raw.get("gating_mode").is_none() && raw.get("gated").and_then(|v| v.as_bool()) == Some(true)
+    {
+        return ActivationConfig::Sigmoid;
+    }
     if let Some(v) = raw.get("secondary_activation") {
         if let Some(s) = v.as_str() {
             if s.is_empty() || s.eq_ignore_ascii_case("none") {
@@ -162,8 +165,7 @@ pub(crate) fn a2_read_secondary_activation(raw: &serde_json::Value, li: usize) -
 }
 
 pub(crate) fn a2_read_gating_mode(raw: &serde_json::Value, li: usize) -> GatingModeOracle {
-    // Single-string gating mode (A2 generic / condition_dsp): replicate across layers.
-    // Mirrors production `parse_gating_modes_from_json`.
+    // Follows C++ `WaveNet::parse_config_json` precedence: `gating_mode` overrides `gated`.
     if let Some(s) = raw.get("gating_mode").and_then(|v| v.as_str()) {
         return match s {
             "gated" => GatingModeOracle::Gated,
@@ -181,6 +183,10 @@ pub(crate) fn a2_read_gating_mode(raw: &serde_json::Value, li: usize) -> GatingM
             "blended" => GatingModeOracle::Blended,
             _ => GatingModeOracle::None,
         };
+    }
+    if raw.get("gating_mode").is_none() && raw.get("gated").and_then(|v| v.as_bool()) == Some(true)
+    {
+        return GatingModeOracle::Gated;
     }
     GatingModeOracle::None
 }
@@ -233,12 +239,24 @@ impl ActivationConfig {
             // Production `activation_parser.rs` wraps bare names as {"type": name}
             // and `ActivationType` carries `#[serde(alias)]` for NAM spellings.
             return match s {
-                "HardTanh" => Self::HardTanh,
-                "FastTanh" => Self::FastTanh,
+                "HardTanh" | "Hardtanh" => Self::HardTanh,
+                "FastTanh" | "Fasttanh" => Self::FastTanh,
                 "ReLU" => Self::ReLU,
+                "LeakyReLU" => Self::LeakyReLU {
+                    negative_slope: 0.01,
+                },
+                "PReLU" => Self::PReLU {
+                    negative_slopes: vec![0.01],
+                },
                 "Sigmoid" => Self::Sigmoid,
                 "SiLU" => Self::SiLU,
                 "HardSwish" | "Hardswish" => Self::HardSwish,
+                "LeakyHardTanh" | "LeakyHardtanh" => Self::LeakyHardTanh {
+                    min_val: -1.0,
+                    max_val: 1.0,
+                    min_slope: 0.01,
+                    max_slope: 0.01,
+                },
                 "Softsign" => Self::Softsign,
                 "Tanh" => Self::Tanh,
                 other => panic!("reference oracle: unknown activation string {other:?}"),
@@ -265,19 +283,23 @@ impl ActivationConfig {
                     negative_slope: slope,
                 }
             }
-            // Production `PReLU { negative_slopes }` — per-channel slopes.
-            // Mirrors `prelu_slice` cycling semantics (`slopes[idx % len]`).
+            // Production `PReLU { negative_slopes }` — scalar or per-channel slopes.
             "PReLU" => {
-                let slopes = obj
-                    .get("negative_slopes")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_f64()).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                if slopes.is_empty() {
-                    panic!("reference oracle: PReLU with empty negative_slopes");
-                } else {
+                if let Some(s) = obj.get("negative_slope").and_then(|v| v.as_f64()) {
+                    Self::PReLU {
+                        negative_slopes: vec![s],
+                    }
+                } else if let Some(arr) = obj.get("negative_slopes").and_then(|v| v.as_array()) {
+                    let slopes: Vec<f64> = arr.iter().filter_map(|x| x.as_f64()).collect();
+                    if slopes.is_empty() {
+                        panic!("reference oracle: PReLU with empty negative_slopes");
+                    }
                     Self::PReLU {
                         negative_slopes: slopes,
+                    }
+                } else {
+                    Self::PReLU {
+                        negative_slopes: vec![0.01],
                     }
                 }
             }
@@ -481,7 +503,7 @@ pub(crate) fn build_a2_arrays(
             for &(key, idx) in FILM_KEYS {
                 let cfg = raw.get(key).and_then(|v| v.as_object());
                 if let Some(obj) = cfg {
-                    let a = obj.get("active").and_then(|a| a.as_bool()).unwrap_or(false);
+                    let a = obj.get("active").and_then(|a| a.as_bool()).unwrap_or(true);
                     if a {
                         active[idx] = true;
                     }

@@ -23,7 +23,7 @@ use super::layout;
 use super::static_factory::reject_condition_dsp_lstm;
 use crate::loader::dispatcher::checked_arith;
 use crate::loader::nam_json::{
-    FreeWavenetGeometry, NamModelData, WavenetTopologyResult, get_wavenet_topology,
+    FreeWavenetGeometry, NamModelData, TopologyError, WavenetTopologyResult, get_wavenet_topology,
     validate_model_data,
 };
 use crate::math::common::AlignedVec;
@@ -215,6 +215,28 @@ fn build_wavenet_dynamic_inner(
         anyhow::bail!("WaveNet dynamic engine requires at least 1 layer array");
     }
 
+    let declared_parent_in = data.config.in_channels;
+    let l0_in = data.config.layers.first().and_then(|l| l.input_size);
+    if let (Some(p_in), Some(l_in)) = (declared_parent_in, l0_in)
+        && p_in != l_in
+    {
+        return Err(anyhow::Error::new(TopologyError {
+            code: crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+            reason: format!(
+                "WaveNet config.in_channels ({p_in}) disagrees with layers[0].input_size ({l_in})"
+            ),
+        }));
+    }
+    let parent_in_channels = declared_parent_in.or(l0_in).unwrap_or(1);
+    if parent_in_channels != 1 {
+        return Err(anyhow::Error::new(TopologyError {
+            code: crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+            reason: format!(
+                "WaveNet A1 dynamic engine supports mono input only (got in_channels={parent_in_channels})"
+            ),
+        }));
+    }
+
     let ch = geom.channels[0];
     let head = geom.head_sizes[0];
     let cond = geom.condition_size;
@@ -336,18 +358,38 @@ fn build_wavenet_dynamic_inner(
 
         let cond_model = build_sub_model(&cond_dsp_data, depth + 1, container_depth)?;
 
+        let cond_in = cond_model.in_channels();
+        if cond_in != parent_in_channels {
+            return Err(anyhow::Error::new(TopologyError {
+                code: crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+                reason: format!(
+                    "condition_dsp input channels ({cond_in}) do not match parent WaveNet input channels ({parent_in_channels})"
+                ),
+            }));
+        }
+
         let cond_out = cond_model.num_output_channels();
-        if cond_out > cond {
-            anyhow::bail!(
-                "condition_dsp output channels ({}) exceed WaveNet condition_size ({})",
-                cond_out,
-                cond
-            );
+        if cond_out == 0 {
+            return Err(anyhow::Error::new(TopologyError {
+                code: crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+                reason: "condition_dsp output channels must be >= 1".to_string(),
+            }));
+        }
+        for (ai, layer_cfg) in data.config.layers.iter().enumerate() {
+            let layer_cond = layer_cfg.condition_size.unwrap_or(cond);
+            if cond_out > layer_cond {
+                return Err(anyhow::Error::new(TopologyError {
+                    code: crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+                    reason: format!(
+                        "condition_dsp output channels ({cond_out}) exceed WaveNet array[{ai}] condition_size ({layer_cond})"
+                    ),
+                }));
+            }
         }
 
         info!(
-            "[Dispatcher] condition_dsp built — architecture={}, output_channels={}",
-            cond_dsp_data.architecture, cond_out
+            "[Dispatcher] condition_dsp built — architecture={}, in_channels={}, output_channels={}",
+            cond_dsp_data.architecture, cond_in, cond_out
         );
 
         Some(cond_model)

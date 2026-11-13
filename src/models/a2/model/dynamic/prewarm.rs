@@ -80,13 +80,23 @@ impl WaveNetA2Dyn {
     pub fn prewarm_step(&mut self, samples: usize) -> usize {
         let n = samples.min(self.prewarm_pending);
         if n > 0 {
-            let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-            let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-            let mut fed = 0usize;
-            while fed < n {
-                let nf = (n - fed).min(WAVENET_MAX_NUM_FRAMES);
-                self.process(&zeros[..nf], &mut discard[..nf]);
-                fed += nf;
+            let in_ch = self.input_channels.max(1);
+            let out_ch = self.head_size.max(1);
+            let width = in_ch.max(out_ch);
+            if width <= WAVENET_MAX_NUM_FRAMES {
+                let max_chunk_frames = (WAVENET_MAX_NUM_FRAMES / width).max(1);
+                let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+                let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+                let mut fed = 0usize;
+                while fed < n {
+                    let nf = (n - fed).min(max_chunk_frames);
+                    self.process(&zeros[..nf * in_ch], &mut discard[..nf * out_ch]);
+                    fed += nf;
+                }
+            } else {
+                log::warn!(
+                    "[WaveNetA2Dyn::prewarm_step] Channel width {width} exceeds WAVENET_MAX_NUM_FRAMES ({WAVENET_MAX_NUM_FRAMES}); skipping zero-alloc incremental feed"
+                );
             }
             self.prewarm_pending -= n;
         }

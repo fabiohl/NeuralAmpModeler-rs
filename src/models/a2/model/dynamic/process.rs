@@ -74,8 +74,9 @@ impl WaveNetA2Dyn {
         // `head_size` interleaved channels are written per frame; the frame
         // count is bounded by both the input length and the output capacity in
         // frames.
+        let in_ch = self.input_channels.max(1);
         let out_ch = self.head_size.max(1);
-        let total = input.len().min(output.len() / out_ch);
+        let total = (input.len() / in_ch).min(output.len() / out_ch);
         if total == 0 {
             return;
         }
@@ -112,7 +113,7 @@ impl WaveNetA2Dyn {
             // for per-layer mixin and FiLM (C++ _process_condition pattern).
             if let Some(cond_dsp) = self.condition_dsp.as_mut() {
                 cond_dsp.process(
-                    &input[pos..pos + nf],
+                    &input[pos * in_ch..(pos + nf) * in_ch],
                     &mut self.condition_dsp_output[0..nf * cond_size],
                 );
                 let dsp_ch = cond_dsp.num_output_channels();
@@ -266,7 +267,7 @@ impl WaveNetA2Dyn {
         } else {
             for f in 0..nf {
                 let base = f * channels;
-                let in_base = pos + f * in_ch;
+                let in_base = (pos + f) * in_ch;
                 for c in 0..channels {
                     let mut sum = 0.0f32;
                     for ic in 0..in_ch {
@@ -344,10 +345,13 @@ impl WaveNetA2Dyn {
             buf[bs..bs + nf * channels].copy_from_slice(&self.layer_in[..nf * channels]);
             // Apply conv_pre_film on new frames.
             // With condition_dsp, the condition signal is multi-channel (cond_size > 1).
+            // Without condition_dsp, the conditioning signal is the parent input (stride `cond_size`,
+            // which equals `parent_in_channels`, NOT the previous cascade array's `input_channels`).
+            let cond_ch = cond_size.max(1);
             let cond_buf: &[f32] = if use_cond_dsp {
                 &self.condition_dsp_output[..nf * cond_size]
             } else {
-                &input[pos..pos + nf]
+                &input[pos * cond_ch..(pos + nf) * cond_ch]
             };
             if let Some(ref mut film) = self.layers[li].conv_pre_film {
                 for f in 0..nf {
@@ -388,10 +392,11 @@ impl WaveNetA2Dyn {
             let mut blending_config = self.blending_configs[li].as_mut();
             let activation = &self.activations[li];
 
+            let cond_ch = cond_size.max(1);
             let cond_buf: &[f32] = if use_cond_dsp {
                 &self.condition_dsp_output[..nf * cond_size]
             } else {
-                &input[pos..pos + nf]
+                &input[pos * cond_ch..(pos + nf) * cond_ch]
             };
 
             // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).

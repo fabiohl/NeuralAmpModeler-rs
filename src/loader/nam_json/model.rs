@@ -166,6 +166,20 @@ impl NamLayerConfig {
         let raw = match self.layer_raw.as_ref() {
             Some(r) => r,
             None => {
+                let (gating_modes, secondary_activations) = if self.gated == Some(true) {
+                    (
+                        vec![crate::models::a2::gating::GatingMode::Gated; num_layers],
+                        vec![
+                            Some(crate::models::a2::activations::ActivationType::Sigmoid);
+                            num_layers
+                        ],
+                    )
+                } else {
+                    (
+                        vec![crate::models::a2::gating::GatingMode::None; num_layers],
+                        vec![None; num_layers],
+                    )
+                };
                 return Ok(super::activation_parser::LayerActivationConfig {
                     activations: vec![
                         crate::models::a2::activations::ActivationType::LeakyReLU {
@@ -173,12 +187,23 @@ impl NamLayerConfig {
                         };
                         num_layers
                     ],
-                    gating_modes: vec![crate::models::a2::gating::GatingMode::None; num_layers],
-                    secondary_activations: vec![None; num_layers],
+                    gating_modes,
+                    secondary_activations,
                 });
             }
         };
-        super::activation_parser::parse_layer_activations(raw, num_layers)
+        let mut cfg = super::activation_parser::parse_layer_activations(raw, num_layers)?;
+        if raw.get("gating_mode").is_none()
+            && raw.get("gated").is_none()
+            && self.gated == Some(true)
+        {
+            cfg.gating_modes
+                .fill(crate::models::a2::gating::GatingMode::Gated);
+            cfg.secondary_activations.fill(Some(
+                crate::models::a2::activations::ActivationType::Sigmoid,
+            ));
+        }
+        Ok(cfg)
     }
 }
 

@@ -558,11 +558,9 @@ fn is_a2_model(model_data: &NamModelData) -> bool {
                     return true;
                 }
                 for key in FILM_KEYS.iter().map(|(k, _)| *k) {
-                    if raw
-                        .get(key)
-                        .and_then(|v| v.get("active"))
-                        .and_then(|a| a.as_bool())
-                        .unwrap_or(false)
+                    if let Some(v) = raw.get(key)
+                        && v.is_object()
+                        && v.get("active").and_then(|a| a.as_bool()).unwrap_or(true)
                     {
                         return true;
                     }

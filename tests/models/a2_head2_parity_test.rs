@@ -65,7 +65,7 @@ fn build_head_model(head_size: usize, head_w: &[f32], head_b: &[f32], scale: f32
                     "kernel_size": 1,
                     "dilations": [1],
                     "activation": {{"type": "ReLU"}},
-                    "gating_mode": null
+                    "gating_mode": "none"
                 }}]
             }},
             "weights": {weights:?}

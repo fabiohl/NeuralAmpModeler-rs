@@ -476,12 +476,46 @@ fn test_parse_single_film_config_inactive() {
 }
 
 #[test]
-fn test_parse_single_film_config_not_object() {
+fn test_parse_single_film_config_empty_object_defaults_active_and_shift_true() {
     let raw = serde_json::json!({
-        "my_film": "not an object"
+        "my_film": {}
+    });
+    let config = parse_single_film_config(&raw, "my_film").unwrap();
+    assert!(
+        config.active,
+        "FiLM object omitting 'active' defaults to true (C++ model.cpp:1209)"
+    );
+    assert!(
+        config.shift,
+        "FiLM object omitting 'shift' defaults to true"
+    );
+    assert_eq!(config.groups, 1);
+}
+
+#[test]
+fn test_parse_single_film_config_bool_false_inactive() {
+    let raw = serde_json::json!({
+        "my_film": false
     });
     let config = parse_single_film_config(&raw, "my_film").unwrap();
     assert_eq!(config, FiLMConfig::default());
+}
+
+#[test]
+fn test_parse_single_film_config_invalid_types_rejected() {
+    for invalid in [
+        serde_json::json!({ "my_film": "not an object" }),
+        serde_json::json!({ "my_film": true }),
+        serde_json::json!({ "my_film": null }),
+        serde_json::json!({ "my_film": 42 }),
+        serde_json::json!({ "my_film": { "active": "yes" } }),
+        serde_json::json!({ "my_film": { "active": true, "shift": "yes" } }),
+    ] {
+        assert!(
+            parse_single_film_config(&invalid, "my_film").is_err(),
+            "invalid FiLM payload must be rejected: {invalid}"
+        );
+    }
 }
 
 #[test]
