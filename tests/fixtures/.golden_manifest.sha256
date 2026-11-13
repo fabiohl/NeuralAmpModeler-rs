@@ -215,6 +215,8 @@ d6b720eeb0491292ad86dd55aaf00f550a2d6a1024687ffcdc26c491b716745b f64_anchors/wav
 b4ed110bd69e6beb07776935f34c47d9cccee23f3b3e484545000fdd9f7b5cf0 f64_anchors/wavenet_official_256_f64.bin
 
 # =============================================================================
+3d30d8f066030da67a75148448278759f4e9a199dc06390249ddf79e51cf739f f64_anchors/wavenet_geometry_256_input.bin
+cbd6e0d97d70b60ee8f970afb58cacfd5612e5cef09784c0f10ae010323a41ef f64_anchors/wavenet_per_layer_kernels_256_f64.bin
 # GENERATORS — fixture generator scripts (sha256 checksums)
 # If a generator hash differs from the committed SHA, its fixtures may be
 # stale — re-generate with: ./tests/fixtures/golden_gen_build.sh
@@ -234,6 +236,7 @@ aa4634f154b343323407fb66f651d54fe8ef0dc6cc57100fb4c33f4a2e6cb25d tools/qa/src/bi
 b9c4d1353435f3f71ffebe03a89f6db7fcfb03b2faab7797d250e142c9fa1687 utils/check-model.sh
 
 # =============================================================================
+2f7c9a7b3154d12a92ff359830191cb883489f15f49ea3b4400c58f8866c1e08 tests/fixtures/generate_wavenet_geometry_fixtures.py
 # MODEL-REGISTRY — every .nam model in the CATALOG (reverse-check reference)
 # =============================================================================
 # MODEL-REGISTRY: BossWN-standard.nam
@@ -307,3 +310,4 @@ b9c4d1353435f3f71ffebe03a89f6db7fcfb03b2faab7797d250e142c9fa1687 utils/check-mod
 # MODEL-REGISTRY: wavenet_post_head_k13.nam
 # MODEL-REGISTRY: wavenet_post_head_multistage.nam
 # MODEL-REGISTRY: wavenet_post_head_single_k3.nam
+# MODEL-REGISTRY: wavenet_per_layer_kernels.nam

@@ -201,7 +201,25 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
     a_dil = [lc.get("dilations", [1, 2, 4, 8]) for lc in layers]
     a_cond = [int(lc.get("condition_size", 1)) for lc in layers]
 
-    a_rf = [sum((a_k[ai] - 1) * d for d in a_dil[ai]) for ai in range(len(layers))]
+    # Per-layer kernel sizes (NAMCore `kernel_sizes` array contract). Legacy
+    # models repeat the scalar `kernel_size` over the array dilations.
+    a_ks = []
+    for ai in range(len(layers)):
+        ks = layers[ai].get("kernel_sizes")
+        if ks is None:
+            ks = [a_k[ai]] * len(a_dil[ai])
+        else:
+            ks = [int(k) for k in ks]
+            if len(ks) != len(a_dil[ai]) or any(k < 1 for k in ks):
+                raise ValueError(
+                    f"array {ai}: kernel_sizes length/values do not match dilations"
+                )
+        a_ks.append(ks)
+
+    a_rf = [
+        sum((a_ks[ai][li] - 1) * d for li, d in enumerate(a_dil[ai]))
+        for ai in range(len(layers))
+    ]
     max_rf = max(a_rf) + 64
     max_ch = max(a_ch)
 
@@ -252,7 +270,8 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
         a_rech.append(rech_w)
 
         lws = []
-        for dil in a_dil[ai]:
+        for li, dil in enumerate(a_dil[ai]):
+            k = a_ks[ai][li]
             cond_i = a_cond[ai]
             conv_w = weights[cursor : cursor + ch * ch * k].reshape(ch, ch, k)
             cursor += ch * ch * k
@@ -271,6 +290,7 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
                 "l1x1_w": l1x1_w,
                 "l1x1_b": l1x1_b,
                 "dilation": dil,
+                "kernel": k,
             })
         a_lws.append(lws)
 
@@ -397,7 +417,7 @@ def _wavenet_core(model: dict, x: np.ndarray, *, all_channels: bool) -> np.ndarr
         # Layer-outer / frame-inner iteration
         for li, lw in enumerate(a_lws[ai]):
             hist = bufs[li]
-            k = a_k[ai]
+            k = lw["kernel"]
             dil = lw["dilation"]
             for f in range(num_frames):
                 idx = bs + f

@@ -58,7 +58,7 @@ fn build_wavenet_array_dyn(
     in_ch: usize,
     cond: usize,
     ch: usize,
-    k: usize,
+    kernel_sizes: &[usize],
     head: usize,
     head_k: usize,
     head_dilation: usize,
@@ -72,7 +72,17 @@ fn build_wavenet_array_dyn(
     let mut layers = Vec::with_capacity(dilations.len());
     let mut states = Vec::with_capacity(dilations.len());
 
-    for &dilation in dilations {
+    if kernel_sizes.len() != dilations.len() {
+        anyhow::bail!(
+            "WaveNet layer array kernel_sizes length ({}) does not match dilations ({})",
+            kernel_sizes.len(),
+            dilations.len()
+        );
+    }
+    for (&dilation, &k) in dilations.iter().zip(kernel_sizes.iter()) {
+        if k == 0 {
+            anyhow::bail!("WaveNet layer array has kernel_size 0 — invalid geometry");
+        }
         let conv1d = layout::read_conv1d_weights_typed::<crate::models::wavenet::Conv1dDyn>(
             cursor, ch, ch, k, dilation, true,
         )?;
@@ -114,18 +124,23 @@ fn build_wavenet_array_dyn(
         (HeadRechannelDyn::Conv1d { conv, state }, rf)
     };
 
-    let receptive_field_size: usize =
-        dilations.iter().map(|&d| (k - 1) * d).sum::<usize>() + head_rf;
+    let receptive_field_size: usize = dilations
+        .iter()
+        .zip(kernel_sizes.iter())
+        .map(|(&d, &k)| (k - 1) * d)
+        .sum::<usize>()
+        + head_rf;
 
     let block_size = ch;
     let block_buffer = AlignedVec::new(block_size * WAVENET_MAX_NUM_FRAMES, 0.0)?;
     let num_layers = layers.len();
+    let array_k = kernel_sizes.first().copied().unwrap_or(1);
 
     Ok(WaveNetLayerArrayDyn {
         in_ch,
         cond,
         ch,
-        k,
+        k: array_k,
         head,
         layers,
         states,
@@ -250,6 +265,7 @@ fn build_wavenet_dynamic_inner(
     debug_assert_eq!(geom.head_dilations.len(), geom.num_arrays);
     debug_assert_eq!(geom.dilations.len(), geom.num_arrays);
     debug_assert_eq!(geom.kernel_sizes.len(), geom.num_arrays);
+    debug_assert_eq!(geom.layer_kernel_sizes.len(), geom.num_arrays);
 
     let mut alloc_num = 0usize;
 
@@ -262,11 +278,19 @@ fn build_wavenet_dynamic_inner(
         let array_head_dilation = geom.head_dilations.get(i).copied().unwrap_or(1);
         let dilations = &geom.dilations[i];
         let has_head_bias = *geom.head_biases.get(i).unwrap_or(&false);
-        let array_k = if geom.kernel_sizes[i] > 0 {
-            geom.kernel_sizes[i]
-        } else {
-            geom.kernel_size
-        };
+        let array_ks: Vec<usize> = geom
+            .layer_kernel_sizes
+            .get(i)
+            .filter(|ks| ks.len() == dilations.len())
+            .cloned()
+            .unwrap_or_else(|| {
+                let array_k = if geom.kernel_sizes.get(i).copied().unwrap_or(0) > 0 {
+                    geom.kernel_sizes[i]
+                } else {
+                    geom.kernel_size
+                };
+                vec![array_k; dilations.len()]
+            });
 
         let activation =
             super::static_factory::parse_a1_layer_activation(data.config.layers.get(i))?;
@@ -276,7 +300,7 @@ fn build_wavenet_dynamic_inner(
             in_ch,
             cond,
             array_ch,
-            array_k,
+            &array_ks,
             array_head,
             array_head_k,
             array_head_dilation,

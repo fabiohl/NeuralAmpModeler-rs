@@ -265,6 +265,7 @@ NeuralAmpModeler-rs introduces const-generic monomorphization for the four predo
 | `detail::Layer` `layer1x1_post_film` execution (`model.cpp:285-291, 1228-1232`) | `WaveNetA2Dyn::process_frame`, `conv1d_ch{3,8}` simd               | ✅ Unconditionally applied outside gating mode; fails closed if `!layer1x1`                                  |
 | `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)              | `WaveNetModel::process` / `WaveNetModelDyn::process`               | ✅ Matching cascade flow                                                                                     |
 | Prewarm receptive field calculation (`model.cpp:436-442, 615-620`)              | `FreeWavenetGeometry::receptive_field()`, dynamic prewarm backfill | ✅ Exact match with C++ receptive field summation ($\Sigma dil \cdot (k-1) + dil_{head} \cdot (k_{head}-1)$) |
+| Per-layer `kernel_sizes` array (`model.cpp:1003-1032`)                          | `FreeWavenetGeometry::layer_kernel_sizes`, `build_wavenet_array_dyn` | ✅ Verified — distinct kernel per layer, `kernel_size`↔`kernel_sizes` exclusivity, length/ceiling rejection, C++/f64/NumPy parity (S10/P17) |
 
 ### 3.3 Analytical Prewarm Shortcut
 
@@ -288,6 +289,8 @@ The A1 path rejects configurations declaring A2 features at topology parsing tim
 - Non-trivial `secondary_activation`
 
 Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
+
+**Per-layer `kernel_sizes` (S10/P17).** The A1 free-geometry path now accepts the canonical NAMCore `kernel_sizes` array (`NAM/wavenet/model.cpp:1003-1032`): one kernel per layer, validated against the array `dilations` length, `kernel_size`/`kernel_sizes` are mutually exclusive, and every kernel must be in `1..=MAX_KERNEL_SIZE`. The dynamic engine reads and processes each layer with its own kernel, the shared receptive-field calculation feeds loader/metadata/prewarm, and a catalog SKU is only matched when all per-layer kernels are homogeneous and equal to `3`. Fixture `tests/fixtures/models/wavenet_per_layer_kernels.nam` is accepted by pinned NAMCore `render` and matches the Rust f32 engine, the Rust f64 oracle and the independent NumPy anchor (`tests/models/wavenet_geometry_parity_test.rs`). The legacy scalar `kernel_size` remains the homogeneous fallback.
 
 **`layer1x1` provenance.** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine"`.
 
@@ -767,6 +770,7 @@ upstream rejection outcomes:
 | P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat**    | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                                                                                                                                                                                                                                                                    |
 | P8  | Linear $M \to N$ Channel Mismatch       | **Fail-Closed**          | Rejects topologies where both $in > 1$ and $out > 1$ with $in \neq out$ (e.g. $2 \to 3$) ([§6.2.1](#621-namcore-v060-multichannel-topology--weight-specification)).                                                                                                                                                                                                                           |
 | P9  | Sequential Child & Top-Level Invariants | **Fail-Closed**          | Rejects non-empty top-level weights, non-matching inter-stage channels, and conflicting known sample rates ([§6.6](#66-sequential-namcore-v060)).                                                                                                                                                                                                                                             |
+| P10 | WaveNet A1 per-layer `kernel_sizes`     | **Verified Parity**      | Distinct kernel per layer accepted with dimensional validation; catalog fast-path only for homogeneous `k=3`. Fixture is accepted by pinned C++ `render` and matches engine f32 / Rust f64 / NumPy (`tests/models/wavenet_geometry_parity_test.rs`, §3.2/§3.4). Remaining A1 geometry families below stay fail-closed. |
 
 ### 7.5 Concordant Rejection Ledger: `known_gap:condition_lstm_rejected_by_both`
 
@@ -854,6 +858,32 @@ post-stack head, so enabling the canonical contract changed no previously
 accepted model's semantics.
 
 End-to-end WaveNet parsing and validation gaps previously noted here are now resolved: secondary activations, `PReLU` bare/scalar/vector forms and channel-dimension validation (`src/loader/nam_json/activation_parser.rs`, `src/models/a2/model/dynamic/mod.rs`), gating precedence (`gating_mode > gated`), FiLM `{}`/`false`/type validation (`src/models/a2/model/set_weights.rs`), and `condition_dsp` parent/output channel validation (`src/loader/dispatcher/wavenet/dynamic.rs`, `src/loader/dispatcher/wavenet/static_factory.rs`) enforce fail-closed semantics with live C++ `namcore_render` and `f64` oracle parity verified in [`tests/models/wavenet_parsing_parity_test.rs`](../tests/models/wavenet_parsing_parity_test.rs). No thresholds, pins or golden data were changed.
+
+### Audit follow-up: WaveNet general geometry — S10/P17–P18 (2026-11-13)
+
+**Implemented — per-layer `kernel_sizes` (A1):** validated array length against
+`dilations`, `kernel_size`/`kernel_sizes` mutual exclusion, kernel ceiling `1..=16`,
+per-layer state budget, shared receptive field, and homogeneous-only catalog
+matching. Evidence: `tests/models/wavenet_geometry_parity_test.rs` with the
+pinned C++ `render` (ESR `4.5e-15`, SNR `143.5 dB`), the Rust f64 oracle against
+an independent NumPy anchor (`9.7e-33`) and the f32 engine against the same
+anchor (`4.1e-15`). Corpus scan of the 64 allowed fixtures: 26 WaveNet models,
+0 A1 models rely on per-layer kernels, 0 declare `layer1x1.active=false`,
+0 use a non-Tanh/ReLU A1 activation, 1 uses `head1x1` (A2), 4 use FiLM (A2),
+and 1 is the known-broken `condition_dsp` LSTM probe.
+
+**Retained fail-closed GAPs (deliberately not implemented in S10):**
+
+| Family | Current behavior | Reason / next evidence required |
+|:--- |:--- |:--- |
+| A1 `layer1x1.active=false` / `groups>1` | `E1305` guardrail | The A1 dynamic engine always builds and reads the 1×1 block; supporting `false` changes the weight stream and residual path, and grouped 1×1 needs a grouped-dense kernel. Not required by any allowed fixture. |
+| A1 non-Tanh/ReLU activation | `E1215` | The A1 SIMD layer only implements Tanh/ReLU; other valid activations need new activation kernels and parity fixtures. |
+| A1 `head1x1` / FiLM / secondary activation | `E1305` guardrail | These are A2 topology features; the A2 path already supports them where shape detection routes there. A1-shape models using them remain rejected. |
+| Slimmable `bottleneck != channels` | `E1316` guardrail | C++ `compute_slim_bottleneck` (`slimmable.cpp:79-85`) scales the bottleneck; the Rust slicer has no distinct-bottleneck representation. Implementing it requires a bottleneck-aware slice/build path plus `render --slim` parity. |
+| LSTM as `condition_dsp` | `E1215` policy + concordant C++ rejection | The existing `wavenet_condition_lstm.nam` probe is structurally invalid (condition_size 3 vs 1 output) and is rejected by both engines. A valid LSTM-condition fixture and convergent dual oracles are required before enabling it (§7.5). |
+
+These guardrails are intentional, documented and fail-closed; no previously
+accepted model changed semantics and no threshold or golden was relaxed.
 
 ---
 

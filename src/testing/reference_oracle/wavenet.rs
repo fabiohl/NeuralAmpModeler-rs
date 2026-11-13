@@ -387,6 +387,18 @@ fn oracle_wavenet_forward_inner(
     let a0_k = l0.kernel_size.unwrap_or(3);
     let a0_dilations = l0.dilations.clone().unwrap_or_else(|| vec![1, 2, 4, 8]);
     let a0_cond = l0.condition_size.unwrap_or(1);
+    let a0_kernels: Vec<usize> = match l0.kernel_sizes.as_ref() {
+        Some(ks) => {
+            if ks.len() != a0_dilations.len() || ks.contains(&0) {
+                return Err(OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "array 0 kernel_sizes length/values do not match dilations",
+                });
+            }
+            ks.clone()
+        }
+        None => vec![a0_k; a0_dilations.len()],
+    };
 
     // Process condition_dsp sub-model to obtain per-frame condition
     // vectors. Use oracle_condition_dsp_channels for ALL output channels
@@ -424,10 +436,30 @@ fn oracle_wavenet_forward_inner(
     let a1_k = l1.kernel_size.unwrap_or(3);
     let a1_dilations = l1.dilations.clone().unwrap_or_else(|| vec![1, 2, 4, 8]);
     let a1_cond = l1.condition_size.unwrap_or(1);
+    let a1_kernels: Vec<usize> = match l1.kernel_sizes.as_ref() {
+        Some(ks) => {
+            if ks.len() != a1_dilations.len() || ks.contains(&0) {
+                return Err(OracleError::UnsupportedTopology {
+                    architecture: "WaveNet",
+                    reason: "array 1 kernel_sizes length/values do not match dilations",
+                });
+            }
+            ks.clone()
+        }
+        None => vec![a1_k; a1_dilations.len()],
+    };
 
-    // Receptive field per array
-    let a0_rf: usize = a0_dilations.iter().map(|&d| (a0_k - 1) * d).sum();
-    let a1_rf: usize = a1_dilations.iter().map(|&d| (a1_k - 1) * d).sum();
+    // Receptive field per array (per-layer kernels).
+    let a0_rf: usize = a0_dilations
+        .iter()
+        .zip(a0_kernels.iter())
+        .map(|(&d, &k)| (k - 1) * d)
+        .sum();
+    let a1_rf: usize = a1_dilations
+        .iter()
+        .zip(a1_kernels.iter())
+        .map(|(&d, &k)| (k - 1) * d)
+        .sum();
     let max_rf = a0_rf.max(a1_rf) + 64;
     let acc_mode = config.accumulation;
 
@@ -440,14 +472,15 @@ fn oracle_wavenet_forward_inner(
         l1x1_w: Vec<f64>,
         l1x1_b: Vec<f64>,
         dilation: usize,
+        kernel: usize,
     }
 
     // ── Read Array0 weights ────────────────────────────────────────────────
     let a0_rechannel_w = cursor.read_f64(a0_ch);
     let a0_num_layers = a0_dilations.len();
     let mut a0_lws: Vec<LayerW> = Vec::new();
-    for &dil in &a0_dilations {
-        let conv_w = cursor.read_f64(a0_ch * a0_ch * a0_k);
+    for (&dil, &k) in a0_dilations.iter().zip(a0_kernels.iter()) {
+        let conv_w = cursor.read_f64(a0_ch * a0_ch * k);
         let conv_b = cursor.read_f64(a0_ch);
         let mixin_w = cursor.read_f64(a0_cond * a0_ch);
         let l1x1_w = cursor.read_f64(a0_ch * a0_ch);
@@ -459,6 +492,7 @@ fn oracle_wavenet_forward_inner(
             l1x1_w,
             l1x1_b,
             dilation: dil,
+            kernel: k,
         });
     }
     let a0_head_w = cursor.read_f64(a0_ch * a0_head);
@@ -467,8 +501,8 @@ fn oracle_wavenet_forward_inner(
     let a1_rechannel_w = cursor.read_f64(a0_ch * a1_ch);
     let a1_num_layers = a1_dilations.len();
     let mut a1_lws: Vec<LayerW> = Vec::new();
-    for &dil in &a1_dilations {
-        let conv_w = cursor.read_f64(a1_ch * a1_ch * a1_k);
+    for (&dil, &k) in a1_dilations.iter().zip(a1_kernels.iter()) {
+        let conv_w = cursor.read_f64(a1_ch * a1_ch * k);
         let conv_b = cursor.read_f64(a1_ch);
         let mixin_w = cursor.read_f64(a1_cond * a1_ch);
         let l1x1_w = cursor.read_f64(a1_ch * a1_ch);
@@ -480,6 +514,7 @@ fn oracle_wavenet_forward_inner(
             l1x1_w,
             l1x1_b,
             dilation: dil,
+            kernel: k,
         });
     }
     let a1_head_w = cursor.read_f64(a1_ch * a1_head);
@@ -558,15 +593,16 @@ fn oracle_wavenet_forward_inner(
                 let mut conv_out = vec![0.0f64; a0_ch];
                 for (oc, cv) in conv_out.iter_mut().enumerate() {
                     let mut sum = lw.conv_b[oc];
-                    let wb = oc * a0_ch * a0_k;
-                    for kt in 0..a0_k {
-                        let off = (lw.dilation as isize) * ((kt as isize) + 1 - (a0_k as isize));
+                    let wb = oc * a0_ch * lw.kernel;
+                    for kt in 0..lw.kernel {
+                        let off =
+                            (lw.dilation as isize) * ((kt as isize) + 1 - (lw.kernel as isize));
                         let ins = ((idx as isize) + off) as usize * a0_ch;
                         for ic in 0..a0_ch {
                             if ins + ic < hist.len() {
                                 sum = mul_add_f64(
                                     hist[ins + ic],
-                                    lw.conv_w[wb + ic * a0_k + kt],
+                                    lw.conv_w[wb + ic * lw.kernel + kt],
                                     sum,
                                     acc_mode,
                                 );
@@ -681,15 +717,16 @@ fn oracle_wavenet_forward_inner(
                 let mut conv_out = vec![0.0f64; a1_ch];
                 for (oc, cv) in conv_out.iter_mut().enumerate() {
                     let mut sum = lw.conv_b[oc];
-                    let wb = oc * a1_ch * a1_k;
-                    for kt in 0..a1_k {
-                        let off = (lw.dilation as isize) * ((kt as isize) + 1 - (a1_k as isize));
+                    let wb = oc * a1_ch * lw.kernel;
+                    for kt in 0..lw.kernel {
+                        let off =
+                            (lw.dilation as isize) * ((kt as isize) + 1 - (lw.kernel as isize));
                         let ins = ((idx as isize) + off) as usize * a1_ch;
                         for ic in 0..a1_ch {
                             if ins + ic < hist.len() {
                                 sum = mul_add_f64(
                                     hist[ins + ic],
-                                    lw.conv_w[wb + ic * a1_k + kt],
+                                    lw.conv_w[wb + ic * lw.kernel + kt],
                                     sum,
                                     acc_mode,
                                 );

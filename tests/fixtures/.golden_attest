@@ -16,3 +16,5 @@
 
 generator=b9c4d1353435f3f71ffebe03a89f6db7fcfb03b2faab7797d250e142c9fa1687 author="Fabio Lima" date=2026-11-08 command=manual-edit-cli-flags scope=utils/check-model.sh reason="remove undocumented --directory alias; no fixture output change"
 generator=61a20786eac3d13001c699db600dcfe19eb581a3d826540de38604acc55493e9 author="Fabio Lima" date=2026-11-08 command=manual-edit-script-lifecycle scope=tests/fixtures/golden_gen_build.sh reason="pair lib_init with finish and usage_fail; no fixture output change"
+generator=1dc31b394c767afbb1101c2c7922b44f65733451169b2f03b724982c32b1b8cc author="Kilo-AI" date=2026-11-13 command=s10-per-layer-kernel-oracle scope=tests/fixtures/scripts/validate_oracle_f64.py reason="additive per-layer kernel_sizes support; models without kernel_sizes resolve identically, existing f64 anchors unchanged"
+generator=8ad4563bd66c77b180e4115fa7e3f4e566fc69c18d09b3510bbddbeecae82a19 author="Kilo-AI" date=2026-11-13 command=s10-manifest-registration scope=tests/fixtures/golden_gen_build.sh reason="register S10 geometry generator/model in manifest lists; no existing fixture output change"

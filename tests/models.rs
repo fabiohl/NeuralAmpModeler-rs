@@ -73,6 +73,8 @@ mod post_stack_head_parity_test;
 mod reset_matrix_test;
 #[path = "models/wavenet_clone_exact_test.rs"]
 mod wavenet_clone_exact_test;
+#[path = "models/wavenet_geometry_parity_test.rs"]
+mod wavenet_geometry_parity_test;
 #[path = "models/wavenet_parsing_parity_test.rs"]
 mod wavenet_parsing_parity_test;
 

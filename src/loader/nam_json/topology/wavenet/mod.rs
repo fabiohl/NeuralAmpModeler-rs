@@ -10,7 +10,7 @@ pub mod sku;
 pub mod slimmable;
 
 pub use a2_validation::{A2TopologyVectors, validate_a2_layer_topology};
-pub use budget::compute_state_budget;
+pub use budget::compute_state_budget_per_layer;
 pub use guardrail::validate_a1_guardrail;
 pub use sku::try_match_catalog_sku;
 pub use slimmable::validate_slimmable_metadata;
@@ -47,7 +47,9 @@ pub enum NamWavenetTopology {
 ///
 /// The `channels` and `head_sizes` fields changed from `usize` to `Vec<usize>`
 /// to support per-array geometry (required for condition_dsp). This is a
-/// breaking change from the v2.x API.
+/// breaking change from the v2.x API. [`Self::layer_kernel_sizes`] was added
+/// later for the per-layer NAMCore `kernel_sizes` contract; direct struct
+/// literal construction outside the crate must include both fields.
 ///
 /// [`WaveNetModelDyn`]: crate::models::wavenet::WaveNetModelDyn
 #[derive(Debug, Clone, PartialEq)]
@@ -59,7 +61,18 @@ pub struct FreeWavenetGeometry {
     pub kernel_size: usize,
     /// Per-array kernel sizes, one per layer-array.
     /// For homogeneous topologies this is a repetition of `kernel_size`.
+    ///
+    /// This is the first layer kernel of each array, kept for backward
+    /// compatibility. The authoritative per-layer geometry is
+    /// [`Self::layer_kernel_sizes`].
     pub kernel_sizes: Vec<usize>,
+    /// Per-layer kernel sizes, one inner `Vec` per layer-array.
+    ///
+    /// Mirrors the canonical NAMCore `kernel_sizes` array contract
+    /// (`NAM/wavenet/model.cpp:1003-1032`), where each layer in an array may
+    /// use a distinct kernel. For legacy `kernel_size` models every inner
+    /// entry is that scalar repeated over the array dilations.
+    pub layer_kernel_sizes: Vec<Vec<usize>>,
     /// Head projection size per layer-array.
     /// `head_sizes.last()` determines `NumOutputChannels()` for the model
     /// (C++ `wave_net_output_channels` returns `layer_array_params.back().head_size`).
@@ -100,23 +113,36 @@ impl FreeWavenetGeometry {
     pub fn receptive_field(&self) -> usize {
         let mut rf = 0;
         for i in 0..self.num_arrays {
-            let k = self
-                .kernel_sizes
-                .get(i)
-                .copied()
-                .unwrap_or(self.kernel_size);
             let head_k = self.head_kernel_sizes.get(i).copied().unwrap_or(1);
             let head_dil = self.head_dilations.get(i).copied().unwrap_or(1);
             let head_rf = (head_k.saturating_sub(1)).saturating_mul(head_dil);
-            let layer_rf: usize = self
-                .dilations
-                .get(i)
-                .map(|dils| {
-                    dils.iter()
-                        .map(|&d| (k.saturating_sub(1)) * d)
-                        .sum::<usize>()
-                })
-                .unwrap_or(0);
+            let layer_rf: usize = match self.layer_kernel_sizes.get(i) {
+                Some(ks) => self
+                    .dilations
+                    .get(i)
+                    .map(|dils| {
+                        dils.iter()
+                            .zip(ks.iter())
+                            .map(|(&d, &k)| (k.saturating_sub(1)) * d)
+                            .sum::<usize>()
+                    })
+                    .unwrap_or(0),
+                None => {
+                    let k = self
+                        .kernel_sizes
+                        .get(i)
+                        .copied()
+                        .unwrap_or(self.kernel_size);
+                    self.dilations
+                        .get(i)
+                        .map(|dils| {
+                            dils.iter()
+                                .map(|&d| (k.saturating_sub(1)) * d)
+                                .sum::<usize>()
+                        })
+                        .unwrap_or(0)
+                }
+            };
             rf += layer_rf + head_rf;
         }
         if let Some(ref post) = self.post_stack_head {
@@ -322,9 +348,9 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
     };
 
     // ── Aggregate state budget check ──
-    if let Err(reason) = compute_state_budget(
+    if let Err(reason) = compute_state_budget_per_layer(
         &extract.dilations,
-        &extract.kernel_sizes,
+        &extract.layer_kernel_sizes,
         &extract.channels,
         &extract.head_kernel_sizes,
         &extract.head_dilations,
@@ -358,7 +384,8 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
             && data.config.condition_dsp.is_none()
             && allowed_channels.is_none()
             && extract.head_kernel_sizes.iter().all(|&k| k == 1)
-            && extract.head_dilations.iter().all(|&d| d == 1);
+            && extract.head_dilations.iter().all(|&d| d == 1)
+            && extract.layer_kernel_sizes.iter().flatten().all(|&k| k == 3);
 
         if catalog_compatible
             && let Some(sku) = try_match_catalog_sku(extract.first_channels, &extract.dilations)
@@ -409,6 +436,7 @@ pub fn get_wavenet_topology(data: &NamModelData) -> WavenetTopologyResult {
         channels: extract.channels,
         kernel_size,
         kernel_sizes: extract.kernel_sizes,
+        layer_kernel_sizes: extract.layer_kernel_sizes,
         head_sizes: extract.head_sizes,
         head_kernel_sizes: extract.head_kernel_sizes,
         head_dilations: extract.head_dilations,
@@ -433,6 +461,7 @@ struct LayerMetadata {
     head_dilations: Vec<usize>,
     channels: Vec<usize>,
     kernel_sizes: Vec<usize>,
+    layer_kernel_sizes: Vec<Vec<usize>>,
     head_biases: Vec<bool>,
 }
 
@@ -446,6 +475,7 @@ fn extract_layer_metadata(layers: &[NamLayerConfig]) -> Result<LayerMetadata, St
     let mut head_dilations = Vec::with_capacity(layers.len());
     let mut channels = Vec::with_capacity(layers.len());
     let mut kernel_sizes = Vec::with_capacity(layers.len());
+    let mut layer_kernel_sizes = Vec::with_capacity(layers.len());
     let mut head_biases = Vec::with_capacity(layers.len());
 
     for (i, layer) in layers.iter().enumerate() {
@@ -501,9 +531,54 @@ fn extract_layer_metadata(layers: &[NamLayerConfig]) -> Result<LayerMetadata, St
                 ));
             }
         }
+
+        let layer_ks: Vec<usize> = match (layer.kernel_sizes.as_ref(), layer.kernel_size) {
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "Layer {} declares both kernel_size and kernel_sizes — ambiguous \
+                     geometry (NAMCore requires exactly one).",
+                    i
+                ));
+            }
+            (Some(ks), None) => {
+                if ks.is_empty() {
+                    return Err(format!("Layer {} has an empty 'kernel_sizes' array.", i));
+                }
+                if ks.len() != dils.len() {
+                    return Err(format!(
+                        "Layer {} has {} kernel_sizes entries but {} dilations — \
+                         NAMCore requires equal lengths.",
+                        i,
+                        ks.len(),
+                        dils.len()
+                    ));
+                }
+                for (j, &lk) in ks.iter().enumerate() {
+                    if lk == 0 {
+                        return Err(format!(
+                            "Layer {} kernel_sizes[{}] is 0 — must be >= 1.",
+                            i, j
+                        ));
+                    }
+                    if lk > MAX_KERNEL_SIZE {
+                        return Err(format!(
+                            "Layer {} kernel_sizes[{}] ({}) exceeds maximum {} — \
+                             DoS/OOM protection.",
+                            i, j, lk, MAX_KERNEL_SIZE
+                        ));
+                    }
+                }
+                ks.clone()
+            }
+            (None, Some(k)) if k > 0 => vec![k; dils.len()],
+            // Historical Rust catalog/free-geometry default: a missing kernel
+            // field resolves to kernel 3, matching the const-generic builders.
+            (None, _) => vec![3; dils.len()],
+        };
+
         if i == 0 {
             first_channels = Some(ch);
-            first_kernel_size = k;
+            first_kernel_size = layer_ks.first().copied().filter(|&k| k > 0);
             first_head_size = layer.head_size;
         }
         let hd = layer.head_size.unwrap_or(1);
@@ -538,7 +613,8 @@ fn extract_layer_metadata(layers: &[NamLayerConfig]) -> Result<LayerMetadata, St
         }
 
         channels.push(ch);
-        kernel_sizes.push(k.unwrap_or(0));
+        kernel_sizes.push(layer_ks.first().copied().unwrap_or(0));
+        layer_kernel_sizes.push(layer_ks);
         head_sizes.push(hd);
         head_kernel_sizes.push(head_k);
         head_dilations.push(head_dil);
@@ -562,6 +638,7 @@ fn extract_layer_metadata(layers: &[NamLayerConfig]) -> Result<LayerMetadata, St
         head_dilations,
         channels,
         kernel_sizes,
+        layer_kernel_sizes,
         head_biases,
     })
 }
