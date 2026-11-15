@@ -35,7 +35,7 @@ ensure_lanczos_probe() {
     fi
     mkdir -p "$build_dir" "$logs_dir"
     echo "→ compiling Lanczos probe ($cxx, $flags)" >&2
-    "$cxx" $flags "-I$container_dir" "$src" -o "$bin" > "$logs_dir/lanczos-probe-build.log" 2>&1 || return 4
+    "$cxx" $flags "-I$container_dir" "$src" -o "$bin.tmp.$$" > "$logs_dir/lanczos-probe-build.log" 2>&1 && mv -f "$bin.tmp.$$" "$bin" || { rm -f "$bin.tmp.$$"; return 4; }
     printf '%s\n' "$fingerprint" > "$config_file"
     printf 'core_commit=%s\nplugin_commit=%s\ncont_md5=%s\nlan_md5=%s\nprobe_src_md5=%s\ncompiler=%s\nflags=%s\n' \
         "$core_commit" "$plugin_commit" "$cont_md5" "$lan_md5" "$src_md5" "$cxx" "$flags" > "$build_dir/.build_provenance"

@@ -78,6 +78,31 @@ enum ParityOutcome {
     SkippedGarbageOutput,
 }
 
+/// True when the caller requires the optional C++ oracle to be available.
+/// `utils/tests-long.sh --strict` exports `NAM_REQUIRE_CPP_ORACLE=1`.
+fn cpp_oracle_required() -> bool {
+    std::env::var("NAM_REQUIRE_CPP_ORACLE").is_ok_and(|v| {
+        let v = v.trim();
+        v == "1" || v.eq_ignore_ascii_case("true")
+    })
+}
+
+/// Completion gate for the optional live C++ matrix.
+///
+/// When the render tool is absent in a non-strict run, `run_render_comparison`
+/// records the typed `report_skip` and returns `SkippedToolNotAvailable`; that
+/// capability outcome is accepted here and becomes a `skip-capability` GAP.
+/// Under `NAM_REQUIRE_CPP_ORACLE=1` the same outcome always fails. No other
+/// non-completed outcome is accepted.
+#[track_caller]
+fn require_live_completed(outcome: ParityOutcome, label: &str) {
+    match outcome {
+        ParityOutcome::Completed => {}
+        ParityOutcome::SkippedToolNotAvailable if !cpp_oracle_required() => {}
+        other => panic!("[{label}] FAIL: parity required Completed, got {other:?}"),
+    }
+}
+
 /// Require that a `ParityOutcome` is `Completed`, otherwise panic with a
 /// descriptive message naming the test and the actual outcome.
 ///
@@ -675,6 +700,20 @@ fn run_v2_multi_sr_impl(
         );
     }
 
+    if !ensure_render_compiled() {
+        if cpp_oracle_required() {
+            panic!(
+                "[STRICT] {label_base}: namcore_render binary unavailable — missing C++ parity \
+                 evidence is a failure under NAM_REQUIRE_CPP_ORACLE=1"
+            );
+        }
+        neural_amp_modeler_rs::testing::report_skip(
+            &format!("cpp_parity::{label_base}"),
+            "render_tool_unavailable",
+        );
+        return;
+    }
+
     let model_path = model_path(model_filename);
     let _json_data = fs::read_to_string(&model_path).expect("Failed to read model");
     let _model_data = parse_nam_json(&_json_data).expect("JSON parser failed");
@@ -961,7 +1000,7 @@ fn live_cross_validation_wavenet_standard() {
         "Live WaveNet Standard",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-standard.nam");
+    require_live_completed(outcome, "BossWN-standard.nam");
 }
 
 #[test]
@@ -973,14 +1012,14 @@ fn live_cross_validation_wavenet_feather() {
         "Live WaveNet Feather",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-feather.nam");
+    require_live_completed(outcome, "BossWN-feather.nam");
 }
 
 #[test]
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_wavenet_nano() {
     let outcome = run_v1("BossWN-nano.nam", "wavenet_nano", "Live WaveNet Nano", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-nano.nam");
+    require_live_completed(outcome, "BossWN-nano.nam");
 }
 
 #[test]
@@ -995,6 +1034,7 @@ fn live_cross_validation_wavenet_lite() {
     match outcome {
         ParityOutcome::Completed => {}
         ParityOutcome::SkippedModelNotFound => {}
+        ParityOutcome::SkippedToolNotAvailable if !cpp_oracle_required() => {}
         other => panic!(
             "[Live WaveNet Lite] FAIL: parity required Completed or SkippedModelNotFound, got {other:?}"
         ),
@@ -1010,14 +1050,14 @@ fn live_cross_validation_wavenet_a1_standard() {
         "Live WaveNet A1 Standard (Official)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a1_standard.nam");
+    require_live_completed(outcome, "wavenet_a1_standard.nam");
 }
 
 #[test]
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_official() {
     let outcome = run_v1("lstm.nam", "lstm_official", "Live LSTM Official", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "lstm.nam");
+    require_live_completed(outcome, "lstm.nam");
 }
 
 #[test]
@@ -1029,7 +1069,7 @@ fn live_cross_validation_wavenet_a2_full() {
         "Live WaveNet A2-Full",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a2_full.nam");
+    require_live_completed(outcome, "wavenet_a2_full.nam");
 }
 
 #[test]
@@ -1041,7 +1081,7 @@ fn live_cross_validation_wavenet_a2_lite() {
         "Live WaveNet A2-Lite",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_a2_lite.nam");
+    require_live_completed(outcome, "wavenet_a2_lite.nam");
 }
 
 #[test]
@@ -1053,7 +1093,7 @@ fn live_cross_validation_convnet() {
         "Live ConvNet Test",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "convnet_test.nam");
+    require_live_completed(outcome, "convnet_test.nam");
 }
 
 // ── Synthetic and exotic topologies (v1) ──────────────────────────────
@@ -1062,21 +1102,21 @@ fn live_cross_validation_convnet() {
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_1x10() {
     let outcome = run_v1("lstm_1x10.nam", "lstm_1x10", "Live LSTM 1×10", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "lstm_1x10.nam");
+    require_live_completed(outcome, "lstm_1x10.nam");
 }
 
 #[test]
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_2x24() {
     let outcome = run_v1("lstm_2x24.nam", "lstm_2x24", "Live LSTM 2×24", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "lstm_2x24.nam");
+    require_live_completed(outcome, "lstm_2x24.nam");
 }
 
 #[test]
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_lstm_3x8() {
     let outcome = run_v1("lstm_3x8.nam", "lstm_3x8", "Live LSTM 3×8", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "lstm_3x8.nam");
+    require_live_completed(outcome, "lstm_3x8.nam");
 }
 
 #[test]
@@ -1088,7 +1128,7 @@ fn live_cross_validation_convnet_nobn() {
         "Live ConvNet No BatchNorm",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "convnet_nobn.nam");
+    require_live_completed(outcome, "convnet_nobn.nam");
 }
 
 #[test]
@@ -1100,7 +1140,7 @@ fn live_cross_validation_convnet_relu() {
         "Live ConvNet ReLU",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "convnet_relu.nam");
+    require_live_completed(outcome, "convnet_relu.nam");
 }
 
 #[test]
@@ -1112,7 +1152,7 @@ fn live_cross_validation_convnet_silu() {
         "Live ConvNet SiLU",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "convnet_silu.nam");
+    require_live_completed(outcome, "convnet_silu.nam");
 }
 
 #[test]
@@ -1124,7 +1164,7 @@ fn live_cross_validation_linear_nobias() {
         "Live Linear No Bias",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "linear_nobias.nam");
+    require_live_completed(outcome, "linear_nobias.nam");
 }
 
 #[test]
@@ -1160,6 +1200,7 @@ fn live_cross_validation_wavenet_condition_lstm() {
                  reason=\"Concordant rejection: Rust fail-closed by policy (LSTM condition_dsp not supported); C++ NAMCore rejects via condition_size mismatch\""
             )
         }
+        ParityOutcome::SkippedToolNotAvailable if !cpp_oracle_required() => {}
         other => panic!("Unexpected outcome: {other:?}"),
     }
 }
@@ -1173,20 +1214,24 @@ fn live_cross_validation_a2_example_slimmable() {
         "Live SlimmableContainer A2 Example (CH=3→6)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "a2_example.nam");
+    require_live_completed(outcome, "a2_example.nam");
 }
 
 /// D-02 capability probe: when the optional C++ oracle is absent in the
-/// non-strict long run, `catch-all` omits the `live_cross_validation_*` matrix
-/// through `--skip`. This probe is the typed evidence for that omission: it
-/// reports the skip through `report_skip`, so `skips.jsonl` stays the single
-/// source of the `skip-capability:<n>` gap (no `grep` over `cargo test --list`).
-/// Under `NAM_REQUIRE_CPP_ORACLE=1`, `ensure_render_compiled` panics instead
-/// (fail-closed).
+/// non-strict long run, the live parity tests record their own typed
+/// `render_tool_unavailable` skip through `report_skip`; this probe reports the
+/// same capability so `skips.jsonl` stays the single source of the
+/// `skip-capability:<n>` gap. Under `NAM_REQUIRE_CPP_ORACLE=1`, the probe fails
+/// and every live parity test returns a hard failure (fail-closed).
 #[test]
 #[ignore = "long: probe for the optional C++ oracle (D-02)"]
 fn d02_live_cross_validation_oracle_probe() {
     if !ensure_render_compiled() {
+        assert!(
+            !cpp_oracle_required(),
+            "[STRICT] cpp_parity::d02_live_cross_validation_oracle_probe: \
+             namcore_render binary unavailable under NAM_REQUIRE_CPP_ORACLE=1"
+        );
         neural_amp_modeler_rs::testing::report_skip(
             "cpp_parity::d02_live_cross_validation_oracle_probe",
             "render_tool_unavailable",
@@ -1377,7 +1422,7 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
             ParityOutcome::Completed => {
                 // Unexpected success is fine if upstream ever gains support.
             }
-            ParityOutcome::SkippedRateRejected | ParityOutcome::SkippedToolNotAvailable => {
+            ParityOutcome::SkippedRateRejected => {
                 eprintln!(
                     "[STATUS] KNOWN_GAP id=\"condition_lstm_rejected_by_both\" \
                      reason=\"Concordant rejection: Rust fail-closed by policy; C++ NAMCore rejects via condition_size mismatch\""
@@ -1386,6 +1431,10 @@ fn live_cross_validation_v2_wavenet_condition_lstm() {
                     "[{label_base} @ {sr} Hz] Concordant rejection: Rust fail-closed by \
                      policy; C++ NAMCore rejects via condition_size mismatch (KnownGap)"
                 );
+            }
+            ParityOutcome::SkippedToolNotAvailable if !cpp_oracle_required() => {}
+            ParityOutcome::SkippedToolNotAvailable => {
+                panic!("[{label_base} @ {sr} Hz] FAIL: C++ oracle required but unavailable")
             }
             ParityOutcome::SkippedModelNotFound => {
                 eprintln!("[STATUS] SKIP_CAPABILITY reason=\"model_not_found:{model_filename}\"");
@@ -1503,7 +1552,7 @@ fn live_cross_validation_wavenet_dyn() {
         "Live WaveNetDyn Free-Shape",
         false,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "wavenet_dyn_free.nam");
+    require_live_completed(outcome, "wavenet_dyn_free.nam");
 }
 
 #[test]
@@ -1515,7 +1564,7 @@ fn live_cross_validation_lstm_dyn() {
         "Live LSTM-Dyn 1×7",
         false,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "lstm_dyn_test.nam");
+    require_live_completed(outcome, "lstm_dyn_test.nam");
 }
 
 #[test]
@@ -1741,7 +1790,7 @@ fn live_cross_validation_v2_wavenet_a2_max() {
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_linear() {
     let outcome = run_v1("linear_test.nam", "linear_test", "Live Linear RF=4", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "linear_test.nam");
+    require_live_completed(outcome, "linear_test.nam");
 }
 
 #[test]
@@ -1784,14 +1833,14 @@ fn live_cross_validation_hf_lstm_1x16() {
         "Live LSTM 1×16 (HF)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "BossLSTM-1x16.nam");
+    require_live_completed(outcome, "BossLSTM-1x16.nam");
 }
 
 #[test]
 #[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn live_cross_validation_hf_lstm_2x8() {
     let outcome = run_v1("BossLSTM-2x8.nam", "lstm_2x8", "Live LSTM 2×8 (HF)", true);
-    assert_eq!(outcome, ParityOutcome::Completed, "BossLSTM-2x8.nam");
+    require_live_completed(outcome, "BossLSTM-2x8.nam");
 }
 
 #[test]
@@ -1803,7 +1852,7 @@ fn live_cross_validation_hf_wavenet_standard() {
         "Live WaveNet Standard (HF)",
         true,
     );
-    assert_eq!(outcome, ParityOutcome::Completed, "BossWN-standard.nam");
+    require_live_completed(outcome, "BossWN-standard.nam");
 }
 
 // --- v2 (multi-SR) HF tests, ignored ---
@@ -1868,6 +1917,12 @@ fn live_cross_validation_nondist_models() {
     let temp_dir = project_root.join("tests/fixtures/.temp_live");
     fs::create_dir_all(&temp_dir).ok();
     if !ensure_render_compiled() {
+        if cpp_oracle_required() {
+            panic!(
+                "[STRICT] cpp_parity::live_cross_validation_nondist_models: \
+                 namcore_render binary unavailable"
+            );
+        }
         neural_amp_modeler_rs::testing::report_skip(
             "cpp_parity::live_cross_validation_nondist_models",
             "render_tool_unavailable",
@@ -1907,7 +1962,7 @@ fn live_cross_validation_nondist_models() {
         }
 
         match result {
-            Ok(outcome) => assert_eq!(outcome, ParityOutcome::Completed, "{filename}"),
+            Ok(outcome) => require_live_completed(outcome, "{filename}"),
             Err(e) => std::panic::resume_unwind(e),
         }
     }

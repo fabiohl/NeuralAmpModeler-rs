@@ -573,30 +573,35 @@ fn manifest_dir() -> PathBuf {
 /// Path of the compiled Lanczos probe; compiles it once on demand through the
 /// Classe D helper (mirrors `utils/ensure_namcore_render.sh` usage).
 fn ensure_probe() -> Result<PathBuf, String> {
-    let bin = manifest_dir().join("build/resampler_probe/lanczos_probe");
-    if bin.is_file() {
-        return Ok(bin);
-    }
-    let helper = manifest_dir().join("utils/ensure_lanczos_probe.sh");
-    let out = Command::new("bash")
-        .arg(&helper)
-        .env("lib_quiet", "1")
-        .output()
-        .map_err(|e| format!("failed to run {}: {e}", helper.display()))?;
-    if !out.status.success() {
-        return Err(format!(
-            "probe build failed rc={:?}: {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    let path = String::from_utf8_lossy(&out.stdout);
-    let path = path.split_whitespace().last().unwrap_or_default().trim();
-    let built = PathBuf::from(path);
-    if !built.is_file() {
-        return Err(format!("probe path not produced: '{path}'"));
-    }
-    Ok(built)
+    static PROBE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    PROBE
+        .get_or_init(|| {
+            let bin = manifest_dir().join("build/resampler_probe/lanczos_probe");
+            if bin.is_file() {
+                return Ok(bin);
+            }
+            let helper = manifest_dir().join("utils/ensure_lanczos_probe.sh");
+            let out = Command::new("bash")
+                .arg(&helper)
+                .env("lib_quiet", "1")
+                .output()
+                .map_err(|e| format!("failed to run {}: {e}", helper.display()))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "probe build failed rc={:?}: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+            let path = String::from_utf8_lossy(&out.stdout);
+            let path = path.split_whitespace().last().unwrap_or_default().trim();
+            let built = PathBuf::from(path);
+            if !built.is_file() {
+                return Err(format!("probe path not produced: '{path}'"));
+            }
+            Ok(built)
+        })
+        .clone()
 }
 
 /// Vendor-mirror availability for the Lanczos comparison axis.

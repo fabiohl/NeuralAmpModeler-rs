@@ -19,9 +19,6 @@ while [ $# -gt 0 ]; do
 done
 lib_init
 trap 'trap_fail $?' ERR
-phase quality
-rc=0; "$(ensure_qa_bin nam_quality testing)" dashboard "${args[@]}" || rc=$?
-if [ "$rc" -eq 0 ]; then emit "PHASE: quality PASS"; else FAILS+=(quality); emit "PHASE: quality FAIL rc=$rc"; fi
-frc=0; finish || frc=$?
-[ "$rc" -ne 0 ] || rc=$frc
+run_step quality "$(ensure_qa_bin nam_quality testing)" dashboard "${args[@]}"
+rc=0; finish || rc=$?
 exit "$rc"

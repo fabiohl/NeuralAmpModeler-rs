@@ -314,6 +314,13 @@ jobs:
           persist-credentials: false
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -396,6 +403,13 @@ jobs:
           persist-credentials: false
       - name: Update Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
@@ -479,7 +493,7 @@ jobs:
             fi
           done
 
-          gap "avx512-hardware-absent"
+          gap "avx512-parity-vector-not-generated"
           if [ ${#FAILS[@]} -gt 0 ]; then
             emit "PHASE: cross-platform-parity FAIL rc=1 log=target/logs/parity"
             finish || true

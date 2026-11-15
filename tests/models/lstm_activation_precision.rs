@@ -9,14 +9,13 @@
 //
 //  ## Axis-B split
 //
-//  - **Structural** (Phase 1, debug): model loading, geometry dispatch and
-//    buffer allocation — cheap, deterministic, codegen-agnostic.
-//  - **SNR oracles** (Phase 2, `--release` only): float measurements against
-//    golden `.bin` vectors / the f64 reference oracle.  `tests-quick.sh`
-//    Phase 1 filters them via
-//    `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
-//    (substring skip also covers `..._gain_stress_v2`); Phase 2 runs the
-//    whole module under release.
+//  - **Structural** (quick): model loading, geometry dispatch and buffer
+//    allocation — cheap, deterministic, codegen-agnostic. Not ignored; the
+//    only test of this module that `tests-quick.sh` selects.
+//  - **SNR characterizations** (long, `#[ignore]`): float measurements against
+//    golden `.bin` vectors / the f64 reference oracle. They print a verdict and
+//    assert no threshold, so they are investigation, not fidelity gates. The
+//    quick suite never selects them (A3: no manual `--skip` lists).
 
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
@@ -121,10 +120,10 @@ fn test_lstm_activation_precision_structural() {
     }
 }
 
-// ── SNR oracles (Phase 2 — --release, Axis-B) ────────────────────────────────
-// These float measurements are filtered from Phase 1 via
-// `--skip lstm_activation_precision::test_lstm_activation_precision_gain`
-// in `utils/tests-quick.sh` and run exclusively under `--release`.
+// ── SNR characterizations (long, #[ignore]) ──────────────────────────────────
+// These float measurements carry `#[ignore]` and run only in the long suite
+// (`--include-ignored`). They are investigation of activation precision, not a
+// fidelity threshold; a verdict printed here never certifies the product.
 
 #[derive(Debug)]
 struct SnrResult {
@@ -219,9 +218,11 @@ fn measure_lstm_snr(golden_path: &str, model_filename: &str, label: &str) -> (f6
 /// (exact `f32::tanh`) paths, computing SNR against the C++ reference.
 /// Reports per-model SNR gain and overall verdict.
 ///
-/// Phase-2 oracle (Axis-B): float measurement against golden `.bin` — runs
-/// exclusively under `--release`; filtered from Phase 1 via `--skip`.
+/// Long-suite characterization (Axis-B): float measurement against golden
+/// `.bin` vectors. It asserts no threshold and only reports a verdict, so it is
+/// `#[ignore]` and kept out of the quick gate.
 #[test]
+#[ignore = "long: caracterização SNR LSTM (investigação, sem limiar)"]
 fn test_lstm_activation_precision_gain() {
     eprintln!();
     eprintln!("══════════════════════════════════════════════════════════════════");
@@ -313,9 +314,8 @@ fn test_lstm_activation_precision_gain() {
 /// Runs the 3 LSTM models through both SIMD (`Fast`) and SIMD (`Standard`)
 /// paths, computing SNR against the f64 exact reference oracle on the stress v2 signal.
 ///
-/// Phase-2 oracle (Axis-B): float measurement against the f64 reference
-/// oracle — runs exclusively under `--release`; filtered from Phase 1 via
-/// `--skip` (substring skip of `test_lstm_activation_precision_gain`).
+/// Long-suite characterization (Axis-B): float measurement against the f64
+/// reference oracle on stress v2. Investigation only; no threshold.
 #[test]
 #[ignore = "long: precisão de ativação em ponto fixo/Gain"]
 fn test_lstm_activation_precision_gain_stress_v2() {

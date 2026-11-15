@@ -11,6 +11,7 @@ cd "$(dirname "$0")/.."
 
 case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) usage_fail "lints.sh não aceita argumentos ($*)" ;; esac
 lib_init
+xtrace_side_channel "$LOG_DIR/lints-xtrace.log"
 trap 'trap_fail $?' ERR
 
 phase_fmt() {
@@ -40,17 +41,19 @@ phase_clippy() {
 }
 run_step clippy phase_clippy
 
-PHASE_NAME=clippy-aarch64
 HOST_ARCH="$(rustc -vV | sed -n 's/^host: //p')"
 if [ "$HOST_ARCH" = aarch64-unknown-linux-gnu ]; then
+  PHASE_NAME=clippy-x86_64
   if rustup target list --installed | grep -qx x86_64-unknown-linux-gnu; then
-    run_step clippy-aarch64 cargo clippy --locked --lib --target x86_64-unknown-linux-gnu -- -D warnings
+    run_step clippy-x86_64 cargo clippy --locked --lib --target x86_64-unknown-linux-gnu -- -D warnings
   else
-    gap "clippy-aarch64:native-host-x86-target-not-installed"
+    gap "clippy-x86_64:native-host-x86-target-not-installed"
   fi
 elif ! rustup target list --installed | grep -qx aarch64-unknown-linux-gnu; then
+  PHASE_NAME=clippy-aarch64
   gap "clippy-aarch64:target-not-installed"
 else
+  PHASE_NAME=clippy-aarch64
   run_step clippy-aarch64 cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
 fi
 

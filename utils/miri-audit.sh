@@ -14,7 +14,7 @@ case "$#:${1:-}" in
     *) usage_fail "miri-audit.sh não aceita argumentos ($*)" ;;
 esac
 lib_init
-trap 'rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ "${FINISHED:-0}" = 1 ] || [ -n "${DONE:-}" ] || { FAILS+=(miri-audit); DONE=1; finish; }' EXIT
+trap 'rc=$?; [ "$rc" -eq 0 ] || [ "${FINISHED:-0}" = 1 ] || [ -n "${DONE:-}" ] || { FAILS+=("${PHASE_NAME:-precondition}"); emit "PHASE: ${PHASE_NAME:-precondition} FAIL rc=$rc"; finish; }' EXIT
 
 LOG_DIR="target/logs"
 mkdir -p "$LOG_DIR"

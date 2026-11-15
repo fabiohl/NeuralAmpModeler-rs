@@ -97,13 +97,39 @@ fn print_help() {
 /// Flags that do not take a value (boolean switches).
 const VALUE_LESS_FLAGS: &[&str] = &["strict"];
 
-fn parse_flags(args: &[String]) -> Result<std::collections::HashMap<String, String>, String> {
+/// Per-subcommand flag whitelists: anything outside the list is a usage error (exit 2).
+const APPEND_FLAGS: &[&str] = &[
+    "phase-id",
+    "name",
+    "status",
+    "duration-ms",
+    "tests-executed",
+    "log",
+    "gaps",
+    "reason",
+    "oracle-sha256",
+    "fixture-sha256",
+    "artifact-sha256",
+    "out",
+];
+const SUMMARY_FLAGS: &[&str] = &["only", "out"];
+const VALIDATE_FLAGS: &[&str] = &["strict", "only", "out"];
+const COUNT_LOG_FLAGS: &[&str] = &["log"];
+
+fn parse_flags(
+    args: &[String],
+    allowed: &[&str],
+) -> Result<std::collections::HashMap<String, String>, String> {
     let mut flags = std::collections::HashMap::new();
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
-        let name = flag.strip_prefix("--").unwrap_or(flag.as_str()).to_string();
-        if name.is_empty() {
-            return Err(format!("{flag}: expected a flag name"));
+        let name = flag
+            .strip_prefix("--")
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| format!("{flag}: expected a --flag"))?
+            .to_string();
+        if !allowed.contains(&name.as_str()) {
+            return Err(format!("unknown flag --{name}"));
         }
         if VALUE_LESS_FLAGS.contains(&name.as_str()) {
             flags.insert(name, String::new());
@@ -111,7 +137,7 @@ fn parse_flags(args: &[String]) -> Result<std::collections::HashMap<String, Stri
         }
         let value = iter
             .next()
-            .ok_or_else(|| format!("{flag} requires a value"))?;
+            .ok_or_else(|| format!("--{name} requires a value"))?;
         flags.insert(name, value.clone());
     }
     Ok(flags)
@@ -127,7 +153,7 @@ fn required<'a>(
 }
 
 fn cmd_append(args: &[String]) {
-    let flags = match parse_flags(args) {
+    let flags = match parse_flags(args, APPEND_FLAGS) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("append: {e}");
@@ -253,7 +279,7 @@ fn cmd_append(args: &[String]) {
 }
 
 fn cmd_summary(args: &[String]) {
-    let flags = match parse_flags(args) {
+    let flags = match parse_flags(args, SUMMARY_FLAGS) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("summary: {e}");
@@ -308,7 +334,7 @@ fn cmd_summary(args: &[String]) {
 }
 
 fn cmd_validate(args: &[String]) {
-    let flags = match parse_flags(args) {
+    let flags = match parse_flags(args, VALIDATE_FLAGS) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("validate: {e}");
@@ -441,7 +467,7 @@ fn cmd_validate(args: &[String]) {
 }
 
 fn cmd_count_log(args: &[String]) {
-    let flags = match parse_flags(args) {
+    let flags = match parse_flags(args, COUNT_LOG_FLAGS) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("count-log: {e}");

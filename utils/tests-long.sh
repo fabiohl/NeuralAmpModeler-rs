@@ -215,9 +215,8 @@ exec_phase "preflight-simd-probe" "preflight-simd-probe" 60 0 run_preflight_simd
 
 # --- Phase 1: catch-all ---
 run_phase_catch_all() {
-  local a=() rc=0
-  [ "$STRICT" -eq 0 ] && [[ " ${GAPS[*]} " == *" preflight-render:"* ]] && a+=(--skip cpp_parity::live_cross_validation)
-  run_cmd cargo test --locked --release --features testing --no-fail-fast -- --include-ignored "${a[@]}" || rc=$?
+  local rc=0
+  run_cmd cargo test --locked --release --features testing --no-fail-fast -- --include-ignored || rc=$?
   if [ -s "$SKIPS" ]; then
     local total optional blocking
     total=$(wc -l < "$SKIPS")

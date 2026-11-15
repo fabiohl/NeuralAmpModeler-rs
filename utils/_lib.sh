@@ -103,10 +103,10 @@ finish() {
 
 require_nightly() {
   local comp="${1:-}"
-  command -v rustup >/dev/null 2>&1 || { echo "GAP: rustup not found" >&2; exit 2; }
-  rustup toolchain list 2>/dev/null | grep -q "nightly" || { echo "GAP: no nightly toolchain installed" >&2; exit 2; }
+  command -v rustup >/dev/null 2>&1 || { echo "ERROR: rustup not found" >&2; exit 2; }
+  rustup toolchain list 2>/dev/null | grep -q "nightly" || { echo "ERROR: no nightly toolchain installed" >&2; exit 2; }
   if [ -n "$comp" ]; then
-    cargo +nightly "$comp" --version >/dev/null 2>&1 || { echo "GAP: $comp component missing on nightly" >&2; exit 2; }
+    cargo +nightly "$comp" --version >/dev/null 2>&1 || { echo "ERROR: $comp component missing on nightly" >&2; exit 2; }
   fi
 }
 
