@@ -202,7 +202,10 @@ run_preflight_catalog() { run_cmd cargo test --locked --release --features testi
 exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
-run_preflight_package() { run_cmd cargo package --locked --allow-dirty && run_cmd env lib_quiet=1 bash utils/consumer-smoke.sh; }
+run_preflight_package() {
+  local pkg_args=(--locked); [ -n "$(git status --porcelain 2>/dev/null)" ] && pkg_args+=(--allow-dirty)
+  run_cmd cargo package "${pkg_args[@]}" && run_cmd env lib_quiet=1 bash utils/consumer-smoke.sh
+}
 exec_phase "preflight-package" "preflight-package" 600 0 run_preflight_package
 
 # --- Preflight 4: freshness ---

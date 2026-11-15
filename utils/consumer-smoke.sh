@@ -46,6 +46,9 @@ rc=0
     flags=""; [ "$t" = x86_64-unknown-linux-gnu ] && flags="-Ctarget-cpu=x86-64-v3"
     RUSTFLAGS="$flags" cargo check --target "$t" || { echo "consumer $t: FAIL" >&2; exit 1; }
   done
+  host_t=$(rustc -vV | sed -n 's/^host: //p')
+  host_f=""; [ "$host_t" = x86_64-unknown-linux-gnu ] && host_f="-Ctarget-cpu=x86-64-v3"
+  RUSTFLAGS="$host_f" cargo build --target "$host_t" || { echo "consumer link ($host_t): FAIL" >&2; exit 1; }
 ) > "$log" 2>&1 || rc=$?
 if [ "$rc" -ne 0 ]; then
   cat "$log" >&2 || true

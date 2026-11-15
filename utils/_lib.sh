@@ -131,7 +131,7 @@ ensure_third_party() {
 
 ensure_namcore_render() {
   local build_dir="$PROJECT_DIR/build/namcore_render" logs_dir="$PROJECT_DIR/target/logs" build_type="Release"
-  local flags="-w -fno-fast-math -ffp-contract=off" jobs="${NAM_RENDER_JOBS:-$(nproc 2>/dev/null || echo 2)}"
+  local flags="-w -fno-fast-math -ffp-contract=off" jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-${NPROC:-$(nproc 2>/dev/null || echo 2)}}"
   local bin="" config_file="$PROJECT_DIR/build/namcore_render/.build_config" prov_file="$PROJECT_DIR/build/namcore_render/.build_provenance"
   command -v cmake >/dev/null 2>&1 || { warn "cmake not found"; return 2; }
   local cxx="${CXX:-}"

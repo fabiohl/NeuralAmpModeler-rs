@@ -249,7 +249,7 @@ pub fn classify_arm_features(features_line: &str) -> &'static str {
 pub fn classify_isa(flags_line: &str) -> &'static str {
     let flags: Vec<&str> = flags_line.split_whitespace().collect();
     let has = |flag: &str| flags.contains(&flag);
-    if has("avx512f") && has("avx512vl") {
+    if has("avx512f") && has("avx512vl") && has("avx512bw") && has("avx512dq") {
         ISA_AVX512
     } else if has("avx")
         && has("avx2")

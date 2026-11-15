@@ -47,6 +47,7 @@ use std::process::{Command, exit};
 use serde::Serialize;
 use serde_json::Value;
 
+use neural_amp_modeler_rs::math::common::SIMD_MATH;
 use neural_amp_modeler_rs::testing::qa::QualityContract;
 use neural_amp_modeler_rs::testing::qa::classify::{
     RegressionOutcome, classify_fresh_regression, classify_regression_outcome,
@@ -55,7 +56,7 @@ use neural_amp_modeler_rs::testing::qa::command::run_command_with_timeout;
 use neural_amp_modeler_rs::testing::qa::criterion::{
     DEFAULT_DSP_MICRO_BATCH, extract_criterion_latencies, parse_bench_constants_env,
 };
-use neural_amp_modeler_rs::testing::qa::env::EnvProbe;
+use neural_amp_modeler_rs::testing::qa::env::{EnvProbe, ISA_AVX512, ISA_X86_64_V3};
 use neural_amp_modeler_rs::testing::qa::ids;
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
@@ -66,6 +67,24 @@ use neural_amp_modeler_rs::testing::qa::verify::{
     parse_verify_report_file, verify_contract,
 };
 use neural_amp_modeler_rs::testing::receipt::tests_passed_from_output;
+
+/// Returns `true` when the x86_64 host CPU exposes the full AVX-512 feature
+/// matrix (`F + VL + BW + DQ`) required by the cross-ISA parity suite.
+#[cfg(target_arch = "x86_64")]
+fn host_has_full_avx512() -> bool {
+    neural_amp_modeler_rs::math::common::avx512_capability_complete(
+        is_x86_feature_detected!("avx512f"),
+        is_x86_feature_detected!("avx512vl"),
+        is_x86_feature_detected!("avx512bw"),
+        is_x86_feature_detected!("avx512dq"),
+    )
+}
+
+/// Non-x86_64 hosts never execute the x86 AVX2-vs-AVX-512 matrix.
+#[cfg(not(target_arch = "x86_64"))]
+fn host_has_full_avx512() -> bool {
+    false
+}
 
 /// Status values accepted by `receipt append` — the documented receipt schema
 /// (`utils/_lib.sh:80`) plus `NOT_VERIFIED`, which the dashboard writes for
@@ -499,19 +518,50 @@ fn cmd_dashboard(args: &[String]) {
             10,
             10,
         );
-        let cross_rec = PhaseReceiptRecord {
-            phase_id: "isa_parity_cross_isa",
-            status: "SKIP_CAPABILITY",
-            exit_code: 0,
-            observed_records: 0,
-            expected_records: 0,
-            reason: neural_amp_modeler_rs::testing::qa::phases::CROSS_ISA_GAP_REASON,
-            run_id: &run_id,
-        };
-        let _ = append_line(
-            &receipt_path_str,
-            &serde_json::to_string(&cross_rec).unwrap(),
-        );
+    }
+    if !existing_phases.contains_key("isa_parity_cross_isa") {
+        if host_has_full_avx512() {
+            let cross_log = log_dir.join("isa_parity_cross_isa.log");
+            run_dashboard_phase(
+                "isa_parity_cross_isa",
+                &[(
+                    &[
+                        "cargo",
+                        "test",
+                        "--release",
+                        "--features",
+                        "testing,avx512",
+                        "--test",
+                        "parity",
+                        "avx2_vs_avx512",
+                        "--",
+                        "--include-ignored",
+                        "--test-threads=1",
+                        "--nocapture",
+                    ],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
+                )],
+                &cross_log,
+                &receipt_path_str,
+                &run_id,
+                10,
+                10,
+            );
+        } else {
+            let cross_rec = PhaseReceiptRecord {
+                phase_id: "isa_parity_cross_isa",
+                status: "SKIP_CAPABILITY",
+                exit_code: 0,
+                observed_records: 0,
+                expected_records: 0,
+                reason: neural_amp_modeler_rs::testing::qa::phases::CROSS_ISA_GAP_REASON,
+                run_id: &run_id,
+            };
+            let _ = append_line(
+                &receipt_path_str,
+                &serde_json::to_string(&cross_rec).unwrap(),
+            );
+        }
     }
 
     // ── Phase 4: spectral_fidelity ──
@@ -561,9 +611,8 @@ fn cmd_dashboard(args: &[String]) {
     }
 
     // ── Phase 5: lstm_activation_precision ──
-    // The target certifies its only non-ignored test (`structural`); the `gain`
-    // and `gain_stress_v2` SNR characterizations stay `#[ignore]` and belong to
-    // the long suite.
+    // Runs both `structural` and the two SNR precision characterizations (`gain`
+    // against NAMCore goldens and `gain_stress_v2` against the f64 oracle).
     if !existing_phases.contains_key("lstm_activation_precision") {
         let lstm_log = log_dir.join("lstm_activation_precision.log");
         run_dashboard_phase(
@@ -579,6 +628,7 @@ fn cmd_dashboard(args: &[String]) {
                     "models",
                     "lstm_activation_precision",
                     "--",
+                    "--include-ignored",
                     "--nocapture",
                 ],
                 &[("NAM_METRICS_JSONL", &metrics_path_str)],
@@ -586,8 +636,8 @@ fn cmd_dashboard(args: &[String]) {
             &lstm_log,
             &receipt_path_str,
             &run_id,
-            1,
-            1,
+            3,
+            3,
         );
     }
 
@@ -639,6 +689,16 @@ fn cmd_dashboard(args: &[String]) {
     let receipt_content = fs::read_to_string(&receipt_path).unwrap_or_default();
     if !receipt_content.contains("\"kind\":\"build_metadata\"") {
         let probe = EnvProbe::probe();
+        // `EnvProbe::effective_isa` classifies the host CPU flags; the actual
+        // engine dispatch depends on compile-time features (`avx512` opt-in).
+        let active_isa = if cfg!(target_arch = "x86_64")
+            && !SIMD_MATH.is_avx512
+            && probe.effective_isa == ISA_AVX512
+        {
+            ISA_X86_64_V3
+        } else {
+            probe.effective_isa
+        };
         let meta = serde_json::json!({
             "kind": "build_metadata",
             "cargo_profile": "mixed (audio=release, tools=dev)",
@@ -650,7 +710,10 @@ fn cmd_dashboard(args: &[String]) {
             "git_commit": probe.git_commit,
             "git_dirty_state": probe.git_dirty,
             "run_id": run_id,
-            "effective_isa": probe.effective_isa,
+            "effective_isa": active_isa,
+            "host_isa": probe.effective_isa,
+            "engine_backend": SIMD_MATH.name,
+            "avx512_feature_active": SIMD_MATH.is_avx512,
             "hardware_class": probe.hardware_class.as_str(),
         });
         let _ = append_line(&receipt_path_str, &meta.to_string());

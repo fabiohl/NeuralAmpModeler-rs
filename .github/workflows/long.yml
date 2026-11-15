@@ -80,13 +80,14 @@ jobs:
       - name: Long QA Suite
         # Zero-input workflow: the GitHub "Run workflow" button always uses this
         # recommended configuration. Strict is the engine's release-gate default;
-        # the phase list is the documented long-suite default.
+        # the phase list covers all non-isolated-core gates on shared CI runners.
         run: >-
           ./utils/tests-long.sh --strict --only
-          'preflight-render,preflight-catalog,preflight-package,preflight-freshness,phase1,phase2,phase3,phase4,phase7'
+          'preflight-render,preflight-catalog,preflight-package,preflight-freshness,preflight-simd-probe,phase1,phase2,phase3,phase4,phase7'
+      - name: AVX-512 Cross-ISA Parity Gate
+        run: lib_quiet=1 ./utils/remote-simd-gate.sh --skip-bench
       - name: Quality Dashboard (fidelity + parity)
-        if: always()
-        run: ./utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only
+        run: lib_quiet=1 ./utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
@@ -97,8 +98,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: long-logs-receipts
-          path: |
-            target/logs/**
-            target/long/**/*.jsonl
+          path: target/logs/**
           if-no-files-found: error
           retention-days: 14

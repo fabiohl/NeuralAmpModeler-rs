@@ -49,8 +49,12 @@ pub struct ReportHeader {
     pub git_dirty: bool,
     /// Dashboard run id.
     pub run_id: String,
-    /// Canonical ISA string (the only ISA source, R-09).
+    /// Canonical ISA string of the engine dispatch active during measurement (R-09).
     pub effective_isa: String,
+    /// Host CPU ISA probed from `/proc/cpuinfo` (present when it differs from or qualifies `effective_isa`).
+    pub host_isa: Option<String>,
+    /// Active engine SIMD backend label (`SIMD_MATH.name`), if recorded.
+    pub engine_backend: Option<String>,
     /// `rustc --version` output.
     pub rustc: String,
     /// Cargo build profile (e.g. `release`).
@@ -70,6 +74,8 @@ impl Default for ReportHeader {
             git_dirty: false,
             run_id: String::new(),
             effective_isa: "unknown".into(),
+            host_isa: None,
+            engine_backend: None,
             rustc: "unknown".into(),
             cargo_profile: "release".into(),
             target_triple: "unknown".into(),
@@ -368,6 +374,12 @@ fn header_from_json(value: &Value) -> ReportHeader {
     }
     if let Some(v) = value.get("effective_isa").and_then(Value::as_str) {
         header.effective_isa = v.to_string();
+    }
+    if let Some(v) = value.get("host_isa").and_then(Value::as_str) {
+        header.host_isa = Some(v.to_string());
+    }
+    if let Some(v) = value.get("engine_backend").and_then(Value::as_str) {
+        header.engine_backend = Some(v.to_string());
     }
     if let Some(v) = value.get("rustc_version").and_then(Value::as_str) {
         header.rustc = v.to_string();
@@ -715,7 +727,17 @@ fn render_header(report: &QualityReport, p: &Palette) -> String {
     }
     out.push_str(&format!("   Commit: {} ({dirty})\n", h.git_commit));
     out.push_str(&format!("   Run ID: {}\n", h.run_id));
-    out.push_str(&format!("   ISA:    {}\n", h.effective_isa));
+    match &h.host_isa {
+        Some(host) if host != &h.effective_isa => {
+            out.push_str(&format!(
+                "   ISA:    {} (active engine dispatch; host CPU: {host})\n",
+                h.effective_isa
+            ));
+        }
+        _ => {
+            out.push_str(&format!("   ISA:    {}\n", h.effective_isa));
+        }
+    }
     out.push_str(&format!("   rustc:  {}\n", h.rustc));
     out.push_str(&format!(
         "   profile: {} · target: {}\n",
@@ -1553,4 +1575,31 @@ pub fn render_quality_report(report: &QualityReport, style: RenderStyle) -> Stri
     out.push_str(&render_coverage_matrix(report, &p));
     out.push_str(&render_footer(report, &p));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_header_distinguishes_active_and_host_isa_when_different() {
+        let with_host = r#"{"kind":"build_metadata","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)","host_isa":"AVX-512","engine_backend":"AVX2"}"#;
+        let report = parse_quality_report(with_host).expect("parse build_metadata");
+        assert_eq!(report.header.host_isa.as_deref(), Some("AVX-512"));
+        assert_eq!(report.header.engine_backend.as_deref(), Some("AVX2"));
+        let plain = render_quality_report(&report, RenderStyle::Plain);
+        assert!(
+            plain.contains(
+                "   ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI) (active engine dispatch; host CPU: AVX-512)\n"
+            ),
+            "unexpected header:\n{plain}"
+        );
+
+        let without_host =
+            r#"{"kind":"build_metadata","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)"}"#;
+        let baseline_report = parse_quality_report(without_host).expect("parse baseline");
+        let baseline = render_quality_report(&baseline_report, RenderStyle::Plain);
+        assert!(baseline.contains("   ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI)\n"));
+        assert!(!baseline.contains("host CPU"));
+    }
 }
