@@ -143,7 +143,7 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
             let start = state_0.buffer_start * CH;
             self.rechannel.process_block::<M>(
                 layer_inputs,
-                &mut state_0.layer_buffer[start..start + num_frames * CH],
+                state_0.layer_buffer.window_mut(start, num_frames * CH),
                 num_frames,
             );
 
@@ -205,7 +205,7 @@ impl<const IN: usize, const COND: usize, const CH: usize, const K: usize, const 
                     let next_state = &mut *states_ptr.add(i + 1);
                     let n_start = next_state.buffer_start * CH;
                     let next_layer_buffer =
-                        &mut next_state.layer_buffer[n_start..n_start + num_frames * CH];
+                        next_state.layer_buffer.window_mut(n_start, num_frames * CH);
 
                     layer.process_block_internal::<M>(WavenetProcessContext {
                         condition,

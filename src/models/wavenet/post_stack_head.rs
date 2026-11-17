@@ -305,17 +305,10 @@ impl PostStackHead {
         let input_len = num_frames * in_ch;
 
         let buf_start = stage.state.buffer_start * in_ch;
-        // SAFETY: `input` has `input_len = num_frames * in_ch` f32s, and the
-        // state's ring buffer is sized for `buffer_start + num_frames` frames
-        // (constructor + `advance_frames` contract), so the destination at
-        // `buf_start` fits; the buffers are distinct.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                input.as_ptr(),
-                stage.state.layer_buffer.as_mut_ptr().add(buf_start),
-                input_len,
-            );
-        }
+        stage
+            .state
+            .layer_buffer
+            .write_slice_at(buf_start, &input[..input_len]);
 
         let out_slice = &mut output[..num_frames * out_ch];
         // SAFETY: `out_slice` has `num_frames * out_ch` f32s and the layer
@@ -373,22 +366,16 @@ impl PostStackHead {
             let in_ch = stage.conv.in_ch;
             let input_len = num_frames * in_ch;
             let buf_start = stage.state.buffer_start * in_ch;
-            // SAFETY: `input` has `num_frames * in_ch` f32s, the ring buffer
-            // covers `buf_start + num_frames` frames, and the slices are
-            // distinct.
+            let dst = stage.state.layer_buffer.window_mut(buf_start, input_len);
+            // SAFETY: `input` has `num_frames * in_ch` f32s, `dst` has `input_len`
+            // f32s, and the slices are distinct.
             unsafe {
-                M::copy_with_scale(
-                    input,
-                    &mut stage.state.layer_buffer[buf_start..buf_start + input_len],
-                    scale,
-                );
+                M::copy_with_scale(input, dst, scale);
             }
             // SAFETY: the ring slice has `input_len` f32s and the activation
             // backend matches the CPU ISA.
             unsafe {
-                stage.activation.apply_simd::<M>(
-                    &mut stage.state.layer_buffer[buf_start..buf_start + input_len],
-                );
+                stage.activation.apply_simd::<M>(dst);
             }
             let out_len = num_frames * stage.conv.out_ch;
             // SAFETY: destination `scratch[..out_len]` and the stage ring
@@ -418,8 +405,10 @@ impl PostStackHead {
             }
             let in_ch = stage.conv.in_ch;
             let buf_start = stage.state.buffer_start * in_ch;
-            stage.state.layer_buffer[buf_start..buf_start + in_len]
-                .copy_from_slice(&scratch[..in_len]);
+            stage
+                .state
+                .layer_buffer
+                .write_slice_at(buf_start, &scratch[..in_len]);
             let out_len = num_frames * stage.conv.out_ch;
             // SAFETY: destination `scratch[..out_len]` and the stage ring
             // buffer cover the documented sizes. The convolution copies its
@@ -473,7 +462,11 @@ impl PostStackHead {
 
         let buf_start = stage.state.buffer_start * in_ch;
 
-        stage.state.layer_buffer[buf_start..buf_start + in_ch].fill(0.0);
+        stage
+            .state
+            .layer_buffer
+            .window_mut(buf_start, in_ch)
+            .fill(0.0);
 
         let start_idx = stage.state.buffer_start * in_ch;
         let src_range = start_idx..start_idx + in_ch;
@@ -534,7 +527,7 @@ impl PostStackHead {
             let buf_start = stage.state.buffer_start * in_ch;
             for offset in 0..=kernel {
                 let start = buf_start - offset * in_ch;
-                stage.state.layer_buffer[start..start + in_ch].copy_from_slice(&input);
+                stage.state.layer_buffer.write_slice_at(start, &input);
             }
 
             let mut out_frame = vec![0.0f32; stage.conv.out_ch];

@@ -58,6 +58,7 @@ use neural_amp_modeler_rs::testing::qa::criterion::{
 };
 use neural_amp_modeler_rs::testing::qa::env::{EnvProbe, ISA_AVX512, ISA_X86_64_V3};
 use neural_amp_modeler_rs::testing::qa::ids;
+use neural_amp_modeler_rs::testing::qa::metrics::{FidelityRecord, MetricValue};
 use neural_amp_modeler_rs::testing::qa::render::{
     RenderStyle, parse_quality_report_file, render_quality_report,
 };
@@ -78,6 +79,16 @@ fn host_has_full_avx512() -> bool {
         is_x86_feature_detected!("avx512bw"),
         is_x86_feature_detected!("avx512dq"),
     )
+}
+
+/// Returns the ISA actually active for engine dispatch (downscales AVX-512
+/// host classification to x86-64-v3 when the `avx512` feature is disabled).
+fn detect_active_isa(probe: &EnvProbe) -> &'static str {
+    if cfg!(target_arch = "x86_64") && !SIMD_MATH.is_avx512 && probe.effective_isa == ISA_AVX512 {
+        ISA_X86_64_V3
+    } else {
+        probe.effective_isa
+    }
 }
 
 /// Non-x86_64 hosts never execute the x86 AVX2-vs-AVX-512 matrix.
@@ -691,14 +702,7 @@ fn cmd_dashboard(args: &[String]) {
         let probe = EnvProbe::probe();
         // `EnvProbe::effective_isa` classifies the host CPU flags; the actual
         // engine dispatch depends on compile-time features (`avx512` opt-in).
-        let active_isa = if cfg!(target_arch = "x86_64")
-            && !SIMD_MATH.is_avx512
-            && probe.effective_isa == ISA_AVX512
-        {
-            ISA_X86_64_V3
-        } else {
-            probe.effective_isa
-        };
+        let active_isa = detect_active_isa(&probe);
         let meta = serde_json::json!({
             "kind": "build_metadata",
             "cargo_profile": "mixed (audio=release, tools=dev)",
@@ -884,7 +888,14 @@ fn cmd_dashboard(args: &[String]) {
 
     // ── Check / Save ──
     if flags.get("save").is_some() {
-        execute_save(contract_path, &receipt_path_str);
+        save_dashboard_contract(
+            contract_path,
+            &receipt_path_str,
+            &report_path_str,
+            &run_id,
+            fidelity_only,
+            perf_passed,
+        );
     }
 
     if flags.get("check").is_some() {
@@ -2022,25 +2033,17 @@ fn cmd_save(args: &[String]) {
     exit(0);
 }
 
-fn execute_save(contract_path: &str, receipt_path: &str) {
-    // Validate the contract payload before touching anything (fail-closed:
-    // a corrupt contract must never be promoted).
-    let contract = match fs::read_to_string(contract_path)
-        .map_err(|e| format!("cannot read contract {contract_path}: {e}"))
-        .and_then(|s| QualityContract::from_json_str(&s).map_err(|e| e.to_string()))
-    {
-        Ok(c) => c,
-        Err(e) => run_error(e),
-    };
-
-    // Fidelity gate: fidelity-domain phases must PASS; the performance domain
-    // never blocks (PERF-006). Provenance is its own domain: a stale fixture
-    // generator blocks the snapshot, but is reported as a provenance failure,
-    // never as a fidelity failure.
+/// Reads and validates the phase receipt before saving a contract.
+///
+/// Refuses (`run_error`) if the provenance phase (`freshness`) or any fidelity
+/// phase failed; when `require_perf` is true, also refuses if `regression_gate`
+/// failed or did not complete with `PASS`.
+fn validate_receipt_for_save(receipt_path: &str, require_perf: bool) {
     let receipt_lines = match read_jsonl_lines(receipt_path) {
         Ok(lines) => lines,
         Err(e) => run_error(format!("cannot read phase receipt {receipt_path}: {e}")),
     };
+    let mut perf_status: Option<String> = None;
     for (i, line) in receipt_lines.iter().enumerate() {
         let value: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -2065,7 +2068,168 @@ fn execute_save(contract_path: &str, receipt_path: &str) {
                 "contract NOT saved: fidelity phase '{phase_id}' FAILed (--save requires all fidelity phases to pass)"
             ));
         }
+        if phase_id == "regression_gate" {
+            perf_status = Some(status.to_string());
+        }
     }
+    if require_perf && perf_status.as_deref() != Some("PASS") {
+        let actual = perf_status.as_deref().unwrap_or("NOT_RUN");
+        run_error(format!(
+            "contract NOT saved: regression_gate status is '{actual}' (--save without --fidelity-only requires PASS)"
+        ));
+    }
+}
+
+fn parse_finite_metric(v: &MetricValue) -> Option<f64> {
+    v.as_finite()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|x| x.is_finite())
+}
+
+fn save_dashboard_contract(
+    contract_path: &str,
+    receipt_path: &str,
+    report_path: &str,
+    run_id: &str,
+    fidelity_only: bool,
+    perf_passed: bool,
+) {
+    validate_receipt_for_save(receipt_path, !fidelity_only);
+    if !fidelity_only && !perf_passed {
+        run_error("contract NOT saved: performance regression_gate did not pass".to_string());
+    }
+
+    let mut contract = match fs::read_to_string(contract_path)
+        .map_err(|e| format!("cannot read contract {contract_path}: {e}"))
+        .and_then(|s| QualityContract::from_json_str(&s).map_err(|e| e.to_string()))
+    {
+        Ok(c) => c,
+        Err(e) => run_error(e),
+    };
+    let report = match parse_verify_report_file(report_path) {
+        Ok(r) => r,
+        Err(e) => run_error(format!("cannot parse verify report {report_path}: {e}")),
+    };
+
+    let probe = EnvProbe::probe();
+    let active_isa = detect_active_isa(&probe);
+    contract.generated_at = neural_amp_modeler_rs::common::diagnostics::format::timestamp();
+    contract.provenance.git_commit = probe.git_commit;
+    contract.provenance.git_dirty = probe.git_dirty;
+    contract.provenance.run_id = run_id.to_string();
+    contract.provenance.effective_isa = active_isa.to_string();
+    contract.provenance.cpu_model = probe.cpu_model;
+    contract.provenance.rustc = probe.rustc_version;
+    contract.provenance.cargo_profile = "release".to_string();
+    contract.provenance.hardware_class = Some(probe.hardware_class.as_str().to_string());
+
+    let mut report_by_label: HashMap<&str, &FidelityRecord> = HashMap::new();
+    for record in &report.fidelity {
+        report_by_label
+            .entry(record.label.as_str())
+            .or_insert(record);
+    }
+    for record in &report.fidelity {
+        if let Some(canonical) = ids::resolve_fidelity_alias(&record.label) {
+            report_by_label.entry(canonical).or_insert(record);
+        }
+    }
+
+    let mut worst_esr: f64 = 0.0;
+    for entry in &mut contract.fidelity {
+        if let Some(record) = report_by_label.get(entry.label.as_str()).copied() {
+            if let Some(esr) = parse_finite_metric(&record.esr) {
+                entry.esr_namcore = esr;
+            }
+            if let Some(esr_f64) = parse_finite_metric(&record.esr_f64)
+                && !record
+                    .f64_oracle_provenance
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with("proxy:"))
+            {
+                entry.esr_f64 = Some(esr_f64);
+            } else if let Some(esr_f64) = parse_finite_metric(&record.esr_f64)
+                && entry.esr_f64.is_some()
+            {
+                entry.esr_f64 = Some(esr_f64);
+            }
+            match &record.snr_db {
+                MetricValue::Null => entry.snr_db = None,
+                raw => {
+                    if let Some(snr) = parse_finite_metric(raw) {
+                        entry.snr_db = Some(snr);
+                    }
+                }
+            }
+            if let Some(mrstft) = parse_finite_metric(&record.mrstft) {
+                entry.mrstft = mrstft;
+            }
+        } else if !entry.optional {
+            run_error(format!(
+                "contract NOT saved: missing mandatory fidelity record '{}'",
+                entry.label
+            ));
+        }
+        if !entry.optional && entry.esr_namcore.is_finite() {
+            worst_esr = worst_esr.max(entry.esr_namcore);
+        }
+    }
+
+    if !fidelity_only {
+        for entry in &mut contract.performance {
+            let Some(lat) = report
+                .latency
+                .iter()
+                .find(|r| r.label == entry.id || r.label == entry.label)
+            else {
+                run_error(format!(
+                    "contract NOT saved: missing latency measurement for '{}'",
+                    entry.id
+                ));
+            };
+            entry.median_latency_us = (lat.median_latency_us * 100.0).round() / 100.0;
+        }
+    }
+
+    if let Some(ref mut alerts) = contract.monitoring_alerts {
+        alerts.worst_esr_parity.measured = worst_esr;
+    }
+
+    let rendered = match contract.to_json_pretty() {
+        Ok(s) => s + "\n",
+        Err(e) => run_error(format!("cannot serialize contract: {e}")),
+    };
+    if let Err(e) = atomic_write(Path::new(contract_path), &rendered) {
+        run_error(format!("contract save failed: {e}"));
+    }
+    eprintln!(
+        "contract saved: {contract_path} (atomic, provenance={}, fidelity={}, performance={})",
+        contract.provenance.git_commit,
+        contract.fidelity.len(),
+        if fidelity_only {
+            "preserved".to_string()
+        } else {
+            contract.performance.len().to_string()
+        }
+    );
+}
+
+fn execute_save(contract_path: &str, receipt_path: &str) {
+    // Validate the contract payload before touching anything (fail-closed:
+    // a corrupt contract must never be promoted).
+    let contract = match fs::read_to_string(contract_path)
+        .map_err(|e| format!("cannot read contract {contract_path}: {e}"))
+        .and_then(|s| QualityContract::from_json_str(&s).map_err(|e| e.to_string()))
+    {
+        Ok(c) => c,
+        Err(e) => run_error(e),
+    };
+
+    // Fidelity gate: fidelity-domain phases must PASS; the performance domain
+    // never blocks (PERF-006). Provenance is its own domain: a stale fixture
+    // generator blocks the snapshot, but is reported as a provenance failure,
+    // never as a fidelity failure.
+    validate_receipt_for_save(receipt_path, false);
 
     let rendered = match contract.to_json_pretty() {
         Ok(s) => s + "\n",

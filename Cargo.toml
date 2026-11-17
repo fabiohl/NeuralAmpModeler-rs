@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "2.1.0"
+version = "3.0.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -98,12 +98,12 @@ loom = "0.7"
 # `MapViewOfFile3`); inert on Linux and macOS builds.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",
     "Win32_System_Memory",
-    "Win32_System_Performance",
     "Win32_System_SystemInformation",
 ] }
 

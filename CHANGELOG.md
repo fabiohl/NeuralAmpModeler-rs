@@ -12,41 +12,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [3.0.0] - 2026-11-17
 
-### Added [Unreleased]
+This major release resolves physical-aliasing soundness in `MirroredBuffer<T>`, enforces strict backpressure and FIFO ordering in `StreamingResampleBuffer`, converges extensible WAV validation, adds experimental verifiable Windows 11 (`x86_64` and `aarch64`) support, and hardens cross-platform diagnostics and QA gates. Read **Breaking Changes** before upgrading from `2.0.0`.
+
+### Breaking Changes and Migration [3.0.0]
+
+- **`MirroredBuffer<T>` `DerefMut` removed (`src/dsp/mirror_buf.rs`):** Removed `impl DerefMut for MirroredBuffer<T>`, which previously exposed a `2N` mutable slice and allowed safe code (e.g. `split_at_mut(size())`) to obtain two aliasing `&mut [T]` references backed by the same physical memory. `Deref<Target = [T]>` (`2N` shared reads) is preserved, and safe bounded mutable access is now provided via `Index<I: SliceIndex<[T]>>`, `IndexMut<usize>`, `window_mut(offset, len)`, `try_window_mut(offset, len)` (enforcing `len <= size()`), `write_slice_at`, `fill`, and allocation-free `copy_within`.
+- **WaveNet post-stack head and A1 geometry structs:**
+  - `PostStackHead` (`src/models/wavenet/post_stack_head.rs`) replaced public `conv`, `activation`, and `state` fields and `process_block_internal` with canonical multi-stage head fields (`stages`, `canonical`).
+  - `HeadConfig` (`src/loader/nam_json/model.rs`) added `kernel_sizes`, and `FreeWavenetGeometry` (`src/loader/nam_json/topology/wavenet/mod.rs`) added `layer_kernel_sizes` to support per-layer kernel sizes in WaveNet A1 geometry.
+- **Internal allocator metadata (`src/math/common/huge_alloc.rs`):** Marked `AllocInfo` and `deallocate_huge` as `#[doc(hidden)]` (paired exclusively with `pub(crate) allocate_huge_pages`).
+
+### Added [3.0.0]
 
 - **Experimental Verifiable Windows 11 support (`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`):**
   - Win32 `MirroredBuffer<T>` backend (`src/dsp/mirror_buf/windows.rs`) using `VirtualAlloc2` + `MapViewOfFile3` placeholders, 6-stage `S0`–`S5` transactional rollback, immediate `CloseHandle`, and dual `UnmapViewOfFile` on `Drop`, preserving `size_of::<MirroredBuffer<T>>() == 16`.
-  - ARM64 timer probe (`src/common/tsc.rs`) protected by a Vectored Exception Handler (`AddVectoredExceptionHandler`) with automatic fallback to `QueryPerformanceCounter`.
+  - ARM64 timer probe (`src/common/tsc.rs`) protected by a Vectored Exception Handler (`AddVectoredExceptionHandler`) with automatic fallback to `std::time::Instant`.
   - Portable PII/Windows/UNC path redaction and crash directory resolution (`src/common/diagnostics/format.rs`, `src/common/panic_hook.rs`, `src/loader/loaded_model_pair.rs`).
   - Internal `nam-preflight` diagnostic crate (`tools/preflight`), `.gitattributes` (`eol=lf`), and native CI jobs (`windows-2025`, `windows-11-arm`) integrated into `cross-platform-parity` (`0 ULP` bitwise parity across all 7 canonical models).
+- **WaveNet A1 per-layer `kernel_sizes` and canonical multi-stage `PostStackHead`** (`src/models/wavenet/`, `src/loader/nam_json/`), plus `LinearModel` prewarm sample parity matching NAMCore PR #352.
+- **Fail-closed QA reconcilers (`tools/qa`):** Added typed `nam_simd_parity` (reconciling the 10 mandatory AVX2↔AVX-512 parity cases via `NAM_SIMD_PARITY_JSONL`) and `nam_skips` (fail-closed `SkipRecord` JSONL consumer in `tests-quick.sh` and `tests-long.sh`), replacing log-text `grep` checks.
 
-### Fixed [Unreleased]
+### Changed [3.0.0]
 
+- **`StreamingResampleBuffer` backpressure and FIFO ordering (`src/dsp/resampling/streaming_adapter.rs`):** Bounded `drain_model_to_out` to `out_fifo.free() + discard_remaining` with `unpop` preservation and zero-progress termination; resumed draining during `pull_output`; restricted `process` bypass fast-path to empty FIFOs; and signaled `StreamingResult::underflow` immediately when `produced < drained` without fabricating output samples.
+- **Typed resampler construction errors (`src/dsp/resampling/streaming_adapter.rs`):** Switched `StreamingResampleBuffer` to `NamResampler::new_simple_typed` and `new_linear_simple_typed` so invalid sample rates report `NamErrorCode::ResamplerBuildFailed` (`E2200`) instead of `OutOfMemory`.
+- **Cross-platform `tsc`, `huge_alloc`, `mirror_buf`, and diagnostics cleanup:**
+  - Removed unreachable `QueryPerformanceCounter` dead code and `"Win32_System_Performance"` from root `Cargo.toml` in Windows ARM64 `read_counter()` hot-path (`src/common/tsc.rs`).
+  - Moved POSIX `memfd_create`/`shm_open` backing helpers from `huge_alloc.rs` to `src/dsp/mirror_buf/posix.rs`, restricted Linux `mmap` huge-page paths to `target_os = "linux"`, and routed macOS allocations through the global allocator (`AllocInfo::Heap` / `HugePageStatus::Heap`).
+  - Parameterized `baseline_isa_label()` for `x86_64` vs `aarch64`, added `uname`/`RtlGetVersion` kernel version detection in `system_info.rs`, scoped `emit_irq_advisory` to Linux, and implemented `sysctlbyname` CPU/OS reporting on macOS in `tools/preflight`.
+- **Documentation, examples, and `docs.rs` surface:** Aligned `examples/offline_render.rs` and `README.md` (separating `crates.io` consumers from repo checkouts and fixing `nam_parity_vector` CLI syntax), updated `utils/consumer-smoke.sh` to validate the extracted `.crate` tarball, refined `doc(cfg)` attributes on `rt_hardening`, and extended `utils/docsrs-check.sh` across all 5 `[package.metadata.docs.rs]` targets.
+
+### Fixed [3.0.0]
+
+- **Strict `WAVE_FORMAT_EXTENSIBLE` (`0xFFFE`) validation and parser convergence (`src/loader/wav.rs`, `src/dsp/cabsim/ir_parse.rs`):** Converged `fmt` chunk parsing via `parse_fmt_chunk`, enforcing `fmt_size >= 40`, `cbSize >= 22`, exact `EXTENSIBLE_GUID_TAIL`, `valid_bits == bits_per_sample`, `block_align`, and `byte_rate`, while preserving `cabsim` odd-sized EOF `data` chunks without padding.
+- **`nam_quality dashboard --save` contract persistence (`tools/qa/src/bin/nam_quality.rs`):** Fixed `--save` so it refreshes `generated_at`, `provenance`, `fidelity`, `performance`, and `worst_esr_parity` in `docs/quality-contract.json` from the verified report before atomic write, failing closed if `regression_gate` did not pass (unless `--fidelity-only`).
 - **AVX-512 `CH=8` `film.active_mask() == 0` fast-path (`src/models/a2/conv1d_ch8/simd.rs`):** Removed the early return in `layer_forward_ch8_block_simdmath` that skipped the dilated convolution loop, restoring `x86_64-linux` vs. `x86_64-avx512` parity on `wavenet_a2_full` (`SNR = 129.14 dB`, `ESR = 1.22e-13`).
-
 - **Portable temporary paths in loader/CabSim tests (`src/dsp/cabsim/loader_test.rs`, `src/loader/loader_malformed_test.rs`):** Replaced hardcoded POSIX `/tmp/*.wav` paths with `std::env::temp_dir()` and RAII cleanup guards.
-
 - **`--all-targets --all-features` on aarch64:** AVX-512 tests and benchmarks now gate on the `nam_avx512` cfg emitted by `build.rs` instead of the raw `avx512` feature, so `cargo check --all-targets --all-features` succeeds on non-`x86_64` targets. The obsolete `compile_error!` that rejected `avx512` on non-`x86_64` was removed; the `build.rs` gate still keeps the AVX-512 modules out of those builds.
-
-- **QA summary isolation and C++ oracle build caching:** `utils/_lib.sh` is now side-effect free when sourced, and `emit` no longer appends to `target/logs/summary.txt` when a child process runs with `lib_quiet=1`. `tests/parity/cpp_parity.rs` now passes `lib_quiet=1` to `utils/ensure_namcore_render.sh` and caches its verification per test binary (`OnceLock`), preventing child script invocations from injecting spurious `RESULT: PASS (0s)` lines into `summary.txt`. A failed summary append records `EMIT_RC`, rewrites the discipline's `*-status.tsv` carrier to `FAIL`, and forces `FAIL (fails=emit)` instead of silently reporting `PASS`.
-
-- **QA script hardening (`utils/*.sh`, `golden_gen_build.sh`):**
-  - Pre-`lib_init` argument errors now fail closed via `usage_fail` (`RESULT: FAIL (0s) fails=uso gaps=none`, exit `2`) without creating `target/logs` or truncating existing evidence.
-  - `utils/quality-dashboard.sh` and `utils/check-model.sh` now reject non-canonical/legacy CLI flags, and `nam_quality` resolves `CARGO_TARGET_DIR` for Criterion and benchmark-constant artifacts instead of hardcoding `target/`.
-  - `utils/ensure_namcore_render.sh` now emits canonical `PHASE: render` and `PHASE: render PASS`/`FAIL` lines to `stderr` before `finish`.
-  - `utils/lints.sh` continues across all eight phases via `run_step` so every static failure is surfaced in a single run, checks the opposite cross-compilation target (`aarch64-unknown-linux-gnu` on `x86_64`, `x86_64-unknown-linux-gnu` on `aarch64`), and scans all tracked `.rs`, `.sh`, `.py`, `build.rs`, and `Cargo.toml` files for SPDX headers.
-  - `utils/tests-quick.sh` enforces a minimum executed test count (`assert_ran_tests 2000`) and no longer emits `PASS` alongside `GAP` when `nam_freshness` reports generator drift (`rc=3`).
-  - `utils/tests-long.sh` validates `--only` phase names up front, lazy-builds `nam_perf_gate` only when RT/perf phases (`phase5`, `phase6`, `phase8`) are selected, records `SKIP_CAPABILITY` for capability/baseline gaps, stops emitting non-canonical `SKIPPED` lines to `summary.txt`, runs `simd_probe` with `--locked --release`, and temporarily lowers `kernel.perf_event_paranoid` to `1` during timing phases when passwordless `sudo` is available.
-  - `tests/parity/cpp_parity.rs` reports `render_tool_unavailable` skips per individual caller test (including `d02_live_cross_validation_oracle_probe` and `test_wav_ir_cross_rate_mismatch_parity`) rather than inside the `OnceLock` initializer, avoiding double-counting the first caller or masking subsequent probe skips.
-  - `tests/fixtures/golden_gen_build.sh` now pairs `lib_init` with `finish` so golden regeneration runs leave a canonical `RESULT:` and carrier record.
-
-- **Deterministic log initialization, target-cache sharing, and provenance in CI (`ci.yml`, `long.yml`, `qa-summary`):**
-  - The `msrv` and `cross-platform-parity` jobs now call `lib_init` before their first `phase`/`emit`, so `target/logs` is created on a cold cache and `summary.txt` is truncated per run instead of publishing stale lines from a warm cache. The `msrv` job exports `RUSTUP_TOOLCHAIN: 1.99.0` to override `rust-toolchain.toml` and checks `--workspace --all-targets --features testing`.
-  - The `linux-arm64` job in `ci.yml` now installs `x86_64-unknown-linux-gnu` so `clippy-aarch64` runs without emitting a `cross-target-missing` gap.
-  - Provisioning helpers (`setup-third-party.sh`, `ensure_namcore_render.sh`) in `ci.yml` (`cpp-parity`) and `long.yml` run with `lib_quiet=1` so they do not inject extra `RESULT:` lines into `summary.txt`, and `.github/actions/qa-summary` surfaces all `RESULT:` verdicts in the step summary heading.
-  - `long.yml` now exports `CARGO_TARGET_DIR: target/long/release` at the workflow level (shared by `Swatinem/rust-cache`, the release build gate, `tests-long.sh`, and `quality-dashboard.sh`), pre-builds `--release --features testing` binaries and test targets (`--no-run`) in the release build gate before timed phases start, and records `target/logs/ci-provenance.log` (with `rustc`/`cargo` versions) and `target/logs/evidence-manifest.json`.
+- **QA summary isolation, script hardening, and CI provenance (`utils/*.sh`, `tests/parity/cpp_parity.rs`, `ci.yml`, `long.yml`):** Isolated `lib_quiet=1` child invocations from `summary.txt`, enforced fail-closed carrier/receipt writes and minimum test counts (`assert_ran_tests 2000`), unified `CARGO_TARGET_DIR: target/long/release` and provenance recording in `long.yml`, and fixed `LogBuffer` snapshot timing in `streaming_adapter_test`.
 
 ## [2.0.0] - 2026-11-03
 

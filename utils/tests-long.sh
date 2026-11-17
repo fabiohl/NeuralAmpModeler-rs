@@ -97,6 +97,9 @@ ensure_long_receipt_bin || {
   echo "ERROR: nam_long_receipt binary could not be built" >&2
   FAILS+=("qa-bins"); emit "PHASE: qa-bins FAIL"; finish || true; exit 1
 }
+if is_phase_selected phase1 catch-all; then
+  SKIPS_BIN=$(ensure_qa_bin nam_skips testing) || { echo "ERROR: nam_skips binary could not be built" >&2; FAILS+=("qa-bins"); emit "PHASE: qa-bins FAIL"; finish || true; exit 1; }
+fi
 if is_phase_selected phase5 rt-deadline || is_phase_selected phase6 rt-jitter || is_phase_selected phase8 perf; then
   PERF_GATE_BIN=$(ensure_qa_bin nam_perf_gate testing) || {
     echo "ERROR: nam_perf_gate binary could not be built" >&2
@@ -218,15 +221,14 @@ exec_phase "preflight-simd-probe" "preflight-simd-probe" 60 0 run_preflight_simd
 
 # --- Phase 1: catch-all ---
 run_phase_catch_all() {
-  local rc=0
+  local rc=0 blocking skips_rc=0
   run_cmd cargo test --locked --release --features testing --no-fail-fast -- --include-ignored || rc=$?
-  if [ -s "$SKIPS" ]; then
-    local total optional blocking
-    total=$(wc -l < "$SKIPS")
-    optional=$(grep -c '"optional":true' "$SKIPS" 2>/dev/null || true)
-    optional=${optional:-0}
-    blocking=$((total - optional))
-    [ "$blocking" -gt 0 ] && PHASE_GAP="skip-capability:$blocking"
+  blocking=$(run_cmd "$SKIPS_BIN" --path "$SKIPS" --run-id "$NAM_RUN_ID" --format blocking) || skips_rc=$?
+  if [ "$skips_rc" -ne 0 ] || ! [[ "$blocking" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: invalid or unreadable skip log $SKIPS (rc=$skips_rc)" >&2
+    [ "$rc" -eq 0 ] && rc=1
+  elif [ "$blocking" -gt 0 ]; then
+    PHASE_GAP="skip-capability:$blocking"
   fi
   return "$rc"
 }

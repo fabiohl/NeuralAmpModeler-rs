@@ -196,7 +196,7 @@ impl WaveNetLayerArrayDyn {
             let start = state_0.buffer_start * ch;
             self.rechannel.process_block::<M>(
                 layer_inputs,
-                &mut state_0.layer_buffer[start..start + num_frames * ch],
+                state_0.layer_buffer.window_mut(start, num_frames * ch),
                 num_frames,
             );
 
@@ -250,7 +250,7 @@ impl WaveNetLayerArrayDyn {
                     let next_state = &mut *states_ptr.add(i + 1);
                     let n_start = next_state.buffer_start * ch;
                     let next_layer_buffer =
-                        &mut next_state.layer_buffer[n_start..n_start + num_frames * ch];
+                        next_state.layer_buffer.window_mut(n_start, num_frames * ch);
 
                     layer.process_block_internal::<M>(WavenetProcessContext {
                         condition,
@@ -280,8 +280,9 @@ impl WaveNetLayerArrayDyn {
                 }
                 HeadRechannelDyn::Conv1d { conv, state } => {
                     let start = state.buffer_start * ch;
-                    state.layer_buffer[start..start + num_frames * ch]
-                        .copy_from_slice(&self.head_accum[0..num_frames * ch]);
+                    state
+                        .layer_buffer
+                        .write_slice_at(start, &self.head_accum[0..num_frames * ch]);
 
                     if PREWARM {
                         let src_range = start..start + ch;

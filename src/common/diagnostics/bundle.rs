@@ -322,9 +322,9 @@ impl DiagnosticBundle {
             self.system.kernel,
             self.system.host_library_version.as_deref().unwrap_or("N/A"),
             if self.system.features.is_empty() {
-                "none (baseline x86-64-v3 only)".to_string()
+                std::borrow::Cow::Borrowed(super::system_info::baseline_isa_label())
             } else {
-                self.system.features.join(", ")
+                std::borrow::Cow::Owned(self.system.features.join(", "))
             },
             timestamp(),
         ));

@@ -51,7 +51,7 @@
 //!   immediate `CloseHandle`, and dual `UnmapViewOfFile` on `Drop`), preserving
 //!   `size_of::<MirroredBuffer<T>>() == 16`.
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, Index, IndexMut, Range};
 use std::sync::atomic::AtomicU8;
 
 mod alloc;
@@ -127,30 +127,30 @@ pub fn huge_page_status() -> MirrorHugePageStatus {
 ///
 /// # Half-aliasing contract
 ///
-/// The virtual extent exposed by `Deref`/`DerefMut` is `2N` elements (`N =
+/// The virtual extent exposed by `Deref` (`&[T]`) is `2N` elements (`N =
 /// size()`), but the **two halves are NOT independent storage**: they map the
 /// same physical pages twice (`MAP_SHARED` on the same fd/offset in
-/// `mirror_buf/alloc.rs`). Consequences:
+/// `mirror_buf/posix.rs`, or dual section views in `mirror_buf/windows.rs`).
+/// Consequences:
 ///
 /// - A write to `buf[i]` for `i < N` is observable at `buf[N + i]`, and vice
 ///   versa — both addresses alias the same physical location. The mirror exists
 ///   precisely so linear reads/writes that cross the `N` boundary behave as a
 ///   wrap-around on the same physical buffer.
-/// - The second half exists so a window that crosses the end of the first half
-///   (a ring wrap) can be read — and, in the ring write pattern, written —
-///   linearly through a single `&[T]`/`&mut [T]` borrow. Such a wrap write is
-///   *intended* to mutate the physical start of the buffer.
-/// - Do **not** treat the two halves as disjoint regions you can own
-///   simultaneously. `split_at_mut(size())` yields two `&mut [T]` slices that
-///   are disjoint in *virtual address space* but physically alias the same
-///   pages; using both as if they were independent buffers (e.g. writing
-///   different data through each) is not a sound way to create two independent
-///   `&mut` views of the same physical data. The supported pattern is a single
-///   mutable borrow over the full `2N` view, or a borrow confined to one side
-///   of a linear operation that crosses the boundary as a wrap.
-/// - Element reads/writes of `T` are `Copy` (f32/f64/i32/…) in every in-crate
-///   instantiation, so no `Drop` runs through the aliased mapping; `T` must
-///   remain `Copy`-like (`Deref` requires no `Drop` of an aliased slot).
+/// - `Deref` (`&[T]` over `2N`) is sound for shared reads because `T: MirrorSafe`
+///   is `Copy` with no `Drop` glue and no interior mutability (`UnsafeCell` is
+///   `!Copy`), and no `&mut` borrow can coexist with `&self`.
+/// - `DerefMut` is **intentionally not implemented**: exposing `&mut [T]` over
+///   `2N` would let safe code call `split_at_mut(buf.size())` to obtain two
+///   simultaneously live `&mut [T]` slices over the same physical memory,
+///   violating Rust's exclusive-reference (`noalias`) guarantees and enabling
+///   safe data races.
+/// - Mutable access is exposed exclusively through operations that cannot
+///   create overlapping `&mut` borrows: single-element indexing (`IndexMut<usize>`),
+///   bounded mutable windows of at most `N` elements (`window_mut` /
+///   `try_window_mut`, where `len <= N` guarantees every element maps to a
+///   distinct physical slot), `write_slice_at`, `fill`, and ring-aware
+///   `copy_within`.
 ///
 pub(crate) mod private {
     /// Private sealing trait preventing external arbitrary implementations of [`super::MirrorSafe`].
@@ -184,19 +184,21 @@ impl_mirror_safe!(f32, f64, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 ///
 /// The mirror mapping makes every physical slot reachable through two virtual
 /// addresses, and the storage is zero-filled at creation. Soundness of
-/// `Deref`/`DerefMut` — which reinterpret the mapping as a `2N`-element
-/// `[T]` — requires every `T` used with this buffer to satisfy:
+/// `Deref` (shared `2N` view) and bounded mutable windows (`len <= N`) requires
+/// every `T` used with this buffer to satisfy:
 ///
 /// 1. **All-bits-zero is a valid `T`.** Storage is created zero-filled
-///    (fresh mmap/ftruncate pages), so an all-zero bit pattern must be a
-///    valid value of `T` — types with niches forbidding it (e.g.
-///    `NonZeroU32`, references `&T`, `NonNull<u8>`) are forbidden.
-/// 2. **No `Drop` glue.** A slot is reachable and overwritable through two
-///    virtual addresses; memory is unmapped without running element drops.
-///    `Self: Copy` guarantees absence of custom destructors.
-/// 3. **Aliasing tolerance under `&mut`.** Writes through the mirrored view
-///    intentionally create aliased observations of the same physical bytes;
-///    `T` must not rely on reference identity or unique addresses.
+///    (fresh mmap/ftruncate or pagefile section pages), so an all-zero bit
+///    pattern must be a valid value of `T` — types with niches forbidding it
+///    (e.g. `NonZeroU32`, references `&T`, `NonNull<u8>`) are forbidden.
+/// 2. **No `Drop` glue and no interior mutability.** A slot is reachable and
+///    overwritable through two virtual addresses; memory is unmapped without
+///    running element drops. `Self: Copy` guarantees absence of custom
+///    destructors and forbids `UnsafeCell`.
+/// 3. **Aliasing tolerance across borrows.** Writes through a bounded mutable
+///    borrow intentionally update the mirrored observation at the partner
+///    virtual offset once the mutable borrow ends; `T` must not rely on
+///    reference identity or unique addresses.
 /// 4. **No address-derived indirection.** `T` must not derive meaning from its
 ///    own virtual memory address.
 ///
@@ -221,6 +223,23 @@ impl_mirror_safe!(f32, f64, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 /// // Zero-Sized Types () do not implement MirrorSafe:
 /// let _ = MirroredBuffer::<()>::new(1024);
 /// ```
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+///
+/// // DerefMut is absent: safe code cannot split the 2N view into two aliasing `&mut [T]` halves:
+/// let mut buf = MirroredBuffer::<f32>::new(16).unwrap();
+/// let n = buf.size();
+/// let (_a, _b) = buf.split_at_mut(n);
+/// ```
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+///
+/// // Mutable range indexing across > N elements is rejected at compile time:
+/// let mut buf = MirroredBuffer::<f32>::new(16).unwrap();
+/// let _s: &mut [f32] = &mut buf[..];
+/// ```
 pub struct MirroredBuffer<T: MirrorSafe> {
     ptr: *mut T,
     size_elements: usize,
@@ -237,8 +256,218 @@ pub fn set_simulate_fail(fail: bool) {
 
 impl<T: MirrorSafe> MirroredBuffer<T> {
     /// Returns the physical buffer size (before mirroring) in elements.
+    #[inline(always)]
     pub fn size(&self) -> usize {
         self.size_elements
+    }
+
+    /// Returns a bounded mutable slice covering `offset..offset + len` if
+    /// `len <= self.size()` and `offset + len <= 2 * self.size()`.
+    ///
+    /// Enforcing `len <= self.size()` guarantees that no two elements in the
+    /// returned `&mut [T]` alias the same physical memory, even when the
+    /// window crosses the `N` mirror seam.
+    #[inline(always)]
+    pub fn try_window_mut(&mut self, offset: usize, len: usize) -> Option<&mut [T]> {
+        let n = self.size_elements;
+        if len > n {
+            return None;
+        }
+        let end = offset.checked_add(len)?;
+        if end > n * 2 {
+            return None;
+        }
+        // SAFETY: `offset + len <= 2 * size_elements` keeps the range within the valid
+        // `2N` virtual mapping (`self.ptr` provenance spans `2N` elements, page-aligned >= align_of::<T>()).
+        // `len <= size_elements` guarantees that for any distinct `i != j` in `offset..offset + len`,
+        // `0 < |i - j| < N`, so `i % N != j % N`: every slot in the returned `&mut [T]` maps
+        // to a distinct physical location (zero internal aliasing). `&mut self` guarantees exclusive access.
+        Some(unsafe { std::slice::from_raw_parts_mut(self.ptr.add(offset), len) })
+    }
+
+    /// Returns a bounded mutable slice covering `offset..offset + len`.
+    ///
+    /// # Panics
+    /// Panics if `len > self.size()` (which would allow internal physical
+    /// aliasing) or if `offset + len > 2 * self.size()`.
+    #[inline(always)]
+    pub fn window_mut(&mut self, offset: usize, len: usize) -> &mut [T] {
+        let n = self.size_elements;
+        assert!(
+            len <= n,
+            "MirroredBuffer::window_mut: window length {len} exceeds physical size {n}"
+        );
+        let end = offset
+            .checked_add(len)
+            .expect("MirroredBuffer::window_mut: offset + len overflowed usize");
+        assert!(
+            end <= n * 2,
+            "MirroredBuffer::window_mut: window {offset}..{end} out of bounds (2N = {})",
+            n * 2
+        );
+        // SAFETY: Same invariants verified above as `try_window_mut`: `offset + len <= 2 * N`
+        // within the valid `2N` mapping and `len <= N` ensures every slot is physically distinct.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.add(offset), len) }
+    }
+
+    /// Copies `src` into the bounded window starting at `offset`.
+    ///
+    /// # Panics
+    /// Panics if `src.len() > self.size()` or `offset + src.len() > 2 * self.size()`.
+    #[inline(always)]
+    pub fn write_slice_at(&mut self, offset: usize, src: &[T]) {
+        self.window_mut(offset, src.len()).copy_from_slice(src);
+    }
+
+    /// Fills all `N = self.size()` physical elements with `value`.
+    ///
+    /// Because both virtual halves map the same physical pages, writing `[0..N)`
+    /// updates `[N..2N)` in one pass.
+    #[inline]
+    pub fn fill(&mut self, value: T) {
+        // SAFETY: `self.ptr` is valid for `size_elements * 2` elements, so the first
+        // `size_elements` physical elements `[0..N)` are valid, aligned, and mutually disjoint.
+        // Exclusive `&mut self` ensures no other reference exists during the fill.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size_elements) }.fill(value);
+    }
+
+    /// Copies `src` to `dest` within the `2N` mirrored view, handling both
+    /// virtual and physical wrap-around overlap safely without heap allocation.
+    ///
+    /// # Panics
+    /// Panics if `src.start > src.end`, `src.end > 2 * self.size()`,
+    /// `src.len() > self.size()`, or `dest + src.len() > 2 * self.size()`.
+    pub fn copy_within(&mut self, src: Range<usize>, dest: usize) {
+        let n = self.size_elements;
+        let total = n * 2;
+        assert!(
+            src.start <= src.end && src.end <= total,
+            "MirroredBuffer::copy_within: source range {}..{} out of bounds (2N = {total})",
+            src.start,
+            src.end
+        );
+        let len = src.end - src.start;
+        assert!(
+            len <= n,
+            "MirroredBuffer::copy_within: copy length {len} exceeds physical size {n}"
+        );
+        assert!(
+            dest.checked_add(len).is_some_and(|end| end <= total),
+            "MirroredBuffer::copy_within: destination range {dest}..+{len} out of bounds (2N = {total})"
+        );
+        if len == 0 {
+            return;
+        }
+
+        let src_p = if src.start >= n {
+            src.start - n
+        } else {
+            src.start
+        };
+        let dst_p = if dest >= n { dest - n } else { dest };
+        if src_p == dst_p {
+            return;
+        }
+
+        let fwd_dist = if dst_p >= src_p {
+            dst_p - src_p
+        } else {
+            n - (src_p - dst_p)
+        };
+        let bwd_dist = n - fwd_dist;
+
+        if fwd_dist >= len && bwd_dist >= len {
+            // SAFETY: `src_p < n`, `dst_p < n`, `len <= n` keep both ranges inside `[0..2N)`.
+            // `fwd_dist >= len && bwd_dist >= len` proves physical disjointness on the ring.
+            unsafe {
+                std::ptr::copy_nonoverlapping(self.ptr.add(src_p), self.ptr.add(dst_p), len);
+            }
+        } else if fwd_dist >= len {
+            if dst_p < src_p {
+                // SAFETY: Both ranges are inside `[0..2N)`, and `dst_p < src_p` ensures
+                // `ptr::copy` copies forward, matching `fwd_dist >= len` physical safety.
+                unsafe { std::ptr::copy(self.ptr.add(src_p), self.ptr.add(dst_p), len) };
+            } else if src_p + len <= n {
+                // SAFETY: `src_p + n + len <= 2N` and `dst_p < src_p + n`, so `ptr::copy`
+                // copies forward across the `[src_p + n ..]` mirror alias safely.
+                unsafe { std::ptr::copy(self.ptr.add(src_p + n), self.ptr.add(dst_p), len) };
+            } else {
+                for i in 0..len {
+                    // SAFETY: `src.start + i < 2N` and `dest + i < 2N`; `fwd_dist >= len`
+                    // guarantees forward order never overwrites an unread source element.
+                    unsafe {
+                        let v = std::ptr::read(self.ptr.add(src.start + i));
+                        std::ptr::write(self.ptr.add(dest + i), v);
+                    }
+                }
+            }
+        } else if bwd_dist >= len {
+            if src_p < dst_p {
+                // SAFETY: Both ranges are inside `[0..2N)`, and `src_p < dst_p` ensures
+                // `ptr::copy` copies backward, matching `bwd_dist >= len` physical safety.
+                unsafe { std::ptr::copy(self.ptr.add(src_p), self.ptr.add(dst_p), len) };
+            } else if dst_p + len <= n {
+                // SAFETY: `dst_p + n + len <= 2N` and `src_p < dst_p + n`, so `ptr::copy`
+                // copies backward across the `[dst_p + n ..]` mirror alias safely.
+                unsafe { std::ptr::copy(self.ptr.add(src_p), self.ptr.add(dst_p + n), len) };
+            } else {
+                for i in (0..len).rev() {
+                    // SAFETY: `src.start + i < 2N` and `dest + i < 2N`; `bwd_dist >= len`
+                    // guarantees backward order never overwrites an unread source element.
+                    unsafe {
+                        let v = std::ptr::read(self.ptr.add(src.start + i));
+                        std::ptr::write(self.ptr.add(dest + i), v);
+                    }
+                }
+            }
+        } else {
+            // Both ends wrap-overlap (`len > n / 2`). Perform an exact allocation-free
+            // ring shift over the single physical view `[0..n)`.
+            // SAFETY: `self.ptr` is valid for `n` disjoint physical elements `[0..n)` under `&mut self`.
+            let phys = unsafe { std::slice::from_raw_parts_mut(self.ptr, n) };
+            let ring_idx = |offset: usize| -> usize {
+                let sum = src_p + offset;
+                if sum >= n { sum - n } else { sum }
+            };
+            for sink in len..n {
+                let mut cur = sink;
+                loop {
+                    let prev = if cur >= fwd_dist {
+                        cur - fwd_dist
+                    } else {
+                        cur + bwd_dist
+                    };
+                    if prev >= len {
+                        break;
+                    }
+                    phys[ring_idx(cur)] = phys[ring_idx(prev)];
+                    cur = prev;
+                }
+            }
+            let g = alloc::gcd(fwd_dist, n);
+            if n - len < g {
+                for r in 0..g {
+                    let rem_dist = (r + g - (len % g)) % g;
+                    if rem_dist >= n - len {
+                        let saved = phys[ring_idx(r)];
+                        let mut cur = r;
+                        loop {
+                            let prev = if cur >= fwd_dist {
+                                cur - fwd_dist
+                            } else {
+                                cur + bwd_dist
+                            };
+                            if prev == r {
+                                phys[ring_idx(cur)] = saved;
+                                break;
+                            }
+                            phys[ring_idx(cur)] = phys[ring_idx(prev)];
+                            cur = prev;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -270,20 +499,27 @@ impl<T: MirrorSafe> Deref for MirroredBuffer<T> {
     }
 }
 
-impl<T: MirrorSafe> DerefMut for MirroredBuffer<T> {
+impl<T: MirrorSafe, I: std::slice::SliceIndex<[T]>> Index<I> for MirroredBuffer<T> {
+    type Output = I::Output;
+
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: Same virtual mapping invariants as Deref: ptr covers size_elements*2 valid
-        // elements of type T: MirrorSafe. Page alignment satisfies align_of::<T>() <= 64 and
-        // align_of::<T>() <= page_size.
-        // The &mut self borrow guarantees exclusive access to this MirroredBuffer instance
-        // through a single &mut [T] over the 2N virtual extent.
-        // Note on half-aliasing: the two virtual halves map the same physical pages. Callers
-        // must not attempt to split this slice (e.g. via split_at_mut) into two simultaneously
-        // active mutable references to the same physical memory. A wrap write crossing the N
-        // boundary through this single continuous slice is the supported pattern and intentionally
-        // aliases the physical start of the buffer.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size_elements * 2) }
+    fn index(&self, index: I) -> &Self::Output {
+        &(**self)[index]
+    }
+}
+
+impl<T: MirrorSafe> IndexMut<usize> for MirroredBuffer<T> {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let virtual_len = self.size_elements * 2;
+        assert!(
+            index < virtual_len,
+            "MirroredBuffer::index_mut: index {index} out of bounds (2N = {virtual_len})"
+        );
+        // SAFETY: `index < 2 * size_elements` lies within the valid `2N` mapping,
+        // `self.ptr` is page-aligned (`>= align_of::<T>()`), and `&mut self` grants
+        // exclusive access to this single element (cannot alias another `&mut T`).
+        unsafe { &mut *self.ptr.add(index) }
     }
 }
 
@@ -320,7 +556,7 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
     /// would cross the FFI boundary.
     pub fn try_clone(&self) -> std::io::Result<Self> {
         let mut new_buf = Self::new(self.size_elements)?;
-        new_buf[..self.size_elements].clone_from_slice(&self[..self.size_elements]);
+        new_buf.write_slice_at(0, &self[..self.size_elements]);
         Ok(new_buf)
     }
 }
@@ -351,9 +587,11 @@ impl<T: MirrorSafe> Clone for MirroredBuffer<T> {
 unsafe impl<T: MirrorSafe + Send> Send for MirroredBuffer<T> {}
 
 // SAFETY: T: MirrorSafe + Sync ensures that shared references to T elements are sound across
-// threads. MirroredBuffer's internal ptr is accessed exclusively through Deref/DerefMut which follow
-// standard Rust borrowing rules (&self vs &mut self). The exclusive process-local virtual
-// mapping prevents data races from external writers.
+// threads. Shared access (`Deref` / `Index<usize>`) only exposes immutable `&[T]`/`&T` views
+// over `Copy` non-`UnsafeCell` elements, while all mutation (`IndexMut<usize>`, `window_mut`,
+// `try_window_mut`, `write_slice_at`, `fill`, `copy_within`) requires `&mut self` and never
+// exposes two aliasing `&mut` references. The exclusive process-local virtual mapping prevents
+// data races from external writers.
 unsafe impl<T: MirrorSafe + Sync> Sync for MirroredBuffer<T> {}
 
 #[cfg(all(

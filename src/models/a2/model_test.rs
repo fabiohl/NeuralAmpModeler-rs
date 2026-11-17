@@ -69,8 +69,7 @@ fn test_wavenet_a2_process_empty_input() {
 fn test_wavenet_a2_prewarm_fills_buffers() {
     let mut model = WaveNetA2::<3>::new().unwrap();
     for buf in &mut model.layer_buffers {
-        let len = buf.size();
-        buf[..len].fill(0.5);
+        buf.fill(0.5);
     }
     model.head_accum.fill(0.5);
     model.layer_in.fill(0.5);

@@ -6,10 +6,11 @@
 
 use super::{MirrorSafe, MirroredBuffer};
 #[cfg(unix)]
+#[cfg(target_os = "linux")]
 use crate::math::common::huge_alloc::HUGE_PAGE_2M;
 use std::marker::PhantomData;
 
-const fn gcd(mut a: usize, mut b: usize) -> usize {
+pub(super) const fn gcd(mut a: usize, mut b: usize) -> usize {
     while b != 0 {
         let t = b;
         b = a % b;
@@ -115,15 +116,14 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
             .checked_mul(element_size)
             .ok_or_else(|| invalid_input("elem_multiple * element_size overflowed"))?;
 
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         if !cfg!(miri)
             && !granularity_overridden
-            && cfg!(target_os = "linux")
             && total_chunk >= HUGE_PAGE_2M
             && let Ok((ptr, size_bytes)) =
                 super::posix::try_alloc_huge_mirrored(requested_bytes, elem_stride)
         {
-            #[cfg(all(test, target_os = "linux"))]
+            #[cfg(test)]
             super::mirror_buf_test::record_test_alloc(requested_bytes, size_bytes);
             return Ok(Self {
                 ptr: ptr as *mut T,
@@ -131,7 +131,7 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
                 _marker: PhantomData,
             });
         }
-        #[cfg(not(unix))]
+        #[cfg(not(target_os = "linux"))]
         let _ = (granularity_overridden, total_chunk);
 
         let align_bytes = lcm(page_size, elem_stride)

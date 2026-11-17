@@ -187,13 +187,13 @@ Windows 11 support is classified as **Experimental Verifiable**:
   4. `aarch64-pc-windows-msvc` validated on a hosted CI VM (`windows-11-arm`), without local physical ARM64 hardware.
   5. No Windows audio host/plugin integration (WASAPI/ASIO), which is out of scope for the core engine.
 
-**Community reproduction on Windows 11 (Git Bash):**
+**Community reproduction on Windows 11 (from a repository checkout, Git Bash):**
 
 ```bash
 cargo run --locked -p nam-preflight --bin nam_preflight
 ./utils/tests-quick.sh
 cargo test --locked --test rt_constraints --features testing,heap-audit
-cargo run --locked --bin nam_parity_vector -- generate --out parity.json
+cargo run --locked --release -p nam-qa --bin nam_parity_vector -- generate --model tests/fixtures/models/BossWN-standard.nam --out target/parity.bin
 ```
 
 `DiagnosticBundle` and diagnostic logs automatically redact `USERPROFILE`, `LOCALAPPDATA`, `C:\...` drive paths, and UNC paths before writing or exporting reports. See [`docs/testing.md`](docs/testing.md#310-windows-11-experimental-validation-explicit-gaps--community-audit-protocol) for the full audit protocol.
@@ -202,10 +202,14 @@ cargo run --locked --bin nam_parity_vector -- generate --out parity.json
 
 **The SIMD baseline is mandatory.** It is enforced at compile time (`src/lib.rs`), not by a probe you have to pass before use. On x86_64 there is no runtime rejection path: a binary built for `x86-64-v3` raises SIGILL on a host without AVX2/FMA. NEON is always present on aarch64.
 
-`simd_probe` is a post-install diagnostic. It reports CPU feature flags, OS vector context support (`OSXSAVE`), the active SIMD backend, and runs a synthetic inference smoke test with a deterministic checksum:
+`simd_probe` is a post-install diagnostic. It reports CPU feature flags, OS vector context support (`OSXSAVE`), the active SIMD backend, and runs a synthetic inference smoke test with a deterministic checksum. Run it from a repository checkout (or install the binary when consuming from `crates.io`):
 
 ```bash
+# From a repository checkout:
 cargo run --bin simd_probe
+
+# Or install the published binary directly on x86_64 (omit RUSTFLAGS on aarch64):
+RUSTFLAGS="-Ctarget-cpu=x86-64-v3" cargo install NeuralAmpModeler-rs --bin simd_probe
 ```
 
 The output is informational only; `simd_probe` does not issue a compliance verdict.
@@ -220,14 +224,14 @@ Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "2.1"
+NeuralAmpModeler-rs = "3.0"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "2.1", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "3.0", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
@@ -252,7 +256,7 @@ time and is not required for correctness.
 
 ### Model Files
 
-The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. To try the engine with **no external file**, use the bundled in-memory example:
+The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. Downstream projects adding `NeuralAmpModeler-rs = "3.0"` as a dependency call the library API directly (see the snippet below). To try the bundled in-memory example with **no external file**, run from a repository checkout (or extracted crate source):
 
 ```bash
 cargo run --example synthetic_model
@@ -288,27 +292,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Full DSP Pipeline (Model + Cabinet IR + Oversampling)
+### HQ Offline Rendering (4× Oversampling)
 
-For a complete end-to-end signal processing chain — neural amp model, cabinet impulse response (IR) convolution, and 4× polyphase anti-aliasing oversampling — see the [`offline_render`](examples/offline_render.rs) example:
+For an offline rendering loop — feeding a synthetic 48 kHz test signal through 4× half-band anti-aliasing oversampling (`OversampleEngine` / `OversampleFactor::X4`), neural amp model inference, and downsampling back to 48 kHz — see [`examples/offline_render.rs`](examples/offline_render.rs) (this example assumes a 48 kHz model and omits cabinet IR convolution; use [`examples/cabsim.rs`](examples/cabsim.rs) for CabSim IR convolution and `StreamingResampleBuffer` / `NamResampler` when converting sample rates):
 
 ```bash
-cargo run --example offline_render -- path/to/model.nam
+# Run from a repository checkout (or pass your own .nam/.namb file path):
+cargo run --example offline_render -- tests/fixtures/models/BossWN-standard.nam
 ```
 
 ### Executable Examples
 
-The crate includes runnable examples demonstrating key features:
+The crate ships runnable examples in `examples/`. If you added `NeuralAmpModeler-rs` as a dependency via `crates.io`, `cargo run --example` applies to your own crate, not dependencies — clone the repository (or run inside the unpacked crate source) to execute these examples directly:
 
-| Example                                            | Description                                                                | Command                                             |
-|:-------------------------------------------------- |:-------------------------------------------------------------------------- |:--------------------------------------------------- |
-| [`load_model`](examples/load_model.rs)             | Off-RT model file loading (`.nam`/`.namb`) and SIMD state prewarming       | `cargo run --example load_model -- <model.nam>`     |
-| [`inspect_model`](examples/inspect_model.rs)       | Inspects metadata, architecture, weights, and sample rates (Text/JSON)     | `cargo run --example inspect_model -- <model.nam>`  |
-| [`offline_render`](examples/offline_render.rs)     | Full audio rendering with 4× polyphase oversampling (HQ mode)              | `cargo run --example offline_render -- <model.nam>` |
-| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution and resampling        | `cargo run --example cabsim -- <ir.wav>`            |
-| [`diagnostics`](examples/diagnostics.rs)           | Diagnostic bundle (`DiagnosticBundle`) and log buffer (`LogBuffer`) export | `cargo run --example diagnostics`                   |
-| [`math_activations`](examples/math_activations.rs) | Precision vs speed benchmarks for SIMD activations (`Standard` vs `Fast`)  | `cargo run --example math_activations`              |
-| [`synthetic_model`](examples/synthetic_model.rs)   | In-memory `StaticModel` construction without external files                | `cargo run --example synthetic_model`               |
+| Example                                            | Description                                                                                      | Command (from repository checkout)                                          |
+|:-------------------------------------------------- |:------------------------------------------------------------------------------------------------ |:--------------------------------------------------------------------------- |
+| [`load_model`](examples/load_model.rs)             | Off-RT model file loading (`.nam`/`.namb`) and SIMD state prewarming                             | `cargo run --example load_model -- tests/fixtures/models/BossWN-standard.nam` |
+| [`inspect_model`](examples/inspect_model.rs)       | Inspects metadata, architecture, weights, and sample rates (Text/JSON)                           | `cargo run --example inspect_model -- tests/fixtures/models/BossWN-standard.nam` |
+| [`offline_render`](examples/offline_render.rs)     | Offline 4× half-band oversampled rendering of a synthetic 48 kHz signal (no CabSim/resampling)   | `cargo run --example offline_render -- tests/fixtures/models/BossWN-standard.nam` |
+| [`cabsim`](examples/cabsim.rs)                     | Standalone cabinet impulse response (IR) convolution and IR-rate resampling                      | `cargo run --example cabsim`                                                |
+| [`diagnostics`](examples/diagnostics.rs)           | Diagnostic bundle (`DiagnosticBundle`) and log buffer (`LogBuffer`) export                       | `cargo run --example diagnostics`                                           |
+| [`math_activations`](examples/math_activations.rs) | Precision vs speed benchmarks for SIMD activations (`Standard` vs `Fast`)                        | `cargo run --example math_activations`                                      |
+| [`synthetic_model`](examples/synthetic_model.rs)   | In-memory `StaticModel` construction without external files                                      | `cargo run --example synthetic_model`                                       |
 
 ---
 

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// Largest CPU index accepted by [`try_parse_cpu_list`].
 ///
 /// Every consumer of this parser ultimately builds a `cpu_set_t` affinity
-/// mask, and [`crate::rt_hardening::thread::pin_thread`] rejects indices
+/// mask, and [`crate::rt_hardening::thread::pin_current_thread`] rejects indices
 /// outside `[0, CPU_SETSIZE)`. Bounding the parser to that same range keeps
 /// parsed targets applicable instead of returning unreachable CPUs.
 const MAX_CPU_LIST_ENTRIES: usize = libc::CPU_SETSIZE as usize;

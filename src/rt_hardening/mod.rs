@@ -27,16 +27,20 @@
 
 /// IRQ-aware CPU topology inspection and optimal core selection (Linux).
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub mod affinity;
 /// PM QoS (`/dev/cpu_dma_latency`) latency guard (Linux).
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub mod pm_qos;
 /// Process-wide setup and RT thread promotion (Linux).
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub mod thread;
 
 /// macOS real-time setup (QoS, time constraint, memory locking, workgroups).
 #[cfg(target_os = "macos")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
 pub mod macos;
 
 /// Pure Mach timebase conversion (tested on every host, used by macOS).
@@ -44,6 +48,7 @@ pub mod macos;
 mod timebase;
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub use affinity::{
     CpuCoreTopology, CpuListError, CpuSelectionReason, CpuSelectionReceipt, SysfsTopologySource,
     SystemSysfsSource, get_allowed_cpus, parse_cpu_list, parse_interrupts_per_cpu,
@@ -51,13 +56,16 @@ pub use affinity::{
     select_optimal_cpu_with_receipt, try_parse_cpu_list,
 };
 #[cfg(target_os = "macos")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "macos")))]
 pub use macos::{
     AudioWorkgroupJoin, OsWorkgroup, ThreadTiming, compute_thread_timing, join_audio_workgroup,
     mlock_region, promote_time_constraint, set_ftz_daz, set_user_interactive_qos,
 };
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub use pm_qos::{PmQosGuard, request_cpu_dma_latency};
 #[cfg(target_os = "linux")]
+#[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
 pub use thread::{
     PinThreadError, SystemThreadConfigurator, ThreadConfigurator, apply_housekeeping_affinity,
     build_cpu_affinity_mask, build_housekeeping_affinity_mask, disable_thp, mlockall_current,

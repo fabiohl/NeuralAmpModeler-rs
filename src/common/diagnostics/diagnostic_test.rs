@@ -203,6 +203,23 @@ fn test_emit_irq_advisory_safety() {
     snap.emit_irq_advisory(128); // Extreme case
 }
 
+#[test]
+fn test_system_snapshot_kernel_and_baseline_label() {
+    let snap = SystemSnapshot::capture();
+    assert!(!snap.kernel.is_empty());
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    assert_ne!(
+        snap.kernel, "unknown",
+        "kernel version must be detected on supported OSes"
+    );
+
+    let label = crate::common::diagnostics::system_info::baseline_isa_label();
+    #[cfg(target_arch = "x86_64")]
+    assert_eq!(label, "none (baseline x86-64-v3 only)");
+    #[cfg(target_arch = "aarch64")]
+    assert_eq!(label, "none (baseline aarch64 NEON)");
+}
+
 /// Verifies that DiagnosticBundle::capture().render() yields a nominal block without error fields.
 #[test]
 fn test_diagnostic_bundle_nominal() {

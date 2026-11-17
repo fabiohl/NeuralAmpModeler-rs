@@ -38,9 +38,13 @@ else
   FAILS+=("tests"); emit "PHASE: tests FAIL rc=$rc_tests log=$log_tests"; finish || exit 1; exit 1
 fi
 
-if [ -s "$SKIPS" ]; then
-  blocking=$(grep -vc '"optional":true' "$SKIPS" 2>/dev/null || true)
-  [ "${blocking:-0}" -gt 0 ] && gap "skip-capability:$blocking"
+log_skips="$LOG_DIR/quick-skips.log"; rc_skips=0; PHASE_NAME=skips; PHASE_LOG="$log_skips"
+blocking=$(cargo run --quiet --locked -p nam-qa --bin nam_skips -- --path "$SKIPS" --run-id "$NAM_RUN_ID" --format blocking 2>"$log_skips") || rc_skips=$?
+if [ "$rc_skips" -ne 0 ] || ! [[ "$blocking" =~ ^[0-9]+$ ]]; then
+  cat "$log_skips" >&2 || true
+  FAILS+=("skips"); emit "PHASE: skips FAIL rc=${rc_skips:-1} log=$log_skips"; finish || exit 1; exit 1
+elif [ "$blocking" -gt 0 ]; then
+  PHASE_NAME=tests; gap "skip-capability:$blocking"
 fi
 
 finish || exit 1

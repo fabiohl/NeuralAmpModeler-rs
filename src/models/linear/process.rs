@@ -303,9 +303,7 @@ impl super::LinearModel {
             mc.prewarm(num_samples);
         }
         let size = self.history.size();
-        for i in 0..(size * 2) {
-            self.history[i] = 0.0;
-        }
+        self.history.fill(0.0);
         self.write_pos = size;
         if let LinearMode::Fft(ref mut state) = self.mode {
             state.reset();
@@ -320,9 +318,7 @@ impl super::LinearModel {
             mc.reset();
         }
         let size = self.history.size();
-        for i in 0..(size * 2) {
-            self.history[i] = 0.0;
-        }
+        self.history.fill(0.0);
         self.write_pos = size;
         if let LinearMode::Fft(ref mut state) = self.mode {
             state.reset();

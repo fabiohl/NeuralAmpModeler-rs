@@ -339,3 +339,310 @@ fn read_ir_reader_valid_wav_roundtrip() {
     assert_eq!(rate, 48000);
     assert_eq!(samples.len(), 8);
 }
+
+struct ExtensibleWavSpec<'a> {
+    fmt_size: u32,
+    sample_rate: u32,
+    byte_rate: u32,
+    block_align: u16,
+    bits_per_sample: u16,
+    cb_size: u16,
+    valid_bits: u16,
+    subformat_u32: u32,
+    guid_tail: [u8; 12],
+    payload: &'a [u8],
+}
+
+/// Builds a mono `WAVE_FORMAT_EXTENSIBLE` (`0xFFFE`) WAV with full control over
+/// `fmt_size`, `cb_size`, `valid_bits`, `byte_rate`, `block_align`, `subformat_u32`,
+/// and the 12-byte `guid_tail`.
+fn build_extensible_wav(spec: ExtensibleWavSpec<'_>) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"RIFF");
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(b"WAVE");
+
+    data.extend_from_slice(b"fmt ");
+    data.extend_from_slice(&spec.fmt_size.to_le_bytes());
+    data.extend_from_slice(&WAV_FORMAT_EXTENSIBLE.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes()); // mono
+    data.extend_from_slice(&spec.sample_rate.to_le_bytes());
+    data.extend_from_slice(&spec.byte_rate.to_le_bytes());
+    data.extend_from_slice(&spec.block_align.to_le_bytes());
+    data.extend_from_slice(&spec.bits_per_sample.to_le_bytes());
+
+    let mut ext = Vec::new();
+    ext.extend_from_slice(&spec.cb_size.to_le_bytes());
+    ext.extend_from_slice(&spec.valid_bits.to_le_bytes());
+    ext.extend_from_slice(&0u32.to_le_bytes()); // dwChannelMask
+    ext.extend_from_slice(&spec.subformat_u32.to_le_bytes());
+    ext.extend_from_slice(&spec.guid_tail);
+    let ext_take = (spec.fmt_size as usize).saturating_sub(16).min(ext.len());
+    data.extend_from_slice(&ext[..ext_take]);
+    if (spec.fmt_size as usize) > 16 + ext_take {
+        data.resize(data.len() + (spec.fmt_size as usize - 16 - ext_take), 0);
+    }
+
+    data.extend_from_slice(b"data");
+    data.extend_from_slice(&(spec.payload.len() as u32).to_le_bytes());
+    data.extend_from_slice(spec.payload);
+    if spec.payload.len() % 2 == 1 {
+        data.push(0); // RIFF even-byte pad
+    }
+
+    let total = (data.len() - 8) as u32;
+    data[4..8].copy_from_slice(&total.to_le_bytes());
+    data
+}
+
+const VALID_GUID_TAIL: [u8; 12] = [0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
+
+#[test]
+fn extensible_valid_pcm_and_float_and_mutated_guid_bytes() {
+    let cases: [(u32, u16, &[u8]); 4] = [
+        (1, 16, &[0x00, 0x40]),
+        (1, 24, &[0x00, 0x00, 0x40]),
+        (1, 32, &[0x00, 0x00, 0x00, 0x40]),
+        (3, 32, &[0x00, 0x00, 0x00, 0x3F]),
+    ];
+
+    for (subformat, bits, payload) in cases {
+        let align = bits / 8;
+        let wav = build_extensible_wav(ExtensibleWavSpec {
+            fmt_size: 40,
+            sample_rate: 48_000,
+            byte_rate: 48_000 * align as u32,
+            block_align: align,
+            bits_per_sample: bits,
+            cb_size: 22,
+            valid_bits: bits,
+            subformat_u32: subformat,
+            guid_tail: VALID_GUID_TAIL,
+            payload,
+        });
+        let (samples, rate) = parse_wav(&wav).expect("valid extensible WAV must parse");
+        assert_eq!(rate, 48_000);
+        assert_eq!(samples.len(), 1);
+        assert!((samples[0] - 0.5).abs() < 1e-4);
+        assert!(crate::loader::parse_wav_ir(&wav).is_ok());
+
+        // Mutate each of the 12 bytes in EXTENSIBLE_GUID_TAIL.
+        for byte_idx in 0..12 {
+            let mut bad_tail = VALID_GUID_TAIL;
+            bad_tail[byte_idx] ^= 0xFF;
+            let bad_wav = build_extensible_wav(ExtensibleWavSpec {
+                fmt_size: 40,
+                sample_rate: 48_000,
+                byte_rate: 48_000 * align as u32,
+                block_align: align,
+                bits_per_sample: bits,
+                cb_size: 22,
+                valid_bits: bits,
+                subformat_u32: subformat,
+                guid_tail: bad_tail,
+                payload,
+            });
+            assert!(
+                parse_wav(&bad_wav).is_err(),
+                "mutated GUID tail byte {byte_idx} must be rejected by cabsim"
+            );
+            assert!(
+                crate::loader::parse_wav_ir(&bad_wav).is_err(),
+                "mutated GUID tail byte {byte_idx} must be rejected by loader::wav"
+            );
+        }
+
+        // Mutate upper 2 bytes of Data1 (subformat u32).
+        for shift in [16u32, 24] {
+            let bad_subformat = subformat ^ (0x01 << shift);
+            let bad_wav = build_extensible_wav(ExtensibleWavSpec {
+                fmt_size: 40,
+                sample_rate: 48_000,
+                byte_rate: 48_000 * align as u32,
+                block_align: align,
+                bits_per_sample: bits,
+                cb_size: 22,
+                valid_bits: bits,
+                subformat_u32: bad_subformat,
+                guid_tail: VALID_GUID_TAIL,
+                payload,
+            });
+            assert!(parse_wav(&bad_wav).is_err());
+            assert!(crate::loader::parse_wav_ir(&bad_wav).is_err());
+        }
+    }
+}
+
+#[test]
+fn extensible_rejects_26_byte_fmt_and_invalid_cb_size_and_valid_bits() {
+    let payload = [0x00u8, 0x40];
+
+    // 26-byte complete extensible fmt chunk is invalid by spec (must be >= 40).
+    let wav_26 = build_extensible_wav(ExtensibleWavSpec {
+        fmt_size: 26,
+        sample_rate: 48_000,
+        byte_rate: 96_000,
+        block_align: 2,
+        bits_per_sample: 16,
+        cb_size: 22,
+        valid_bits: 16,
+        subformat_u32: 1,
+        guid_tail: VALID_GUID_TAIL,
+        payload: &payload,
+    });
+    assert!(parse_wav(&wav_26).is_err());
+    assert!(matches!(
+        crate::loader::parse_wav_ir(&wav_26),
+        Err(crate::loader::WavError::InvalidExtensibleFormat)
+    ));
+
+    // cbSize < 22
+    let wav_cb_small = build_extensible_wav(ExtensibleWavSpec {
+        fmt_size: 40,
+        sample_rate: 48_000,
+        byte_rate: 96_000,
+        block_align: 2,
+        bits_per_sample: 16,
+        cb_size: 21,
+        valid_bits: 16,
+        subformat_u32: 1,
+        guid_tail: VALID_GUID_TAIL,
+        payload: &payload,
+    });
+    assert!(parse_wav(&wav_cb_small).is_err());
+    assert!(matches!(
+        crate::loader::parse_wav_ir(&wav_cb_small),
+        Err(crate::loader::WavError::InvalidExtensibleFormat)
+    ));
+
+    // cbSize > fmt_size - 18 (e.g. cbSize = 24 with fmt_size = 40 -> 24 + 18 = 42 > 40)
+    let wav_cb_large = build_extensible_wav(ExtensibleWavSpec {
+        fmt_size: 40,
+        sample_rate: 48_000,
+        byte_rate: 96_000,
+        block_align: 2,
+        bits_per_sample: 16,
+        cb_size: 24,
+        valid_bits: 16,
+        subformat_u32: 1,
+        guid_tail: VALID_GUID_TAIL,
+        payload: &payload,
+    });
+    assert!(parse_wav(&wav_cb_large).is_err());
+    assert!(matches!(
+        crate::loader::parse_wav_ir(&wav_cb_large),
+        Err(crate::loader::WavError::InvalidExtensibleFormat)
+    ));
+
+    // valid_bits = 0, > bits, and reduced (< bits) for PCM & float
+    for (subfmt, bits, valid_bits, p) in [
+        (1u32, 24u16, 0u16, &[0x00u8, 0x00, 0x40][..]),
+        (1, 24, 32, &[0x00, 0x00, 0x40]),
+        (1, 24, 20, &[0x00, 0x00, 0x40]),
+        (3, 32, 24, &[0x00, 0x00, 0x00, 0x3F]),
+    ] {
+        let align = bits / 8;
+        let bad = build_extensible_wav(ExtensibleWavSpec {
+            fmt_size: 40,
+            sample_rate: 48_000,
+            byte_rate: 48_000 * align as u32,
+            block_align: align,
+            bits_per_sample: bits,
+            cb_size: 22,
+            valid_bits,
+            subformat_u32: subfmt,
+            guid_tail: VALID_GUID_TAIL,
+            payload: p,
+        });
+        assert!(
+            parse_wav(&bad).is_err(),
+            "subfmt={subfmt} bits={bits} valid_bits={valid_bits} must fail"
+        );
+        assert!(crate::loader::parse_wav_ir(&bad).is_err());
+    }
+
+    // Wrong block_align / byte_rate
+    let bad_align = build_extensible_wav(ExtensibleWavSpec {
+        fmt_size: 40,
+        sample_rate: 48_000,
+        byte_rate: 96_000,
+        block_align: 4,
+        bits_per_sample: 16,
+        cb_size: 22,
+        valid_bits: 16,
+        subformat_u32: 1,
+        guid_tail: VALID_GUID_TAIL,
+        payload: &payload,
+    });
+    assert!(parse_wav(&bad_align).is_err());
+    assert!(crate::loader::parse_wav_ir(&bad_align).is_err());
+
+    let bad_rate = build_extensible_wav(ExtensibleWavSpec {
+        fmt_size: 40,
+        sample_rate: 48_000,
+        byte_rate: 48_000,
+        block_align: 2,
+        bits_per_sample: 16,
+        cb_size: 22,
+        valid_bits: 16,
+        subformat_u32: 1,
+        guid_tail: VALID_GUID_TAIL,
+        payload: &payload,
+    });
+    assert!(parse_wav(&bad_rate).is_err());
+    assert!(crate::loader::parse_wav_ir(&bad_rate).is_err());
+}
+
+#[test]
+fn odd_inter_chunk_padding_and_cabsim_load_from_memory_convolution_parity() {
+    // Odd-sized JUNK chunk (3 bytes + 1 pad byte) before fmt, plus odd-sized data at EOF.
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&0u32.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"JUNK");
+    wav.extend_from_slice(&3u32.to_le_bytes());
+    wav.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0x00]); // 3 payload + 1 pad byte
+
+    // 40-byte extensible PCM24 mono
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&40u32.to_le_bytes());
+    wav.extend_from_slice(&WAV_FORMAT_EXTENSIBLE.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&48_000u32.to_le_bytes());
+    wav.extend_from_slice(&(48_000u32 * 3).to_le_bytes());
+    wav.extend_from_slice(&3u16.to_le_bytes());
+    wav.extend_from_slice(&24u16.to_le_bytes());
+    wav.extend_from_slice(&22u16.to_le_bytes());
+    wav.extend_from_slice(&24u16.to_le_bytes());
+    wav.extend_from_slice(&0u32.to_le_bytes());
+    wav.extend_from_slice(&1u32.to_le_bytes());
+    wav.extend_from_slice(&VALID_GUID_TAIL);
+
+    // 1 PCM24 sample (3 bytes = odd) at EOF without pad byte: value ~ 0.5
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&3u32.to_le_bytes());
+    wav.extend_from_slice(&[0x00, 0x00, 0x40]);
+    let total = (wav.len() - 8) as u32;
+    wav[4..8].copy_from_slice(&total.to_le_bytes());
+
+    let ir = crate::prelude::CabSimIr::load_from_memory(&wav, 0, false)
+        .expect("load_from_memory must accept valid extensible WAV after padded JUNK");
+    assert_eq!(ir.sample_rate, 48_000);
+    assert_eq!(ir.samples.len(), 1);
+    assert!((ir.samples[0] - 0.5).abs() < 1e-4);
+
+    // Validate convolution output with partition_size = 64 (zero-latency UPOLS).
+    let mut conv =
+        crate::prelude::ConvEngine::new(&ir.samples, 64).expect("ConvEngine::new must succeed");
+    let mut input = [0.0f32; 64];
+    input[0] = 1.0;
+    let mut output = [0.0f32; 64];
+    conv.process(&input, &mut output, None);
+    assert!(
+        (output[0] - ir.samples[0]).abs() < 1e-5,
+        "impulse convolution output[0]={} != ir.samples[0]={}",
+        output[0],
+        ir.samples[0]
+    );
+}

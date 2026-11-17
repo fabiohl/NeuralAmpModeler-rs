@@ -132,9 +132,7 @@ impl LinearOneToMany {
     /// Resets internal history and FFT tail state.
     pub fn reset(&mut self) {
         let size = self.history.size();
-        for i in 0..(size * 2) {
-            self.history[i] = 0.0;
-        }
+        self.history.fill(0.0);
         self.write_pos = size;
         if let MultichannelMode::Fft(ref mut states) = self.mode {
             for state in states {

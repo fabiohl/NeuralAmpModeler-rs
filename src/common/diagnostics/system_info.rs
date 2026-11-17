@@ -74,28 +74,85 @@ impl SystemSnapshot {
     /// Emits an informational advisory recommending IRQ isolation from a specific
     /// CPU core, in order to minimize real-time preemption.
     pub fn emit_irq_advisory(&self, core: usize) {
-        if core >= 64 {
-            return;
-        }
-        let mask = 0xFFFFFFFFFFFFFFFFu64 ^ (1u64 << core);
+        #[cfg(target_os = "linux")]
+        {
+            if core >= 64 {
+                return;
+            }
+            let mask = 0xFFFFFFFFFFFFFFFFu64 ^ (1u64 << core);
 
-        log::info!(
-            "💡 For minimum latency, isolate core {} from system IRQs (as sudo): echo {:X} > /proc/irq/default_smp_affinity",
-            core,
-            mask
-        );
+            log::info!(
+                "💡 For minimum latency, isolate core {} from system IRQs (as sudo): echo {:X} > /proc/irq/default_smp_affinity",
+                core,
+                mask
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = core;
     }
 }
 
-/// Reads the Linux kernel version from `/proc/version`.
+/// Returns the compile-time baseline ISA label when no optional features are detected.
+pub(crate) const fn baseline_isa_label() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "none (baseline x86-64-v3 only)"
+    } else if cfg!(target_arch = "aarch64") {
+        "none (baseline aarch64 NEON)"
+    } else {
+        "none (baseline)"
+    }
+}
+
+/// Reads the OS/kernel version string for diagnostics (off-RT).
 fn read_kernel_version() -> String {
-    std::fs::read_to_string("/proc/version")
-        .ok()
-        .and_then(|v| {
-            // Format: "Linux version 6.8.0-generic (...)"
-            v.split_whitespace().nth(2).map(String::from)
-        })
-        .unwrap_or_else(|| "unknown".to_string())
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/version")
+            .ok()
+            .and_then(|v| {
+                // Format: "Linux version 6.8.0-generic (...)"
+                v.split_whitespace().nth(2).map(String::from)
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        // SAFETY: `utsname` is a plain C struct; `libc::uname` initializes it when returning 0.
+        let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
+        // SAFETY: `uts` is a valid mutable pointer to `libc::utsname`.
+        if unsafe { libc::uname(&mut uts) } == 0 {
+            // SAFETY: `uname` NUL-terminates `release` on success.
+            let release = unsafe { std::ffi::CStr::from_ptr(uts.release.as_ptr()) };
+            if let Ok(s) = release.to_str()
+                && !s.is_empty()
+            {
+                return s.to_string();
+            }
+        }
+        "unknown".to_string()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+        let mut info = OSVERSIONINFOW {
+            dwOSVersionInfoSize: core::mem::size_of::<OSVERSIONINFOW>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `dwOSVersionInfoSize` is set to `size_of::<OSVERSIONINFOW>()` as required by MSDN.
+        if unsafe { RtlGetVersion(&raw mut info) } == 0 && info.dwMajorVersion != 0 {
+            format!(
+                "{}.{}.{}",
+                info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
+            )
+        } else {
+            "unknown".to_string()
+        }
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        "unknown".to_string()
+    }
 }
 
 /// Detects advanced CPU features (above x86-64-v3 baseline).

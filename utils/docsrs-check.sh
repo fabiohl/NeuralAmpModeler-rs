@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-# docsrs-check.sh — Parity check for docs.rs under nightly rustdoc. Classe D.
+# docsrs-check.sh — Parity check for docs.rs targets under nightly rustdoc. Classe D.
 # Uso: utils/docsrs-check.sh
 # Orçamento: 80
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
@@ -15,7 +15,6 @@ case "$#:${1:-}" in
 esac
 
 lib_init
-PHASE_NAME=docsrs; phase docsrs
 require_nightly
 trap 'trap_fail $?' ERR
 
@@ -34,24 +33,36 @@ docsrs_feature_scope=$(awk '
     print a
   }' Cargo.toml)
 
+docsrs_targets_raw=$(awk '
+  /^\[/ { sec = ($0 == "[package.metadata.docs.rs]"); in_t = 0; next }
+  !sec { next }
+  /^targets *= *\[/ { in_t = 1 }
+  in_t {
+    line = $0
+    while (match(line, /"[^"]+"/)) {
+      t = t " " substr(line, RSTART + 1, RLENGTH - 2)
+      line = substr(line, RSTART + RLENGTH)
+    }
+    if ($0 ~ /\]/) in_t = 0
+  }
+  END { gsub(/^ +| +$/, "", t); print t }' Cargo.toml)
+
 docsrs_feature_args=()
+docsrs_targets=()
 read -r -a docsrs_feature_args <<< "$docsrs_feature_scope"
+read -r -a docsrs_targets <<< "$docsrs_targets_raw"
+[ "${#docsrs_targets[@]}" -gt 0 ] || { FAILS+=("metadata"); emit "PHASE: docsrs FAIL (no targets in package.metadata.docs.rs)"; finish || true; exit 1; }
 
 export DOCS_RS=1
 export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }--cfg docsrs -D warnings"
+installed_targets=$(rustup +nightly target list --installed)
 
-for docsrs_target in "" aarch64-unknown-linux-gnu; do
-  docsrs_target_args=()
-  if [ -n "$docsrs_target" ]; then
-    rustup +nightly target list --installed | grep -qx "$docsrs_target" || {
-      echo "GAP: nightly target $docsrs_target not installed (rustup +nightly target add $docsrs_target)" >&2; exit 2;
-    }
-    docsrs_target_args=(--target "$docsrs_target")
-  fi
-  if ! cargo +nightly doc --locked --lib --no-deps "${docsrs_target_args[@]}" "${docsrs_feature_args[@]}"; then
-    echo "FAIL: rustdoc emitted warnings/errors on target ${docsrs_target:-host}." >&2
-    exit 1
+for docsrs_target in "${docsrs_targets[@]}"; do
+  PHASE_NAME="docsrs-$docsrs_target"
+  if printf '%s\n' "$installed_targets" | grep -qx "$docsrs_target"; then
+    run_step "$PHASE_NAME" cargo +nightly doc --locked --lib --no-deps --target "$docsrs_target" "${docsrs_feature_args[@]}"
+  else
+    gap "$PHASE_NAME:target-not-installed"
   fi
 done
-ok "rustdoc emitted zero warnings on x86_64 and aarch64."
 finish

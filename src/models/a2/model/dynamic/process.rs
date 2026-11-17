@@ -341,8 +341,8 @@ impl WaveNetA2Dyn {
 
         // Copy layer_in → history buffer.
         {
-            let buf = &mut self.layer_buffers[li];
-            buf[bs..bs + nf * channels].copy_from_slice(&self.layer_in[..nf * channels]);
+            let buf = self.layer_buffers[li].window_mut(bs, nf * channels);
+            buf.copy_from_slice(&self.layer_in[..nf * channels]);
             // Apply conv_pre_film on new frames.
             // With condition_dsp, the condition signal is multi-channel (cond_size > 1).
             // Without condition_dsp, the conditioning signal is the parent input (stride `cond_size`,
@@ -357,14 +357,11 @@ impl WaveNetA2Dyn {
                 for f in 0..nf {
                     let cond_slice = &cond_buf[f * cond_size..(f + 1) * cond_size];
                     // SAFETY: `cond_slice` has length exactly `cond_size`, matching this
-                    // FiLM layer's `cond_size`, and the input slice is an in-bounds
-                    // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+                    // FiLM layer's `cond_size`, and `&mut buf[f * channels..(f + 1) * channels]`
+                    // is an in-bounds sub-slice of length `channels`; both satisfy `film.process`'s
                     // documented preconditions.
                     unsafe {
-                        film.process(
-                            &mut buf[bs + f * channels..bs + (f + 1) * channels],
-                            cond_slice,
-                        );
+                        film.process(&mut buf[f * channels..(f + 1) * channels], cond_slice);
                     }
                 }
             }

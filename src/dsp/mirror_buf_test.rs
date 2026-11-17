@@ -337,9 +337,9 @@ fn test_mirror_buf_bidirectional_aliasing_and_seam_slice() -> Result<(), Box<dyn
         }
     }
 
-    // 4. Single contiguous &mut [T] write crossing the N seam wraps cleanly into [0..k].
+    // 4. Single bounded &mut [T] window crossing the N seam wraps cleanly into [0..k].
     {
-        let seam_mut: &mut [f32] = &mut buf[n - k..n + k];
+        let seam_mut: &mut [f32] = buf.window_mut(n - k, 2 * k);
         for (idx, slot) in seam_mut.iter_mut().enumerate() {
             *slot = (idx as f32) + 0.5;
         }
@@ -373,13 +373,181 @@ fn test_mirror_buf_repeated_create_write_drop_stress() -> Result<(), Box<dyn std
         assert_eq!(buf[n].to_bits(), sentinel_a.to_bits());
         assert_eq!(buf[2 * n - 1].to_bits(), sentinel_b.to_bits());
 
-        let seam_mut = &mut buf[n - 4..n + 4];
+        let seam_mut = buf.window_mut(n - 4, 8);
         for (j, slot) in seam_mut.iter_mut().enumerate() {
             *slot = (iter * 8 + j) as f32;
         }
         assert_eq!(buf[0].to_bits(), ((iter * 8 + 4) as f32).to_bits());
         assert_eq!(buf[n - 1].to_bits(), ((iter * 8 + 3) as f32).to_bits());
     }
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_bounded_window_mut_limits_and_wrap() -> Result<(), Box<dyn std::error::Error>> {
+    let mut buf = MirroredBuffer::<u32>::new(1)?;
+    let n = buf.size();
+    assert!(n >= 4);
+
+    // 1. len == 0 at 0, N, 2N (valid) and 2N + 1 (rejected).
+    assert_eq!(buf.try_window_mut(0, 0).map(|s| s.len()), Some(0));
+    assert_eq!(buf.try_window_mut(n, 0).map(|s| s.len()), Some(0));
+    assert_eq!(buf.try_window_mut(n * 2, 0).map(|s| s.len()), Some(0));
+    assert!(buf.try_window_mut(n * 2 + 1, 0).is_none());
+
+    // 2. len == N - 1 wrapping across N, plus split_at_mut on the bounded slice (physically disjoint).
+    let half = n / 2;
+    {
+        let w = buf.window_mut(half, n - 1);
+        assert_eq!(w.len(), n - 1);
+        let (left, right) = w.split_at_mut(n - half);
+        for (i, slot) in left.iter_mut().enumerate() {
+            *slot = 10_000 + i as u32;
+        }
+        for (i, slot) in right.iter_mut().enumerate() {
+            *slot = 20_000 + i as u32;
+        }
+    }
+    for i in 0..(n - half) {
+        assert_eq!(buf[half + i], 10_000 + i as u32);
+        assert_eq!(buf[n + half + i], 10_000 + i as u32);
+    }
+    for i in 0..(half - 1) {
+        assert_eq!(buf[i], 20_000 + i as u32);
+        assert_eq!(buf[n + i], 20_000 + i as u32);
+    }
+
+    // 3. len == N wrapping across N touches every physical slot exactly once.
+    buf.fill(0);
+    {
+        let w = buf.window_mut(half, n);
+        for (i, slot) in w.iter_mut().enumerate() {
+            *slot = 0xA000_0000 + i as u32;
+        }
+    }
+    for i in 0..n {
+        let virt = half + i;
+        let expected = 0xA000_0000 + i as u32;
+        assert_eq!(buf[virt], expected);
+        assert_eq!(buf[virt % n], expected);
+    }
+
+    // 4. len == N + 1, out-of-bounds, and overflow are rejected.
+    assert!(buf.try_window_mut(0, n + 1).is_none());
+    assert!(buf.try_window_mut(n - 1, n + 1).is_none());
+    assert!(buf.try_window_mut(n + 1, n).is_none());
+    assert!(buf.try_window_mut(usize::MAX, 1).is_none());
+    assert!(buf.try_window_mut(1, usize::MAX).is_none());
+
+    // 5. write_slice_at across the N seam.
+    buf.fill(0);
+    let payload = [11_u32, 22, 33, 44, 55, 66];
+    buf.write_slice_at(n - 3, &payload);
+    assert_eq!(buf[n - 3], 11);
+    assert_eq!(buf[n - 1], 33);
+    assert_eq!(buf[0], 44);
+    assert_eq!(buf[2], 66);
+
+    Ok(())
+}
+
+#[test]
+#[should_panic(expected = "exceeds physical size")]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_window_mut_rejects_len_gt_n() {
+    let mut buf = MirroredBuffer::<u32>::new(1).expect("alloc");
+    let n = buf.size();
+    let _ = buf.window_mut(0, n + 1);
+}
+
+#[test]
+#[should_panic(expected = "out of bounds")]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_index_mut_rejects_2n() {
+    let mut buf = MirroredBuffer::<u32>::new(1).expect("alloc");
+    let n = buf.size();
+    buf[n * 2] = 1;
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_copy_within_ring_overlap_cases() -> Result<(), Box<dyn std::error::Error>> {
+    let mut buf = MirroredBuffer::<u32>::new(1)?;
+    let n = buf.size();
+    assert!(n >= 16);
+
+    let reset_pattern = |b: &mut MirroredBuffer<u32>| {
+        let w = b.window_mut(0, n);
+        for (i, slot) in w.iter_mut().enumerate() {
+            *slot = i as u32;
+        }
+    };
+
+    // Case A: Physical seam forward/backward traps (`src` and `dest` in opposite virtual halves).
+    for &(src_start, dest, len) in &[
+        (0, n + 1, 8),
+        (n, 1, 8),
+        (1, n, 8),
+        (n + 1, 0, 8),
+        (n - 4, n - 2, 8),
+        (n - 2, n - 4, 8),
+    ] {
+        reset_pattern(&mut buf);
+        let expected: Vec<u32> = (0..len).map(|i| ((src_start + i) % n) as u32).collect();
+        buf.copy_within(src_start..src_start + len, dest);
+        for (i, &exp) in expected.iter().enumerate() {
+            assert_eq!(
+                buf[dest + i],
+                exp,
+                "mismatch for src={src_start}..{}, dest={dest}, i={i}",
+                src_start + len
+            );
+        }
+    }
+
+    // Case B: `len > n / 2` where both forward and backward directions wrap-overlap.
+    // Includes `len = n - 2` (sinks + possible pure coset cycles) and `len = n` (pure cyclic shift).
+    for &(src_start, dest, len) in &[
+        (0, 2, n - 2),
+        (3, 1, n - 2),
+        (n - 3, 2, n - 1),
+        (2, n - 3, n - 1),
+        (0, 4, n),
+        (n / 2, n / 2 + 6, n),
+    ] {
+        reset_pattern(&mut buf);
+        let expected: Vec<u32> = (0..len).map(|i| ((src_start + i) % n) as u32).collect();
+        buf.copy_within(src_start..src_start + len, dest);
+        for (i, &exp) in expected.iter().enumerate() {
+            assert_eq!(
+                buf[(dest + i) % n],
+                exp,
+                "wrap-overlap mismatch for src={src_start}..{}, dest={dest}, len={len}, i={i}",
+                src_start + len
+            );
+        }
+    }
+
+    // Case C: `src_p == dst_p` (same physical span across halves) is a no-op.
+    reset_pattern(&mut buf);
+    buf.copy_within(0..16, n);
+    for i in 0..n {
+        assert_eq!(buf[i], i as u32);
+    }
+
     Ok(())
 }
 

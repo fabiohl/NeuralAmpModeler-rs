@@ -537,8 +537,7 @@ impl WaveNetA2Dyn {
             self.head_accum[..ha_len].fill(0.0);
             self.head_write_pos = rf;
             for buf in self.layer_buffers.iter_mut() {
-                let len = buf.size();
-                buf[..len].fill(0.0);
+                buf.fill(0.0);
             }
             self.layer_buffer_starts
                 .copy_from_slice(&self.layer_ring_sizes);

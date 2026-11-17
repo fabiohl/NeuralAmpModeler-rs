@@ -175,19 +175,16 @@ impl<const CH: usize> WaveNetA2<CH> {
         // so testing it per frame punishes the branch predictor on every block.
         // Evaluate once per layer instead — bit-exact, zero extra allocation.
         {
-            let buf = &mut self.layer_buffers[li];
-            buf[bs..bs + nf * ch].copy_from_slice(&self.layer_in[..nf * ch]);
+            let buf = self.layer_buffers[li].window_mut(bs, nf * ch);
+            buf.copy_from_slice(&self.layer_in[..nf * ch]);
             if let Some(ref mut film) = self.layers[li].conv_pre_film {
                 for f in 0..nf {
                     // SAFETY: `cond` is a 1-element slice of the input, matching this
-                    // FiLM layer's `cond_size == 1`, and the input slice is an in-bounds
-                    // sub-slice of length `ch` ≤ `channels`; both satisfy
+                    // FiLM layer's `cond_size == 1`, and `&mut buf[f * ch..(f + 1) * ch]`
+                    // is an in-bounds sub-slice of length `ch` ≤ `channels`; both satisfy
                     // `film.process`'s documented preconditions.
                     unsafe {
-                        film.process(
-                            &mut buf[bs + f * ch..bs + (f + 1) * ch],
-                            &input[pos + f..pos + f + 1],
-                        );
+                        film.process(&mut buf[f * ch..(f + 1) * ch], &input[pos + f..pos + f + 1]);
                     }
                 }
             }

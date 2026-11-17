@@ -130,9 +130,7 @@ impl LinearManyToManyShared {
     pub fn reset(&mut self) {
         let size = self.histories[0].size();
         for h in &mut self.histories {
-            for i in 0..(size * 2) {
-                h[i] = 0.0;
-            }
+            h.fill(0.0);
         }
         self.write_pos = size;
         if let MultichannelMode::Fft(ref mut states) = self.mode {

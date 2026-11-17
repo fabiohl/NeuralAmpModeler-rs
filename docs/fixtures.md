@@ -75,7 +75,7 @@ Consumer-facing contract:
 - **Examples (`load_model`, `offline_render`):** A model path must be supplied explicitly on the command line. With no path and no local checkout fixture, the example prints its usage and exits with code `1`; it never reports success or invents a fallback path.
 - **Benchmarks (`benches/common.rs`):** A repository checkout resolves models under `tests/fixtures/models*` and `third-party/community_models`. An external consumer must point the harness variables `NAM_MODELS_DIR` and/or `NAM_FIXTURES_DIR` at a fixture root; an absent file is reported on `stderr` and the benchmark skips instead of passing silently. `load_and_prewarm_required` panics with the searched path for regression gates that prohibit absence. `inference_bench` and `regression_gate` declare `required-features = ["testing"]` because they import the `testing` module; build them with `cargo bench --features testing --bench <name>`.
 - **Library test utilities ([`src/testing/fixtures.rs`](../src/testing/fixtures.rs), `testing` feature):** The consumer supplies `NAM_MODELS_DIR`, `NAM_THIRD_PARTY_DIR`, and, when needed, the read-only vendor overrides `NAM_CORE_DIR` and `NAM_PLUGIN_DIR`. Required fixtures fail with `MissingModelFixture`; optional ones emit a typed skip.
-- **Packaging verification:** Validated continuously by [`utils/consumer-smoke.sh`](../utils/consumer-smoke.sh) via `cargo package --list` and isolated consumer extraction under `target/`.
+- **Packaging verification:** Validated continuously by [`utils/consumer-smoke.sh`](../utils/consumer-smoke.sh) via `cargo package` and isolated `.crate` extraction into `${TMPDIR:-/tmp}` (consumer target/feature matrix, host link, and packaged examples).
 
 ### Skip Semantics & Honest Gating
 

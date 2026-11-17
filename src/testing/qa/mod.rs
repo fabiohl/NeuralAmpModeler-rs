@@ -317,3 +317,6 @@ pub mod criterion;
 
 /// Deterministic benchmark CPU core resolution (§2.4).
 pub mod pick_core;
+
+/// Mandatory cross-ISA parity matrix contract and fail-closed JSONL reconciler.
+pub mod simd_parity;

@@ -103,7 +103,8 @@ fn publish_calibration(mult: u64) {
 /// Reads the raw cycle counter, serialized against earlier instructions.
 ///
 /// x86_64: `LFENCE; RDTSC`. aarch64: `ISB; MRS CNTVCT_EL0` (on Windows ARM64,
-/// falls back to `QueryPerformanceCounter` if EL0 counter access trapped).
+/// callers only reach this after [`calibrate_tsc`] has verified EL0 access;
+/// otherwise `TSC_MULT` stays `0` and [`rdtsc_nanos`] uses `Instant`).
 #[inline(always)]
 fn read_counter() -> u64 {
     #[cfg(target_arch = "x86_64")]
@@ -115,17 +116,9 @@ fn read_counter() -> u64 {
             core::arch::x86_64::_rdtsc()
         }
     }
-    #[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
+    #[cfg(target_arch = "aarch64")]
     {
         read_cntvct_el0()
-    }
-    #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
-    {
-        if ensure_win_arm64_generic_timer_accessible() {
-            read_cntvct_el0()
-        } else {
-            read_win_qpc_counter()
-        }
     }
 }
 
@@ -135,7 +128,7 @@ fn read_cntvct_el0() -> u64 {
     let cycles: u64;
     // SAFETY: `isb` and `mrs cntvct_el0` only read a system register; no memory is
     // accessed (`nomem`, `nostack`). On Linux/macOS EL0 access is guaranteed by ABI;
-    // on Windows ARM64, callers gate this path behind `ensure_win_arm64_generic_timer_accessible`.
+    // on Windows ARM64, callers only invoke this after `calibrate_tsc()` verified EL0 access.
     unsafe {
         core::arch::asm!(
             "isb",
@@ -222,7 +215,6 @@ mod win_arm64_timer {
         AddVectoredExceptionHandler, EXCEPTION_CONTINUE_EXECUTION, EXCEPTION_CONTINUE_SEARCH,
         EXCEPTION_POINTERS, RemoveVectoredExceptionHandler,
     };
-    use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 
     const EXCEPTION_PRIVILEGED_INSTRUCTION: i32 = 0xC000_0096_u32 as i32;
 
@@ -368,30 +360,12 @@ mod win_arm64_timer {
         );
         accessible
     }
-
-    #[inline]
-    pub(super) fn read_qpc_counter() -> u64 {
-        let mut count: i64 = 0;
-        // SAFETY: `count` is a valid stack-allocated `i64` out-parameter.
-        let ok = unsafe { QueryPerformanceCounter(&raw mut count) };
-        if ok != 0 && count >= 0 {
-            count as u64
-        } else {
-            0
-        }
-    }
 }
 
 #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
 #[inline]
 fn ensure_win_arm64_generic_timer_accessible() -> bool {
     win_arm64_timer::ensure_accessible()
-}
-
-#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
-#[inline]
-fn read_win_qpc_counter() -> u64 {
-    win_arm64_timer::read_qpc_counter()
 }
 
 #[cfg(all(target_arch = "aarch64", target_os = "windows"))]

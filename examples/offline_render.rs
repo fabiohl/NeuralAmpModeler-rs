@@ -4,7 +4,13 @@
 //! # Offline High-Quality (HQ) Audio Buffer Rendering Example (`offline_render`)
 //!
 //! Demonstrates offline audio processing using the `NeuralAmpModeler-rs` engine
-//! in **High Quality (HQ) Mode**.
+//! in **High Quality (HQ) Mode** (synthetic 48 kHz signal -> 4× upsampling ->
+//! neural model inference -> 4× downsampling).
+//!
+//! This example does **not** perform speaker-cabinet impulse response (IR)
+//! convolution or sample-rate conversion when a model's native rate differs
+//! from 48 kHz; see `examples/cabsim.rs` for CabSim IR convolution and
+//! `StreamingResampleBuffer` / `NamResampler` for multi-rate resampling.
 //!
 //! ## Quality Modes Overview
 //!
@@ -12,10 +18,12 @@
 //!   Uses zero added latency (`OversampleFactor::Off`), active adaptive compute load-balancing,
 //!   and exact or fast-math activations depending on CPU constraints.
 //! - **HQ / Offline Mode**: Designed for audio rendering and DAW exports where CPU budget is unconstrained.
-//!   Enables **4× half-band oversampling (`OversampleFactor::X4`)** to eliminate non-linear activation
+//!   Enables **4× half-band oversampling (`OversampleFactor::X4`)** to attenuate non-linear activation
 //!   aliasing, disables adaptive compute for 100% deterministic output, and uses exact activation precision.
 //!
 //! ## Usage
+//!
+//! Run from a repository checkout (or extracted crate source):
 //!
 //! ```bash
 //! cargo run --example offline_render -- /path/to/model.nam
@@ -34,7 +42,9 @@ use neural_amp_modeler_rs::models::NamModel;
 
 /// Processing block size in samples at native model rate.
 const BLOCK_SIZE: usize = 512;
-/// Sample rate for the generated test buffer.
+/// Sample rate for the generated test buffer (48 kHz; this example does not
+/// resample models with a different native rate — use `StreamingResampleBuffer`
+/// when host and model sample rates differ).
 const SAMPLE_RATE: u32 = 48000;
 /// Duration of generated test buffer in seconds.
 const DURATION_SECS: f32 = 2.0;
@@ -82,6 +92,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Architecture : {}", model_pair.architecture);
     println!("  Topology     : {}", model_pair.topology);
     println!("  Sample Rate  : {} Hz", model_pair.sample_rate);
+    if model_pair.sample_rate != SAMPLE_RATE {
+        println!(
+            "  [Note] Model native rate ({} Hz) differs from {} Hz synthetic input; \
+             no sample-rate resampling is applied in this example.",
+            model_pair.sample_rate, SAMPLE_RATE
+        );
+    }
 
     // 3. Prewarm model state (flushes recurrent memory / tube state before rendering).
     println!("\n[2/4] Pre-Warming Neural Model State");
@@ -183,7 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         20.0 * out_rms.max(1e-6).log10()
     );
 
-    println!("\n[Status] Offline HQ rendering completed successfully with zero aliasing.");
+    println!("\n[Status] Offline HQ rendering completed successfully (4x half-band oversampling).");
     Ok(())
 }
 

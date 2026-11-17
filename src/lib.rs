@@ -51,7 +51,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "2.1"
+//! NeuralAmpModeler-rs = "3.0"
 //! ```
 //!
 //! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
@@ -67,7 +67,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "2.1", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "3.0", features = ["testing"] }
 //! ```
 //!
 //! ```no_run
@@ -217,7 +217,13 @@ pub mod models;
     feature = "rt-hardening",
     any(target_os = "linux", target_os = "macos")
 ))]
-#[cfg_attr(docsrs, doc(cfg(feature = "rt-hardening")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(
+        feature = "rt-hardening",
+        any(target_os = "linux", target_os = "macos")
+    )))
+)]
 pub mod rt_hardening;
 
 /// Convenience re-exports for the common inference and DSP pipeline.

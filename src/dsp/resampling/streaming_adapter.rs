@@ -23,6 +23,8 @@
 //! rate (mono or stereo), so any consumer (plugin host, standalone audio host,
 //! offline renderer) can drive it.
 
+use log::error;
+
 use crate::common::diagnostics::NamErrorCode;
 use crate::dsp::resampler::NamResampler;
 use crate::math::common::AlignedVec;
@@ -48,11 +50,11 @@ fn drain_channels(
     if out_l.is_empty() || out_r.is_empty() {
         return 0;
     }
-    let pending = fifo_l.len();
+    let pending = fifo_l.len().min(fifo_r.len());
     if pending == 0 {
         return 0;
     }
-    let pop = pending.min(scratch_l.cap());
+    let pop = pending.min(scratch_l.cap()).min(scratch_r.cap());
     let popped = fifo_l.pop_into(&mut scratch_l[..pop]);
     let popped_r = fifo_r.pop_into(&mut scratch_r[..pop]);
     let n_in = popped.min(popped_r);
@@ -197,13 +199,19 @@ impl StreamingResampleBuffer {
     /// - `max_block`: worst-case host block size per channel (1..=8192).
     ///
     /// # Errors
-    /// Returns [`NamErrorCode::OutOfMemory`] on allocation failure.
+    /// Returns [`NamErrorCode::ResamplerBuildFailed`] if `host_rate` or
+    /// `model_rate` is outside `4_000..=384_000` Hz, or
+    /// [`NamErrorCode::OutOfMemory`] on allocation failure or when the derived
+    /// model-rate capacity exceeds `MAX_MODEL_CAP`.
     #[cold]
     pub fn new(host_rate: u32, model_rate: u32, max_block: usize) -> Result<Self, NamErrorCode> {
         Self::build(host_rate, model_rate, max_block, false)
     }
 
     /// Creates the streaming buffer with the linear-phase filter variant.
+    ///
+    /// # Errors
+    /// Same as [`new`](Self::new).
     #[cold]
     pub fn new_linear(
         host_rate: u32,
@@ -222,11 +230,20 @@ impl StreamingResampleBuffer {
     ) -> Result<Self, NamErrorCode> {
         let max_block = max_block.clamp(1, MAX_STREAM_BLOCK);
         let resampler = if linear_phase {
-            NamResampler::new_linear_simple(host_rate, model_rate)
+            NamResampler::new_linear_simple_typed(host_rate, model_rate)
         } else {
-            NamResampler::new_simple(host_rate, model_rate)
+            NamResampler::new_simple_typed(host_rate, model_rate)
         }
-        .map_err(|_| NamErrorCode::OutOfMemory)?;
+        .inspect_err(|&code| {
+            error!(
+                "[StreamingResampleBuffer] Failed to build resampler (host_rate={}, model_rate={}, linear={}): {} ({:?})",
+                host_rate,
+                model_rate,
+                linear_phase,
+                code.code(),
+                code
+            );
+        })?;
 
         let latency_host = resampler.latency_samples(host_rate);
         let model_cap = Self::max_model_samples(max_block, host_rate, model_rate);
@@ -234,6 +251,16 @@ impl StreamingResampleBuffer {
             // Extreme host↔model rate ratio: reject instead of allocating tens
             // of MB per instance. Realistic NAM usage (model ≤ 192 kHz) is far
             // below this bound.
+            error!(
+                "[StreamingResampleBuffer] Model FIFO capacity {} exceeds MAX_MODEL_CAP {} (host_rate={}, model_rate={}, max_block={}): {} ({:?})",
+                model_cap,
+                MAX_MODEL_CAP,
+                host_rate,
+                model_rate,
+                max_block,
+                NamErrorCode::OutOfMemory.code(),
+                NamErrorCode::OutOfMemory
+            );
             return Err(NamErrorCode::OutOfMemory);
         }
         let out_cap = Self::output_capacity(max_block, latency_host);
@@ -390,13 +417,16 @@ impl StreamingResampleBuffer {
     /// Pushes a host-rate input block into the input FIFO.
     ///
     /// Returns the number of samples accepted per channel (all of `in_l.len()`
-    /// when within `max_block` of free space). Bounded: never overflows.
+    /// when within `max_block` of free space). Bounded: never overflows and
+    /// keeps both channels synchronized.
     #[inline]
     pub fn push_input(&mut self, in_l: &[f32], in_r: &[f32]) -> usize {
-        let n = in_l.len().min(in_r.len());
+        let free = self.in_fifo[0].free().min(self.in_fifo[1].free());
+        let n = in_l.len().min(in_r.len()).min(free);
         let a = self.in_fifo[0].push(&in_l[..n]);
         let b = self.in_fifo[1].push(&in_r[..n]);
         let accepted = a.min(b);
+        debug_assert_eq!(accepted, n);
         self.input_total += accepted as u64;
         accepted
     }
@@ -416,39 +446,86 @@ impl StreamingResampleBuffer {
         )
     }
 
-    /// Internal: drains pending host input into `self.mid_in` (model rate).
-    fn drain_to_mid(&mut self) -> usize {
+    /// Internal: drains pending host input into `self.mid_in[..limit]` (model rate),
+    /// bounded by the available free space in `model_fifo` so model outputs
+    /// never exceed `model_fifo` capacity.
+    fn drain_to_mid_bounded(&mut self, max_model_out: usize) -> usize {
         let [mid_l, mid_r] = &mut self.mid_in;
+        let cap = max_model_out.min(mid_l.cap()).min(mid_r.cap());
+        if cap == 0 {
+            return 0;
+        }
         drain_channels(
             &mut self.in_fifo,
             &mut self.in_scratch,
             &mut self.resampler,
-            mid_l,
-            mid_r,
+            &mut mid_l[..cap],
+            &mut mid_r[..cap],
         )
     }
 
     /// Queues a model-rate output block and drains the model FIFO through
-    /// `resampler_out` into the host-rate output FIFO as far as possible.
+    /// `resampler_out` into the host-rate output FIFO as far as free output
+    /// capacity allows.
     ///
-    /// Returns the number of model samples accepted. RT-safe: zero allocations.
+    /// Any model samples that cannot yet fit into `out_fifo` remain buffered in
+    /// `model_fifo` and will resume draining on subsequent
+    /// [`pull_output`](Self::pull_output) or `push_model_output` calls.
+    ///
+    /// Returns the exact number of model samples per channel accepted into the
+    /// adapter (guaranteed never to be dropped or silently overwritten).
+    /// RT-safe: zero allocations.
     pub fn push_model_output(&mut self, in_l: &[f32], in_r: &[f32]) -> usize {
         let n = in_l.len().min(in_r.len());
-        let a = self.model_fifo[0].push(&in_l[..n]);
-        let b = self.model_fifo[1].push(&in_r[..n]);
-        let accepted = a.min(b);
-        self.drain_model_to_out();
-        accepted
+        let mut pushed_total = 0usize;
+        loop {
+            if pushed_total < n {
+                let free = self.model_fifo[0].free().min(self.model_fifo[1].free());
+                let chunk = (n - pushed_total).min(free);
+                if chunk > 0 {
+                    let a = self.model_fifo[0].push(&in_l[pushed_total..pushed_total + chunk]);
+                    let b = self.model_fifo[1].push(&in_r[pushed_total..pushed_total + chunk]);
+                    let pushed = a.min(b);
+                    debug_assert_eq!(pushed, chunk);
+                    pushed_total += pushed;
+                }
+            }
+            self.drain_model_to_out();
+            if pushed_total >= n {
+                break;
+            }
+            let free_after = self.model_fifo[0].free().min(self.model_fifo[1].free());
+            if free_after == 0 {
+                break;
+            }
+        }
+        pushed_total
     }
 
-    /// Internal: drains the model FIFO through `resampler_out` into `out_fifo`.
+    /// Internal: drains the model FIFO through `resampler_out` into `out_fifo`,
+    /// strictly bounded by `out_fifo` free capacity plus remaining warm-up
+    /// discard budget. Unconsumed model samples stay in `model_fifo` without
+    /// re-processing already consumed samples.
     fn drain_model_to_out(&mut self) {
+        let scratch_cap = self.out_scratch[0].cap().min(self.out_scratch[1].cap());
+        let mid_cap = self.mid_drain[0].cap().min(self.mid_drain[1].cap());
         loop {
-            let pending = self.model_fifo[0].len();
+            let pending = self.model_fifo[0].len().min(self.model_fifo[1].len());
             if pending == 0 {
                 break;
             }
-            let pop = pending.min(self.mid_drain[0].cap());
+            let out_free = self.out_fifo[0].free().min(self.out_fifo[1].free());
+            // Warm-up samples up to `discard_remaining` are dropped before
+            // reaching `out_fifo`, so only outputs beyond that budget need
+            // free slots in `out_fifo`.
+            let max_out = (out_free as u64)
+                .saturating_add(self.discard_remaining)
+                .min(scratch_cap as u64) as usize;
+            if max_out == 0 {
+                break;
+            }
+
+            let pop = pending.min(mid_cap);
             let popped = self.model_fifo[0].pop_into(&mut self.mid_drain[0][..pop]);
             let popped_r = self.model_fifo[1].pop_into(&mut self.mid_drain[1][..pop]);
             let n_in = popped.min(popped_r);
@@ -461,8 +538,8 @@ impl StreamingResampleBuffer {
                 self.resampler.process_output(
                     &self.mid_drain[0][..n_in],
                     &self.mid_drain[1][..n_in],
-                    scratch_l,
-                    scratch_r,
+                    &mut scratch_l[..max_out],
+                    &mut scratch_r[..max_out],
                 )
             };
 
@@ -471,7 +548,7 @@ impl StreamingResampleBuffer {
                 self.model_fifo[0].unpop(n_in - consumed);
                 self.model_fifo[1].unpop(n_in - consumed);
             }
-            let mut written = progress.samples_written;
+            let mut written = progress.samples_written.min(max_out);
             let mut skip = 0usize;
             if self.discard_remaining > 0 {
                 // Warm-up: discard the first `latency_host` real resampler
@@ -486,15 +563,70 @@ impl StreamingResampleBuffer {
                 let a = self.out_fifo[0].push(&self.out_scratch[0][skip..skip + written]);
                 let b = self.out_fifo[1].push(&self.out_scratch[1][skip..skip + written]);
                 let pushed = a.min(b);
-                // Bounded by construction: `out_fifo` capacity absorbs the worst
-                // case (max_block production + priming retention + margin).
+                // Guaranteed by construction: `written <= max_out - d <= out_free`.
                 debug_assert_eq!(pushed, written);
+            }
+            if consumed == 0 && progress.samples_written == 0 {
+                break;
             }
         }
     }
 
+    /// Consumes leading priming zeros (up to `n - *pos`) into `out_l`/`out_r`,
+    /// updating `*pos` and `*pad_used`.
+    #[inline]
+    fn fill_priming_zeros(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        pos: &mut usize,
+        n: usize,
+        pad_used: &mut usize,
+    ) {
+        if *pos >= n || self.priming_remaining == 0 {
+            return;
+        }
+        let avail = n - *pos;
+        let pad = (self.priming_remaining.min(avail as u64)) as usize;
+        if pad > 0 {
+            out_l[*pos..*pos + pad].fill(0.0);
+            out_r[*pos..*pos + pad].fill(0.0);
+            self.priming_remaining -= pad as u64;
+            *pos += pad;
+            *pad_used += pad;
+        }
+    }
+
+    /// Drains `model_fifo -> out_fifo` and pops available real samples into
+    /// `out_l[*pos..n]` / `out_r[*pos..n]`, resuming `drain_model_to_out` after
+    /// each pop so backpressured model outputs keep flowing.
+    fn pull_available_real(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        pos: &mut usize,
+        n: usize,
+        real_used: &mut usize,
+    ) {
+        self.drain_model_to_out();
+        while *pos < n {
+            let avail = self.out_fifo[0].len().min(self.out_fifo[1].len());
+            if avail == 0 {
+                break;
+            }
+            let take = (n - *pos).min(avail);
+            let p0 = self.out_fifo[0].pop_into(&mut out_l[*pos..*pos + take]);
+            let p1 = self.out_fifo[1].pop_into(&mut out_r[*pos..*pos + take]);
+            let popped = p0.min(p1);
+            debug_assert_eq!(popped, take);
+            *pos += popped;
+            *real_used += popped;
+            self.drain_model_to_out();
+        }
+    }
+
     /// Pulls **exactly** `n` host-rate samples from the output FIFO, retaining
-    /// any excess for the next call.
+    /// any excess for the next call and resuming any backpressured model output.
     ///
     /// During warm-up, the formally declared latency
     /// ([`latency_samples`](StreamingResampleBuffer::latency_samples)) is
@@ -507,6 +639,7 @@ impl StreamingResampleBuffer {
     pub fn pull_output(&mut self, out_l: &mut [f32], out_r: &mut [f32], n: usize) -> PullResult {
         let n = n.min(out_l.len()).min(out_r.len());
         if n == 0 {
+            self.drain_model_to_out();
             return PullResult {
                 written: 0,
                 real: 0,
@@ -515,61 +648,124 @@ impl StreamingResampleBuffer {
             };
         }
 
+        let mut pos = 0usize;
+        let mut pad_used = 0usize;
+        let mut real_used = 0usize;
+
         // Priming: consume the declared latency as contiguous leading zeros
         // first, so the delivered waveform aligns at exactly `latency_samples()`
         // (the real resampler outputs are discarded during warm-up).
-        let pad_target = if self.priming_remaining > 0 {
-            (self.priming_remaining.min(n as u64)) as usize
-        } else {
-            0
-        };
-        let pad = pad_target.min(n);
-        let real_target = n - pad;
+        self.fill_priming_zeros(out_l, out_r, &mut pos, n, &mut pad_used);
+        self.pull_available_real(out_l, out_r, &mut pos, n, &mut real_used);
 
-        let avail = self.out_fifo[0].len().min(self.out_fifo[1].len());
-        let real = real_target.min(avail);
-
-        // Zero-fill the priming pad first (leading), then pop real samples
-        // contiguously after it; any residual deficit is zero-filled last.
-        if pad > 0 {
-            out_l[..pad].fill(0.0);
-            out_r[..pad].fill(0.0);
-        }
-        self.out_fifo[0].pop_into(&mut out_l[pad..pad + real]);
-        self.out_fifo[1].pop_into(&mut out_r[pad..pad + real]);
-        if pad + real < n {
-            out_l[pad + real..n].fill(0.0);
-            out_r[pad + real..n].fill(0.0);
-        }
-
-        self.priming_remaining -= pad as u64;
-        self.output_real_total += real as u64;
-        self.output_padded_total += (n - real) as u64;
-
-        // Any fabrication beyond the nominal priming pad is a mid-stream
-        // underflow (contract violation): the pipeline fell short of the real
-        // samples requested. Under correct operation this never fires.
-        let deficit = real_target.saturating_sub(real);
+        let deficit = n - pos;
         if deficit > 0 {
+            out_l[pos..n].fill(0.0);
+            out_r[pos..n].fill(0.0);
             self.underflow_total += deficit as u64;
         }
 
+        self.output_real_total += real_used as u64;
+        self.output_padded_total += (pad_used + deficit) as u64;
+
         PullResult {
             written: n,
-            real,
-            padded: n - real,
+            real: real_used,
+            padded: pad_used + deficit,
             underflow: deficit > 0,
         }
     }
 
+    /// Internal: drains pending host input in `in_fifo` through `model`,
+    /// bounded by `model_fifo` free space, pushing produced model outputs to
+    /// `model_fifo`, draining to `out_fifo`, and pulling available real samples
+    /// into `out_l[*pos..n]` / `out_r[*pos..n]` when space is still needed.
+    ///
+    /// Returns `(model_underflow, model_stalled)`.
+    fn drain_input_through_model<F>(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        pos: &mut usize,
+        n: usize,
+        real_used: &mut usize,
+        model: &mut F,
+    ) -> (bool, bool)
+    where
+        F: FnMut(&[f32], &[f32], &mut [f32], &mut [f32]) -> usize,
+    {
+        let mut model_underflow = false;
+        let mut model_stalled = false;
+        loop {
+            self.drain_model_to_out();
+            if *pos < n {
+                self.pull_available_real(out_l, out_r, pos, n, real_used);
+            }
+            let model_free = self.model_fifo[0].free().min(self.model_fifo[1].free());
+            if model_free == 0 {
+                break;
+            }
+            let drained = self.drain_to_mid_bounded(model_free);
+            if drained == 0 {
+                break;
+            }
+            let produced = {
+                let in_mid_l = &self.mid_in[0][..drained];
+                let in_mid_r = &self.mid_in[1][..drained];
+                let [model_out_l, model_out_r] = &mut self.model_out;
+                model(
+                    in_mid_l,
+                    in_mid_r,
+                    &mut model_out_l[..drained],
+                    &mut model_out_r[..drained],
+                )
+            };
+            let produced = produced.min(drained);
+            if produced < drained {
+                model_underflow = true;
+            }
+            if produced > 0 {
+                let a = self.model_fifo[0].push(&self.model_out[0][..produced]);
+                let b = self.model_fifo[1].push(&self.model_out[1][..produced]);
+                let pushed = a.min(b);
+                debug_assert_eq!(pushed, produced);
+                self.drain_model_to_out();
+                if *pos < n {
+                    self.pull_available_real(out_l, out_r, pos, n, real_used);
+                }
+            } else {
+                // Pathological model: zero output produced for `drained`
+                // inputs. Bail out without fabricating fake samples or guessing
+                // unconsumed input counts; any remaining `in_fifo` stays queued.
+                model_stalled = true;
+                break;
+            }
+        }
+        (model_underflow, model_stalled)
+    }
+
     /// One-shot streaming pass: pushes the input block, runs the model on all
-    /// pending model-rate samples, and pulls exactly `out` samples.
+    /// pending model-rate samples, and pulls exactly `n` samples.
     ///
     /// # Contract
     /// - `in_l/in_r` and `out_l/out_r` carry host-rate samples; equal lengths
     ///   are expected (the effective length is the minimum of all four).
-    /// - `model` is invoked with model-rate slices; it must write at most as
-    ///   many output samples as the input length (returns the written count).
+    /// - `model` is invoked with equal-length model-rate slices (`&mid[..drained]`
+    ///   and `&mut model_out[..drained]`) and is expected to write `drained`
+    ///   output samples (1:1 synchronous cardinality, returning the written count).
+    /// - **Under-producing callback (`produced < drained`):** the callback
+    ///   signature does not report input consumption separately from output
+    ///   production, so the adapter never guesses unconsumed inputs and never
+    ///   fabricates non-zero model-rate samples. It preserves the `produced`
+    ///   real samples written, flags `StreamingResult::underflow = true`
+    ///   immediately (stopping the loop on `produced == 0`), and accounts any
+    ///   host-rate zero-fill deficit in `underflow_total`.
+    /// - **Bypass + granular API compatibility:** when `is_bypass()` is `true`
+    ///   and all internal FIFOs (`in_fifo`, `model_fifo`, `out_fifo`) are empty,
+    ///   `process` takes a zero-copy direct fast path. If any FIFO holds pending
+    ///   samples from prior granular calls (`push_input`, `push_model_output`,
+    ///   partial `pull_output`), `process` routes through the FIFO pipeline so
+    ///   pending samples are never reordered or abandoned.
     ///
     /// RT-safe: zero allocations on the processing path.
     pub fn process<F>(
@@ -585,10 +781,11 @@ impl StreamingResampleBuffer {
     {
         let n = in_l.len().min(in_r.len()).min(out_l.len()).min(out_r.len());
 
-        // Bypass fast path (host rate == model rate): no resampling and no
-        // latency, so the model can be called directly on the caller's buffers
-        // with exact cardinality — skipping the FIFO pipeline entirely.
-        if self.is_bypass() {
+        // Bypass fast path (host rate == model rate) when no granular FIFO
+        // state is pending: zero-copy, zero latency, exact cardinality.
+        let fifos_empty =
+            self.input_pending() == 0 && self.model_pending() == 0 && self.output_pending() == 0;
+        if self.is_bypass() && fifos_empty {
             let produced = model(&in_l[..n], &in_r[..n], &mut out_l[..n], &mut out_r[..n]);
             let produced = produced.min(n);
             self.input_total += n as u64;
@@ -609,39 +806,68 @@ impl StreamingResampleBuffer {
             };
         }
 
-        let consumed = self.push_input(&in_l[..n], &in_r[..n]);
+        let mut pos = 0usize;
+        let mut pad_used = 0usize;
+        let mut real_used = 0usize;
+        let mut model_underflow = false;
+        let mut model_stalled = false;
 
-        // Drain → model → feed output, until all pending host input is consumed.
-        loop {
-            let drained = self.drain_to_mid();
-            if drained == 0 {
-                break;
-            }
-            let produced = {
-                let in_mid_l = &self.mid_in[0][..drained];
-                let in_mid_r = &self.mid_in[1][..drained];
-                let [model_out_l, model_out_r] = &mut self.model_out;
-                model(in_mid_l, in_mid_r, model_out_l, model_out_r)
-            };
-            let produced = produced.min(self.model_out[0].cap());
-            if produced > 0 {
-                self.model_fifo[0].push(&self.model_out[0][..produced]);
-                self.model_fifo[1].push(&self.model_out[1][..produced]);
-                self.drain_model_to_out();
-            } else {
-                // Pathological model: no forward progress possible. Bail out;
-                // the caller must replace/reset the model before continuing.
-                break;
-            }
+        // 1. Honor any remaining declared priming first, then pull pre-existing
+        //    output samples so downstream FIFOs drain before new input arrives.
+        self.fill_priming_zeros(out_l, out_r, &mut pos, n, &mut pad_used);
+        self.pull_available_real(out_l, out_r, &mut pos, n, &mut real_used);
+
+        // 2. Drain any pre-existing host input queued via `push_input` before
+        //    pushing `in_l/in_r`, preserving strict chronological order and
+        //    freeing `in_fifo` capacity.
+        if self.input_pending() > 0 {
+            let (uf, stalled) = self.drain_input_through_model(
+                out_l,
+                out_r,
+                &mut pos,
+                n,
+                &mut real_used,
+                &mut model,
+            );
+            model_underflow |= uf;
+            model_stalled = stalled;
         }
 
-        let pull = self.pull_output(&mut out_l[..n], &mut out_r[..n], n);
+        // 3. Push the new host-rate block (bounded by `in_fifo` free space).
+        let consumed = self.push_input(&in_l[..n], &in_r[..n]);
+
+        // 4. Drain → model → model_fifo → resampler_out → out_fifo → pull.
+        if !model_stalled {
+            let (uf, _) = self.drain_input_through_model(
+                out_l,
+                out_r,
+                &mut pos,
+                n,
+                &mut real_used,
+                &mut model,
+            );
+            model_underflow |= uf;
+        }
+
+        // 5. Complete `out_l/out_r[..n]` cardinality (pull any final real
+        //    samples; zero-fill any residual deficit as underflow).
+        self.pull_available_real(out_l, out_r, &mut pos, n, &mut real_used);
+        let deficit = n - pos;
+        if deficit > 0 {
+            out_l[pos..n].fill(0.0);
+            out_r[pos..n].fill(0.0);
+            self.underflow_total += deficit as u64;
+        }
+
+        self.output_real_total += real_used as u64;
+        self.output_padded_total += (pad_used + deficit) as u64;
+
         StreamingResult {
             consumed,
-            written: pull.written,
-            real: pull.real,
-            padded: pull.padded,
-            underflow: pull.underflow,
+            written: n,
+            real: real_used,
+            padded: pad_used + deficit,
+            underflow: deficit > 0 || model_underflow,
         }
     }
 }

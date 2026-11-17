@@ -172,41 +172,14 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
         )
     })?;
 
-    if fmt_size < 16 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "IR WAV: 'fmt ' chunk too small",
-        ));
-    }
+    let fmt = crate::loader::wav::parse_fmt_chunk(&data[fmt_offset..], fmt_size, 1)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("IR WAV: {e}")))?;
 
-    let raw_audio_format = u16::from_le_bytes([data[fmt_offset], data[fmt_offset + 1]]);
-    let num_channels = u16::from_le_bytes([data[fmt_offset + 2], data[fmt_offset + 3]]);
-    let sample_rate = u32::from_le_bytes([
-        data[fmt_offset + 4],
-        data[fmt_offset + 5],
-        data[fmt_offset + 6],
-        data[fmt_offset + 7],
-    ]);
-    let bits_per_sample = u16::from_le_bytes([data[fmt_offset + 14], data[fmt_offset + 15]]);
-
-    let audio_format = if raw_audio_format == WAV_FORMAT_EXTENSIBLE {
-        if fmt_size < 26 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "IR WAV: 'fmt ' chunk too small for extensible format",
-            ));
-        }
-        u16::from_le_bytes([data[fmt_offset + 24], data[fmt_offset + 25]])
-    } else {
-        raw_audio_format
-    };
-
-    if num_channels != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("IR WAV must be mono (found {} channels)", num_channels),
-        ));
-    }
+    let raw_audio_format = fmt.raw_format;
+    let audio_format = fmt.audio_format;
+    let num_channels = fmt.channels;
+    let sample_rate = fmt.sample_rate;
+    let bits_per_sample = fmt.bits_per_sample;
 
     if !(MIN_IR_SAMPLE_RATE..=MAX_IR_SAMPLE_RATE).contains(&sample_rate) {
         return Err(io::Error::new(
@@ -220,21 +193,7 @@ pub(crate) fn parse_wav(data: &[u8]) -> io::Result<(Vec<f32>, u32)> {
 
     let (data_start, data_size) = find_data_chunk(data)?;
 
-    let bytes_per_sample = match (audio_format, bits_per_sample) {
-        (WAV_FORMAT_PCM, 16) => 2usize,
-        (WAV_FORMAT_PCM, 24) => 3,
-        (WAV_FORMAT_PCM, 32) => 4,
-        (WAV_FORMAT_IEEE_FLOAT, 32) => 4,
-        (fmt, bits) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "IR WAV: unsupported format (audio_format={}, bits={})",
-                    fmt, bits
-                ),
-            ));
-        }
-    };
+    let bytes_per_sample = fmt.alignment as usize;
 
     // `find_chunk` guarantees the declared payload fits in the file. A payload
     // that is not a whole number of samples is a malformed stream, not audio

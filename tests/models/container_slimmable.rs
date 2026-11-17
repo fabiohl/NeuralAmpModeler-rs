@@ -784,8 +784,7 @@ fn test_set_slimmable_size_resets_target() {
             }
             lite.head_write_pos = 42; // arbitrary non-rf value
             for buf in &mut lite.layer_buffers {
-                let len = buf.size();
-                (&mut buf[..])[..len].fill(0.5);
+                buf.fill(0.5);
             }
         } else {
             panic!("Expected WavenetA2Lite at index 0");

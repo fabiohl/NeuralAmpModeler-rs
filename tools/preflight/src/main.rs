@@ -465,6 +465,53 @@ fn print_os_details() {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(ver) = read_macos_sysctl_string(c"kern.osproductversion") {
+            println!("macos.version: {ver}");
+        }
+        if let Some(rel) = read_macos_sysctl_string(c"kern.osrelease") {
+            println!("macos.kernel:  {rel}");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_sysctl_string(name: &core::ffi::CStr) -> Option<String> {
+    let mut len: usize = 0;
+    // SAFETY: `name` is NUL-terminated; passing null `oldp` queries the required buffer size.
+    let rc = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            core::ptr::null_mut(),
+            &raw mut len,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || len == 0 || len > 4096 {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    // SAFETY: `buf` has `len` writable bytes matching the size query above.
+    let rc2 = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            buf.as_mut_ptr().cast::<core::ffi::c_void>(),
+            &raw mut len,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc2 != 0 {
+        return None;
+    }
+    let end = buf[..len.min(buf.len())]
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(len.min(buf.len()));
+    let s = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
 }
 
 fn print_cpu_model() {
@@ -482,7 +529,14 @@ fn print_cpu_model() {
         .unwrap_or_else(|| "unknown".to_string());
         println!("cpu.model: {}", model.trim());
     }
-    #[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    {
+        let model = read_macos_sysctl_string(c"machdep.cpu.brand_string")
+            .or_else(|| read_macos_sysctl_string(c"hw.model"))
+            .unwrap_or_else(|| "unknown".to_string());
+        println!("cpu.model: {model}");
+    }
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
     {
         let model = std::fs::read_to_string("/proc/cpuinfo")
             .ok()

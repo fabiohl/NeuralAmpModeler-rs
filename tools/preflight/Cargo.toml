@@ -14,6 +14,9 @@ autobins = false
 name = "nam_preflight"
 path = "src/main.rs"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
     "Wdk_System_SystemServices",

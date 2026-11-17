@@ -168,8 +168,7 @@ fn test_normalize_scale() {
     assert!((peak - 1.0).abs() < 1e-6);
 }
 
-/// Creates a minimal 44-byte WAV header with the given sample rate.
-/// Uses PCM16 mono format; byte_rate and block_align are zero (not validated by the parser).
+/// Creates a minimal 44-byte WAV header with the given sample rate (PCM16 mono).
 fn make_wav_header(sample_rate: u32) -> Vec<u8> {
     let mut buf = vec![0u8; 44];
     buf[0..4].copy_from_slice(b"RIFF");
@@ -180,8 +179,8 @@ fn make_wav_header(sample_rate: u32) -> Vec<u8> {
     buf[20..22].copy_from_slice(&1u16.to_le_bytes()); // PCM
     buf[22..24].copy_from_slice(&1u16.to_le_bytes()); // mono
     buf[24..28].copy_from_slice(&sample_rate.to_le_bytes());
-    buf[28..32].copy_from_slice(&0u32.to_le_bytes()); // byte_rate (unchecked)
-    buf[32..34].copy_from_slice(&0u16.to_le_bytes()); // block_align (unchecked)
+    buf[28..32].copy_from_slice(&(sample_rate.saturating_mul(2)).to_le_bytes()); // byte_rate
+    buf[32..34].copy_from_slice(&2u16.to_le_bytes()); // block_align
     buf[34..36].copy_from_slice(&16u16.to_le_bytes()); // bits_per_sample
     buf[36..40].copy_from_slice(b"data");
     buf[40..44].copy_from_slice(&0u32.to_le_bytes()); // 0 data size
@@ -207,17 +206,34 @@ fn test_reject_ir_extreme_sample_rate() {
         Ok(_) => panic!("should reject 1 Hz sample rate"),
     }
 
-    // u32::MAX — above MAX_IR_SAMPLE_RATE
-    let buf = make_wav_header(u32::MAX);
-    let (_dir_max, path_max) = temp_wav_path("nam_rs_test_rate_max.wav");
-    std::fs::write(&path_max, &buf).unwrap();
-    match CabSimIr::load(&path_max, 0, false) {
+    // 384_001 Hz — above MAX_IR_SAMPLE_RATE
+    let buf_over = make_wav_header(384_001);
+    let (_dir_over, path_over) = temp_wav_path("nam_rs_test_rate_384001.wav");
+    std::fs::write(&path_over, &buf_over).unwrap();
+    match CabSimIr::load(&path_over, 0, false) {
         Err(err) => {
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
             assert!(
                 err.to_string().contains("out of range"),
                 "expected 'out of range' in: {}",
                 err
+            );
+        }
+        Ok(_) => panic!("should reject 384_001 Hz sample rate"),
+    }
+
+    // u32::MAX — above MAX_IR_SAMPLE_RATE (also overflows 32-bit byte_rate)
+    let buf = make_wav_header(u32::MAX);
+    let (_dir_max, path_max) = temp_wav_path("nam_rs_test_rate_max.wav");
+    std::fs::write(&path_max, &buf).unwrap();
+    match CabSimIr::load(&path_max, 0, false) {
+        Err(err) => {
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            let msg = err.to_string();
+            assert!(
+                msg.contains("out of range") || msg.contains("Invalid sample rate"),
+                "expected rate error in: {}",
+                msg
             );
         }
         Ok(_) => panic!("should reject u32::MAX sample rate"),
@@ -354,13 +370,15 @@ fn write_extensible_wav(
     buf.extend_from_slice(&bits_per_sample.to_le_bytes()); // wValidBitsPerSample
     buf.extend_from_slice(&0u32.to_le_bytes()); // dwChannelMask
 
-    // SubFormat GUID: first 2 bytes are subformat code (1 for PCM, 3 for IEEE Float)
+    // SubFormat GUID: first 4 bytes (Data1 LE) carry subformat code (1 = PCM, 3 = IEEE Float),
+    // followed by the 12-byte KSDATAFORMAT_SUBTYPE_* GUID tail.
     let subformat_code: u16 = if subformat_pcm { 1 } else { 3 };
     buf.extend_from_slice(&subformat_code.to_le_bytes());
-    // Remainder of KSDATAFORMAT_SUBTYPE_PCM / IEEE_FLOAT GUID (14 bytes):
-    // 00-00-00-00-10-80-00-00-AA-00-38-9B-71-00
     buf.extend_from_slice(&[
-        0x00, 0x00, 0x00, 0x00, 0x10, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71, 0x00,
+        0x00, 0x00, // upper 2 bytes of Data1 (u32 LE)
+        0x00, 0x00, // Data2 = 0x0000
+        0x10, 0x00, // Data3 = 0x0010
+        0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71, // Data4
     ]);
 
     buf.extend_from_slice(b"data");

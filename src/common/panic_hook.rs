@@ -228,7 +228,11 @@ fn format_panic_report_to_buf(
         );
         let _ = write!(w, "\nfeatures=");
         if system.features.is_empty() {
-            let _ = write!(w, "none (baseline x86-64-v3 only)");
+            let _ = write!(
+                w,
+                "{}",
+                crate::common::diagnostics::system_info::baseline_isa_label()
+            );
         } else {
             for (i, f) in system.features.iter().enumerate() {
                 if i > 0 {

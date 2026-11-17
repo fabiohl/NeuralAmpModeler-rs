@@ -67,8 +67,7 @@ pub(crate) fn a2_prewarm_common(
     head_write_pos: &mut usize,
 ) {
     for buf in layer_buffers.iter_mut() {
-        let len = buf.size();
-        buf[..len].fill(0.0);
+        buf.fill(0.0);
     }
     layer_buffer_starts[..num_layers].copy_from_slice(&layer_ring_sizes[..num_layers]);
     layer_in.fill(0.0);

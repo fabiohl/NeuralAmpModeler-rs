@@ -13,20 +13,37 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static SKIP_LOG_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
-struct SkipRecord<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    run_id: Option<&'a str>,
-    pid: u32,
-    test: &'a str,
-    reason: &'a str,
+/// Structured record persisted to `skips-<NAM_RUN_ID>.jsonl` (or `skips.jsonl`).
+#[non_exhaustive]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkipRecord {
+    /// Run identifier exported by the test harness (`NAM_RUN_ID`), when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Process ID that emitted the skip record.
+    pub pid: u32,
+    /// Name or identifier of the skipped test.
+    pub test: String,
+    /// Machine-readable skip reason.
+    pub reason: String,
+    /// Whether the skip belongs to a documented optional fixture family.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    optional: bool,
+    pub optional: bool,
+}
+
+/// Resolves the canonical skip log path inside `log_dir` for `run_id`.
+#[must_use]
+pub fn skip_log_path(log_dir: &Path, run_id: Option<&str>) -> PathBuf {
+    match run_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => log_dir.join(format!("skips-{id}.jsonl")),
+        None => log_dir.join("skips.jsonl"),
+    }
 }
 
 /// Classifies a skip reason as an optional, non-distributable fixture.
@@ -72,16 +89,14 @@ pub fn report_skip(test: &str, reason: &str) {
     let _ = std::fs::create_dir_all(&log_dir);
 
     let run_id = std::env::var("NAM_RUN_ID").ok();
-    let log_path = match run_id.as_deref() {
-        Some(id) if !id.is_empty() => log_dir.join(format!("skips-{id}.jsonl")),
-        _ => log_dir.join("skips.jsonl"),
-    };
+    let run_id_trimmed = run_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let log_path = skip_log_path(&log_dir, run_id_trimmed);
     let pid = std::process::id();
     let record = SkipRecord {
-        run_id: run_id.as_deref(),
+        run_id: run_id_trimmed.map(str::to_owned),
         pid,
-        test,
-        reason,
+        test: test.to_owned(),
+        reason: reason.to_owned(),
         optional,
     };
 

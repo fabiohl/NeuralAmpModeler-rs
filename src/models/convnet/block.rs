@@ -144,8 +144,9 @@ impl ConvNetBlock {
         let input_len = num_frames * in_ch;
 
         let buf_start = self.state.buffer_start * in_ch;
-        self.state.layer_buffer[buf_start..buf_start + input_len]
-            .copy_from_slice(&input[..input_len]);
+        self.state
+            .layer_buffer
+            .write_slice_at(buf_start, &input[..input_len]);
 
         let out_slice = &mut output[..num_frames * out_ch];
         // SAFETY: `conv.process_block::<M>` is an `unsafe fn`; its preconditions

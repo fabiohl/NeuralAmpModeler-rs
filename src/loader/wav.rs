@@ -216,6 +216,118 @@ fn uint_le(bytes: &[u8]) -> u32 {
 /// `{0x00000000, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}}`
 const EXTENSIBLE_GUID_TAIL: [u8; 12] = [0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
 
+/// Validated RIFF/WAVE `fmt ` chunk metadata shared between `loader::wav` and `dsp::cabsim::ir_parse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ValidatedWavFmt {
+    pub raw_format: u16,
+    pub audio_format: u16,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub byte_rate: u32,
+    pub alignment: u16,
+    pub bits_per_sample: u16,
+}
+
+/// Validates a RIFF `fmt ` chunk payload against the supported PCM (16/24/32-bit)
+/// and IEEE float (32-bit) subset, including `0xFFFE` (`WAVE_FORMAT_EXTENSIBLE`).
+///
+/// Enforces:
+/// - `declared_size >= 16` (and `>= 40` for `0xFFFE`, rejecting 26-byte extensible chunks)
+/// - `cbSize >= 22` and `cbSize + 18 <= declared_size`
+/// - `EXTENSIBLE_GUID_TAIL` exact match and `subformat` in `{1, 3}` (full `u32` check)
+/// - `valid_bits == bits_per_sample` (reduced `valid_bits` rejected without bit-shifting decoder)
+/// - `block_align == channels * (bits / 8)` and `byte_rate == sample_rate * block_align`
+pub(crate) fn parse_fmt_chunk(
+    fmt_bytes: &[u8],
+    declared_size: u32,
+    max_channels: u16,
+) -> Result<ValidatedWavFmt, WavError> {
+    if declared_size < 16 {
+        return Err(WavError::InvalidOrDuplicateFmt);
+    }
+
+    let fmt_len = (declared_size as usize).min(40);
+    if fmt_bytes.len() < fmt_len {
+        return Err(WavError::TruncatedPayload);
+    }
+    let fmt = &fmt_bytes[..fmt_len];
+
+    let raw_format = uint_le(&fmt[0..2]) as u16;
+    let channels = uint_le(&fmt[2..4]) as u16;
+    if channels == 0 || channels > max_channels {
+        return Err(WavError::UnsupportedChannelCount(channels));
+    }
+
+    let sample_rate = uint_le(&fmt[4..8]);
+    let byte_rate = uint_le(&fmt[8..12]);
+    let alignment = uint_le(&fmt[12..14]) as u16;
+    let bits_per_sample = uint_le(&fmt[14..16]) as u16;
+
+    let mut format = raw_format as u32;
+    if raw_format == 65534 {
+        if declared_size < 40 {
+            return Err(WavError::InvalidExtensibleFormat);
+        }
+        let cb_size = uint_le(&fmt[16..18]);
+        if cb_size < 22 || (cb_size as u64) + 18 > declared_size as u64 {
+            return Err(WavError::InvalidExtensibleFormat);
+        }
+        let valid_bits = uint_le(&fmt[18..20]) as u16;
+        if valid_bits == 0 || valid_bits > bits_per_sample {
+            return Err(WavError::InvalidValidBits {
+                valid_bits,
+                bits: bits_per_sample,
+            });
+        }
+        if fmt[28..40] != EXTENSIBLE_GUID_TAIL {
+            return Err(WavError::UnsupportedExtensibleSubtype);
+        }
+        format = uint_le(&fmt[24..28]);
+        if format == 3 && valid_bits != bits_per_sample {
+            return Err(WavError::InvalidFloatValidBits {
+                valid_bits,
+                bits: bits_per_sample,
+            });
+        }
+        if format == 1 && valid_bits != bits_per_sample {
+            return Err(WavError::InvalidValidBits {
+                valid_bits,
+                bits: bits_per_sample,
+            });
+        }
+    }
+
+    let is_pcm =
+        format == 1 && (bits_per_sample == 16 || bits_per_sample == 24 || bits_per_sample == 32);
+    let is_float = format == 3 && bits_per_sample == 32;
+    if !is_pcm && !is_float {
+        return Err(WavError::UnsupportedFormat {
+            format,
+            bits: bits_per_sample,
+        });
+    }
+
+    let expected_align = channels * (bits_per_sample / 8);
+    let expected_byte_rate = (sample_rate as u64) * (expected_align as u64);
+    if sample_rate == 0 || alignment != expected_align || (byte_rate as u64) != expected_byte_rate {
+        return Err(WavError::InvalidRateOrAlignment {
+            rate: sample_rate,
+            alignment,
+            byte_rate,
+        });
+    }
+
+    Ok(ValidatedWavFmt {
+        raw_format,
+        audio_format: format as u16,
+        channels,
+        sample_rate,
+        byte_rate,
+        alignment,
+        bits_per_sample,
+    })
+}
+
 /// Parses a byte slice containing a RIFF/WAVE file into decoded impulse response weights.
 ///
 /// Implements strict little-endian decoding and boundary checking matching upstream
@@ -276,64 +388,16 @@ pub fn parse_wav_ir(bytes: &[u8]) -> Result<WavIrData, WavError> {
         }
 
         if chunk_id == b"fmt " {
-            if have_format || size < 16 {
+            if have_format {
                 return Err(WavError::InvalidOrDuplicateFmt);
             }
 
-            let fmt_len = (size as usize).min(40);
-            if position + fmt_len > end {
-                return Err(WavError::TruncatedPayload);
-            }
-            let fmt = &bytes[position..position + fmt_len];
-
-            format = uint_le(&fmt[0..2]);
-            channels = uint_le(&fmt[2..4]) as u16;
-            if channels != 1 && channels != 2 {
-                return Err(WavError::UnsupportedChannelCount(channels));
-            }
-
-            rate = uint_le(&fmt[4..8]);
-            let byte_rate = uint_le(&fmt[8..12]);
-            alignment = uint_le(&fmt[12..14]) as u16;
-            bits = uint_le(&fmt[14..16]) as u16;
-
-            if format == 65534 {
-                if size < 40 {
-                    return Err(WavError::InvalidExtensibleFormat);
-                }
-                let cb_size = uint_le(&fmt[16..18]);
-                if cb_size < 22 || (cb_size as u64) + 18 > size as u64 {
-                    return Err(WavError::InvalidExtensibleFormat);
-                }
-                let valid_bits = uint_le(&fmt[18..20]) as u16;
-                if valid_bits == 0 || valid_bits > bits {
-                    return Err(WavError::InvalidValidBits { valid_bits, bits });
-                }
-                if fmt[28..40] != EXTENSIBLE_GUID_TAIL {
-                    return Err(WavError::UnsupportedExtensibleSubtype);
-                }
-                format = uint_le(&fmt[24..28]);
-                if format == 3 && valid_bits != bits {
-                    return Err(WavError::InvalidFloatValidBits { valid_bits, bits });
-                }
-            }
-
-            let is_pcm = format == 1 && (bits == 16 || bits == 24 || bits == 32);
-            let is_float = format == 3 && bits == 32;
-            if !is_pcm && !is_float {
-                return Err(WavError::UnsupportedFormat { format, bits });
-            }
-
-            let expected_align = channels * (bits / 8);
-            let expected_byte_rate = (rate as u64) * (expected_align as u64);
-            if rate == 0 || alignment != expected_align || (byte_rate as u64) != expected_byte_rate
-            {
-                return Err(WavError::InvalidRateOrAlignment {
-                    rate,
-                    alignment,
-                    byte_rate,
-                });
-            }
+            let parsed_fmt = parse_fmt_chunk(&bytes[position..], size, 2)?;
+            format = parsed_fmt.audio_format as u32;
+            channels = parsed_fmt.channels;
+            rate = parsed_fmt.sample_rate;
+            alignment = parsed_fmt.alignment;
+            bits = parsed_fmt.bits_per_sample;
 
             have_format = true;
         } else if chunk_id == b"data" {

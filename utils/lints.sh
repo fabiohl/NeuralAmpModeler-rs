@@ -88,7 +88,8 @@ phase_policies() {
   cargo_msrv=$(grep -m1 '^rust-version = ' Cargo.toml | sed -E 's/rust-version = "([^"]+)"/\1/')
   grep -qE "NeuralAmpModeler-rs = (\"$cargo_ver\"|\{ version = \"$cargo_ver\")" README.md || { echo "README version mismatch" >&2; exit 1; }
   grep -qE "badge/MSRV-$cargo_msrv" README.md || { echo "README MSRV mismatch" >&2; exit 1; }
-  for feat in $(git grep -h -o -E 'doc\(cfg\(feature = "[^"]+"\)\)' src/ | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
+  doc_cfg=$(git grep -h 'doc(cfg(' src/)
+  for feat in $(grep -o -E 'feature = "[^"]+"' <<<"$doc_cfg" | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
     grep -qE "^$feat\s*=" Cargo.toml || { echo "Unknown doc(cfg) feature: $feat" >&2; exit 1; }
   done
   git ls-files '*.rs' | xargs awk '
